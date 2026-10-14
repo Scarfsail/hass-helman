@@ -1,119 +1,37 @@
 from __future__ import annotations
 
+from _fakes import FakeHass as SharedFakeHass
+
 import importlib
-import sys
-import types
 import unittest
-from pathlib import Path
-
-from _ha_stubs import stub_module
-
-ROOT = Path(__file__).resolve().parents[1]
+from types import SimpleNamespace
+from unittest.mock import patch
 
 
-def _load_helman_init_with_stubs():
-    for module_name in list(sys.modules):
-        if module_name == "custom_components.helman" or module_name.startswith(
-            "custom_components.helman."
-        ):
-            sys.modules.pop(module_name)
+class _FakeStorage:
+    load_calls = 0
 
-    stub_module("custom_components", __path__=[str(ROOT / "custom_components")])
-    import homeassistant.config_entries  # type: ignore  # noqa: F401
+    def __init__(self, _hass) -> None:
+        self.loaded = False
 
-    # Use the real ``homeassistant.core``: a partial stub shadows it and breaks
-    # the many transitive ``from homeassistant.core import ...`` in real HA helpers.
-    import homeassistant.core  # type: ignore  # noqa: F401
+    async def async_load(self) -> None:
+        self.loaded = True
+        type(self).load_calls += 1
 
-    frontend_mod = types.ModuleType("custom_components.helman.frontend")
 
-    async def async_register_frontend(_hass) -> None:
-        return None
+class _FakeCoordinator:
+    fail_setup = False
+    unload_calls = 0
 
-    async def async_unregister_frontend(_hass) -> None:
-        return None
+    def __init__(self, _hass, storage) -> None:
+        self.storage = storage
 
-    frontend_mod.async_register_frontend = async_register_frontend
-    frontend_mod.async_unregister_frontend = async_unregister_frontend
-    sys.modules["custom_components.helman.frontend"] = frontend_mod
+    async def async_setup(self) -> None:
+        if type(self).fail_setup:
+            raise RuntimeError("coordinator setup failed")
 
-    panel_mod = types.ModuleType("custom_components.helman.panel")
-    panel_mod.register_calls = 0
-
-    async def async_register_panel(_hass) -> None:
-        panel_mod.register_calls += 1
-
-    panel_mod.async_register_panel = async_register_panel
-    sys.modules["custom_components.helman.panel"] = panel_mod
-
-    websockets_mod = types.ModuleType("custom_components.helman.websockets")
-    websockets_mod.register_calls = 0
-
-    def async_register_websocket_commands(_hass) -> None:
-        websockets_mod.register_calls += 1
-
-    websockets_mod.async_register_websocket_commands = async_register_websocket_commands
-    sys.modules["custom_components.helman.websockets"] = websockets_mod
-
-    group_services_mod = types.ModuleType("custom_components.helman.group_services")
-    group_services_mod.register_calls = 0
-    group_services_mod.schema_updates = 0
-
-    async def async_register_group_services(_hass) -> None:
-        group_services_mod.register_calls += 1
-
-    def async_update_group_service_schemas(_hass) -> None:
-        group_services_mod.schema_updates += 1
-
-    group_services_mod.async_register_group_services = async_register_group_services
-    group_services_mod.async_update_group_service_schemas = (
-        async_update_group_service_schemas
-    )
-    sys.modules["custom_components.helman.group_services"] = group_services_mod
-
-    storage_mod = types.ModuleType("custom_components.helman.storage")
-
-    class HelmanStorage:
-        load_calls = 0
-
-        def __init__(self, _hass) -> None:
-            self.loaded = False
-
-        async def async_load(self) -> None:
-            self.loaded = True
-            type(self).load_calls += 1
-
-    storage_mod.HelmanStorage = HelmanStorage
-    sys.modules["custom_components.helman.storage"] = storage_mod
-
-    coordinator_mod = types.ModuleType("custom_components.helman.coordinator")
-
-    class HelmanCoordinator:
-        fail_setup = False
-        unload_calls = 0
-
-        def __init__(self, _hass, storage) -> None:
-            self.storage = storage
-
-        async def async_setup(self) -> None:
-            if type(self).fail_setup:
-                raise RuntimeError("coordinator setup failed")
-
-        async def async_unload(self) -> None:
-            type(self).unload_calls += 1
-
-    coordinator_mod.HelmanCoordinator = HelmanCoordinator
-    sys.modules["custom_components.helman.coordinator"] = coordinator_mod
-
-    module = importlib.import_module("custom_components.helman")
-    return (
-        module,
-        panel_mod,
-        websockets_mod,
-        storage_mod,
-        coordinator_mod,
-        group_services_mod,
-    )
+    async def async_unload(self) -> None:
+        type(self).unload_calls += 1
 
 
 class FakeConfigEntry:
@@ -134,26 +52,52 @@ class FakeConfigEntries:
         return True
 
 
-class FakeHass:
+class FakeHass(SharedFakeHass):
     def __init__(self) -> None:
+        super().__init__()
         self.data: dict = {}
         self.config_entries = FakeConfigEntries()
 
 
 class InitRecoveryTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        (
-            self.helman_init,
-            self.panel_mod,
-            self.websockets_mod,
-            self.storage_mod,
-            self.coordinator_mod,
-            self.group_services_mod,
-        ) = _load_helman_init_with_stubs()
-        self.storage_mod.HelmanStorage.load_calls = 0
-        self.coordinator_mod.HelmanCoordinator.fail_setup = False
-        self.coordinator_mod.HelmanCoordinator.unload_calls = 0
-        self.panel_mod.register_calls = 0
+        self.helman_init = importlib.import_module("custom_components.helman")
+        self.panel_mod = SimpleNamespace(register_calls=0)
+        self.websockets_mod = SimpleNamespace(register_calls=0)
+        self.group_services_mod = SimpleNamespace(register_calls=0, schema_updates=0)
+        self.storage_mod = SimpleNamespace(HelmanStorage=_FakeStorage)
+        self.coordinator_mod = SimpleNamespace(HelmanCoordinator=_FakeCoordinator)
+        _FakeStorage.load_calls = 0
+        _FakeCoordinator.fail_setup = False
+        _FakeCoordinator.unload_calls = 0
+
+        async def register_panel(_hass):
+            self.panel_mod.register_calls += 1
+
+        def register_websockets(_hass):
+            self.websockets_mod.register_calls += 1
+
+        async def register_services(_hass):
+            self.group_services_mod.register_calls += 1
+
+        def update_schemas(_hass):
+            self.group_services_mod.schema_updates += 1
+
+        async def nothing(_hass):
+            return None
+
+        replacements = {
+            "HelmanStorage": _FakeStorage,
+            "HelmanCoordinator": _FakeCoordinator,
+            "async_register_panel": register_panel,
+            "async_register_websocket_commands": register_websockets,
+            "async_register_group_services": register_services,
+            "async_update_group_service_schemas": update_schemas,
+            "async_register_frontend": nothing,
+            "async_unregister_frontend": nothing,
+        }
+        for name, replacement in replacements.items():
+            self.enterContext(patch.object(self.helman_init, name, replacement))
 
     async def test_async_setup_initializes_storage_and_panel(self) -> None:
         hass = FakeHass()

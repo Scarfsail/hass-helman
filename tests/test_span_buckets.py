@@ -10,10 +10,6 @@ import unittest
 from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 
-from _ha_stubs import install_helman_packages
-
-
-install_helman_packages()
 
 buckets_mod = importlib.import_module("custom_components.helman.span_buckets")
 

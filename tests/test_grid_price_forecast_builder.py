@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from homeassistant.util import dt as dt_util
+
 import importlib
 import unittest
 from datetime import datetime, timezone
@@ -7,41 +9,12 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from _ha_stubs import install_helman_packages, stub_module
+from _ha_stubs import stub_module
 
 REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
 SPRING_FORWARD_REFERENCE_TIME = datetime.fromisoformat("2026-03-29T01:30:00+01:00")
 TZ = ZoneInfo("Europe/Prague")
 UTC = timezone.utc
-
-
-def _install_import_stubs() -> None:
-    install_helman_packages()
-    core_mod = stub_module("homeassistant.core")
-    if not hasattr(core_mod, "HomeAssistant"):
-        core_mod.HomeAssistant = type("HomeAssistant", (), {})
-
-    util_pkg = stub_module("homeassistant.util")
-    dt_mod = stub_module("homeassistant.util.dt")
-    if not hasattr(dt_mod, "as_local"):
-        dt_mod.as_local = lambda value: value
-    if not hasattr(dt_mod, "as_utc"):
-        dt_mod.as_utc = lambda value: value
-    util_pkg.dt = dt_mod
-
-
-class _FakeDtUtil:
-    @staticmethod
-    def as_local(value: datetime) -> datetime:
-        if value.tzinfo == TZ:
-            return value
-        return value.astimezone(TZ)
-
-    @staticmethod
-    def as_utc(value: datetime) -> datetime:
-        if value.tzinfo == UTC:
-            return value
-        return value.astimezone(UTC)
 
 
 class _FakeStateMachine:
@@ -52,9 +25,6 @@ class _FakeStateMachine:
         return self._states.get(entity_id)
 
 
-_install_import_stubs()
-
-
 class GridPriceForecastBuilderTests(unittest.TestCase):
     def _make_builder(
         self,
@@ -62,9 +32,7 @@ class GridPriceForecastBuilderTests(unittest.TestCase):
         config: dict | None = None,
         states: dict[str, object] | None = None,
     ):
-        module = importlib.reload(
-            importlib.import_module("custom_components.helman.grid_price_forecast_builder")
-        )
+        module = importlib.import_module("custom_components.helman.grid_price_forecast_builder")
         hass = SimpleNamespace(
             config=SimpleNamespace(time_zone="Europe/Prague"),
             states=_FakeStateMachine(states),
@@ -99,7 +67,7 @@ class GridPriceForecastBuilderTests(unittest.TestCase):
             },
         )
 
-        with patch.object(module, "dt_util", _FakeDtUtil):
+        with patch.object(module, "dt_util", dt_util):
             snapshot = builder.build(
                 reference_time=REFERENCE_TIME,
                 export_snapshot=builder.build_export_price_snapshot(),
@@ -156,7 +124,7 @@ class GridPriceForecastBuilderTests(unittest.TestCase):
             },
         )
 
-        with patch.object(module, "dt_util", _FakeDtUtil):
+        with patch.object(module, "dt_util", dt_util):
             channel = builder.build_export_price_snapshot()
 
         self.assertIsNone(channel["currentPrice"])
@@ -195,7 +163,7 @@ class GridPriceForecastBuilderTests(unittest.TestCase):
             },
         )
 
-        with patch.object(module, "dt_util", _FakeDtUtil):
+        with patch.object(module, "dt_util", dt_util):
             channel = builder.build_export_price_snapshot()
 
         self.assertEqual(channel["status"], "available")
@@ -226,7 +194,7 @@ class GridPriceForecastBuilderTests(unittest.TestCase):
     def test_export_ingestion_reports_nothing_when_unconfigured(self) -> None:
         module, builder = self._make_builder(config={})
 
-        with patch.object(module, "dt_util", _FakeDtUtil):
+        with patch.object(module, "dt_util", dt_util):
             channel = builder.build_export_price_snapshot()
 
         self.assertEqual(channel["status"], "not_configured")
@@ -249,7 +217,7 @@ class GridPriceForecastBuilderTests(unittest.TestCase):
             },
         )
 
-        with patch.object(module, "dt_util", _FakeDtUtil):
+        with patch.object(module, "dt_util", dt_util):
             channel = builder.build_export_price_snapshot()
 
         self.assertEqual(channel["status"], "partial")
@@ -281,7 +249,7 @@ class GridPriceForecastBuilderTests(unittest.TestCase):
         )
         owned_channel = {"status": "available", "currentPrice": 2.5, "points": []}
 
-        with patch.object(module, "dt_util", _FakeDtUtil):
+        with patch.object(module, "dt_util", dt_util):
             snapshot = builder.build(
                 reference_time=REFERENCE_TIME,
                 export_snapshot=owned_channel,
@@ -309,7 +277,7 @@ class GridPriceForecastBuilderTests(unittest.TestCase):
             }
         )
 
-        with patch.object(module, "dt_util", _FakeDtUtil):
+        with patch.object(module, "dt_util", dt_util):
             snapshot = builder.build(
                 reference_time=REFERENCE_TIME,
                 export_snapshot=builder.build_export_price_snapshot(),
@@ -337,7 +305,7 @@ class GridPriceForecastBuilderTests(unittest.TestCase):
             }
         )
 
-        with patch.object(module, "dt_util", _FakeDtUtil):
+        with patch.object(module, "dt_util", dt_util):
             snapshot = builder.build(
                 reference_time=REFERENCE_TIME,
                 export_snapshot=builder.build_export_price_snapshot(),
@@ -365,7 +333,7 @@ class GridPriceForecastBuilderTests(unittest.TestCase):
             }
         )
 
-        with patch.object(module, "dt_util", _FakeDtUtil):
+        with patch.object(module, "dt_util", dt_util):
             snapshot = builder.build(
                 reference_time=REFERENCE_TIME,
                 export_snapshot=builder.build_export_price_snapshot(),
@@ -393,7 +361,7 @@ class GridPriceForecastBuilderTests(unittest.TestCase):
             }
         )
 
-        with patch.object(module, "dt_util", _FakeDtUtil):
+        with patch.object(module, "dt_util", dt_util):
             snapshot = builder.build(
                 reference_time=SPRING_FORWARD_REFERENCE_TIME,
                 export_snapshot=builder.build_export_price_snapshot(),

@@ -5,14 +5,14 @@ from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from _ha_stubs import install_helman_packages, stub_module
+from _ha_stubs import stub_module
 from homeassistant.util import dt as dt_util
 
 TZ = timezone.utc
 
 
 def _install_import_stubs() -> None:
-    install_helman_packages()
+
     core_mod = stub_module("homeassistant.core")
     if not hasattr(core_mod, "HomeAssistant"):
         core_mod.HomeAssistant = type("HomeAssistant", (), {})

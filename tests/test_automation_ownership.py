@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import unittest
 
-from _ha_stubs import install_helman_packages
 
 
 SLOT_ID = "2026-03-20T21:00:00+01:00"
@@ -11,7 +10,6 @@ THIRD_SLOT_ID = "2026-03-20T22:00:00+01:00"
 
 
 def _install_import_stubs() -> None:
-    install_helman_packages("scheduling")
 
     import homeassistant.util.dt  # type: ignore  # noqa: F401
     import homeassistant.core  # type: ignore  # noqa: F401

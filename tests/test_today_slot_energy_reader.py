@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+from homeassistant.util import dt as dt_util
+
 import unittest
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from _ha_stubs import install_helman_packages, stub_module
+from _ha_stubs import stub_module
 
 TZ = ZoneInfo("Europe/Prague")
 UTC = timezone.utc
@@ -15,7 +17,7 @@ ENTITY_ID = "sensor.house_energy"
 
 
 def _install_import_stubs() -> None:
-    install_helman_packages()
+
     core_mod = stub_module("homeassistant.core")
     if not hasattr(core_mod, "HomeAssistant"):
         core_mod.HomeAssistant = type("HomeAssistant", (), {})
@@ -39,18 +41,6 @@ def _install_import_stubs() -> None:
     util_pkg.dt = dt_mod
 
 
-class _FakeDtUtil:
-    @staticmethod
-    def as_local(value: datetime) -> datetime:
-        if value.tzinfo == TZ:
-            return value
-        return value.astimezone(TZ)
-
-    @staticmethod
-    def as_utc(value: datetime) -> datetime:
-        if value.tzinfo == UTC:
-            return value
-        return value.astimezone(UTC)
 
 
 _install_import_stubs()
@@ -66,7 +56,7 @@ def _state(local_time: datetime, value_kwh: float) -> SimpleNamespace:
     return SimpleNamespace(
         state=str(round(value_kwh, 6)),
         attributes={"unit_of_measurement": "kWh"},
-        last_updated=_FakeDtUtil.as_utc(local_time),
+        last_updated=dt_util.as_utc(local_time),
     )
 
 
@@ -142,7 +132,7 @@ class TodaySlotEnergyReaderTests(unittest.IsolatedAsyncioTestCase):
         cls._dt_patcher = patch.object(
             recorder_hourly_series,
             "dt_util",
-            _FakeDtUtil,
+            dt_util,
         )
         cls._dt_patcher.start()
 
@@ -272,16 +262,16 @@ class TodaySlotEnergyReaderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             recorder.windows[0],
             (
-                _FakeDtUtil.as_utc(DAY - timedelta(minutes=30)),
-                _FakeDtUtil.as_utc(DAY + timedelta(minutes=15)),
+                dt_util.as_utc(DAY - timedelta(minutes=30)),
+                dt_util.as_utc(DAY + timedelta(minutes=15)),
             ),
         )
         # Last read of the day: not the 95 completed slots, only the ones the
         # rebound window still leaves open plus the quarter hour since the
         # previous refresh.
         last_start, last_end = recorder.windows[-1]
-        self.assertEqual(last_end, _FakeDtUtil.as_utc(DAY + timedelta(hours=23, minutes=45)))
-        self.assertEqual(last_start, _FakeDtUtil.as_utc(DAY + timedelta(hours=22, minutes=45)))
+        self.assertEqual(last_end, dt_util.as_utc(DAY + timedelta(hours=23, minutes=45)))
+        self.assertEqual(last_start, dt_util.as_utc(DAY + timedelta(hours=22, minutes=45)))
         self.assertEqual((last_end - last_start), timedelta(hours=1))
 
     async def test_a_midnight_reset_is_carried_into_the_resumed_read(self) -> None:
@@ -356,7 +346,7 @@ class TodaySlotEnergyReaderTests(unittest.IsolatedAsyncioTestCase):
         # The dip left no trace: the slot it fell in is ordinary consumption,
         # not a phantom reset's worth of energy.
         self.assertAlmostEqual(pre_dip, 3.48, places=6)
-        dip_slot = _FakeDtUtil.as_utc(DAY + timedelta(hours=23, minutes=0))
+        dip_slot = dt_util.as_utc(DAY + timedelta(hours=23, minutes=0))
         self.assertAlmostEqual(warm[dip_slot], 0.03, places=6)
 
     async def test_a_real_reset_near_the_end_of_the_window_resolves_once_it_can(
@@ -396,7 +386,7 @@ class TodaySlotEnergyReaderTests(unittest.IsolatedAsyncioTestCase):
         # The slot the reset falls in holds what the old counter measured in it
         # and none of the 3.48 kWh it had accumulated before it.
         self.assertAlmostEqual(pre_reset, 3.48, places=6)
-        reset_slot = _FakeDtUtil.as_utc(DAY + timedelta(hours=23, minutes=0))
+        reset_slot = dt_util.as_utc(DAY + timedelta(hours=23, minutes=0))
         self.assertAlmostEqual(warm[reset_slot], 0.03, places=6)
 
     async def test_a_new_local_day_drops_the_previous_days_prefix(self) -> None:
@@ -428,7 +418,7 @@ class TodaySlotEnergyReaderTests(unittest.IsolatedAsyncioTestCase):
         # as the first read of any day (a fresh day is a cold read too).
         self.assertEqual(
             recorder.windows[-1][0],
-            _FakeDtUtil.as_utc(DAY + timedelta(days=1) - timedelta(minutes=30)),
+            dt_util.as_utc(DAY + timedelta(days=1) - timedelta(minutes=30)),
         )
 
 

@@ -1,182 +1,13 @@
 from __future__ import annotations
 
-import sys
-import types
+from _fakes import FakeHass as SharedFakeHass
+
+from _fakes import FakeBus, FakeConnection as SharedFakeConnection
+
 import unittest
-from datetime import datetime
+from types import SimpleNamespace
+from unittest.mock import patch
 
-from _ha_stubs import install_helman_packages, stub_ha_dt, stub_module
-
-
-def _install_voluptuous_stub() -> None:
-    if "voluptuous" in sys.modules:
-        return
-
-    module = types.ModuleType("voluptuous")
-
-    class Invalid(Exception):
-        pass
-
-    class _MissingType:
-        pass
-
-    _MISSING = _MissingType()
-
-    class _Marker:
-        def __init__(self, key: str, *, default: object = _MISSING) -> None:
-            self.key = key
-            self.default = default
-
-    class Required(_Marker):
-        pass
-
-    class Optional(_Marker):
-        pass
-
-    def In(options):
-        def validator(value):
-            if value not in options:
-                raise Invalid(f"Value {value!r} is not in {options!r}")
-            return value
-
-        return validator
-
-    def Coerce(expected_type):
-        def validator(value):
-            try:
-                return expected_type(value)
-            except (TypeError, ValueError) as err:
-                raise Invalid(str(err)) from err
-
-        return validator
-
-    class Schema:
-        def __init__(self, schema, *, extra=None) -> None:
-            self._schema = schema
-            self._extra = extra
-
-        def __call__(self, value):
-            return _validate(self._schema, value, extra=self._extra)
-
-    PREVENT_EXTRA = object()
-
-    def _validate(schema, value, *, extra=None):
-        if isinstance(schema, Schema):
-            return schema(value)
-
-        if isinstance(schema, dict):
-            if not isinstance(value, dict):
-                raise Invalid("Expected a dict")
-
-            result = {}
-            seen_keys: set[str] = set()
-            for key_spec, validator in schema.items():
-                if isinstance(key_spec, _Marker):
-                    key = key_spec.key
-                    seen_keys.add(key)
-                    if key in value:
-                        result[key] = _validate(validator, value[key])
-                        continue
-                    if isinstance(key_spec, Optional) and key_spec.default is not _MISSING:
-                        result[key] = _validate(validator, key_spec.default)
-                        continue
-                    if isinstance(key_spec, Required):
-                        raise Invalid(f"Missing required key {key!r}")
-                    continue
-
-                seen_keys.add(key_spec)
-                if key_spec not in value:
-                    raise Invalid(f"Missing required key {key_spec!r}")
-                result[key_spec] = _validate(validator, value[key_spec])
-
-            if extra is PREVENT_EXTRA:
-                extras = set(value) - seen_keys
-                if extras:
-                    raise Invalid(f"Extra keys not allowed: {sorted(extras)!r}")
-            return result
-
-        if isinstance(schema, list):
-            if len(schema) != 1:
-                raise Invalid("List schema must contain exactly one validator")
-            if not isinstance(value, list):
-                raise Invalid("Expected a list")
-            return [_validate(schema[0], item) for item in value]
-
-        if isinstance(schema, type):
-            if not isinstance(value, schema):
-                raise Invalid(f"Expected value of type {schema.__name__}")
-            return value
-
-        if callable(schema):
-            return schema(value)
-
-        if value != schema:
-            raise Invalid(f"Expected {schema!r}")
-        return value
-
-    module.Coerce = Coerce
-    module.In = In
-    module.Invalid = Invalid
-    module.Optional = Optional
-    module.PREVENT_EXTRA = PREVENT_EXTRA
-    module.Required = Required
-    module.Schema = Schema
-    sys.modules["voluptuous"] = module
-
-
-def _install_import_stubs() -> None:
-    install_helman_packages("scheduling")
-    core_mod = stub_module("homeassistant.core")
-    core_mod.HomeAssistant = type("HomeAssistant", (), {})
-    core_mod.callback = lambda func: func
-
-    components_pkg = stub_module("homeassistant.components")
-    websocket_api_mod = stub_module("homeassistant.components.websocket_api")
-    websocket_api_mod.ActiveConnection = type("ActiveConnection", (), {})
-    websocket_api_mod.async_register_command = lambda hass, command: None
-    websocket_api_mod.async_response = lambda func: func
-
-    def websocket_command(schema):
-        def decorator(func):
-            func.websocket_schema = schema
-            return func
-
-        return decorator
-
-    websocket_api_mod.websocket_command = websocket_command
-    components_pkg.websocket_api = websocket_api_mod
-
-    helpers_pkg = stub_module("homeassistant.helpers")
-    storage_mod = stub_module("homeassistant.helpers.storage")
-
-    class DummyStore:
-        def __init__(self, hass, version, key) -> None:
-            self._data = None
-
-        async def async_load(self):
-            return self._data
-
-        async def async_save(self, data) -> None:
-            self._data = data
-
-    storage_mod.Store = DummyStore
-    helpers_pkg.storage = storage_mod
-
-    # A hardware profile with a mode table looks Helman's own mode select up
-    # by unique id; an empty registry leaves it at its suggested entity id.
-    entity_registry_mod = stub_module("homeassistant.helpers.entity_registry")
-    entity_registry_mod.async_get = lambda hass: types.SimpleNamespace(
-        async_get_entity_id=lambda domain, platform, unique_id: None
-    )
-    helpers_pkg.entity_registry = entity_registry_mod
-
-    util_pkg = stub_module("homeassistant.util")
-    dt_mod = stub_ha_dt(datetime.fromisoformat("2026-04-05T12:00:00+00:00"))
-    util_pkg.dt = dt_mod
-
-
-_install_import_stubs()
-_install_voluptuous_stub()
 
 from custom_components.helman.automation import config as automation_config_module
 from custom_components.helman.const import CONFIG_DOCUMENT_VERSION, DOMAIN
@@ -189,6 +20,8 @@ from custom_components.helman.websockets import (
     ws_save_config,
     ws_validate_config,
 )
+
+_save_config_handler = ws_save_config.__wrapped__
 
 
 def _invalid_config() -> dict:
@@ -238,17 +71,10 @@ class FakeUser:
         self.is_admin = is_admin
 
 
-class FakeConnection:
+class FakeConnection(SharedFakeConnection):
     def __init__(self, *, is_admin: bool) -> None:
+        super().__init__()
         self.user = FakeUser(is_admin=is_admin)
-        self.results: list[tuple[int, dict]] = []
-        self.errors: list[tuple[int, str, str]] = []
-
-    def send_result(self, msg_id: int, result: dict) -> None:
-        self.results.append((msg_id, result))
-
-    def send_error(self, msg_id: int, code: str, message: str) -> None:
-        self.errors.append((msg_id, code, message))
 
 
 class FakeConfigEntry:
@@ -281,21 +107,16 @@ class FakeConfigEntries:
         return self.reload_result
 
 
-class FakeBus:
-    def __init__(self) -> None:
-        self.fired: list[tuple[str, dict]] = []
-
-    def async_fire(self, event_type: str, event_data: dict | None = None) -> None:
-        self.fired.append((event_type, dict(event_data or {})))
 
 
-class FakeHass:
+class FakeHass(SharedFakeHass):
     def __init__(
         self,
         storage: FakeStorage | None,
         *,
         config_entries: FakeConfigEntries | None = None,
     ) -> None:
+        super().__init__()
         domain_data = {}
         if storage is not None:
             domain_data["storage"] = storage
@@ -305,6 +126,14 @@ class FakeHass:
 
 
 class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        registry = SimpleNamespace(async_get_entity_id=lambda *args: None)
+        patcher = patch(
+            "homeassistant.helpers.entity_registry.async_get", return_value=registry
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def _set_known_optimizer_kinds(self, *kinds: str) -> None:
         original = automation_config_module.KNOWN_OPTIMIZER_KINDS
         automation_config_module.KNOWN_OPTIMIZER_KINDS = frozenset(kinds)
@@ -536,7 +365,7 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
             "training": {"solar_bias": {"total_energy_entity_id": "sensor.pv_total"}},
         }
 
-        await ws_save_config(
+        await _save_config_handler(
             hass,
             connection,
             {"id": 1, "type": "helman/save_config", "config": config},
@@ -565,7 +394,7 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         connection = FakeConnection(is_admin=True)
         hass = FakeHass(storage)
 
-        await ws_save_config(
+        await _save_config_handler(
             hass,
             connection,
             {"id": 1, "type": "helman/save_config", "config": _invalid_config()},
@@ -582,7 +411,7 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         connection = FakeConnection(is_admin=True)
         hass = FakeHass(storage)
 
-        await ws_save_config(
+        await _save_config_handler(
             hass,
             connection,
             {"id": 1, "type": "helman/save_config", "config": {}},
@@ -609,7 +438,7 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         connection = FakeConnection(is_admin=True)
         hass = FakeHass(storage, config_entries=FakeConfigEntries(reload_result=False))
 
-        await ws_save_config(
+        await _save_config_handler(
             hass,
             connection,
             {"id": 1, "type": "helman/save_config", "config": {}},
@@ -629,7 +458,7 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
             }
         }
 
-        await ws_save_config(
+        await _save_config_handler(
             hass,
             connection,
             {"id": 1, "type": "helman/save_config", "config": config},
@@ -656,7 +485,7 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
             }
         }
 
-        await ws_save_config(
+        await _save_config_handler(
             hass,
             connection,
             {"id": 1, "type": "helman/save_config", "config": config},
@@ -707,7 +536,7 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
             }
         }
 
-        await ws_save_config(
+        await _save_config_handler(
             hass,
             connection,
             {"id": 1, "type": "helman/save_config", "config": config},
@@ -724,7 +553,7 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         connection = FakeConnection(is_admin=True)
         hass = FakeHass(storage)
 
-        await ws_save_config(
+        await _save_config_handler(
             hass,
             connection,
             {"id": 1, "type": "helman/save_config", "config": _v6_shaped_config()},
@@ -748,7 +577,7 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-        await ws_save_config(
+        await _save_config_handler(
             hass,
             connection,
             {"id": 1, "type": "helman/save_config", "config": {}},

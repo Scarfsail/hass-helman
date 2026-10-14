@@ -13,10 +13,6 @@ from __future__ import annotations
 import asyncio
 import unittest
 
-from _ha_stubs import install_helman_packages
-
-
-install_helman_packages()
 
 from custom_components.helman.config_validation import validate_config_document  # noqa: E402
 from custom_components.helman.power_polarity import (  # noqa: E402

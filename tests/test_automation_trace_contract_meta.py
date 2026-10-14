@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import unittest
 
-from _ha_stubs import install_helman_packages, stub_ha_dt, stub_module
+from _ha_stubs import stub_ha_dt, stub_module
 
 
 def _install_import_stubs() -> None:
-    install_helman_packages("scheduling")
+
     util_pkg = stub_module("homeassistant.util")
     dt_mod = stub_ha_dt()
     util_pkg.dt = dt_mod

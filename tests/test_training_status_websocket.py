@@ -7,6 +7,8 @@ so faking the record would test nothing.
 
 from __future__ import annotations
 
+from _fakes import FakeConnection as SharedFakeConnection
+
 import asyncio
 import importlib
 import unittest
@@ -36,17 +38,11 @@ HOUSE_FP = "house-fp"
 APPLIANCE_FP = "appliance-fp"
 
 
-class FakeConnection:
+class FakeConnection(SharedFakeConnection):
     def __init__(self, *, is_admin: bool = True) -> None:
+        super().__init__()
         self.user = SimpleNamespace(is_admin=is_admin)
-        self.results: list[tuple[int, object]] = []
-        self.errors: list[tuple[int, str, str]] = []
 
-    def send_result(self, msg_id: int, result: object) -> None:
-        self.results.append((msg_id, result))
-
-    def send_error(self, msg_id: int, code: str, message: str) -> None:
-        self.errors.append((msg_id, code, message))
 
 
 class _MemoryBackend:

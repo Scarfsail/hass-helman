@@ -1,18 +1,20 @@
 from __future__ import annotations
 
+from homeassistant.util import dt as dt_util
+
 import unittest
 from datetime import datetime, timezone
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from _ha_stubs import install_helman_packages, stub_module
+from _ha_stubs import stub_module
 
 TZ = ZoneInfo("Europe/Prague")
 UTC = timezone.utc
 
 
 def _install_import_stubs() -> None:
-    install_helman_packages()
+
     core_mod = stub_module("homeassistant.core")
     if not hasattr(core_mod, "HomeAssistant"):
         core_mod.HomeAssistant = type("HomeAssistant", (), {})
@@ -38,22 +40,6 @@ def _install_import_stubs() -> None:
     util_pkg.dt = dt_mod
 
 
-class _FakeDtUtil:
-    @staticmethod
-    def as_local(value: datetime) -> datetime:
-        if value.tzinfo == TZ:
-            return value
-        return value.astimezone(TZ)
-
-    @staticmethod
-    def as_utc(value: datetime) -> datetime:
-        if value.tzinfo == UTC:
-            return value
-        return value.astimezone(UTC)
-
-    @staticmethod
-    def parse_datetime(value: str) -> datetime:
-        return datetime.fromisoformat(value)
 
 
 _install_import_stubs()
@@ -247,12 +233,12 @@ class BatteryForecastResponseTests(unittest.TestCase):
         cls._response_dt_patcher = patch.object(
             battery_forecast_response,
             "dt_util",
-            _FakeDtUtil,
+            dt_util,
         )
         cls._recorder_dt_patcher = patch.object(
             recorder_hourly_series,
             "dt_util",
-            _FakeDtUtil,
+            dt_util,
         )
         cls._response_dt_patcher.start()
         cls._recorder_dt_patcher.start()

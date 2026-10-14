@@ -1,51 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-import sys
-import types
-from pathlib import Path
+from importlib import import_module
+import pytest
+from types import SimpleNamespace
 
-ROOT = Path(__file__).resolve().parents[1]
-
-if "custom_components" not in sys.modules:
-    custom_components_pkg = types.ModuleType("custom_components")
-    sys.modules["custom_components"] = custom_components_pkg
-    custom_components_pkg.__path__ = [str(ROOT / "custom_components")]
-
-if "custom_components.helman" not in sys.modules:
-    helman_pkg = types.ModuleType("custom_components.helman")
-    helman_pkg.__path__ = [str(ROOT / "custom_components" / "helman")]
-    sys.modules["custom_components.helman"] = helman_pkg
-
-if "homeassistant" not in sys.modules:
-    ha_pkg = types.ModuleType("homeassistant")
-    sys.modules["homeassistant"] = ha_pkg
-
-core_mod = types.ModuleType("homeassistant.core")
-core_mod.HomeAssistant = type("HomeAssistant", (), {})
-sys.modules["homeassistant.core"] = core_mod
-
-helpers_mod = types.ModuleType("homeassistant.helpers")
-sys.modules["homeassistant.helpers"] = helpers_mod
-
-storage_stub = types.ModuleType("homeassistant.helpers.storage")
-
-
-class _DummyStore:
-    def __init__(self, hass, version, key):
-        pass
-
-    async def async_load(self):
-        return None
-
-    async def async_save(self, data):
-        pass
-
-
-storage_stub.Store = _DummyStore
-sys.modules["homeassistant.helpers.storage"] = storage_stub
-
-#: What the stubbed Energy manager hands out, and how often it was asked.
+#: What the energy manager hands out, and how often it was asked.
 ENERGY_PREFERENCES = {
     "device_consumption": [{"stat_consumption": "sensor.oven_energy"}]
 }
@@ -54,21 +14,9 @@ energy_requests: list[object] = []
 
 async def _async_get_manager(hass):
     energy_requests.append(hass)
-    return types.SimpleNamespace(data=ENERGY_PREFERENCES)
+    return SimpleNamespace(data=ENERGY_PREFERENCES)
 
 
-components_mod = types.ModuleType("homeassistant.components")
-components_mod.__path__ = []
-energy_mod = types.ModuleType("homeassistant.components.energy")
-energy_mod.__path__ = []
-energy_data_mod = types.ModuleType("homeassistant.components.energy.data")
-energy_data_mod.async_get_manager = _async_get_manager
-energy_mod.data = energy_data_mod
-sys.modules["homeassistant.components"] = components_mod
-sys.modules["homeassistant.components.energy"] = energy_mod
-sys.modules["homeassistant.components.energy.data"] = energy_data_mod
-
-#: What the stubbed entity suggestions hand out, and for which calls.
 SUGGESTIONS = {
     "energy": [],
     "power": [{"entityId": "sensor.oven_power", "reasons": []}],
@@ -82,33 +30,31 @@ def _suggest_entities(hass, anchor_entity_ids, config):
     return SUGGESTIONS
 
 
-suggestions_mod = types.ModuleType("custom_components.helman.controllables.suggestions")
-suggestions_mod.suggest_entities = _suggest_entities
-sys.modules["custom_components.helman.controllables.suggestions"] = suggestions_mod
-
-#: What the stubbed entity and label registries hold: the oven's meter and its
-#: switch share an HA device, and only the switch carries the label.
 _ENTITIES = {
-    "sensor.oven_energy": types.SimpleNamespace(device_id="dev_oven", labels=set()),
-    "switch.oven": types.SimpleNamespace(device_id="dev_oven", labels={"kitchen"}),
+    "sensor.oven_energy": SimpleNamespace(device_id="dev_oven", labels=set()),
+    "switch.oven": SimpleNamespace(device_id="dev_oven", labels={"kitchen"}),
 }
-entity_registry_mod = types.ModuleType("homeassistant.helpers.entity_registry")
-entity_registry_mod.async_get = lambda hass: types.SimpleNamespace(
-    entities=_ENTITIES, async_get=_ENTITIES.get
-)
-label_registry_mod = types.ModuleType("homeassistant.helpers.label_registry")
-label_registry_mod.async_get = lambda hass: types.SimpleNamespace(
-    async_get_label=lambda label_id: types.SimpleNamespace(name="Kitchen")
-    if label_id == "kitchen"
-    else None
-)
-helpers_mod.entity_registry = entity_registry_mod
-helpers_mod.label_registry = label_registry_mod
-sys.modules["homeassistant.helpers.entity_registry"] = entity_registry_mod
-sys.modules["homeassistant.helpers.label_registry"] = label_registry_mod
 
-from custom_components.helman.const import CONFIG_DOCUMENT_VERSION  # noqa: E402
-from custom_components.helman.storage import HelmanStorage  # noqa: E402
+
+@pytest.fixture(autouse=True)
+def _ha_dependencies(monkeypatch):
+    from homeassistant.components.energy import data as energy_data
+    from homeassistant.helpers import entity_registry, label_registry
+    suggestions = import_module("custom_components.helman.controllables.suggestions")
+
+    monkeypatch.setattr(energy_data, "async_get_manager", _async_get_manager)
+    monkeypatch.setattr(suggestions, "suggest_entities", _suggest_entities)
+    monkeypatch.setattr(entity_registry, "async_get", lambda hass: SimpleNamespace(
+        entities=_ENTITIES, async_get=_ENTITIES.get
+    ))
+    monkeypatch.setattr(label_registry, "async_get", lambda hass: SimpleNamespace(
+        async_get_label=lambda label_id: SimpleNamespace(name="Kitchen")
+        if label_id == "kitchen" else None
+    ))
+
+
+from custom_components.helman.const import CONFIG_DOCUMENT_VERSION
+from custom_components.helman.storage import HelmanStorage
 
 
 class _FakeStore:

@@ -17,59 +17,17 @@ from __future__ import annotations
 import sys
 import types
 import unittest
+
+import pytest
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from _ha_stubs import install_helman_packages
 
 UTC = timezone.utc
 
 
-def _install_import_stubs() -> None:
-    install_helman_packages("solar_bias_correction")
 
-    ha_mod = types.ModuleType("homeassistant")
-    ha_mod.__path__ = []
-    sys.modules["homeassistant"] = ha_mod
-
-    components_mod = types.ModuleType("homeassistant.components")
-    components_mod.__path__ = []
-    sys.modules["homeassistant.components"] = components_mod
-
-    async def _run_in_executor(func, *args):
-        return func(*args)
-
-    recorder_mod = types.ModuleType("homeassistant.components.recorder")
-    recorder_mod.get_instance = lambda hass: SimpleNamespace(
-        async_add_executor_job=_run_in_executor
-    )
-    sys.modules["homeassistant.components.recorder"] = recorder_mod
-
-    history_mod = types.ModuleType("homeassistant.components.recorder.history")
-    history_mod.state_changes_during_period = lambda *args, **kwargs: {}
-    history_mod.get_significant_states = lambda *args, **kwargs: {}
-    sys.modules["homeassistant.components.recorder.history"] = history_mod
-
-    core_mod = types.ModuleType("homeassistant.core")
-    core_mod.HomeAssistant = type("HomeAssistant", (), {})
-    core_mod.callback = lambda func: func
-    sys.modules["homeassistant.core"] = core_mod
-
-    util_mod = types.ModuleType("homeassistant.util")
-    sys.modules["homeassistant.util"] = util_mod
-    dt_mod = types.ModuleType("homeassistant.util.dt")
-    dt_mod.now = lambda: datetime(2026, 4, 17, 12, 7, tzinfo=UTC)
-    dt_mod.as_local = lambda value: value.astimezone(UTC)
-    dt_mod.as_utc = lambda value: value.astimezone(UTC)
-    sys.modules["homeassistant.util.dt"] = dt_mod
-    util_mod.dt = dt_mod
-
-    sys.modules.pop("custom_components.helman.recorder_hourly_series", None)
-    sys.modules.pop("custom_components.helman.solar_bias_correction.actuals", None)
-
-
-_install_import_stubs()
 
 import importlib  # noqa: E402
 
@@ -89,6 +47,17 @@ TODAY = date(2026, 4, 17)
 #: The clock every test runs against: 12:07 puts 12:00 in progress.
 NOW = datetime(2026, 4, 17, 12, 7, tzinfo=UTC)
 HASS = SimpleNamespace(states=SimpleNamespace(get=lambda entity_id: None))
+
+
+@pytest.fixture(autouse=True)
+def _fixed_now(monkeypatch):
+    from homeassistant.util import dt as dt_util
+
+    previous_time_zone = dt_util.DEFAULT_TIME_ZONE
+    dt_util.set_default_time_zone(UTC)
+    monkeypatch.setattr(dt_util, "now", lambda: NOW)
+    yield
+    dt_util.set_default_time_zone(previous_time_zone)
 
 
 class _State:
@@ -137,10 +106,16 @@ def _serving(rows_by_entity: dict[str, list[_State]]):
             for entity_id in entity_ids or []
         }
 
+    class _Recorder:
+        @staticmethod
+        async def async_add_executor_job(func, *args):
+            return func(*args)
+
     return patch.multiple(
         recorder_series,
         state_changes_during_period=_per_entity,
         get_significant_states=_batched,
+        get_instance=lambda hass: _Recorder(),
     )
 
 

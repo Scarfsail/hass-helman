@@ -9,6 +9,8 @@ dataset tests' business.
 
 from __future__ import annotations
 
+from _fakes import FakeConnection
+
 import asyncio
 import importlib
 import unittest
@@ -61,16 +63,6 @@ TREE = {
 }
 
 
-class FakeConnection:
-    def __init__(self) -> None:
-        self.results: list[tuple[int, object]] = []
-        self.errors: list[tuple[int, str, str]] = []
-
-    def send_result(self, msg_id: int, result: object) -> None:
-        self.results.append((msg_id, result))
-
-    def send_error(self, msg_id: int, code: str, message: str) -> None:
-        self.errors.append((msg_id, code, message))
 
 
 class FakeService:

@@ -1,60 +1,18 @@
 from __future__ import annotations
 
+from _fakes import FakeHass as SharedFakeHass
+
 import json
 import sys
 import types
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
-from _ha_stubs import install_helman_packages, stub_module
+from _ha_stubs import stub_module
 
 ROOT = Path(__file__).resolve().parents[1]
 
-
-def _install_import_stubs() -> None:
-    install_helman_packages()
-    components_pkg = stub_module("homeassistant.components")
-    frontend_mod = stub_module("homeassistant.components.frontend", removed_panels=[])
-    frontend_mod.removed_panels = []
-
-    def async_remove_panel(_hass, path):
-        frontend_mod.removed_panels.append(path)
-
-    frontend_mod.async_remove_panel = async_remove_panel
-
-    panel_custom_mod = stub_module("homeassistant.components.panel_custom", calls=[])
-    panel_custom_mod.calls = []
-
-    async def async_register_panel(*args, **kwargs):
-        panel_custom_mod.calls.append((args, kwargs))
-
-    panel_custom_mod.async_register_panel = async_register_panel
-
-    http_mod = stub_module("homeassistant.components.http")
-
-    class StaticPathConfig:
-        def __init__(self, url_path, path, cache_headers=False) -> None:
-            self.url_path = url_path
-            self.path = path
-            self.cache_headers = cache_headers
-
-    http_mod.StaticPathConfig = StaticPathConfig
-
-    # `panel.py` reaches into `frontend.py` for the version-stamped card URL,
-    # which asks the loader for the integration's manifest version.
-    loader_mod = stub_module("homeassistant.loader")
-
-    async def async_get_integration(_hass, _domain):
-        return types.SimpleNamespace(version="1.2.3")
-
-    loader_mod.async_get_integration = async_get_integration
-
-    components_pkg.frontend = frontend_mod
-    components_pkg.panel_custom = panel_custom_mod
-    components_pkg.http = http_mod
-
-
-_install_import_stubs()
 
 from custom_components.helman.const import (
     CARD_URL,
@@ -133,8 +91,9 @@ class FakeLovelace:
         self.resources = FakeResources()
 
 
-class FakeHass:
+class FakeHass(SharedFakeHass):
     def __init__(self) -> None:
+        super().__init__()
         self.config = FakeConfig()
         self.http = FakeHttp()
         self.data = {}
@@ -142,8 +101,23 @@ class FakeHass:
 
 class PanelTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        sys.modules["homeassistant.components.frontend"].removed_panels.clear()
-        sys.modules["homeassistant.components.panel_custom"].calls.clear()
+        self.removed_panels = []
+        self.calls = []
+
+        async def register_panel(*args, **kwargs):
+            self.calls.append((args, kwargs))
+
+        async def get_integration(*args):
+            return types.SimpleNamespace(version="1.2.3")
+
+        for target, replacement in (
+            ("custom_components.helman.panel.frontend.async_remove_panel", lambda _hass, path: self.removed_panels.append(path)),
+            ("custom_components.helman.panel.panel_custom.async_register_panel", register_panel),
+            ("custom_components.helman.frontend.async_get_integration", get_integration),
+        ):
+            patcher = patch(target, replacement)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     async def test_register_panel_registers_static_bundle_and_admin_panel(self) -> None:
         hass = FakeHass()
@@ -157,7 +131,7 @@ class PanelTests(unittest.IsolatedAsyncioTestCase):
             hass.http.static_paths[0].path,
         )
 
-        panel_custom_mod = sys.modules["homeassistant.components.panel_custom"]
+        panel_custom_mod = types.SimpleNamespace(calls=self.calls)
         self.assertEqual(len(panel_custom_mod.calls), 1)
         _args, kwargs = panel_custom_mod.calls[0]
         self.assertTrue(kwargs["require_admin"])
@@ -179,7 +153,7 @@ class PanelTests(unittest.IsolatedAsyncioTestCase):
         await async_register_frontend(hass)
         await async_register_panel(hass)
 
-        _args, kwargs = sys.modules["homeassistant.components.panel_custom"].calls[0]
+        _args, kwargs = self.calls[0]
         expected = await async_card_module_url(hass)
         self.assertEqual(kwargs["config"], {"card_module_url": expected})
         self.assertTrue(expected.startswith(f"{CARD_URL}?v="))
@@ -211,7 +185,7 @@ class PanelTests(unittest.IsolatedAsyncioTestCase):
             lovelace.resources.items,
             [{"id": "legacy", "type": "module", "url": await async_card_module_url(hass)}],
         )
-        _args, kwargs = sys.modules["homeassistant.components.panel_custom"].calls[0]
+        _args, kwargs = self.calls[0]
         self.assertEqual(kwargs["config"], {"card_module_url": await async_card_module_url(hass)})
 
     async def test_register_panel_passes_no_card_url_when_the_resource_stays_classic(
@@ -228,7 +202,7 @@ class PanelTests(unittest.IsolatedAsyncioTestCase):
         await async_register_frontend(hass)
         await async_register_panel(hass)
 
-        _args, kwargs = sys.modules["homeassistant.components.panel_custom"].calls[0]
+        _args, kwargs = self.calls[0]
         self.assertEqual(kwargs["config"], {})
 
     async def test_register_panel_passes_no_card_url_without_a_registered_resource(
@@ -247,7 +221,7 @@ class PanelTests(unittest.IsolatedAsyncioTestCase):
         await async_register_frontend(hass)
         await async_register_panel(hass)
 
-        _args, kwargs = sys.modules["homeassistant.components.panel_custom"].calls[0]
+        _args, kwargs = self.calls[0]
         self.assertEqual(kwargs["config"], {})
 
     def test_manifest_orders_setup_after_lovelace(self) -> None:
@@ -271,14 +245,14 @@ class PanelTests(unittest.IsolatedAsyncioTestCase):
         async_unregister_panel(hass)
 
         self.assertEqual(
-            sys.modules["homeassistant.components.frontend"].removed_panels,
+            self.removed_panels,
             [PANEL_FRONTEND_URL_PATH],
         )
 
     async def test_register_panel_does_not_reregister_static_path_after_reload(self) -> None:
         hass = FakeHass()
-        frontend_mod = sys.modules["homeassistant.components.frontend"]
-        panel_custom_mod = sys.modules["homeassistant.components.panel_custom"]
+        frontend_mod = types.SimpleNamespace(removed_panels=self.removed_panels)
+        panel_custom_mod = types.SimpleNamespace(calls=self.calls)
 
         await async_register_panel(hass)
         async_unregister_panel(hass)

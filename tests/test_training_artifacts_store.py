@@ -6,32 +6,7 @@ import sys
 import types
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-
-if "custom_components" not in sys.modules:
-    custom_components_pkg = types.ModuleType("custom_components")
-    sys.modules["custom_components"] = custom_components_pkg
-    custom_components_pkg.__path__ = [str(ROOT / "custom_components")]
-
-if "custom_components.helman" not in sys.modules:
-    helman_pkg = types.ModuleType("custom_components.helman")
-    helman_pkg.__path__ = [str(ROOT / "custom_components" / "helman")]
-    sys.modules["custom_components.helman"] = helman_pkg
-
-if "homeassistant" not in sys.modules:
-    sys.modules["homeassistant"] = types.ModuleType("homeassistant")
-
-core_mod = types.ModuleType("homeassistant.core")
-core_mod.HomeAssistant = type("HomeAssistant", (), {})
-sys.modules["homeassistant.core"] = core_mod
-
-helpers_mod = types.ModuleType("homeassistant.helpers")
-sys.modules["homeassistant.helpers"] = helpers_mod
-storage_stub = types.ModuleType("homeassistant.helpers.storage")
-sys.modules["homeassistant.helpers.storage"] = storage_stub
-
-
-def _install_fake_store_backend():
+def _install_fake_store_backend(monkeypatch):
     """One in-memory document per storage key, surviving a store re-creation
     so a "restart" can be simulated."""
     documents: dict[str, dict] = {}
@@ -47,18 +22,18 @@ def _install_fake_store_backend():
         async def async_save(self, data):
             documents[self.key] = data
 
-    storage_stub.Store = FakeStore
+    monkeypatch.setattr(_load_storage_module().storage, "Store", FakeStore)
     return documents
 
 
 def _load_storage_module():
     storage_mod = importlib.import_module("custom_components.helman.storage")
-    return importlib.reload(storage_mod)
+    return storage_mod
 
 
-def test_profile_survives_a_round_trip_through_the_store():
+def test_profile_survives_a_round_trip_through_the_store(monkeypatch):
     async def _inner():
-        _install_fake_store_backend()
+        _install_fake_store_backend(monkeypatch)
         storage_mod = _load_storage_module()
 
         store = storage_mod.TrainingArtifactsStore(object())
@@ -86,12 +61,12 @@ def test_profile_survives_a_round_trip_through_the_store():
     asyncio.run(_inner())
 
 
-def test_failed_refit_preserves_the_previous_profile():
+def test_failed_refit_preserves_the_previous_profile(monkeypatch):
     """The rule that makes "older than 48 h, refit fails" keep serving with a
     banner instead of blanking."""
 
     async def _inner():
-        _install_fake_store_backend()
+        _install_fake_store_backend(monkeypatch)
         storage_mod = _load_storage_module()
 
         store = storage_mod.TrainingArtifactsStore(object())
@@ -119,9 +94,9 @@ def test_failed_refit_preserves_the_previous_profile():
     asyncio.run(_inner())
 
 
-def test_a_document_from_an_unsupported_version_is_ignored():
+def test_a_document_from_an_unsupported_version_is_ignored(monkeypatch):
     async def _inner():
-        documents = _install_fake_store_backend()
+        documents = _install_fake_store_backend(monkeypatch)
         storage_mod = _load_storage_module()
         documents[storage_mod.TRAINING_ARTIFACTS_STORAGE_KEY] = {
             "version": 99,
@@ -136,9 +111,9 @@ def test_a_document_from_an_unsupported_version_is_ignored():
     asyncio.run(_inner())
 
 
-def test_first_ever_failure_records_an_outcome_without_data():
+def test_first_ever_failure_records_an_outcome_without_data(monkeypatch):
     async def _inner():
-        _install_fake_store_backend()
+        _install_fake_store_backend(monkeypatch)
         storage_mod = _load_storage_module()
 
         store = storage_mod.TrainingArtifactsStore(object())
@@ -156,11 +131,11 @@ def test_first_ever_failure_records_an_outcome_without_data():
     asyncio.run(_inner())
 
 
-def test_appliance_energy_round_trips_alongside_house_consumption():
+def test_appliance_energy_round_trips_alongside_house_consumption(monkeypatch):
     """Both sections coexist: writing one must not drop the other."""
 
     async def _inner():
-        _install_fake_store_backend()
+        _install_fake_store_backend(monkeypatch)
         storage_mod = _load_storage_module()
 
         store = storage_mod.TrainingArtifactsStore(object())
@@ -201,9 +176,9 @@ def test_appliance_energy_round_trips_alongside_house_consumption():
     asyncio.run(_inner())
 
 
-def test_failed_appliance_energy_run_preserves_the_previous_estimates():
+def test_failed_appliance_energy_run_preserves_the_previous_estimates(monkeypatch):
     async def _inner():
-        _install_fake_store_backend()
+        _install_fake_store_backend(monkeypatch)
         storage_mod = _load_storage_module()
 
         store = storage_mod.TrainingArtifactsStore(object())
@@ -240,9 +215,9 @@ def test_failed_appliance_energy_run_preserves_the_previous_estimates():
     asyncio.run(_inner())
 
 
-def test_success_records_the_attempt_at_its_trained_at():
+def test_success_records_the_attempt_at_its_trained_at(monkeypatch):
     async def _inner():
-        _install_fake_store_backend()
+        _install_fake_store_backend(monkeypatch)
         storage_mod = _load_storage_module()
 
         store = storage_mod.TrainingArtifactsStore(object())
@@ -260,11 +235,11 @@ def test_success_records_the_attempt_at_its_trained_at():
     asyncio.run(_inner())
 
 
-def test_failure_records_its_own_attempt_and_keeps_what_it_preserves():
+def test_failure_records_its_own_attempt_and_keeps_what_it_preserves(monkeypatch):
     """A week of failed nights must not read as one success a week ago."""
 
     async def _inner():
-        _install_fake_store_backend()
+        _install_fake_store_backend(monkeypatch)
         storage_mod = _load_storage_module()
 
         store = storage_mod.TrainingArtifactsStore(object())
@@ -291,11 +266,11 @@ def test_failure_records_its_own_attempt_and_keeps_what_it_preserves():
     asyncio.run(_inner())
 
 
-def test_a_section_written_before_attempts_were_recorded_has_none():
+def test_a_section_written_before_attempts_were_recorded_has_none(monkeypatch):
     """No store version bump: ``None`` means *not recorded*."""
 
     async def _inner():
-        documents = _install_fake_store_backend()
+        documents = _install_fake_store_backend(monkeypatch)
         storage_mod = _load_storage_module()
         documents[storage_mod.TRAINING_ARTIFACTS_STORAGE_KEY] = {
             "version": storage_mod.TRAINING_ARTIFACTS_STORAGE_VERSION,
@@ -317,11 +292,11 @@ def test_a_section_written_before_attempts_were_recorded_has_none():
     asyncio.run(_inner())
 
 
-def test_a_document_written_before_appliance_energy_existed_still_loads():
+def test_a_document_written_before_appliance_energy_existed_still_loads(monkeypatch):
     """No store version bump: the key is simply absent on an older document."""
 
     async def _inner():
-        documents = _install_fake_store_backend()
+        documents = _install_fake_store_backend(monkeypatch)
         storage_mod = _load_storage_module()
         documents[storage_mod.TRAINING_ARTIFACTS_STORAGE_KEY] = {
             "version": storage_mod.TRAINING_ARTIFACTS_STORAGE_VERSION,

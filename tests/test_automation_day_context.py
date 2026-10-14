@@ -4,14 +4,14 @@ import unittest
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from _ha_stubs import install_helman_packages, stub_module
+from _ha_stubs import stub_module
 
 
 PRAGUE = ZoneInfo("Europe/Prague")
 
 
 def _install_import_stubs() -> None:
-    install_helman_packages("automation")
+
     util_pkg = stub_module("homeassistant.util")
     dt_mod = stub_module("homeassistant.util.dt")
 

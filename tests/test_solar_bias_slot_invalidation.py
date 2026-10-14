@@ -2,16 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from _ha_stubs import install_helman_packages
 
 TZ = timezone.utc
 
 
-def _install_import_stubs() -> None:
-    install_helman_packages("solar_bias_correction")
-
-
-_install_import_stubs()
 
 from custom_components.helman.solar_bias_correction.slot_invalidation import (  # noqa: E402
     InvalidationInputs,

@@ -4,29 +4,10 @@ import sys
 import unittest
 from datetime import datetime, timedelta
 
-from _ha_stubs import install_helman_packages
 
 
 REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
 
-
-def _install_import_stubs() -> None:
-    install_helman_packages("scheduling")
-
-    import homeassistant.util.dt  # type: ignore  # noqa: F401
-
-    util_pkg = sys.modules["homeassistant.util"]
-    dt_mod = sys.modules["homeassistant.util.dt"]
-    if not hasattr(dt_mod, "parse_datetime"):
-        dt_mod.parse_datetime = datetime.fromisoformat
-    if not hasattr(dt_mod, "as_local"):
-        dt_mod.as_local = lambda value: value
-    if not hasattr(dt_mod, "as_utc"):
-        dt_mod.as_utc = lambda value: value
-    util_pkg.dt = dt_mod
-
-
-_install_import_stubs()
 
 from custom_components.helman.const import (  # noqa: E402
     FORECAST_CANONICAL_GRANULARITY_MINUTES,

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from homeassistant.util import dt as dt_util
+
 import importlib
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -7,7 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
-from _ha_stubs import install_helman_packages, stub_module
+from _ha_stubs import stub_module
 
 REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
 TZ = ZoneInfo("Europe/Prague")
@@ -52,7 +54,7 @@ def _replay_window(
 
 
 def _install_import_stubs() -> None:
-    install_helman_packages()
+
     core_mod = stub_module("homeassistant.core")
     if not hasattr(core_mod, "HomeAssistant"):
         core_mod.HomeAssistant = type("HomeAssistant", (), {})
@@ -80,26 +82,6 @@ def _install_import_stubs() -> None:
     util_pkg.dt = dt_mod
 
 
-class _FakeDtUtil:
-    @staticmethod
-    def as_local(value: datetime) -> datetime:
-        if value.tzinfo == TZ:
-            return value
-        return value.astimezone(TZ)
-
-    @staticmethod
-    def as_utc(value: datetime) -> datetime:
-        if value.tzinfo == UTC:
-            return value
-        return value.astimezone(UTC)
-
-    @staticmethod
-    def now() -> datetime:
-        return REFERENCE_TIME
-
-    @staticmethod
-    def utc_from_timestamp(timestamp: float) -> datetime:
-        return datetime.fromtimestamp(timestamp, tz=UTC)
 
 
 _install_import_stubs()
@@ -203,12 +185,12 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         consumption_module, recorder_module, builder = self._make_builder()
 
         with (
-            patch.object(consumption_module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_module, "dt_util", _FakeDtUtil),
+            patch.object(consumption_module, "dt_util", dt_util),
+            patch.object(recorder_module, "dt_util", dt_util),
         ):
             return builder.assemble(
                 self._flat_profile(consumption_module, consumers=consumers),
-                local_now=_FakeDtUtil.as_local(reference_time),
+                local_now=dt_util.as_local(reference_time),
                 consumers_config=[
                     {"energy_entity_id": "sensor.washer_energy", "label": "Washer"}
                 ],
@@ -233,8 +215,8 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with (
-            patch.object(consumption_module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_module, "dt_util", _FakeDtUtil),
+            patch.object(consumption_module, "dt_util", dt_util),
+            patch.object(recorder_module, "dt_util", dt_util),
             patch.object(
                 builder,
                 "_build_actual_history",
@@ -268,8 +250,8 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with (
-            patch.object(consumption_module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_module, "dt_util", _FakeDtUtil),
+            patch.object(consumption_module, "dt_util", dt_util),
+            patch.object(recorder_module, "dt_util", dt_util),
             patch.object(
                 builder,
                 "_build_actual_history",
@@ -294,8 +276,8 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         consumption_module, recorder_module, builder = self._make_builder()
 
         with (
-            patch.object(consumption_module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_module, "dt_util", _FakeDtUtil),
+            patch.object(consumption_module, "dt_util", dt_util),
+            patch.object(recorder_module, "dt_util", dt_util),
         ):
             payload = await builder.build(
                 reference_time=REFERENCE_TIME,
@@ -317,8 +299,8 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with (
-            patch.object(consumption_module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_module, "dt_util", _FakeDtUtil),
+            patch.object(consumption_module, "dt_util", dt_util),
+            patch.object(recorder_module, "dt_util", dt_util),
         ):
             payload = await builder.build(
                 reference_time=REFERENCE_TIME,
@@ -337,8 +319,8 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         consumption_module, recorder_module, builder = self._make_builder()
 
         with (
-            patch.object(consumption_module, "dt_util", _FakeDtUtil),
-            patch.object(recorder_module, "dt_util", _FakeDtUtil),
+            patch.object(consumption_module, "dt_util", dt_util),
+            patch.object(recorder_module, "dt_util", dt_util),
             patch.object(
                 builder, "_build_actual_history", AsyncMock(return_value=[])
             ),
@@ -510,7 +492,7 @@ class ConsumptionForecastBuilderCacheTests(unittest.IsolatedAsyncioTestCase):
             SimpleNamespace(
                 state=str(round(index * 0.1, 4)),
                 attributes={"unit_of_measurement": "kWh"},
-                last_updated=_FakeDtUtil.as_utc(
+                last_updated=dt_util.as_utc(
                     midnight + timedelta(minutes=15 * index)
                 ),
             )
@@ -538,7 +520,7 @@ class ConsumptionForecastBuilderCacheTests(unittest.IsolatedAsyncioTestCase):
         )
         consumers = [{"energy_entity_id": self.ENTITY_ID, "label": "A"}]
         with (
-            patch.object(recorder_module, "dt_util", _FakeDtUtil),
+            patch.object(recorder_module, "dt_util", dt_util),
             patch.object(
                 recorder_module,
                 "state_changes_during_period",
@@ -585,15 +567,15 @@ class ConsumptionForecastBuilderCacheTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             windows[0],
             (
-                _FakeDtUtil.as_utc(datetime(2026, 5, 9, 23, 30, tzinfo=TZ)),
-                _FakeDtUtil.as_utc(datetime(2026, 5, 10, 23, 30, tzinfo=TZ)),
+                dt_util.as_utc(datetime(2026, 5, 9, 23, 30, tzinfo=TZ)),
+                dt_util.as_utc(datetime(2026, 5, 10, 23, 30, tzinfo=TZ)),
             ),
         )
         self.assertEqual(
             windows[1],
             (
-                _FakeDtUtil.as_utc(datetime(2026, 5, 10, 22, 45, tzinfo=TZ)),
-                _FakeDtUtil.as_utc(datetime(2026, 5, 10, 23, 45, tzinfo=TZ)),
+                dt_util.as_utc(datetime(2026, 5, 10, 22, 45, tzinfo=TZ)),
+                dt_util.as_utc(datetime(2026, 5, 10, 23, 45, tzinfo=TZ)),
             ),
         )
         # And the answer is still the whole day, not just the tail.

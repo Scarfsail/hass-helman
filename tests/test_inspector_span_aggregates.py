@@ -21,17 +21,19 @@ of ``test_inspector_recorder_query_count.py``.
 
 from __future__ import annotations
 
+from _fakes import DummyStore as _DummyStore
+
 import asyncio
-import sys
 from contextlib import contextmanager
-import types
 import unittest
+import pytest
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
+from homeassistant.components import recorder
+from homeassistant.util import dt as dt_util
 
-from _ha_stubs import install_helman_packages
 
 
 #: Every ``statistics_during_period`` call the fake recorder saw, in order.
@@ -51,40 +53,14 @@ STATISTICS_ROWS_MONTH: dict[str, list[dict]] = {}
 STATISTICS_ROWS_DAY: dict[str, list[dict]] = {}
 
 
-def _install_import_stubs() -> None:
-    install_helman_packages("solar_bias_correction")
-
-    ha_mod = types.ModuleType("homeassistant")
-    ha_mod.__path__ = []
-    sys.modules["homeassistant"] = ha_mod
-
-    components_mod = types.ModuleType("homeassistant.components")
-    components_mod.__path__ = []
-    sys.modules["homeassistant.components"] = components_mod
-
-    async def _run_in_executor(func, *args):
+async def _run_in_executor(func, *args):
         # Yields before running, the way a real executor hand-off does. Without
         # this the fake never lets a second coroutine interleave, and anything
         # racing a recorder read would pass here no matter how it behaved.
         await asyncio.sleep(0)
         return func(*args)
 
-    recorder_mod = types.ModuleType("homeassistant.components.recorder")
-    # One shared instance rather than a fresh namespace per call, so a test can
-    # give the recorder a purge horizon. ``keep_days`` and ``auto_purge`` are
-    # absent by default, which is how the fake says "no horizon to be had".
-    recorder_mod.instance_stub = SimpleNamespace(
-        async_add_executor_job=_run_in_executor
-    )
-    recorder_mod.get_instance = lambda hass: recorder_mod.instance_stub
-    sys.modules["homeassistant.components.recorder"] = recorder_mod
-
-    history_mod = types.ModuleType("homeassistant.components.recorder.history")
-    history_mod.state_changes_during_period = lambda *args, **kwargs: {}
-    history_mod.get_significant_states = lambda *args, **kwargs: {}
-    sys.modules["homeassistant.components.recorder.history"] = history_mod
-
-    def _fake_statistics_during_period(
+def _fake_statistics_during_period(
         hass, start_time, end_time, statistic_ids, period, units, types_
     ):
         STATISTICS_CALLS.append(
@@ -119,38 +95,24 @@ def _install_import_stubs() -> None:
             if statistic_ids is None or statistic_id in statistic_ids
         }
 
-    statistics_mod = types.ModuleType("homeassistant.components.recorder.statistics")
-    statistics_mod.statistics_during_period = _fake_statistics_during_period
-    sys.modules["homeassistant.components.recorder.statistics"] = statistics_mod
-
-    core_mod = types.ModuleType("homeassistant.core")
-    core_mod.HomeAssistant = type("HomeAssistant", (), {})
-    core_mod.callback = lambda func: func
-    sys.modules["homeassistant.core"] = core_mod
-
-    util_mod = types.ModuleType("homeassistant.util")
-    sys.modules["homeassistant.util"] = util_mod
-    dt_mod = types.ModuleType("homeassistant.util.dt")
-    dt_mod.now = lambda: NOW
-    dt_mod.as_local = lambda value: value.astimezone(PRAGUE)
-    dt_mod.as_utc = lambda value: value.astimezone(timezone.utc)
-    sys.modules["homeassistant.util.dt"] = dt_mod
-    util_mod.dt = dt_mod
-
-    sys.modules.pop("custom_components.helman.recorder_statistics_span", None)
-    sys.modules.pop("custom_components.helman.solar_bias_correction.service", None)
-
-
 PRAGUE = ZoneInfo("Europe/Prague")
-#: The clock every test runs against. A span is cut at today, so this bounds it.
 NOW = datetime(2026, 5, 25, 10, 0, tzinfo=PRAGUE)
+RECORDER_STUB = SimpleNamespace(async_add_executor_job=_run_in_executor)
+DT_STUB = dt_util
 
-_install_import_stubs()
 
-#: The stubbed ``dt_util`` module, so a test can move the clock.
-DT_STUB = sys.modules["homeassistant.util.dt"]
-#: The stubbed recorder instance, so a test can give it a purge horizon.
-RECORDER_STUB = sys.modules["homeassistant.components.recorder"].instance_stub
+@pytest.fixture(autouse=True)
+def _recorder(monkeypatch):
+    from homeassistant.components.recorder import history
+    monkeypatch.setattr(recorder, "get_instance", lambda hass: RECORDER_STUB)
+    monkeypatch.setattr(span_mod, "get_instance", lambda hass: RECORDER_STUB)
+    monkeypatch.setattr(recorder_series_mod, "get_instance", lambda hass: RECORDER_STUB)
+    monkeypatch.setattr(recorder_series_mod, "get_significant_states", lambda *args, **kwargs: {})
+    monkeypatch.setattr(recorder_series_mod, "state_changes_during_period", lambda *args, **kwargs: {})
+    monkeypatch.setattr(span_mod, "statistics_during_period", _fake_statistics_during_period)
+    monkeypatch.setattr(history, "state_changes_during_period", lambda *args, **kwargs: {})
+    monkeypatch.setattr(history, "get_significant_states", lambda *args, **kwargs: {})
+    monkeypatch.setattr(DT_STUB, "now", lambda: NOW)
 
 
 def _solar_meter_batch(by_slot_wh: dict[str, float]):
@@ -236,13 +198,6 @@ def _hass(**fields) -> SimpleNamespace:
         states=SimpleNamespace(get=lambda entity_id: None),
         **fields,
     )
-
-
-class _DummyStore:
-    profile = None
-
-    async def async_save(self, payload):
-        self.saved = payload
 
 
 def _make_service(*, import_price_config=None):

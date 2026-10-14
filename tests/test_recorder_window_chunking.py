@@ -16,18 +16,12 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from _ha_stubs import install_helman_packages
 
 PRAGUE = ZoneInfo("Europe/Prague")
 UTC = timezone.utc
 METER = "sensor.solar_total_energy"
 
 
-def _install_import_stubs() -> None:
-    install_helman_packages()
-
-
-_install_import_stubs()
 
 from custom_components.helman import recorder_hourly_series  # noqa: E402
 

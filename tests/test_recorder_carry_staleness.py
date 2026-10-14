@@ -22,13 +22,15 @@ Four things earn a test here, per the issue's working agreement:
 
 from __future__ import annotations
 
+from homeassistant.util import dt as dt_util
+
 import unittest
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from _ha_stubs import install_helman_packages, stub_module
+from _ha_stubs import stub_module
 
 TZ = ZoneInfo("Europe/Prague")
 UTC = timezone.utc
@@ -37,7 +39,7 @@ ENTITY_ID = "sensor.house_energy"
 
 
 def _install_import_stubs() -> None:
-    install_helman_packages()
+
     core_mod = stub_module("homeassistant.core")
     if not hasattr(core_mod, "HomeAssistant"):
         core_mod.HomeAssistant = type("HomeAssistant", (), {})
@@ -61,18 +63,6 @@ def _install_import_stubs() -> None:
     util_pkg.dt = dt_mod
 
 
-class _FakeDtUtil:
-    @staticmethod
-    def as_local(value: datetime) -> datetime:
-        if value.tzinfo == TZ:
-            return value
-        return value.astimezone(TZ)
-
-    @staticmethod
-    def as_utc(value: datetime) -> datetime:
-        if value.tzinfo == UTC:
-            return value
-        return value.astimezone(UTC)
 
 
 _install_import_stubs()
@@ -88,7 +78,7 @@ def _state(local_time: datetime, value_kwh: float) -> SimpleNamespace:
     return SimpleNamespace(
         state=str(round(value_kwh, 6)),
         attributes={"unit_of_measurement": "kWh"},
-        last_updated=_FakeDtUtil.as_utc(local_time),
+        last_updated=dt_util.as_utc(local_time),
     )
 
 
@@ -213,7 +203,7 @@ class GapDropsRatherThanZeroesTests(_RecorderPatchMixin, unittest.IsolatedAsynci
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls._dt_patcher = patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil)
+        cls._dt_patcher = patch.object(recorder_hourly_series, "dt_util", dt_util)
         cls._dt_patcher.start()
 
     @classmethod
@@ -264,7 +254,7 @@ class GapDropsRatherThanZeroesTests(_RecorderPatchMixin, unittest.IsolatedAsynci
         # still carry 100.0 and their slots read as real, if uneventful,
         # zero-delta slots.
         for offset_minutes in (0, 15):
-            slot_start = _FakeDtUtil.as_utc(
+            slot_start = dt_util.as_utc(
                 DAY + timedelta(hours=9, minutes=offset_minutes)
             )
             self.assertIn(slot_start, changes)
@@ -275,7 +265,7 @@ class GapDropsRatherThanZeroesTests(_RecorderPatchMixin, unittest.IsolatedAsynci
         # from there through 11:00 is stale and its slot is absent -- not a
         # zero, and not merged into one big delta either.
         for offset_minutes in (45, 60, 75, 90, 105, 120):
-            slot_start = _FakeDtUtil.as_utc(
+            slot_start = dt_util.as_utc(
                 DAY + timedelta(hours=9, minutes=offset_minutes)
             )
             self.assertNotIn(
@@ -287,14 +277,14 @@ class GapDropsRatherThanZeroesTests(_RecorderPatchMixin, unittest.IsolatedAsynci
         # The slot the fresh 11:07 reading lands in -- 11:00-11:15 -- must not
         # be charged with the whole outage's 4 kWh; its start boundary (11:00)
         # has no sample, so it drops out like the rest of the gap.
-        overcharged_slot = _FakeDtUtil.as_utc(DAY + timedelta(hours=11))
+        overcharged_slot = dt_util.as_utc(DAY + timedelta(hours=11))
         self.assertNotIn(overcharged_slot, changes)
         self.assertNotIn(4.0, changes.values())
 
         # And the ordinary slots either side of the gap read normally.
-        before_gap = _FakeDtUtil.as_utc(DAY + timedelta(hours=8, minutes=30))
+        before_gap = dt_util.as_utc(DAY + timedelta(hours=8, minutes=30))
         self.assertAlmostEqual(changes[before_gap], 0.25, places=6)
-        after_gap = _FakeDtUtil.as_utc(DAY + timedelta(hours=11, minutes=15))
+        after_gap = dt_util.as_utc(DAY + timedelta(hours=11, minutes=15))
         self.assertAlmostEqual(changes[after_gap], 0.3, places=6)
 
 
@@ -303,7 +293,7 @@ class QuietOnChangeMeterTests(_RecorderPatchMixin, unittest.IsolatedAsyncioTestC
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls._dt_patcher = patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil)
+        cls._dt_patcher = patch.object(recorder_hourly_series, "dt_util", dt_util)
         cls._dt_patcher.start()
 
     @classmethod
@@ -334,7 +324,7 @@ class QuietOnChangeMeterTests(_RecorderPatchMixin, unittest.IsolatedAsyncioTestC
         # Every slot from 09:00 to 11:00 is a real, unchanged zero -- not
         # dropped, because the meter's next reading confirmed nothing moved.
         for index in range(8):
-            slot_start = _FakeDtUtil.as_utc(
+            slot_start = dt_util.as_utc(
                 DAY + timedelta(hours=9, minutes=15 * index)
             )
             self.assertIn(slot_start, changes, f"slot {index} should still be present")
@@ -346,7 +336,7 @@ class LookbackCatchesAPreWindowGapTests(_RecorderPatchMixin, unittest.IsolatedAs
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls._dt_patcher = patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil)
+        cls._dt_patcher = patch.object(recorder_hourly_series, "dt_util", dt_util)
         cls._dt_patcher.start()
 
     @classmethod
@@ -379,7 +369,7 @@ class LookbackCatchesAPreWindowGapTests(_RecorderPatchMixin, unittest.IsolatedAs
             )
 
         # The query itself must have reached back for the pre-window reading.
-        self.assertEqual(recorder.windows[0][0], _FakeDtUtil.as_utc(window_start) - timedelta(minutes=30))
+        self.assertEqual(recorder.windows[0][0], dt_util.as_utc(window_start) - timedelta(minutes=30))
 
         # 10:00, 10:15 and 10:30 are all still inside the outage at their own
         # boundary and must not read as zero-delta slots.
@@ -388,7 +378,7 @@ class LookbackCatchesAPreWindowGapTests(_RecorderPatchMixin, unittest.IsolatedAs
             window_start + timedelta(minutes=15),
             window_start + timedelta(minutes=30),
         ):
-            slot_start = _FakeDtUtil.as_utc(local_slot_start)
+            slot_start = dt_util.as_utc(local_slot_start)
             self.assertNotIn(slot_start, changes)
 
 
@@ -398,7 +388,7 @@ class ResumedReadMatchesColdReadTests(_RecorderPatchMixin, unittest.IsolatedAsyn
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls._dt_patcher = patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil)
+        cls._dt_patcher = patch.object(recorder_hourly_series, "dt_util", dt_util)
         cls._dt_patcher.start()
 
     @classmethod
@@ -461,7 +451,7 @@ class ResumedReadMatchesColdReadTests(_RecorderPatchMixin, unittest.IsolatedAsyn
 
         # And the gap really did drop out of the final answer rather than
         # reading as a string of zeros.
-        gap_slot = _FakeDtUtil.as_utc(DAY + timedelta(hours=9, minutes=30))
+        gap_slot = dt_util.as_utc(DAY + timedelta(hours=9, minutes=30))
         self.assertNotIn(gap_slot, incremental)
 
 
@@ -490,7 +480,7 @@ class QuietMeterInALiveBatchTests(_RecorderPatchMixin, unittest.IsolatedAsyncioT
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls._dt_patcher = patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil)
+        cls._dt_patcher = patch.object(recorder_hourly_series, "dt_util", dt_util)
         cls._dt_patcher.start()
 
     @classmethod
@@ -530,7 +520,7 @@ class QuietMeterInALiveBatchTests(_RecorderPatchMixin, unittest.IsolatedAsyncioT
         # meter's next reading differed, which is every quiet stretch there is.
         quiet = batch.by_entity[QUIET_ENTITY_ID]
         for index in range(8):
-            slot_start = _FakeDtUtil.as_utc(
+            slot_start = dt_util.as_utc(
                 DAY + timedelta(hours=9, minutes=15 * index)
             )
             self.assertIn(slot_start, quiet, f"slot {index} should still be present")
@@ -540,10 +530,10 @@ class QuietMeterInALiveBatchTests(_RecorderPatchMixin, unittest.IsolatedAsyncioT
         # make lands in the slot it belongs to rather than being spread.
         busy = batch.by_entity[BUSY_ENTITY_ID]
         self.assertAlmostEqual(
-            busy[_FakeDtUtil.as_utc(DAY + timedelta(hours=10))], 0.25, places=6
+            busy[dt_util.as_utc(DAY + timedelta(hours=10))], 0.25, places=6
         )
         self.assertAlmostEqual(
-            quiet[_FakeDtUtil.as_utc(DAY + timedelta(hours=11))], 0.2, places=6
+            quiet[dt_util.as_utc(DAY + timedelta(hours=11))], 0.2, places=6
         )
 
         # And the trace really is the union of both meters' publishes.
@@ -551,7 +541,7 @@ class QuietMeterInALiveBatchTests(_RecorderPatchMixin, unittest.IsolatedAsyncioT
             batch.liveness_instants, sorted(batch.liveness_instants)
         )
         self.assertIn(
-            _FakeDtUtil.as_utc(DAY + timedelta(hours=10)), batch.liveness_instants
+            dt_util.as_utc(DAY + timedelta(hours=10)), batch.liveness_instants
         )
 
     async def test_a_batch_wide_silence_still_drops_its_slots(self) -> None:
@@ -585,7 +575,7 @@ class QuietMeterInALiveBatchTests(_RecorderPatchMixin, unittest.IsolatedAsyncioT
         for entity_id in (BUSY_ENTITY_ID, QUIET_ENTITY_ID):
             changes = batch.by_entity[entity_id]
             for offset_minutes in (45, 60, 75, 90, 105, 120):
-                slot_start = _FakeDtUtil.as_utc(
+                slot_start = dt_util.as_utc(
                     DAY + timedelta(hours=9, minutes=offset_minutes)
                 )
                 self.assertNotIn(
@@ -608,7 +598,7 @@ class SolarPathBorrowsTheBatchTraceTests(
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls._dt_patcher = patch.object(recorder_hourly_series, "dt_util", _FakeDtUtil)
+        cls._dt_patcher = patch.object(recorder_hourly_series, "dt_util", dt_util)
         cls._dt_patcher.start()
 
     @classmethod
@@ -644,13 +634,13 @@ class SolarPathBorrowsTheBatchTraceTests(
         # trace the inspector hands over from its batched read.
         changes = await self._read(
             [
-                _FakeDtUtil.as_utc(DAY + timedelta(minutes=15 * index))
+                dt_util.as_utc(DAY + timedelta(minutes=15 * index))
                 for index in range(28)
             ]
         )
 
         for index in range(8):
-            slot_start = _FakeDtUtil.as_utc(
+            slot_start = dt_util.as_utc(
                 DAY + timedelta(hours=4, minutes=15 * index)
             )
             self.assertIn(slot_start, changes, f"04:{15 * index:02d} should be present")
@@ -662,7 +652,7 @@ class SolarPathBorrowsTheBatchTraceTests(
         changes = await self._read(None)
 
         for index in range(2, 8):
-            slot_start = _FakeDtUtil.as_utc(
+            slot_start = dt_util.as_utc(
                 DAY + timedelta(hours=4, minutes=15 * index)
             )
             self.assertNotIn(slot_start, changes)

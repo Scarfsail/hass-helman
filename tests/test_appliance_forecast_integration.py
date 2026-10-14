@@ -6,82 +6,20 @@ import types
 import unittest
 from pathlib import Path
 
-from _ha_stubs import restore_modules, snapshot_modules
-
 ROOT = Path(__file__).resolve().parents[1]
 
-_STUBBED_MODULES = (
-    "custom_components",
-    "custom_components.helman",
-    "custom_components.helman.recorder_hourly_series",
-    "homeassistant",
-    "homeassistant.components",
-    "homeassistant.components.recorder",
-    "homeassistant.components.recorder.history",
-    "homeassistant.util",
-    "homeassistant.util.dt",
+forecast_integration_module = importlib.import_module(
+    "custom_components.helman.appliances.forecast_integration"
 )
-
-
-def _install_import_stubs() -> dict[str, types.ModuleType | None]:
-    previous_modules = snapshot_modules(_STUBBED_MODULES)
-    custom_components_pkg = types.ModuleType("custom_components")
-    custom_components_pkg.__path__ = [str(ROOT / "custom_components")]
-    sys.modules["custom_components"] = custom_components_pkg
-
-    helman_pkg = types.ModuleType("custom_components.helman")
-    helman_pkg.__path__ = [str(ROOT / "custom_components" / "helman")]
-    sys.modules["custom_components.helman"] = helman_pkg
-
-    recorder_slots_mod = types.ModuleType("custom_components.helman.recorder_hourly_series")
-
-    recorder_slots_mod.own_energy_changes = lambda meter, children, *, slot: dict(meter)
-    recorder_slots_mod.get_local_current_slot_start = (
-        lambda reference_time, *, interval_minutes: reference_time.replace(
-            minute=(reference_time.minute // interval_minutes) * interval_minutes,
-            second=0,
-            microsecond=0,
-        )
-    )
-    sys.modules[recorder_slots_mod.__name__] = recorder_slots_mod
-
-    import homeassistant.util.dt  # type: ignore  # noqa: F401
-    return previous_modules
-
-
-_previous_modules = _install_import_stubs()
-try:
-    forecast_integration_module = importlib.import_module(
-        "custom_components.helman.appliances.forecast_integration"
-    )
-    projection_builder_module = importlib.import_module(
-        "custom_components.helman.appliances.projection_builder"
-    )
-finally:
-    restore_modules(_previous_modules)
-    for module_name in (
-        "custom_components.helman.appliances.forecast_integration",
-        "custom_components.helman.appliances.projection_builder",
-        "custom_components.helman.appliances",
-    ):
-        sys.modules.pop(module_name, None)
+projection_builder_module = importlib.import_module(
+    "custom_components.helman.appliances.projection_builder"
+)
 
 ApplianceDemandPoint = projection_builder_module.ApplianceDemandPoint
 aggregate_appliance_demand_by_slot = (
     forecast_integration_module.aggregate_appliance_demand_by_slot
 )
 build_adjusted_house_forecast = forecast_integration_module.build_adjusted_house_forecast
-
-# The module under test binds the real ``dt_util`` at import while the restore
-# above drops it from ``sys.modules`` (so the conftest cannot reach it); pin its
-# default zone to Europe/Prague directly so ``as_local``-based slot ids match the
-# ``+01:00`` fixtures. A stubbed ``dt_util`` (host-only, identity ``as_local``)
-# has no ``set_default_time_zone`` and is left as-is.
-if hasattr(forecast_integration_module.dt_util, "set_default_time_zone"):
-    forecast_integration_module.dt_util.set_default_time_zone(
-        forecast_integration_module.dt_util.get_time_zone("Europe/Prague")
-    )
-
 
 def _make_house_forecast() -> dict:
     return {

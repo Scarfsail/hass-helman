@@ -14,10 +14,6 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
-from _ha_stubs import install_helman_packages
-
-
-install_helman_packages()
 
 series = importlib.import_module("custom_components.helman.recorder_hourly_series")
 devices = importlib.import_module("custom_components.helman.controllables.config")
