@@ -4,6 +4,7 @@ from _fakes import FakeHass as SharedFakeHass
 
 import asyncio
 import unittest
+from dataclasses import replace
 from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
@@ -200,6 +201,52 @@ def _build_executor(
 
 
 class RuntimeAnnouncementTests(unittest.IsolatedAsyncioTestCase):
+    async def test_reaching_target_soc_announces_changed_executed_action(self) -> None:
+        announced = []
+        current_soc = [72.0]
+        executor, _hass, _store = _build_executor(
+            entity_id="select.mode",
+            state=FakeState("Normal", options=_build_mode_options()),
+            document=ScheduleDocument(
+                execution_enabled=True,
+                slots={
+                    CURRENT_SLOT_ID: ScheduleAction(
+                        kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+                        target_soc=80,
+                    )
+                },
+            ),
+            announce_schedule_changed=lambda: announced.append("schedule"),
+        )
+        executor._dependencies = replace(
+            executor._dependencies,
+            read_battery_state=lambda: _build_battery_state(
+                current_soc=current_soc[0]
+            ),
+        )
+
+        await executor.async_reconcile(reason="test", reference_time=REFERENCE_TIME)
+        self.assertEqual(announced, ["schedule"])
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.executed_action.kind,
+            SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+        )
+
+        current_soc[0] = 80.0
+        await executor.async_reconcile(reason="test", reference_time=REFERENCE_TIME)
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.executed_action.kind,
+            SCHEDULE_ACTION_STOP_DISCHARGING,
+        )
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.inverter.reason,
+            "target_soc_reached",
+        )
+        self.assertEqual(announced, ["schedule", "schedule"])
+
+        await executor.async_reconcile(reason="test", reference_time=REFERENCE_TIME)
+        self.assertEqual(announced, ["schedule", "schedule"])
+
     async def test_changed_error_code_announces_without_timestamp_noise(self) -> None:
         announced = []
         executor, _hass, _store = _build_executor(

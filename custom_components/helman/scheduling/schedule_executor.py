@@ -788,7 +788,13 @@ class ScheduleExecutor:
             (
                 None
                 if inverter is None
-                else (inverter.action_kind, inverter.outcome, inverter.error_code)
+                else (
+                    inverter.action_kind,
+                    inverter.outcome,
+                    inverter.executed_action,
+                    inverter.reason,
+                    inverter.error_code,
+                )
             ),
             tuple(
                 sorted(
