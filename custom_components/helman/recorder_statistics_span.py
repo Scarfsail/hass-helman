@@ -99,7 +99,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
-from .recorder_hourly_series import query_cumulative_hourly_energy_changes
+from .recorder_hourly_series import query_cumulative_slot_energy_changes
 from .span_buckets import add_months
 
 _LOGGER = logging.getLogger(__name__)
@@ -696,7 +696,7 @@ async def query_spliced_hourly_energy(
 ) -> dict[str, dict[datetime, float]]:
     """Hourly energy over a window that outlives the raw states, per entity.
 
-    Same shape as :func:`~.recorder_hourly_series.query_cumulative_hourly_energy_changes`
+    Same shape as :func:`~.recorder_hourly_series.query_cumulative_slot_energy_changes`
     -- ``{hour_start: kwh}``, keyed by the hour's UTC instant -- for callers that
     ask for more history than ``purge_keep_days`` leaves behind. A trainer
     configured for 56 days reads eight from raw states on a stock recorder and
@@ -780,8 +780,9 @@ async def query_spliced_hourly_energy(
             else {}
         )
         if splice < local_end:
-            recent = await query_cumulative_hourly_energy_changes(
-                hass, entity_id, local_start=splice, local_end=local_end
+            recent = await query_cumulative_slot_energy_changes(
+                hass, entity_id, local_start=splice, local_end=local_end,
+                interval_minutes=60,
             )
             # Raw states win outright, so an hour both sources carry is counted
             # once, with the reading that saw every tick of it.

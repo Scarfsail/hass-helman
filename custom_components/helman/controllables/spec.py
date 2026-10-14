@@ -19,17 +19,6 @@ affects. It deliberately does *not* own config reading — the per-kind readers
 stay where they are and the ``controllables:`` config shape is a later phase —
 nor the decision logic of the executors. It is the vocabulary, not the machinery.
 
-The capability flags are not decoration; they record real, verified asymmetries:
-
-``affects_battery``
-    Only the inverter's actions reach :mod:`..battery_slot_simulation`. The
-    simulator takes one ``ScheduleAction``, and every caller sources it from the
-    slot's ``inverter`` entry — the forecast builder from the schedule map, the
-    ``ensure_self_sustainability`` condition from the schedule overlay, which is
-    built from the same field. An appliance moves the battery too, but only
-    *indirectly*, by adding house demand — which is what ``affects_consumption``
-    says. Nothing lets an appliance select an inverter mode.
-
 ``affects_consumption``
     Only the appliance kinds appear in
     :func:`..appliances.projection_builder.build_appliance_projection_plan`, and
@@ -101,9 +90,8 @@ class ControllableSpec:
     #: attribute supplies the option for each schedule action kind. Insertion
     #: order is the order the roster emits, so it is part of the wire payload.
     action_option_attrs: dict[str, str] = field(default_factory=dict)
-    #: See the module docstring — these three record verified asymmetries, not
+    #: See the module docstring — these record verified asymmetries, not
     #: guesses about which kind feels more like an appliance.
-    affects_battery: bool = False
     affects_consumption: bool = False
     optimizer_kinds: tuple[str, ...] = ()
 
@@ -162,7 +150,6 @@ CONTROLLABLE_SPECS: dict[str, ControllableSpec] = {
                 ),
                 SCHEDULE_ACTION_STOP_EXPORT: "stop_export_option",
             },
-            affects_battery=True,
             optimizer_kinds=("charge_hold", "export_price", "charge_from_grid"),
         ),
         ControllableSpec(

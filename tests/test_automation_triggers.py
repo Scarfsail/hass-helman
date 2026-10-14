@@ -85,8 +85,10 @@ class FakeStorage:
         self.schedule_document = schedule_document
         self.saved_schedule_documents.append(schedule_document)
 
-    async def async_save_snapshot(self, snapshot: dict) -> None:
-        self.forecast_snapshot = snapshot
+    async def async_save_snapshots(
+        self, *, house_snapshot: dict, solar_snapshot: dict | None
+    ) -> None:
+        self.forecast_snapshot = house_snapshot
 
 
 class FakeExecutor:

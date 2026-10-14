@@ -21,7 +21,7 @@ class _FakeEntry:
 
 
 class _FakeCoordinator:
-    def register_sensor_ready(self) -> None: ...
+    pass
 
 
 def _install(sensor) -> list[float | None]:

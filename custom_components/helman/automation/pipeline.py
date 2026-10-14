@@ -27,11 +27,6 @@ from .ownership import (
     strip_automation_owned_actions,
 )
 from .optimizer import build_optimizer
-from .reserve_floor_classifier import (
-    ReserveFloorBoundary,
-    ReserveFloorResult,
-    classify_reserve_floor_observations,
-)
 from .snapshot import OptimizationSnapshot, attach_day_contexts, snapshot_to_dict
 from .trace import (
     OptimizerTrace,
@@ -329,13 +324,6 @@ class _PipelineExecutionResult:
     #: cannot persist them itself — it hands them back and the caller writes
     #: them to the hysteresis store on the event loop (#264).
     emitted_day_bands: dict[tuple[date, str], str] = field(default_factory=dict)
-    #: #274 (P0 of #270) diagnostic classification, one entry per observed
-    #: window. Empty unless a caller opts in via
-    #: ``capture_reserve_floor_diagnostics`` *and* the run has at least one
-    #: enabled ``charge_from_grid`` instance — never populated in a normal
-    #: production run today. Purely additive: nothing here feeds back into
-    #: ``working_schedule_document``.
-    reserve_floor_results: tuple[ReserveFloorResult, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -690,12 +678,6 @@ class AutomationRunner:
         return finalized
 
 
-#: Optimizer kind #274's diagnostic capture is gated on. Several instances of
-#: this kind can exist in one run (config enforces unique ids, not unique
-#: kinds), and each is captured independently, keyed by its own id.
-_CHARGE_FROM_GRID_KIND = "charge_from_grid"
-
-
 def run_optimizer_loop_pure(
     *,
     appliance_optimizers: "Sequence[OptimizerInstanceConfig]",
@@ -707,7 +689,7 @@ def run_optimizer_loop_pure(
     appliance_registry: Any,
     build_snapshot: "Callable[[ScheduleDocument], OptimizationSnapshot]",
     resolve_day_contexts: "Callable[..., dict] | None" = None,
-    capture_reserve_floor_diagnostics: bool = False,
+    on_step_end: "Callable[[ScheduleDocument, OptimizerTrace], None] | None" = None,
 ) -> _PipelineExecutionResult:
     """Pure, synchronous optimizer loop — safe to run in an executor.
 
@@ -725,14 +707,7 @@ def run_optimizer_loop_pure(
     Contains no ``hass`` access and no ``await``. ``build_snapshot`` rebuilds
     the optimization snapshot from a schedule document alone using the
     pre-gathered (hass-free) compute inputs, so every per-iteration rebuild
-    stays pure too.
-
-    ``capture_reserve_floor_diagnostics`` arms the #274 (P0 of #270)
-    diagnostic: one extra control-snapshot rebuild per run plus one extra
-    boundary rebuild per emitting ``charge_from_grid`` step. Opt-in and
-    ``False`` by default — production scheduled runs never pass it, so they
-    never pay for it. A run with no enabled ``charge_from_grid`` instance
-    captures no extra snapshots and does no classification work regardless.
+    stays pure too. ``on_step_end`` lets a caller observe each completed step.
     """
     working_schedule_document = schedule_document
     snapshot = initial_snapshot
@@ -742,19 +717,6 @@ def run_optimizer_loop_pure(
         _safe_capture(_capture_static_rails, initial_snapshot, trace.slot_ids)
     )
     emitted_day_bands: dict[tuple[date, str], str] = {}
-    capture_reserve_floor = capture_reserve_floor_diagnostics and any(
-        optimizer.kind == _CHARGE_FROM_GRID_KIND for optimizer in system_optimizers
-    )
-    reserve_floor_control_snapshot: OptimizationSnapshot | None = None
-    if capture_reserve_floor:
-        # The control snapshot: the trajectory before anything was planned.
-        # Built over `schedule_document`, which carries user-owned actions
-        # only — no automation-owned ones.
-        reserve_floor_control_snapshot = _safe_build_snapshot(
-            build_snapshot, schedule_document
-        )
-    reserve_floor_boundaries: dict[str, ReserveFloorBoundary] = {}
-
     # --- Phase 1: appliance optimizers, earlier appliances only, untraced ---
     # Provisional and superseded by phase 3: its summaries never join
     # `optimizer_summaries`, the list that becomes the reported run result —
@@ -766,7 +728,6 @@ def run_optimizer_loop_pure(
             snapshot,
             _summary,
             _emitted,
-            _boundary,
         ) = _run_optimizer_step(
             optimizer_config=optimizer_config,
             working_schedule_document=working_schedule_document,
@@ -779,7 +740,7 @@ def run_optimizer_loop_pure(
             traced=False,
             phase=1,
             optimizer_summaries=(),
-            capture_reserve_floor=False,
+            on_step_end=on_step_end,
         )
 
     # --- Phase 2: system optimizers, traced, fixed phase-1 appliance demand ---
@@ -789,7 +750,6 @@ def run_optimizer_loop_pure(
             snapshot,
             summary,
             emitted,
-            boundary,
         ) = _run_optimizer_step(
             optimizer_config=optimizer_config,
             working_schedule_document=working_schedule_document,
@@ -802,12 +762,10 @@ def run_optimizer_loop_pure(
             traced=True,
             phase=PHASE_SYSTEM_PLAN,
             optimizer_summaries=tuple(optimizer_summaries),
-            capture_reserve_floor=capture_reserve_floor,
+            on_step_end=on_step_end,
         )
         optimizer_summaries.append(summary)
         emitted_day_bands.update(emitted)
-        if boundary is not None:
-            reserve_floor_boundaries[optimizer_config.id] = boundary
 
     # --- Phase 3: appliance optimizers re-plan against the phase-2 inverter
     # plan. Each sees "my lane is empty, earlier lanes committed" the same
@@ -832,7 +790,6 @@ def run_optimizer_loop_pure(
             snapshot,
             summary,
             emitted,
-            _boundary,
         ) = _run_optimizer_step(
             optimizer_config=optimizer_config,
             working_schedule_document=working_schedule_document,
@@ -845,7 +802,7 @@ def run_optimizer_loop_pure(
             traced=True,
             phase=PHASE_FINAL_APPLIANCE_PLACEMENT,
             optimizer_summaries=tuple(optimizer_summaries),
-            capture_reserve_floor=False,
+            on_step_end=on_step_end,
         )
         optimizer_summaries.append(summary)
         emitted_day_bands.update(emitted)
@@ -861,15 +818,6 @@ def run_optimizer_loop_pure(
     trace.set_rails_final(
         _safe_capture(_capture_step_rails, snapshot, trace.slot_ids)
     )
-    reserve_floor_results: tuple[ReserveFloorResult, ...] = ()
-    if capture_reserve_floor and trace.reserve_floor_observations:
-        reserve_floor_results = _safe_classify_reserve_floor(
-            trace.reserve_floor_observations,
-            control_snapshot=reserve_floor_control_snapshot,
-            boundaries=reserve_floor_boundaries,
-            final_snapshot=snapshot,
-            final_document=working_schedule_document,
-        )
     return _PipelineExecutionResult(
         working_schedule_document=working_schedule_document,
         snapshot=snapshot,
@@ -883,7 +831,6 @@ def run_optimizer_loop_pure(
             optimizers=trace.optimizer_explanations(),
         ),
         emitted_day_bands=emitted_day_bands,
-        reserve_floor_results=reserve_floor_results,
     )
 
 
@@ -900,13 +847,12 @@ def _run_optimizer_step(
     traced: bool,
     phase: int,
     optimizer_summaries: tuple[OptimizerRunSummary, ...],
-    capture_reserve_floor: bool,
+    on_step_end: "Callable[[ScheduleDocument, OptimizerTrace], None] | None",
 ) -> tuple[
     ScheduleDocument,
     OptimizationSnapshot,
     OptimizerRunSummary,
     dict[tuple[date, str], str],
-    "ReserveFloorBoundary | None",
 ]:
     """Run one optimizer step, shared by every phase.
 
@@ -954,7 +900,6 @@ def _run_optimizer_step(
                     day_context.classification
                 )
     slots_written = 0
-    boundary: ReserveFloorBoundary | None = None
     for member_config in optimizer_config.member_configs():
         (controllable_id,) = member_config.controllable_ids
         if step_day_contexts is not None:
@@ -1068,18 +1013,9 @@ def _run_optimizer_step(
         )
         trace.record_writes(write_records)
         slots_written += len(write_records)
-        if capture_reserve_floor and optimizer_config.kind == _CHARGE_FROM_GRID_KIND:
-            step_observations = [
-                observation
-                for observation in trace.reserve_floor_observations
-                if observation.optimizer_id == optimizer_config.id
-            ]
-            if step_observations:
-                boundary = _safe_build_reserve_floor_boundary(
-                    build_snapshot=build_snapshot,
-                    working_schedule_document=working_schedule_document,
-                )
         trace.end_step(status="ok")
+        if on_step_end is not None:
+            on_step_end(working_schedule_document, trace)
     # One summary per optimizer, whatever its member count: the run result
     # reports configured optimizers, not lanes.
     summary = _build_optimizer_summary(
@@ -1089,7 +1025,7 @@ def _run_optimizer_step(
         slots_written=slots_written,
         duration_ms=_elapsed_ms(optimizer_started_at),
     )
-    return working_schedule_document, snapshot, summary, emitted_bands, boundary
+    return working_schedule_document, snapshot, summary, emitted_bands
 
 
 def _coerce_optimizer_result_schedule_document(
@@ -1155,83 +1091,6 @@ def _safe_capture(
     except Exception:  # pragma: no cover - observability must not fail runs
         _LOGGER.exception("trace rail capture failed; run continues")
         return {}
-
-
-def _safe_build_snapshot(
-    build_snapshot: "Callable[..., OptimizationSnapshot]",
-    document: ScheduleDocument,
-) -> OptimizationSnapshot | None:
-    """Build the #274 control snapshot without ever failing the run.
-
-    Logs at debug only, per the issue's "never above debug" rule — unlike
-    ``_safe_capture``, whose rail-capture failures warrant the louder
-    ``_LOGGER.exception``.
-    """
-    try:
-        return build_snapshot(document)
-    except Exception:  # pragma: no cover - observability must not fail runs
-        _LOGGER.debug(
-            "reserve floor control snapshot capture failed; run continues",
-            exc_info=True,
-        )
-        return None
-
-
-def _safe_build_reserve_floor_boundary(
-    *,
-    build_snapshot: "Callable[[ScheduleDocument], OptimizationSnapshot]",
-    working_schedule_document: ScheduleDocument,
-) -> ReserveFloorBoundary | None:
-    """The #274 boundary capture, phased pipeline (#272, P2 of #270).
-
-    Phase 2 never touches an appliance lane, so ``working_schedule_document``
-    right after the emitting ``charge_from_grid`` step writes *is* the same
-    demand basis its own input used — the fixed phase-1 appliance demand plus
-    whatever phase 2 has written so far, including this step's own bridge.
-    There is no more pending-lane restoration to reconcile: a plain rebuild
-    over this one document is both the snapshot and the demand basis.
-
-    Never fails the run: caught and logged at debug, like every other #274
-    capture point.
-    """
-    try:
-        return ReserveFloorBoundary(
-            snapshot=build_snapshot(working_schedule_document),
-            demand_document=working_schedule_document,
-        )
-    except Exception:  # pragma: no cover - observability must not fail runs
-        _LOGGER.debug(
-            "reserve floor boundary capture failed; run continues", exc_info=True
-        )
-        return None
-
-
-def _safe_classify_reserve_floor(
-    observations: tuple[Any, ...],
-    **kwargs: Any,
-) -> tuple[ReserveFloorResult, ...]:
-    """Classify without ever failing the run.
-
-    ``classify_reserve_floor_observation`` already catches per-observation, so
-    this only guards the dispatcher itself; either way, a failure here reports
-    every observation as ``status="failed"`` rather than silently vanishing.
-    """
-    try:
-        return classify_reserve_floor_observations(observations, **kwargs)
-    except Exception:  # pragma: no cover - observability must not fail runs
-        _LOGGER.debug(
-            "reserve floor classification batch failed; run continues",
-            exc_info=True,
-        )
-        return tuple(
-            ReserveFloorResult(
-                optimizer_id=observation.optimizer_id,
-                group_index=observation.group_index,
-                window=observation.window,
-                status="failed",
-            )
-            for observation in observations
-        )
 
 
 def _capture_static_rails(

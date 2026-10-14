@@ -12,7 +12,7 @@ from .optimizers import (
 from .spec import KNOWN_OPTIMIZER_KINDS
 
 if TYPE_CHECKING:
-    from ..appliances import AppliancesRuntimeRegistry
+    from ..appliances.state import AppliancesRuntimeRegistry
     from ..scheduling.schedule import ScheduleControlConfig, ScheduleDocument
     from .config import OptimizerInstanceConfig
     from .trace import OptimizerTrace

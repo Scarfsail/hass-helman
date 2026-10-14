@@ -5,12 +5,10 @@ import unittest
 
 
 
-from custom_components.helman.appliances import (
-    AppliancesRuntimeRegistry,
-    ClimateApplianceRuntime,
-    build_appliances_response,
-    build_appliances_runtime_registry,
-)
+from custom_components.helman.appliances.state import AppliancesRuntimeRegistry
+from custom_components.helman.appliances.climate_appliance import ClimateApplianceRuntime
+from custom_components.helman.appliances.dto import build_appliances_response
+from custom_components.helman.appliances.config import build_appliances_runtime_registry
 
 
 def _valid_config() -> dict:

@@ -27,7 +27,7 @@ def _install_import_stubs() -> None:
 
 _install_import_stubs()
 
-from custom_components.helman.appliances import AppliancesRuntimeRegistry  # noqa: E402
+from custom_components.helman.appliances.state import AppliancesRuntimeRegistry  # noqa: E402
 from custom_components.helman.const import (  # noqa: E402
     SCHEDULE_HORIZON_HOURS,
     SCHEDULE_SLOT_MINUTES,

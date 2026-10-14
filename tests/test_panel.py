@@ -24,7 +24,7 @@ from custom_components.helman.frontend import (
     async_card_module_url,
     async_register_frontend,
 )
-from custom_components.helman.panel import async_register_panel, async_unregister_panel
+from custom_components.helman.panel import async_register_panel
 
 
 class FakeHttp:
@@ -101,7 +101,6 @@ class FakeHass(SharedFakeHass):
 
 class PanelTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        self.removed_panels = []
         self.calls = []
 
         async def register_panel(*args, **kwargs):
@@ -111,7 +110,6 @@ class PanelTests(unittest.IsolatedAsyncioTestCase):
             return types.SimpleNamespace(version="1.2.3")
 
         for target, replacement in (
-            ("custom_components.helman.panel.frontend.async_remove_panel", lambda _hass, path: self.removed_panels.append(path)),
             ("custom_components.helman.panel.panel_custom.async_register_panel", register_panel),
             ("custom_components.helman.frontend.async_get_integration", get_integration),
         ):
@@ -238,30 +236,6 @@ class PanelTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("lovelace", manifest.get("after_dependencies", []))
         self.assertNotIn("lovelace", manifest.get("dependencies", []))
-
-    async def test_unregister_panel_removes_registered_panel(self) -> None:
-        hass = FakeHass()
-        await async_register_panel(hass)
-        async_unregister_panel(hass)
-
-        self.assertEqual(
-            self.removed_panels,
-            [PANEL_FRONTEND_URL_PATH],
-        )
-
-    async def test_register_panel_does_not_reregister_static_path_after_reload(self) -> None:
-        hass = FakeHass()
-        frontend_mod = types.SimpleNamespace(removed_panels=self.removed_panels)
-        panel_custom_mod = types.SimpleNamespace(calls=self.calls)
-
-        await async_register_panel(hass)
-        async_unregister_panel(hass)
-        await async_register_panel(hass)
-
-        self.assertEqual(len(hass.http.static_paths), 1)
-        self.assertEqual(frontend_mod.removed_panels, [PANEL_FRONTEND_URL_PATH])
-        self.assertEqual(len(panel_custom_mod.calls), 2)
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -81,8 +81,6 @@ class ScheduleExecutorDependencies:
 
 @dataclass
 class ScheduleExecutionRuntime:
-    last_applied_entity_id: str | None = None
-    last_applied_option: str | None = None
     last_applied_action: ScheduleAction | None = None
     last_active_slot_id: str | None = None
     last_runtime_action_kind: RuntimeActionKind | None = None
@@ -227,8 +225,6 @@ class InverterExecutor:
         )
 
     def build_empty_noop_runtime(self, *, active_slot_id: str) -> InverterRuntimeStatus:
-        self._runtime.last_applied_entity_id = None
-        self._runtime.last_applied_option = None
         self._runtime.last_applied_action = EMPTY_SCHEDULE_ACTION
         self._runtime.last_active_slot_id = active_slot_id
         self._runtime.last_runtime_action_kind = "noop"
@@ -332,8 +328,6 @@ class InverterExecutor:
         if current_option != desired_option:
             await controller.async_select_option(self._actuator, option=desired_option)
 
-        self._runtime.last_applied_entity_id = control_config.mode_entity_id
-        self._runtime.last_applied_option = desired_option
         self._runtime.last_applied_action = action
         self._runtime.last_active_slot_id = active_slot_id
         self._runtime.last_runtime_action_kind = action_kind

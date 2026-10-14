@@ -5,7 +5,8 @@ from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Any
 
-from ..appliances import AppliancesRuntimeRegistry, build_appliances_response
+from ..appliances.state import AppliancesRuntimeRegistry
+from ..appliances.dto import build_appliances_response
 from ..forecast_series_fields import (
     BATTERY_PUBLIC_SERIES_FIELDS,
     project_series_fields,

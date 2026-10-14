@@ -181,18 +181,6 @@ class ControllableSpecRegistryTests(unittest.TestCase):
                 f"{kind} declares attributes {runtime_type.__name__} does not have",
             )
 
-    def test_the_inverter_is_the_only_kind_that_affects_the_battery(self) -> None:
-        """Only inverter actions reach ``battery_slot_simulation``.
-
-        Appliances move the battery only by adding demand, which is what
-        ``affects_consumption`` records; nothing lets one select an inverter
-        mode.
-        """
-        self.assertEqual(
-            {kind for kind, spec in CONTROLLABLE_SPECS.items() if spec.affects_battery},
-            {"inverter"},
-        )
-
     def test_the_appliance_kinds_are_the_only_ones_that_affect_consumption(
         self,
     ) -> None:
@@ -205,13 +193,6 @@ class ControllableSpecRegistryTests(unittest.TestCase):
             },
             {"climate", "ev_charger", "generic"},
         )
-
-    def test_no_kind_both_drives_the_battery_and_projects_demand(self) -> None:
-        for kind, spec in CONTROLLABLE_SPECS.items():
-            self.assertFalse(
-                spec.affects_battery and spec.affects_consumption,
-                f"{kind} claims both capabilities",
-            )
 
     def test_only_the_inverter_maps_schedule_actions_to_options(self) -> None:
         """An appliance's state follows from its action shape, not an option map."""

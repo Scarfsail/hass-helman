@@ -196,14 +196,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await coordinator.async_setup()
 
     domain_data["coordinator"] = coordinator
-    domain_data[entry.entry_id] = {}
 
     try:
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     except Exception:
         await coordinator.async_unload()
         domain_data.pop("coordinator", None)
-        domain_data.pop(entry.entry_id, None)
         raise
     return True
 

@@ -17,11 +17,9 @@ def _install_import_stubs() -> None:
 
 _install_import_stubs()
 
-from custom_components.helman.appliances import (
-    AppliancesRuntimeRegistry,
-    ClimateApplianceRuntime,
-    build_appliances_runtime_registry,
-)
+from custom_components.helman.appliances.state import AppliancesRuntimeRegistry
+from custom_components.helman.appliances.climate_appliance import ClimateApplianceRuntime
+from custom_components.helman.appliances.config import build_appliances_runtime_registry
 from custom_components.helman.const import SCHEDULE_SLOT_MINUTES
 from custom_components.helman.scheduling.schedule import (
     ScheduleActionError,

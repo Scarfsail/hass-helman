@@ -23,20 +23,22 @@ from homeassistant.helpers.event import (
 
 from homeassistant.util import dt as dt_util
 
-from .appliances import (
+from .appliances.config import build_appliances_runtime_registry
+from .appliances.dto import ApplianceMetadataResponseDict
+from .appliances.dto import build_appliances_response
+from .appliances.forecast_integration import build_adjusted_house_forecast
+from .appliances.projection_builder import (
     ApplianceProjectionPlan,
-    ApplianceMetadataResponseDict,
-    ApplianceProjectionsResponseDict,
-    AppliancesRuntimeRegistry,
-    build_adjusted_house_forecast,
     build_appliance_projection_plan,
-    read_vehicle_remaining_capacity_kwh_by_vehicle_id,
-    build_appliance_projections_response,
-    build_appliances_response,
-    build_appliances_runtime_registry,
     build_projection_input_bundle,
+    read_vehicle_remaining_capacity_kwh_by_vehicle_id,
+)
+from .appliances.projection_response import (
+    ApplianceProjectionsResponseDict,
+    build_appliance_projections_response,
     build_empty_appliance_projections_response,
 )
+from .appliances.state import AppliancesRuntimeRegistry
 from .automation.compute_inputs import (
     ComputeInputs,
     CustomConditionGroupResult,
@@ -1041,9 +1043,6 @@ class HelmanCoordinator:
         self._async_add_entities = async_add_entities
         self._unmeasured_sensor_factory = unmeasured_sensor_factory
         self._share_sensor_factory = share_sensor_factory
-
-    def register_sensor_ready(self) -> None:
-        """No-op: sensors receive their first value on the next tick."""
 
     def _publish_solar_forecast_entities(self, *, reason: str) -> None:
         for sensor in self._solar_forecast_sensors:
@@ -3820,14 +3819,10 @@ class HelmanCoordinator:
             self._cached_forecast = house_snapshot
             self._cached_solar_forecast = solar_snapshot
             self._invalidate_battery_forecast_cache()
-            save_snapshots = getattr(self._storage, "async_save_snapshots", None)
-            if save_snapshots is not None:
-                await save_snapshots(
-                    house_snapshot=house_snapshot,
-                    solar_snapshot=solar_snapshot,
-                )
-            else:
-                await self._storage.async_save_snapshot(house_snapshot)
+            await self._storage.async_save_snapshots(
+                house_snapshot=house_snapshot,
+                solar_snapshot=solar_snapshot,
+            )
             # Warm the appliance pipeline before publishing so the house
             # consumption sensor reports the adjusted (base + scheduled) demand,
             # keeping the recorded history it feeds aligned with the battery and

@@ -247,7 +247,7 @@ This is not a regression introduced by phasing. It is the **same hazard** the si
 | Reading surplus | `automation/rails.py` |
 | Run triggers | `automation/triggers.py`, `coordinator.py` |
 | Horizon and slot size | `const.py` — `SCHEDULE_HORIZON_HOURS`, `SCHEDULE_SLOT_MINUTES` |
-| Reserve-floor breach classification | `automation/reserve_floor_classifier.py` |
+| Reserve-floor breach classification | `tests/reserve_floor_classifier.py`, called by `tests/reserve_floor_harness.py` |
 
 ### Things that surprise people
 
@@ -257,4 +257,4 @@ This is not a regression introduced by phasing. It is the **same hazard** the si
 - **Appliance optimizers run twice.** Once in phase 1 to estimate demand for the system bucket, once in phase 3 to place for real against the system bucket's decisions. Only phase 3's placement is what ships; phase 1 is invisible in the run's explanation.
 - **The result no longer depends on what was on disk before the run.** Same forecasts, prices, live state and history in, same document out — whatever the previous plan contained.
 - **A run cannot react to mid-run changes.** All inputs are frozen at run start.
-- **The reserve-floor hazard is not fixed by this.** Phase 3 can still move an appliance into a window `charge_hold` sized before seeing that move. It is classified (`automation/reserve_floor_classifier.py`), not repaired — see Example 6.
+- **The reserve-floor hazard is not fixed by this.** Phase 3 can still move an appliance into a window `charge_hold` sized before seeing that move. The test harness classifies it (`tests/reserve_floor_classifier.py`); production does not classify it — see Example 6.
