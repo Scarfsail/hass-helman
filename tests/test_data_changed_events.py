@@ -9,6 +9,7 @@ Shared coordinator test helpers provide the schedule fixtures used here.
 """
 
 from __future__ import annotations
+from tests._fakes import make_coordinator
 
 import unittest
 
@@ -54,7 +55,7 @@ class DataChangedEventTests(unittest.IsolatedAsyncioTestCase):
         persisted.setdefault("slotMinutes", SCHEDULE_SLOT_MINUTES)
         storage = FakeStorage(schedule_document=persisted)
         hass = FakeHass()
-        coordinator = HelmanCoordinator(hass, storage)
+        coordinator = make_coordinator(_hass=hass, _storage=storage)
         coordinator._schedule_executor = FakeExecutor()
         return coordinator, storage, hass
 

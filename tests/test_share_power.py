@@ -10,6 +10,7 @@ is tested, not a hand-written tree.
 """
 
 from __future__ import annotations
+from tests._fakes import make_coordinator
 
 import asyncio
 import importlib
@@ -105,7 +106,7 @@ def _make_coordinator(
     hass = SimpleNamespace(states=_States(states))
     tree = asyncio.run(tree_builder.HelmanTreeBuilder(hass, config).build())
 
-    c = object.__new__(coordinator_module.HelmanCoordinator)
+    c = make_coordinator()
     c._active_config = config
     c._hass = hass
     c._cached_tree = tree
@@ -281,7 +282,7 @@ class RunningPredicateTests(unittest.TestCase):
                             active_states=member.active_states,
                         )
                     )
-                    c = object.__new__(coordinator_module.HelmanCoordinator)
+                    c = make_coordinator()
                     c._hass = SimpleNamespace(
                         states=SimpleNamespace(
                             get=lambda _entity_id, value=value: SimpleNamespace(state=value)

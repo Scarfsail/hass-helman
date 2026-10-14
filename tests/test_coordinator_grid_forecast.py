@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests._fakes import make_coordinator
 
 import importlib
 import unittest
@@ -20,7 +21,7 @@ def _clock(monkeypatch):
 
 class CoordinatorGridForecastTests(unittest.IsolatedAsyncioTestCase):
     async def test_get_forecast_derives_top_level_grid_from_battery_forecast(self):
-        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._hass = SimpleNamespace()
         coordinator._storage = SimpleNamespace(config={})
         coordinator._active_config = {}
@@ -175,7 +176,7 @@ class CoordinatorGridForecastTests(unittest.IsolatedAsyncioTestCase):
 
 class CoordinatorOwnedExportPriceChannelTests(unittest.TestCase):
     def _make_coordinator(self):
-        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._hass = SimpleNamespace()
         coordinator._active_config = {}
         coordinator._grid_price_snapshot_cache = None

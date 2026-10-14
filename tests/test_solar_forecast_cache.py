@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests._fakes import FakeHass, make_coordinator
 
 import importlib
 import asyncio
@@ -38,7 +39,7 @@ def _make_matching_house_snapshot(
 
 def _make_refresh_only_coordinator(coordinator_module):
     """A coordinator carrying just the bookkeeping the refresh guard needs."""
-    coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+    coordinator = make_coordinator()
     coordinator._create_task = asyncio.create_task
     coordinator._refresh_tasks = set()
     coordinator._forecast_refresh_task = None
@@ -135,7 +136,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_refresh_forecast_persists_canonical_solar_snapshot(self) -> None:
         coordinator_module = self._load_coordinator_module()
-        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._hass = SimpleNamespace()
         coordinator._active_config = {}
         coordinator._cached_forecast = None
@@ -211,7 +212,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         coordinator_module = self._load_coordinator_module()
-        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._hass = SimpleNamespace()
         coordinator._active_config = {}
         coordinator._cached_forecast = None
@@ -274,7 +275,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         coordinator_module = self._load_coordinator_module()
 
         def _fresh_coordinator():
-            coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+            coordinator = make_coordinator()
             coordinator._hass = SimpleNamespace()
             coordinator._active_config = {}
             coordinator._cached_forecast = None
@@ -349,7 +350,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_refresh_forecast_skips_unadded_forecast_entities(self) -> None:
         coordinator_module = self._load_coordinator_module()
-        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._hass = SimpleNamespace()
         coordinator._active_config = {}
         coordinator._cached_forecast = None
@@ -411,7 +412,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         path.
         """
         coordinator_module = self._load_coordinator_module()
-        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._hass = SimpleNamespace()
         coordinator._active_config = {}
         # Both snapshots are from the slot before the one `REFERENCE_TIME`
@@ -456,7 +457,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         """A config change is not staleness: the old answer must not be served."""
         coordinator_module = self._load_coordinator_module()
-        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._hass = SimpleNamespace()
         coordinator._active_config = {}
         coordinator._cached_forecast = _make_matching_house_snapshot(
@@ -528,9 +529,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
                 generated_at = (
                     REFERENCE_TIME - timedelta(minutes=age_minutes)
                 ).isoformat()
-                coordinator = object.__new__(
-                    coordinator_module.HelmanCoordinator
-                )
+                coordinator = make_coordinator()
                 coordinator._hass = SimpleNamespace()
                 coordinator._active_config = {}
                 coordinator._cached_forecast = {
@@ -654,7 +653,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_get_forecast_uses_cached_corrected_points_without_rebuilding_solar_snapshot(self) -> None:
         coordinator_module = self._load_coordinator_module()
-        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._hass = SimpleNamespace()
         coordinator._active_config = {}
         coordinator._forecast_cache_revision = 0
@@ -784,7 +783,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_build_canonical_solar_forecast_keeps_raw_points_and_corrected_points_separate(self) -> None:
         coordinator_module = self._load_coordinator_module()
-        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._hass = SimpleNamespace()
         coordinator._active_config = {}
 
@@ -842,8 +841,8 @@ class DegradedSolarRebuildTests(unittest.IsolatedAsyncioTestCase):
     )
 
     def _make_build_coordinator(self, coordinator_module, *, cached_solar):
-        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
-        coordinator._hass = SimpleNamespace()
+        coordinator = make_coordinator()
+        coordinator._hass = FakeHass()
         coordinator._active_config = {}
         coordinator._cached_forecast = None
         coordinator._house_profile = None

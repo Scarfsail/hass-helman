@@ -8,6 +8,7 @@ dataset tests' business.
 """
 
 from __future__ import annotations
+from tests._fakes import make_coordinator
 
 from _fakes import FakeConnection
 
@@ -126,7 +127,7 @@ async def _executor(func, *args):
 class DeviceReportTestCase(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.recorder = FakeRecorder()
-        self.coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        self.coordinator = make_coordinator()
         self.coordinator._cached_tree = TREE
         self.coordinator._device_datasets = OrderedDict()
         self.coordinator._solar_bias_service = FakeService()

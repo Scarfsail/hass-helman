@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests._fakes import make_coordinator
 
 import asyncio
 import sys
@@ -30,7 +31,7 @@ def _fixed_now(monkeypatch):
 
 
 def _make_coordinator() -> HelmanCoordinator:
-    coordinator = object.__new__(HelmanCoordinator)
+    coordinator = make_coordinator()
     coordinator._hass = SimpleNamespace(
         async_add_executor_job=_inline_executor_job
     )
@@ -959,7 +960,7 @@ class SlotAlignedRefreshBeatTests(unittest.TestCase):
     """
 
     def _fire(self, fired_at):
-        coordinator = object.__new__(HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._hass = SimpleNamespace()
         coordinator._unsub_forecast_refresh = None
         forwarded = []
@@ -1014,7 +1015,7 @@ class BatteryForecastCurrentAccessorTests(unittest.TestCase):
     now owns (moved verbatim from ``BatteryForecastHistoryStore._slot_values``)."""
 
     def _coordinator(self, snapshot):
-        coordinator = object.__new__(HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._hass = SimpleNamespace(
             config=SimpleNamespace(time_zone="Europe/Prague")
         )
@@ -1248,7 +1249,7 @@ class BatteryForecastCurrentRefusalLoggingTests(unittest.TestCase):
     LOGGER = "custom_components.helman.coordinator"
 
     def _coordinator(self, snapshot):
-        coordinator = object.__new__(HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._hass = SimpleNamespace(
             config=SimpleNamespace(time_zone="Europe/Prague")
         )

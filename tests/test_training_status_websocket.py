@@ -6,6 +6,7 @@ so faking the record would test nothing.
 """
 
 from __future__ import annotations
+from tests._fakes import make_coordinator
 
 from _fakes import FakeConnection as SharedFakeConnection
 
@@ -155,7 +156,7 @@ def _make_coordinator(
     house_profile=None,
     appliance_estimates=None,
 ):
-    coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+    coordinator = make_coordinator()
     coordinator._solar_bias_service = bias_service or _make_bias_service()
     coordinator._training_artifacts_store = store or _make_store()
     coordinator._house_profile = house_profile

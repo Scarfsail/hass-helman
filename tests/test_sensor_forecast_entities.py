@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests._fakes import make_coordinator
 
 import importlib
 import sys
@@ -285,7 +286,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
     async def test_daily_entities_sum_local_day_buckets(self) -> None:
         coordinator_module = _load_coordinator_module()
 
-        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._cached_solar_forecast = {
             "points": [
                 {"timestamp": "2026-03-20T08:00:00+01:00", "value": 500.0},
@@ -300,7 +301,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
     async def test_today_remaining_excludes_elapsed_points(self) -> None:
         coordinator_module = _load_coordinator_module()
 
-        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._cached_solar_forecast = {
             "points": [
                 {"timestamp": "2026-03-20T08:00:00+01:00", "value": 500.0},
@@ -339,7 +340,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
     async def test_sparse_day_offsets_and_today_remaining_use_shared_snapshot(self) -> None:
         coordinator_module = _load_coordinator_module()
 
-        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._cached_solar_forecast = {
             "points": [
                 {"timestamp": "2026-03-20T08:00:00+01:00", "value": 500.0},
@@ -400,7 +401,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
     async def test_coordinator_absorbs_the_import_price_from_the_snapshot(self) -> None:
         coordinator_module = _load_coordinator_module()
 
-        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator = make_coordinator()
 
         coordinator._absorb_grid_import_price(
             {"import": {"status": "available", "unit": "CZK/kWh", "currentPrice": 4.25}}
@@ -505,7 +506,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
     async def test_coordinator_absorbs_the_export_price_from_the_snapshot(self) -> None:
         coordinator_module = _load_coordinator_module()
 
-        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator = make_coordinator()
 
         coordinator._absorb_grid_export_price(
             {"export": {"status": "available", "unit": "CZK/kWh", "currentPrice": 1.85}}
@@ -546,7 +547,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_coordinator_owns_the_export_schedule_from_one_ingestion(self) -> None:
         coordinator_module = _load_coordinator_module()
-        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator = make_coordinator()
 
         coordinator._absorb_grid_export_price(
             {
@@ -631,7 +632,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_only_ingestion_reads_the_configured_sell_price_entity(self) -> None:
         coordinator_module = _load_coordinator_module()
-        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._hass = SimpleNamespace()
         coordinator._active_config = {}
         coordinator._grid_export_price_channel = None
@@ -673,7 +674,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
     async def test_current_slot_solar_forecast_is_published_as_power(self) -> None:
         coordinator_module = _load_coordinator_module()
 
-        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._hass = SimpleNamespace(
             config=SimpleNamespace(time_zone="Europe/Prague")
         )
@@ -748,7 +749,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(patcher.stop)
 
         started: list[object] = []
-        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._grid_export_price_backfill_started = False
         coordinator._get_grid_sell_price_entity_id = lambda: "sensor.spot_sell_price"
         coordinator._hass = SimpleNamespace(

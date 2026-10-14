@@ -82,7 +82,7 @@ class FakeServices:
 class FakeHass:
     def __init__(self, states: dict[str, FakeState] | None = None) -> None:
         self.data: dict = {}
-        self.config = SimpleNamespace(config_dir="/tmp")
+        self.config = SimpleNamespace(config_dir="/tmp", time_zone="Europe/Prague")
         self.states = FakeStates(states)
         self.bus = FakeBus()
         self.services = FakeServices(self)
@@ -92,6 +92,24 @@ class FakeHass:
 
     def async_create_background_task(self, coro, name):
         return asyncio.create_task(coro, name=name)
+
+
+def make_coordinator(**overrides):
+    """Build a coordinator through its real constructor, then set test state."""
+    from custom_components.helman.coordinator import HelmanCoordinator
+
+    hass = overrides.pop("_hass", None)
+    storage = overrides.pop("_storage", None)
+    if hass is None:
+        hass = FakeHass()
+    if storage is None:
+        storage = FakeStorage(
+            schedule_document={"executionEnabled": False, "slotMinutes": 15, "slots": {}}
+        )
+    coordinator = HelmanCoordinator(hass, storage)
+    for name, value in overrides.items():
+        setattr(coordinator, name, value)
+    return coordinator
 
 
 def _valid_config() -> dict:

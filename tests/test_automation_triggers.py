@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from _fakes import FakeState, FakeHass as BaseFakeHass
+from _fakes import FakeState, FakeHass as BaseFakeHass, make_coordinator
 
 import asyncio
 import importlib
@@ -232,7 +232,7 @@ class CoordinatorAutomationTriggerTests(unittest.IsolatedAsyncioTestCase):
             schedule_document=persisted_schedule_document,
             config=config,
         )
-        coordinator = HelmanCoordinator(FakeHass(), storage)
+        coordinator = make_coordinator(_hass=FakeHass(), _storage=storage)
         executor = FakeExecutor()
         coordinator._schedule_executor = executor
         coordinator._automation_triggers = SimpleNamespace(

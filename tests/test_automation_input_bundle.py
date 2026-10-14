@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests._fakes import FakeHass, make_coordinator
 
 import importlib
 import unittest
@@ -71,7 +72,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_refresh_builds_bundle_from_canonical_inputs(self) -> None:
-        coordinator = object.__new__(HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._hass = SimpleNamespace()
         coordinator._active_config = {}
         coordinator._appliances_registry = build_appliances_runtime_registry(
@@ -147,7 +148,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
     async def test_resolved_map_includes_unscheduled_generic_and_climate_candidates(
         self,
     ) -> None:
-        coordinator = object.__new__(HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._appliances_registry = build_appliances_runtime_registry(
             {
                 "devices": {"consumers": [
@@ -239,7 +240,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
     async def test_history_average_resolution_preserves_fixed_history_and_fallback_values(
         self,
     ) -> None:
-        coordinator = object.__new__(HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._appliances_registry = build_appliances_runtime_registry(
             {
                 "devices": {"consumers": [
@@ -311,7 +312,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_failed_bundle_refresh_keeps_previous_bundle(self) -> None:
-        coordinator = object.__new__(HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._hass = SimpleNamespace()
         coordinator._active_config = {}
         previous_bundle = AutomationInputBundle(
@@ -340,10 +341,13 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(coordinator._automation_input_bundle, previous_bundle)
 
     async def test_refresh_forecast_updates_bundle_after_house_refresh(self) -> None:
-        coordinator = object.__new__(HelmanCoordinator)
-        coordinator._hass = SimpleNamespace()
+        coordinator = make_coordinator()
+        coordinator._hass = FakeHass()
         coordinator._active_config = {}
-        coordinator._storage = SimpleNamespace(async_save_snapshots=AsyncMock())
+        coordinator._storage = SimpleNamespace(
+            schedule_document={"executionEnabled": False, "slotMinutes": 15, "slots": {}},
+            async_save_snapshots=AsyncMock(),
+        )
         coordinator._invalidate_battery_forecast_cache = Mock()
         coordinator._async_refresh_automation_input_bundle = AsyncMock(return_value=True)
         coordinator._cached_forecast = None
@@ -422,7 +426,7 @@ class RuntimeHistoryRequirementsTests(unittest.TestCase):
 
     @staticmethod
     def _coordinator():
-        coordinator = object.__new__(HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._active_config = {}
         return coordinator
 
@@ -600,7 +604,7 @@ class ApplianceRuntimeHistoryResolutionTests(unittest.IsolatedAsyncioTestCase):
     }
 
     def _coordinator(self, reader):
-        coordinator = object.__new__(HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._active_config = {}
         coordinator._appliances_registry = build_appliances_runtime_registry(
             self.APPLIANCES
@@ -756,7 +760,7 @@ class ApplianceEnergyAdoptionTests(unittest.TestCase):
     """Adopting the nightly estimates, and what the two readers do with them."""
 
     def _make_coordinator(self, *, section, appliances=None):
-        coordinator = object.__new__(HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._training_artifacts_store = SimpleNamespace(
             appliance_energy=section
         )

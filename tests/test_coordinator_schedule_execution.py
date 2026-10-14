@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests._fakes import make_coordinator
 
 import asyncio
 import sys
@@ -144,7 +145,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             persisted_schedule_document["slotMinutes"] = SCHEDULE_SLOT_MINUTES
 
         storage = FakeStorage(schedule_document=persisted_schedule_document)
-        coordinator = HelmanCoordinator(FakeHass(), storage)
+        coordinator = make_coordinator(_hass=FakeHass(), _storage=storage)
         executor = FakeExecutor()
         coordinator._schedule_executor = executor
         return coordinator, storage, executor
@@ -252,17 +253,14 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             },
             config=_valid_climate_config(),
         )
-        coordinator = HelmanCoordinator(
-            FakeHass(
+        coordinator = make_coordinator(_hass=FakeHass(
                 {
                     "climate.living_room": FakeState(
                         "heat",
                         attributes={"hvac_modes": ["off", "heat"]},
                     )
                 }
-            ),
-            storage,
-        )
+            ), _storage=storage)
         coordinator._active_config = storage.config
         coordinator._appliances_registry = build_appliances_runtime_registry(storage.config)
 
@@ -280,7 +278,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         config["devices"]["name_cleaner_regex"] = " Power$"
         storage = FakeStorage(schedule_document={}, config=config)
         hass = FakeHass()
-        coordinator = HelmanCoordinator(hass, storage)
+        coordinator = make_coordinator(_hass=hass, _storage=storage)
         coordinator._active_config = storage.config
         coordinator._appliances_registry = build_appliances_runtime_registry(config)
 
@@ -309,17 +307,14 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             },
             config=_valid_climate_config(),
         )
-        coordinator = HelmanCoordinator(
-            FakeHass(
+        coordinator = make_coordinator(_hass=FakeHass(
                 {
                     "climate.living_room": FakeState(
                         "heat",
                         attributes={"hvac_modes": ["off", "heat"]},
                     )
                 }
-            ),
-            storage,
-        )
+            ), _storage=storage)
         coordinator._active_config = storage.config
         coordinator._appliances_registry = build_appliances_runtime_registry(storage.config)
 
@@ -772,7 +767,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             }
         )
         # The real executor, never started: Home Assistant is still starting.
-        coordinator = HelmanCoordinator(FakeHass(), storage)
+        coordinator = make_coordinator(_hass=FakeHass(), _storage=storage)
 
         with self.assertRaisesRegex(ScheduleExecutionUnavailableError, "not running"):
             await coordinator.set_schedule_execution(
@@ -793,7 +788,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 "slots": {},
             }
         )
-        coordinator = HelmanCoordinator(FakeHass(), storage)
+        coordinator = make_coordinator(_hass=FakeHass(), _storage=storage)
 
         self.assertTrue(
             await coordinator.set_schedule_execution(
@@ -964,8 +959,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 }
             },
         )
-        coordinator = HelmanCoordinator(
-            FakeHass(
+        coordinator = make_coordinator(_hass=FakeHass(
                 {
                     "sensor.battery_remaining_energy": FakeState(
                         "5.0",
@@ -975,9 +969,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                     "sensor.battery_min_soc": FakeState("unknown"),
                     "sensor.battery_max_soc": FakeState("100"),
                 }
-            ),
-            storage,
-        )
+            ), _storage=storage)
 
         with self.assertLogs(
             "custom_components.helman.coordinator", level="WARNING"
@@ -995,7 +987,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             schedule_document={"executionEnabled": False, "slots": {}},
             config={},
         )
-        coordinator = HelmanCoordinator(FakeHass(), storage)
+        coordinator = make_coordinator(_hass=FakeHass(), _storage=storage)
 
         with self.assertLogs(
             "custom_components.helman.coordinator", level="WARNING"
@@ -1586,7 +1578,7 @@ class OptimizerCustomConditionEvaluationTests(unittest.IsolatedAsyncioTestCase):
             schedule_document={"executionEnabled": False, "slots": {}},
             config={"automation": {"system_optimizers": optimizers}},
         )
-        coordinator = HelmanCoordinator(FakeHass(), storage)
+        coordinator = make_coordinator(_hass=FakeHass(), _storage=storage)
         coordinator._active_config = storage.config
         return coordinator
 
@@ -1855,7 +1847,7 @@ class ScheduleExecutionStartupTests(unittest.IsolatedAsyncioTestCase):
                 "slots": {},
             }
         )
-        coordinator = HelmanCoordinator(FakeHass(), storage)
+        coordinator = make_coordinator(_hass=FakeHass(), _storage=storage)
         executor = FakeExecutor()
         coordinator._schedule_executor = executor
         return coordinator, executor
@@ -1925,7 +1917,7 @@ class ScheduleExecutionResponsivenessTests(unittest.IsolatedAsyncioTestCase):
                 ),
             }
         )
-        self.coordinator = HelmanCoordinator(self.hass, self.storage)
+        self.coordinator = make_coordinator(_hass=self.hass, _storage=self.storage)
         self.coordinator._appliances_registry = build_appliances_runtime_registry(
             _valid_appliances_config()
         )
@@ -2059,7 +2051,7 @@ class SolaxProfileScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 return_value=[],
             ),
         ):
-            coordinator = HelmanCoordinator(hass, storage)
+            coordinator = make_coordinator(_hass=hass, _storage=storage)
 
         control = coordinator._read_schedule_control_config()
         self.assertEqual(control.mode_entity_id, "select.helman_inverter_mode")

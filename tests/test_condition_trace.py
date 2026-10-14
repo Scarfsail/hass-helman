@@ -9,7 +9,7 @@ the short-circuit. A ``hass`` with states and a bus is all the built-in
 
 from __future__ import annotations
 
-from _fakes import FakeHass as SharedFakeHass
+from _fakes import FakeHass as SharedFakeHass, make_coordinator
 
 from _fakes import FakeConnection as SharedFakeConnection
 
@@ -91,7 +91,7 @@ def _optimizer(*groups: dict) -> dict:
 
 def _coordinator(hass: FakeHass, *optimizers: dict) -> HelmanCoordinator:
     config = {"automation": {"system_optimizers": list(optimizers)}}
-    coordinator = HelmanCoordinator(hass, FakeStorage(config))
+    coordinator = make_coordinator(_hass=hass, _storage=FakeStorage(config))
     coordinator._active_config = config
     return coordinator
 
