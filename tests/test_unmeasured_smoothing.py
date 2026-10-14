@@ -11,6 +11,7 @@ The coordinator therefore smooths the raw difference before flooring it.
 """
 
 from __future__ import annotations
+from tests._fakes import make_coordinator
 
 import importlib
 import unittest
@@ -54,7 +55,7 @@ class _FakeStates:
 
 
 def _make_coordinator(states: dict[str, str]):
-    c = object.__new__(coordinator_module.HelmanCoordinator)
+    c = make_coordinator()
     c._active_config = {
         "visualization": {"history_buckets": 60, "history_bucket_duration": 1}
     }
