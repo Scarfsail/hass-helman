@@ -32,16 +32,16 @@ from dataclasses import dataclass
 import logging
 from typing import TYPE_CHECKING, Any
 
-from ..scheduling.schedule import appliance_actions, inverter_action, parse_slot_id
-from .optimizers.charge_from_grid import _min_soc_over
-from .rails import forecast_covers_horizon, read_soc_by_bucket
+from custom_components.helman.scheduling.schedule import appliance_actions, inverter_action, parse_slot_id
+from custom_components.helman.automation.optimizers.charge_from_grid import _min_soc_over
+from custom_components.helman.automation.rails import forecast_covers_horizon, read_soc_by_bucket
 
 if TYPE_CHECKING:
     from datetime import datetime
 
-    from ..scheduling.schedule import ScheduleDocument
-    from .snapshot import OptimizationSnapshot
-    from .trace import ReserveFloorObservation
+    from custom_components.helman.scheduling.schedule import ScheduleDocument
+    from custom_components.helman.automation.snapshot import OptimizationSnapshot
+    from custom_components.helman.automation.trace import ReserveFloorObservation
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -81,7 +81,7 @@ class ReserveFloorBoundary:
     ``demand_document`` is that same document: there is no more pending-lane
     restoration to reconcile between "what the snapshot's inverter overlay
     shows" and "what the house-demand basis was" — see
-    ``pipeline._safe_build_reserve_floor_boundary``.
+    ``reserve_floor_harness._safe_build_reserve_floor_boundary``.
     """
 
     snapshot: "OptimizationSnapshot"

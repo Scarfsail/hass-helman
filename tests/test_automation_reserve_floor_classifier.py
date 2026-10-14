@@ -57,8 +57,9 @@ from custom_components.helman.automation.day_context import (  # noqa: E402
 from custom_components.helman.automation.optimizers.charge_from_grid import (  # noqa: E402
     build_charge_from_grid_optimizer,
 )
-from custom_components.helman.automation.pipeline import run_optimizer_loop_pure  # noqa: E402
-from custom_components.helman.automation.reserve_floor_classifier import (  # noqa: E402
+import reserve_floor_harness as harness_module  # noqa: E402
+from reserve_floor_harness import run_optimizer_loop_pure  # noqa: E402
+from reserve_floor_classifier import (  # noqa: E402
     CLASS_DOWNSTREAM_INTRODUCED,
     CLASS_KNOWN_UNREPAIRABLE,
     CLASS_NONE,
@@ -82,7 +83,7 @@ from custom_components.helman.automation.snapshot import (  # noqa: E402
     OptimizationSnapshot,
 )
 from custom_components.helman.automation.trace import ReserveFloorObservation  # noqa: E402
-from custom_components.helman.appliances import AppliancesRuntimeRegistry  # noqa: E402
+from custom_components.helman.appliances.state import AppliancesRuntimeRegistry  # noqa: E402
 from custom_components.helman.scheduling.schedule import (  # noqa: E402
     ScheduleAction,
     ScheduleDocument,
@@ -839,7 +840,7 @@ class ScenarioSuiteTests(unittest.TestCase):
         build_snapshot = _make_build_snapshot(charge_bump_pp=6.25)
         built_boundaries: list[ReserveFloorBoundary] = []
         classified_boundaries: dict[str, ReserveFloorBoundary] = {}
-        real_build_boundary = pipeline_module._safe_build_reserve_floor_boundary
+        real_build_boundary = harness_module._safe_build_reserve_floor_boundary
 
         def recording_build_boundary(**kwargs):
             boundary = real_build_boundary(**kwargs)
@@ -852,11 +853,11 @@ class ScenarioSuiteTests(unittest.TestCase):
             return classify_reserve_floor_observations(observations, **kwargs)
 
         with patch.object(
-            pipeline_module,
+            harness_module,
             "_safe_build_reserve_floor_boundary",
             side_effect=recording_build_boundary,
         ), patch.object(
-            pipeline_module,
+            harness_module,
             "classify_reserve_floor_observations",
             side_effect=recording_classify,
         ):
@@ -1011,7 +1012,7 @@ class TransportAndSafetyTests(unittest.TestCase):
         There is no more ``next_index`` arithmetic to get wrong -- phase 2
         never touches an appliance lane, so the boundary's ``demand_document``
         is simply the working document right after the emitting step writes
-        (see ``pipeline._safe_build_reserve_floor_boundary``). It must still
+        (see ``reserve_floor_harness._safe_build_reserve_floor_boundary``). It must still
         carry the fixed phase-1 appliance demand -- the same demand basis
         ``charge_from_grid``'s own input used -- because the appliance
         (phase 1, before any system optimizer) already wrote it by the time
@@ -1019,7 +1020,7 @@ class TransportAndSafetyTests(unittest.TestCase):
         """
         build_snapshot = _make_build_snapshot()
         captured_boundaries: list[ReserveFloorBoundary] = []
-        real_build_boundary = pipeline_module._safe_build_reserve_floor_boundary
+        real_build_boundary = harness_module._safe_build_reserve_floor_boundary
 
         def recording_build_boundary(**kwargs):
             boundary = real_build_boundary(**kwargs)
@@ -1034,7 +1035,7 @@ class TransportAndSafetyTests(unittest.TestCase):
             }
 
         with patch.object(
-            pipeline_module,
+            harness_module,
             "_safe_build_reserve_floor_boundary",
             side_effect=recording_build_boundary,
         ):
