@@ -261,7 +261,6 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
                 )
             ],
         )
-        self.assertEqual(executor.runtime.last_applied_option, "Stop Charging")
 
     async def test_reconcile_touches_nothing_while_execution_is_disabled(self) -> None:
         # The restart-while-disabled guarantee: a plan is present and the
@@ -288,7 +287,6 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(hass.services.calls, [])
-        self.assertIsNone(executor.runtime.last_applied_option)
         # The reality check still runs, so the plan stays in sync with reality.
         self.assertEqual(check.await_count, 3)
 
@@ -335,7 +333,6 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
         await executor.async_reconcile(reason="test", reference_time=REFERENCE_TIME)
 
         check.assert_awaited_once()
-        self.assertEqual(executor.runtime.last_applied_option, "Stop Charging")
 
     async def test_reconcile_skips_candidate_inverter_action(self) -> None:
         executor, hass, _store = _build_executor(
@@ -427,7 +424,6 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
                 )
             ],
         )
-        self.assertEqual(executor.runtime.last_applied_option, "Stop Export")
 
     async def test_reconcile_leaves_implicit_empty_slot_untouched(self) -> None:
         executor, hass, _store = _build_executor(
@@ -461,11 +457,7 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             "skipped",
         )
         self.assertEqual(
-            executor.runtime.execution_status.active_slot_runtime.status,
-            "applied",
-        )
-        self.assertEqual(
-            executor.runtime.execution_status.active_slot_runtime.reason,
+            executor.runtime.execution_status.active_slot_runtime.inverter.reason,
             "scheduled",
         )
 
@@ -499,7 +491,7 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             SCHEDULE_ACTION_NORMAL,
         )
         self.assertEqual(
-            executor.runtime.execution_status.active_slot_runtime.reason,
+            executor.runtime.execution_status.active_slot_runtime.inverter.reason,
             "scheduled",
         )
 
@@ -521,7 +513,6 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
         await executor.async_reconcile(reason="test", reference_time=REFERENCE_TIME)
 
         self.assertEqual(hass.services.calls, [])
-        self.assertEqual(executor.runtime.last_applied_option, "Stop Charging")
 
     async def test_reconcile_executes_charge_target_option_when_target_not_reached(
         self,
@@ -558,12 +549,12 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
         self.assertEqual(
-            executor.runtime.execution_status.active_slot_runtime.reason,
+            executor.runtime.execution_status.active_slot_runtime.inverter.reason,
             "scheduled",
         )
         self.assertEqual(
-            executor.runtime.execution_status.active_slot_runtime.status,
-            "applied",
+            executor.runtime.execution_status.active_slot_runtime.inverter.outcome,
+            "success",
         )
 
     async def test_reconcile_executes_stop_discharging_when_charge_target_reached(
@@ -603,12 +594,12 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             SCHEDULE_ACTION_STOP_DISCHARGING,
         )
         self.assertEqual(
-            executor.runtime.execution_status.active_slot_runtime.reason,
+            executor.runtime.execution_status.active_slot_runtime.inverter.reason,
             "target_soc_reached",
         )
         self.assertEqual(
-            executor.runtime.execution_status.active_slot_runtime.status,
-            "applied",
+            executor.runtime.execution_status.active_slot_runtime.inverter.outcome,
+            "success",
         )
         self.assertEqual(store.saved_documents, [])
 
@@ -647,12 +638,12 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
         self.assertEqual(
-            executor.runtime.execution_status.active_slot_runtime.reason,
+            executor.runtime.execution_status.active_slot_runtime.inverter.reason,
             "scheduled",
         )
         self.assertEqual(
-            executor.runtime.execution_status.active_slot_runtime.status,
-            "applied",
+            executor.runtime.execution_status.active_slot_runtime.inverter.outcome,
+            "success",
         )
 
     async def test_reconcile_executes_stop_charging_when_discharge_target_reached(
@@ -691,12 +682,12 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             SCHEDULE_ACTION_STOP_CHARGING,
         )
         self.assertEqual(
-            executor.runtime.execution_status.active_slot_runtime.reason,
+            executor.runtime.execution_status.active_slot_runtime.inverter.reason,
             "target_soc_reached",
         )
         self.assertEqual(
-            executor.runtime.execution_status.active_slot_runtime.status,
-            "applied",
+            executor.runtime.execution_status.active_slot_runtime.inverter.outcome,
+            "success",
         )
         self.assertEqual(store.saved_documents, [])
 
@@ -727,11 +718,11 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             CURRENT_SLOT_ID,
         )
         self.assertEqual(
-            executor.runtime.execution_status.active_slot_runtime.status,
-            "error",
+            executor.runtime.execution_status.active_slot_runtime.inverter.outcome,
+            "failed",
         )
         self.assertEqual(
-            executor.runtime.execution_status.active_slot_runtime.error_code,
+            executor.runtime.execution_status.active_slot_runtime.inverter.error_code,
             "execution_unavailable",
         )
 
@@ -767,11 +758,11 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ScheduleNotConfiguredError):
             await executor.async_reconcile(reason="test", reference_time=REFERENCE_TIME)
         self.assertEqual(
-            executor.runtime.execution_status.active_slot_runtime.status,
-            "error",
+            executor.runtime.execution_status.active_slot_runtime.inverter.outcome,
+            "failed",
         )
         self.assertEqual(
-            executor.runtime.execution_status.active_slot_runtime.error_code,
+            executor.runtime.execution_status.active_slot_runtime.inverter.error_code,
             "not_configured",
         )
 
@@ -811,8 +802,8 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             "Stop Discharging",
         )
         self.assertEqual(
-            executor.runtime.execution_status.active_slot_runtime.status,
-            "applied",
+            executor.runtime.execution_status.active_slot_runtime.inverter.outcome,
+            "success",
         )
 
     async def test_reconcile_raises_when_stop_export_option_is_missing(self) -> None:
@@ -840,11 +831,11 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ScheduleNotConfiguredError):
             await executor.async_reconcile(reason="test", reference_time=REFERENCE_TIME)
         self.assertEqual(
-            executor.runtime.execution_status.active_slot_runtime.status,
-            "error",
+            executor.runtime.execution_status.active_slot_runtime.inverter.outcome,
+            "failed",
         )
         self.assertEqual(
-            executor.runtime.execution_status.active_slot_runtime.error_code,
+            executor.runtime.execution_status.active_slot_runtime.inverter.error_code,
             "not_configured",
         )
 
@@ -863,11 +854,11 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ScheduleExecutionUnavailableError):
             await executor.async_reconcile(reason="test", reference_time=REFERENCE_TIME)
         self.assertEqual(
-            executor.runtime.execution_status.active_slot_runtime.status,
-            "error",
+            executor.runtime.execution_status.active_slot_runtime.inverter.outcome,
+            "failed",
         )
         self.assertEqual(
-            executor.runtime.execution_status.active_slot_runtime.error_code,
+            executor.runtime.execution_status.active_slot_runtime.inverter.error_code,
             "execution_unavailable",
         )
 
@@ -895,19 +886,19 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             CURRENT_SLOT_ID,
         )
         self.assertEqual(
-            executor.runtime.execution_status.active_slot_runtime.status,
-            "error",
+            executor.runtime.execution_status.active_slot_runtime.inverter.outcome,
+            "failed",
         )
         self.assertEqual(
             executor.runtime.execution_status.active_slot_runtime.executed_action.kind,
             SCHEDULE_ACTION_STOP_CHARGING,
         )
         self.assertEqual(
-            executor.runtime.execution_status.active_slot_runtime.reason,
+            executor.runtime.execution_status.active_slot_runtime.inverter.reason,
             "scheduled",
         )
         self.assertEqual(
-            executor.runtime.execution_status.active_slot_runtime.error_code,
+            executor.runtime.execution_status.active_slot_runtime.inverter.error_code,
             "execution_unavailable",
         )
 
@@ -960,11 +951,11 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             CURRENT_SLOT_ID,
         )
         self.assertEqual(
-            executor.runtime.execution_status.active_slot_runtime.status,
-            "error",
+            executor.runtime.execution_status.active_slot_runtime.inverter.outcome,
+            "failed",
         )
         self.assertEqual(
-            executor.runtime.execution_status.active_slot_runtime.error_code,
+            executor.runtime.execution_status.active_slot_runtime.inverter.error_code,
             "not_configured",
         )
 
@@ -1023,7 +1014,6 @@ class ScheduleExecutorConcurrencyTests(unittest.IsolatedAsyncioTestCase):
 
         hass.services.release.set()
         await self._wait(attempt)
-        self.assertEqual(executor.runtime.last_applied_option, "Stop Charging")
 
     async def test_restore_releases_the_schedule_lock_and_serializes_with_reconcile(
         self,

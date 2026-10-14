@@ -9,7 +9,6 @@ if TYPE_CHECKING:
     from .schedule import ScheduleAction, ScheduleActionDict
 
 ScheduleExecutionReason = Literal["scheduled", "target_soc_reached"]
-ScheduleRuntimeState = Literal["applied", "error"]
 RuntimeActionKind = Literal["apply", "slot_stop", "noop"]
 RuntimeOutcome = Literal["success", "failed", "skipped"]
 
@@ -77,54 +76,9 @@ class ActiveSlotRuntimeStatus:
     appliances: dict[str, ApplianceRuntimeStatus] = field(default_factory=dict)
     reconciled_at: str | None = None
 
-    @classmethod
-    def from_inverter(
-        cls,
-        *,
-        action_kind: RuntimeActionKind,
-        outcome: RuntimeOutcome,
-        executed_action: "ScheduleAction | None" = None,
-        reason: ScheduleExecutionReason | None = None,
-        error_code: str | None = None,
-        message: str | None = None,
-        reconciled_at: str | None = None,
-    ) -> "ActiveSlotRuntimeStatus":
-        return cls(
-            inverter=InverterRuntimeStatus(
-                action_kind=action_kind,
-                outcome=outcome,
-                executed_action=executed_action,
-                reason=reason,
-                error_code=error_code,
-                message=message,
-            ),
-            appliances={},
-            reconciled_at=reconciled_at,
-        )
-
-    @property
-    def status(self) -> ScheduleRuntimeState:
-        if self.inverter is not None and self.inverter.outcome == "failed":
-            return "error"
-        if any(runtime.outcome == "failed" for runtime in self.appliances.values()):
-            return "error"
-        return "applied"
-
     @property
     def executed_action(self) -> "ScheduleAction | None":
         return None if self.inverter is None else self.inverter.executed_action
-
-    @property
-    def reason(self) -> ScheduleExecutionReason | None:
-        return None if self.inverter is None else self.inverter.reason
-
-    @property
-    def error_code(self) -> str | None:
-        return None if self.inverter is None else self.inverter.error_code
-
-
-SlotRuntimeStatus = ActiveSlotRuntimeStatus
-
 
 @dataclass(frozen=True)
 class ScheduleExecutionStatus:

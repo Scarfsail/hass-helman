@@ -38,7 +38,7 @@ from custom_components.helman.scheduling.schedule import (  # noqa: E402
     build_horizon_end,
     schedule_document_to_dict,
 )
-from custom_components.helman.appliances import AppliancesRuntimeRegistry  # noqa: E402
+from custom_components.helman.appliances.state import AppliancesRuntimeRegistry  # noqa: E402
 from custom_components.helman.automation.explain import (  # noqa: E402
     OptimizerExplanation,
 )

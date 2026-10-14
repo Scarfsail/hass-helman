@@ -19,7 +19,7 @@ from custom_components.helman.const import (  # noqa: E402
     SCHEDULE_ACTION_STOP_CHARGING,
     SCHEDULE_SLOT_MINUTES,
 )
-from custom_components.helman.appliances import build_appliances_runtime_registry  # noqa: E402
+from custom_components.helman.appliances.config import build_appliances_runtime_registry  # noqa: E402
 from custom_components.helman.automation.compute_inputs import (  # noqa: E402
     CustomConditionGroupResult,
 )
@@ -43,10 +43,17 @@ from custom_components.helman.scheduling.schedule import (  # noqa: E402
 )
 from custom_components.helman.scheduling.runtime_status import (  # noqa: E402
     ActiveSlotRuntimeStatus,
+    InverterRuntimeStatus,
     ScheduleExecutionStatus,
 )
 
 
+
+
+def _slot_runtime_from_inverter(*, reconciled_at=None, **kwargs):
+    return ActiveSlotRuntimeStatus(
+        inverter=InverterRuntimeStatus(**kwargs), reconciled_at=reconciled_at
+    )
 
 
 def _battery_forecast_schedule_signature(coordinator):
@@ -1308,7 +1315,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
         executor.execution_status = ScheduleExecutionStatus(
             active_slot_id=CURRENT_SLOT_ID,
-            active_slot_runtime=ActiveSlotRuntimeStatus.from_inverter(
+            active_slot_runtime=_slot_runtime_from_inverter(
                 action_kind="apply",
                 outcome="success",
                 executed_action=ScheduleAction(kind="stop_discharging"),
@@ -1353,7 +1360,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
         executor.execution_status = ScheduleExecutionStatus(
             active_slot_id=CURRENT_SLOT_ID,
-            active_slot_runtime=ActiveSlotRuntimeStatus.from_inverter(
+            active_slot_runtime=_slot_runtime_from_inverter(
                 action_kind="slot_stop",
                 outcome="success",
                 executed_action=ScheduleAction(kind="normal"),
@@ -1392,7 +1399,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
         executor.execution_status = ScheduleExecutionStatus(
             active_slot_id=CURRENT_SLOT_ID,
-            active_slot_runtime=ActiveSlotRuntimeStatus.from_inverter(
+            active_slot_runtime=_slot_runtime_from_inverter(
                 action_kind="apply",
                 outcome="success",
                 executed_action=ScheduleAction(kind="normal"),
@@ -1421,7 +1428,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
         executor.execution_status = ScheduleExecutionStatus(
             active_slot_id=CURRENT_SLOT_ID,
-            active_slot_runtime=ActiveSlotRuntimeStatus.from_inverter(
+            active_slot_runtime=_slot_runtime_from_inverter(
                 action_kind="apply",
                 outcome="failed",
                 error_code="execution_unavailable",

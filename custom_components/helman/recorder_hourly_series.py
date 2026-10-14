@@ -140,10 +140,6 @@ def get_local_current_slot_start(
     return dt_util.as_local(slot_start_utc)
 
 
-def get_local_current_hour_start(reference_time: datetime) -> datetime:
-    return get_local_current_slot_start(reference_time, interval_minutes=60)
-
-
 def get_today_completed_local_slots(
     reference_time: datetime,
     *,
@@ -161,10 +157,6 @@ def get_today_completed_local_slots(
     )
 
 
-def get_today_completed_local_hours(reference_time: datetime) -> list[datetime]:
-    return get_today_completed_local_slots(reference_time, interval_minutes=60)
-
-
 def get_today_completed_local_slot_boundaries(
     reference_time: datetime,
     *,
@@ -179,25 +171,6 @@ def get_today_completed_local_slot_boundaries(
         interval_minutes=interval_minutes,
     )
     return [*completed_slots, current_slot_start]
-
-
-async def query_slot_energy_changes(
-    hass: HomeAssistant,
-    entity_id: str,
-    reference_time: datetime,
-    *,
-    interval_minutes: int,
-) -> dict[datetime, float]:
-    return await query_cumulative_slot_energy_changes(
-        hass,
-        entity_id,
-        local_start=_get_local_day_start(reference_time),
-        local_end=get_local_current_slot_start(
-            reference_time,
-            interval_minutes=interval_minutes,
-        ),
-        interval_minutes=interval_minutes,
-    )
 
 
 async def query_cumulative_slot_energy_changes(
@@ -596,22 +569,6 @@ def _slot_energy_changes_from_states(
         liveness_instants=liveness_instants,
     )
     return _build_slot_energy_changes_from_boundaries(utc_boundaries, boundary_samples)
-
-
-async def query_cumulative_hourly_energy_changes(
-    hass: HomeAssistant,
-    entity_id: str,
-    *,
-    local_start: datetime,
-    local_end: datetime,
-) -> dict[datetime, float]:
-    return await query_cumulative_slot_energy_changes(
-        hass,
-        entity_id,
-        local_start=local_start,
-        local_end=local_end,
-        interval_minutes=60,
-    )
 
 
 @dataclass(frozen=True)

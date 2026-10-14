@@ -102,24 +102,6 @@ class ForecastRecorderSlotTests(unittest.TestCase):
         self.assertEqual(len(boundaries), 85)
         self.assertEqual(boundaries[-1].isoformat(), "2026-03-20T21:00:00+01:00")
 
-    def test_hourly_helpers_delegate_to_slot_helpers(self) -> None:
-        reference_time = datetime(2026, 3, 20, 21, 7, tzinfo=TZ)
-
-        self.assertEqual(
-            recorder_hourly_series.get_local_current_hour_start(reference_time),
-            recorder_hourly_series.get_local_current_slot_start(
-                reference_time,
-                interval_minutes=60,
-            ),
-        )
-        self.assertEqual(
-            recorder_hourly_series.get_today_completed_local_hours(reference_time),
-            recorder_hourly_series.get_today_completed_local_slots(
-                reference_time,
-                interval_minutes=60,
-            ),
-        )
-
     def test_build_local_slot_starts_until_skips_spring_forward_gap(self) -> None:
         slots = recorder_hourly_series._build_local_slot_starts_until(
             datetime(2026, 3, 29, 0, 0, tzinfo=TZ),

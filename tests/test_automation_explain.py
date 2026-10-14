@@ -417,7 +417,7 @@ class ConditionMatrixTests(unittest.TestCase):
     PRICES = {SLOT_0: -1.0, SLOT_1: 0.5, SLOT_2: 5.0}
 
     def _snapshot(self, *, day_classification: str | None = None):
-        from custom_components.helman.appliances import AppliancesRuntimeRegistry
+        from custom_components.helman.appliances.state import AppliancesRuntimeRegistry
         from custom_components.helman.automation.day_context import DayContext
         from custom_components.helman.automation.snapshot import (
             OptimizationContext,

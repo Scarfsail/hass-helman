@@ -23,7 +23,7 @@ CURRENT_SLOT_ID = "2026-03-20T21:00:00+01:00"
 CURRENT_SLOT_ID_UTC = "2026-03-20T20:00:00+00:00"
 
 
-from custom_components.helman.appliances import AppliancesRuntimeRegistry
+from custom_components.helman.appliances.state import AppliancesRuntimeRegistry
 from custom_components.helman.automation.config import AutomationConfig
 from custom_components.helman.automation.config import OptimizerInstanceConfig
 from custom_components.helman.automation.spec import OPTIMIZER_BUCKET_APPLIANCE

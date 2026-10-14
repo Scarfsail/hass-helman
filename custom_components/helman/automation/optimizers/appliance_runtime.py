@@ -99,7 +99,7 @@ from ..rails import (
 from ..trace import NULL_TRACE
 
 if TYPE_CHECKING:
-    from ...appliances import AppliancesRuntimeRegistry
+    from ...appliances.state import AppliancesRuntimeRegistry
     from ..conditions import Eligibility
     from ..config import OptimizerInstanceConfig
     from ..day_context import DayContext

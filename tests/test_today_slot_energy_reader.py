@@ -170,13 +170,16 @@ class TodaySlotEnergyReaderTests(unittest.IsolatedAsyncioTestCase):
     async def _read_full_day(
         self, recorder: _Recorder, reference_time: datetime
     ) -> dict[datetime, float]:
-        """The oracle: the untouched whole-day query."""
+        """The oracle: a whole-day query through the cumulative reader."""
         read_patch, instance_patch = self._patches(recorder)
         with read_patch, instance_patch:
-            return await recorder_hourly_series.query_slot_energy_changes(
+            return await recorder_hourly_series.query_cumulative_slot_energy_changes(
                 _make_hass(),
                 ENTITY_ID,
-                reference_time,
+                local_start=recorder_hourly_series._get_local_day_start(reference_time),
+                local_end=recorder_hourly_series.get_local_current_slot_start(
+                    reference_time, interval_minutes=15
+                ),
                 interval_minutes=15,
             )
 
