@@ -1,4 +1,5 @@
 from __future__ import annotations
+from tests._fakes import make_coordinator
 
 import importlib
 import sys
@@ -167,7 +168,7 @@ class CoordinatorSolarBiasResponseTests(unittest.IsolatedAsyncioTestCase):
             "custom_components.helman.coordinator"
         )
 
-        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._hass = SimpleNamespace()
         coordinator._storage = SimpleNamespace(config={})
         coordinator._active_config = {}
@@ -298,7 +299,7 @@ class CoordinatorSolarBiasResponseTests(unittest.IsolatedAsyncioTestCase):
             "custom_components.helman.coordinator"
         )
 
-        coordinator = object.__new__(coordinator_module.HelmanCoordinator)
+        coordinator = make_coordinator()
         coordinator._hass = SimpleNamespace()
         coordinator._storage = SimpleNamespace(config={})
         coordinator._active_config = {}
