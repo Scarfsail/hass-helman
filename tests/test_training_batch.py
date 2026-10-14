@@ -323,22 +323,6 @@ class TrainingBatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(order, ["house_start", "house_end"])
         self.assertEqual(batch.last_outcomes["solar_bias"], "skipped_disabled")
 
-    async def test_a_manual_bias_train_in_progress_is_a_skip_not_a_failure(
-        self,
-    ) -> None:
-        """`helman/train_solar_bias_now` bypasses the batch lock."""
-        bias_service = _FakeBiasService(
-            error=service_module.TrainingInProgressError("already running")
-        )
-        batch = self._make_batch(
-            bias_service=bias_service,
-            house_job=self._make_recording_house_job([]),
-        )
-
-        await batch.async_run(reason="test")
-
-        self.assertEqual(batch.last_outcomes["solar_bias"], "skipped_in_progress")
-
     async def test_a_second_trigger_joins_the_run_in_flight(self) -> None:
         started = asyncio.Event()
         release = asyncio.Event()

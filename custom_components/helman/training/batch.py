@@ -10,7 +10,6 @@ from homeassistant.helpers.event import async_track_time_change
 
 from ..solar_bias_correction.service import (
     BiasNotConfiguredError,
-    TrainingInProgressError,
 )
 from .appliance_energy import ApplianceEnergyTrainingJob
 from .house_consumption import HouseConsumptionTrainingJob
@@ -191,11 +190,6 @@ class TrainingBatch:
             payload = await self._solar_bias_service.async_train()
         except BiasNotConfiguredError:
             return "skipped_disabled"
-        except TrainingInProgressError:
-            # `helman/train_solar_bias_now` bypasses this batch's lock, so a
-            # manual train can be under way. That is a skip, not a failure.
-            _LOGGER.debug("Solar bias training already in progress; skipping")
-            return "skipped_in_progress"
         # The service catches an ordinary training failure itself and reports
         # it in the payload rather than raising, so the outcome is read from
         # there -- never assumed.

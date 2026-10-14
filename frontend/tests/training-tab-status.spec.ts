@@ -410,24 +410,6 @@ test("a training_in_progress rejection is shown as did not run", async ({ page }
     await expect(message).not.toHaveClass(/success/);
 });
 
-test("a skipped_in_progress outcome is shown as did not run, not success", async ({ page }) => {
-    await mountEditor(page, status());
-    await openTrainingTab(page);
-
-    await page.evaluate((next) => {
-        (window as any).__trainNow = {
-            result: { outcomes: { solar_bias: "skipped_in_progress" }, status: next },
-        };
-    }, status());
-    const solar = page.locator('helman-training-job-status[data-job="solar_bias"]');
-    await solar.locator("button.train-job").click();
-
-    const message = solar.locator(".message");
-    await expect(message).toContainText("Solar bias did not run");
-    await expect(message).not.toHaveClass(/success/);
-    await expect(message).not.toContainText("Training finished");
-});
-
 test("a resolved request with a failed outcome is shown as an error", async ({ page }) => {
     await mountEditor(page, status());
     await openTrainingTab(page);

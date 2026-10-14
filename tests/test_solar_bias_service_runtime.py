@@ -127,7 +127,7 @@ def test_training_failed_without_profile_falls_back_to_raw():
     assert result.adjusted_points[0]["value"] == 10.0
 
 
-def test_get_profile_payload_returns_none_without_real_profile():
+def test_missing_profile_is_not_usable():
     service = service_mod.SolarBiasCorrectionService(
         _make_hass(),
         _DummyStore(),
@@ -146,10 +146,10 @@ def test_get_profile_payload_returns_none_without_real_profile():
         error_reason="boom",
     )
 
-    assert service.get_profile_payload() is None
+    assert service._profile is None
 
 
-def test_get_profile_payload_returns_none_for_insufficient_history_placeholder():
+def test_insufficient_history_profile_is_not_usable():
     service = service_mod.SolarBiasCorrectionService(
         _make_hass(),
         _DummyStore(),
@@ -172,10 +172,10 @@ def test_get_profile_payload_returns_none_for_insufficient_history_placeholder()
         error_reason=None,
     )
 
-    assert service.get_profile_payload() is None
+    assert not service._has_usable_profile()
 
 
-def test_get_profile_payload_returns_runtime_profile():
+def test_runtime_profile_is_usable():
     service = service_mod.SolarBiasCorrectionService(
         _make_hass(),
         _DummyStore(),
@@ -198,11 +198,9 @@ def test_get_profile_payload_returns_runtime_profile():
         error_reason=None,
     )
 
-    assert service.get_profile_payload() == {
-        "trainedAt": "2026-04-24T03:00:00+02:00",
-        "factors": {"12:00": 2.0},
-        "omittedSlots": ["11:30"],
-    }
+    assert service._has_usable_profile()
+    assert service._profile.factors == {"12:00": 2.0}
+    assert service._profile.omitted_slots == ["11:30"]
 
 
 def test_get_status_payload_includes_invalidated_slot_count():
@@ -290,7 +288,7 @@ def test_reloaded_insufficient_history_payload_keeps_profile_unavailable():
         )
         await service.async_setup()
 
-        assert service.get_profile_payload() is None
+        assert not service._has_usable_profile()
 
     asyncio.run(_inner())
 
@@ -348,7 +346,7 @@ def test_failed_first_training_does_not_persist_phantom_profile_after_reload():
         assert store.saved_payloads[-1]["profile"] is None
         assert payload["status"] == "training_failed"
         assert payload["effectiveVariant"] == "raw"
-        assert reloaded.get_profile_payload() is None
+        assert reloaded._profile is None
         service_mod.dt_util.now = lambda: now
         try:
             reloaded_status = reloaded.get_status_payload()
@@ -429,9 +427,9 @@ def test_insufficient_history_placeholder_is_not_preserved_after_failed_retrain(
 
         assert payload["status"] == "training_failed"
         assert payload["effectiveVariant"] == "raw"
-        assert service.get_profile_payload() is None
+        assert service._profile is None
         assert store.saved_payloads[-1]["profile"] is None
-        assert reloaded.get_profile_payload() is None
+        assert reloaded._profile is None
 
         service_mod.dt_util.now = lambda: now
         try:
@@ -506,7 +504,7 @@ def test_failed_retrain_keeps_original_trained_at_for_preserved_profile():
         assert payload["status"] == "training_failed"
         assert payload["effectiveVariant"] == "adjusted"
         assert payload["trainedAt"] == "2026-04-20T03:00:00+02:00"
-        assert service.get_profile_payload()["trainedAt"] == "2026-04-20T03:00:00+02:00"
+        assert service.get_status_payload()["trainedAt"] == "2026-04-20T03:00:00+02:00"
         assert store.saved_payloads[-1]["metadata"]["trained_at"] == "2026-04-20T03:00:00+02:00"
         # The attempt is recorded on its own: keeping the profile's trained_at
         # must not make a failing night look like no attempt at all.

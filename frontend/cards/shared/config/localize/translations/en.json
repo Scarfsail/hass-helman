@@ -730,7 +730,6 @@
     "did_not_run_reasons": {
       "training_in_progress": "another training run is already in progress",
       "job_disabled": "the job is disabled",
-      "skipped_in_progress": "another training run was already in progress",
       "skipped_disabled": "the job is disabled"
     },
     "outcomes": {
