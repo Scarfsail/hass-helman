@@ -56,24 +56,38 @@ async function mountEditor(page: Page): Promise<void> {
             language: "en",
             locale: { language: "en" },
             user: { is_admin: true },
-            connection: { subscribeMessage: async () => () => undefined },
-            callWS: async (request: { type: string; config?: unknown }) => {
-                calls.push({ type: request.type, config: request.config });
-                if (request.type === "helman/get_config") {
+            connection: window.__mockHass().connection,
+            callWS: window.__mockHass({
+                "helman/get_config": async (request: {
+                    type: string;
+                    config?: unknown;
+                }) => {
                     return JSON.parse(JSON.stringify(config));
-                }
-                if (request.type === "helman/get_config_defaults") {
+                },
+                "helman/get_config_defaults": async (request: {
+                    type: string;
+                    config?: unknown;
+                }) => {
                     return JSON.parse(JSON.stringify(defaults));
-                }
-                if (request.type === "helman/get_optimizer_schema") {
+                },
+                "helman/get_optimizer_schema": async (request: {
+                    type: string;
+                    config?: unknown;
+                }) => {
                     return { version: 19, kinds: [] };
-                }
-                if (request.type === "helman/get_appliances") return { appliances: [] };
-                if (request.type === "helman/save_config") {
+                },
+                "helman/save_config": async (request: {
+                    type: string;
+                    config?: unknown;
+                }) => {
                     return { success: true, validation: { valid: true, errors: [], warnings: [] }, reloadStarted: false };
                 }
-                return {};
-            },
+            }, (request: {
+                type: string;
+                config?: unknown;
+            }) => {
+                calls.push({ type: request.type, config: request.config });
+            }).callWS,
         };
         document.body.appendChild(element);
     }, { config: STORED_CONFIG, defaults: CONFIG_DEFAULTS });

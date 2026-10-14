@@ -1,3 +1,4 @@
+import { installMockHass } from "./support/mock-hass";
 import { test, expect, type Page } from "@playwright/test";
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
 import { installFixedClock } from "./support/fixed-clock";
@@ -61,6 +62,7 @@ declare global {
 async function mount(page: Page, variant: Variant = {}): Promise<void> {
     await installFixedClock(page);
     await page.setContent("<!doctype html><html><body style='margin:0'></body></html>");
+    await installMockHass(page);
     await page.addScriptTag({ content: HA_DIALOG_STUB });
     await page.evaluate((v) => {
         const profile = v.profile !== false;
@@ -201,26 +203,54 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                     window.__requests.push({ type: msg.type });
                     return msg.type === "helman/get_forecast" ? forecast : {};
                 },
-                subscribeMessage: async () => () => undefined,
+                subscribeMessage: window.__mockHass().connection.subscribeMessage,
             },
             states,
-            callWS: async (msg: { type: string; node?: string; section?: string }) => {
-                window.__requests.push({ type: msg.type, node: msg.node, section: msg.section });
-                if (msg.type === "helman/get_device_tree") return tree;
-                if (msg.type === "helman/get_history") return { buckets: 3, bucket_duration: 60, entity_history: {} };
-                if (msg.type === "helman/get_schedule") return { executionEnabled: true, slots: [] };
-                if (msg.type === "helman/solar_bias/day_aggregates") return aggregates;
-                if (msg.type === "helman/get_node_detail") {
-                    if (msg.node === "inverter") return inverter;
-                    if (msg.section === "flows") return flowsSection;
+            callWS: window.__mockHass({
+                "helman/get_device_tree": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                }) => {
+                    return tree;
+                },
+                "helman/get_history": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                }) => {
+                    return { buckets: 3, bucket_duration: 60, entity_history: {} };
+                },
+                "helman/solar_bias/day_aggregates": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                }) => {
+                    return aggregates;
+                },
+                "helman/get_node_detail": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                }) => {
+                    if (msg.node === "inverter")
+                        return inverter;
+                    if (msg.section === "flows")
+                        return flowsSection;
                     if (msg.section) {
-                        if (v.sectionFails) throw new Error("recorder down");
+                        if (v.sectionFails)
+                            throw new Error("recorder down");
                         return section;
                     }
                     return overview;
                 }
-                return {};
-            },
+            }, (msg: {
+                type: string;
+                node?: string;
+                section?: string;
+            }) => {
+                window.__requests.push({ type: msg.type, node: msg.node, section: msg.section });
+            }).callWS,
         };
     }, variant);
     await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });

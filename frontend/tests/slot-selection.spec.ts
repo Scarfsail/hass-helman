@@ -122,7 +122,16 @@ async function mountInspector(page: Page): Promise<void> {
             config: { time_zone: "UTC" },
             connection: {},
             // Echo the requested date back so the payload matches _selectedDate.
-            callWS: async (msg: { date: string }) => ({ ...payload, date: msg.date }),
+            // Echo the requested date back so the payload matches _selectedDate.
+            // Echo the requested date back so the payload matches _selectedDate.
+            // Echo the requested date back so the payload matches _selectedDate.
+            callWS: window.__mockHass({
+                "helman/solar_bias/inspector": async (msg: {
+                    date: string;
+                }) => {
+                    return ({ ...payload, date: msg.date });
+                }
+            }).callWS,
         };
         document.body.appendChild(el);
     });

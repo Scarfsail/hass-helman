@@ -1,3 +1,4 @@
+import { installMockHass } from "./support/mock-hass";
 import { test, expect, type Page } from "@playwright/test";
 import { CARD_BUNDLE } from "./support/card-page";
 
@@ -49,6 +50,7 @@ declare global {
  */
 async function installFixture(page: Page, bucketSeconds: number): Promise<void> {
     await page.setContent("<!doctype html><html><body></body></html>");
+    await installMockHass(page);
     await page.evaluate((bucket) => {
         const liveIntervals = new Map<number, number>();
         let markedIntervals = 0;
@@ -151,21 +153,26 @@ async function installFixture(page: Page, bucketSeconds: number): Promise<void> 
             // Identity is what the shared store is keyed on, so it stays one object.
             connection: {
                 sendMessagePromise: async () => ({}),
-                subscribeMessage: async () => () => undefined,
+                subscribeMessage: window.__mockHass().connection.subscribeMessage,
             },
             states,
-            callWS: async (msg: { type: string }) => {
-                if (msg.type === "helman/get_device_tree") {
+            callWS: window.__mockHass({
+                "helman/get_device_tree": async (msg: {
+                    type: string;
+                }) => {
                     return new Promise((release) => heldTree.push(() => release(treePayload)));
-                }
-                if (msg.type === "helman/get_history") {
+                },
+                "helman/get_history": async (msg: {
+                    type: string;
+                }) => {
                     return new Promise((release) => heldHistory.push(() => release(historyPayload)));
+                },
+                "helman/get_controllable_entities": async (msg: {
+                    type: string;
+                }) => {
+                    return { entities: [] };
                 }
-                if (msg.type === "helman/get_schedule") return { executionEnabled: true, slots: [] };
-                if (msg.type === "helman/get_controllable_entities") return { entities: [] };
-                if (msg.type === "helman/get_appliances") return { appliances: [] };
-                return {};
-            },
+            }).callWS,
         };
     }, bucketSeconds);
     await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });

@@ -178,23 +178,16 @@ async function mountEditor(page: Page): Promise<void> {
             language: "en",
             locale: { language: "en" },
             user: { is_admin: true },
-            connection: { subscribeMessage: async () => () => undefined },
-            callWS: async (request: any) => {
-                if (request.type === "helman/get_config") {
+            connection: window.__mockHass().connection,
+            callWS: window.__mockHass({
+                "helman/get_config": async (request: any) => {
                     return JSON.parse(JSON.stringify(config));
-                }
-                if (request.type === "helman/get_optimizer_schema") {
+                },
+                "helman/get_optimizer_schema": async (request: any) => {
                     return JSON.parse(JSON.stringify(schema));
-                }
-                if (request.type === "helman/get_appliances") return { appliances: [] };
-                if (request.type === "helman/inspect_entities") {
-                    (window as any).__inspectRequests.push(
-                        JSON.parse(JSON.stringify(request)),
-                    );
-                    // Every target gets the same fact, whatever its path: that
-                    // is what the backend's fallback does for a path no
-                    // evaluator claims, and the editor cannot tell the two
-                    // apart because it never interprets a fact.
+                },
+                "helman/inspect_entities": async (request: any) => {
+                    (window as any).__inspectRequests.push(JSON.parse(JSON.stringify(request)));
                     return {
                         results: (request.targets ?? []).map((target: any) => ({
                             key: target.key,
@@ -214,8 +207,7 @@ async function mountEditor(page: Page): Promise<void> {
                         })),
                     };
                 }
-                return {};
-            },
+            }).callWS,
         };
         document.body.appendChild(element);
 

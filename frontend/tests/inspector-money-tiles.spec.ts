@@ -100,7 +100,13 @@ async function mountInspector(
             language: "en",
             config: { time_zone: "UTC" },
             connection: {},
-            callWS: async (msg: { date: string }) => ({ ...payload, date: msg.date }),
+            callWS: window.__mockHass({
+                "helman/solar_bias/inspector": async (msg: {
+                    date: string;
+                }) => {
+                    return ({ ...payload, date: msg.date });
+                }
+            }).callWS,
         };
         document.body.appendChild(el);
     }, { date: DAY, money: overrides.moneyActual ?? MONEY_ACTUAL, totals: overrides.totalsActual === undefined ? TOTALS_ACTUAL : overrides.totalsActual });

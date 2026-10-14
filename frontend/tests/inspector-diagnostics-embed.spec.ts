@@ -1,6 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
-import { installFakeHass } from "./support/fake-hass";
+import { installFakeHass } from "./support/mock-hass";
 import { CARD_BUNDLE, EDITOR_BUNDLE } from "./support/card-page";
 
 /**
@@ -120,14 +120,10 @@ async function mountEditor(page: Page, options: { cardUrl?: string } = {}): Prom
         const hass = window.__fakeHass as Record<string, unknown> & {
             callWS: (msg: { type: string }) => Promise<unknown>;
         };
-        const inspectorCallWS = hass.callWS;
         hass.user = { is_admin: true };
-        hass.callWS = async (msg: { type: string }) => {
-            if (msg.type === "helman/get_config") return { config_version: 6 };
-            if (msg.type === "helman/get_optimizer_schema") return { version: 2, kinds: [] };
-            if (msg.type === "helman/get_appliances") return { appliances: [] };
-            return inspectorCallWS(msg);
-        };
+        window.__setMockReply(hass, "helman/get_config", { config_version: 6 });
+        window.__setMockReply(hass, "helman/get_optimizer_schema", { version: 2, kinds: [] });
+        window.__setMockReply(hass, "helman/get_appliances", { appliances: [] });
 
         const element = document.createElement("helman-config-editor-panel") as HTMLElement &
             Record<string, unknown>;

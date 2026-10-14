@@ -1,3 +1,4 @@
+import { installMockHass } from "./support/mock-hass";
 import { test, expect, type Page } from "@playwright/test";
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
 import { installFixedClock } from "./support/fixed-clock";
@@ -79,6 +80,7 @@ declare global {
 async function mount(page: Page, variant: Variant = {}): Promise<void> {
     await installFixedClock(page);
     await page.setContent("<!doctype html><html><body style='margin:0'></body></html>");
+    await installMockHass(page);
     await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-card"));
     await page.addScriptTag({ content: HA_DIALOG_STUB });
@@ -288,28 +290,82 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             },
             connection: {
                 sendMessagePromise: async () => ({}),
-                subscribeMessage: async () => () => undefined,
+                subscribeMessage: window.__mockHass().connection.subscribeMessage,
             },
             states,
-            callWS: async (msg: { type: string; node?: string; section?: string; device_id?: string }) => {
-                window.__requests.push({ type: msg.type, node: msg.node, section: msg.section, device_id: msg.device_id });
-                if (msg.type === "helman/get_device_tree") return tree;
-                if (msg.type === "helman/get_history") return { buckets: 3, bucket_duration: 5, entity_history: {} };
-                if (msg.type === "helman/get_schedule") return schedule;
-                if (msg.type === "helman/get_appliances") return appliances;
-                if (msg.type === "helman/get_appliance_projections") {
-                    if (v.projectionFails || (window as any).__projectionDown) throw new Error("projection down");
+            callWS: window.__mockHass({
+                "helman/get_device_tree": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                    device_id?: string;
+                }) => {
+                    return tree;
+                },
+                "helman/get_history": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                    device_id?: string;
+                }) => {
+                    return { buckets: 3, bucket_duration: 5, entity_history: {} };
+                },
+                "helman/get_schedule": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                    device_id?: string;
+                }) => {
+                    return schedule;
+                },
+                "helman/get_appliances": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                    device_id?: string;
+                }) => {
+                    return appliances;
+                },
+                "helman/get_appliance_projections": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                    device_id?: string;
+                }) => {
+                    if (v.projectionFails || (window as any).__projectionDown)
+                        throw new Error("projection down");
                     return projection;
-                }
-                if (msg.type === "helman/get_node_detail") {
-                    if (v.overviewFails) throw new Error("detail down");
-                    if (msg.section === "segment") return segment;
-                    if (msg.section === "today" && (v.todayFails || (window as any).__todayDown)) throw new Error("today down");
+                },
+                "helman/get_node_detail": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                    device_id?: string;
+                }) => {
+                    if (v.overviewFails)
+                        throw new Error("detail down");
+                    if (msg.section === "segment")
+                        return segment;
+                    if (msg.section === "today" && (v.todayFails || (window as any).__todayDown))
+                        throw new Error("today down");
                     return msg.section ? today : overview;
+                },
+                "recorder/statistic_during_period": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                    device_id?: string;
+                }) => {
+                    return { change: 1 };
                 }
-                if (msg.type === "recorder/statistic_during_period") return { change: 1 };
-                return null;
-            },
+            }, (msg: {
+                type: string;
+                node?: string;
+                section?: string;
+                device_id?: string;
+            }) => {
+                window.__requests.push({ type: msg.type, node: msg.node, section: msg.section, device_id: msg.device_id });
+            }).callWS,
         };
     }, variant);
     await page.evaluate(async () => {

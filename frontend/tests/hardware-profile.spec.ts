@@ -214,20 +214,16 @@ async function mountEditor(
                 user: { is_admin: true },
                 states: {},
                 entities,
-                connection: { subscribeMessage: async () => () => undefined },
-                callWS: async (request: any) => {
-                    if (request.type === "helman/get_config") {
+                connection: window.__mockHass().connection,
+                callWS: window.__mockHass({
+                    "helman/get_config": async (request: any) => {
                         return JSON.parse(JSON.stringify(config));
-                    }
-                    if (request.type === "helman/get_optimizer_schema") {
-                        return { version: 2, kinds: [] };
-                    }
-                    if (request.type === "helman/get_appliances") return { appliances: [] };
-                    if (request.type === "helman/validate_config") return (window as any).__validation;
-                    if (request.type === "helman/get_vendors") {
-                        (window as any).__vendorRequests.push(
-                            JSON.parse(JSON.stringify(request.config)),
-                        );
+                    },
+                    "helman/validate_config": async (request: any) => {
+                        return (window as any).__validation;
+                    },
+                    "helman/get_vendors": async (request: any) => {
+                        (window as any).__vendorRequests.push(JSON.parse(JSON.stringify(request.config)));
                         const inverter = request.config?.energy_nodes?.inverter;
                         const devices: Record<string, unknown> = {};
                         if (inverter?.profile?.id === profile.id) {
@@ -244,12 +240,10 @@ async function mountEditor(
                         const consumers: any[] = request.config?.devices?.consumers ?? [];
                         consumers.forEach((device, index) => {
                             // The backend ignores a profile of another kind.
-                            if (device?.profile?.id !== charger.id || device.kind !== charger.deviceKind) return;
+                            if (device?.profile?.id !== charger.id || device.kind !== charger.deviceKind)
+                                return;
                             const path = `devices.consumers[${index}]`;
-                            const absolute = (relative: Record<string, unknown>) =>
-                                Object.fromEntries(
-                                    Object.entries(relative).map(([key, value]) => [`${path}.${key}`, value]),
-                                );
+                            const absolute = (relative: Record<string, unknown>) => Object.fromEntries(Object.entries(relative).map(([key, value]) => [`${path}.${key}`, value]));
                             devices[path] = {
                                 profile: charger.id,
                                 storedProfile: device.profile,
@@ -262,8 +256,7 @@ async function mountEditor(
                         });
                         return { profiles: [profile, charger], devices };
                     }
-                    return {};
-                },
+                }).callWS,
             };
             document.body.appendChild(element);
         },

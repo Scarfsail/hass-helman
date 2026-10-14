@@ -1,3 +1,4 @@
+import { installMockHass } from "./support/mock-hass";
 import { test, expect, type Page } from "@playwright/test";
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
 import { installFixedClock } from "./support/fixed-clock";
@@ -109,6 +110,7 @@ declare global {
 async function mount(page: Page, variant: Variant = {}): Promise<void> {
     await installFixedClock(page);
     await page.setContent("<!doctype html><html><body style='margin:0'></body></html>");
+    await installMockHass(page);
     await page.addScriptTag({ content: HA_DIALOG_STUB });
     await page.evaluate(({ v, points }) => {
         const profile = v.profile !== false;
@@ -325,23 +327,63 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                     if (msg.type === "helman/get_forecast" && v.forecastFails) throw new Error("forecast down");
                     return msg.type === "helman/get_forecast" ? forecast : {};
                 },
-                subscribeMessage: async () => () => undefined,
+                subscribeMessage: window.__mockHass().connection.subscribeMessage,
             },
             states,
-            callWS: async (msg: { type: string; node?: string; section?: string }) => {
-                window.__requests.push({ type: msg.type, node: msg.node, section: msg.section });
-                if (msg.type === "helman/get_device_tree") return tree;
-                if (msg.type === "helman/get_history") return { buckets: 3, bucket_duration: 60, entity_history: {} };
-                if (msg.type === "helman/get_schedule") return schedule;
-                if (msg.type === "helman/solar_bias/inspector") return inspectorDay;
-                if (msg.type === "helman/solar_bias/day_aggregates") return { days: [] };
-                if (msg.type === "helman/get_node_detail") {
-                    if (msg.node === "inverter") return inverter;
-                    if (msg.section === "production" && v.sectionFails) throw new Error("recorder down");
+            callWS: window.__mockHass({
+                "helman/get_device_tree": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                }) => {
+                    return tree;
+                },
+                "helman/get_history": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                }) => {
+                    return { buckets: 3, bucket_duration: 60, entity_history: {} };
+                },
+                "helman/get_schedule": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                }) => {
+                    return schedule;
+                },
+                "helman/solar_bias/inspector": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                }) => {
+                    return inspectorDay;
+                },
+                "helman/solar_bias/day_aggregates": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                }) => {
+                    return { days: [] };
+                },
+                "helman/get_node_detail": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                }) => {
+                    if (msg.node === "inverter")
+                        return inverter;
+                    if (msg.section === "production" && v.sectionFails)
+                        throw new Error("recorder down");
                     return msg.section ? sections[msg.section] : overview;
                 }
-                return {};
-            },
+            }, (msg: {
+                type: string;
+                node?: string;
+                section?: string;
+            }) => {
+                window.__requests.push({ type: msg.type, node: msg.node, section: msg.section });
+            }).callWS,
         };
     }, { v: variant, points: forecastPoints(!!variant.night) });
     await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });

@@ -88,22 +88,29 @@ async function mountEditor(page: Page): Promise<Locator> {
                         };
                     },
                 },
-                callWS: async (request: { type: string; config?: unknown }) => {
-                    if (request.type === "helman/get_config") {
+                callWS: window.__mockHass({
+                    "helman/get_config": async (request: {
+                        type: string;
+                        config?: unknown;
+                    }) => {
                         getConfigCalls += 1;
                         return JSON.parse(JSON.stringify(stored));
-                    }
-                    if (request.type === "helman/get_optimizer_schema") return schema;
-                    if (request.type === "helman/get_appliances") return { appliances: [] };
-                    if (request.type === "helman/save_config") {
+                    },
+                    "helman/get_optimizer_schema": async (request: {
+                        type: string;
+                        config?: unknown;
+                    }) => {
+                        return schema;
+                    },
+                    "helman/save_config": async (request: {
+                        type: string;
+                        config?: unknown;
+                    }) => {
                         saveCalls += 1;
                         const succeeded = window.__saveSucceeds;
                         if (succeeded) {
                             stored = request.config;
                         }
-                        // As the backend does: a successful save reloads the
-                        // entry and announces it, so the saver hears its own
-                        // write come back.
                         queueMicrotask(() => {
                             if (succeeded) {
                                 window.__fireDataChanged("config");
@@ -117,8 +124,7 @@ async function mountEditor(page: Page): Promise<Locator> {
                             reloadError: null,
                         };
                     }
-                    return {};
-                },
+                }).callWS,
             };
             document.body.appendChild(element);
         },

@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { installFakeHass } from "./support/fake-hass";
+import { installFakeHass } from "./support/mock-hass";
 import {
     STOP_MONTH_VIEW,
     STOP_SLOT_60,
@@ -241,9 +241,9 @@ test("an announced span refresh is silent, the refresh button is not", async ({ 
     const shown = await page.evaluate(() => {
         const card = document.querySelector("helman-solar-inspector") as any;
         const hass = card.hass;
-        const original = hass.callWS;
         // Held open, so both loads are still in flight when they are read.
-        hass.callWS = () => new Promise(() => { /* never lands */ });
+        window.__setMockReply(hass, "helman/solar_bias/day_aggregates",
+            () => new Promise(() => { /* never lands */ }));
         // The key answers "same window", which is exactly the case here; the
         // refresh path clears it, so do that rather than fake a navigation.
         card._spanRequestKey = null;
@@ -252,7 +252,7 @@ test("an announced span refresh is silent, the refresh button is not", async ({ 
         card._spanRequestKey = null;
         void card._loadSpan(false);
         const loud = card._spanLoading;
-        hass.callWS = original;
+        window.__clearMockReply(hass, "helman/solar_bias/day_aggregates");
         return { silent, loud };
     });
 
@@ -275,23 +275,24 @@ test("a slow span answer cannot land on top of a newer one", async ({ page }) =>
     const landed = await page.evaluate(async () => {
         const card = document.querySelector("helman-solar-inspector") as any;
         const hass = card.hass;
-        const original = hass.callWS;
         const sample = card._span.days[0];
 
         let releaseStale: ((value: unknown) => void) | null = null;
-        hass.callWS = () => new Promise((resolve) => { releaseStale = resolve; });
+        window.__setMockReply(hass, "helman/solar_bias/day_aggregates",
+            () => new Promise((resolve) => { releaseStale = resolve; }));
         card._spanRequestKey = null;
         const stale = card._loadSpan(true);
 
         // The same window again, and this answer is the current one.
-        hass.callWS = async () => ({ currency: "CZK", days: [sample, { ...sample }] });
+        window.__setMockReply(hass, "helman/solar_bias/day_aggregates",
+            { currency: "CZK", days: [sample, { ...sample }] });
         card._spanRequestKey = null;
         await card._loadSpan(true);
         const afterFresh = card._span.days.length;
 
         releaseStale!({ currency: "CZK", days: [] });
         await stale;
-        hass.callWS = original;
+        window.__clearMockReply(hass, "helman/solar_bias/day_aggregates");
         return { afterFresh, afterStale: card._span.days.length, loading: card._spanLoading };
     });
 

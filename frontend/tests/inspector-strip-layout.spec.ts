@@ -58,7 +58,13 @@ async function mountInspector(page: Page): Promise<void> {
             language: "en",
             config: { time_zone: "UTC" },
             connection: {},
-            callWS: async (message: { date: string }) => ({ ...payload, date: message.date }),
+            callWS: window.__mockHass({
+                "helman/solar_bias/inspector": async (message: {
+                    date: string;
+                }) => {
+                    return ({ ...payload, date: message.date });
+                }
+            }).callWS,
         };
         document.body.appendChild(inspector);
     });

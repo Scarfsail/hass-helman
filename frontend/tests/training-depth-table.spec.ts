@@ -1,3 +1,4 @@
+import { installMockHass } from "./support/mock-hass";
 import { test, expect, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
@@ -130,6 +131,7 @@ async function mountEditor(
         await page.goto(`${ORIGIN}/`);
         await page.addScriptTag({ content: HA_DIALOG_STUB });
     }
+    await installMockHass(page);
     await page.addScriptTag({ path: EDITOR_BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-config-editor-panel"));
 
@@ -148,17 +150,15 @@ async function mountEditor(
                 language: "en",
                 locale: { language: "en" },
                 user: { is_admin: true },
-                connection: { subscribeMessage: async () => () => undefined },
-                callWS: async (request: any) => {
-                    if (request.type === "helman/get_config") {
+                connection: window.__mockHass().connection,
+                callWS: window.__mockHass({
+                    "helman/get_config": async (request: any) => {
                         return JSON.parse(JSON.stringify(config));
-                    }
-                    if (request.type === "helman/get_optimizer_schema") {
-                        return { version: 2, kinds: [] };
-                    }
-                    if (request.type === "helman/get_appliances") return { appliances: [] };
-                    if (request.type === "helman/get_device_tree") return deviceTree;
-                    if (request.type === "helman/inspect_entities") {
+                    },
+                    "helman/get_device_tree": async (request: any) => {
+                        return deviceTree;
+                    },
+                    "helman/inspect_entities": async (request: any) => {
                         requests.push(JSON.parse(JSON.stringify(request)));
                         return {
                             results: (request.targets ?? []).map((target: any) => {
@@ -175,40 +175,38 @@ async function mountEditor(
                                     key: target.key,
                                     draft: depth
                                         ? {
-                                              entityId: "sensor.stub",
-                                              status: "ok",
-                                              facts: [
-                                                  {
-                                                      id: "value",
-                                                      token: "value",
-                                                      params: { value: "1", unit: "kWh" },
-                                                      severity: "neutral",
-                                                  },
-                                                  {
-                                                      id: "history",
-                                                      token: "history_depth",
-                                                      params: {
-                                                          available,
-                                                          raw_states: depth.raw_states,
-                                                          statistics: depth.statistics,
-                                                          required: requiredFor(target.key),
-                                                      },
-                                                      severity:
-                                                          available >= requiredFor(target.key)
-                                                              ? "ok"
-                                                              : "warn",
-                                                  },
-                                              ],
-                                              dependsOn: [],
-                                          }
+                                            entityId: "sensor.stub",
+                                            status: "ok",
+                                            facts: [
+                                                {
+                                                    id: "value",
+                                                    token: "value",
+                                                    params: { value: "1", unit: "kWh" },
+                                                    severity: "neutral",
+                                                },
+                                                {
+                                                    id: "history",
+                                                    token: "history_depth",
+                                                    params: {
+                                                        available,
+                                                        raw_states: depth.raw_states,
+                                                        statistics: depth.statistics,
+                                                        required: requiredFor(target.key),
+                                                    },
+                                                    severity: available >= requiredFor(target.key)
+                                                        ? "ok"
+                                                        : "warn",
+                                                },
+                                            ],
+                                            dependsOn: [],
+                                        }
                                         : { entityId: null, status: "unsupported", facts: [] },
                                     saved: null,
                                 };
                             }),
                         };
                     }
-                    return {};
-                },
+                }).callWS,
             };
             if (deviceTree) element.panel = { config: { card_module_url: cardModuleUrl } };
             document.body.appendChild(element);

@@ -102,25 +102,21 @@ async function mountEditor(page: Page, trainingStatus: unknown): Promise<void> {
                 language: "en",
                 locale: { language: "en" },
                 user: { is_admin: true },
-                connection: { subscribeMessage: async () => () => undefined },
-                callWS: async (request: any) => {
-                    if (request.type === "helman/get_config") {
+                connection: window.__mockHass().connection,
+                callWS: window.__mockHass({
+                    "helman/get_config": async (request: any) => {
                         return JSON.parse(JSON.stringify(config));
-                    }
-                    if (request.type === "helman/get_optimizer_schema") {
-                        return { version: 2, kinds: [] };
-                    }
-                    if (request.type === "helman/get_appliances") return { appliances: [] };
-                    if (request.type === "helman/inspect_entities") return { results: [] };
-                    if (request.type === "helman/training/status") {
+                    },
+                    "helman/training/status": async (request: any) => {
                         return JSON.parse(JSON.stringify(w.__trainingStatus));
-                    }
-                    if (request.type === "helman/training/train_now") {
+                    },
+                    "helman/training/train_now": async (request: any) => {
                         w.__trainRequests.push(JSON.parse(JSON.stringify(request)));
-                        if (w.__trainNow.error) throw w.__trainNow.error;
+                        if (w.__trainNow.error)
+                            throw w.__trainNow.error;
                         return JSON.parse(JSON.stringify(w.__trainNow.result));
-                    }
-                    if (request.type === "helman/solar_bias/status") {
+                    },
+                    "helman/solar_bias/status": async (request: any) => {
                         w.__solarDiagnosticsRequests += 1;
                         if (w.__solarDiagnosticsFailures > 0) {
                             w.__solarDiagnosticsFailures -= 1;
@@ -138,8 +134,7 @@ async function mountEditor(page: Page, trainingStatus: unknown): Promise<void> {
                             droppedDays: [{ date: "2026-09-15", reason: "day_ratio_out_of_band" }],
                         };
                     }
-                    return {};
-                },
+                }).callWS,
             };
             document.body.appendChild(element);
         },

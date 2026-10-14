@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { installFakeHass } from "./support/fake-hass";
+import { installFakeHass } from "./support/mock-hass";
 import {
     STOP_MONTH_VIEW,
     clickStop,
@@ -135,20 +135,13 @@ test.describe("day view", () => {
         await page.evaluate(() => window.__releaseInspector());
         await expect.poll(() => readShell(page)).toMatchObject({ hasChart: true });
 
-        // Swapped in after the first, working load: the fixture's own
-        // `callWS` is captured so the failure is the only thing this changes.
+        // Swapped in after the first, working load so only the next day fails.
         await page.evaluate(() => {
-            const original = (window.__fakeHass as { callWS: (msg: unknown) => Promise<unknown> }).callWS;
-            (window.__fakeHass as Record<string, unknown>).callWS = async (msg: {
-                type: string;
-                date?: string;
-            }) => {
-                if (msg.type === "helman/solar_bias/inspector") {
+            (window.__fakeHass as { setReply: (command: string, reply: (msg: { date?: string }) => never) => void })
+                .setReply("helman/solar_bias/inspector", (msg) => {
                     window.__requestedDates.push(msg.date ?? "");
                     throw new Error("boom");
-                }
-                return original(msg);
-            };
+                });
         });
 
         await pressNextDay(page);

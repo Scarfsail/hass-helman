@@ -77,20 +77,15 @@ async function mountEditor(page: Page): Promise<void> {
                 language: "en",
                 locale: { language: "en" },
                 user: { is_admin: true },
-                connection: { subscribeMessage: async () => () => undefined },
-                callWS: async (request: any) => {
-                    if (request.type === "helman/get_config") {
+                connection: window.__mockHass().connection,
+                callWS: window.__mockHass({
+                    "helman/get_config": async (request: any) => {
                         return JSON.parse(JSON.stringify(w.__stored));
-                    }
-                    if (request.type === "helman/get_optimizer_schema") {
-                        return { version: 2, kinds: [] };
-                    }
-                    if (request.type === "helman/get_appliances") return { appliances: [] };
-                    if (request.type === "helman/inspect_entities") return { results: [] };
-                    if (request.type === "helman/training/status") {
+                    },
+                    "helman/training/status": async (request: any) => {
                         return JSON.parse(JSON.stringify(trainingStatus));
-                    }
-                    if (request.type === "helman/validate_config") {
+                    },
+                    "helman/validate_config": async (request: any) => {
                         return {
                             valid: false,
                             errors: [
@@ -103,8 +98,8 @@ async function mountEditor(page: Page): Promise<void> {
                             ],
                             warnings: [],
                         };
-                    }
-                    if (request.type === "helman/save_config") {
+                    },
+                    "helman/save_config": async (request: any) => {
                         w.__saved.push(JSON.parse(JSON.stringify(request.config)));
                         w.__stored = JSON.parse(JSON.stringify(request.config));
                         return {
@@ -114,8 +109,7 @@ async function mountEditor(page: Page): Promise<void> {
                             reloadSucceeded: true,
                         };
                     }
-                    return {};
-                },
+                }).callWS,
             };
             document.body.appendChild(element);
         },

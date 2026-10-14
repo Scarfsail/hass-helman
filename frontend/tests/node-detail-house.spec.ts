@@ -1,3 +1,4 @@
+import { installMockHass } from "./support/mock-hass";
 import { test, expect, type Page } from "@playwright/test";
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
 import { FIXED_NOW_ISO, installFixedClock } from "./support/fixed-clock";
@@ -53,6 +54,7 @@ declare global {
 async function mount(page: Page, variant: Variant = {}): Promise<void> {
     await installFixedClock(page);
     await page.setContent("<!doctype html><html><body style='margin:0'></body></html>");
+    await installMockHass(page);
     await page.addScriptTag({ content: HA_DIALOG_STUB });
     await page.evaluate((v) => {
         const profile = v.profile !== false;
@@ -277,16 +279,48 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                     window.__requests.push({ type: msg.type });
                     return msg.type === "helman/get_forecast" ? forecast : {};
                 },
-                subscribeMessage: async () => () => undefined,
+                subscribeMessage: window.__mockHass().connection.subscribeMessage,
             },
             states,
-            callWS: async (msg: { type: string; node?: string; section?: string; report?: string }) => {
-                window.__requests.push({ type: msg.type, node: msg.node, section: msg.section, report: msg.report });
-                if (msg.type === "helman/get_device_tree") return tree;
-                if (msg.type === "helman/get_history") return { buckets: 3, bucket_duration: 60, entity_history: {} };
-                if (msg.type === "helman/get_schedule") return schedule;
-                if (msg.type === "helman/device_report") return ranking;
-                if (msg.type === "helman/get_node_detail") {
+            callWS: window.__mockHass({
+                "helman/get_device_tree": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                    report?: string;
+                }) => {
+                    return tree;
+                },
+                "helman/get_history": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                    report?: string;
+                }) => {
+                    return { buckets: 3, bucket_duration: 60, entity_history: {} };
+                },
+                "helman/get_schedule": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                    report?: string;
+                }) => {
+                    return schedule;
+                },
+                "helman/device_report": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                    report?: string;
+                }) => {
+                    return ranking;
+                },
+                "helman/get_node_detail": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                    report?: string;
+                }) => {
                     if (msg.node === "inverter") {
                         return {
                             node: "inverter", asOf: "2026-10-21T12:00:00+00:00", configured: false, profile: null, mode: null,
@@ -295,12 +329,20 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                             condition: null, sections: [],
                         };
                     }
-                    if (msg.section === "today") return today;
-                    if (msg.section === "pattern") return pattern;
+                    if (msg.section === "today")
+                        return today;
+                    if (msg.section === "pattern")
+                        return pattern;
                     return overview;
                 }
-                return {};
-            },
+            }, (msg: {
+                type: string;
+                node?: string;
+                section?: string;
+                report?: string;
+            }) => {
+                window.__requests.push({ type: msg.type, node: msg.node, section: msg.section, report: msg.report });
+            }).callWS,
         };
     }, variant);
     await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
