@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from _fakes import FakeHass as SharedFakeHass
+
 import asyncio
 import unittest
 from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
-from _ha_stubs import install_helman_packages
 
 
 REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
@@ -15,7 +16,6 @@ AFTER_NEXT_SLOT_BOUNDARY = datetime.fromisoformat("2026-03-20T21:16:00+01:00")
 
 
 def _install_import_stubs() -> None:
-    install_helman_packages("scheduling")
 
     import homeassistant.core  # type: ignore  # noqa: F401
     import homeassistant.helpers.event  # type: ignore  # noqa: F401
@@ -97,8 +97,9 @@ class FakeServices:
             await self.release.wait()
 
 
-class FakeHass:
+class FakeHass(SharedFakeHass):
     def __init__(self, states: dict[str, FakeState]) -> None:
+        super().__init__()
         self.states = FakeStates(states)
         self.services = FakeServices()
         self.created_tasks = 0

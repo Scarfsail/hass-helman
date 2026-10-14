@@ -1,229 +1,35 @@
 from __future__ import annotations
 
+from _fakes import FakeState, FakeHass as BaseFakeHass
+
 import asyncio
 import importlib
-import sys
 import types
 import unittest
+import pytest
 from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from _ha_stubs import (
-    install_helman_packages,
-    restore_modules,
-    snapshot_modules,
-    stub_module,
-)
-
-
 REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
 CURRENT_SLOT_ID = "2026-03-20T21:00:00+01:00"
 NEXT_SLOT_ID = "2026-03-20T21:30:00+01:00"
-_STUBBED_MODULES = (
-    "custom_components",
-    "custom_components.helman",
-    "custom_components.helman.battery_capacity_forecast_builder",
-    "custom_components.helman.consumption_forecast_builder",
-    "custom_components.helman.forecast_builder",
-    "custom_components.helman.recorder_hourly_series",
-    "custom_components.helman.scheduling",
-    "custom_components.helman.tree_builder",
-    "homeassistant",
-    "homeassistant.components",
-    "homeassistant.components.energy",
-    "homeassistant.components.energy.data",
-    "homeassistant.components.recorder",
-    "homeassistant.components.recorder.history",
-    "homeassistant.core",
-    "homeassistant.helpers",
-    "homeassistant.helpers.entity_registry",
-    "homeassistant.helpers.event",
-    "homeassistant.helpers.storage",
-    "homeassistant.util",
-    "homeassistant.util.dt",
-)
+pipeline_module = importlib.import_module("custom_components.helman.automation.pipeline")
+triggers_module = importlib.import_module("custom_components.helman.automation.triggers")
+coordinator_module = importlib.import_module("custom_components.helman.coordinator")
+const_module = importlib.import_module("custom_components.helman.const")
+runtime_status_module = importlib.import_module("custom_components.helman.scheduling.runtime_status")
+schedule_module = importlib.import_module("custom_components.helman.scheduling.schedule")
 
 
-def _install_import_stubs() -> dict[str, types.ModuleType | None]:
-    previous_modules = snapshot_modules(_STUBBED_MODULES)
+@pytest.fixture(autouse=True)
+def _clock(monkeypatch):
+    from homeassistant.util import dt as dt_util
+    from custom_components.helman.automation import day_context_store
+    from _fakes import DummyStore
+    monkeypatch.setattr(dt_util, "now", lambda: REFERENCE_TIME)
+    monkeypatch.setattr(day_context_store, "_DayBandStore", DummyStore)
 
-    install_helman_packages("scheduling")
-
-    battery_builder_mod = types.ModuleType(
-        "custom_components.helman.battery_capacity_forecast_builder"
-    )
-    battery_builder_mod.BatteryCapacityForecastBuilder = type(
-        "BatteryCapacityForecastBuilder",
-        (),
-        {},
-    )
-    sys.modules[battery_builder_mod.__name__] = battery_builder_mod
-
-    consumption_builder_mod = types.ModuleType(
-        "custom_components.helman.consumption_forecast_builder"
-    )
-    consumption_builder_mod.ConsumptionForecastBuilder = type(
-        "ConsumptionForecastBuilder",
-        (),
-        {"_make_payload": staticmethod(lambda **kwargs: kwargs)},
-    )
-    # Coordinator reads (min_history_days, training_window_days) via this
-    # shared helper since the v14 training-section relocation.
-    consumption_builder_mod.read_house_training_window_config = (
-        lambda config: (14, 56)
-    )
-    sys.modules[consumption_builder_mod.__name__] = consumption_builder_mod
-
-    forecast_builder_mod = types.ModuleType("custom_components.helman.forecast_builder")
-    forecast_builder_mod.HelmanForecastBuilder = type(
-        "HelmanForecastBuilder",
-        (),
-        {},
-    )
-    sys.modules[forecast_builder_mod.__name__] = forecast_builder_mod
-
-    recorder_slots_mod = types.ModuleType("custom_components.helman.recorder_hourly_series")
-
-    recorder_slots_mod.own_energy_changes = lambda meter, children, *, slot: dict(meter)
-    recorder_slots_mod.get_local_current_slot_start = (
-        lambda reference_time, *, interval_minutes: reference_time.replace(
-            minute=(reference_time.minute // interval_minutes) * interval_minutes,
-            second=0,
-            microsecond=0,
-        )
-    )
-    recorder_slots_mod.SWITCH_ACTIVE_STATES = ("on",)
-    recorder_slots_mod.CLIMATE_ACTIVE_STATES = ("heat", "cool")
-    recorder_slots_mod.get_today_completed_local_hours = lambda *args, **kwargs: []
-    recorder_slots_mod.get_today_completed_local_slots = lambda *args, **kwargs: []
-
-    async def _query_cumulative_hourly_energy_changes(*args, **kwargs):
-        return {}
-
-    recorder_slots_mod.query_cumulative_hourly_energy_changes = (
-        _query_cumulative_hourly_energy_changes
-    )
-    recorder_slots_mod.query_cumulative_hourly_energy_changes = (
-        lambda *args, **kwargs: []
-    )
-    recorder_slots_mod.query_slot_energy_changes = lambda *args, **kwargs: []
-    class _ApplianceRuntimeHistoryReader:
-        def __init__(self, hass):
-            self.hass = hass
-
-        async def async_query_active_hours_by_local_date(self, requests, **kwargs):
-            return {request.key: {} for request in requests}
-
-    recorder_slots_mod.ApplianceRuntimeHistoryReader = _ApplianceRuntimeHistoryReader
-    recorder_slots_mod.ApplianceRuntimeRequest = type(
-        "ApplianceRuntimeRequest",
-        (SimpleNamespace,),
-        {},
-    )
-
-    class _TodaySlotEnergyReader:
-        def __init__(self, hass):
-            self.hass = hass
-
-        async def async_query_slot_energy_changes(self, *args, **kwargs):
-            return {}
-
-    recorder_slots_mod.TodaySlotEnergyReader = _TodaySlotEnergyReader
-
-    class _TodaySlotBoundaryStateReader:
-        def __init__(self, hass):
-            self.hass = hass
-
-        async def async_query_slot_boundary_state_values(self, *args, **kwargs):
-            return {}
-
-    recorder_slots_mod.TodaySlotBoundaryStateReader = _TodaySlotBoundaryStateReader
-    sys.modules[recorder_slots_mod.__name__] = recorder_slots_mod
-
-    tree_builder_mod = types.ModuleType("custom_components.helman.tree_builder")
-    tree_builder_mod.HelmanTreeBuilder = type("HelmanTreeBuilder", (), {})
-    sys.modules[tree_builder_mod.__name__] = tree_builder_mod
-
-    import homeassistant.components.energy.data  # type: ignore  # noqa: F401
-    import homeassistant.core  # type: ignore  # noqa: F401
-    import homeassistant.helpers.event  # type: ignore  # noqa: F401
-    import homeassistant.helpers.storage  # type: ignore  # noqa: F401
-    import homeassistant.util.dt  # type: ignore  # noqa: F401
-
-    recorder_mod = stub_module("homeassistant.components.recorder")
-    recorder_mod.get_instance = lambda hass: None
-
-    history_mod = stub_module("homeassistant.components.recorder.history")
-    history_mod.state_changes_during_period = lambda *args, **kwargs: {}
-    history_mod.get_significant_states = lambda *args, **kwargs: {}
-
-    # ``automation.day_context_store`` builds a ``storage.Store``; force a
-    # lightweight stub over the real ``homeassistant`` one, so a ``FakeHass``
-    # without a real ``data``/``config`` can still back the store.
-    helpers_pkg = stub_module("homeassistant.helpers")
-    storage_helper_mod = types.ModuleType("homeassistant.helpers.storage")
-
-    class _HelperStore:
-        def __init__(self, hass, version, key) -> None:
-            self._data = None
-
-        async def async_load(self):
-            return self._data
-
-        async def async_save(self, data) -> None:
-            self._data = data
-
-    storage_helper_mod.Store = _HelperStore
-    sys.modules["homeassistant.helpers.storage"] = storage_helper_mod
-    helpers_pkg.storage = storage_helper_mod
-
-    return previous_modules
-
-
-_original_helman_modules = {
-    module_name
-    for module_name in sys.modules
-    if module_name == "custom_components.helman"
-    or module_name.startswith("custom_components.helman.")
-}
-_previous_modules = _install_import_stubs()
-try:
-    pipeline_module = importlib.import_module("custom_components.helman.automation.pipeline")
-    triggers_module = importlib.import_module("custom_components.helman.automation.triggers")
-    coordinator_module = importlib.import_module("custom_components.helman.coordinator")
-    const_module = importlib.import_module("custom_components.helman.const")
-    runtime_status_module = importlib.import_module(
-        "custom_components.helman.scheduling.runtime_status"
-    )
-    schedule_module = importlib.import_module(
-        "custom_components.helman.scheduling.schedule"
-    )
-finally:
-    restore_modules(_previous_modules)
-    for module_name in list(sys.modules):
-        if (
-            module_name not in _original_helman_modules
-            and (
-                module_name == "custom_components.helman"
-                or module_name.startswith("custom_components.helman.")
-            )
-        ):
-            sys.modules.pop(module_name, None)
-
-# The imported modules bound the real ``dt_util`` while the restore above drops
-# it from ``sys.modules`` (so the conftest reaches a different object); pin the
-# actually-bound module's default zone to Europe/Prague so ``as_local`` slot ids
-# match the ``+01:00`` fixtures. A stubbed ``dt_util`` has no setter.
-for _bound_module in (
-    pipeline_module,
-    triggers_module,
-    coordinator_module,
-    schedule_module,
-):
-    _bound_dt = getattr(_bound_module, "dt_util", None)
-    if _bound_dt is not None and hasattr(_bound_dt, "set_default_time_zone"):
-        _bound_dt.set_default_time_zone(_bound_dt.get_time_zone("Europe/Prague"))
 
 AutomationRunResult = pipeline_module.AutomationRunResult
 AutomationTriggerCoordinator = triggers_module.AutomationTriggerCoordinator
@@ -250,36 +56,13 @@ def _domains_payload(
     }
 
 
-class FakeState:
-    def __init__(self, state: str, *, attributes: dict | None = None) -> None:
-        self.state = state
-        self.attributes = attributes or {}
-
-
-class FakeStates:
-    def __init__(self, states: dict[str, FakeState]) -> None:
-        self._states = states
-
-    def get(self, entity_id: str) -> FakeState | None:
-        return self._states.get(entity_id)
-
-
-class FakeBus:
-    def __init__(self) -> None:
-        self.fired: list[tuple[str, dict]] = []
-
-    def async_fire(self, event_type: str, event_data: dict | None = None) -> None:
-        self.fired.append((event_type, dict(event_data or {})))
-
-
-class FakeHass:
+class FakeHass(BaseFakeHass):
     def __init__(self, states: dict[str, FakeState] | None = None) -> None:
-        self.states = FakeStates(states or {})
-        self.bus = FakeBus()
+        super().__init__(states)
         self._tasks: set[asyncio.Task[None]] = set()
 
     def async_create_task(self, coro):
-        task = asyncio.create_task(coro)
+        task = super().async_create_task(coro)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         return task

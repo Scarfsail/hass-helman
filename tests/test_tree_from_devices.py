@@ -26,11 +26,8 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from _ha_stubs import install_helman_packages
 
 ROOT = Path(__file__).resolve().parents[1]
-
-install_helman_packages()
 
 from custom_components.helman import tree_builder  # noqa: E402
 from custom_components.helman.appliances.config import (  # noqa: E402

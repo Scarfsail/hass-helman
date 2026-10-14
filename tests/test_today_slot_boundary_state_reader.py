@@ -8,13 +8,15 @@ asked for.
 
 from __future__ import annotations
 
+from homeassistant.util import dt as dt_util
+
 import unittest
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from _ha_stubs import install_helman_packages, stub_module
+from _ha_stubs import stub_module
 
 TZ = ZoneInfo("Europe/Prague")
 UTC = timezone.utc
@@ -23,7 +25,7 @@ ENTITY_ID = "sensor.battery_soc"
 
 
 def _install_import_stubs() -> None:
-    install_helman_packages()
+
     core_mod = stub_module("homeassistant.core")
     if not hasattr(core_mod, "HomeAssistant"):
         core_mod.HomeAssistant = type("HomeAssistant", (), {})
@@ -47,18 +49,6 @@ def _install_import_stubs() -> None:
     util_pkg.dt = dt_mod
 
 
-class _FakeDtUtil:
-    @staticmethod
-    def as_local(value: datetime) -> datetime:
-        if value.tzinfo == TZ:
-            return value
-        return value.astimezone(TZ)
-
-    @staticmethod
-    def as_utc(value: datetime) -> datetime:
-        if value.tzinfo == UTC:
-            return value
-        return value.astimezone(UTC)
 
 
 _install_import_stubs()
@@ -77,7 +67,7 @@ def _state(local_time: datetime, value: object) -> SimpleNamespace:
     return SimpleNamespace(
         state=str(value),
         attributes={},
-        last_updated=_FakeDtUtil.as_utc(local_time),
+        last_updated=dt_util.as_utc(local_time),
     )
 
 
@@ -160,14 +150,14 @@ class TodaySlotBoundaryStateReaderTests(unittest.IsolatedAsyncioTestCase):
             actual = await self._read(reader, recorder, at)
             expected, _ = await self._read_cold(states, at)
             self.assertEqual(actual, expected)
-            self.assertEqual(actual[_FakeDtUtil.as_utc(at)], 60)
+            self.assertEqual(actual[dt_util.as_utc(at)], 60)
 
     @classmethod
     def setUpClass(cls) -> None:
         cls._dt_patcher = patch.object(
             recorder_hourly_series,
             "dt_util",
-            _FakeDtUtil,
+            dt_util,
         )
         cls._dt_patcher.start()
 
@@ -323,8 +313,8 @@ class TodaySlotBoundaryStateReaderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             warm_recorder.windows[0],
             (
-                _FakeDtUtil.as_utc(DAY),
-                _FakeDtUtil.as_utc(DAY + timedelta(minutes=30)),
+                dt_util.as_utc(DAY),
+                dt_util.as_utc(DAY + timedelta(minutes=30)),
             ),
         )
         # The last read of the day is an hour and a quarter, not twenty-four:
@@ -335,8 +325,8 @@ class TodaySlotBoundaryStateReaderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             (last_start, last_end),
             (
-                _FakeDtUtil.as_utc(DAY + timedelta(hours=22, minutes=45)),
-                _FakeDtUtil.as_utc(DAY + timedelta(days=1)),
+                dt_util.as_utc(DAY + timedelta(hours=22, minutes=45)),
+                dt_util.as_utc(DAY + timedelta(days=1)),
             ),
         )
         # Every read but the first is bounded by the same rule.
@@ -373,10 +363,10 @@ class TodaySlotBoundaryStateReaderTests(unittest.IsolatedAsyncioTestCase):
         # rebounded to. Nothing after the dip is lifted by an offset, which is
         # what a cumulative meter's reset handling would have done to it.
         self.assertAlmostEqual(
-            warm[_FakeDtUtil.as_utc(DAY + timedelta(hours=13))], before_dip, places=6
+            warm[dt_util.as_utc(DAY + timedelta(hours=13))], before_dip, places=6
         )
         self.assertAlmostEqual(
-            warm[_FakeDtUtil.as_utc(DAY + timedelta(hours=13, minutes=15))],
+            warm[dt_util.as_utc(DAY + timedelta(hours=13, minutes=15))],
             before_dip,
             places=6,
         )
@@ -393,10 +383,10 @@ class TodaySlotBoundaryStateReaderTests(unittest.IsolatedAsyncioTestCase):
             cold, _ = await self._read_cold(states, reference_time)
             self.assertEqual(warm, cold, f"diverged at {reference_time.isoformat()}")
 
-        carried = warm[_FakeDtUtil.as_utc(DAY + timedelta(hours=14))]
+        carried = warm[dt_util.as_utc(DAY + timedelta(hours=14))]
         for minutes in (15, 30, 45):
             self.assertAlmostEqual(
-                warm[_FakeDtUtil.as_utc(DAY + timedelta(hours=14, minutes=minutes))],
+                warm[dt_util.as_utc(DAY + timedelta(hours=14, minutes=minutes))],
                 carried,
                 places=6,
             )
@@ -419,8 +409,8 @@ class TodaySlotBoundaryStateReaderTests(unittest.IsolatedAsyncioTestCase):
             cold, _ = await self._read_cold(states, reference_time)
             self.assertEqual(warm, cold, f"diverged at {reference_time.isoformat()}")
 
-        self.assertNotIn(_FakeDtUtil.as_utc(DAY + timedelta(hours=11)), warm)
-        self.assertIn(_FakeDtUtil.as_utc(DAY + timedelta(hours=12)), warm)
+        self.assertNotIn(dt_util.as_utc(DAY + timedelta(hours=11)), warm)
+        self.assertIn(dt_util.as_utc(DAY + timedelta(hours=12)), warm)
 
     async def test_a_write_the_recorder_commits_late_still_lands(self) -> None:
         """The margin the settle window buys, spent.
@@ -440,7 +430,7 @@ class TodaySlotBoundaryStateReaderTests(unittest.IsolatedAsyncioTestCase):
         reader = recorder_hourly_series.TodaySlotBoundaryStateReader(_make_hass())
 
         early = await self._read(reader, recorder, DAY + timedelta(hours=12))
-        boundary = _FakeDtUtil.as_utc(DAY + timedelta(hours=11, minutes=45))
+        boundary = dt_util.as_utc(DAY + timedelta(hours=11, minutes=45))
         carried = early[boundary]
 
         delayed = _state(DAY + timedelta(hours=11, minutes=47), 90.0)
@@ -476,7 +466,7 @@ class TodaySlotBoundaryStateReaderTests(unittest.IsolatedAsyncioTestCase):
         early = await self._read(
             reader, recorder, DAY + timedelta(hours=14), interval_minutes=60
         )
-        boundary = _FakeDtUtil.as_utc(DAY + timedelta(hours=13))
+        boundary = dt_util.as_utc(DAY + timedelta(hours=13))
         carried = early[boundary]
 
         recorder.states.append(_state(DAY + timedelta(hours=13, minutes=59), 99.0))
@@ -505,7 +495,7 @@ class TodaySlotBoundaryStateReaderTests(unittest.IsolatedAsyncioTestCase):
         cold, _ = await self._read_cold(states, DAY + timedelta(hours=12))
         self.assertEqual(warm, cold)
         # The retry read the day, not a tail resumed from a read that failed.
-        self.assertEqual(recorder.windows[-1][0], _FakeDtUtil.as_utc(DAY))
+        self.assertEqual(recorder.windows[-1][0], dt_util.as_utc(DAY))
 
     async def test_a_new_local_day_drops_the_previous_days_prefix(self) -> None:
         states = self._eventful_day() + _soc_states(
@@ -529,7 +519,7 @@ class TodaySlotBoundaryStateReaderTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             recorder.windows[-1][0],
-            _FakeDtUtil.as_utc(DAY + timedelta(days=1)),
+            dt_util.as_utc(DAY + timedelta(days=1)),
         )
 
     async def test_a_clock_that_stepped_backwards_reads_the_day_again(self) -> None:
@@ -542,7 +532,7 @@ class TodaySlotBoundaryStateReaderTests(unittest.IsolatedAsyncioTestCase):
         cold, _ = await self._read_cold(states, DAY + timedelta(hours=10))
 
         self.assertEqual(warm, cold)
-        self.assertEqual(recorder.windows[-1][0], _FakeDtUtil.as_utc(DAY))
+        self.assertEqual(recorder.windows[-1][0], dt_util.as_utc(DAY))
 
     async def test_a_different_interval_invalidates_the_prefix(self) -> None:
         states = self._eventful_day()
@@ -558,7 +548,7 @@ class TodaySlotBoundaryStateReaderTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(warm, cold)
-        self.assertEqual(recorder.windows[-1][0], _FakeDtUtil.as_utc(DAY))
+        self.assertEqual(recorder.windows[-1][0], dt_util.as_utc(DAY))
         self.assertEqual(reader._frozen_by_entity[ENTITY_ID].interval_minutes, 60)
 
     async def test_a_second_entity_keeps_its_own_prefix(self) -> None:
@@ -577,7 +567,7 @@ class TodaySlotBoundaryStateReaderTests(unittest.IsolatedAsyncioTestCase):
 
         # The other entity was read from midnight; the first one's prefix is
         # untouched by it.
-        self.assertEqual(recorder.windows[-1][0], _FakeDtUtil.as_utc(DAY))
+        self.assertEqual(recorder.windows[-1][0], dt_util.as_utc(DAY))
         self.assertIn(ENTITY_ID, reader._frozen_by_entity)
         self.assertIn("sensor.other_battery_soc", reader._frozen_by_entity)
 
@@ -587,14 +577,14 @@ class DstTests(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self) -> None:
         self._dt_patcher = patch.object(
-            recorder_hourly_series, "dt_util", _FakeDtUtil
+            recorder_hourly_series, "dt_util", dt_util
         )
         self._dt_patcher.start()
         self.addCleanup(self._dt_patcher.stop)
 
     async def _walk_day(self, day: datetime, expected_hours: int) -> None:
-        day_end = _FakeDtUtil.as_local(
-            _FakeDtUtil.as_utc(day) + timedelta(hours=expected_hours)
+        day_end = dt_util.as_local(
+            dt_util.as_utc(day) + timedelta(hours=expected_hours)
         )
         states = _soc_states(
             start=day - timedelta(minutes=10),
@@ -607,10 +597,10 @@ class DstTests(unittest.IsolatedAsyncioTestCase):
         reader = recorder_hourly_series.TodaySlotBoundaryStateReader(_make_hass())
         tests = TodaySlotBoundaryStateReaderTests()
 
-        cursor_utc = _FakeDtUtil.as_utc(day) + timedelta(minutes=15)
-        end_utc = _FakeDtUtil.as_utc(day_end)
+        cursor_utc = dt_util.as_utc(day) + timedelta(minutes=15)
+        end_utc = dt_util.as_utc(day_end)
         while cursor_utc < end_utc:
-            reference_time = _FakeDtUtil.as_local(cursor_utc)
+            reference_time = dt_util.as_local(cursor_utc)
             warm = await tests._read(reader, recorder, reference_time)
             cold, _ = await tests._read_cold(states, reference_time)
             self.assertEqual(
@@ -638,7 +628,7 @@ class SharedReaderAcrossConsumersTests(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self) -> None:
         for module in (recorder_hourly_series, battery_actual_history_builder):
-            patcher = patch.object(module, "dt_util", _FakeDtUtil)
+            patcher = patch.object(module, "dt_util", dt_util)
             patcher.start()
             self.addCleanup(patcher.stop)
 
@@ -675,11 +665,11 @@ class SharedReaderAcrossConsumersTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(warming, automation)
         self.assertEqual(len(warming), 48)
         first_window, second_window = recorder.windows
-        self.assertEqual(first_window[0], _FakeDtUtil.as_utc(DAY))
+        self.assertEqual(first_window[0], dt_util.as_utc(DAY))
         # An hour instead of twelve hours: everything settled is already held.
         self.assertEqual(
             second_window[0],
-            _FakeDtUtil.as_utc(DAY + timedelta(hours=11, minutes=15)),
+            dt_util.as_utc(DAY + timedelta(hours=11, minutes=15)),
         )
         self.assertEqual(second_window[1] - second_window[0], timedelta(hours=1))
 

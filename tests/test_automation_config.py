@@ -3,11 +3,11 @@ from __future__ import annotations
 import unittest
 from datetime import datetime
 
-from _ha_stubs import install_helman_packages, stub_ha_dt, stub_module
+from _ha_stubs import stub_ha_dt, stub_module
 
 
 def _install_import_stubs() -> None:
-    install_helman_packages()
+
     util_pkg = stub_module("homeassistant.util")
     dt_mod = stub_ha_dt(datetime.fromisoformat("2026-04-05T12:00:00+00:00"))
     util_pkg.dt = dt_mod

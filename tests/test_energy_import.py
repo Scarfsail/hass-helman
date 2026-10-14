@@ -9,10 +9,6 @@ from __future__ import annotations
 import unittest
 from copy import deepcopy
 
-from _ha_stubs import install_helman_packages
-
-
-install_helman_packages()
 
 from custom_components.helman.controllables.energy_import import (  # noqa: E402
     EnergyImportConflict,

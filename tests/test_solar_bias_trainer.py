@@ -9,26 +9,6 @@ import types
 import pathlib
 
 
-def setup_package_stubs():
-    repo_root = pathlib.Path(__file__).resolve().parents[1]
-    custom_components_dir = repo_root / "custom_components"
-    helman_dir = custom_components_dir / "helman"
-
-    # custom_components package stub
-    if "custom_components" not in sys.modules:
-        pkg = types.ModuleType("custom_components")
-        pkg.__path__ = [str(custom_components_dir)]
-        sys.modules["custom_components"] = pkg
-
-    # custom_components.helman package stub
-    if "custom_components.helman" not in sys.modules:
-        pkg = types.ModuleType("custom_components.helman")
-        pkg.__path__ = [str(helman_dir)]
-        sys.modules["custom_components.helman"] = pkg
-
-
-setup_package_stubs()
-
 from custom_components.helman.solar_bias_correction import models
 
 # Trainer module will be created in Task 4

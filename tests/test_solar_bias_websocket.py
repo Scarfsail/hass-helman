@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from _fakes import FakeHass as SharedFakeHass
+
+from _fakes import FakeConnection as SharedFakeConnection
+
 import importlib
 import sys
 import types
@@ -8,108 +12,30 @@ from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
-from _ha_stubs import install_helman_packages, stub_module
+from _ha_stubs import stub_module
 
-
-def _install_import_stubs() -> None:
-    install_helman_packages("solar_bias_correction", "scheduling")
-    core_mod = stub_module("homeassistant.core")
-    core_mod.HomeAssistant = type("HomeAssistant", (), {})
-    core_mod.callback = lambda func: func
-
-    components_pkg = stub_module("homeassistant.components")
-    websocket_api_mod = stub_module("homeassistant.components.websocket_api")
-    websocket_api_mod.ActiveConnection = type("ActiveConnection", (), {})
-    websocket_api_mod.async_register_command = lambda hass, command: None
-    websocket_api_mod.async_response = lambda func: func
-
-    def websocket_command(schema):
-        def decorator(func):
-            func.websocket_schema = schema
-            return func
-
-        return decorator
-
-    websocket_api_mod.websocket_command = websocket_command
-    components_pkg.websocket_api = websocket_api_mod
-
-    helpers_pkg = stub_module("homeassistant.helpers")
-    storage_mod = stub_module("homeassistant.helpers.storage")
-
-    class DummyStore:
-        def __init__(self, hass, version, key) -> None:
-            self._data = None
-
-        async def async_load(self):
-            return self._data
-
-        async def async_save(self, data) -> None:
-            self._data = data
-
-    storage_mod.Store = DummyStore
-    helpers_pkg.storage = storage_mod
-
-    util_pkg = stub_module("homeassistant.util")
-    dt_mod = stub_module("homeassistant.util.dt", as_local=lambda value: value)
-    dt_mod.now = lambda: datetime.fromisoformat("2026-04-24T03:00:00+02:00")
-    dt_mod.parse_datetime = datetime.fromisoformat
-    util_pkg.dt = dt_mod
-
-    service_mod = types.ModuleType(
-        "custom_components.helman.solar_bias_correction.service"
-    )
-
-    class TrainingInProgressError(RuntimeError):
-        pass
-
-    class BiasNotConfiguredError(RuntimeError):
-        pass
-
-    class SolarBiasCorrectionService:
-        pass
-
-    service_mod.TrainingInProgressError = TrainingInProgressError
-    service_mod.BiasNotConfiguredError = BiasNotConfiguredError
-    service_mod.SolarBiasCorrectionService = SolarBiasCorrectionService
-    sys.modules[service_mod.__name__] = service_mod
-
-
-_install_import_stubs()
 
 from custom_components.helman.const import DOMAIN  # noqa: E402
 
 
-class FakeConnection:
+class FakeConnection(SharedFakeConnection):
     def __init__(self, *, is_admin: bool = True) -> None:
+        super().__init__()
         self.user = SimpleNamespace(is_admin=is_admin)
-        self.results: list[tuple[int, object]] = []
-        self.errors: list[tuple[int, str, str]] = []
-
-    def send_result(self, msg_id: int, result: object) -> None:
-        self.results.append((msg_id, result))
-
-    def send_error(self, msg_id: int, code: str, message: str) -> None:
-        self.errors.append((msg_id, code, message))
 
 
-class FakeHass:
+
+class FakeHass(SharedFakeHass):
     def __init__(self, coordinator) -> None:
+        super().__init__()
         self.data = {DOMAIN: {"coordinator": coordinator}}
 
 
 def _load_websocket_modules():
-    for module_name in (
-        "custom_components.helman.solar_bias_correction.websocket",
-        "custom_components.helman.websockets",
-    ):
-        sys.modules.pop(module_name, None)
-
-    solar_bias_ws = importlib.import_module(
-        "custom_components.helman.solar_bias_correction.websocket"
+    return (
+        importlib.import_module("custom_components.helman.solar_bias_correction.websocket"),
+        importlib.import_module("custom_components.helman.websockets"),
     )
-    websockets_mod = importlib.import_module("custom_components.helman.websockets")
-
-    return solar_bias_ws, websockets_mod
 
 
 class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
@@ -185,7 +111,7 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         coordinator = SimpleNamespace(_solar_bias_service=service)
         connection = FakeConnection()
 
-        await self.solar_bias_ws.ws_train_solar_bias_now(
+        await self.solar_bias_ws.ws_train_solar_bias_now.__wrapped__(
             FakeHass(coordinator),
             connection,
             {"id": 1, "type": "helman/solar_bias/train_now"},
@@ -200,7 +126,7 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         coordinator = SimpleNamespace(_solar_bias_service=service)
         connection = FakeConnection(is_admin=False)
 
-        await self.solar_bias_ws.ws_train_solar_bias_now(
+        await self.solar_bias_ws.ws_train_solar_bias_now.__wrapped__(
             FakeHass(coordinator),
             connection,
             {"id": 1, "type": "helman/solar_bias/train_now"},
@@ -235,7 +161,7 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(coordinator=coordinator):
                 connection = FakeConnection()
 
-                await self.solar_bias_ws.ws_train_solar_bias_now(
+                await self.solar_bias_ws.ws_train_solar_bias_now.__wrapped__(
                     FakeHass(coordinator),
                     connection,
                     {"id": 1, "type": "helman/solar_bias/train_now"},
@@ -256,7 +182,7 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         coordinator = SimpleNamespace(_solar_bias_service=service)
         connection = FakeConnection()
 
-        await self.solar_bias_ws.ws_train_solar_bias_now(
+        await self.solar_bias_ws.ws_train_solar_bias_now.__wrapped__(
             FakeHass(coordinator),
             connection,
             {"id": 1, "type": "helman/solar_bias/train_now"},
@@ -280,7 +206,7 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         coordinator = SimpleNamespace(_solar_bias_service=service)
         connection = FakeConnection()
 
-        await self.solar_bias_ws.ws_train_solar_bias_now(
+        await self.solar_bias_ws.ws_train_solar_bias_now.__wrapped__(
             FakeHass(coordinator),
             connection,
             {"id": 1, "type": "helman/solar_bias/train_now"},
@@ -316,7 +242,7 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
             "custom_components.helman.solar_bias_correction.websocket",
             level="ERROR",
         ) as captured:
-            await self.solar_bias_ws.ws_train_solar_bias_now(
+            await self.solar_bias_ws.ws_train_solar_bias_now.__wrapped__(
                 FakeHass(coordinator),
                 connection,
                 {"id": 1, "type": "helman/solar_bias/train_now"},
@@ -347,7 +273,7 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
             "custom_components.helman.solar_bias_correction.websocket",
             level="ERROR",
         ) as captured:
-            await self.solar_bias_ws.ws_train_solar_bias_now(
+            await self.solar_bias_ws.ws_train_solar_bias_now.__wrapped__(
                 FakeHass(coordinator),
                 connection,
                 {"id": 1, "type": "helman/solar_bias/train_now"},
@@ -369,7 +295,7 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
             "custom_components.helman.solar_bias_correction.websocket",
             level="ERROR",
         ) as captured:
-            await self.solar_bias_ws.ws_train_solar_bias_now(
+            await self.solar_bias_ws.ws_train_solar_bias_now.__wrapped__(
                 FakeHass(coordinator),
                 connection,
                 {"id": 1, "type": "helman/solar_bias/train_now"},
@@ -506,7 +432,7 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         coordinator = SimpleNamespace(_solar_bias_service=service)
         connection = FakeConnection()
 
-        await self.solar_bias_ws.ws_get_solar_bias_inspector(
+        await self.solar_bias_ws.ws_get_solar_bias_inspector.__wrapped__(
             FakeHass(coordinator),
             connection,
             {"id": 1, "type": "helman/solar_bias/inspector", "date": "2026-04-25"},
@@ -528,7 +454,7 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         coordinator = SimpleNamespace(_solar_bias_service=service)
         connection = FakeConnection(is_admin=False)
 
-        await self.solar_bias_ws.ws_get_solar_bias_inspector(
+        await self.solar_bias_ws.ws_get_solar_bias_inspector.__wrapped__(
             FakeHass(coordinator),
             connection,
             {"id": 1, "type": "helman/solar_bias/inspector", "date": "2026-04-25"},
@@ -545,7 +471,7 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
                 coordinator = SimpleNamespace(_solar_bias_service=service)
                 connection = FakeConnection()
 
-                await self.solar_bias_ws.ws_get_solar_bias_inspector(
+                await self.solar_bias_ws.ws_get_solar_bias_inspector.__wrapped__(
                     FakeHass(coordinator),
                     connection,
                     {
@@ -569,7 +495,7 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         coordinator = SimpleNamespace(_solar_bias_service=service)
         connection = FakeConnection()
 
-        await self.solar_bias_ws.ws_get_solar_bias_day_aggregates(
+        await self.solar_bias_ws.ws_get_solar_bias_day_aggregates.__wrapped__(
             FakeHass(coordinator),
             connection,
             {
@@ -597,7 +523,7 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         coordinator = SimpleNamespace(_solar_bias_service=service)
         connection = FakeConnection()
 
-        await self.solar_bias_ws.ws_get_solar_bias_day_aggregates(
+        await self.solar_bias_ws.ws_get_solar_bias_day_aggregates.__wrapped__(
             FakeHass(coordinator),
             connection,
             {
@@ -626,7 +552,7 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         coordinator = SimpleNamespace(_solar_bias_service=service)
         connection = FakeConnection()
 
-        await self.solar_bias_ws.ws_get_solar_bias_day_aggregates(
+        await self.solar_bias_ws.ws_get_solar_bias_day_aggregates.__wrapped__(
             FakeHass(coordinator),
             connection,
             {
@@ -657,7 +583,7 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         coordinator = SimpleNamespace(_solar_bias_service=service)
         connection = FakeConnection()
 
-        await self.solar_bias_ws.ws_get_solar_bias_day_aggregates(
+        await self.solar_bias_ws.ws_get_solar_bias_day_aggregates.__wrapped__(
             FakeHass(coordinator),
             connection,
             {
@@ -679,7 +605,7 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         coordinator = SimpleNamespace(_solar_bias_service=service)
         connection = FakeConnection()
 
-        await self.solar_bias_ws.ws_get_solar_bias_day_aggregates(
+        await self.solar_bias_ws.ws_get_solar_bias_day_aggregates.__wrapped__(
             FakeHass(coordinator),
             connection,
             {

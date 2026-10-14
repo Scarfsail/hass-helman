@@ -7,14 +7,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from _ha_stubs import install_helman_packages
 
 
-def _install_package_stubs() -> None:
-    install_helman_packages()
-
-
-_install_package_stubs()
 
 appliance_energy_module = importlib.import_module(
     "custom_components.helman.training.appliance_energy"

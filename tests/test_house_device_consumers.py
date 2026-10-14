@@ -10,10 +10,6 @@ from __future__ import annotations
 import importlib
 import unittest
 
-from _ha_stubs import install_helman_packages
-
-
-install_helman_packages()
 
 module = importlib.import_module("custom_components.helman.house_device_consumers")
 extract = module.extract_house_device_consumers

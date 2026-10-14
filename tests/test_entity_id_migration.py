@@ -14,16 +14,13 @@ up HA's full registry machinery.
 
 from __future__ import annotations
 
+from _fakes import FakeHass as SharedFakeHass
+
 import importlib
-import sys
-import types
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
-from _ha_stubs import stub_module
 
-ROOT = Path(__file__).resolve().parents[1]
 
 ENTRY_ID = "entry-1"
 
@@ -90,80 +87,17 @@ class FakeConfigEntries:
         self.update_calls.append((entry.entry_id, version))
 
 
-class FakeHass:
+class FakeHass(SharedFakeHass):
     def __init__(self, registry: FakeEntityRegistry) -> None:
+        super().__init__()
         self.data: dict = {}
         self.config_entries = FakeConfigEntries()
         self._fake_registry = registry
 
 
-def _load_helman_init_with_stubs():
-    for module_name in list(sys.modules):
-        if module_name == "custom_components.helman" or module_name.startswith(
-            "custom_components.helman."
-        ):
-            sys.modules.pop(module_name)
-
-    stub_module("custom_components", __path__=[str(ROOT / "custom_components")])
-
-    # Stub the submodules async_setup_entry pulls in that this test does not
-    # exercise -- same approach as test_init_recovery.py.
-    frontend_mod = types.ModuleType("custom_components.helman.frontend")
-
-    async def async_register_frontend(_hass) -> None:
-        return None
-
-    async def async_unregister_frontend(_hass) -> None:
-        return None
-
-    frontend_mod.async_register_frontend = async_register_frontend
-    frontend_mod.async_unregister_frontend = async_unregister_frontend
-    sys.modules["custom_components.helman.frontend"] = frontend_mod
-
-    panel_mod = types.ModuleType("custom_components.helman.panel")
-
-    async def async_register_panel(_hass) -> None:
-        return None
-
-    panel_mod.async_register_panel = async_register_panel
-    sys.modules["custom_components.helman.panel"] = panel_mod
-
-    websockets_mod = types.ModuleType("custom_components.helman.websockets")
-
-    def async_register_websocket_commands(_hass) -> None:
-        return None
-
-    websockets_mod.async_register_websocket_commands = async_register_websocket_commands
-    sys.modules["custom_components.helman.websockets"] = websockets_mod
-
-    storage_mod = types.ModuleType("custom_components.helman.storage")
-
-    class HelmanStorage:
-        def __init__(self, _hass) -> None:
-            pass
-
-        async def async_load(self) -> None:
-            return None
-
-    storage_mod.HelmanStorage = HelmanStorage
-    sys.modules["custom_components.helman.storage"] = storage_mod
-
-    coordinator_mod = types.ModuleType("custom_components.helman.coordinator")
-
-    class HelmanCoordinator:
-        def __init__(self, _hass, storage) -> None:
-            pass
-
-    coordinator_mod.HelmanCoordinator = HelmanCoordinator
-    sys.modules["custom_components.helman.coordinator"] = coordinator_mod
-
-    module = importlib.import_module("custom_components.helman")
-    return module
-
-
 class EntityIdMigrationTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
-        self.helman_init = _load_helman_init_with_stubs()
+        self.helman_init = importlib.import_module("custom_components.helman")
 
     def _patch_registry(self, registry: FakeEntityRegistry) -> None:
         # The module under test calls the module-level ``er.async_get`` /

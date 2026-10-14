@@ -13,263 +13,14 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
-from _ha_stubs import install_helman_packages, stub_ha_dt, stub_module
+from _ha_stubs import stub_ha_dt, stub_module
+from _fakes import FakeConnection as SharedFakeConnection, FakeHass as SharedFakeHass
 
 
 REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
 CURRENT_SLOT_ID = "2026-03-20T21:00:00+01:00"
 CURRENT_SLOT_ID_UTC = "2026-03-20T20:00:00+00:00"
 
-
-def _install_voluptuous_stub() -> None:
-    if "voluptuous" in sys.modules:
-        return
-
-    module = types.ModuleType("voluptuous")
-
-    class Invalid(Exception):
-        pass
-
-    class _MissingType:
-        pass
-
-    _MISSING = _MissingType()
-
-    class _Marker:
-        def __init__(self, key: str, *, default: object = _MISSING) -> None:
-            self.key = key
-            self.default = default
-
-    class Required(_Marker):
-        pass
-
-    class Optional(_Marker):
-        pass
-
-    def In(options):
-        def validator(value):
-            if value not in options:
-                raise Invalid(f"Value {value!r} is not in {options!r}")
-            return value
-
-        return validator
-
-    def Coerce(expected_type):
-        def validator(value):
-            try:
-                return expected_type(value)
-            except (TypeError, ValueError) as err:
-                raise Invalid(str(err)) from err
-
-        return validator
-
-    class Schema:
-        def __init__(self, schema, *, extra=None) -> None:
-            self._schema = schema
-            self._extra = extra
-
-        def __call__(self, value):
-            return _validate(self._schema, value, extra=self._extra)
-
-    PREVENT_EXTRA = object()
-
-    def _validate(schema, value, *, extra=None):
-        if isinstance(schema, Schema):
-            return schema(value)
-
-        if isinstance(schema, dict):
-            if not isinstance(value, dict):
-                raise Invalid("Expected a dict")
-
-            result = {}
-            seen_keys: set[str] = set()
-            for key_spec, validator in schema.items():
-                if isinstance(key_spec, _Marker):
-                    key = key_spec.key
-                    seen_keys.add(key)
-                    if key in value:
-                        result[key] = _validate(validator, value[key])
-                        continue
-                    if isinstance(key_spec, Optional) and key_spec.default is not _MISSING:
-                        result[key] = _validate(validator, key_spec.default)
-                        continue
-                    if isinstance(key_spec, Required):
-                        raise Invalid(f"Missing required key {key!r}")
-                    continue
-
-                seen_keys.add(key_spec)
-                if key_spec not in value:
-                    raise Invalid(f"Missing required key {key_spec!r}")
-                result[key_spec] = _validate(validator, value[key_spec])
-
-            if extra is PREVENT_EXTRA:
-                extras = set(value) - seen_keys
-                if extras:
-                    raise Invalid(f"Extra keys not allowed: {sorted(extras)!r}")
-            return result
-
-        if isinstance(schema, list):
-            if len(schema) != 1:
-                raise Invalid("List schema must contain exactly one validator")
-            if not isinstance(value, list):
-                raise Invalid("Expected a list")
-            return [_validate(schema[0], item) for item in value]
-
-        if isinstance(schema, type):
-            if not isinstance(value, schema):
-                raise Invalid(f"Expected value of type {schema.__name__}")
-            return value
-
-        if callable(schema):
-            return schema(value)
-
-        if value != schema:
-            raise Invalid(f"Expected {schema!r}")
-        return value
-
-    module.Coerce = Coerce
-    module.In = In
-    module.Invalid = Invalid
-    module.Optional = Optional
-    module.PREVENT_EXTRA = PREVENT_EXTRA
-    module.Required = Required
-    module.Schema = Schema
-    sys.modules["voluptuous"] = module
-
-
-def _install_import_stubs() -> None:
-    install_helman_packages("scheduling")
-
-    battery_builder_mod = types.ModuleType(
-        "custom_components.helman.battery_capacity_forecast_builder"
-    )
-    battery_builder_mod.BatteryCapacityForecastBuilder = type(
-        "BatteryCapacityForecastBuilder",
-        (),
-        {},
-    )
-    sys.modules[battery_builder_mod.__name__] = battery_builder_mod
-
-    consumption_builder_mod = types.ModuleType(
-        "custom_components.helman.consumption_forecast_builder"
-    )
-    consumption_builder_mod.ConsumptionForecastBuilder = type(
-        "ConsumptionForecastBuilder",
-        (),
-        {"_make_payload": staticmethod(lambda **kwargs: kwargs)},
-    )
-    # Coordinator reads (min_history_days, training_window_days) via this
-    # shared helper since the v14 training-section relocation.
-    consumption_builder_mod.read_house_training_window_config = (
-        lambda config: (14, 56)
-    )
-    sys.modules[consumption_builder_mod.__name__] = consumption_builder_mod
-
-    forecast_builder_mod = types.ModuleType("custom_components.helman.forecast_builder")
-    forecast_builder_mod.HelmanForecastBuilder = type(
-        "HelmanForecastBuilder",
-        (),
-        {},
-    )
-    sys.modules[forecast_builder_mod.__name__] = forecast_builder_mod
-
-    tree_builder_mod = types.ModuleType("custom_components.helman.tree_builder")
-    tree_builder_mod.HelmanTreeBuilder = type("HelmanTreeBuilder", (), {})
-    sys.modules[tree_builder_mod.__name__] = tree_builder_mod
-
-    core_mod = stub_module("homeassistant.core")
-    core_mod.HomeAssistant = type("HomeAssistant", (), {})
-    core_mod.callback = lambda func: func
-
-    components_pkg = stub_module("homeassistant.components", __path__=[])
-    websocket_api_mod = stub_module("homeassistant.components.websocket_api")
-    websocket_api_mod.ActiveConnection = type("ActiveConnection", (), {})
-    websocket_api_mod.async_register_command = lambda hass, command: None
-    websocket_api_mod.async_response = lambda func: func
-
-    def websocket_command(schema):
-        def decorator(func):
-            func.websocket_schema = schema
-            return func
-
-        return decorator
-
-    websocket_api_mod.websocket_command = websocket_command
-    components_pkg.websocket_api = websocket_api_mod
-
-    recorder_mod = stub_module("homeassistant.components.recorder")
-    recorder_mod.get_instance = lambda hass: None
-
-    history_mod = stub_module("homeassistant.components.recorder.history")
-    history_mod.state_changes_during_period = lambda *args, **kwargs: {}
-    history_mod.get_significant_states = lambda *args, **kwargs: {}
-
-    # The house consumption trainer splices its window's tail out of hourly
-    # long-term statistics, so importing the coordinator now reaches this
-    # module too. Nothing here exercises that read; it answers with nothing.
-    statistics_mod = stub_module("homeassistant.components.recorder.statistics")
-    statistics_mod.statistics_during_period = lambda *args, **kwargs: {}
-
-    energy_data_mod = stub_module("homeassistant.components.energy.data")
-
-    async def async_get_manager(hass):
-        return SimpleNamespace(async_listen_updates=lambda callback: lambda: None)
-
-    energy_data_mod.async_get_manager = async_get_manager
-
-    helpers_pkg = stub_module("homeassistant.helpers", __path__=[])
-    event_mod = stub_module("homeassistant.helpers.event")
-    event_mod.async_track_time_change = lambda hass, callback, **kwargs: lambda: None
-    event_mod.async_track_time_interval = (
-        lambda hass, callback, interval: lambda: None
-    )
-
-    # Mirrors the real helper: fires at once when HA is already running, which
-    # is the state a test's fake hass is always in.
-    start_mod = stub_module("homeassistant.helpers.start")
-
-    def _async_at_started(hass, at_start_cb):
-        at_start_cb(hass)
-        return lambda: None
-
-    start_mod.async_at_started = _async_at_started
-    helpers_pkg.start = start_mod
-    event_mod.async_track_state_change_event = (
-        lambda hass, entity_ids, action: lambda: None
-    )
-
-    debounce_mod = stub_module("homeassistant.helpers.debounce")
-
-    class _Debouncer:
-        def __init__(self, *args, **kwargs) -> None:
-            pass
-
-        async def async_call(self) -> None:
-            pass
-
-    debounce_mod.Debouncer = _Debouncer
-
-    storage_mod = stub_module("homeassistant.helpers.storage")
-
-    class DummyStore:
-        def __init__(self, hass, version, key) -> None:
-            self._data = None
-
-        async def async_load(self):
-            return self._data
-
-        async def async_save(self, data) -> None:
-            self._data = data
-
-    storage_mod.Store = DummyStore
-
-    util_pkg = stub_module("homeassistant.util", __path__=[])
-    dt_mod = stub_ha_dt(REFERENCE_TIME)
-    util_pkg.dt = dt_mod
-
-
-_install_import_stubs()
-_install_voluptuous_stub()
 
 from custom_components.helman.appliances import AppliancesRuntimeRegistry
 from custom_components.helman.automation.config import AutomationConfig
@@ -317,29 +68,6 @@ from custom_components.helman.websockets import (
     ws_get_schedule_explanation,
     ws_run_automation,
 )
-
-for module_name in (
-    "custom_components.helman.battery_capacity_forecast_builder",
-    "custom_components.helman.consumption_forecast_builder",
-    "custom_components.helman.forecast_builder",
-    "custom_components.helman.tree_builder",
-    "custom_components.helman.coordinator",
-    "custom_components.helman.websockets",
-    "homeassistant.util.dt",
-    "homeassistant.util",
-    "homeassistant.core",
-    "homeassistant.components",
-    "homeassistant.components.websocket_api",
-    "homeassistant.components.energy",
-    "homeassistant.components.energy.data",
-    "homeassistant.helpers",
-    "homeassistant.helpers.event",
-    "homeassistant.helpers.debounce",
-    "homeassistant.helpers.storage",
-    "homeassistant.helpers.entity_registry",
-):
-    sys.modules.pop(module_name, None)
-
 
 def _make_executor_hass() -> SimpleNamespace:
     """A hass stub that runs executor hops inline and records them.
@@ -674,21 +402,15 @@ class _FakeCoordinator:
         return self._control_config
 
 
-class _FakeConnection:
+class _FakeConnection(SharedFakeConnection):
     def __init__(self, *, is_admin: bool) -> None:
+        super().__init__()
         self.user = SimpleNamespace(is_admin=is_admin)
-        self.results: list[tuple[int, object]] = []
-        self.errors: list[tuple[int, str, str]] = []
-
-    def send_result(self, msg_id: int, result: dict) -> None:
-        self.results.append((msg_id, result))
-
-    def send_error(self, msg_id: int, code: str, message: str) -> None:
-        self.errors.append((msg_id, code, message))
 
 
-class _FakeHass:
+class _FakeHass(SharedFakeHass):
     def __init__(self, coordinator) -> None:
+        super().__init__()
         self.data = {DOMAIN: {"coordinator": coordinator}}
 
 
@@ -1652,7 +1374,7 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
         written_schedule = ScheduleDocument(
             execution_enabled=True,
             slots={
-                CURRENT_SLOT_ID_UTC: {
+                CURRENT_SLOT_ID: {
                     "inverter": {"kind": "normal"},
                     "boiler": {"on": True, "setBy": "automation"},
                 }
@@ -2211,7 +1933,7 @@ class RunAutomationWebsocketTests(unittest.IsolatedAsyncioTestCase):
         )
         connection = _FakeConnection(is_admin=True)
 
-        await ws_run_automation(
+        await ws_run_automation.__wrapped__(
             _FakeHass(coordinator),
             connection,
             {"id": 1, "type": "helman/run_automation"},
@@ -2232,7 +1954,7 @@ class RunAutomationWebsocketTests(unittest.IsolatedAsyncioTestCase):
         )
         connection = _FakeConnection(is_admin=True)
 
-        await ws_run_automation(
+        await ws_run_automation.__wrapped__(
             _FakeHass(coordinator),
             connection,
             {"id": 1, "type": "helman/run_automation"},
@@ -2255,7 +1977,7 @@ class RunAutomationWebsocketTests(unittest.IsolatedAsyncioTestCase):
         )
         connection = _FakeConnection(is_admin=True)
 
-        await ws_run_automation(
+        await ws_run_automation.__wrapped__(
             _FakeHass(coordinator),
             connection,
             {"id": 1, "type": "helman/run_automation"},
@@ -2276,7 +1998,7 @@ class RunAutomationWebsocketTests(unittest.IsolatedAsyncioTestCase):
         coordinator = SimpleNamespace(run_automation=AsyncMock())
         connection = _FakeConnection(is_admin=False)
 
-        await ws_run_automation(
+        await ws_run_automation.__wrapped__(
             _FakeHass(coordinator),
             connection,
             {"id": 1, "type": "helman/run_automation"},
@@ -2414,8 +2136,8 @@ class ScheduleExplanationWebsocketTests(unittest.IsolatedAsyncioTestCase):
     def test_the_request_schema_rejects_a_bad_date_and_an_empty_lane(self) -> None:
         import voluptuous as vol
 
-        schema = vol.Schema(ws_get_schedule_explanation.websocket_schema)
-        message = {key: value for key, value in self.MESSAGE.items() if key != "id"}
+        schema = ws_get_schedule_explanation._ws_schema
+        message = self.MESSAGE
         with self.assertRaises(vol.Invalid):
             schema({**message, "date": "31.7.2026"})
         with self.assertRaises(vol.Invalid):

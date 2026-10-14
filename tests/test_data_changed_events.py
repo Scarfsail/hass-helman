@@ -5,22 +5,16 @@ says so. These tests pin the emit contract: every schedule write announces
 itself, an automation run announces itself even when it wrote nothing, and a
 no-op write stays silent so a client is never woken for nothing.
 
-The coordinator fixtures live in ``test_coordinator_schedule_execution`` --
-importing that module installs the same ``sys.modules`` stubs this one needs,
-which is safe precisely because the suite runs one process per file.
+Shared coordinator test helpers provide the schedule fixtures used here.
 """
 
 from __future__ import annotations
 
 import unittest
 
-from test_coordinator_schedule_execution import (  # noqa: E402
-    CURRENT_SLOT_ID,
-    REFERENCE_TIME,
-    FakeExecutor,
-    FakeHass,
-    FakeStorage,
-    _domains_payload,
+from _fakes import (
+    CURRENT_SLOT_ID, REFERENCE_TIME, FakeExecutor, FakeHass,
+    FakeStorage, _domains_payload,
 )
 
 from custom_components.helman.const import (  # noqa: E402

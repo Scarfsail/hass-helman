@@ -25,14 +25,12 @@ exercised, in the style of ``test_inspector_span_aggregates.py``.
 
 from __future__ import annotations
 
-import sys
-import types
 import unittest
+import pytest
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
-from _ha_stubs import install_helman_packages
 
 
 PRAGUE = ZoneInfo("Europe/Prague")
@@ -65,28 +63,10 @@ async def _run_in_executor(func, *args):
     return func(*args)
 
 
-def _install_import_stubs() -> None:
-    install_helman_packages()
-
-    ha_mod = types.ModuleType("homeassistant")
-    ha_mod.__path__ = []
-    sys.modules["homeassistant"] = ha_mod
-
-    components_mod = types.ModuleType("homeassistant.components")
-    components_mod.__path__ = []
-    sys.modules["homeassistant.components"] = components_mod
-
-    async def _async_block_till_done():
+async def _async_block_till_done():
         FLUSHES.append(sum(len(rows) for _metadata, rows in IMPORTS))
 
-    recorder_mod = types.ModuleType("homeassistant.components.recorder")
-    recorder_mod.get_instance = lambda hass: SimpleNamespace(
-        async_add_executor_job=_run_in_executor,
-        async_block_till_done=_async_block_till_done,
-    )
-    sys.modules["homeassistant.components.recorder"] = recorder_mod
-
-    def _fake_state_changes_during_period(
+def _fake_state_changes_during_period(
         hass,
         start_time,
         end_time,
@@ -117,12 +97,7 @@ def _install_import_stubs() -> None:
                 inside.insert(0, _FakeState(instant, value))
         return {entity_id: inside} if inside else {}
 
-    history_mod = types.ModuleType("homeassistant.components.recorder.history")
-    history_mod.state_changes_during_period = _fake_state_changes_during_period
-    history_mod.get_significant_states = lambda *args, **kwargs: {}
-    sys.modules["homeassistant.components.recorder.history"] = history_mod
-
-    def _fake_statistics_during_period(
+def _fake_statistics_during_period(
         hass, start_time, end_time, statistic_ids, period, units, types_
     ):
         rows = [
@@ -134,29 +109,10 @@ def _install_import_stubs() -> None:
             return {}
         return {statistic_id: list(rows) for statistic_id in statistic_ids}
 
-    def _fake_async_import_statistics(hass, metadata, statistics):
+def _fake_async_import_statistics(hass, metadata, statistics):
         IMPORTS.append((dict(metadata), [dict(row) for row in statistics]))
 
-    statistics_mod = types.ModuleType("homeassistant.components.recorder.statistics")
-    statistics_mod.statistics_during_period = _fake_statistics_during_period
-    statistics_mod.async_import_statistics = _fake_async_import_statistics
-    sys.modules["homeassistant.components.recorder.statistics"] = statistics_mod
-
-    # The real models module is a plain TypedDict/IntEnum module with no
-    # dependencies, but the package it lives in is stubbed above, so it is
-    # restated here rather than imported through a half-real package.
-    models_mod = types.ModuleType("homeassistant.components.recorder.models")
-    models_mod.StatisticData = dict
-    models_mod.StatisticMetaData = dict
-    models_mod.StatisticMeanType = SimpleNamespace(NONE=0, ARITHMETIC=1, CIRCULAR=2)
-    sys.modules["homeassistant.components.recorder.models"] = models_mod
-
-    core_mod = types.ModuleType("homeassistant.core")
-    core_mod.HomeAssistant = type("HomeAssistant", (), {})
-    core_mod.callback = lambda func: func
-    sys.modules["homeassistant.core"] = core_mod
-
-    class _FakeStore:
+class _FakeStore:
         def __init__(self, hass, version, key) -> None:
             self.key = key
 
@@ -166,36 +122,30 @@ def _install_import_stubs() -> None:
         async def async_save(self, document):
             STORED[self.key] = document
 
-    helpers_mod = types.ModuleType("homeassistant.helpers")
-    helpers_mod.__path__ = []
-    sys.modules["homeassistant.helpers"] = helpers_mod
-    storage_mod = types.ModuleType("homeassistant.helpers.storage")
-    storage_mod.Store = _FakeStore
-    sys.modules["homeassistant.helpers.storage"] = storage_mod
-    helpers_mod.storage = storage_mod
-
-    util_mod = types.ModuleType("homeassistant.util")
-    sys.modules["homeassistant.util"] = util_mod
-    dt_mod = types.ModuleType("homeassistant.util.dt")
-    dt_mod.now = lambda: NOW
-    dt_mod.as_local = lambda value: value.astimezone(PRAGUE)
-    dt_mod.as_utc = lambda value: value.astimezone(timezone.utc)
-    sys.modules["homeassistant.util.dt"] = dt_mod
-    util_mod.dt = dt_mod
-
-    sys.modules.pop("custom_components.helman.grid_export_price_backfill", None)
-
-
-_install_import_stubs()
-
-import importlib  # noqa: E402
-
+import importlib
 backfill = importlib.import_module("custom_components.helman.grid_export_price_backfill")
 
-# The real walk pauses a second between chunks so the recorder's queue stays
-# short. Nothing here is queued, and the pacing is not what these tests are
-# about, so they run it flat out.
-backfill._CHUNK_PAUSE_SECONDS = 0
+
+@pytest.fixture(autouse=True)
+def _recorder(monkeypatch):
+    from homeassistant.components.recorder import history
+    from custom_components.helman import recorder_statistics_span as span_mod
+    from homeassistant.helpers import storage
+    from homeassistant.util import dt as dt_util
+
+    monkeypatch.setattr(backfill, "get_instance", lambda hass: SimpleNamespace(
+        async_add_executor_job=_run_in_executor,
+        async_block_till_done=_async_block_till_done,
+    ))
+    monkeypatch.setattr(span_mod, "get_instance", backfill.get_instance)
+    monkeypatch.setattr(span_mod, "statistics_during_period", _fake_statistics_during_period)
+    monkeypatch.setattr(backfill, "state_changes_during_period", _fake_state_changes_during_period)
+    monkeypatch.setattr(backfill, "async_import_statistics", _fake_async_import_statistics)
+    monkeypatch.setattr(backfill.storage, "Store", _FakeStore)
+    monkeypatch.setattr(history, "state_changes_during_period", _fake_state_changes_during_period)
+    monkeypatch.setattr(dt_util, "now", lambda: NOW)
+    monkeypatch.setattr(backfill, "_CHUNK_PAUSE_SECONDS", 0)
+
 
 SOURCE = "sensor.spot_sell_price"
 MIRROR = "sensor.helman_grid_export_price"

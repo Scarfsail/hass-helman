@@ -23,14 +23,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from _ha_stubs import install_helman_packages
 
 
-def _install_package_stubs() -> None:
-    install_helman_packages()
-
-
-_install_package_stubs()
 
 span_mod = importlib.import_module("custom_components.helman.recorder_statistics_span")
 series_mod = importlib.import_module("custom_components.helman.recorder_hourly_series")

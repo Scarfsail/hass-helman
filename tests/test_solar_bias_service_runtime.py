@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from _fakes import DummyStore as _DummyStore
+
 import asyncio
 import importlib
 import sys
@@ -7,75 +9,30 @@ import types
 from pathlib import Path
 from types import SimpleNamespace
 
-ROOT = Path(__file__).resolve().parents[1]
-
-
-if "custom_components" not in sys.modules:
-    pkg = types.ModuleType("custom_components")
-    pkg.__path__ = [str(ROOT / "custom_components")]
-    sys.modules["custom_components"] = pkg
-
-if "custom_components.helman" not in sys.modules:
-    pkg = types.ModuleType("custom_components.helman")
-    pkg.__path__ = [str(ROOT / "custom_components" / "helman")]
-    sys.modules["custom_components.helman"] = pkg
-
-if "homeassistant" not in sys.modules:
-    sys.modules["homeassistant"] = types.ModuleType("homeassistant")
-
-core_mod = types.ModuleType("homeassistant.core")
-core_mod.HomeAssistant = type("HomeAssistant", (), {})
-core_mod.callback = lambda func: func
-sys.modules["homeassistant.core"] = core_mod
-
-util_mod = types.ModuleType("homeassistant.util")
-sys.modules["homeassistant.util"] = util_mod
-
-dt_mod = types.ModuleType("homeassistant.util.dt")
-dt_mod.now = lambda: None
-dt_mod.as_local = lambda value: value
-sys.modules["homeassistant.util.dt"] = dt_mod
-
-helpers_mod = types.ModuleType("homeassistant.helpers")
-sys.modules["homeassistant.helpers"] = helpers_mod
-
-event_mod = types.ModuleType("homeassistant.helpers.event")
-event_mod.async_track_time_change = lambda hass, callback, **kwargs: lambda: None
-sys.modules["homeassistant.helpers.event"] = event_mod
-
-actuals_mod = types.ModuleType("custom_components.helman.solar_bias_correction.actuals")
-async def _load_actuals_window(*args, **kwargs):
-    return None
-async def _load_actuals_for_day(*args, **kwargs):
-    return {}
-actuals_mod.load_actuals_window = _load_actuals_window
-actuals_mod.load_actuals_for_day = _load_actuals_for_day
-actuals_mod.slot_actuals_from_batched_slot_energy = lambda *args, **kwargs: {}
-sys.modules[actuals_mod.__name__] = actuals_mod
-
-forecast_history_mod = types.ModuleType("custom_components.helman.solar_bias_correction.forecast_history")
-async def _load_archived_forecast_points(*args, **kwargs):
-    return []
-async def _load_trainer_samples(*args, **kwargs):
-    return []
-def _forecast_points_from_slot_map(*args, **kwargs):
-    return []
-forecast_history_mod.load_archived_forecast_points = _load_archived_forecast_points
-forecast_history_mod.load_trainer_samples = _load_trainer_samples
-forecast_history_mod.forecast_points_from_slot_map = _forecast_points_from_slot_map
-sys.modules[forecast_history_mod.__name__] = forecast_history_mod
-
+import pytest
 
 models = importlib.import_module("custom_components.helman.solar_bias_correction.models")
-sys.modules.pop("custom_components.helman.solar_bias_correction.service", None)
 service_mod = importlib.import_module("custom_components.helman.solar_bias_correction.service")
 
 
-class _DummyStore:
-    profile = None
+@pytest.fixture(autouse=True)
+def _stub_training_inputs(monkeypatch):
+    async def empty_window(*args, **kwargs):
+        return None
 
-    async def async_save(self, payload):
-        self.saved = payload
+    async def empty_day(*args, **kwargs):
+        return {}
+
+    async def empty_points(*args, **kwargs):
+        return []
+
+    for name, replacement in (
+        ("load_actuals_window", empty_window),
+        ("load_actuals_for_day", empty_day),
+        ("load_archived_forecast_points", empty_points),
+        ("load_trainer_samples", empty_points),
+    ):
+        monkeypatch.setattr(service_mod, name, replacement)
 
 
 def _make_cfg(

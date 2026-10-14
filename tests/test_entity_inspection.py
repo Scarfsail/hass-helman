@@ -25,10 +25,6 @@ import unittest.mock
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-from _ha_stubs import install_helman_packages
-
-
-install_helman_packages()
 
 from custom_components.helman.entity_inspection import (  # noqa: E402
     FALLBACK_EVALUATOR,

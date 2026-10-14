@@ -29,7 +29,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from _ha_stubs import install_helman_packages, stub_ha_dt, stub_module
+from _ha_stubs import stub_ha_dt, stub_module
 
 TZ = timezone(timedelta(hours=2))
 REFERENCE_TIME = datetime(2026, 7, 10, 5, 0, tzinfo=TZ)
@@ -38,7 +38,7 @@ GOLDEN_PATH = Path(__file__).with_name("fixtures") / "reserve_floor_classifier_g
 
 
 def _install_import_stubs() -> None:
-    install_helman_packages("scheduling")
+
     util_pkg = stub_module("homeassistant.util")
     dt_mod = stub_ha_dt(REFERENCE_TIME)
     util_pkg.dt = dt_mod

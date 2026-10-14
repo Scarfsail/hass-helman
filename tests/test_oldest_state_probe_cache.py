@@ -14,14 +14,12 @@ callers with two reads, or outlive the config entry that filled it.
 from __future__ import annotations
 
 import asyncio
-import sys
-import types
 import unittest
+import pytest
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
-from _ha_stubs import install_helman_packages
 
 
 PRAGUE = ZoneInfo("Europe/Prague")
@@ -35,71 +33,33 @@ RECORDER: dict[str, object] = {
 }
 
 
-def _install_import_stubs() -> None:
-    install_helman_packages()
+async def _run_in_executor(func, *args):
+    # Yield so concurrent callers can overlap at the recorder boundary.
+    await asyncio.sleep(0)
+    return func(*args)
 
-    ha_mod = types.ModuleType("homeassistant")
-    ha_mod.__path__ = []
-    sys.modules["homeassistant"] = ha_mod
 
-    components_mod = types.ModuleType("homeassistant.components")
-    components_mod.__path__ = []
-    sys.modules["homeassistant.components"] = components_mod
+def _state_changes_during_period(hass, start, end, entity_id, *args, **kwargs):
+    RECORDER["probes"].append(entity_id)
+    if RECORDER["error"] is not None:
+        raise RECORDER["error"]
+    oldest = RECORDER["oldest_state"].get(entity_id)
+    if oldest is None:
+        return {}
+    return {entity_id: [SimpleNamespace(last_updated=oldest, state="1.0")]}
 
-    async def _run_in_executor(func, *args):
-        # A real executor hand-off suspends the caller, which is the whole
-        # point of the concurrency test below: without a suspension point the
-        # second caller would find the answer already cached whether the lock
-        # existed or not.
-        await asyncio.sleep(0)
-        return func(*args)
 
-    recorder_mod = types.ModuleType("homeassistant.components.recorder")
-    recorder_mod.get_instance = lambda hass: SimpleNamespace(
+@pytest.fixture(autouse=True)
+def _recorder(monkeypatch):
+    from homeassistant.components.recorder import history
+    from homeassistant.util import dt as dt_util
+
+    monkeypatch.setattr(span_mod, "get_instance", lambda hass: SimpleNamespace(
         async_add_executor_job=_run_in_executor
-    )
-    sys.modules["homeassistant.components.recorder"] = recorder_mod
+    ))
+    monkeypatch.setattr(history, "state_changes_during_period", _state_changes_during_period)
+    monkeypatch.setattr(dt_util, "now", lambda: RECORDER["now"])
 
-    def _state_changes_during_period(hass, start, end, entity_id, *args, **kwargs):
-        RECORDER["probes"].append(entity_id)
-        if RECORDER["error"] is not None:
-            raise RECORDER["error"]
-        oldest = RECORDER["oldest_state"].get(entity_id)
-        if oldest is None:
-            return {}
-        return {entity_id: [SimpleNamespace(last_updated=oldest, state="1.0")]}
-
-    history_mod = types.ModuleType("homeassistant.components.recorder.history")
-    history_mod.state_changes_during_period = _state_changes_during_period
-    # The sibling raw reader binds this at import time; nothing here reads it.
-    history_mod.get_significant_states = lambda *args, **kwargs: {}
-    sys.modules["homeassistant.components.recorder.history"] = history_mod
-
-    statistics_mod = types.ModuleType("homeassistant.components.recorder.statistics")
-    statistics_mod.statistics_during_period = lambda *args, **kwargs: {}
-    sys.modules["homeassistant.components.recorder.statistics"] = statistics_mod
-
-    core_mod = types.ModuleType("homeassistant.core")
-    core_mod.HomeAssistant = type("HomeAssistant", (), {})
-    core_mod.callback = lambda func: func
-    sys.modules["homeassistant.core"] = core_mod
-
-    util_mod = types.ModuleType("homeassistant.util")
-    sys.modules["homeassistant.util"] = util_mod
-    dt_mod = types.ModuleType("homeassistant.util.dt")
-    # The cache's own clock: every test that is about a lifetime moves this
-    # rather than waiting.
-    dt_mod.now = lambda: RECORDER["now"]
-    dt_mod.as_local = lambda value: value.astimezone(PRAGUE)
-    dt_mod.as_utc = lambda value: value
-    sys.modules["homeassistant.util.dt"] = dt_mod
-    util_mod.dt = dt_mod
-
-    sys.modules.pop("custom_components.helman.recorder_hourly_series", None)
-    sys.modules.pop("custom_components.helman.recorder_statistics_span", None)
-
-
-_install_import_stubs()
 
 import importlib  # noqa: E402
 

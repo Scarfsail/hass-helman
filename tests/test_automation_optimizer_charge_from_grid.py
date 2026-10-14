@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sys
 import types
 import unittest
 from copy import deepcopy
@@ -9,7 +8,7 @@ from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from unittest.mock import patch
 
-from _ha_stubs import install_helman_packages, stub_ha_dt, stub_module
+from _ha_stubs import stub_ha_dt, stub_module
 
 
 TZ = timezone(timedelta(hours=2))
@@ -17,7 +16,7 @@ REFERENCE_TIME = datetime(2026, 7, 10, 5, 0, tzinfo=TZ)
 DAY = date(2026, 7, 10)
 
 def _install_import_stubs() -> None:
-    install_helman_packages("scheduling")
+
     # ``battery_state`` imports ``HomeAssistant`` only for annotations; stubbing
     # it lets the real horizon simulator load.
     core_mod = stub_module("homeassistant.core")
@@ -554,8 +553,6 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
                     soc_by_bucket={trajectory_end or _at(7, 45): soc_pct}
                 )
 
-        fake_module = types.ModuleType("custom_components.helman.automation.horizon_simulation")
-        fake_module.build_horizon_simulator = lambda *_args, **_kwargs: FakeSimulator()
         # Points carry end-of-slot SoC, so the 07:xx values are what the
         # expensive window at 08:00 is entered with.
         soc_series = _soc_series(soc if soc is not None else {
@@ -566,7 +563,10 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
             10: 60,
         })
         prices = _import_points({6: 2.0, 8: 6.0})
-        with patch.dict(sys.modules, {fake_module.__name__: fake_module}):
+        with patch(
+            "custom_components.helman.automation.horizon_simulation.build_horizon_simulator",
+            side_effect=lambda *_args, **_kwargs: FakeSimulator(),
+        ):
             optimizer = build_charge_from_grid_optimizer(_make_config())
             snapshot = _make_snapshot(
                 soc_series=soc_series,

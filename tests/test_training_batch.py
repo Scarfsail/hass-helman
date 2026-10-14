@@ -6,16 +6,10 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
-from _ha_stubs import install_helman_packages
 
 REFERENCE_TIME = datetime.fromisoformat("2026-08-02T03:00:00+02:00")
 
 
-def _install_package_stubs() -> None:
-    install_helman_packages()
-
-
-_install_package_stubs()
 
 batch_module = importlib.import_module("custom_components.helman.training.batch")
 house_module = importlib.import_module(

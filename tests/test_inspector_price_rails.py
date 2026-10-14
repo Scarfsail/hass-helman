@@ -12,74 +12,21 @@ any single source can be blamed for.
 
 from __future__ import annotations
 
+from _fakes import DummyStore as _DummyStore
+
 import sys
 import types
 import unittest
+
+import pytest
 from datetime import date, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 from zoneinfo import ZoneInfo
 
-from _ha_stubs import install_helman_packages
 
 
-def _install_import_stubs() -> None:
-    install_helman_packages("solar_bias_correction")
 
-    ha_mod = types.ModuleType("homeassistant")
-    ha_mod.__path__ = []
-    sys.modules["homeassistant"] = ha_mod
-
-    components_mod = types.ModuleType("homeassistant.components")
-    components_mod.__path__ = []
-    sys.modules["homeassistant.components"] = components_mod
-
-    recorder_mod = types.ModuleType("homeassistant.components.recorder")
-    # A stated purge horizon, wide enough to hold the target day. Without one the
-    # inspector cannot tell "this instance keeps everything" from "the recorder
-    # will not say", and an elapsed day whose every meter reads empty -- which is
-    # exactly what these stubs produce before a test fills one in -- is taken as
-    # purged and served from hourly statistics instead of raw states.
-    recorder_mod.get_instance = lambda hass: SimpleNamespace(
-        keep_days=30, auto_purge=True
-    )
-    sys.modules["homeassistant.components.recorder"] = recorder_mod
-
-    history_mod = types.ModuleType("homeassistant.components.recorder.history")
-    history_mod.state_changes_during_period = lambda *args, **kwargs: {}
-
-    async def _fake_get_significant_states(*args, **kwargs):
-        return {}
-
-    history_mod.get_significant_states = _fake_get_significant_states
-    sys.modules["homeassistant.components.recorder.history"] = history_mod
-
-    # The inspector day asks the recorder where its statistics begin, which
-    # imports the span module. Answering with nothing leaves the floor at the
-    # trainer's window, which is what every assertion in this file was written
-    # against.
-    statistics_mod = types.ModuleType("homeassistant.components.recorder.statistics")
-    statistics_mod.statistics_during_period = lambda *args, **kwargs: {}
-    sys.modules["homeassistant.components.recorder.statistics"] = statistics_mod
-
-    core_mod = types.ModuleType("homeassistant.core")
-    core_mod.HomeAssistant = type("HomeAssistant", (), {})
-    core_mod.callback = lambda func: func
-    sys.modules["homeassistant.core"] = core_mod
-
-    util_mod = types.ModuleType("homeassistant.util")
-    sys.modules["homeassistant.util"] = util_mod
-    dt_mod = types.ModuleType("homeassistant.util.dt")
-    dt_mod.now = lambda: datetime.fromisoformat("2026-05-11T10:00:00+02:00")
-    dt_mod.as_local = lambda value: value
-    dt_mod.as_utc = lambda value: value
-    sys.modules["homeassistant.util.dt"] = dt_mod
-    util_mod.dt = dt_mod
-
-    sys.modules.pop("custom_components.helman.solar_bias_correction.service", None)
-
-
-_install_import_stubs()
 
 import importlib  # noqa: E402
 
@@ -93,6 +40,12 @@ price_builder = importlib.import_module(
     "custom_components.helman.grid_price_forecast_builder"
 )
 
+@pytest.fixture(autouse=True)
+def _fixed_now(monkeypatch):
+    from homeassistant.util import dt as dt_util
+    monkeypatch.setattr(dt_util, "now", lambda: datetime.fromisoformat("2026-05-11T10:00:00+02:00"))
+
+
 PRAGUE = ZoneInfo("Europe/Prague")
 #: "Now" for every test here: 10:00 local on 2026-05-11.
 TODAY = "2026-05-11"
@@ -100,13 +53,6 @@ PAST_DAY = "2026-05-10"
 FUTURE_DAY = "2026-05-12"
 IMPORT_ENTITY = "sensor.helman_grid_import_price"
 EXPORT_ENTITY = "sensor.helman_grid_export_price"
-
-
-class _DummyStore:
-    profile = None
-
-    async def async_save(self, payload):
-        self.saved = payload
 
 
 def _make_cfg():
@@ -299,7 +245,7 @@ class TestDateScopedBoundarySampler(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             {
-                boundary.strftime("%H:%M"): sample.value
+                boundary.astimezone(PRAGUE).strftime("%H:%M"): sample.value
                 for boundary, sample in samples.items()
             },
             {"00:00": 2.0, "00:15": 2.0, "00:30": 4.0, "00:45": 4.0},
@@ -316,7 +262,7 @@ class TestDateScopedBoundarySampler(unittest.IsolatedAsyncioTestCase):
         # here -- so it seeds the carry and vouches for nothing.
         self.assertEqual(
             {
-                boundary.strftime("%H:%M"): sample.observed
+                boundary.astimezone(PRAGUE).strftime("%H:%M"): sample.observed
                 for boundary, sample in samples.items()
             },
             {"00:00": False, "00:15": False, "00:30": True, "00:45": False},
@@ -370,7 +316,7 @@ class TestDateScopedBoundarySampler(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             {
-                boundary.strftime("%H:%M"): sample.value
+                boundary.astimezone(PRAGUE).strftime("%H:%M"): sample.value
                 for boundary, sample in samples.items()
             },
             {"05:45": 2.0, "06:00": 4.0, "06:15": 4.0},
@@ -395,7 +341,7 @@ class TestDateScopedBoundarySampler(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             {
-                boundary.strftime("%H:%M"): sample.value
+                boundary.astimezone(PRAGUE).strftime("%H:%M"): sample.value
                 for boundary, sample in samples.items()
             },
             {"00:00": 3.0, "00:15": 9.0},
@@ -647,13 +593,9 @@ class TestRecordedRailAcrossAnOutage(unittest.IsolatedAsyncioTestCase):
             "query_oldest_state_date",
             AsyncMock(return_value=date(2026, 5, 9)),
         ), patch.object(
-            # This file stubs ``as_local`` as an identity, which is enough while
-            # every key stays in one zone. The reader keys its slots by the UTC
-            # instant on purpose, so the labelling step needs the real
-            # conversion or every slot reads two hours early.
-            service_mod.dt_util,
-            "as_local",
-            lambda value: value.astimezone(PRAGUE),
+            self.span,
+            "query_hourly_statistics",
+            AsyncMock(return_value=SimpleNamespace(rows={EXPORT_ENTITY: {}})),
         ):
             _imported, exported = await service._load_recorded_price_rails(
                 [None, EXPORT_ENTITY],

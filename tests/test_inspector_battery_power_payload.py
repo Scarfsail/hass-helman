@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from _fakes import DummyStore as _DummyStore
+
 import sys
 import types
 import unittest
@@ -8,54 +10,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
-from _ha_stubs import install_helman_packages
 
 
-def _install_import_stubs() -> None:
-    install_helman_packages("solar_bias_correction")
-
-    ha_mod = types.ModuleType("homeassistant")
-    ha_mod.__path__ = []
-    sys.modules["homeassistant"] = ha_mod
-
-    components_mod = types.ModuleType("homeassistant.components")
-    components_mod.__path__ = []
-    sys.modules["homeassistant.components"] = components_mod
-
-    recorder_mod = types.ModuleType("homeassistant.components.recorder")
-    recorder_mod.get_instance = lambda hass: None
-    sys.modules["homeassistant.components.recorder"] = recorder_mod
-
-    history_mod = types.ModuleType("homeassistant.components.recorder.history")
-    history_mod.state_changes_during_period = lambda *args, **kwargs: {}
-
-    async def _fake_get_significant_states(*args, **kwargs):
-        return {}
-
-    history_mod.get_significant_states = _fake_get_significant_states
-    sys.modules["homeassistant.components.recorder.history"] = history_mod
-
-    core_mod = types.ModuleType("homeassistant.core")
-    core_mod.HomeAssistant = type("HomeAssistant", (), {})
-    core_mod.callback = lambda func: func
-    sys.modules["homeassistant.core"] = core_mod
-
-    util_mod = types.ModuleType("homeassistant.util")
-    sys.modules["homeassistant.util"] = util_mod
-    dt_mod = types.ModuleType("homeassistant.util.dt")
-    dt_mod.now = lambda: datetime.fromisoformat("2026-05-11T10:00:00+02:00")
-    dt_mod.as_local = lambda value: value
-    dt_mod.as_utc = lambda value: value
-    sys.modules["homeassistant.util.dt"] = dt_mod
-    util_mod.dt = dt_mod
-
-    sys.modules.pop("custom_components.helman.solar_bias_correction.service", None)
-    sys.modules.pop(
-        "custom_components.helman.solar_bias_correction.house_forecast_history", None
-    )
 
 
-_install_import_stubs()
 
 import importlib  # noqa: E402
 
@@ -67,13 +25,6 @@ models = importlib.import_module(
 )
 
 PRAGUE = ZoneInfo("Europe/Prague")
-
-
-class _DummyStore:
-    profile = None
-
-    async def async_save(self, payload):
-        self.saved = payload
 
 
 def _make_cfg():

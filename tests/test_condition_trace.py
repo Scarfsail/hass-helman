@@ -9,6 +9,10 @@ the short-circuit. A ``hass`` with states and a bus is all the built-in
 
 from __future__ import annotations
 
+from _fakes import FakeHass as SharedFakeHass
+
+from _fakes import FakeConnection as SharedFakeConnection
+
 import json
 import unittest
 from pathlib import Path
@@ -48,12 +52,13 @@ class FakeStates:
         return self._states.get(entity_id)
 
 
-class FakeHass:
+class FakeHass(SharedFakeHass):
     def __init__(
         self,
         states: dict[str, str] | None = None,
         attributes: dict[str, dict] | None = None,
     ) -> None:
+        super().__init__()
         self.bus = FakeBus()
         self.states = FakeStates(
             {
@@ -73,17 +78,11 @@ class FakeStorage:
         self.schedule_document: dict = {}
 
 
-class FakeConnection:
+class FakeConnection(SharedFakeConnection):
     def __init__(self, *, is_admin: bool = True) -> None:
+        super().__init__()
         self.user = SimpleNamespace(is_admin=is_admin)
-        self.results: list[tuple[int, object]] = []
-        self.errors: list[tuple[int, str, str]] = []
 
-    def send_result(self, msg_id: int, result: object) -> None:
-        self.results.append((msg_id, result))
-
-    def send_error(self, msg_id: int, code: str, message: str) -> None:
-        self.errors.append((msg_id, code, message))
 
 
 def _optimizer(*groups: dict) -> dict:

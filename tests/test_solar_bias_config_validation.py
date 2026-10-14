@@ -2,10 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-# Import the existing test helpers which install import stubs and provide _valid_config
-from test_config_validation import _valid_config, _install_import_stubs
-
-_install_import_stubs()
+from _fakes import _valid_config
 
 from custom_components.helman.config_validation import validate_config_document
 

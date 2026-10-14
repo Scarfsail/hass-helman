@@ -5,7 +5,7 @@ import unittest
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 
-from _ha_stubs import install_helman_packages, stub_ha_dt, stub_module
+from _ha_stubs import stub_ha_dt, stub_module
 
 
 TZ = timezone(timedelta(hours=2))
@@ -13,7 +13,7 @@ REFERENCE_TIME = datetime(2026, 7, 10, 5, 0, tzinfo=TZ)
 DAY = date(2026, 7, 10)
 
 def _install_import_stubs() -> None:
-    install_helman_packages("scheduling")
+
     util_pkg = stub_module("homeassistant.util")
     dt_mod = stub_ha_dt()
     util_pkg.dt = dt_mod

@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import unittest
+import pytest
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from _ha_stubs import install_helman_packages, stub_module
 
 
 PRAGUE = ZoneInfo("Europe/Prague")
@@ -41,40 +41,20 @@ class _FakeStore:
         raise NotImplementedError
 
 
-def _install_import_stubs() -> None:
-    install_helman_packages("automation")
-
-    homeassistant_pkg = stub_module("homeassistant")
-    core_mod = stub_module("homeassistant.core")
-    core_mod.HomeAssistant = object
-    helpers_pkg = stub_module("homeassistant.helpers")
-    storage_mod = stub_module("homeassistant.helpers.storage")
-    storage_mod.Store = _FakeStore
-    helpers_pkg.storage = storage_mod
-    homeassistant_pkg.helpers = helpers_pkg
-
-    util_pkg = stub_module("homeassistant.util")
-    dt_mod = stub_module("homeassistant.util.dt")
-
-    def _as_local(value: datetime) -> datetime:
-        if value.tzinfo is None:
-            return value.replace(tzinfo=PRAGUE)
-        return value.astimezone(PRAGUE)
-
-    dt_mod.as_local = _as_local
-    dt_mod.as_utc = lambda v: v.astimezone(timezone.utc) if v.tzinfo else v.replace(
-        tzinfo=timezone.utc
-    )
-    dt_mod.parse_datetime = datetime.fromisoformat
-    dt_mod.now = lambda: _NOW
-    util_pkg.dt = dt_mod
+from custom_components.helman.automation import day_context_store
+DayContextStore = day_context_store.DayContextStore
 
 
-_install_import_stubs()
+class _StoreForTest(_FakeStore):
+    _async_migrate_func = day_context_store._DayBandStore._async_migrate_func
 
-from custom_components.helman.automation.day_context_store import (  # noqa: E402
-    DayContextStore,
-)
+
+@pytest.fixture(autouse=True)
+def _store(monkeypatch):
+    from homeassistant.util import dt as dt_util
+    monkeypatch.setattr(day_context_store, "_DayBandStore", _StoreForTest)
+    monkeypatch.setattr(dt_util, "now", lambda: _NOW)
+
 
 TODAY = date(2026, 7, 10)
 TOMORROW = TODAY + timedelta(days=1)
