@@ -2,9 +2,7 @@ import type { ScheduleApplianceMetadata } from "./schedule-appliance-metadata";
 import type {
     ScheduleApplianceAction,
     ScheduleControllableAction,
-    ScheduleEditIntent,
     ScheduleInverterAction,
-    ScheduleRangeEditIntent,
     ScheduleSetBy,
     ScheduleSlot,
     ScheduleSlotPatch,
@@ -17,6 +15,7 @@ import {
     getScheduleApplianceActionIdentityKey,
 } from "../schedule-types";
 import { buildScheduleSlotPatches } from "./schedule-patch-builder";
+import type { ScheduleEditIntent, ScheduleRangeEditIntent } from "./schedule-patch-builder";
 import {
     formatScheduleDayLabel,
     getScheduleLocalDayStartMs,
@@ -157,17 +156,6 @@ export function isEntityScheduleActionEmpty(action: EntityScheduleAction): boole
     return action === null || (isEntityInverterAction(action) && action.kind === "empty");
 }
 
-/**
- * The "nothing scheduled" value for a lane -- `null` for every lane alike.
- *
- * The inverter used to spell it `{ kind: "empty" }` because its domain always
- * held an action; since the flattening it says it the way an appliance always
- * has, by not being in the slot's map at all.
- */
-export function getEmptyEntityScheduleAction(_target: EntityScheduleTarget): EntityScheduleAction {
-    return null;
-}
-
 export function getEntityScheduleActionKey(action: EntityScheduleAction): string {
     if (action === null) {
         return "none";
@@ -285,7 +273,6 @@ export function buildElapsedScheduleSlots({
             endLabel: labels.endLabel,
             rangeLabel: labels.rangeLabel,
             assignments: {},
-            runtime: null,
             isCurrent: false,
         });
     }
@@ -586,20 +573,6 @@ export function selectEntityScheduleSlotsInRange({
  * dropped here as well as in the UI: the backend rejects past slots, and a
  * rejected batch would take the whole day's edit with it.
  */
-export function buildEntitySchedulePatches({
-    slots,
-    target,
-    draft,
-    nowMs,
-}: {
-    slots: readonly ScheduleSlot[];
-    target: EntityScheduleTarget;
-    draft: EntityScheduleDraft;
-    nowMs: number;
-}): ScheduleSlotPatch[] {
-    return buildEntityScheduleLanePatches({ slots, lanes: [{ target, draft }], nowMs });
-}
-
 /**
  * Every lane's draft as one batch of slot patches.
  *

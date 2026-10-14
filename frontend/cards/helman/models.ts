@@ -1,21 +1,11 @@
 import type {
-    ApplianceMetadataDTO,
-    ApplianceProjectionDTO,
-    AppliancesPayload,
-    ApplianceProjectionsPayload,
     ScheduleApplianceActionDTO,
     ScheduleActionDTO,
     ScheduleControllableActionsDTO,
-    SchedulePayload,
     ScheduleSlotDTO,
 } from "../helman-api";
 
-export type HelmanSchedule = SchedulePayload;
 export type HelmanScheduleAction = ScheduleActionDTO;
-export type HelmanAppliances = AppliancesPayload;
-export type HelmanApplianceMetadata = ApplianceMetadataDTO;
-export type HelmanApplianceProjections = ApplianceProjectionsPayload;
-export type HelmanApplianceProjection = ApplianceProjectionDTO;
 
 export interface HelmanSchedulePatch {
     id: string;

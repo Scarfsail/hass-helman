@@ -77,8 +77,6 @@ export class TreeItem {
     // Derived-color caches; invalidated by reference comparison against the latest bucket
     public _cachedDominantBucketRef?: object;
     public _cachedDominantColor?: string;
-    public _cachedBlendedBucketRef?: object;
-    public _cachedBlendedColor?: string;
 }
 
 /** Whether a item earns a row at all.

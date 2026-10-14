@@ -82,99 +82,11 @@ export function buildScheduleApplianceProjectionIndex(
     };
 }
 
-export function getScheduleApplianceProjectionBadge({
-    projectionIndex,
-    applianceKind,
-    applianceId,
-    action,
-    slotId,
-}: {
-    projectionIndex: ScheduleApplianceProjectionIndex;
-    applianceKind: string | null | undefined;
-    applianceId: string;
-    action: ScheduleApplianceAction;
-    slotId: string;
-}): ScheduleApplianceProjectionBadge | null {
-    if (isScheduleApplianceActionEnabled(action) !== true) {
-        return null;
-    }
-
-    const resolvedApplianceKind = _resolveProjectionApplianceKind(applianceKind, action);
-    const candidates = projectionIndex.points.get(applianceId)?.get(slotId);
-    if (!candidates || candidates.length === 0) {
-        return null;
-    }
-
-    if (resolvedApplianceKind === "ev_charger" && isScheduleEvChargerAction(action)) {
-        const matches = candidates
-            .filter((candidate) => _matchesEvProjectedAction(action, candidate))
-            .flatMap((candidate) => candidate.expectedVehicleSocPct === null
-                ? []
-                : [candidate.expectedVehicleSocPct]);
-        if (matches.length === 0) {
-            return null;
-        }
-
-        const expectedVehicleSocPct = Math.max(...matches);
-        return {
-            kind: "vehicle_soc",
-            text: String(expectedVehicleSocPct),
-            expectedVehicleSocPct,
-        };
-    }
-
-    if (resolvedApplianceKind === "generic") {
-        const energyPoints = _collectEnergyProjectionPoints(candidates);
-        if (energyPoints.length === 0) {
-            return null;
-        }
-
-        const energyKwh = energyPoints.reduce((sum, candidate) => sum + candidate.energyKwh!, 0);
-        return {
-            kind: "energy",
-            text: _formatEnergyBadgeText(energyKwh),
-            energyKwh,
-            applianceKind: "generic",
-            mode: null,
-            projectionMethod: _mergeProjectionMethods(
-                energyPoints.map((candidate) => candidate.projectionMethod),
-            ),
-        };
-    }
-
-    if (resolvedApplianceKind === "climate" && isScheduleClimateApplianceAction(action)) {
-        const energyPoints = _collectEnergyProjectionPoints(
-            candidates.filter((candidate) => _matchesClimateProjectedAction(action, candidate)),
-        );
-        if (energyPoints.length === 0) {
-            return null;
-        }
-
-        const energyKwh = energyPoints.reduce((sum, candidate) => sum + candidate.energyKwh!, 0);
-        return {
-            kind: "energy",
-            text: _formatEnergyBadgeText(energyKwh),
-            energyKwh,
-            applianceKind: "climate",
-            mode: action.mode,
-            projectionMethod: _mergeProjectionMethods(
-                energyPoints.map((candidate) => candidate.projectionMethod),
-            ),
-        };
-    }
-
-    return null;
-}
-
 /**
  * What a whole run is projected to consume, whatever appliance it belongs to.
  *
- * `getScheduleApplianceProjectionBadge` answers one slot at a time, and for an
- * EV charger it answers with the vehicle's SoC instead -- the right badge for a
- * chip, but it leaves a charging run with no consumption figure at all. A lane
- * draws runs rather than slots, and the question a run raises is how much it
- * costs, so the energy is summed here for every kind, against the same action
- * matchers the per-slot badge uses.
+ * A lane draws runs rather than slots, so the energy is summed here for every
+ * kind, against the action matchers.
  *
  * Slots the caller leaves out simply do not count, which is how a run that is
  * half over reports only what it has left to draw.
@@ -315,62 +227,6 @@ export function buildScheduleVehicleSocSlots({
     }
 
     return series;
-}
-
-export function mergeScheduleApplianceProjectionBadges(
-    current: ScheduleApplianceProjectionBadge | null,
-    next: ScheduleApplianceProjectionBadge | null,
-): ScheduleApplianceProjectionBadge | null {
-    if (current === null) {
-        return next;
-    }
-    if (current.kind === "vehicle_soc" && next?.kind === "vehicle_soc") {
-        const expectedVehicleSocPct = Math.max(current.expectedVehicleSocPct, next.expectedVehicleSocPct);
-        return {
-            kind: "vehicle_soc",
-            text: String(expectedVehicleSocPct),
-            expectedVehicleSocPct,
-        };
-    }
-
-    if (current.kind !== "energy" || next?.kind !== "energy") {
-        return current;
-    }
-
-    const energyKwh = current.energyKwh + next.energyKwh;
-    return {
-        kind: "energy",
-        text: _formatEnergyBadgeText(energyKwh),
-        energyKwh,
-        applianceKind: current.applianceKind,
-        mode: _mergeOptionalString(current.mode, next.mode),
-        projectionMethod: _mergeProjectionMethods([
-            current.projectionMethod,
-            next.projectionMethod,
-        ]),
-    };
-}
-
-export function aggregateScheduleApplianceEnergyProjectionBadges(
-    badges: readonly (ScheduleApplianceProjectionBadge | null)[],
-): Extract<ScheduleApplianceProjectionBadge, { kind: "energy" }> | null {
-    const energyBadges = badges.filter((badge): badge is Extract<ScheduleApplianceProjectionBadge, { kind: "energy" }> =>
-        badge !== null && badge.kind === "energy");
-    if (energyBadges.length === 0) {
-        return null;
-    }
-
-    const energyKwh = energyBadges.reduce((sum, badge) => sum + badge.energyKwh, 0);
-    return {
-        kind: "energy",
-        text: _formatEnergyBadgeText(energyKwh),
-        energyKwh,
-        applianceKind: "aggregate",
-        mode: null,
-        projectionMethod: _mergeProjectionMethods(
-            energyBadges.map((badge) => badge.projectionMethod),
-        ),
-    };
 }
 
 function _resolveProjectionApplianceKind(
@@ -533,17 +389,6 @@ function _normalizeEnergyKwh(value: number | null | undefined): number | null {
 
 function _normalizeOptionalString(value: string | null | undefined): string | null {
     return _isNonEmptyString(value) ? value : null;
-}
-
-function _mergeOptionalString(
-    current: string | null,
-    next: string | null,
-): string | null {
-    if (current === next) {
-        return current;
-    }
-
-    return current ?? next;
 }
 
 function _isNonEmptyString(value: unknown): value is string {

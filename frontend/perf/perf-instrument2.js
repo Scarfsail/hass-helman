@@ -39,7 +39,7 @@
   ]);
   out.band = timeIt("bandStrip", customElements.get("helman-solar-schedule-band-strip"), [
     "_rebuildNormalizedIfNeeded", "_rebuildDerivedIfNeeded", "_buildBandLanes",
-    "_buildHighlights", "_buildGridTicks", "_selectedDay",
+    "_buildHighlights", "_selectedDay",
   ]);
   out.pills = timeIt("dayPills", customElements.get("helman-solar-day-pills"), [
     "_rebuildNormalizedIfNeeded", "_rebuildModelIfNeeded", "_syncOwner", "_revealSelectedPill",
@@ -48,7 +48,7 @@
     "_load",
   ]);
   out.card = timeIt("helmanCard", customElements.get("helman-card"), [
-    "_buildDialogParams", "_rebuildWatchedEntityIds",
+    "_rebuildWatchedEntityIds",
   ]);
   return out;
 })();

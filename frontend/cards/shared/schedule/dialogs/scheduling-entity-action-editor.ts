@@ -194,7 +194,6 @@ export class SchedulingEntityActionEditor extends LitElement {
                         .localize=${this.localize}
                         .action=${action}
                         .selectedAuthorship=${this._authorshipSummary()}
-                        .showSummary=${false}
                         .showControls=${true}
                         @schedule-appliance-action-change=${this._handleApplianceActionChange}
                     ></scheduling-ev-charger-editor>
@@ -206,7 +205,6 @@ export class SchedulingEntityActionEditor extends LitElement {
                         .localize=${this.localize}
                         .action=${action}
                         .selectedAuthorship=${this._authorshipSummary()}
-                        .showSummary=${false}
                         .showControls=${true}
                         @schedule-appliance-action-change=${this._handleApplianceActionChange}
                     ></scheduling-climate-appliance-editor>
@@ -218,7 +216,6 @@ export class SchedulingEntityActionEditor extends LitElement {
                         .localize=${this.localize}
                         .action=${action}
                         .selectedAuthorship=${this._authorshipSummary()}
-                        .showSummary=${false}
                         .showControls=${true}
                         @schedule-appliance-action-change=${this._handleApplianceActionChange}
                     ></scheduling-generic-appliance-editor>

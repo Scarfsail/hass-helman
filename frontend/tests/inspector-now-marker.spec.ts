@@ -186,7 +186,6 @@ async function mountBand(page: Page, date: string): Promise<void> {
             blockProjections: new Map(), blockVehicleSoc: new Map(),
         }];
         band.readonly = true;
-        band.laneLabels = "track";
         band.showForecastRows = false;
         band.showAxis = false;
         band.windowStartMs = dayStartMs;

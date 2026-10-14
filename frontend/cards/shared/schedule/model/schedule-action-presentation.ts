@@ -1,10 +1,7 @@
 import type { LocalizeFunction } from "../../../localize/localize";
 import type { ScheduleAction } from "../schedule-types";
 import { getScheduleActionTone, type ScheduleActionToneClass } from "../action-tones";
-import {
-    getScheduleActionLabel,
-    type ScheduleActionLabelVariant,
-} from "./schedule-labels";
+import { getScheduleActionLabel } from "./schedule-labels";
 
 export interface ScheduleActionPresentation {
     icon: string;
@@ -18,12 +15,11 @@ export interface ScheduleActionPresentation {
 export function getScheduleActionPresentation(
     action: ScheduleAction,
     localize: LocalizeFunction,
-    labelVariant: ScheduleActionLabelVariant = "default",
 ): ScheduleActionPresentation {
     const tone = getScheduleActionTone(action.kind);
     return {
         icon: _getScheduleActionIcon(action.kind),
-        label: getScheduleActionLabel(action, localize, labelVariant),
+        label: getScheduleActionLabel(action, localize),
         toneClass: `action-tone-${tone}`,
         isCandidate: action.conditionMet === false,
     };

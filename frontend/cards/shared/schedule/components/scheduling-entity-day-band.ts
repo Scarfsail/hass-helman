@@ -197,21 +197,12 @@ export class SchedulingEntityDayBand extends LitElement {
         helmanColorVars,
         schedulingSharedStyles,
         css`
-            /* A label column beside a single shared time column: every lane and
-               every context row is the same span of the same day, so they have
-               to line up to the pixel. */
             .band {
                 display: grid;
-                grid-template-columns: minmax(96px, 156px) 1fr;
+                grid-template-columns: 1fr;
                 align-items: center;
                 gap: 2px 8px;
                 touch-action: pan-y;
-            }
-
-            /* No gutter at all: the tracks are the whole width, which is what
-               lets a host line them up with a chart of its own. */
-            .band.labels-in-track {
-                grid-template-columns: 1fr;
             }
 
             /* A host aligning the tracks to its own chart inset them to that
@@ -219,79 +210,26 @@ export class SchedulingEntityDayBand extends LitElement {
                The tracks take the insets; the lane does not, so the name inside
                it can start at the host's own left edge -- a name is not a time,
                and on a narrow screen the gutter is the only room it has. */
-            .band.labels-in-track .track,
-            .band.labels-in-track .context-row {
+            .band .track,
+            .band .context-row {
                 margin-left: var(--entity-day-band-track-inset-start, 0px);
                 margin-right: var(--entity-day-band-track-inset-end, 0px);
             }
 
-            .band.labels-in-track .lane {
+            .band .lane {
                 display: block;
                 position: relative;
-            }
-
-            .row-label {
-                display: flex;
-                align-items: center;
-                gap: 5px;
-                min-width: 0;
-                color: var(--secondary-text-color);
-                font-size: 0.72rem;
-            }
-
-            .row-label.context {
-                letter-spacing: 0.04em;
-                text-transform: uppercase;
-                font-size: 0.6rem;
-            }
-
-            /* The name and the "why" button are two intents, so they are two
-               controls -- a button inside a button is not a thing, and
-               overloading the name's click would make "which entity" and "why
-               this plan" the same press. */
-            .lane-label {
-                display: flex;
-                align-items: center;
-                gap: 5px;
-                flex: 1 1 auto;
-                min-width: 0;
-                padding: 0 2px;
-                border: none;
-                border-radius: 6px;
-                background: none;
-                color: var(--secondary-text-color);
-                font: inherit;
-                font-size: 0.72rem;
-                text-align: start;
-                cursor: pointer;
-            }
-
-            /* The icon and the coverage badge sit beside the name button,
-               not inside it, so the sizing hangs off the row rather than off
-               the button it used to live in. */
-            /* A direct child: the coverage badge beside it carries an icon
-               element of its own, and a descendant selector would set this
-               size on that one too, over the size the badge sets on itself. */
-            .lane-label-row > ha-icon {
-                flex: 0 0 auto;
-                --mdc-icon-size: 15px;
-                cursor: pointer;
             }
 
             /* The live badge stands in for that icon, so it has to be boxed to
                the same size -- left to itself it sizes for an entity row and
                would set the lane's height. */
-            .lane-label-row state-badge,
             .track-label state-badge {
                 flex: 0 0 auto;
                 width: 18px;
                 height: 18px;
                 line-height: 18px;
                 cursor: pointer;
-            }
-
-            .lane-label-row state-badge {
-                --mdc-icon-size: 15px;
             }
 
             .lane.unavailable state-badge {
@@ -357,11 +295,6 @@ export class SchedulingEntityDayBand extends LitElement {
                 font-size: 0.66rem;
                 font-variant-numeric: tabular-nums;
                 opacity: 0.75;
-            }
-
-            .lane.selected .lane-label {
-                color: var(--primary-text-color);
-                font-weight: 600;
             }
 
             .lane.unavailable .lane-name {
@@ -1047,7 +980,6 @@ export class SchedulingEntityDayBand extends LitElement {
      * In-track labels are what a host with no room for a label column gets --
      * giving one up is what lets the tracks line up with a chart above.
      */
-    @property({ type: String }) public laneLabels: "column" | "track" = "column";
     /**
      * Draw the day's own slots on every lane and every forecast row.
      *
@@ -1314,11 +1246,9 @@ export class SchedulingEntityDayBand extends LitElement {
         this._ownTicks = needsOwnTicks ? this._ownGridTicks() : [];
         this._gridTicks = this._resolveGridTicks();
         const hasSelection = this.lanes.some((lane) => lane.key === this.selectedLaneKey);
-        const inTrackLabels = this.laneLabels === "track";
         const classes = [
             "band",
             hasSelection ? "has-selection" : "",
-            inTrackLabels ? "labels-in-track" : "",
             this.readonly ? "readonly" : "",
         ].filter((value) => value.length > 0).join(" ");
         return html`
@@ -1334,7 +1264,6 @@ export class SchedulingEntityDayBand extends LitElement {
                 ` : nothing}
                 ${this.lanes.map((lane) => this._renderLane(lane))}
                 ${this.showAxis ? html`
-                    ${inTrackLabels ? nothing : html`<span></span>`}
                     <div class="axis">
                         ${this._renderAxisTicks()}
                     </div>
@@ -1422,23 +1351,8 @@ export class SchedulingEntityDayBand extends LitElement {
         });
     }
 
-    /**
-     * A forecast row's name, wherever this band puts names.
-     *
-     * The context rows follow the lanes rather than keeping a column of their
-     * own: a gutter that exists only for three chart names is a gutter, and the
-     * stack reads as one thing when every row is labelled the same way.
-     */
-    private _renderContextHeading(labelKey: string) {
-        return this.laneLabels === "track"
-            ? nothing
-            : html`<span class="row-label context">${this.localize(labelKey)}</span>`;
-    }
-
     private _renderContextTrackLabel(labelKey: string) {
-        return this.laneLabels === "track"
-            ? html`<span class="track-label context">${this.localize(labelKey)}</span>`
-            : nothing;
+        return html`<span class="track-label context">${this.localize(labelKey)}</span>`;
     }
 
     /**
@@ -1460,7 +1374,6 @@ export class SchedulingEntityDayBand extends LitElement {
 
         const anchors = new Map(columns.map(({ slot, socPct }) => [slot.id, { pct: socPct }]));
         return html`
-            ${this._renderContextHeading("scheduling.forecast.battery_label")}
             <div class="context-row" @pointerdown=${this._handleContextPointerDown}>
                 <div class="plot">
                     ${columns.map(({ slot, socPct, direction }) => html`
@@ -1517,7 +1430,6 @@ export class SchedulingEntityDayBand extends LitElement {
         const anchors = new Map(values.map(({ slot, value }) =>
             [slot.id, { pct: this._toBarPct(value, maxWh) }]));
         return html`
-            ${this._renderContextHeading("scheduling.forecast.solar_label")}
             <div class="context-row" @pointerdown=${this._handleContextPointerDown}>
                 <div class="plot">
                     ${values.map(({ slot, value }) => value === 0 ? nothing : html`
@@ -1555,7 +1467,6 @@ export class SchedulingEntityDayBand extends LitElement {
                 : { pct: 50 + halfHeight(entry) },
         ]));
         return html`
-            ${this._renderContextHeading("scheduling.forecast.price_label")}
             <div class="context-row price" @pointerdown=${this._handleContextPointerDown}>
                 <div class="plot">
                     <span class="zero-line"></span>
@@ -1619,31 +1530,8 @@ export class SchedulingEntityDayBand extends LitElement {
             selected ? "selected" : "",
             lane.isAvailable ? "" : "unavailable",
         ].filter((value) => value.length > 0).join(" ");
-        const inTrackLabels = this.laneLabels === "track";
         return html`
             <div class=${classes} data-lane=${lane.key}>
-                ${inTrackLabels ? nothing : html`
-                    <div class="row-label lane-label-row">
-                        ${this._renderLaneIcon(lane)}
-                        <!--
-                            Beside the name button rather than inside it: the
-                            coverage badge is a control, and a button inside a
-                            button is not a thing -- the same rule the "why"
-                            button next door already lives by.
-                        -->
-                        ${this._renderAutomationBadge(lane)}
-                        <button
-                            class="lane-label"
-                            type="button"
-                            aria-pressed=${selected}
-                            title=${lane.name}
-                            @click=${() => this._emitLaneSelect(lane.key)}
-                        >
-                            <span class="lane-name">${lane.name}</span>
-                            ${this._renderLaneTotal(lane)}
-                        </button>
-                    </div>
-                `}
                 <!--
                     Bare track: the elapsed stretch carries no gap button, so a
                     press there would otherwise do nothing. Pressing a lane
@@ -1651,7 +1539,7 @@ export class SchedulingEntityDayBand extends LitElement {
                 -->
                 <div
                     class="track"
-                    title=${inTrackLabels && !this.readonly ? lane.name : nothing}
+                    title=${!this.readonly ? lane.name : nothing}
                     @click=${(event: Event) => this._handleTrackClick(event, lane.key)}
                 >
                     ${this._renderVehicleSocRamp(lane)}
@@ -1666,7 +1554,7 @@ export class SchedulingEntityDayBand extends LitElement {
                     Outside the track, which clips: the name has to be free to
                     reach back into whatever gutter the host inset the track by.
                 -->
-                ${inTrackLabels ? this._renderTrackLabel(lane) : nothing}
+                ${this._renderTrackLabel(lane)}
             </div>
         `;
     }

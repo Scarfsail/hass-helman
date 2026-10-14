@@ -29,7 +29,6 @@ interface MountOptions {
      * Labels in their own column. The default here is `"track"`, which is what
      * the day editor -- the production host that matters -- uses.
      */
-    columnLabels?: boolean;
     /** Draw the day's slots, as both of the editor's modes do. */
     slotGrid?: boolean;
     /** And let a press on one name it, as the editor's Explain mode does. */
@@ -59,7 +58,7 @@ interface MountOptions {
 async function mountBand(page: Page, options: MountOptions = {}): Promise<void> {
     await loadBundle(page, "scheduling-entity-day-band");
 
-    await page.evaluate(({ dayStartMs, nowMs, hourMs, windowStartMs, windowEndMs, windowed, highlight, live, columnLabels, slotGrid, slotPicks, twoLanes, selectedSlot, halfHourly, gridTicks, axis, widthPx }) => {
+    await page.evaluate(({ dayStartMs, nowMs, hourMs, windowStartMs, windowEndMs, windowed, highlight, live, slotGrid, slotPicks, twoLanes, selectedSlot, halfHourly, gridTicks, axis, widthPx }) => {
         const at = (hour: number) => dayStartMs + hour * hourMs;
         const stepMs = halfHourly ? hourMs / 2 : hourMs;
         const slots = Array.from({ length: halfHourly ? 48 : 24 }, (_, index) => ({
@@ -137,7 +136,6 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
             : [boilerLane];
         band.nowMs = nowMs;
         band.readonly = true;
-        band.laneLabels = columnLabels ? "column" : "track";
         band.slotGrid = slotGrid;
         band.slotPicks = slotPicks;
         band.selectedSlot = selectedSlot === undefined
@@ -193,7 +191,6 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
         windowed: options.windowed ?? false,
         highlight: options.highlight ?? false,
         live: options.live ?? false,
-        columnLabels: options.columnLabels ?? false,
         slotGrid: options.slotGrid ?? false,
         slotPicks: options.slotPicks ?? false,
         twoLanes: options.twoLanes ?? false,

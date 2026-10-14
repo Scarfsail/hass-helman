@@ -68,9 +68,7 @@ export class SchedulingGenericApplianceEditor extends LitElement {
     @property({ attribute: false }) public appliance?: ScheduleGenericApplianceMetadata;
     @property({ attribute: false }) public localize!: LocalizeFunction;
     @property({ attribute: false }) public action: ScheduleApplianceAction | null = null;
-    @property({ attribute: false }) public summaryContent: unknown = nothing;
     @property({ attribute: false }) public selectedAuthorship: ScheduleActionAuthorshipSummary | null = null;
-    @property({ type: Boolean }) public showSummary = false;
     @property({ type: Boolean }) public showControls = true;
 
     @state() private _mode: GenericApplianceEditorMode = "none";
@@ -93,8 +91,6 @@ export class SchedulingGenericApplianceEditor extends LitElement {
                     <div class="panel-title">${this.appliance.name}</div>
                     <div class="field-help">${this.localize("scheduling.dialog.appliance_kind.generic")}</div>
                 </div>
-                ${this.showSummary ? this.summaryContent : nothing}
-                ${this.showSummary && this.showControls ? html`<div class="mixed-editor-divider"></div>` : nothing}
                 ${this.showControls ? html`
                     <div class="action-options compact-action-options">
                         ${this._renderModeOption("none")}

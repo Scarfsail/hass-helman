@@ -1,10 +1,7 @@
 import type {
-    RuntimeActionKind,
-    RuntimeOutcome,
     ScheduleApplianceActionDTO,
     ScheduleActionDTO,
     SchedulePayload,
-    ScheduleRuntimeReason,
     ScheduleSetBy as ScheduleSetByDTO,
 } from "../../helman-api";
 import type { ScheduleGranularityMinutes } from "./model/schedule-time";
@@ -65,35 +62,6 @@ export interface ScheduleActionAuthorshipSummary {
     };
 }
 
-export type ScheduleRangeEditAuthorshipSummary = Record<
-    string,
-    ScheduleActionAuthorshipSummary
->;
-
-export interface ScheduleInverterRuntime {
-    actionKind: RuntimeActionKind;
-    outcome: RuntimeOutcome;
-    executedAction?: ScheduleInverterAction;
-    reason?: ScheduleRuntimeReason;
-    errorCode?: string;
-    message?: string;
-}
-
-export interface ScheduleApplianceRuntime {
-    actionKind: RuntimeActionKind;
-    outcome: RuntimeOutcome;
-    errorCode?: string;
-    message?: string;
-    updatedAt?: string;
-}
-
-export type ScheduleControllableRuntime = ScheduleInverterRuntime | ScheduleApplianceRuntime;
-
-export interface ScheduleRuntime {
-    controllables: Record<string, ScheduleControllableRuntime>;
-    reconciledAt?: string;
-}
-
 export interface ScheduleSlot {
     id: string;
     index: number;
@@ -104,7 +72,6 @@ export interface ScheduleSlot {
     endLabel: string | null;
     rangeLabel: string;
     assignments: ScheduleAssignments;
-    runtime: ScheduleRuntime | null;
     isCurrent: boolean;
 }
 
@@ -138,46 +105,6 @@ export interface ScheduleTimelineModel {
     currentSlotId: string | null;
 }
 
-export interface ScheduleSlotDaySectionModel {
-    dayKey: string;
-    dayLabel: string;
-    slots: ScheduleSlot[];
-}
-
-export interface ScheduleSlotToggleDetail {
-    slotId: string;
-    slotIds?: string[];
-    shiftKey: boolean;
-}
-
-export interface ScheduleDialogOpenDetail {
-    slotId: string;
-    slotIds?: string[];
-}
-
-export interface ScheduleSelectionValueOption<TValue> {
-    key: string;
-    value: TValue;
-    authorship: ScheduleActionAuthorshipSummary | null;
-}
-
-export interface ScheduleSelectionValueSummary<TValue> {
-    state: "uniform" | "mixed";
-    seedValue: TValue;
-    distinctValues: ScheduleSelectionValueOption<TValue>[];
-}
-
-export type ScheduleRangeEditSelectionSummary = Record<
-    string,
-    ScheduleSelectionValueSummary<ScheduleControllableAction | null>
->;
-
-export interface ScheduleDialogState {
-    selectedSlots: ScheduleSlot[];
-    selectionSummary: ScheduleRangeEditSelectionSummary;
-    authorshipSummary: ScheduleRangeEditAuthorshipSummary;
-}
-
 /**
  * What one lane's edit means, for any controllable.
  *
@@ -185,13 +112,6 @@ export interface ScheduleDialogState {
  * spell that as `set_user` with an `empty` action, because its lane always had
  * an action, and it no longer does.
  */
-export type ScheduleEditIntent =
-    | { kind: "keep" }
-    | { kind: "set_user"; action: ScheduleControllableAction }
-    | { kind: "unset_user" };
-
-export type ScheduleRangeEditIntent = Record<string, ScheduleEditIntent>;
-
 export interface ScheduleOwnerError {
     code: string | null;
     message: string;
@@ -210,6 +130,7 @@ export interface ScheduleOwnerSnapshot {
 
 export interface NormalizedScheduleModel {
     slots: ScheduleSlot[];
+    activeSlotId: string | null;
     currentSlotId: string | null;
     currentDayKey: string | null;
     granularityMinutes: ScheduleGranularityMinutes | null;
@@ -254,50 +175,6 @@ export function cloneScheduleControllableActions(
             cloneScheduleControllableAction(action),
         ]),
     );
-}
-
-export function cloneScheduleInverterRuntime(
-    runtime: ScheduleInverterRuntime,
-): ScheduleInverterRuntime {
-    return {
-        actionKind: runtime.actionKind,
-        outcome: runtime.outcome,
-        executedAction: runtime.executedAction
-            ? cloneScheduleInverterAction(runtime.executedAction)
-            : undefined,
-        reason: runtime.reason,
-        errorCode: runtime.errorCode,
-        message: runtime.message,
-    };
-}
-
-export function cloneScheduleApplianceRuntime(
-    runtime: ScheduleApplianceRuntime,
-): ScheduleApplianceRuntime {
-    return {
-        actionKind: runtime.actionKind,
-        outcome: runtime.outcome,
-        errorCode: runtime.errorCode,
-        message: runtime.message,
-        updatedAt: runtime.updatedAt,
-    };
-}
-
-export function cloneScheduleRuntime(runtime: ScheduleRuntime): ScheduleRuntime {
-    return {
-        controllables: Object.fromEntries(
-            Object.entries(runtime.controllables).map(([controllableId, entry]) => [
-                controllableId,
-                // Which shape an entry has is decided by its id, not by
-                // sniffing its fields: an inverter runtime that failed before
-                // it acted carries neither `executedAction` nor `reason`.
-                controllableId === INVERTER_CONTROLLABLE_ID
-                    ? cloneScheduleInverterRuntime(entry as ScheduleInverterRuntime)
-                    : cloneScheduleApplianceRuntime(entry as ScheduleApplianceRuntime),
-            ]),
-        ),
-        reconciledAt: runtime.reconciledAt,
-    };
 }
 
 export function isScheduleBackedDisplaySlot(

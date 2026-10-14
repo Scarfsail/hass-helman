@@ -281,7 +281,6 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
                     .windowEndMs=${day.startMs + end * MINUTE_MS}
                     .highlightRanges=${this._buildHighlights(day)}
                     .timeGridTicks=${this._gridTicks}
-                    .laneLabels=${"track"}
                     .readonly=${true}
                     .showForecastRows=${false}
                     .showAxis=${false}

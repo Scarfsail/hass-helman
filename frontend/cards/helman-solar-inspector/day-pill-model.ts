@@ -255,7 +255,6 @@ export function buildSolarInspectorDayPills({
             dayAggregate: daySlots.length > 0
                 ? aggregateScheduleDayForecast({ slots: daySlots, slotForecastMap })
                 : null,
-            rows: [],
         };
     });
 
@@ -264,8 +263,6 @@ export function buildSolarInspectorDayPills({
     const forecast = buildScheduleTableForecastMeta({
         slotForecastMap,
         sections,
-        slots: sections.flatMap((section) => slotsByDayKey.get(section.dayKey) ?? []),
-        timeZone,
     });
     const availability: SolarInspectorDayPillAvailability = {
         battery: forecast.batteryAvailable,

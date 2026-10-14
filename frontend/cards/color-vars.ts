@@ -21,7 +21,7 @@ import {
  * The palette from color-utils, as CSS custom properties.
  *
  * This lives apart from color-utils so that module stays free of any rendering
- * dependency — history-engine and the blend helpers import it from contexts
+ * dependency — history-engine imports it from contexts
  * that have no business pulling in Lit.
  *
  * Custom properties set on one element's :host do not reach a sibling custom
@@ -64,22 +64,5 @@ export const helmanColorVars = css`
         --helman-phase-l1: var(--helman-theme-phase-l1, ${unsafeCSS(PHASE_COLORS[1])});
         --helman-phase-l2: var(--helman-theme-phase-l2, ${unsafeCSS(PHASE_COLORS[2])});
         --helman-phase-l3: var(--helman-theme-phase-l3, ${unsafeCSS(PHASE_COLORS[3])});
-    }
-`;
-
-/**
- * The four forecast metrics — surplus, state of charge, grid import, grid
- * export — as the short `--m-*` names their tables key off. Shared by the
- * scheduling slot table and the automation inspector, which render the same
- * metrics in the same colors.
- *
- * Include alongside helmanColorVars; these resolve against it.
- */
-export const helmanMetricVars = css`
-    :host {
-        --m-surplus: var(--helman-solar);
-        --m-soc: var(--helman-battery);
-        --m-import: var(--helman-grid-import);
-        --m-export: var(--helman-grid-export);
     }
 `;

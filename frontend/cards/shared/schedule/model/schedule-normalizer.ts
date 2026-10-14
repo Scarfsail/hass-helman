@@ -1,19 +1,7 @@
-import type {
-    ApplianceRuntimeDTO,
-    InverterRuntimeDTO,
-    SchedulePayload,
-} from "../../../helman-api";
+import type { SchedulePayload } from "../../../helman-api";
 import type {
     NormalizedScheduleModel,
-    ScheduleApplianceRuntime,
-    ScheduleInverterRuntime,
-    ScheduleRuntime,
     ScheduleSlot,
-} from "../schedule-types";
-import {
-    INVERTER_CONTROLLABLE_ID,
-    cloneScheduleInverterAction,
-    cloneScheduleRuntime,
 } from "../schedule-types";
 import {
     extractScheduleSlotAssignments,
@@ -29,13 +17,14 @@ import {
 
 export const EMPTY_NORMALIZED_SCHEDULE: NormalizedScheduleModel = {
     slots: [],
+    activeSlotId: null,
     currentSlotId: null,
     currentDayKey: null,
     granularityMinutes: null,
 };
 
 /**
- * `normalizeSchedulePayload` with the expensive half memoised: the schedule as
+ * The schedule structure with the expensive half memoised: the schedule as
  * slots, with the one the clock is inside marked.
  *
  * The structure is rebuilt only when the schedule itself changes, but which
@@ -85,28 +74,6 @@ export class NormalizedScheduleCache {
     }
 }
 
-export function normalizeSchedulePayload({
-    schedule,
-    timeZone,
-    locale,
-    now = new Date(),
-}: {
-    schedule: SchedulePayload | null;
-    timeZone: string;
-    locale: string;
-    now?: Date;
-}): NormalizedScheduleModel {
-    return applyNormalizedScheduleCurrentState(
-        buildNormalizedScheduleStructure({
-            schedule,
-            timeZone,
-            locale,
-        }),
-        timeZone,
-        now,
-    );
-}
-
 export function buildNormalizedScheduleStructure({
     schedule,
     timeZone,
@@ -119,6 +86,7 @@ export function buildNormalizedScheduleStructure({
     if (schedule === null) {
         return {
             slots: [],
+            activeSlotId: null,
             currentSlotId: null,
             currentDayKey: null,
             granularityMinutes: null,
@@ -130,8 +98,7 @@ export function buildNormalizedScheduleStructure({
     const slotBoundaries = resolveScheduleSlotBoundaries(schedule.slots.map((slot) => slot.id));
     const slotBoundariesByMs = new Map(slotBoundaries.map((slot) => [slot.startMs, slot]));
     const seenMs = new Set<number>();
-    const normalizedRuntime = _normalizeScheduleRuntime(schedule.runtime);
-    const runtimeSlotId = normalizedRuntime?.slotId ?? null;
+    const activeSlotId = schedule.runtime?.activeSlotId ?? null;
     const normalizedSlots = schedule.slots
         .flatMap((slot) => {
             const startMs = getScheduleSlotStartMs(slot.id);
@@ -165,13 +132,9 @@ export function buildNormalizedScheduleStructure({
         }));
 
     return {
-        slots: normalizedSlots.map((slot) => ({
-            ...slot,
-            runtime: slot.id === runtimeSlotId && normalizedRuntime !== null
-                ? cloneScheduleRuntime(normalizedRuntime.runtime)
-                : null,
-        })),
-        currentSlotId: runtimeSlotId,
+        slots: normalizedSlots,
+        activeSlotId,
+        currentSlotId: activeSlotId,
         currentDayKey: null,
         granularityMinutes,
     };
@@ -193,7 +156,7 @@ export function applyNormalizedScheduleCurrentState(
     }
 
     const nowMs = now.getTime();
-    const runtimeSlotId = model.slots.find((slot) => slot.runtime !== null)?.id ?? null;
+    const runtimeSlotId = model.slots.find((slot) => slot.id === model.activeSlotId)?.id ?? null;
     const currentSlotId = model.slots.find((slot) =>
         slot.startMs <= nowMs && (slot.endMs === null || nowMs < slot.endMs)
     )?.id
@@ -254,52 +217,5 @@ function _normalizeSlot({
         endLabel: labels.endLabel,
         rangeLabel: labels.rangeLabel,
         assignments: extractScheduleSlotAssignments(slot.controllables, slot.id),
-        runtime: null,
-    };
-}
-
-function _normalizeScheduleRuntime(
-    runtime: SchedulePayload["runtime"],
-): { slotId: string; runtime: ScheduleRuntime } | null {
-    if (runtime === undefined) {
-        return null;
-    }
-
-    return {
-        slotId: runtime.activeSlotId,
-        runtime: {
-            controllables: Object.fromEntries(
-                Object.entries(runtime.controllables).map(([controllableId, entry]) => [
-                    controllableId,
-                    controllableId === INVERTER_CONTROLLABLE_ID
-                        ? _normalizeInverterRuntime(entry as InverterRuntimeDTO)
-                        : _normalizeApplianceRuntime(entry as ApplianceRuntimeDTO),
-                ]),
-            ),
-            reconciledAt: runtime.reconciledAt,
-        },
-    };
-}
-
-function _normalizeInverterRuntime(runtime: InverterRuntimeDTO): ScheduleInverterRuntime {
-    return {
-        actionKind: runtime.actionKind,
-        outcome: runtime.outcome,
-        reason: runtime.reason,
-        errorCode: runtime.errorCode,
-        message: runtime.message,
-        executedAction: runtime.executedAction
-            ? cloneScheduleInverterAction(runtime.executedAction)
-            : undefined,
-    };
-}
-
-function _normalizeApplianceRuntime(runtime: ApplianceRuntimeDTO): ScheduleApplianceRuntime {
-    return {
-        actionKind: runtime.actionKind,
-        outcome: runtime.outcome,
-        errorCode: runtime.errorCode,
-        message: runtime.message,
-        updatedAt: runtime.updatedAt,
     };
 }
