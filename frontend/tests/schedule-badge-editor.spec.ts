@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { scheduleSlots } from "./support/payload-builders";
 import { loadBundle } from "./support/card-page";
 
 /**
@@ -30,22 +31,16 @@ interface FakeNode {
  * a lane, and a press on it would land nowhere.
  */
 async function installFakeBackend(page: Page): Promise<void> {
-    await page.evaluate(() => {
+    const nowMs = await page.evaluate(() => Date.now());
+    const dayStartMs = Date.parse(`${new Date(nowMs).toISOString().slice(0, 10)}T00:00:00Z`);
+    const schedule = scheduleSlots({ slotMinutes: 60, start: new Date(dayStartMs).toISOString(), count: 24 });
+    const running = schedule.slots.find((slot) => Date.parse(slot.id) <= nowMs && nowMs < Date.parse(slot.id) + 3_600_000);
+    if (running) running.controllables = {
+        dishwasher: { on: true, setBy: "automation" },
+        boiler: { on: true, setBy: "user" },
+    };
+    await page.evaluate((schedule) => {
         const nowMs = Date.now();
-        const dayStartMs = new Date(new Date(nowMs).toISOString().slice(0, 10) + "T00:00:00Z").getTime();
-        const slots = Array.from({ length: 24 }, (_unused, hour) => {
-            const startMs = dayStartMs + hour * 3_600_000;
-            const running = startMs <= nowMs && nowMs < startMs + 3_600_000;
-            return {
-                id: new Date(startMs).toISOString(),
-                controllables: running
-                    ? {
-                        dishwasher: { on: true, setBy: "automation" },
-                        boiler: { on: true, setBy: "user" },
-                    }
-                    : {},
-            };
-        });
         const appliance = (id: string, name: string) => ({
             id,
             name,
@@ -81,36 +76,45 @@ async function installFakeBackend(page: Page): Promise<void> {
                     last_changed: new Date(nowMs).toISOString(),
                 },
             },
-            callWS: async (msg: { type: string }) => {
-                if (msg.type === "helman/get_schedule") {
-                    return { executionEnabled: true, slots };
-                }
-                if (msg.type === "helman/get_appliances") {
+            callWS: window.__mockHass({
+                "helman/get_schedule": async (msg: {
+                    type: string;
+                }) => {
+                    return schedule;
+                },
+                "helman/get_appliances": async (msg: {
+                    type: string;
+                }) => {
                     return {
                         appliances: [
                             appliance("dishwasher", "Dishwasher"),
                             appliance("boiler", "Boiler"),
                         ],
                     };
-                }
-                if (msg.type === "helman/get_controllable_entities") {
+                },
+                "helman/get_controllable_entities": async (msg: {
+                    type: string;
+                }) => {
                     return {
                         entities: [
                             { kind: "generic", name: "Dishwasher", entityId: "switch.dishwasher", normalState: "off" },
                             { kind: "generic", name: "Boiler", entityId: "switch.boiler", normalState: "off" },
                         ],
                     };
-                }
-                if (msg.type === "helman/get_entity_actual_history") {
+                },
+                "helman/get_entity_actual_history": async (msg: {
+                    type: string;
+                }) => {
                     return { entities: {} };
-                }
-                if (msg.type === "helman/get_appliance_projections") {
+                },
+                "helman/get_appliance_projections": async (msg: {
+                    type: string;
+                }) => {
                     return { appliances: [] };
                 }
-                return {};
-            },
+            }).callWS,
         };
-    });
+    }, schedule);
 }
 
 /**
@@ -317,16 +321,12 @@ test.describe("opening the day editor from a scheduling badge", () => {
         // The backend refuses the batch the way its slot validator does.
         await page.evaluate(() => {
             const hass = window.__fakeHass as any;
-            const inner = hass.callWS;
-            hass.callWS = async (msg: { type: string }) => {
-                if (msg.type === "helman/set_schedule") {
-                    throw {
+            window.__setMockReply(hass, "helman/set_schedule", () => {
+                throw {
                         code: "invalid_slots",
                         message: "Schedule slot must be within the rolling 48-hour horizon",
-                    };
-                }
-                return inner(msg);
-            };
+                };
+            });
         });
 
         // Clear the boiler's run, so there is a draft worth writing.
@@ -352,22 +352,21 @@ test.describe("opening the day editor from a scheduling badge", () => {
         ]);
         await pressBadge(page, "Boiler");
 
-        await page.evaluate(() => {
+        await page.evaluate((emptySchedule) => {
             const hass = window.__fakeHass as any;
-            const inner = hass.callWS;
             let written = false;
-            hass.callWS = async (msg: { type: string }) => {
-                if (msg.type === "helman/set_schedule") {
+            window.__setMockReply(hass, "helman/set_schedule", () => {
                     written = true;
                     return { success: true };
-                }
+            });
                 // The connection drops right after the write lands.
-                if (msg.type === "helman/get_schedule" && written) {
+            window.__setMockReply(hass, "helman/get_schedule", () => {
+                if (written) {
                     throw { code: "timeout", message: "connection lost" };
                 }
-                return inner(msg);
-            };
-        });
+                return emptySchedule;
+            });
+        }, scheduleSlots({ slotMinutes: 15 }));
 
         await page.locator(".block-row").first().locator("button").nth(1).click();
         await page.locator("ha-button[slot=primaryAction]").click();

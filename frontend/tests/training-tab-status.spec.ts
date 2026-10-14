@@ -1,3 +1,4 @@
+import { configDoc } from "./support/payload-builders";
 import { test, expect, type Page } from "@playwright/test";
 import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
@@ -14,8 +15,8 @@ import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 const HOUSE_TRAINED_AT = "2026-09-12T03:00:00+00:00";
 const HOUSE_ATTEMPT_AT = "2026-09-19T03:01:00+00:00";
 
-const CONFIG = {
-    config_version: 14,
+const CONFIG = configDoc({
+
     energy_nodes: {
         house: { forecast: { total_energy_entity_id: "sensor.house_energy" } },
     },
@@ -44,7 +45,7 @@ const CONFIG = {
         },
     ] },
     training: {},
-};
+});
 
 type Job = Record<string, unknown>;
 
@@ -102,25 +103,21 @@ async function mountEditor(page: Page, trainingStatus: unknown): Promise<void> {
                 language: "en",
                 locale: { language: "en" },
                 user: { is_admin: true },
-                connection: { subscribeMessage: async () => () => undefined },
-                callWS: async (request: any) => {
-                    if (request.type === "helman/get_config") {
+                connection: window.__mockHass().connection,
+                callWS: window.__mockHass({
+                    "helman/get_config": async (request: any) => {
                         return JSON.parse(JSON.stringify(config));
-                    }
-                    if (request.type === "helman/get_optimizer_schema") {
-                        return { version: 2, kinds: [] };
-                    }
-                    if (request.type === "helman/get_appliances") return { appliances: [] };
-                    if (request.type === "helman/inspect_entities") return { results: [] };
-                    if (request.type === "helman/training/status") {
+                    },
+                    "helman/training/status": async (request: any) => {
                         return JSON.parse(JSON.stringify(w.__trainingStatus));
-                    }
-                    if (request.type === "helman/training/train_now") {
+                    },
+                    "helman/training/train_now": async (request: any) => {
                         w.__trainRequests.push(JSON.parse(JSON.stringify(request)));
-                        if (w.__trainNow.error) throw w.__trainNow.error;
+                        if (w.__trainNow.error)
+                            throw w.__trainNow.error;
                         return JSON.parse(JSON.stringify(w.__trainNow.result));
-                    }
-                    if (request.type === "helman/solar_bias/status") {
+                    },
+                    "helman/solar_bias/status": async (request: any) => {
                         w.__solarDiagnosticsRequests += 1;
                         if (w.__solarDiagnosticsFailures > 0) {
                             w.__solarDiagnosticsFailures -= 1;
@@ -138,12 +135,11 @@ async function mountEditor(page: Page, trainingStatus: unknown): Promise<void> {
                             droppedDays: [{ date: "2026-09-15", reason: "day_ratio_out_of_band" }],
                         };
                     }
-                    return {};
-                },
+                }).callWS,
             };
             document.body.appendChild(element);
         },
-        { config: CONFIG, trainingStatus },
+        { config: JSON.parse(JSON.stringify(CONFIG)), trainingStatus },
     );
 
     // The editor renders its tab bar once the config has loaded.

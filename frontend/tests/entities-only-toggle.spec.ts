@@ -1,3 +1,4 @@
+import { configDoc } from "./support/payload-builders";
 import { test, expect, type Page } from "@playwright/test";
 import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
@@ -22,8 +23,8 @@ import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
  */
 
 /** A document with something picked at every Energy nodes entity path. */
-const CONFIG = {
-    config_version: 7,
+const CONFIG = configDoc({
+
     energy_nodes: {
         inverter: { controls: { mode: { entity_id: "select.inverter_mode", options: {} } } },
         house: {
@@ -77,7 +78,7 @@ const CONFIG = {
             },
         },
     ] },
-};
+});
 
 /** The same, for the tab whose entity groups live inside device cards. */
 const DEVICE_ENTITY_PATHS = [
@@ -135,16 +136,12 @@ async function mountEditor(page: Page): Promise<void> {
             language: "en",
             locale: { language: "en" },
             user: { is_admin: true },
-            connection: { subscribeMessage: async () => () => undefined },
-            callWS: async (request: any) => {
-                if (request.type === "helman/get_config") {
+            connection: window.__mockHass().connection,
+            callWS: window.__mockHass({
+                "helman/get_config": async (request: any) => {
                     return JSON.parse(JSON.stringify(config));
-                }
-                if (request.type === "helman/get_optimizer_schema") {
-                    return { version: 2, kinds: [] };
-                }
-                if (request.type === "helman/get_appliances") return { appliances: [] };
-                if (request.type === "helman/inspect_entities") {
+                },
+                "helman/inspect_entities": async (request: any) => {
                     return {
                         results: (request.targets ?? []).map((target: any) => ({
                             key: target.key,
@@ -164,8 +161,7 @@ async function mountEditor(page: Page): Promise<void> {
                         })),
                     };
                 }
-                return {};
-            },
+            }).callWS,
         };
         document.body.appendChild(element);
 
@@ -190,7 +186,7 @@ async function mountEditor(page: Page): Promise<void> {
                   })
                 : !!(element as HTMLElement).offsetParent;
         };
-    }, CONFIG);
+    }, JSON.parse(JSON.stringify(CONFIG)));
 
     await expect
         .poll(() =>

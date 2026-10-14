@@ -1,3 +1,4 @@
+import { configDoc } from "./support/payload-builders";
 import { test, expect, type Page } from "@playwright/test";
 
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
@@ -32,11 +33,11 @@ const BOILER = {
     children: [{ id: "pump", controls: { switch: { entity_id: "switch.pump" } } }],
 };
 
-const CONFIG = {
-    config_version: 25,
+const CONFIG = configDoc({
+
     devices: { consumers: [BOILER] },
     automation: { enabled: true, appliance_optimizers: [], system_optimizers: [] },
-};
+});
 
 const STRINGS: Record<string, string> = {
     "node_detail.device.edit.button": "Edit",
@@ -83,13 +84,18 @@ async function mountDetail(page: Page, options: MountOptions = {}): Promise<void
                 locale: { language: "en" },
                 user: { is_admin: true },
                 states: {},
-                connection: { subscribeMessage: async () => () => undefined },
-                callWS: async (request: any) => {
-                    calls.push({ type: request.type, config: request.config, targets: request.targets });
-                    if (request.type === "helman/get_config") return JSON.parse(JSON.stringify(config));
-                    if (request.type === "helman/save_config") return hang ? new Promise(() => undefined) : save;
-                    if (request.type === "helman/get_vendors") return vendors;
-                    if (request.type === "helman/inspect_entities") {
+                connection: window.__mockHass().connection,
+                callWS: window.__mockHass({
+                    "helman/get_config": async (request: any) => {
+                        return JSON.parse(JSON.stringify(config));
+                    },
+                    "helman/save_config": async (request: any) => {
+                        return hang ? new Promise(() => undefined) : save;
+                    },
+                    "helman/get_vendors": async (request: any) => {
+                        return vendors;
+                    },
+                    "helman/inspect_entities": async (request: any) => {
                         return {
                             results: (request.targets ?? []).map((target: any) => ({
                                 key: target.key,
@@ -103,8 +109,9 @@ async function mountDetail(page: Page, options: MountOptions = {}): Promise<void
                             })),
                         };
                     }
-                    return {};
-                },
+                }, (request: any) => {
+                    calls.push({ type: request.type, config: request.config, targets: request.targets });
+                }).callWS,
             };
             content.params = {
                 nodeType: "device",

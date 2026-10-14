@@ -2,6 +2,8 @@ import { test, expect, type Page } from "@playwright/test";
 
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
 import { loadBundle } from "./support/card-page";
+import { treeNode, treePayload } from "./support/payload-builders";
+import type { TreeItemDTO } from "../cards/helman-api";
 
 /**
  * The inverter from the power card's distribution row.
@@ -15,38 +17,15 @@ import { loadBundle } from "./support/card-page";
  */
 
 /** A tree DTO with the defaults the backend fills in. */
-function dto(overrides: Record<string, unknown>) {
-    return {
-        powerSensorId: null,
-        ratioSensorId: null,
-        switchEntityId: null,
-        sourceType: null,
-        sourceConfig: null,
-        valueType: "default",
-        isSource: false,
-        isUnmeasured: false,
-        isEstimated: false,
-        groups: {},
-        groupBadgeTexts: [],
-        icon: null,
-        compact: false,
-        showAdditionalInfo: false,
-        childrenFullWidth: false,
-        hideChildren: false,
-        hideChildrenIndicator: false,
-        sortChildrenByPower: false,
-        deferrable: false,
-        controllableIds: [],
-        children: [],
-        ...overrides,
-    };
+function dto(overrides: Partial<TreeItemDTO>) {
+    return treeNode(overrides);
 }
 
 async function mountCard(page: Page): Promise<void> {
     await loadBundle(page, "helman-card");
     await page.addScriptTag({ content: HA_DIALOG_STUB });
 
-    const tree = {
+    const tree = treePayload({
         sources: [
             dto({ id: "solar", displayName: "Solar", powerSensorId: "sensor.solar", isSource: true, sourceType: "solar" }),
             dto({ id: "battery", displayName: "Battery", powerSensorId: "sensor.battery", isSource: true, sourceType: "battery" }),
@@ -55,7 +34,7 @@ async function mountCard(page: Page): Promise<void> {
         consumptionTotalSensorId: null,
         productionTotalSensorId: null,
         uiConfig: { show_others_group: false, device_groupings: [], history_buckets: 3, history_bucket_duration: 5 },
-    };
+    });
 
     await page.evaluate(async (tree) => {
         const state = (value: string, unit?: string) => ({ state: value, attributes: unit ? { unit_of_measurement: unit } : {} });
@@ -81,7 +60,7 @@ async function mountCard(page: Page): Promise<void> {
             config: { time_zone: "UTC" },
             connection: {
                 sendMessagePromise: async () => ({}),
-                subscribeMessage: async () => () => undefined,
+                subscribeMessage: window.__mockHass().connection.subscribeMessage,
             },
             states: {
                 "sensor.solar": state("4200", "W"),
@@ -91,16 +70,28 @@ async function mountCard(page: Page): Promise<void> {
                 "number.max_soc": state("100", "%"),
                 "select.helman_inverter_mode": state("normal"),
             },
-            callWS: async (msg: { type: string; section?: string }) => {
-                if (msg.type === "helman/get_device_tree") return tree;
-                if (msg.type === "helman/get_history") return { buckets: 3, bucket_duration: 5, entity_history: {} };
-                if (msg.type === "helman/get_schedule") return { executionEnabled: true, slots: [] };
-                if (msg.type === "helman/get_node_detail") {
-                    if (msg.section) throw new Error("no sections without a profile");
+            callWS: window.__mockHass({
+                "helman/get_device_tree": async (msg: {
+                    type: string;
+                    section?: string;
+                }) => {
+                    return tree;
+                },
+                "helman/get_history": async (msg: {
+                    type: string;
+                    section?: string;
+                }) => {
+                    return { buckets: 3, bucket_duration: 5, entity_history: {} };
+                },
+                "helman/get_node_detail": async (msg: {
+                    type: string;
+                    section?: string;
+                }) => {
+                    if (msg.section)
+                        throw new Error("no sections without a profile");
                     return overview;
                 }
-                return {};
-            },
+            }).callWS,
         };
         const card = document.createElement("helman-card") as any;
         await card.setConfig({ type: "custom:helman-card" });

@@ -2,6 +2,13 @@ export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonObject | JsonArray;
 export type JsonArray = JsonValue[];
 export type JsonObject = { [key: string]: JsonValue | undefined };
+/** The versioned document returned by `helman/get_config`. */
+export type ConfigDocument = JsonObject & {
+  config_version: number;
+  energy_nodes?: JsonObject;
+  devices?: JsonObject;
+  automation?: JsonObject;
+};
 export type PathSegment = string | number;
 
 export interface ValidationIssue {

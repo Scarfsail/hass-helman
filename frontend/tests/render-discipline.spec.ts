@@ -1,6 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { resolve } from "node:path";
-import { installFakeHass } from "./support/fake-hass";
+import { installFakeHass } from "./support/mock-hass";
 import { loadBundle } from "./support/card-page";
 
 /**

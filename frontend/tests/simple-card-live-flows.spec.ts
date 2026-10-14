@@ -1,3 +1,5 @@
+import { installMockHass } from "./support/mock-hass";
+import { cardTree } from "./support/payload-builders";
 import { test, expect, type Page } from "@playwright/test";
 import { IDLE_W, liveFlows } from "../cards/helman-simple/live-flows";
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
@@ -85,41 +87,38 @@ interface Line {
 async function mountCard(page: Page, powers: { solar: number; house: number; battery: number; grid: number }): Promise<void> {
     await installFixedClock(page);
     await page.setContent("<!doctype html><html><body style='margin:0'></body></html>");
+    await installMockHass(page);
     await page.addScriptTag({ content: HA_DIALOG_STUB });
-    await page.evaluate((p) => {
-        const node = (id: string, sensor: string, sourceType: string | null) => ({
-            id, displayName: id, powerSensorId: sensor, ratioSensorId: null, switchEntityId: null,
-            valueType: "default", sourceConfig: null, sourceType, isSource: sourceType !== null,
-            isUnmeasured: false, groups: {}, groupBadgeTexts: [], icon: null, compact: false,
-            showAdditionalInfo: false, childrenFullWidth: false, hideChildren: false,
-            hideChildrenIndicator: false, sortChildrenByPower: false, deferrable: false,
-            controllableIds: [], children: [],
-        });
-        const tree = {
-            sources: [node("solar", "sensor.solar", "solar"), node("grid", "sensor.grid", "grid"), node("battery", "sensor.battery", "battery")],
-            consumers: [node("house", "sensor.house", null)],
-            consumptionTotalSensorId: null,
-            productionTotalSensorId: null,
-            uiConfig: { show_others_group: false, device_groupings: [], history_buckets: 3, history_bucket_duration: 60 },
-        };
+    await page.evaluate(({ p, tree }) => {
         const watts = (value: number) => ({ state: String(value), attributes: { unit_of_measurement: "W" } });
         (window as any).__hass = {
             language: "en",
             locale: { language: "en-GB" },
             config: { time_zone: "UTC" },
-            connection: { sendMessagePromise: async () => ({}), subscribeMessage: async () => () => undefined },
+            connection: { sendMessagePromise: async () => ({}), subscribeMessage: window.__mockHass().connection.subscribeMessage },
             states: {
                 "sensor.solar": watts(p.solar), "sensor.house": watts(p.house),
                 "sensor.battery": watts(p.battery), "sensor.grid": watts(p.grid),
             },
-            callWS: async (msg: { type: string }) => {
-                if (msg.type === "helman/get_device_tree") return tree;
-                if (msg.type === "helman/get_history") return { buckets: 3, bucket_duration: 60, entity_history: {} };
-                if (msg.type === "helman/get_node_detail") throw new Error("no inverter");
-                return {};
-            },
+            callWS: window.__mockHass({
+                "helman/get_device_tree": async (msg: {
+                    type: string;
+                }) => {
+                    return tree;
+                },
+                "helman/get_history": async (msg: {
+                    type: string;
+                }) => {
+                    return { buckets: 3, bucket_duration: 60, entity_history: {} };
+                },
+                "helman/get_node_detail": async (msg: {
+                    type: string;
+                }) => {
+                    throw new Error("no inverter");
+                }
+            }).callWS,
         };
-    }, powers);
+    }, { p: powers, tree: cardTree() });
     await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-simple-card"));
     await page.evaluate(() => {

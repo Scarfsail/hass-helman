@@ -1,3 +1,4 @@
+import { configDoc } from "./support/payload-builders";
 import { test, expect, type Page } from "@playwright/test";
 import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
@@ -57,8 +58,8 @@ const SCHEMA = {
  * shape `_validate_requires_appliance` warns on. The warning's path names
  * "second" (`appliance_optimizers[0]`), so only its card should badge.
  */
-const CONFIG = {
-    config_version: 15,
+const CONFIG = configDoc({
+
     energy_nodes: { house: { base_load_w: 350 } },
     appliances: [],
     automation: {
@@ -88,7 +89,7 @@ const CONFIG = {
             },
         ],
     },
-};
+});
 
 const VALIDATION_REPORT = {
     valid: true,
@@ -117,26 +118,30 @@ async function mountEditor(page: Page): Promise<void> {
                 locale: { language: "en" },
                 user: { is_admin: true },
                 connection: {
-                    subscribeMessage: async () => () => undefined,
+                    subscribeMessage: window.__mockHass().connection.subscribeMessage,
                 },
-                callWS: async (request: { type: string }) => {
-                    if (request.type === "helman/get_config") {
+                callWS: window.__mockHass({
+                    "helman/get_config": async (request: {
+                        type: string;
+                    }) => {
                         return JSON.parse(JSON.stringify(config));
+                    },
+                    "helman/get_optimizer_schema": async (request: {
+                        type: string;
+                    }) => {
+                        return schema;
+                    },
+                    "helman/validate_config": async (request: {
+                        type: string;
+                    }) => {
+                        return validation;
                     }
-                    if (request.type === "helman/get_optimizer_schema") return schema;
-                    if (request.type === "helman/get_appliances") return { appliances: [] };
-                    if (request.type === "helman/validate_config") return validation;
-                    return {};
-                },
+                }).callWS,
             };
             document.body.appendChild(element);
         },
-        { schema: SCHEMA, config: CONFIG, validation: VALIDATION_REPORT },
+        { schema: SCHEMA, config: JSON.parse(JSON.stringify(CONFIG)), validation: VALIDATION_REPORT },
     );
-}
-
-function root(page: Page) {
-    return page.locator("helman-config-editor-panel");
 }
 
 async function openAutomationTab(page: Page): Promise<void> {

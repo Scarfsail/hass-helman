@@ -1,3 +1,4 @@
+import type { InspectorPayload } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
 import { loadBundle } from "./support/card-page";
 
@@ -44,7 +45,7 @@ async function mountInspector(
     await loadBundle(page, "helman-solar-inspector");
 
     await page.evaluate(({ date, money, totals }) => {
-        const impact: Array<Record<string, unknown>> = [];
+        const impact: InspectorPayload["series"]["impact"] = [];
         const corrected: Array<{ timestamp: string; valueWh: number }> = [];
         for (let m = 0; m < 1440; m += 15) {
             const hh = String(Math.floor(m / 60)).padStart(2, "0");
@@ -53,18 +54,15 @@ async function mountInspector(
             impact.push({ slot: `${hh}:${mm}`, rawWh: 0, correctedWh: 0, impactWh: 0, factor: 1 });
             corrected.push({ timestamp: `${date}T${hh}:${mm}:00`, valueWh: 100 });
         }
-        const payload = {
-            date,
+        const payload = window.__inspectorDay({ date,
             timezone: "UTC",
             status: "ok",
             effectiveVariant: null,
             trainedAt: null,
-            range: {
-                minDate: date, maxDate: date, canGoPrevious: false, canGoNext: false,
+            range: { minDate: date, maxDate: date, canGoPrevious: false, canGoNext: false,
                 isToday: true, isFuture: false,
             },
-            series: {
-                raw: [], corrected, actual: [], invalidated: [], factors: [], impact,
+            series: { raw: [], corrected, actual: [], invalidated: [], factors: [], impact,
                 houseForecast: [], houseActual: [],
                 batterySocForecast: [], batterySocActual: [],
                 gridForecast: [], gridActual: [], batteryForecast: [], batteryActual: [],
@@ -72,16 +70,14 @@ async function mountInspector(
                 moneyActual: money,
                 moneyForecast: [],
             },
-            totals: {
-                rawWh: null, correctedWh: null, actualWh: null,
+            totals: { rawWh: null, correctedWh: null, actualWh: null,
                 houseForecastWh: null, houseActualWh: null,
                 gridForecastWh: null, gridActualWh: null,
                 batteryForecastWh: null, batteryActualWh: null,
                 moneyActual: totals,
                 moneyForecast: null,
             },
-            availability: {
-                hasRawForecast: false, hasCorrectedForecast: true, hasActuals: false,
+            availability: { hasRawForecast: false, hasCorrectedForecast: true, hasActuals: false,
                 hasInvalidated: false, hasProfile: true, hasHouseForecast: false,
                 hasHouseActual: false, hasBatterySocForecast: false, hasBatterySocActual: false,
                 hasGridForecast: false, hasGridActual: false, hasBatteryForecast: false,
@@ -90,7 +86,7 @@ async function mountInspector(
             priceUnit: "CZK/kWh",
             batterySocBounds: [],
             trainingExplainability: null,
-        };
+        });
 
         document.body.innerHTML = "";
         const el = document.createElement("helman-solar-inspector") as any;
@@ -100,7 +96,13 @@ async function mountInspector(
             language: "en",
             config: { time_zone: "UTC" },
             connection: {},
-            callWS: async (msg: { date: string }) => ({ ...payload, date: msg.date }),
+            callWS: window.__mockHass({
+                "helman/solar_bias/inspector": async (msg: {
+                    date: string;
+                }) => {
+                    return ({ ...payload, date: msg.date });
+                }
+            }).callWS,
         };
         document.body.appendChild(el);
     }, { date: DAY, money: overrides.moneyActual ?? MONEY_ACTUAL, totals: overrides.totalsActual === undefined ? TOTALS_ACTUAL : overrides.totalsActual });

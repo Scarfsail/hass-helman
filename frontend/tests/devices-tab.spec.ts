@@ -1,3 +1,5 @@
+import type { JsonObject } from "../cards/shared/config/types";
+import { configDoc } from "./support/payload-builders";
 import { test, expect, type Page } from "@playwright/test";
 import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
@@ -119,7 +121,7 @@ type Device = Record<string, any>;
 
 declare global {
     interface Window {
-        __editorConfig: () => { devices: { consumers: Device[] }; energy_nodes?: { inverter?: Device } };
+        __devicesConfig: () => { devices: { consumers: Device[] }; energy_nodes?: { inverter?: Device } };
         __inspectKeys: string[];
         __validation: unknown;
         __card: (id: string) => HTMLDetailsElement | null;
@@ -129,9 +131,9 @@ declare global {
 
 async function mountEditor(
     page: Page,
-    devices: unknown[] = DEVICES,
+    devices: JsonObject[] = DEVICES,
     validation: unknown = { valid: true, errors: [], warnings: [] },
-    inverter: unknown = INVERTER,
+    inverter: JsonObject | null = INVERTER,
     vendors: unknown = null,
 ): Promise<void> {
     await loadBundle(page, "helman-config-editor-panel", EDITOR_BUNDLE);
@@ -146,7 +148,7 @@ async function mountEditor(
             const element = document.createElement(
                 "helman-config-editor-panel",
             ) as HTMLElement & Record<string, unknown>;
-            window.__editorConfig = () =>
+            window.__devicesConfig = () =>
                 (element as unknown as { _config: { devices: { consumers: Device[] } } })._config;
             window.__inspectKeys = [];
             window.__validation = report;
@@ -166,18 +168,20 @@ async function mountEditor(
                 language: "en",
                 locale: { language: "en" },
                 user: { is_admin: true },
-                connection: { subscribeMessage: async () => () => undefined },
-                callWS: async (request: any) => {
-                    if (request.type === "helman/get_config") {
+                connection: window.__mockHass().connection,
+                callWS: window.__mockHass({
+                    "helman/get_config": async (request: any) => {
                         return JSON.parse(JSON.stringify(config));
-                    }
-                    if (request.type === "helman/get_optimizer_schema") {
-                        return { version: 2, kinds: [] };
-                    }
-                    if (request.type === "helman/get_appliances") return { appliances: [] };
-                    if (request.type === "helman/validate_config") return window.__validation;
-                    if (request.type === "helman/get_vendors" && vendors) return vendors;
-                    if (request.type === "helman/inspect_entities") {
+                    },
+                    "helman/validate_config": async (request: any) => {
+                        return window.__validation;
+                    },
+                    "helman/get_vendors": async (request: any) => {
+                        if (request.type === "helman/get_vendors" && vendors)
+                            return vendors;
+                        return {};
+                    },
+                    "helman/inspect_entities": async (request: any) => {
                         return {
                             results: (request.targets ?? []).map((target: any) => {
                                 window.__inspectKeys.push(target.key);
@@ -190,10 +194,7 @@ async function mountEditor(
                                         // Cleaned as the backend's resolution cleans it,
                                         // so the draft's regex shows in the answer.
                                         placeholder: request.config?.devices?.name_cleaner_regex
-                                            ? placeholders[target.key]?.replace(
-                                                  new RegExp(request.config.devices.name_cleaner_regex),
-                                                  "",
-                                              )
+                                            ? placeholders[target.key]?.replace(new RegExp(request.config.devices.name_cleaner_regex), "")
                                             : placeholders[target.key],
                                     },
                                     saved: null,
@@ -201,17 +202,16 @@ async function mountEditor(
                             }),
                         };
                     }
-                    return {};
-                },
+                }).callWS,
             };
             document.body.appendChild(element);
         },
         {
-            config: {
-                config_version: 28,
+            config: JSON.parse(JSON.stringify(configDoc({
+
                 ...(inverter ? { energy_nodes: { inverter } } : {}),
                 devices: { consumers: devices },
-            },
+            }))),
             placeholders: PLACEHOLDERS,
             report: validation,
             vendors,
@@ -245,7 +245,7 @@ test("the device settings sit above the list and the regex renames the cards", a
     await regex.dispatchEvent("change");
 
     expect(
-        await page.evaluate(() => (window.__editorConfig().devices as any).name_cleaner_regex),
+        await page.evaluate(() => (window.__devicesConfig().devices as any).name_cleaner_regex),
     ).toBe("\\sbreaker$");
     await expect
         .poll(() =>
@@ -303,7 +303,7 @@ async function openTabSection(page: Page, label: string): Promise<void> {
         .evaluate((details) => ((details as HTMLDetailsElement).open = true));
 }
 
-const config = (page: Page) => page.evaluate(() => window.__editorConfig().devices.consumers);
+const config = (page: Page) => page.evaluate(() => window.__devicesConfig().devices.consumers);
 
 /** The ids of the cards the tab shows, in document order, hidden ones left out. */
 const visibleCardIds = (page: Page) =>
@@ -970,7 +970,7 @@ test("the empty state says nothing is imported and offers Add device", async ({ 
     await expect(panel.locator("details.device-card")).toHaveCount(0);
 });
 
-const inverter = (page: Page) => page.evaluate(() => window.__editorConfig().energy_nodes?.inverter);
+const inverter = (page: Page) => page.evaluate(() => window.__devicesConfig().energy_nodes?.inverter);
 
 test("the inverter is edited first on the Energy nodes tab", async ({ page }) => {
     await mountEditor(page);
@@ -1136,16 +1136,14 @@ async function deviceResponse(
   await page.evaluate(
     ({ type, response, deferred }) => {
       const panel = document.querySelector("helman-config-editor-panel") as any;
-      const previous = panel.hass.callWS;
-      panel.hass.callWS = async (request: any) => {
-        if (request.type !== type) return previous(request);
+      window.__setMockReply(panel.hass, type, async (request: any) => {
         (window as any).__deviceRequest = request;
         if (deferred)
           return new Promise((resolve) => {
             (window as any).__resolveDeviceRequest = () => resolve(response);
           });
         return response;
-      };
+      });
     },
     { type, response, deferred },
   );
@@ -1535,11 +1533,8 @@ test("a failed suggestion request shows a readable error that a retry clears", a
   await page.evaluate(() => {
     window.__card("breaker")!.open = true;
     const panel = document.querySelector("helman-config-editor-panel") as any;
-    const previous = panel.hass.callWS;
-    panel.hass.callWS = async (request: any) =>
-      request.type === "helman/suggest_device_entities"
-        ? Promise.reject({ code: "unknown_error" })
-        : previous(request);
+    window.__setMockReply(panel.hass, "helman/suggest_device_entities", () =>
+      Promise.reject({ code: "unknown_error" }));
   });
   await page.locator(".apply-suggestions").click();
   await expect(page.locator(".message.error")).toHaveText(

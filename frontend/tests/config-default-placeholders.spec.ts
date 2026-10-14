@@ -1,3 +1,4 @@
+import { configDoc } from "./support/payload-builders";
 import { test, expect, type Page } from "@playwright/test";
 import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
@@ -19,14 +20,14 @@ import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
  */
 
 /** One solar bias field set, its neighbours and the training time left unset. */
-const STORED_CONFIG = {
-    config_version: 19,
+const STORED_CONFIG = configDoc({
+
     training: {
         solar_bias: {
             clamp_max: 2.5,
         },
     },
-};
+});
 
 /** What the backend serves for the paths this spec looks at. */
 const CONFIG_DEFAULTS = {
@@ -56,27 +57,41 @@ async function mountEditor(page: Page): Promise<void> {
             language: "en",
             locale: { language: "en" },
             user: { is_admin: true },
-            connection: { subscribeMessage: async () => () => undefined },
-            callWS: async (request: { type: string; config?: unknown }) => {
-                calls.push({ type: request.type, config: request.config });
-                if (request.type === "helman/get_config") {
+            connection: window.__mockHass().connection,
+            callWS: window.__mockHass({
+                "helman/get_config": async (request: {
+                    type: string;
+                    config?: unknown;
+                }) => {
                     return JSON.parse(JSON.stringify(config));
-                }
-                if (request.type === "helman/get_config_defaults") {
+                },
+                "helman/get_config_defaults": async (request: {
+                    type: string;
+                    config?: unknown;
+                }) => {
                     return JSON.parse(JSON.stringify(defaults));
-                }
-                if (request.type === "helman/get_optimizer_schema") {
+                },
+                "helman/get_optimizer_schema": async (request: {
+                    type: string;
+                    config?: unknown;
+                }) => {
                     return { version: 19, kinds: [] };
-                }
-                if (request.type === "helman/get_appliances") return { appliances: [] };
-                if (request.type === "helman/save_config") {
+                },
+                "helman/save_config": async (request: {
+                    type: string;
+                    config?: unknown;
+                }) => {
                     return { success: true, validation: { valid: true, errors: [], warnings: [] }, reloadStarted: false };
                 }
-                return {};
-            },
+            }, (request: {
+                type: string;
+                config?: unknown;
+            }) => {
+                calls.push({ type: request.type, config: request.config });
+            }).callWS,
         };
         document.body.appendChild(element);
-    }, { config: STORED_CONFIG, defaults: CONFIG_DEFAULTS });
+    }, { config: JSON.parse(JSON.stringify(STORED_CONFIG)), defaults: CONFIG_DEFAULTS });
 
     // The Training tab's panels ship collapsed, and a collapsed <details>
     // renders nothing to query.
@@ -197,4 +212,7 @@ test("saving writes no placeholder into the document", async ({ page }) => {
     };
     expect(saved.training?.training_time).toBeUndefined();
     expect(saved.training?.solar_bias).toEqual({ clamp_max: 2.5 });
+    expect(saved).not.toHaveProperty("energy_nodes");
+    expect(saved).not.toHaveProperty("devices");
+    expect(saved).not.toHaveProperty("automation");
 });

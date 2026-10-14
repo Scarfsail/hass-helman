@@ -252,8 +252,13 @@ async function mountEditor(
             el.hass = {
                 config: { time_zone: "UTC" },
                 states: {},
-                callWS: async ({ controllable_id }: { controllable_id: string }) =>
-                    payloads[controllable_id] ?? null,
+                callWS: window.__mockHass({
+                    "helman/get_schedule_explanation": async ({ controllable_id }: {
+                        controllable_id: string;
+                    }) => {
+                        return payloads[controllable_id] ?? null;
+                    }
+                }).callWS,
             };
         }
 

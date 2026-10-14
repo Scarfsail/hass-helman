@@ -1,3 +1,4 @@
+import { configDoc } from "./support/payload-builders";
 import { test, expect, type Page } from "@playwright/test";
 import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
@@ -22,8 +23,8 @@ import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 const GRID_PATH = ["energy_nodes", "grid", "entities", "power"];
 const GRID_KEY = GRID_PATH.join(".");
 
-const STORED_CONFIG = {
-    config_version: 6,
+const STORED_CONFIG = configDoc({
+
     energy_nodes: {
         grid: {
             entities: {
@@ -32,7 +33,7 @@ const STORED_CONFIG = {
             },
         },
     },
-};
+});
 
 /** A token no translation file has a string for, in either locale. */
 const UNKNOWN_TOKEN = "a_token_this_bundle_has_never_heard_of";
@@ -150,79 +151,57 @@ async function mountEditor(page: Page, options: MountOptions = {}): Promise<void
                 language: "en",
                 locale: { language: "en" },
                 user: { is_admin: true },
-                connection: { subscribeMessage: async () => () => undefined },
-                callWS: async (request: any) => {
-                    if (request.type === "helman/get_config") {
+                connection: window.__mockHass().connection,
+                callWS: window.__mockHass({
+                    "helman/get_config": async (request: any) => {
                         return JSON.parse(JSON.stringify(config));
-                    }
-                    if (request.type === "helman/get_optimizer_schema") {
-                        return { version: 2, kinds: [] };
-                    }
-                    if (request.type === "helman/get_appliances") return { appliances: [] };
-                    if (request.type === "helman/inspect_entities") {
+                    },
+                    "helman/inspect_entities": async (request: any) => {
                         requests.push(JSON.parse(JSON.stringify(request)));
-                        // A spec can hold one answer back to reproduce a slow
-                        // round trip: the ordering bugs only show when an
-                        // earlier request resolves after a later one.
                         const delay = (window as any).__inspectDelayMs ?? 0;
                         if (delay > 0) {
                             (window as any).__inspectDelayMs = 0;
                             await new Promise((resolve) => setTimeout(resolve, delay));
                         }
-                        // The *backend* decides what a reading says, so the
-                        // stub reads the polarity out of the document it was
-                        // sent and picks the token. Nothing on the editor side
-                        // knows that a polarity has anything to do with this.
-                        const polarity =
-                            request.config?.energy_nodes?.grid?.entities?.power_polarity;
-                        const gridFacts = draftFacts.map((fact: any) =>
-                            fact.id === "reading"
-                                ? {
-                                      ...fact,
-                                      token:
-                                          polarity === "positive_is_export"
-                                              ? "power_reading.exporting"
-                                              : "power_reading.importing",
-                                  }
-                                : fact,
-                        );
-                        // `dependsOn` is the backend's own list of what it
-                        // read, and it is what a revert writes back. The stub
-                        // reports it for the same reason the backend does:
-                        // nothing in the editor can work it out.
+                        const polarity = request.config?.energy_nodes?.grid?.entities?.power_polarity;
+                        const gridFacts = draftFacts.map((fact: any) => fact.id === "reading"
+                            ? {
+                                ...fact,
+                                token: polarity === "positive_is_export"
+                                    ? "power_reading.exporting"
+                                    : "power_reading.importing",
+                            }
+                            : fact);
                         return {
                             results: (request.targets ?? []).map((target: any) => ({
                                 key: target.key,
-                                draft:
-                                    target.key === gridKey
+                                draft: target.key === gridKey
+                                    ? {
+                                        entityId: "sensor.grid_power",
+                                        status: "ok",
+                                        facts: gridFacts,
+                                        dependsOn: dependsOnByKey[gridKey],
+                                    }
+                                    : factsByKey[target.key]
                                         ? {
-                                              entityId: "sensor.grid_power",
-                                              status: "ok",
-                                              facts: gridFacts,
-                                              dependsOn: dependsOnByKey[gridKey],
-                                          }
-                                        : factsByKey[target.key]
-                                          ? {
-                                                entityId: "sensor.stub",
-                                                status: "ok",
-                                                facts: factsByKey[target.key],
-                                                dependsOn: dependsOnByKey[target.key],
-                                            }
-                                          : { entityId: null, status: "unsupported", facts: [] },
-                                saved:
-                                    withSaved && (target.key === gridKey || savedKeys.includes(target.key))
-                                        ? {
-                                              entityId: "sensor.stub",
-                                              status: "ok",
-                                              facts: savedFacts,
-                                              dependsOn: dependsOnByKey[target.key],
-                                          }
-                                        : null,
+                                            entityId: "sensor.stub",
+                                            status: "ok",
+                                            facts: factsByKey[target.key],
+                                            dependsOn: dependsOnByKey[target.key],
+                                        }
+                                        : { entityId: null, status: "unsupported", facts: [] },
+                                saved: withSaved && (target.key === gridKey || savedKeys.includes(target.key))
+                                    ? {
+                                        entityId: "sensor.stub",
+                                        status: "ok",
+                                        facts: savedFacts,
+                                        dependsOn: dependsOnByKey[target.key],
+                                    }
+                                    : null,
                             })),
                         };
                     }
-                    return {};
-                },
+                }).callWS,
             };
             document.body.appendChild(element);
         },
@@ -522,7 +501,7 @@ test("clearing a configured entity keeps the saved reading and its revert", asyn
 test("a tab with no groups at all never asks", async ({ page }) => {
     // The early return has to survive the widened filter: nothing picked and
     // nothing saved means no call, not a call with an empty target list.
-    await mountEditor(page, { config: { config_version: 6 } });
+    await mountEditor(page, { config: configDoc({  }) });
     await openTab(page, "Helman card");
     await page.waitForTimeout(2500);
     expect(await requestCount(page)).toBe(0);
@@ -597,10 +576,10 @@ test("a slow answer cannot repaint a reading the user has already cleared", asyn
     // clear reach that branch at all: while the *stored* config still names an
     // entity, the poll rightly keeps asking so the saved reading can be shown.
     await mountEditor(page, {
-        config: {
-            config_version: 6,
+        config: configDoc({
+
             energy_nodes: { grid: { entities: { power: "", power_polarity: "positive_is_import" } } },
-        },
+        }),
     });
     // No tick sync here: with nothing at the path the poll rightly sends
     // nothing at all, so there is no tick to sync to. Wait for the group to

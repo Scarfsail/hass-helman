@@ -1,3 +1,4 @@
+import { configDoc } from "./support/payload-builders";
 import { test, expect, type Page } from "@playwright/test";
 import {
     assignPhase,
@@ -88,12 +89,12 @@ type Device = Record<string, any>;
 
 declare global {
     interface Window {
-        __editorConfig: () => { devices: { groupings?: any[]; consumers: Device[] } };
+        __phaseConfig: () => { devices: { groupings?: any[]; consumers: Device[] } };
         __saved: any[];
     }
 }
 
-async function mountEditor(page: Page, groupings: unknown[] = [BREAKERS]): Promise<void> {
+async function mountEditor(page: Page, groupings: Array<typeof BREAKERS> = [BREAKERS]): Promise<void> {
     await loadBundle(page, "helman-config-editor-panel", EDITOR_BUNDLE);
 
     await page.evaluate(
@@ -101,38 +102,33 @@ async function mountEditor(page: Page, groupings: unknown[] = [BREAKERS]): Promi
             const element = document.createElement(
                 "helman-config-editor-panel",
             ) as HTMLElement & Record<string, unknown>;
-            window.__editorConfig = () => (element as unknown as { _config: any })._config;
+            window.__phaseConfig = () => (element as unknown as { _config: any })._config;
             window.__saved = [];
             element.hass = {
                 language: "en",
                 locale: { language: "en" },
                 user: { is_admin: true },
-                connection: { subscribeMessage: async () => () => undefined },
-                callWS: async (request: any) => {
-                    if (request.type === "helman/get_config") {
+                connection: window.__mockHass().connection,
+                callWS: window.__mockHass({
+                    "helman/get_config": async (request: any) => {
                         return JSON.parse(JSON.stringify(config));
-                    }
-                    if (request.type === "helman/get_optimizer_schema") {
-                        return { version: 2, kinds: [] };
-                    }
-                    if (request.type === "helman/get_appliances") return { appliances: [] };
-                    if (request.type === "helman/validate_config") {
+                    },
+                    "helman/validate_config": async (request: any) => {
                         return { valid: true, errors: [], warnings: [] };
-                    }
-                    if (request.type === "helman/save_config") {
+                    },
+                    "helman/save_config": async (request: any) => {
                         window.__saved.push(JSON.parse(JSON.stringify(request.config)));
                         return { success: true, validation: { valid: true, errors: [], warnings: [] }, reloadStarted: false };
                     }
-                    return {};
-                },
+                }).callWS,
             };
             document.body.appendChild(element);
         },
         {
-            config: {
-                config_version: 26,
+            config: JSON.parse(JSON.stringify(configDoc({
+
                 devices: { ...(groupings.length > 0 ? { groupings } : {}), consumers: [AC, BOILER, LAMP, PANEL] },
-            },
+            }))),
         },
     );
 
@@ -202,7 +198,7 @@ const phases = (page: Page) =>
                 found[device.id] = device.phase;
                 walk(device.children ?? []);
             });
-        walk(window.__editorConfig().devices.consumers);
+        walk(window.__phaseConfig().devices.consumers);
         return found;
     });
 
@@ -380,7 +376,7 @@ test("a drop into a phase writes that device's phase only, and Unassigned delete
         "": ["boiler", "lamp"],
     });
     expect(await phases(page)).toEqual({ ...INITIAL, ac: "L3", pump: "L1", boiler: undefined });
-    expect(await page.evaluate(() => "phase" in window.__editorConfig().devices.consumers[1])).toBe(false);
+    expect(await page.evaluate(() => "phase" in window.__phaseConfig().devices.consumers[1])).toBe(false);
 
     // The device editor's picker shows what the board set.
     const picker = (id: string) =>

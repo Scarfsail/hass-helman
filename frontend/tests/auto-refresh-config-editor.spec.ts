@@ -1,3 +1,4 @@
+import { configDoc } from "./support/payload-builders";
 import { test, expect, type Page, type Locator } from "@playwright/test";
 import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
@@ -30,8 +31,8 @@ import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 const SCHEMA = { version: 2, kinds: [] };
 
 /** What the fake backend has stored. Swapped to stand in for another machine. */
-const STORED_CONFIG = { config_version: 6, forecast_days: 3 };
-const CHANGED_CONFIG = { config_version: 6, forecast_days: 5 };
+const STORED_CONFIG = configDoc({  forecast_days: 3 });
+const CHANGED_CONFIG = configDoc({  forecast_days: 5 });
 
 declare global {
     interface Window {
@@ -50,7 +51,7 @@ async function mountEditor(page: Page): Promise<Locator> {
 
     await page.evaluate(
         ({ schema, config }) => {
-            let stored: unknown = config;
+            let stored: unknown = JSON.parse(config);
             let getConfigCalls = 0;
             window.__setStoredConfig = (next: unknown) => {
                 stored = next;
@@ -88,22 +89,29 @@ async function mountEditor(page: Page): Promise<Locator> {
                         };
                     },
                 },
-                callWS: async (request: { type: string; config?: unknown }) => {
-                    if (request.type === "helman/get_config") {
+                callWS: window.__mockHass({
+                    "helman/get_config": async (request: {
+                        type: string;
+                        config?: unknown;
+                    }) => {
                         getConfigCalls += 1;
                         return JSON.parse(JSON.stringify(stored));
-                    }
-                    if (request.type === "helman/get_optimizer_schema") return schema;
-                    if (request.type === "helman/get_appliances") return { appliances: [] };
-                    if (request.type === "helman/save_config") {
+                    },
+                    "helman/get_optimizer_schema": async (request: {
+                        type: string;
+                        config?: unknown;
+                    }) => {
+                        return schema;
+                    },
+                    "helman/save_config": async (request: {
+                        type: string;
+                        config?: unknown;
+                    }) => {
                         saveCalls += 1;
                         const succeeded = window.__saveSucceeds;
                         if (succeeded) {
                             stored = request.config;
                         }
-                        // As the backend does: a successful save reloads the
-                        // entry and announces it, so the saver hears its own
-                        // write come back.
                         queueMicrotask(() => {
                             if (succeeded) {
                                 window.__fireDataChanged("config");
@@ -117,12 +125,11 @@ async function mountEditor(page: Page): Promise<Locator> {
                             reloadError: null,
                         };
                     }
-                    return {};
-                },
+                }).callWS,
             };
             document.body.appendChild(element);
         },
-        { schema: SCHEMA, config: STORED_CONFIG },
+        { schema: SCHEMA, config: JSON.stringify(STORED_CONFIG) },
     );
 
     const panel = page.locator("helman-config-editor-panel");
@@ -163,7 +170,7 @@ test("a clean editor picks up a config saved elsewhere", async ({ page }) => {
     await mountEditor(page);
     expect(await readBadges(page)).toContain("Stored config loaded");
 
-    await page.evaluate((config) => window.__setStoredConfig(config), CHANGED_CONFIG);
+    await page.evaluate((config) => window.__setStoredConfig(JSON.parse(config)), JSON.stringify(CHANGED_CONFIG));
     await page.evaluate(() => window.__fireDataChanged("config"));
 
     // Three reads: the first load, the comparison that found the change, and
@@ -194,7 +201,7 @@ test("a dirty editor keeps its draft and says the config moved", async ({ page }
     await mountEditor(page);
     await makeDirty(page);
 
-    await page.evaluate((config) => window.__setStoredConfig(config), CHANGED_CONFIG);
+    await page.evaluate((config) => window.__setStoredConfig(JSON.parse(config)), JSON.stringify(CHANGED_CONFIG));
     await page.evaluate(() => window.__fireDataChanged("config"));
 
     await expect

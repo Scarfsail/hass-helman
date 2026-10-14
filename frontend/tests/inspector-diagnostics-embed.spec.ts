@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
-import { installFakeHass } from "./support/fake-hass";
+import { installFakeHass } from "./support/mock-hass";
+import { configDoc } from "./support/payload-builders";
 import { CARD_BUNDLE, EDITOR_BUNDLE } from "./support/card-page";
 
 /**
@@ -116,18 +117,14 @@ async function mountEditor(page: Page, options: { cardUrl?: string } = {}): Prom
     await page.addScriptTag({ path: EDITOR_BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-config-editor-panel"));
 
-    await page.evaluate((cardUrl) => {
+    await page.evaluate(({ cardUrl, config }) => {
         const hass = window.__fakeHass as Record<string, unknown> & {
             callWS: (msg: { type: string }) => Promise<unknown>;
         };
-        const inspectorCallWS = hass.callWS;
         hass.user = { is_admin: true };
-        hass.callWS = async (msg: { type: string }) => {
-            if (msg.type === "helman/get_config") return { config_version: 6 };
-            if (msg.type === "helman/get_optimizer_schema") return { version: 2, kinds: [] };
-            if (msg.type === "helman/get_appliances") return { appliances: [] };
-            return inspectorCallWS(msg);
-        };
+        window.__setMockReply(hass, "helman/get_config", config);
+        window.__setMockReply(hass, "helman/get_optimizer_schema", { version: 2, kinds: [] });
+        window.__setMockReply(hass, "helman/get_appliances", { appliances: [] });
 
         const element = document.createElement("helman-config-editor-panel") as HTMLElement &
             Record<string, unknown>;
@@ -136,7 +133,7 @@ async function mountEditor(page: Page, options: { cardUrl?: string } = {}): Prom
         element.panel = cardUrl === null ? { config: {} } : { config: { card_module_url: cardUrl } };
         element.hass = hass;
         document.body.appendChild(element);
-    }, options.cardUrl === undefined ? CARD_MODULE_URL : options.cardUrl);
+    }, { cardUrl: options.cardUrl === undefined ? CARD_MODULE_URL : options.cardUrl, config: JSON.parse(JSON.stringify(configDoc())) });
 
     await page.evaluate(async () => {
         const panel = document.querySelector("helman-config-editor-panel") as HTMLElement &

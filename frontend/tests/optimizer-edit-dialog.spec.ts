@@ -189,7 +189,7 @@ async function mountPanel(page: Page, options: MountOptions = {}): Promise<void>
 
             let reads = 0;
 
-            const panel = document.createElement("scheduling-explanation-panel") as HTMLElement
+            const panel = document.createElement("scheduling-explanation-panel") as unknown as HTMLElement
                 & Record<string, unknown>;
             panel.localize = (key: string) => strings[key] ?? key;
             panel.hass = {
@@ -207,18 +207,33 @@ async function mountPanel(page: Page, options: MountOptions = {}): Promise<void>
                         };
                     },
                 },
-                callWS: async (request: { type: string; config?: unknown }) => {
-                    calls.push({ type: request.type, config: request.config });
-                    if (request.type === "helman/get_config") {
+                callWS: window.__mockHass({
+                    "helman/get_config": async (request: {
+                        type: string;
+                        config?: unknown;
+                    }) => {
                         const answer = configs[Math.min(reads, configs.length - 1)];
                         reads += 1;
                         return answer;
+                    },
+                    "helman/get_optimizer_schema": async (request: {
+                        type: string;
+                        config?: unknown;
+                    }) => {
+                        return schema;
+                    },
+                    "helman/save_config": async (request: {
+                        type: string;
+                        config?: unknown;
+                    }) => {
+                        return save;
                     }
-                    if (request.type === "helman/get_optimizer_schema") return schema;
-                    if (request.type === "helman/get_appliances") return { appliances: [] };
-                    if (request.type === "helman/save_config") return save;
-                    return {};
-                },
+                }, (request: {
+                    type: string;
+                    config?: unknown;
+                }) => {
+                    calls.push({ type: request.type, config: request.config });
+                }).callWS,
             };
             panel.applianceName = appliance;
             panel.payload = fixture;

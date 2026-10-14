@@ -9,6 +9,8 @@ import {
     waitForDayChart,
 } from "./support/inspector-aggregate-harness";
 import { loadBundle } from "./support/card-page";
+import { treeNode, treePayload } from "./support/payload-builders";
+import type { TreeItemDTO } from "../cards/helman-api";
 
 /**
  * A device box's name opens that device's detail.
@@ -57,32 +59,8 @@ async function installHaStubs(page: Page): Promise<void> {
 }
 
 /** A house child DTO with the defaults the backend fills in. */
-function dto(overrides: Record<string, unknown>) {
-    return {
-        powerSensorId: null,
-        switchEntityId: null,
-        sourceType: null,
-        sourceConfig: null,
-        valueType: "default",
-        isSource: false,
-        isUnmeasured: false,
-        isEstimated: false,
-        groups: {},
-        groupBadgeTexts: [],
-        icon: null,
-        compact: false,
-        showAdditionalInfo: false,
-        childrenFullWidth: true,
-        hideChildren: false,
-        hideChildrenIndicator: false,
-        sortChildrenByPower: false,
-        deferrable: false,
-        controllableIds: [],
-        energyEntityId: null,
-        ratioSensorId: null,
-        children: [],
-        ...overrides,
-    };
+function dto(overrides: Partial<TreeItemDTO>) {
+    return treeNode({ childrenFullWidth: true, ...overrides });
 }
 
 /**
@@ -102,7 +80,7 @@ async function mountCard(
     await loadBundle(page, "helman-card");
     await installHaStubs(page);
 
-    const tree = {
+    const tree = treePayload({
         sources: [dto({ id: "solar", displayName: "Solar", powerSensorId: "sensor.solar", isSource: true, sourceType: "solar" })],
         consumers: [
             dto({
@@ -146,7 +124,7 @@ async function mountCard(
             history_buckets: 3,
             history_bucket_duration: 5,
         },
-    };
+    });
 
     await page.evaluate(
         async ({ tree, today, lastHour, stats }) => {
@@ -159,7 +137,7 @@ async function mountCard(
                 config: { time_zone: "UTC" },
                 connection: {
                     sendMessagePromise: async () => ({}),
-                    subscribeMessage: async () => () => undefined,
+                    subscribeMessage: window.__mockHass().connection.subscribeMessage,
                 },
                 states: {
                     "sensor.solar": state("0"),
@@ -170,22 +148,22 @@ async function mountCard(
                     "sensor.house_unmeasured": state("500"),
                     "switch.boiler": { entity_id: "switch.boiler", state: "on", attributes: {} },
                 },
-                callWS: async (msg: any) => {
-                    if (msg.type === "helman/get_device_tree") return tree;
-                    if (msg.type === "helman/get_history") {
+                callWS: window.__mockHass({
+                    "helman/get_device_tree": async (msg: any) => {
+                        return tree;
+                    },
+                    "helman/get_history": async (msg: any) => {
                         return { buckets: 3, bucket_duration: 5, entity_history: {} };
-                    }
-                    if (msg.type === "helman/get_schedule") return { executionEnabled: true, slots: [] };
-                    if (msg.type === "helman/get_device_stats") {
+                    },
+                    "helman/get_device_stats": async (msg: any) => {
                         (window as any).__deviceStatsRequests.push(msg.device_key);
                         return (stats as Record<string, unknown>)[msg.device_key] ?? null;
-                    }
-                    if (msg.type === "recorder/statistic_during_period") {
+                    },
+                    "recorder/statistic_during_period": async (msg: any) => {
                         (window as any).__statRequests.push(msg);
                         return { change: msg.calendar ? today : lastHour };
                     }
-                    return {};
-                },
+                }).callWS,
             };
             const card = document.createElement("helman-card") as any;
             await card.setConfig({ type: "custom:helman-card" });

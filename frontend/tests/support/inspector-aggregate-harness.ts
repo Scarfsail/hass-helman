@@ -1,4 +1,5 @@
-import { expect, type Page } from "@playwright/test";
+import type { InspectorPayload } from "../../cards/helman-api";
+import { type Page } from "@playwright/test";
 
 import { loadBundle } from "./card-page";
 import { installFixedClock } from "./fixed-clock";
@@ -50,7 +51,7 @@ export async function mountInspector(
     // Off by default -- every existing case wants its span answered right
     // away. On, `helman/solar_bias/day_aggregates` returns a promise the test
     // releases itself, through `window.__pendingSpan()` / `__releaseSpan()`,
-    // the same shape `fake-hass.ts` gives the day read.
+    // the same shape `mock-hass.ts` gives the day read.
     holdSpanRequests = false,
 ): Promise<void> {
     await page.evaluate(([punchHoles, shape, floor, rawDayFloor, holdSpan]: [boolean, string, string, string | null, boolean]) => {
@@ -74,11 +75,11 @@ export async function mountInspector(
         // only hold them to that if the fixture makes them the same.
         const SLOTS_PER_DAY = 96;
         const houseActual: Array<{ timestamp: string; valueWh: number }> = [];
-        const houseActualBreakdown: Array<Record<string, unknown>> = [];
+        const houseActualBreakdown: InspectorPayload["series"]["houseActualBreakdown"] = [];
         // The day chart resolves a click to the nearest slot the impact series
         // knows, so without these a press in the day view selects nothing at
         // all -- which is not what a bare day payload should mean here.
-        const impact: Array<Record<string, unknown>> = [];
+        const impact: InspectorPayload["series"]["impact"] = [];
         for (let m = 0; m < 1440; m += 15) {
             const hh = String(Math.floor(m / 60)).padStart(2, "0");
             const mm = String(m % 60).padStart(2, "0");
@@ -124,33 +125,28 @@ export async function mountInspector(
             });
         }
 
-        const dayPayload = {
-            date,
+        const dayPayload = window.__inspectorDay({ date,
             timezone: "UTC",
             status: "ok",
             effectiveVariant: null,
             trainedAt: null,
             priceUnit: "CZK/kWh",
-            range: {
-                minDate: dayFloor, maxDate: date, canGoPrevious: true, canGoNext: false,
+            range: { minDate: dayFloor, maxDate: date, canGoPrevious: true, canGoNext: false,
                 isToday: true, isFuture: false,
             },
-            series: {
-                raw: [], corrected, actual: [], invalidated: [], factors: [], impact,
+            series: { raw: [], corrected, actual: [], invalidated: [], factors: [], impact,
                 houseForecast: [], houseActual,
                 houseActualBreakdown, houseForecastBreakdown: [],
                 batterySocForecast: [], batterySocActual: [],
                 gridForecast: [], gridActual: [], batteryForecast: [], batteryActual: [],
                 importPrice: price, exportPrice: [],
             },
-            totals: {
-                rawWh: null, correctedWh: null, actualWh: null,
+            totals: { rawWh: null, correctedWh: null, actualWh: null,
                 houseForecastWh: null, houseActualWh: null,
                 gridForecastWh: null, gridActualWh: null,
                 batteryForecastWh: null, batteryActualWh: null,
             },
-            availability: {
-                hasRawForecast: false, hasCorrectedForecast: true, hasActuals: false,
+            availability: { hasRawForecast: false, hasCorrectedForecast: true, hasActuals: false,
                 hasInvalidated: false, hasProfile: true, hasHouseForecast: false,
                 hasHouseActual: true, hasHouseActualBreakdown: true,
                 hasBatterySocForecast: false, hasBatterySocActual: false,
@@ -159,7 +155,7 @@ export async function mountInspector(
             },
             batterySocBounds: [],
             trainingExplainability: null,
-        };
+        });
 
         (window as any).__spanRequests = [];
         (window as any).__dayRequests = [];
@@ -247,8 +243,8 @@ export async function mountInspector(
             language: "en",
             config: { time_zone: "UTC" },
             connection: {},
-            callWS: async (msg: any) => {
-                if (msg.type === "helman/solar_bias/day_aggregates") {
+            callWS: window.__mockHass({
+                "helman/solar_bias/day_aggregates": (msg: any) => {
                     (window as any).__spanRequests.push(msg);
                     const result = {
                         bucket: msg.bucket ?? "day",
@@ -272,25 +268,16 @@ export async function mountInspector(
                     return new Promise((resolveSpan) => {
                         pendingSpan.push(() => resolveSpan(result));
                     });
-                }
-                if (msg.type === "helman/get_schedule") {
-                    // An empty schedule, in the shape the backend sends one:
-                    // `{}` is not that shape, and every subscriber that reaches
-                    // for `slots` on it throws -- inside `willUpdate`, which
-                    // leaves the element unrendered until some later property
-                    // change happens to give it another go.
-                    return { executionEnabled: true, slots: [] };
-                }
-                if (msg.type === "helman/solar_bias/inspector") {
+                },
+                "helman/solar_bias/inspector": (msg: any) => {
                     (window as any).__dayRequests.push(msg.date);
                     return { ...dayPayload, date: msg.date };
-                }
-                if (msg.type === "helman/get_device_stats") {
+                },
+                "helman/get_device_stats": (msg: any) => {
                     ((window as any).__deviceStatsRequests ??= []).push(msg.device_key);
                     return null;
-                }
-                return {};
-            },
+                },
+            }).callWS,
         };
         document.body.appendChild(el);
     }, [holes, variant, minDate, dayMinDate, holdSpanRequests] as [boolean, string, string, string | null, boolean]);

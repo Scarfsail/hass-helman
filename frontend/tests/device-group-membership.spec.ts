@@ -1,3 +1,4 @@
+import { configDoc } from "./support/payload-builders";
 import { test, expect, type Page } from "@playwright/test";
 import { consumerGroups } from "../cards/shared/config/devices";
 import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
@@ -80,7 +81,7 @@ type Device = Record<string, any>;
 
 declare global {
     interface Window {
-        __editorConfig: () => { devices: { groupings?: any[]; consumers: Device[] } };
+        __membershipConfig: () => { devices: { groupings?: any[]; consumers: Device[] } };
     }
 }
 
@@ -92,24 +93,20 @@ async function mountEditor(page: Page): Promise<void> {
             const element = document.createElement(
                 "helman-config-editor-panel",
             ) as HTMLElement & Record<string, unknown>;
-            window.__editorConfig = () => (element as unknown as { _config: any })._config;
+            window.__membershipConfig = () => (element as unknown as { _config: any })._config;
             element.hass = {
                 language: "en",
                 locale: { language: "en" },
                 user: { is_admin: true },
-                connection: { subscribeMessage: async () => () => undefined },
-                callWS: async (request: any) => {
-                    if (request.type === "helman/get_config") {
+                connection: window.__mockHass().connection,
+                callWS: window.__mockHass({
+                    "helman/get_config": async (request: any) => {
                         return JSON.parse(JSON.stringify(config));
-                    }
-                    if (request.type === "helman/get_optimizer_schema") {
-                        return { version: 2, kinds: [] };
-                    }
-                    if (request.type === "helman/get_appliances") return { appliances: [] };
-                    if (request.type === "helman/validate_config") {
+                    },
+                    "helman/validate_config": async (request: any) => {
                         return { valid: true, errors: [], warnings: [] };
-                    }
-                    if (request.type === "helman/inspect_entities") {
+                    },
+                    "helman/inspect_entities": async (request: any) => {
                         return {
                             results: (request.targets ?? []).map((target: any) => ({
                                 key: target.key,
@@ -118,16 +115,15 @@ async function mountEditor(page: Page): Promise<void> {
                             })),
                         };
                     }
-                    return {};
-                },
+                }).callWS,
             };
             document.body.appendChild(element);
         },
         {
-            config: {
-                config_version: 26,
+            config: JSON.parse(JSON.stringify(configDoc({
+
                 devices: { groupings: [BREAKERS, MODES], consumers: [AC, BOILER, LAMP] },
-            },
+            }))),
             placeholders: PLACEHOLDERS,
         },
     );
@@ -207,7 +203,7 @@ const memberships = (page: Page) =>
                 found[device.id] = device.groups;
                 walk(device.children ?? []);
             });
-        walk(window.__editorConfig().devices.consumers);
+        walk(window.__membershipConfig().devices.consumers);
         return found;
     });
 

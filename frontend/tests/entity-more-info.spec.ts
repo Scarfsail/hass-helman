@@ -1,3 +1,4 @@
+import { configDoc } from "./support/payload-builders";
 import { test, expect, type Page } from "@playwright/test";
 import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
@@ -22,14 +23,14 @@ const GRID_KEY = GRID_PATH.join(".");
 /** A configured picker the stub answers about with no entity behind it. */
 const HOUSE_KEY = ["energy_nodes", "house", "entities", "power"].join(".");
 
-const CONFIG = {
-    config_version: 7,
+const CONFIG = configDoc({
+
     energy_nodes: {
         grid: { entities: { power: "sensor.grid_power" } },
         house: { entities: { power: "sensor.house_power" } },
     },
     devices: { consumers: [] },
-};
+});
 
 /** What the draft reads, what the *stored* document read: different entities. */
 const DRAFT_ENTITY = "sensor.grid_power";
@@ -78,16 +79,12 @@ async function mountEditor(page: Page): Promise<void> {
                 language: "en",
                 locale: { language: "en" },
                 user: { is_admin: true },
-                connection: { subscribeMessage: async () => () => undefined },
-                callWS: async (request: any) => {
-                    if (request.type === "helman/get_config") {
+                connection: window.__mockHass().connection,
+                callWS: window.__mockHass({
+                    "helman/get_config": async (request: any) => {
                         return JSON.parse(JSON.stringify(config));
-                    }
-                    if (request.type === "helman/get_optimizer_schema") {
-                        return { version: 2, kinds: [] };
-                    }
-                    if (request.type === "helman/get_appliances") return { appliances: [] };
-                    if (request.type === "helman/inspect_entities") {
+                    },
+                    "helman/inspect_entities": async (request: any) => {
                         return {
                             results: (request.targets ?? []).map((target: any) => {
                                 if (target.key === gridKey) {
@@ -130,8 +127,7 @@ async function mountEditor(page: Page): Promise<void> {
                             }),
                         };
                     }
-                    return {};
-                },
+                }).callWS,
             };
             document.body.appendChild(element);
 
@@ -148,7 +144,7 @@ async function mountEditor(page: Page): Promise<void> {
             };
         },
         {
-            config: CONFIG,
+            config: JSON.parse(JSON.stringify(CONFIG)),
             gridKey: GRID_KEY,
             houseKey: HOUSE_KEY,
             draftEntity: DRAFT_ENTITY,

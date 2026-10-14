@@ -53,22 +53,19 @@ async function mountInspector(page: Page): Promise<void> {
                 factor: 1,
             });
         }
-        const payload = {
-            date,
+        const payload = window.__inspectorDay({ date,
             timezone: "UTC",
             status: "ok",
             effectiveVariant: null,
             trainedAt: null,
-            range: {
-                minDate: date,
+            range: { minDate: date,
                 maxDate: date,
                 canGoPrevious: false,
                 canGoNext: false,
                 isToday: true,
                 isFuture: false,
             },
-            series: {
-                raw: [],
+            series: { raw: [],
                 corrected,
                 actual: [],
                 invalidated: [],
@@ -83,8 +80,7 @@ async function mountInspector(page: Page): Promise<void> {
                 batteryForecast: [],
                 batteryActual: [],
             },
-            totals: {
-                rawWh: null,
+            totals: { rawWh: null,
                 correctedWh: null,
                 actualWh: null,
                 houseForecastWh: null,
@@ -94,8 +90,7 @@ async function mountInspector(page: Page): Promise<void> {
                 batteryForecastWh: null,
                 batteryActualWh: null,
             },
-            availability: {
-                hasRawForecast: false,
+            availability: { hasRawForecast: false,
                 hasCorrectedForecast: true,
                 hasActuals: false,
                 hasInvalidated: false,
@@ -111,7 +106,7 @@ async function mountInspector(page: Page): Promise<void> {
             },
             batterySocBounds: [],
             trainingExplainability: null,
-        };
+        });
 
         const el = document.createElement("helman-solar-inspector") as any;
         // Full-day axis + hour-wide slots so the click geometry is exact and wide.
@@ -122,7 +117,16 @@ async function mountInspector(page: Page): Promise<void> {
             config: { time_zone: "UTC" },
             connection: {},
             // Echo the requested date back so the payload matches _selectedDate.
-            callWS: async (msg: { date: string }) => ({ ...payload, date: msg.date }),
+            // Echo the requested date back so the payload matches _selectedDate.
+            // Echo the requested date back so the payload matches _selectedDate.
+            // Echo the requested date back so the payload matches _selectedDate.
+            callWS: window.__mockHass({
+                "helman/solar_bias/inspector": async (msg: {
+                    date: string;
+                }) => {
+                    return ({ ...payload, date: msg.date });
+                }
+            }).callWS,
         };
         document.body.appendChild(el);
     });

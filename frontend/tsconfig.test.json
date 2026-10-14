@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "target": "ES2022",
+    "types": ["node"]
+  },
+  "include": [
+    "cards/**/*.ts",
+    "cards/**/*.tsx",
+    "cards/**/*.json",
+    "config-editor/**/*.ts",
+    "config-editor/**/*.json",
+    "tests/**/*.ts"
+  ]
+}

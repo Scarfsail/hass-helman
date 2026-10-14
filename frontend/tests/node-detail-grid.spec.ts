@@ -1,3 +1,6 @@
+import { installMockHass } from "./support/mock-hass";
+import { cardTree, forecastPayload } from "./support/payload-builders";
+import type { ForecastPayload } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
 import { installFixedClock } from "./support/fixed-clock";
@@ -53,32 +56,18 @@ type Variant = {
 
 declare global {
     interface Window {
-        __hass: any;
-        __requests: Array<{ type: string; node?: string; section?: string }>;
+        __GridHass: any;
+        __GridRequests: Array<{ type: string; node?: string; section?: string }>;
     }
 }
 
 async function mount(page: Page, variant: Variant = {}): Promise<void> {
     await installFixedClock(page);
     await page.setContent("<!doctype html><html><body style='margin:0'></body></html>");
+    await installMockHass(page);
     await page.addScriptTag({ content: HA_DIALOG_STUB });
-    await page.evaluate((v) => {
+    await page.evaluate(({ v, tree, forecastDefaults }) => {
         const profile = v.profile !== false;
-        const node = (id: string, sensor: string, sourceType: string | null) => ({
-            id, displayName: id, powerSensorId: sensor, ratioSensorId: null, switchEntityId: null,
-            valueType: "default", sourceConfig: null, sourceType, isSource: sourceType !== null,
-            isUnmeasured: false, groups: {}, groupBadgeTexts: [], icon: null, compact: false,
-            showAdditionalInfo: false, childrenFullWidth: false, hideChildren: false,
-            hideChildrenIndicator: false, sortChildrenByPower: false, deferrable: false,
-            controllableIds: [], children: [],
-        });
-        const tree = {
-            sources: [node("solar", "sensor.solar", "solar"), { ...node("grid", "sensor.grid", "grid"), valueType: v.positiveGridNode ? "positive" : "default" }, node("battery", "sensor.battery", "battery")],
-            consumers: [node("house", "sensor.house", null)],
-            consumptionTotalSensorId: null,
-            productionTotalSensorId: null,
-            uiConfig: { show_others_group: false, device_groupings: [], history_buckets: 3, history_bucket_duration: 60 },
-        };
         const s = (state: string, unit?: string, friendly?: string) => ({
             state, attributes: { ...(unit ? { unit_of_measurement: unit } : {}), ...(friendly ? { friendly_name: friendly } : {}) },
         });
@@ -155,8 +144,10 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
         const slot = (iso: string, imported: number, exported: number) => ({
             timestamp: iso, durationHours: 0.25, importedFromGridKwh: imported, exportedToGridKwh: exported,
         });
-        const forecast = {
+        const forecast: ForecastPayload = {
+            ...forecastDefaults,
             grid: {
+                ...forecastDefaults.grid,
                 status: "available", generatedAt: null, unit: "kWh", resolution: "quarter_hour", horizonHours: 48,
                 startedAt: null, partialReason: null, coverageUntil: null, scheduleAdjusted: true,
                 currentImportPrice: v.staleCurrentPrice ? 3.0 : 4.2, importPriceUnit: "CZK/kWh",
@@ -190,45 +181,73 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             agreement: { status: "unknown", reason: "no_profile", commanded: null, observedOption: null, registers: [] },
             condition: null, sections: [],
         };
-        window.__requests = [];
-        window.__hass = {
+        window.__GridRequests = [];
+        window.__GridHass = {
             language: "en",
             // A 24-hour English locale, so times read as the assertions write them.
             locale: { language: "en-GB" },
             config: { time_zone: "UTC" },
             connection: {
                 sendMessagePromise: async (msg: { type: string }) => {
-                    window.__requests.push({ type: msg.type });
+                    window.__GridRequests.push({ type: msg.type });
                     return msg.type === "helman/get_forecast" ? forecast : {};
                 },
-                subscribeMessage: async () => () => undefined,
+                subscribeMessage: window.__mockHass().connection.subscribeMessage,
             },
             states,
-            callWS: async (msg: { type: string; node?: string; section?: string }) => {
-                window.__requests.push({ type: msg.type, node: msg.node, section: msg.section });
-                if (msg.type === "helman/get_device_tree") return tree;
-                if (msg.type === "helman/get_history") return { buckets: 3, bucket_duration: 60, entity_history: {} };
-                if (msg.type === "helman/get_schedule") return { executionEnabled: true, slots: [] };
-                if (msg.type === "helman/solar_bias/day_aggregates") return aggregates;
-                if (msg.type === "helman/get_node_detail") {
-                    if (msg.node === "inverter") return inverter;
-                    if (msg.section === "flows") return flowsSection;
+            callWS: window.__mockHass({
+                "helman/get_device_tree": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                }) => {
+                    return tree;
+                },
+                "helman/get_history": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                }) => {
+                    return { buckets: 3, bucket_duration: 60, entity_history: {} };
+                },
+                "helman/solar_bias/day_aggregates": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                }) => {
+                    return aggregates;
+                },
+                "helman/get_node_detail": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                }) => {
+                    if (msg.node === "inverter")
+                        return inverter;
+                    if (msg.section === "flows")
+                        return flowsSection;
                     if (msg.section) {
-                        if (v.sectionFails) throw new Error("recorder down");
+                        if (v.sectionFails)
+                            throw new Error("recorder down");
                         return section;
                     }
                     return overview;
                 }
-                return {};
-            },
+            }, (msg: {
+                type: string;
+                node?: string;
+                section?: string;
+            }) => {
+                window.__GridRequests.push({ type: msg.type, node: msg.node, section: msg.section });
+            }).callWS,
         };
-    }, variant);
+    }, { v: variant, tree: cardTree(variant.positiveGridNode ? "positive" : "default"), forecastDefaults: forecastPayload() });
     await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-simple-card"));
     await page.evaluate(async () => {
         const card = document.createElement("helman-simple-card") as any;
         card.setConfig({ type: "custom:helman-simple-card" });
-        card.hass = window.__hass;
+        card.hass = window.__GridHass;
         document.body.appendChild(card);
     });
 }
@@ -245,7 +264,7 @@ const phase = (page: Page, n: number) => picture(page).locator(`[data-phase-bar=
 const flow = (page: Page) => content(page).locator("helman-node-flow");
 const flowLabel = (page: Page, side: "in" | "out", id: string) => flow(page).locator(`[data-side="${side}"] [data-flow="${id}"]`);
 const sectionRequests = (page: Page, section?: string) =>
-    page.evaluate((name) => window.__requests.filter((r) => r.type === "helman/get_node_detail" && r.node === "grid" && r.section
+    page.evaluate((name) => window.__GridRequests.filter((r) => r.type === "helman/get_node_detail" && r.node === "grid" && r.section
         && (name === undefined || r.section === name)).length, section);
 
 /** An element's inline `left` or `width`, in % of its track. */
@@ -458,7 +477,7 @@ test.describe("the flow", () => {
         await expect(flow(page).locator("[data-total='in']")).toHaveText("In 5.8 kWh · income 18.90 CZK");
         await expect(flow(page).locator("[data-total='out']")).toHaveText("Out 2.7 kWh · cost 42.50 CZK");
         // The money is the span read made on opening, not a second one.
-        expect(await page.evaluate(() => window.__requests.filter((r) => r.type === "helman/solar_bias/day_aggregates").length)).toBe(1);
+        expect(await page.evaluate(() => window.__GridRequests.filter((r) => r.type === "helman/solar_bias/day_aggregates").length)).toBe(1);
 
         await flow(page).locator("[data-scope='now']").click();
         await expect(flowLabel(page, "in", "solar")).toContainText("3.0 kW");
@@ -714,7 +733,7 @@ test.describe("disclosure and live data", () => {
         await openDetail(page);
         await page.evaluate(() => {
             const card = document.querySelector("helman-simple-card") as any;
-            const hass = window.__hass;
+            const hass = window.__GridHass;
             card.hass = {
                 ...hass,
                 states: { ...hass.states, "sensor.solax_inverter_voltage_l2": { state: "244.0", attributes: { unit_of_measurement: "V" } } },

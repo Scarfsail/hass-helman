@@ -1,3 +1,5 @@
+import type { JsonObject } from "../cards/shared/config/types";
+import { configDoc } from "./support/payload-builders";
 import { test, expect, type Locator, type Page } from "@playwright/test";
 
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
@@ -90,16 +92,16 @@ type Device = Record<string, any>;
 
 declare global {
     interface Window {
-        __editorConfig: () => { devices: { consumers: Device[] } };
+        __sectionsEditorConfig: () => { devices: { consumers: Device[] } };
         __validation: unknown;
     }
 }
 
 async function mountEditor(
     page: Page,
-    consumers: unknown[],
+    consumers: JsonObject[],
     validation: unknown = VALID,
-    inverter: unknown = null,
+    inverter: JsonObject | null = null,
 ): Promise<void> {
     await loadBundle(page, "helman-config-editor-panel", EDITOR_BUNDLE);
 
@@ -108,19 +110,21 @@ async function mountEditor(
             const element = document.createElement(
                 "helman-config-editor-panel",
             ) as HTMLElement & Record<string, unknown>;
-            window.__editorConfig = () => (element as unknown as { _config: any })._config;
+            window.__sectionsEditorConfig = () => (element as unknown as { _config: any })._config;
             window.__validation = report;
             element.hass = {
                 language: "en",
                 locale: { language: "en" },
                 user: { is_admin: true },
-                connection: { subscribeMessage: async () => () => undefined },
-                callWS: async (request: any) => {
-                    if (request.type === "helman/get_config") return JSON.parse(JSON.stringify(config));
-                    if (request.type === "helman/get_optimizer_schema") return { version: 2, kinds: [] };
-                    if (request.type === "helman/get_appliances") return { appliances: [] };
-                    if (request.type === "helman/validate_config") return window.__validation;
-                    if (request.type === "helman/inspect_entities") {
+                connection: window.__mockHass().connection,
+                callWS: window.__mockHass({
+                    "helman/get_config": async (request: any) => {
+                        return JSON.parse(JSON.stringify(config));
+                    },
+                    "helman/validate_config": async (request: any) => {
+                        return window.__validation;
+                    },
+                    "helman/inspect_entities": async (request: any) => {
                         return {
                             results: (request.targets ?? []).map((target: any) => ({
                                 key: target.key,
@@ -129,17 +133,16 @@ async function mountEditor(
                             })),
                         };
                     }
-                    return {};
-                },
+                }).callWS,
             };
             document.body.appendChild(element);
         },
         {
-            config: {
-                config_version: 28,
+            config: JSON.parse(JSON.stringify(configDoc({
+
                 ...(inverter ? { energy_nodes: { inverter } } : {}),
                 devices: { consumers },
-            },
+            }))),
             report: validation,
         },
     );
@@ -238,7 +241,7 @@ test("a reader's toggle survives a re-render", async ({ page }) => {
     const name = identity.locator(".field input").first();
     await name.fill("Radiator");
     await name.dispatchEvent("change");
-    await expect.poll(() => page.evaluate(() => window.__editorConfig().devices.consumers[0].name)).toBe("Radiator");
+    await expect.poll(() => page.evaluate(() => window.__sectionsEditorConfig().devices.consumers[0].name)).toBe("Radiator");
     expect(await openSections(panel(page), "heater")).toEqual(["Identity"]);
 });
 
@@ -257,7 +260,7 @@ test("a reorder does not hand a device another device's open sections", async ({
             detail: { oldIndex: 0, newIndex: 1 }, bubbles: true, composed: true,
         }));
     });
-    await expect.poll(() => page.evaluate(() => window.__editorConfig().devices.consumers[0].id)).toBe("boiler");
+    await expect.poll(() => page.evaluate(() => window.__sectionsEditorConfig().devices.consumers[0].id)).toBe("boiler");
     expect(await openSections(panel(page), "boiler")).toEqual([]);
 });
 
@@ -288,7 +291,7 @@ test("a missing meter opens Measurements alone, and fixing it leaves it open", a
             );
         });
     await expect
-        .poll(() => page.evaluate(() => window.__editorConfig().devices.consumers[0].consumption))
+        .poll(() => page.evaluate(() => window.__sectionsEditorConfig().devices.consumers[0].consumption))
         .toEqual({ energy_entity_id: "sensor.fridge_energy" });
     await validate(page, VALID);
     await expect(panel(page).locator(".device-issues")).toHaveCount(0);
@@ -343,11 +346,11 @@ test("a broken child opens its parent's Children section", async ({ page }) => {
 });
 
 test("the device edit dialog shows every section collapsed, and no Children", async ({ page }) => {
-    const config = {
-        config_version: 26,
+    const config = configDoc({
+
         devices: { consumers: [BREAKER] },
         automation: { enabled: true, appliance_optimizers: [], system_optimizers: [] },
-    };
+    });
     await loadBundle(page, "node-detail-device-content");
     await page.addScriptTag({ content: HA_DIALOG_STUB });
     await page.evaluate((config) => {
@@ -358,12 +361,12 @@ test("the device edit dialog shows every section collapsed, and no Children", as
             locale: { language: "en" },
             user: { is_admin: true },
             states: {},
-            connection: { subscribeMessage: async () => () => undefined },
-            callWS: async (request: any) => {
-                if (request.type === "helman/get_config") return JSON.parse(JSON.stringify(config));
-                if (request.type === "helman/inspect_entities") return { results: [] };
-                return {};
-            },
+            connection: window.__mockHass().connection,
+            callWS: window.__mockHass({
+                "helman/get_config": async (request: any) => {
+                    return JSON.parse(JSON.stringify(config));
+                }
+            }).callWS,
         };
         content.params = {
             nodeType: "device",
@@ -371,7 +374,7 @@ test("the device edit dialog shows every section collapsed, and no Children", as
                 deviceKeyIsMeter: true, children: [] },
         };
         document.body.appendChild(content);
-    }, config);
+    }, JSON.parse(JSON.stringify(config)));
 
     await page.locator("node-detail-device-content ha-button.edit").click();
     const dialog = page.locator("helman-device-edit-dialog");
@@ -385,7 +388,7 @@ test("the device edit dialog shows every section collapsed, and no Children", as
 });
 
 /** The inverter sits first on the Energy nodes tab, straight in its section. */
-async function mountInverter(page: Page, inverter: unknown): Promise<void> {
+async function mountInverter(page: Page, inverter: JsonObject): Promise<void> {
     await mountEditor(page, [HEATER], VALID, inverter);
     await panel(page).locator(".tabs").getByRole("button", { name: "Energy nodes", exact: true }).click();
     await expect(panel(page).locator(".inverter-section")).toHaveCount(1);

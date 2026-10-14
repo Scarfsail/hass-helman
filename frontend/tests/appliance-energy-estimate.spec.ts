@@ -1,3 +1,5 @@
+import { configDoc } from "./support/payload-builders";
+import type { JsonObject } from "../cards/shared/config/types";
 import { test, expect, type Locator, type Page } from "@playwright/test";
 import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
@@ -20,7 +22,7 @@ import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
  * power while active (issue #395).
  */
 
-function learner(id: string, name: string, meter: string): Record<string, unknown> {
+function learner(id: string, name: string, meter: string): JsonObject {
     return {
         id,
         name,
@@ -34,8 +36,8 @@ function learner(id: string, name: string, meter: string): Record<string, unknow
     };
 }
 
-const CONFIG = {
-    config_version: 19,
+const CONFIG = configDoc({
+
     devices: { consumers: [
         learner("dishwasher", "Dishwasher", "sensor.dishwasher_energy"),
         learner("washer", "Laundry", "sensor.washer_energy"),
@@ -78,7 +80,7 @@ const CONFIG = {
         // No meter of its own and no parent's: nothing is ever trained for it.
         { id: "lights", name: "Lights", consumption: { power_entity_id: "sensor.lights_power" } },
     ] },
-};
+});
 
 function job(id: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
     return {
@@ -152,25 +154,19 @@ async function mountEditor(page: Page): Promise<void> {
                 language: "en",
                 locale: { language: "en" },
                 user: { is_admin: true },
-                connection: { subscribeMessage: async () => () => undefined },
-                callWS: async (request: any) => {
-                    if (request.type === "helman/get_config") {
-                        return JSON.parse(JSON.stringify(config));
-                    }
-                    if (request.type === "helman/get_optimizer_schema") {
-                        return { version: 2, kinds: [] };
-                    }
-                    if (request.type === "helman/get_appliances") return { appliances: [] };
-                    if (request.type === "helman/training/status") {
+                connection: window.__mockHass().connection,
+                callWS: window.__mockHass({
+                    "helman/get_config": async (request: any) => {
+                        return JSON.parse(config);
+                    },
+                    "helman/training/status": async (request: any) => {
                         return JSON.parse(JSON.stringify(trainingStatus));
                     }
-                    if (request.type === "helman/inspect_entities") return { results: [] };
-                    return {};
-                },
+                }).callWS,
             };
             document.body.appendChild(element);
         },
-        { config: CONFIG, trainingStatus: TRAINING_STATUS },
+        { config: JSON.stringify(CONFIG), trainingStatus: TRAINING_STATUS },
     );
 
     await expect(page.locator(".tabs button").first()).toBeVisible();

@@ -1,3 +1,4 @@
+import type { InspectorPayload } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
 import { loadBundle } from "./support/card-page";
 
@@ -7,7 +8,7 @@ async function mountInspector(page: Page): Promise<void> {
     await page.evaluate(() => {
         const date = "2026-07-18";
         const corrected: Array<{ timestamp: string; valueWh: number }> = [];
-        const impact: Array<Record<string, unknown>> = [];
+        const impact: InspectorPayload["series"]["impact"] = [];
         const batterySocForecast: Array<{ slot: string; pct: number }> = [];
         const importPrice: Array<{ slot: string; value: number }> = [];
         const exportPrice: Array<{ slot: string; value: number }> = [];
@@ -23,26 +24,22 @@ async function mountInspector(page: Page): Promise<void> {
             exportPrice.push({ slot, value: 1 });
             moneyForecast.push({ slot, cost: 0.4, gain: 0.1 });
         }
-        const payload = {
-            date,
+        const payload = window.__inspectorDay({ date,
             timezone: "UTC",
             status: "ok",
             effectiveVariant: null,
             trainedAt: null,
             range: { minDate: date, maxDate: date, canGoPrevious: false, canGoNext: false, isToday: false, isFuture: true },
-            series: {
-                raw: [], corrected, actual: [], invalidated: [], factors: [], impact,
+            series: { raw: [], corrected, actual: [], invalidated: [], factors: [], impact,
                 houseForecast: [], houseActual: [], batterySocForecast, batterySocActual: [],
                 gridForecast: [], gridActual: [], batteryForecast: [], batteryActual: [],
                 importPrice, exportPrice, moneyActual: [], moneyForecast,
             },
-            totals: {
-                rawWh: null, correctedWh: null, actualWh: null, houseForecastWh: null,
+            totals: { rawWh: null, correctedWh: null, actualWh: null, houseForecastWh: null,
                 houseActualWh: null, gridForecastWh: null, gridActualWh: null,
                 batteryForecastWh: null, batteryActualWh: null, moneyActual: null, moneyForecast: null,
             },
-            availability: {
-                hasRawForecast: false, hasCorrectedForecast: true, hasActuals: false,
+            availability: { hasRawForecast: false, hasCorrectedForecast: true, hasActuals: false,
                 hasInvalidated: false, hasProfile: true, hasHouseForecast: false,
                 hasHouseActual: false, hasBatterySocForecast: true, hasBatterySocActual: false,
                 hasGridForecast: false, hasGridActual: false, hasBatteryForecast: false,
@@ -51,14 +48,20 @@ async function mountInspector(page: Page): Promise<void> {
             priceUnit: "CZK/kWh",
             batterySocBounds: [],
             trainingExplainability: null,
-        };
+        });
         const inspector = document.createElement("helman-solar-inspector") as any;
         inspector.daylightOnlyDefault = false;
         inspector.hass = {
             language: "en",
             config: { time_zone: "UTC" },
             connection: {},
-            callWS: async (message: { date: string }) => ({ ...payload, date: message.date }),
+            callWS: window.__mockHass({
+                "helman/solar_bias/inspector": async (message: {
+                    date: string;
+                }) => {
+                    return ({ ...payload, date: message.date });
+                }
+            }).callWS,
         };
         document.body.appendChild(inspector);
     });

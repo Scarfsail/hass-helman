@@ -1,3 +1,6 @@
+import { installMockHass } from "./support/mock-hass";
+import { scheduleSlots, treeNode, treePayload } from "./support/payload-builders";
+import type { EvChargerUseMode, ScheduleControllableActionsDTO, SchedulePayload, ScheduleSlotDTO, TreeItemDTO } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
 import { installFixedClock } from "./support/fixed-clock";
@@ -27,7 +30,7 @@ import { expectReducedMotionStill } from "./support/node-flow";
 
 const SCREENS = process.env.SCREENS;
 
-type Window = { from: number; to: number; candidate?: boolean; vehicleId?: string | null; useMode?: string };
+type Window = { from: number; to: number; candidate?: boolean; vehicleId?: string | null; useMode?: EvChargerUseMode };
 
 type Variant = {
     profile?: boolean;
@@ -68,8 +71,8 @@ type Variant = {
 
 declare global {
     interface Window {
-        __hass: any;
-        __requests: Array<{ type: string; node?: string; section?: string; device_id?: string }>;
+        __EvChargerHass: any;
+        __EvChargerRequests: Array<{ type: string; node?: string; section?: string; device_id?: string }>;
         __deepAll: (root: ParentNode, selector: string, out?: Element[]) => Element[];
         __serviceCalls: Array<[string, string, Record<string, unknown>]>;
         __moreInfo: string[];
@@ -79,10 +82,28 @@ declare global {
 async function mount(page: Page, variant: Variant = {}): Promise<void> {
     await installFixedClock(page);
     await page.setContent("<!doctype html><html><body style='margin:0'></body></html>");
+    await installMockHass(page);
     await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-card"));
     await page.addScriptTag({ content: HA_DIALOG_STUB });
-    await page.evaluate((v) => {
+        const dto = (overrides: Partial<TreeItemDTO>) => treeNode({ childrenFullWidth: true, ...overrides });
+        const tree = treePayload({
+            sources: [
+                dto({ id: "solar", displayName: "Solar", powerSensorId: "sensor.solar", isSource: true, sourceType: "solar" }),
+                dto({ id: "battery", displayName: "Battery", powerSensorId: "sensor.battery", isSource: true, sourceType: "battery" }),
+                dto({ id: "grid", displayName: "Grid", powerSensorId: "sensor.grid", isSource: true, sourceType: "grid" }),
+            ],
+            consumers: [dto({
+                id: "house", displayName: "House", powerSensorId: "sensor.house",
+                children: [
+                    dto({ id: "sensor.ev_energy", displayName: "Garage EV", powerSensorId: "sensor.ev_power", energyEntityId: "sensor.ev_energy", controllableIds: ["garage-ev"], switchEntityId: "switch.ev_charge" }),
+                    dto({ id: "sensor.boiler_energy", displayName: "Boiler", powerSensorId: "sensor.boiler_power", energyEntityId: "sensor.boiler_energy", controllableIds: ["boiler"] }),
+                ],
+            })],
+            consumptionTotalSensorId: null, productionTotalSensorId: null,
+            uiConfig: { show_others_group: false, device_groupings: [], history_buckets: 3, history_bucket_duration: 5 },
+        });
+    await page.evaluate(({ v, tree, scheduleDefaults }) => {
         window.__deepAll = function deepAll(root: ParentNode, selector: string, out: Element[] = []) {
             for (const element of Array.from(root.querySelectorAll("*"))) {
                 if (element.matches(selector)) out.push(element);
@@ -117,29 +138,6 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
         const s = (state: string, unit?: string, at = updated, changedAt = at) => ({
             state, last_reported: at, last_updated: changedAt, last_changed: changedAt, attributes: unit ? { unit_of_measurement: unit } : {},
         });
-        const dto = (overrides: Record<string, unknown>) => ({
-            powerSensorId: null, switchEntityId: null, sourceType: null, sourceConfig: null, valueType: "default",
-            isSource: false, isUnmeasured: false, isEstimated: false, groups: {}, groupBadgeTexts: [], icon: null,
-            compact: false, showAdditionalInfo: false, childrenFullWidth: true, hideChildren: false,
-            hideChildrenIndicator: false, sortChildrenByPower: false, deferrable: false, controllableIds: [],
-            energyEntityId: null, ratioSensorId: null, children: [], ...overrides,
-        });
-        const tree = {
-            sources: [
-                dto({ id: "solar", displayName: "Solar", powerSensorId: "sensor.solar", isSource: true, sourceType: "solar" }),
-                dto({ id: "battery", displayName: "Battery", powerSensorId: "sensor.battery", isSource: true, sourceType: "battery" }),
-                dto({ id: "grid", displayName: "Grid", powerSensorId: "sensor.grid", isSource: true, sourceType: "grid" }),
-            ],
-            consumers: [dto({
-                id: "house", displayName: "House", powerSensorId: "sensor.house",
-                children: [
-                    dto({ id: "sensor.ev_energy", displayName: "Garage EV", powerSensorId: "sensor.ev_power", energyEntityId: "sensor.ev_energy", controllableIds: ["garage-ev"], switchEntityId: "switch.ev_charge" }),
-                    dto({ id: "sensor.boiler_energy", displayName: "Boiler", powerSensorId: "sensor.boiler_power", energyEntityId: "sensor.boiler_energy", controllableIds: ["boiler"] }),
-                ],
-            })],
-            consumptionTotalSensorId: null, productionTotalSensorId: null,
-            uiConfig: { show_others_group: false, device_groupings: [], history_buckets: 3, history_bucket_duration: 5 },
-        };
         const phases = v.phases ?? ["2100", "2150", "2150"];
         const phaseAt = new Date(Date.parse(updated) - (v.phasesAgeS ?? 0) * 1000).toISOString();
         const phaseChangedAt = new Date(Date.parse(phaseAt) - (v.phasesHeldS ?? 0) * 1000).toISOString();
@@ -240,7 +238,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             { from: 11.75, to: 14, vehicleId: "kona", useMode: "Fast" },
             { from: 22, to: 26, candidate: true, vehicleId: "kona", useMode: "ECO" },
         ];
-        const slots = [];
+        const slots: ScheduleSlotDTO[] = [];
         const series = [];
         const start = Date.parse("2026-10-21T11:45:00Z");
         for (let i = 0; i < 36 * 4; i += 1) {
@@ -248,7 +246,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             const id = at.toISOString().replace(".000Z", "+00:00");
             const hour = 11.75 + i / 4;
             const window = windows.find((w) => hour >= w.from && hour < w.to);
-            const controllables: Record<string, unknown> = { inverter: { kind: "normal" } };
+            const controllables: ScheduleControllableActionsDTO = { inverter: { kind: "normal" } };
             if (window) {
                 controllables["garage-ev"] = {
                     charge: true, useMode: window.useMode ?? "Fast", ecoGear: "6A", setBy: "automation",
@@ -263,7 +261,8 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             }
             slots.push({ id, controllables });
         }
-        const schedule = {
+        const schedule: SchedulePayload = {
+            ...scheduleDefaults,
             executionEnabled: v.executionEnabled ?? true,
             slots,
             runtime: {
@@ -277,8 +276,8 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             generatedAt: v.projectionGeneratedAt ?? "2026-10-21T12:00:00+00:00",
             appliances: v.projectionEmpty ? {} : { "garage-ev": { series } },
         };
-        window.__requests = [];
-        window.__hass = {
+        window.__EvChargerRequests = [];
+        window.__EvChargerHass = {
             language: "en",
             locale: { language: "en-GB" },
             config: { time_zone: v.timeZone ?? "UTC" },
@@ -288,34 +287,88 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             },
             connection: {
                 sendMessagePromise: async () => ({}),
-                subscribeMessage: async () => () => undefined,
+                subscribeMessage: window.__mockHass().connection.subscribeMessage,
             },
             states,
-            callWS: async (msg: { type: string; node?: string; section?: string; device_id?: string }) => {
-                window.__requests.push({ type: msg.type, node: msg.node, section: msg.section, device_id: msg.device_id });
-                if (msg.type === "helman/get_device_tree") return tree;
-                if (msg.type === "helman/get_history") return { buckets: 3, bucket_duration: 5, entity_history: {} };
-                if (msg.type === "helman/get_schedule") return schedule;
-                if (msg.type === "helman/get_appliances") return appliances;
-                if (msg.type === "helman/get_appliance_projections") {
-                    if (v.projectionFails || (window as any).__projectionDown) throw new Error("projection down");
+            callWS: window.__mockHass({
+                "helman/get_device_tree": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                    device_id?: string;
+                }) => {
+                    return tree;
+                },
+                "helman/get_history": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                    device_id?: string;
+                }) => {
+                    return { buckets: 3, bucket_duration: 5, entity_history: {} };
+                },
+                "helman/get_schedule": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                    device_id?: string;
+                }) => {
+                    return schedule;
+                },
+                "helman/get_appliances": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                    device_id?: string;
+                }) => {
+                    return appliances;
+                },
+                "helman/get_appliance_projections": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                    device_id?: string;
+                }) => {
+                    if (v.projectionFails || (window as any).__projectionDown)
+                        throw new Error("projection down");
                     return projection;
-                }
-                if (msg.type === "helman/get_node_detail") {
-                    if (v.overviewFails) throw new Error("detail down");
-                    if (msg.section === "segment") return segment;
-                    if (msg.section === "today" && (v.todayFails || (window as any).__todayDown)) throw new Error("today down");
+                },
+                "helman/get_node_detail": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                    device_id?: string;
+                }) => {
+                    if (v.overviewFails)
+                        throw new Error("detail down");
+                    if (msg.section === "segment")
+                        return segment;
+                    if (msg.section === "today" && (v.todayFails || (window as any).__todayDown))
+                        throw new Error("today down");
                     return msg.section ? today : overview;
+                },
+                "recorder/statistic_during_period": async (msg: {
+                    type: string;
+                    node?: string;
+                    section?: string;
+                    device_id?: string;
+                }) => {
+                    return { change: 1 };
                 }
-                if (msg.type === "recorder/statistic_during_period") return { change: 1 };
-                return null;
-            },
+            }, (msg: {
+                type: string;
+                node?: string;
+                section?: string;
+                device_id?: string;
+            }) => {
+                window.__EvChargerRequests.push({ type: msg.type, node: msg.node, section: msg.section, device_id: msg.device_id });
+            }).callWS,
         };
-    }, variant);
+    }, { v: variant, tree, scheduleDefaults: scheduleSlots({ slotMinutes: 15 }) });
     await page.evaluate(async () => {
         const card = document.createElement("helman-card") as any;
         await card.setConfig({ type: "custom:helman-card" });
-        card.hass = window.__hass;
+        card.hass = window.__EvChargerHass;
         document.body.appendChild(card);
     });
     await expect.poll(() => page.evaluate(() => window.__deepAll(document, "helman-tree-item").length)).toBeGreaterThan(1);
@@ -343,7 +396,7 @@ const strip = (page: Page) => content(page).locator("helman-mode-strip");
 const switchLine = (page: Page) => content(page).locator("[data-switch-line]");
 // The card's own inverter overview, for its distribution row's cell, is not the detail's.
 const requests = (page: Page, type: string) =>
-    page.evaluate((type) => window.__requests.filter((r) => r.type === type && r.node !== "inverter"), type);
+    page.evaluate((type) => window.__EvChargerRequests.filter((r) => r.type === type && r.node !== "inverter"), type);
 const sectionRequests = async (page: Page, section: string) =>
     (await requests(page, "helman/get_node_detail")).filter((r) => r.section === section).length;
 
@@ -365,11 +418,11 @@ async function open(page: Page, id: string): Promise<void> {
 async function setStates(page: Page, states: Record<string, string>): Promise<void> {
     await page.evaluate((states) => {
         const card = window.__deepAll(document, "helman-card")[0] as any;
-        const hass = window.__hass;
+        const hass = window.__EvChargerHass;
         const next = { ...hass.states };
         for (const [id, state] of Object.entries(states)) next[id] = { ...next[id], state };
-        window.__hass = { ...hass, states: next };
-        card.hass = window.__hass;
+        window.__EvChargerHass = { ...hass, states: next };
+        card.hass = window.__EvChargerHass;
     }, states);
 }
 

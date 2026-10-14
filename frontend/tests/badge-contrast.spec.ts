@@ -1,3 +1,4 @@
+import { configDoc } from "./support/payload-builders";
 import { test, expect, type Page } from "@playwright/test";
 import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
@@ -21,11 +22,11 @@ import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 const GRID_PATH = ["energy_nodes", "grid", "entities", "power"];
 const GRID_KEY = GRID_PATH.join(".");
 
-const CONFIG = {
-    config_version: 7,
+const CONFIG = configDoc({
+
     energy_nodes: { grid: { entities: { power: "sensor.grid_power" } } },
     devices: { consumers: [] },
-};
+});
 
 /** One fact per severity, so every badge class is on screen to be measured. */
 const FACTS = ["neutral", "info", "ok", "warn"].map((severity, index) => ({
@@ -56,33 +57,27 @@ async function mountEditor(page: Page): Promise<void> {
                 language: "en",
                 locale: { language: "en" },
                 user: { is_admin: true },
-                connection: { subscribeMessage: async () => () => undefined },
-                callWS: async (request: any) => {
-                    if (request.type === "helman/get_config") {
+                connection: window.__mockHass().connection,
+                callWS: window.__mockHass({
+                    "helman/get_config": async (request: any) => {
                         return JSON.parse(JSON.stringify(config));
-                    }
-                    if (request.type === "helman/get_optimizer_schema") {
-                        return { version: 2, kinds: [] };
-                    }
-                    if (request.type === "helman/get_appliances") return { appliances: [] };
-                    if (request.type === "helman/inspect_entities") {
+                    },
+                    "helman/inspect_entities": async (request: any) => {
                         return {
                             results: (request.targets ?? []).map((target: any) => ({
                                 key: target.key,
-                                draft:
-                                    target.key === gridKey
-                                        ? {
-                                              entityId: "sensor.grid_power",
-                                              status: "ok",
-                                              facts,
-                                          }
-                                        : { entityId: null, status: "unset", facts: [] },
+                                draft: target.key === gridKey
+                                    ? {
+                                        entityId: "sensor.grid_power",
+                                        status: "ok",
+                                        facts,
+                                    }
+                                    : { entityId: null, status: "unset", facts: [] },
                                 saved: null,
                             })),
                         };
                     }
-                    return {};
-                },
+                }).callWS,
             };
             document.body.appendChild(element);
 
@@ -149,7 +144,7 @@ async function mountEditor(page: Page): Promise<void> {
                 }
             };
         },
-        { config: CONFIG, gridKey: GRID_KEY, facts: FACTS },
+        { config: JSON.parse(JSON.stringify(CONFIG)), gridKey: GRID_KEY, facts: FACTS },
     );
 
     await expect

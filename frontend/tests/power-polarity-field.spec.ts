@@ -1,3 +1,4 @@
+import { configDoc } from "./support/payload-builders";
 import { test, expect, type Page } from "@playwright/test";
 import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
@@ -19,15 +20,15 @@ import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
  * fields share with the aggregation-method select, which had the same bug.
  */
 
-const STORED_CONFIG = {
-    config_version: 6,
+const STORED_CONFIG = configDoc({
+
     energy_nodes: {
         house: { entities: { power: "sensor.house_power" } },
         solar: { entities: { power: "sensor.solar_power" } },
         battery: { entities: { power: "sensor.battery_power" } },
         grid: { entities: { power: "sensor.grid_power" } },
     },
-};
+});
 
 /** Each device's options, in the order the editor should offer them. */
 const EXPECTED_OPTIONS: Record<string, string[]> = {
@@ -62,17 +63,14 @@ async function mountEditorWith(
             language,
             locale: { language },
             user: { is_admin: true },
-            connection: { subscribeMessage: async () => () => undefined },
-            callWS: async (request: { type: string }) => {
-                if (request.type === "helman/get_config") {
+            connection: window.__mockHass().connection,
+            callWS: window.__mockHass({
+                "helman/get_config": async (request: {
+                    type: string;
+                }) => {
                     return JSON.parse(JSON.stringify(config));
                 }
-                if (request.type === "helman/get_optimizer_schema") {
-                    return { version: 2, kinds: [] };
-                }
-                if (request.type === "helman/get_appliances") return { appliances: [] };
-                return {};
-            },
+            }).callWS,
         };
         document.body.appendChild(element);
     }, { config, language });
@@ -197,8 +195,8 @@ test("there is no blank option to select", async ({ page }) => {
 });
 
 test("a configured value still wins over the default", async ({ page }) => {
-    await mountEditorWith(page, {
-        config_version: 6,
+    await mountEditorWith(page, configDoc({
+
         energy_nodes: {
             grid: {
                 entities: {
@@ -207,7 +205,7 @@ test("a configured value still wins over the default", async ({ page }) => {
                 },
             },
         },
-    });
+    }));
     const root = await readSelectedValues(page, { grid: EXPECTED_OPTIONS.grid });
     expect(root.grid).toBe("positive_is_import");
 });
@@ -287,8 +285,8 @@ test("a value from another device's vocabulary shows the default", async ({ page
     // the default, so the default is genuinely what is in force -- showing it
     // makes the field agree with the runtime instead of rendering blank.
     // Validation still reports the bad value on save.
-    await mountEditorWith(page, {
-        config_version: 6,
+    await mountEditorWith(page, configDoc({
+
         energy_nodes: {
             grid: {
                 entities: {
@@ -297,7 +295,7 @@ test("a value from another device's vocabulary shows the default", async ({ page
                 },
             },
         },
-    });
+    }));
     const shown = await readSelectedValues(page, { grid: EXPECTED_OPTIONS.grid });
     expect(shown.grid).toBe("positive_is_export");
 

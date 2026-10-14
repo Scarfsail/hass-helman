@@ -100,7 +100,6 @@ const iso = (year: number, month: number) =>
 const NOW = new Date(FIXED_NOW_ISO);
 const THIS_YEAR = NOW.getUTCFullYear();
 const THIS_MONTH = NOW.getUTCMonth() + 1;
-const TODAY = NOW.toISOString().slice(0, 10);
 
 test.describe("span pill model", () => {
     // The model imports only types, so it is exercised directly rather than
