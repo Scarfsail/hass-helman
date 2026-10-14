@@ -7,6 +7,7 @@ whenever a phase is.
 """
 
 from __future__ import annotations
+from tests._fakes import make_coordinator
 
 import importlib
 import unittest
@@ -52,7 +53,7 @@ class _FakeSensor:
 
 
 def _make_coordinator(states: dict[str, str], *, telemetry=True):
-    c = object.__new__(coordinator_module.HelmanCoordinator)
+    c = make_coordinator()
     c._hass = SimpleNamespace(states=_FakeStates(states))
     c._inverter_telemetry = _telemetry() if telemetry else None
     return c
