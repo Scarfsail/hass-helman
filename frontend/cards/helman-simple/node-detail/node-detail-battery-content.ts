@@ -5,7 +5,6 @@ import type {
     BatteryChargeDTO,
     BatteryChargeSectionPayload,
     BatteryDetailPayload,
-    ScheduleActionDTO,
     SchedulePayload,
 } from "../../helman-api";
 import { currencyFromPriceUnit } from "../../helman-solar-inspector/money-model";

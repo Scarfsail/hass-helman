@@ -1,7 +1,7 @@
+import type { HomeAssistant } from "../../../../types/ha";
 import * as cs from "./translations/cs.json";
 import * as en from "./translations/en.json";
 
-import type { HomeAssistantLike } from "../types";
 
 const languages: Record<string, any> = {
   cs,
@@ -11,7 +11,7 @@ const languages: Record<string, any> = {
 export type LocalizeFunction = (key: string) => string;
 
 export function getLocalizeFunction(
-  hass?: Pick<HomeAssistantLike, "language" | "locale">,
+  hass?: Pick<HomeAssistant, "language" | "locale">,
 ): LocalizeFunction {
   const lang = getLanguage(hass?.language || hass?.locale?.language || "cs");
   return (key: string) => localize(key, lang);

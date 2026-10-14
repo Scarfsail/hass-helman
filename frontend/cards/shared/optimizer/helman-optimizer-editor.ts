@@ -1,3 +1,4 @@
+import type { HomeAssistant } from "../../../types/ha";
 import { LitElement, html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 
@@ -42,7 +43,6 @@ import {
     stopSummaryToggle,
 } from "../config/sortable-list";
 import type {
-    HomeAssistantLike,
     JsonObject,
     JsonValue,
     PathSegment,
@@ -179,7 +179,7 @@ export class HelmanOptimizerEditor
     @property({ attribute: false })
     applianceMetadata: ApplianceMetadataResponse | null = null;
 
-    @property({ attribute: false }) hass?: HomeAssistantLike;
+    @property({ attribute: false }) hass?: HomeAssistant;
 
     @property({ type: Boolean }) narrow = false;
 
@@ -264,7 +264,7 @@ export class HelmanOptimizerEditor
             return;
         }
         if (differsOnlyByEnabled(current, this._yaml.value)) {
-            this._yaml = { ...this._yaml, value: current };
+            this._yaml = { ...this._yaml, value: current as JsonValue };
             return;
         }
         this._yaml = null;

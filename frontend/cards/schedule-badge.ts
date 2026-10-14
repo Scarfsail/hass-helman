@@ -1,6 +1,6 @@
 import { LitElement, PropertyValues, TemplateResult, css, html, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import type { HomeAssistant } from "../hass-frontend/src/types";
+import type { HomeAssistant } from "../types/ha";
 import { getLocalizeFunction } from "./localize/localize";
 import {
     OPEN_SCHEDULE_EDITOR_EVENT,

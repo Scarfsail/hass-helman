@@ -33,8 +33,8 @@ and a condition shape HA grows later is followed for free.
 Those readings are stamped onto the entry's own trace step under ``params``
 rather than travelling beside it. ``ha-trace-path-details`` destructures a step
 into the keys it knows and YAML-dumps *whatever is left* into the block at the
-top of the pane, beneath the result (see ``_renderSelectedTraceInfo`` in
-``frontend/hass-frontend/src/components/trace/ha-trace-path-details.ts``). So a
+top of the pane, beneath the result (see ``_renderSelectedTraceInfo`` in the
+HA frontend's ``src/components/trace/ha-trace-path-details.ts``). So a
 key HA has no name for is not ignored -- it is rendered, in the one place the
 reader is already looking. ``params`` is safe to use: a trace element only ever
 carries ``path``, ``timestamp``, ``child_id``, ``changed_variables``, ``error``,

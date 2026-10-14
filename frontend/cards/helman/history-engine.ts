@@ -1,4 +1,4 @@
-import type { HomeAssistant } from "../../hass-frontend/src/types";
+import type { HomeAssistant } from "../../types/ha";
 import { HistoryPayload, applyValueType } from "../helman-api";
 import { TreeItem } from "./tree-item";
 import { nodeAccentColor } from "../color-utils";

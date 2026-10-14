@@ -1,9 +1,7 @@
 import { LitElement, css, html } from "lit-element";
 import { customElement, property, state } from "lit/decorators.js";
 import { nothing } from "lit-html";
-import type { HomeAssistant } from "../../../../hass-frontend/src/types";
-import type { NodeInfo } from "../../../../hass-frontend/src/components/trace/hat-script-graph";
-import type { LocalizeFunc } from "../../../../hass-frontend/src/common/translations/localize";
+import type { HomeAssistant, NodeInfo, LocalizeFunc } from "../../../../types/ha";
 import type { LocalizeFunction } from "../../../localize/localize";
 import { loadHaTrace } from "../../load-ha-elements";
 import { formatScheduleTime } from "../model/schedule-time";

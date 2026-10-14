@@ -570,7 +570,7 @@ function _buildApplianceSummaryItem(
 }
 
 function _resolveApplianceKind(
-    appliance: ScheduleApplianceMetadata | undefined,
+    appliance: ScheduleApplianceMetadata | null,
     action: ScheduleApplianceAction,
 ): string {
     if (appliance?.kind) {

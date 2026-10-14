@@ -1,7 +1,7 @@
 import { LitElement, css, html, nothing, unsafeCSS } from "lit-element";
 import { nodeAccentColor } from "../color-utils";
 import { customElement, property, state } from "lit/decorators.js";
-import type { HomeAssistant } from "../../hass-frontend/src/types";
+import type { HomeAssistant } from "../../types/ha";
 import { TreeItem } from "./tree-item";
 import "./tree-item-list";
 import type { DeviceGrouping, HelmanUiConfig } from "../helman-api";

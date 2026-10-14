@@ -1,7 +1,8 @@
+import type { HomeAssistant } from "../../../types/ha";
 import { asJsonArray, asJsonObject } from "../config/config-document";
 import { booleanValue, stringValue } from "../config/form-fields";
-import type { HomeAssistantLike, JsonObject } from "../config/types";
-import { getSharedDataChangedFeed, type DataChangedHost } from "../../helman/data-changed";
+import type { JsonObject } from "../config/types";
+import { getSharedDataChangedFeed } from "../../helman/data-changed";
 import { fetchOptimizerSchema, type OptimizerSchemaDocument } from "./optimizer-schema";
 
 /**
@@ -162,17 +163,14 @@ export interface AutomationCoverageSource {
     subscribe(listener: (index: AutomationCoverageIndex) => void): () => void;
 }
 
-export type AutomationCoverageHost = HomeAssistantLike & DataChangedHost;
-
 const sources = new WeakMap<object, AutomationCoverageSourceImpl>();
 
 /**
- * Keyed by the connection where there is one, so the config editor's narrow
- * `HomeAssistantLike` and the cards' real `hass` share a source when they share
- * a socket. A host without a connection gets its own, which is what the
+ * Keyed by the connection where there is one, so the config editor and the
+ * cards share a source when they share a socket. A host without a connection gets its own, which is what the
  * Playwright mounts do.
  */
-export function getSharedAutomationCoverage(hass: AutomationCoverageHost): AutomationCoverageSource {
+export function getSharedAutomationCoverage(hass: HomeAssistant): AutomationCoverageSource {
     const key: object = hass.connection ?? hass;
     let source = sources.get(key);
     if (!source) {
@@ -186,7 +184,7 @@ export function getSharedAutomationCoverage(hass: AutomationCoverageHost): Autom
 }
 
 class AutomationCoverageSourceImpl implements AutomationCoverageSource {
-    private _hass: AutomationCoverageHost;
+    private _hass: HomeAssistant;
     private _index: AutomationCoverageIndex | null = null;
     private readonly _listeners = new Set<(index: AutomationCoverageIndex) => void>();
     private _unsubscribeDataChanged: (() => void) | null = null;
@@ -217,11 +215,11 @@ class AutomationCoverageSourceImpl implements AutomationCoverageSource {
      */
     private _refused = false;
 
-    constructor(hass: AutomationCoverageHost) {
+    constructor(hass: HomeAssistant) {
         this._hass = hass;
     }
 
-    public updateHass(hass: AutomationCoverageHost): void {
+    public updateHass(hass: HomeAssistant): void {
         this._hass = hass;
     }
 

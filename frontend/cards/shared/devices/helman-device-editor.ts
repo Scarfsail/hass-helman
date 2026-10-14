@@ -1,3 +1,4 @@
+import type { HomeAssistant } from "../../../types/ha";
 import { LitElement, css, html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import { live } from "lit/directives/live.js";
@@ -64,7 +65,6 @@ import {
 } from "../config/form-fields";
 import { renderDragHandle, renderRemoveButton, renderSortableList } from "../config/sortable-list";
 import type {
-    HomeAssistantLike,
     JsonObject,
     JsonValue,
     PathSegment,
@@ -74,7 +74,7 @@ import type {
 } from "../config/types";
 import { resolvedDraft } from "../config/resolved-draft";
 import { defineOnce } from "../define-once";
-import type { HaEntityPickerEntityFilterFunc } from "../../../hass-frontend/src/data/entity/entity";
+import type { HaEntityPickerEntityFilterFunc } from "../../../types/ha";
 import { haDeviceEntityFilter, sharedHaDevice, suggestionAnchors } from "./device-scope";
 import { formatPower } from "../../power-format";
 import {
@@ -456,7 +456,7 @@ export class HelmanDeviceEditor extends LitElement implements HardwareProfileHos
     /** The device this one is a child of, or `null` at the top level. */
     @property({ attribute: false }) parent: JsonObject | null = null;
 
-    @property({ attribute: false }) hass?: HomeAssistantLike;
+    @property({ attribute: false }) hass?: HomeAssistant;
 
     @property({ type: Boolean }) narrow = false;
 

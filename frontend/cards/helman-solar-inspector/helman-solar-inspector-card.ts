@@ -1,7 +1,6 @@
 import { LitElement, css, html } from "lit-element";
 import { customElement, state } from "lit/decorators.js";
-import type { HomeAssistant } from "../../hass-frontend/src/types";
-import type { LovelaceCard } from "../../hass-frontend/src/panels/lovelace/types";
+import type { HomeAssistant, LovelaceCard } from "../../types/ha";
 import type { HelmanSolarInspectorCardConfig } from "./HelmanSolarInspectorCardConfig";
 import {
     hassContextChanged,

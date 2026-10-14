@@ -1,5 +1,5 @@
 import type { HassEntity } from "home-assistant-js-websocket";
-import type { HomeAssistant } from "../../../../hass-frontend/src/types";
+import type { HomeAssistant } from "../../../../types/ha";
 import type { ControllableEntityDTO } from "../../../helman-api";
 import type { EntityScheduleTarget } from "./entity-day-schedule-model";
 import type { ScheduleApplianceMetadata } from "./schedule-appliance-metadata";

@@ -129,17 +129,12 @@ import {
   renderHelpDialog,
   renderHelpIcon,
   renderOptionalNumberField,
-  renderOptionalSelectField,
   renderSelectFieldWithDefault,
   renderRequiredNumberField,
-  renderRequiredTextField,
   renderSvgIcon,
   formatError,
   renderOptionalTextField,
   renderSimpleSection,
-  setOptionalNumber,
-  setOptionalString,
-  setRequiredNumber,
   setRequiredString,
   stringValue,
 } from "../cards/shared/config/form-fields";
@@ -159,7 +154,6 @@ import type { OptimizerConfigChangedDetail } from "../cards/shared/optimizer/hel
 import "../cards/shared/optimizer/helman-optimizer-editor";
 import "../cards/shared/devices/helman-device-editor";
 import {
-  TRAINING_STATUS_CHANGED,
   asTrainingStatus,
   type TrainingStatus,
   type TrainingStatusChangedDetail,
@@ -172,7 +166,7 @@ import {
   type InspectorEmbed,
   type SolarInspectorCardElement,
 } from "./solar-inspector-embed";
-import type { HomeAssistant } from "../hass-frontend/src/types";
+import type { HomeAssistant } from "../types/ha";
 import { HelmanClient } from "../cards/helman/client";
 import type { TreeItem } from "../cards/helman/tree-item";
 import { hydrateItem } from "../cards/helman/tree-item-hydrator";
@@ -225,7 +219,6 @@ import {
   type DeviceEnergyInput,
 } from "../cards/shared/devices/device-energy";
 import type {
-  HomeAssistantLike,
   JsonObject,
   JsonValue,
   PathSegment,
@@ -285,7 +278,6 @@ const INVERTER_ACTION_OPTIONS = [
   { key: "stop_discharging", labelKey: "editor.fields.stop_discharging_option" },
   { key: "stop_export", labelKey: "editor.fields.stop_export_option" },
 ] as const;
-const DAY_CLASSIFICATIONS = ["surplus", "tight", "deficit"] as const;
 
 /**
  * How often the editor asks `helman/training/status`, for the Training tab's
@@ -293,12 +285,6 @@ const DAY_CLASSIFICATIONS = ["surplus", "tight", "deficit"] as const;
  * run takes minutes, and the answer is read from memory on every tick.
  */
 const TRAINING_STATUS_INTERVAL_MS = 5000;
-
-// DUMMY: reuse Home Assistant's visual condition builder. Value is not persisted
-// yet — this only proves the editor renders and round-trips inside our panel.
-const OPTIMIZER_CONDITION_SELECTOR = {
-  condition: {},
-} as const;
 
 /** One row of a training tab depth table -- see `_renderTrainingDepthTable`. */
 interface TrainingDepthRow {
@@ -968,7 +954,7 @@ export class HelmanConfigEditorPanel
    */
   declare panel?: { config?: { card_module_url?: string } | null };
 
-  private _hass?: HomeAssistantLike;
+  private _hass?: HomeAssistant;
   private _localize?: LocalizeFunction;
   private readonly _fallbackLocalize = getLocalizeFunction();
   private _activeTab: TabId = "energy_nodes";
@@ -1146,16 +1132,16 @@ export class HelmanConfigEditorPanel
   private _trainingStatusSequence = 0;
   private _trainingStatusApplied = 0;
 
-  get hass(): HomeAssistantLike | undefined {
+  get hass(): HomeAssistant | undefined {
     return this._hass;
   }
 
-  set hass(hass: HomeAssistantLike | undefined) {
+  set hass(hass: HomeAssistant | undefined) {
     const oldValue = this._hass;
     this._hass = hass;
     if (hass && !this._localize) {
       this._localize = getLocalizeFunction(hass);
-      this._cardLocalize = getCardLocalizeFunction(hass as unknown as HomeAssistant);
+      this._cardLocalize = getCardLocalizeFunction(hass);
     }
     // Reused HA components (e.g. the condition builder) localize via
     // hass.localize, but the "config" fragment is only lazy-loaded on the
@@ -1207,7 +1193,7 @@ export class HelmanConfigEditorPanel
     }
   }
 
-  protected willUpdate(changedProperties: PropertyValues<this>): void {
+  protected willUpdate(changedProperties: PropertyValues): void {
     super.willUpdate(changedProperties);
     if (changedProperties.has("_validation")) {
       const path = [...INVERTER_PATH];
@@ -1224,7 +1210,7 @@ export class HelmanConfigEditorPanel
     }
   }
 
-  protected updated(changedProperties: PropertyValues<this>): void {
+  protected updated(changedProperties: PropertyValues): void {
     super.updated(changedProperties);
     if (!this._hasLoadedOnce && this.hass) {
       this._hasLoadedOnce = true;
@@ -3222,7 +3208,7 @@ export class HelmanConfigEditorPanel
     }
     const sequence = ++this._deviceTreeSequence;
     try {
-      const payload = await new HelmanClient(this.hass as unknown as HomeAssistant).getDeviceTree();
+      const payload = await new HelmanClient(this.hass).getDeviceTree();
       // A later fetch has been asked for; its tree is the newer one.
       if (sequence !== this._deviceTreeSequence) return;
       const items = new Map<string, TreeItem>();
@@ -4581,15 +4567,6 @@ export class HelmanConfigEditorPanel
     return renderOptionalTextField(this, path, labelKey, helperKey, helpKey, placeholder);
   }
 
-  private _renderRequiredTextField(
-    path: PathSegment[],
-    labelKey: string,
-    explicitValue?: unknown,
-    helpKey?: string,
-  ): TemplateResult {
-    return renderRequiredTextField(this, path, labelKey, explicitValue, helpKey);
-  }
-
   private _renderOptionalNumberField(
     path: PathSegment[],
     labelKey: string,
@@ -4669,15 +4646,6 @@ export class HelmanConfigEditorPanel
   private _optionLabel(key: string, fallback: string): string {
     const translated = this._t(key);
     return translated === key ? fallback : translated;
-  }
-
-  private _renderOptionalSelectField(
-    path: PathSegment[],
-    labelKey: string,
-    options: { value: string; label: string }[],
-    helpKey?: string,
-  ): TemplateResult {
-    return renderOptionalSelectField(this, path, labelKey, options, helpKey);
   }
 
   private _renderBooleanField(
@@ -5438,26 +5406,8 @@ export class HelmanConfigEditorPanel
     });
   }
 
-  private _removePath(path: PathSegment[]): void {
-    this._applyMutation((draft) => {
-      unsetValueAtPath(draft, path);
-    });
-  }
-
-  private _setOptionalString(path: PathSegment[], rawValue: string): void {
-    setOptionalString(this, path, rawValue);
-  }
-
   private _setRequiredString(path: PathSegment[], rawValue: string): void {
     setRequiredString(this, path, rawValue);
-  }
-
-  private _setOptionalNumber(path: PathSegment[], rawValue: string): void {
-    setOptionalNumber(this, path, rawValue);
-  }
-
-  private _setRequiredNumber(path: PathSegment[], rawValue: string): void {
-    setRequiredNumber(this, path, rawValue);
   }
 
   private _getAutomationEnabled(): boolean {

@@ -14,8 +14,7 @@
  * directory both vite entry points compile.
  */
 
-import type { LocalizeFunc } from "../../hass-frontend/src/common/translations/localize";
-import type { HomeAssistant } from "../../hass-frontend/src/types";
+import type { LocalizeFunc, HomeAssistant } from "../../types/ha";
 
 const REQUIRED_ELEMENTS = [
   "ha-entity-picker",

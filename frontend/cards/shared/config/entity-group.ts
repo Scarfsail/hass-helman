@@ -15,7 +15,7 @@ import {
 } from "./localize/localize";
 import type { PathSegment } from "./types";
 import { SENSOR_KIND_FILTERS, type SensorKind } from "./sensor-kind";
-import type { HaEntityPickerEntityFilterFunc } from "../../../hass-frontend/src/data/entity/entity";
+import type { HaEntityPickerEntityFilterFunc } from "../../../types/ha";
 
 /**
  * One entity, its settings, and what it currently reads -- as one control.

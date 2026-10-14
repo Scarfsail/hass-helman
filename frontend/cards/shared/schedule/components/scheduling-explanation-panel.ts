@@ -1,8 +1,7 @@
 import { LitElement, css, html } from "lit-element";
 import { customElement, property, state } from "lit/decorators.js";
 import { nothing } from "lit-html";
-import type { HomeAssistant } from "../../../../hass-frontend/src/types";
-import type { HomeAssistantLike } from "../../config/types";
+import type { HomeAssistant } from "../../../../types/ha";
 import type { LocalizeFunction } from "../../../localize/localize";
 import "./scheduling-logic-diagram";
 import "../dialogs/scheduling-condition-trace-dialog";
@@ -351,7 +350,7 @@ export class SchedulingExplanationPanel extends LitElement {
 
         return html`
             <helman-optimizer-edit-dialog
-                .hass=${this.hass as unknown as HomeAssistantLike}
+                .hass=${this.hass}
                 .localize=${this.localize}
                 .open=${true}
                 .optimizerIds=${[request.optimizerId]}

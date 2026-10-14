@@ -2,7 +2,7 @@ import { LitElement, css, html, type PropertyValues } from "lit-element";
 import { customElement, property, state } from "lit/decorators.js";
 import { nothing } from "lit-html";
 import { repeat } from "lit/directives/repeat.js";
-import type { HomeAssistant } from "../../hass-frontend/src/types";
+import type { HomeAssistant } from "../../types/ha";
 import type { ForecastPayload } from "../helman-api";
 import { ForecastLoader } from "../helman/forecast-loader";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";

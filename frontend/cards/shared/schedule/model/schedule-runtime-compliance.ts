@@ -273,7 +273,7 @@ function _buildApplianceIssue({
 }: {
     applianceId: string;
     appliance: ScheduleApplianceMetadata | null;
-    plannedAction: ScheduleApplianceAction | null;
+    plannedAction: ScheduleApplianceAction;
     runtime: ScheduleApplianceRuntime | null;
     localize: LocalizeFunction;
 }): ScheduleRuntimeComplianceIssue | null {
@@ -365,18 +365,11 @@ function _buildUnexpectedApplianceIssue({
 
 function _getExpectedApplianceLabel(
     appliance: ScheduleApplianceMetadata | null,
-    action: ScheduleApplianceAction,
+    action: ScheduleApplianceAction | null,
     localize: LocalizeFunction,
 ): string {
     return getScheduleApplianceActionPresentation({
-        appliance: appliance ?? {
-            id: "unknown",
-            name: "unknown",
-            kind: "unknown",
-            icon: "mdi:flash-outline",
-            order: 0,
-            supportsAuthoring: false,
-        },
+        appliance: appliance ?? { kind: "unknown", icon: "mdi:flash-outline" },
         action,
         localize,
     }).label;

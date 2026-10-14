@@ -1,7 +1,7 @@
 import { LitElement, css, html } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { mdiCurrentAc } from "@mdi/js";
-import type { HomeAssistant } from "../../hass-frontend/src/types";
+import type { HomeAssistant } from "../../types/ha";
 import { fillTemplate, type LocalizeFunction } from "../localize/localize";
 import { type InverterDetailPayload, commandedModeKind } from "../helman-api";
 

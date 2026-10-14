@@ -1,7 +1,7 @@
 import { LitElement, css, html, svg, type TemplateResult } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { nothing } from "lit-html";
-import type { HomeAssistant } from "../../hass-frontend/src/types";
+import type { HomeAssistant } from "../../types/ha";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import { getScheduleLocalTimeParts } from "../shared/schedule/model/schedule-time";
 import { slotSelectionModeForEvent, type SlotPickDetail } from "./slot-selection.js";

@@ -3,7 +3,6 @@ import { customElement, property, state } from "lit/decorators.js";
 import { fillTemplate } from "../../localize/localize";
 import {
     getEffectiveSolarForecastPoints,
-    type ScheduleActionDTO,
     type SchedulePayload,
     type SolarDestinationsSectionPayload,
     type SolarDetailPayload,

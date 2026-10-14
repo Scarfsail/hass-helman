@@ -14,7 +14,9 @@
     "typeRoots": [
       "node_modules/@types"
     ],
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "allowImportingTsExtensions": true,
+    "noUnusedLocals": true
   },
   "include": [
     "cards/**/*.ts",

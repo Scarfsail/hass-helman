@@ -1,10 +1,10 @@
-import type { HaEntityPickerEntityFilterFunc } from "../../../hass-frontend/src/data/entity/entity";
+import type { HaEntityPickerEntityFilterFunc, HomeAssistant } from "../../../types/ha";
 import { asJsonObject } from "../config/config-document";
 import { ownMeter } from "../config/devices";
 import { stringValue } from "../config/form-fields";
-import type { HomeAssistantLike, JsonObject } from "../config/types";
+import type { JsonObject } from "../config/types";
 
-type EntityRegistry = NonNullable<HomeAssistantLike["entities"]>;
+type EntityRegistry = HomeAssistant["entities"];
 
 /**
  * The one HA device a helman device's entities belong to, or `null`.
@@ -14,7 +14,7 @@ type EntityRegistry = NonNullable<HomeAssistantLike["entities"]>;
  * under two or more HA devices, or none under any, resolve to nothing.
  */
 export function sharedHaDevice(
-    hass: Pick<HomeAssistantLike, "entities"> | undefined,
+    hass: Pick<HomeAssistant, "entities"> | undefined,
     entityIds: readonly string[],
 ): string | null {
     const devices = new Set(
@@ -58,7 +58,7 @@ const filterCache = new WeakMap<EntityRegistry, Map<string, HaEntityPickerEntity
 
 /** A picker filter admitting the HA device's entities and the picker's own value. */
 export function haDeviceEntityFilter(
-    hass: Pick<HomeAssistantLike, "entities"> | undefined,
+    hass: Pick<HomeAssistant, "entities"> | undefined,
     deviceId: string,
     currentValue: string,
 ): HaEntityPickerEntityFilterFunc {

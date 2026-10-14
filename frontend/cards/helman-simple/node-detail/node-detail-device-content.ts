@@ -1,13 +1,12 @@
 import { LitElement, css, html, nothing, type PropertyValues } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import type { HomeAssistant } from "../../../hass-frontend/src/types";
+import type { HomeAssistant } from "../../../types/ha";
 import type { LocalizeFunction } from "../../localize/localize";
 import type { TreeItem } from "../../helman/tree-item";
 import type { DeviceDetailParams } from "./node-detail-types";
 import { nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import { formatPower } from "../../power-format";
 import "../../appliance-switch-badge";
-import type { HomeAssistantLike } from "../../shared/config/types";
 import { fetchDeviceStats, type DeviceStats, type DeviceStatsSpread } from "../../helman-api";
 import type { HelmanDeviceEditDialog } from "../../shared/devices/helman-device-edit-dialog";
 import "../../shared/devices/helman-device-edit-dialog";
@@ -162,7 +161,7 @@ export class NodeDetailDeviceContent extends LitElement {
         if (!this._editing || !item.deviceKey) return nothing;
         return html`
             <helman-device-edit-dialog
-                .hass=${this.hass as unknown as HomeAssistantLike}
+                .hass=${this.hass}
                 .localize=${this.localize}
                 .open=${true}
                 .deviceKey=${item.deviceKey}
@@ -267,7 +266,7 @@ export class NodeDetailDeviceContent extends LitElement {
         if (!deviceKey) return;
         let stats: DeviceStats | null;
         try {
-            stats = await fetchDeviceStats(this.hass as unknown as HomeAssistantLike, deviceKey);
+            stats = await fetchDeviceStats(this.hass, deviceKey);
         } catch {
             stats = null;
         }
