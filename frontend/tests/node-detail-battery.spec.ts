@@ -1,4 +1,6 @@
 import { installMockHass } from "./support/mock-hass";
+import { cardTree, forecastPayload, scheduleSlots } from "./support/payload-builders";
+import type { ForecastPayload, ScheduleActionDTO, SchedulePayload, ScheduleSlotDTO } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
 import { installFixedClock } from "./support/fixed-clock";
@@ -55,8 +57,8 @@ type Variant = {
 
 declare global {
     interface Window {
-        __hass: any;
-        __requests: Array<{ type: string; node?: string; section?: string }>;
+        __BatteryHass: any;
+        __BatteryRequests: Array<{ type: string; node?: string; section?: string }>;
         __moreInfo: string[];
     }
 }
@@ -66,23 +68,8 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
     await page.setContent("<!doctype html><html><body style='margin:0'></body></html>");
     await installMockHass(page);
     await page.addScriptTag({ content: HA_DIALOG_STUB });
-    await page.evaluate((v) => {
+    await page.evaluate(({ v, tree, forecastDefaults, scheduleDefaults }) => {
         const profile = v.profile !== false;
-        const node = (id: string, sensor: string, sourceType: string | null) => ({
-            id, displayName: id, powerSensorId: sensor, ratioSensorId: null, switchEntityId: null,
-            valueType: "default", sourceConfig: null, sourceType, isSource: sourceType !== null,
-            isUnmeasured: false, groups: {}, groupBadgeTexts: [], icon: null, compact: false,
-            showAdditionalInfo: false, childrenFullWidth: false, hideChildren: false,
-            hideChildrenIndicator: false, sortChildrenByPower: false, deferrable: false,
-            controllableIds: [], children: [],
-        });
-        const tree = {
-            sources: [node("solar", "sensor.solar", "solar"), node("grid", "sensor.grid", "grid"), node("battery", "sensor.battery", "battery")],
-            consumers: [node("house", "sensor.house", null)],
-            consumptionTotalSensorId: null,
-            productionTotalSensorId: null,
-            uiConfig: { show_others_group: false, device_groupings: [], history_buckets: 3, history_bucket_duration: 60 },
-        };
         const s = (state: string, unit?: string, attributes: Record<string, unknown> = {}) => ({
             state, attributes: { ...(unit ? { unit_of_measurement: unit } : {}), ...attributes },
         });
@@ -164,18 +151,19 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             currency: "CZK/kWh", complete: false, unavailable: null, charge,
         };
         // 15-minute slots from 11:45 today for a day and a half.
-        const slots = [];
+        const slots: ScheduleSlotDTO[] = [];
         const start = Date.parse(`${day}T11:45:00Z`);
         for (let i = 0; i < 36 * 4; i += 1) {
             const at = new Date(start + i * 900_000);
             const id = at.toISOString().replace(".000Z", "+00:00");
             const hour = at.getUTCHours() + (at.getUTCDate() - 21) * 24;
-            let action: Record<string, unknown> = { kind: "normal", setBy: "automation" };
+            let action: ScheduleActionDTO = { kind: "normal", setBy: "automation" };
             if (hour >= 14 && hour < 16) action = { kind: "charge_to_target_soc", targetSoc: 80, setBy: "automation" };
             if (hour >= 18 && hour < 19) action = { kind: "discharge_to_target_soc", targetSoc: 30, setBy: "automation", conditionMet: false };
             slots.push({ id, controllables: { inverter: action } });
         }
-        const schedule = {
+        const schedule: SchedulePayload = {
+            ...scheduleDefaults,
             executionEnabled: true,
             slots,
             runtime: {
@@ -188,8 +176,10 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             remainingEnergyKwh: 0, socPct: soc, importedFromGridKwh: 0, exportedToGridKwh: 0,
             hitMinSoc: false, hitMaxSoc: false, limitedByChargePower: false, limitedByDischargePower: false,
         });
-        const forecast = {
+        const forecast: ForecastPayload = {
+            ...forecastDefaults,
             battery_capacity: {
+                ...forecastDefaults.battery_capacity,
                 status: "available", generatedAt: null, startedAt: null, unit: "kWh", resolution: "quarter_hour", horizonHours: 48,
                 model: null, nominalCapacityKwh: 17.3, currentRemainingEnergyKwh: 11.6, currentSoc: 67, minSoc: 10, maxSoc: 100,
                 chargeEfficiency: 0.95, dischargeEfficiency: 0.95, maxChargePowerW: 5000, maxDischargePowerW: 6000,
@@ -213,17 +203,17 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             agreement: { status: "unknown", reason: "no_profile", commanded: null, observedOption: null, registers: [] },
             condition: null, sections: [],
         };
-        window.__requests = [];
+        window.__BatteryRequests = [];
         window.__moreInfo = [];
         document.addEventListener("hass-more-info", (event) => window.__moreInfo.push((event as CustomEvent).detail.entityId));
-        window.__hass = {
+        window.__BatteryHass = {
             language: "en",
             // A 24-hour English locale, so times read as the assertions write them.
             locale: { language: "en-GB" },
             config: { time_zone: "UTC" },
             connection: {
                 sendMessagePromise: async (msg: { type: string }) => {
-                    window.__requests.push({ type: msg.type });
+                    window.__BatteryRequests.push({ type: msg.type });
                     if (msg.type === "helman/get_forecast" && v.forecastFails) throw new Error("forecast down");
                     return msg.type === "helman/get_forecast" ? forecast : {};
                 },
@@ -268,16 +258,16 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 node?: string;
                 section?: string;
             }) => {
-                window.__requests.push({ type: msg.type, node: msg.node, section: msg.section });
+                window.__BatteryRequests.push({ type: msg.type, node: msg.node, section: msg.section });
             }).callWS,
         };
-    }, variant);
+    }, { v: variant, tree: cardTree(), forecastDefaults: forecastPayload(), scheduleDefaults: scheduleSlots({ slotMinutes: 15 }) });
     await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-simple-card"));
     await page.evaluate(async () => {
         const card = document.createElement("helman-simple-card") as any;
         card.setConfig({ type: "custom:helman-simple-card" });
-        card.hass = window.__hass;
+        card.hass = window.__BatteryHass;
         document.body.appendChild(card);
     });
 }
@@ -292,7 +282,7 @@ const flow = (page: Page) => content(page).locator("helman-node-flow");
 const glyph = (page: Page) => content(page).locator("helman-soc-glyph");
 const flowLabel = (page: Page, side: "in" | "out", id: string) => flow(page).locator(`[data-side="${side}"] [data-flow="${id}"]`);
 const sectionRequests = (page: Page, section?: string) =>
-    page.evaluate((name) => window.__requests.filter((r) => r.type === "helman/get_node_detail" && r.node === "battery" && r.section
+    page.evaluate((name) => window.__BatteryRequests.filter((r) => r.type === "helman/get_node_detail" && r.node === "battery" && r.section
         && (name === undefined || r.section === name)).length, section);
 
 /** A ribbon's thickness where it meets the centre, px: the gap between its two ends there. */
@@ -828,7 +818,7 @@ test.describe("disclosure and live data", () => {
         await openDetail(page);
         await page.evaluate(() => {
             const card = document.querySelector("helman-simple-card") as any;
-            const hass = window.__hass;
+            const hass = window.__BatteryHass;
             card.hass = { ...hass, states: { ...hass.states, "sensor.soc": { state: "70", attributes: { unit_of_measurement: "%" } } } };
         });
         await expect(glyph(page).locator("[data-soc-text]")).toHaveText("70 %");

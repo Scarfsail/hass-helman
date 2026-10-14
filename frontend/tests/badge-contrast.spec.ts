@@ -1,3 +1,4 @@
+import { configDoc } from "./support/payload-builders";
 import { test, expect, type Page } from "@playwright/test";
 import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
@@ -21,11 +22,11 @@ import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 const GRID_PATH = ["energy_nodes", "grid", "entities", "power"];
 const GRID_KEY = GRID_PATH.join(".");
 
-const CONFIG = {
-    config_version: 7,
+const CONFIG = configDoc({
+
     energy_nodes: { grid: { entities: { power: "sensor.grid_power" } } },
     devices: { consumers: [] },
-};
+});
 
 /** One fact per severity, so every badge class is on screen to be measured. */
 const FACTS = ["neutral", "info", "ok", "warn"].map((severity, index) => ({
@@ -143,7 +144,7 @@ async function mountEditor(page: Page): Promise<void> {
                 }
             };
         },
-        { config: CONFIG, gridKey: GRID_KEY, facts: FACTS },
+        { config: JSON.parse(JSON.stringify(CONFIG)), gridKey: GRID_KEY, facts: FACTS },
     );
 
     await expect

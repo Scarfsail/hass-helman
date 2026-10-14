@@ -1,3 +1,4 @@
+import type { InspectorPayload } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
 import {
     STOP_MONTH_VIEW,
@@ -68,8 +69,8 @@ async function mountInspector(page: Page): Promise<void> {
         const soc: Array<{ slot: string; pct: number }> = [];
         const importPrice: Array<{ slot: string; value: number }> = [];
         const exportPrice: Array<{ slot: string; value: number }> = [];
-        const moneyActual: Array<Record<string, unknown>> = [];
-        const moneyForecast: Array<Record<string, unknown>> = [];
+        const moneyActual: InspectorPayload["series"]["moneyActual"] = [];
+        const moneyForecast: InspectorPayload["series"]["moneyForecast"] = [];
         for (let m = 0; m < 1440; m += 15) {
             const hh = String(Math.floor(m / 60)).padStart(2, "0");
             const mm = String(m % 60).padStart(2, "0");
@@ -89,32 +90,27 @@ async function mountInspector(page: Page): Promise<void> {
                 moneyForecast.push({ slot: label, cost: 0.3, gain: 0.2 });
             }
         }
-        const payload = {
-            date,
+        const payload = window.__inspectorDay({ date,
             timezone: "UTC",
             status: "ok",
             effectiveVariant: null,
             trainedAt: null,
             priceUnit: "CZK/kWh",
-            range: {
-                minDate: date, maxDate: date, canGoPrevious: false, canGoNext: false,
+            range: { minDate: date, maxDate: date, canGoPrevious: false, canGoNext: false,
                 isToday: true, isFuture: false,
             },
-            series: {
-                raw: [], corrected, actual, invalidated: [], factors: [], impact: [],
+            series: { raw: [], corrected, actual, invalidated: [], factors: [], impact: [],
                 houseForecast, houseActual: [],
                 batterySocForecast: soc, batterySocActual: [],
                 gridForecast, gridActual: [], batteryForecast: [], batteryActual: [],
                 importPrice, exportPrice, moneyActual, moneyForecast,
             },
-            totals: {
-                rawWh: null, correctedWh: null, actualWh: null,
+            totals: { rawWh: null, correctedWh: null, actualWh: null,
                 houseForecastWh: null, houseActualWh: null,
                 gridForecastWh: null, gridActualWh: null,
                 batteryForecastWh: null, batteryActualWh: null,
             },
-            availability: {
-                hasRawForecast: false, hasCorrectedForecast: true, hasActuals: true,
+            availability: { hasRawForecast: false, hasCorrectedForecast: true, hasActuals: true,
                 hasInvalidated: false, hasProfile: true, hasHouseForecast: true,
                 hasHouseActual: false, hasBatterySocForecast: true, hasBatterySocActual: false,
                 hasGridForecast: true, hasGridActual: false, hasBatteryForecast: false,
@@ -122,7 +118,7 @@ async function mountInspector(page: Page): Promise<void> {
             },
             batterySocBounds: [],
             trainingExplainability: null,
-        };
+        });
 
         document.body.innerHTML = "";
         const el = document.createElement("helman-solar-inspector") as unknown as

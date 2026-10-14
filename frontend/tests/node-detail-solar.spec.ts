@@ -1,4 +1,6 @@
 import { installMockHass } from "./support/mock-hass";
+import { cardTree, forecastPayload, scheduleSlots } from "./support/payload-builders";
+import type { ForecastPayload, ForecastStatus, ScheduleActionDTO, SchedulePayload, ScheduleSlotDTO } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
 import { installFixedClock } from "./support/fixed-clock";
@@ -44,7 +46,7 @@ type Variant = {
     exportLimit?: string;
     forecastFails?: boolean;
     /** The forecast's status, as at startup. */
-    forecastStatus?: string;
+    forecastStatus?: ForecastStatus;
     /** The destinations: complete with some unresolved, battery-only export, or unavailable. */
     destinations?: "normal" | "batteryExport" | "unavailable";
     /** The production section's request fails. */
@@ -102,8 +104,8 @@ function todayKwh(from: number, night = false): number {
 
 declare global {
     interface Window {
-        __hass: any;
-        __requests: Array<{ type: string; node?: string; section?: string }>;
+        __SolarHass: any;
+        __SolarRequests: Array<{ type: string; node?: string; section?: string }>;
     }
 }
 
@@ -112,23 +114,8 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
     await page.setContent("<!doctype html><html><body style='margin:0'></body></html>");
     await installMockHass(page);
     await page.addScriptTag({ content: HA_DIALOG_STUB });
-    await page.evaluate(({ v, points }) => {
+    await page.evaluate(({ v, points, tree, forecastDefaults, scheduleDefaults }) => {
         const profile = v.profile !== false;
-        const node = (id: string, sensor: string, sourceType: string | null) => ({
-            id, displayName: id, powerSensorId: sensor, ratioSensorId: null, switchEntityId: null,
-            valueType: "default", sourceConfig: null, sourceType, isSource: sourceType !== null,
-            isUnmeasured: false, groups: {}, groupBadgeTexts: [], icon: null, compact: false,
-            showAdditionalInfo: false, childrenFullWidth: false, hideChildren: false,
-            hideChildrenIndicator: false, sortChildrenByPower: false, deferrable: false,
-            controllableIds: [], children: [],
-        });
-        const tree = {
-            sources: [node("solar", "sensor.solar", "solar"), node("grid", "sensor.grid", "grid"), node("battery", "sensor.battery", "battery")],
-            consumers: [node("house", "sensor.house", null)],
-            consumptionTotalSensorId: null,
-            productionTotalSensorId: null,
-            uiConfig: { show_others_group: false, device_groupings: [], history_buckets: 3, history_bucket_duration: 60 },
-        };
         const s = (state: string, unit?: string, attributes: Record<string, unknown> = {}) => ({
             state, attributes: { ...(unit ? { unit_of_measurement: unit } : {}), ...attributes },
         });
@@ -257,16 +244,17 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             },
         };
         const sections: Record<string, unknown> = { production, strings, destinations, flows };
-        const slots = [];
+        const slots: ScheduleSlotDTO[] = [];
         const start = Date.parse("2026-10-21T11:45:00Z");
         for (let i = 0; i < 36 * 4; i += 1) {
             const at = new Date(start + i * 900_000);
             const id = at.toISOString().replace(".000Z", "+00:00");
             const hour = at.getUTCHours() + (at.getUTCDate() - 21) * 24;
-            const action = hour >= 12 && hour < 13 ? { kind: "stop_export", setBy: "automation" } : { kind: "normal", setBy: "automation" };
+            const action: ScheduleActionDTO = hour >= 12 && hour < 13 ? { kind: "stop_export", setBy: "automation" } : { kind: "normal", setBy: "automation" };
             slots.push({ id, controllables: { inverter: action } });
         }
-        const schedule = {
+        const schedule: SchedulePayload = {
+            ...scheduleDefaults,
             executionEnabled: true,
             slots,
             runtime: {
@@ -274,8 +262,10 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 controllables: { inverter: { actionKind: "apply", outcome: "success", executedAction: { kind: "stop_export" }, reason: "scheduled" } },
             },
         };
-        const forecast = {
+        const forecast: ForecastPayload = {
+            ...forecastDefaults,
             solar: {
+                ...forecastDefaults.solar,
                 status: v.forecastStatus ?? "available", unit: "Wh", resolution: "quarter_hour", horizonHours: 168,
                 actualHistory: points.actual, points: points.raw, adjustedPoints: points.adjusted,
                 biasCorrection: {
@@ -288,42 +278,38 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
         const wh = (rows: Array<{ timestamp: string; value: number }>) => rows.filter((row) => row.timestamp.startsWith("2026-10-21")).map((row) => ({ timestamp: row.timestamp, valueWh: row.value }));
         const sum = (rows: Array<{ valueWh: number }>) => rows.reduce((total, row) => total + row.valueWh, 0);
         const series = { raw: wh(points.raw), corrected: wh(points.adjusted), actual: wh(points.actual) };
-        const inspectorDay = {
-            date: "2026-10-21", timezone: "UTC", dataGranularityMinutes: 15, status: "applied", effectiveVariant: "adjusted",
+        const inspectorDay = window.__inspectorDay({ date: "2026-10-21", timezone: "UTC", dataGranularityMinutes: 15, status: "applied", effectiveVariant: "adjusted",
             trainedAt: "2026-10-21T03:00:00+00:00",
             range: { minDate: "2026-10-01", maxDate: "2026-10-26", canGoPrevious: true, canGoNext: true, isToday: true, isFuture: false },
-            series: {
-                ...series, invalidated: [], factors: [], impact: [], houseForecast: [], houseActual: [], houseActualBreakdown: [],
+            series: { ...series, invalidated: [], factors: [], impact: [], houseForecast: [], houseActual: [], houseActualBreakdown: [],
                 houseForecastBreakdown: [], batterySocForecast: [], batterySocActual: [], gridForecast: [], gridActual: [],
                 batteryForecast: [], batteryActual: [], importPrice: [], exportPrice: [], moneyActual: [], moneyForecast: [],
             },
-            totals: {
-                rawWh: sum(series.raw), correctedWh: sum(series.corrected), actualWh: sum(series.actual),
+            totals: { rawWh: sum(series.raw), correctedWh: sum(series.corrected), actualWh: sum(series.actual),
                 houseForecastWh: null, houseActualWh: null, gridForecastWh: null, gridActualWh: null,
                 batteryForecastWh: null, batteryActualWh: null, moneyActual: null, moneyForecast: null,
             },
-            availability: {
-                hasRawForecast: true, hasCorrectedForecast: true, hasActuals: true, hasInvalidated: false, hasProfile: false,
+            availability: { hasRawForecast: true, hasCorrectedForecast: true, hasActuals: true, hasInvalidated: false, hasProfile: false,
                 hasHouseForecast: false, hasHouseActual: false, hasBatterySocForecast: false, hasBatterySocActual: false,
                 hasGridForecast: false, hasGridActual: false, hasBatteryForecast: false, hasBatteryActual: false,
                 hasImportPrice: false, hasExportPrice: false,
             },
             batterySocBounds: [], priceUnit: null, trainingExplainability: null,
-        };
+        });
         const inverter = {
             node: "inverter", asOf: "2026-10-21T12:00:00+00:00", configured: false, profile: null, mode: null,
             entities: {}, maxAllowedExportPower: 9900,
             agreement: { status: "unknown", reason: "no_profile", commanded: null, observedOption: null, registers: [] },
             condition: null, sections: [],
         };
-        window.__requests = [];
-        window.__hass = {
+        window.__SolarRequests = [];
+        window.__SolarHass = {
             language: "en",
             locale: { language: "en-GB" },
             config: { time_zone: "UTC" },
             connection: {
                 sendMessagePromise: async (msg: { type: string }) => {
-                    window.__requests.push({ type: msg.type });
+                    window.__SolarRequests.push({ type: msg.type });
                     if (msg.type === "helman/get_forecast" && v.forecastFails) throw new Error("forecast down");
                     return msg.type === "helman/get_forecast" ? forecast : {};
                 },
@@ -382,16 +368,16 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 node?: string;
                 section?: string;
             }) => {
-                window.__requests.push({ type: msg.type, node: msg.node, section: msg.section });
+                window.__SolarRequests.push({ type: msg.type, node: msg.node, section: msg.section });
             }).callWS,
         };
-    }, { v: variant, points: forecastPoints(!!variant.night) });
+    }, { v: variant, points: forecastPoints(!!variant.night), tree: cardTree(), forecastDefaults: forecastPayload(), scheduleDefaults: scheduleSlots({ slotMinutes: 15 }) });
     await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-simple-card"));
     await page.evaluate(async () => {
         const card = document.createElement("helman-simple-card") as any;
         card.setConfig({ type: "custom:helman-simple-card" });
-        card.hass = window.__hass;
+        card.hass = window.__SolarHass;
         document.body.appendChild(card);
     });
 }
@@ -406,7 +392,7 @@ const curve = (page: Page) => content(page).locator("[data-production-curve]");
 const flow = (page: Page) => content(page).locator("helman-node-flow");
 const flowLabel = (page: Page, side: "in" | "out", id: string) => flow(page).locator(`[data-side="${side}"] [data-flow="${id}"]`);
 const sectionRequests = (page: Page) =>
-    page.evaluate(() => window.__requests.filter((r) => r.type === "helman/get_node_detail" && r.node === "solar" && r.section).map((r) => r.section));
+    page.evaluate(() => window.__SolarRequests.filter((r) => r.type === "helman/get_node_detail" && r.node === "solar" && r.section).map((r) => r.section));
 
 /** Open a question the way a reader does: its tile, or the picture that absorbed it. */
 async function open(page: Page, id: string): Promise<void> {
@@ -934,7 +920,7 @@ test.describe("disclosure and live data", () => {
         await openDetail(page);
         await page.evaluate(() => {
             const card = document.querySelector("helman-simple-card") as any;
-            const hass = window.__hass;
+            const hass = window.__SolarHass;
             card.hass = { ...hass, states: { ...hass.states, "sensor.solax_pv_power_1": { state: "3000", attributes: { unit_of_measurement: "W" } } } };
         });
         await expect(flowLabel(page, "in", "string-1")).toContainText("3.0 kW");

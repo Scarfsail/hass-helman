@@ -1,3 +1,4 @@
+import { configDoc } from "./support/payload-builders";
 import { test, expect, type Page } from "@playwright/test";
 import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
@@ -68,8 +69,8 @@ const PROFILE = {
 };
 
 /** A hand-mapped document: every owned path is set, and one site setting. */
-const CUSTOM_CONFIG = {
-    config_version: 29,
+const CUSTOM_CONFIG = configDoc({
+
     energy_nodes: {
         inverter: {
             controls: {
@@ -97,16 +98,16 @@ const CUSTOM_CONFIG = {
             forecast: { charge_efficiency: 0.95 },
         },
     },
-};
+});
 
-const SOLAX_CONFIG = {
-    config_version: 29,
+const SOLAX_CONFIG = configDoc({
+
     energy_nodes: {
         inverter: { profile: { id: "solax_inverter", entry_id: "solax-entry" } },
         solar: { forecast: { total_energy_entity_id: "sensor.solar_total" } },
         battery: { forecast: { charge_efficiency: 0.95 } },
     },
-};
+});
 
 /** The SolaX EV charger: bound to an HA device, owning the meters and controls. */
 const CHARGER_PROFILE = {
@@ -146,8 +147,8 @@ const CHARGER_VALUES = {
 };
 
 /** A hand-mapped charger, and one already bound to the drive's charger. */
-const CHARGERS_CONFIG = {
-    config_version: 29,
+const CHARGERS_CONFIG = configDoc({
+
     devices: {
         consumers: [
             {
@@ -163,11 +164,11 @@ const CHARGERS_CONFIG = {
             },
         ],
     },
-};
+});
 
 /** The garage charger on the profile. */
-const GARAGE_ON_PROFILE = {
-    config_version: 29,
+const GARAGE_ON_PROFILE = configDoc({
+
     devices: {
         consumers: [
             {
@@ -179,7 +180,7 @@ const GARAGE_ON_PROFILE = {
             },
         ],
     },
-};
+});
 
 const GARAGE = "devices.consumers[0]";
 /** The same device as an entity group's key. */
@@ -752,8 +753,8 @@ function valueAt(document: any, path: string): any {
 }
 
 /** A hand-mapped garage charger whose meters and switch sit on the drive's HA device. */
-const MATCHING_CONFIG = {
-    config_version: 29,
+const MATCHING_CONFIG = configDoc({
+
     devices: {
         consumers: [
             {
@@ -769,7 +770,7 @@ const MATCHING_CONFIG = {
             },
         ],
     },
-};
+});
 
 const ON_DRIVE_CHARGER = {
     "sensor.garage_ev_energy": { device_id: "drive-charger" },

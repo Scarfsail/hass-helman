@@ -1,3 +1,4 @@
+import { configDoc } from "./support/payload-builders";
 import { test, expect, type Page } from "@playwright/test";
 import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
@@ -22,14 +23,14 @@ const GRID_KEY = GRID_PATH.join(".");
 /** A configured picker the stub answers about with no entity behind it. */
 const HOUSE_KEY = ["energy_nodes", "house", "entities", "power"].join(".");
 
-const CONFIG = {
-    config_version: 7,
+const CONFIG = configDoc({
+
     energy_nodes: {
         grid: { entities: { power: "sensor.grid_power" } },
         house: { entities: { power: "sensor.house_power" } },
     },
     devices: { consumers: [] },
-};
+});
 
 /** What the draft reads, what the *stored* document read: different entities. */
 const DRAFT_ENTITY = "sensor.grid_power";
@@ -143,7 +144,7 @@ async function mountEditor(page: Page): Promise<void> {
             };
         },
         {
-            config: CONFIG,
+            config: JSON.parse(JSON.stringify(CONFIG)),
             gridKey: GRID_KEY,
             houseKey: HOUSE_KEY,
             draftEntity: DRAFT_ENTITY,

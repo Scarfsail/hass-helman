@@ -5,7 +5,7 @@
   "description": "Frontend source (card + config editor) for the Helman Energy Home Assistant integration.",
   "scripts": {
     "build": "npm run build:card && npm run build:editor",
-    "typecheck": "tsc -p . --noEmit",
+    "typecheck": "tsc -p . --noEmit && tsc -p tsconfig.test.json --noEmit",
     "build:card": "vite build",
     "build:editor": "vite build -c vite.config.editor.ts",
     "watch": "npm run watch:card & npm run watch:editor",
@@ -23,6 +23,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.61.1",
+    "@types/node": "^26.6.5",
     "ts-lit-plugin": "2.0.2",
     "typescript": "^6.0.3",
     "vite": "^8.1.1"

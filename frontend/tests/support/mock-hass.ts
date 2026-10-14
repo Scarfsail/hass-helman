@@ -1,6 +1,8 @@
 import type { Page } from "@playwright/test";
 
-import { installFixedClock } from "./fixed-clock";
+import { FIXED_TODAY, installFixedClock } from "./fixed-clock";
+import { configDoc, forecastPayload, inspectorDay, scheduleSlots, treePayload } from "./payload-builders";
+import type { ConfigDocument, InspectorPayload } from "../../cards/helman-api";
 
 export type MockRequest = { type: string; [key: string]: unknown };
 export type MockReply = unknown | Error | ((request: MockRequest) => unknown | Promise<unknown>);
@@ -8,6 +10,9 @@ export type MockReplies = Record<string, MockReply>;
 
 declare global {
     interface Window {
+        __inspectorDayBase: InspectorPayload;
+        __inspectorDay: typeof inspectorDay;
+        __configDocBase: ConfigDocument;
         __mockRequests: MockRequest[];
         __setMockReply: (hass: { callWS: (request: MockRequest) => Promise<unknown> }, command: string, response: MockReply) => void;
         __clearMockReply: (hass: { callWS: (request: MockRequest) => Promise<unknown> }, command: string) => void;
@@ -24,9 +29,26 @@ declare global {
 
 /** Install the shared router in the page, where override closures and counters live. */
 export async function installMockHass(page: Page): Promise<void> {
-    await page.evaluate(() => {
-        if (window.__mockHass) return;
+    const fixtureDefaults = {
+        schedule: scheduleSlots({ slotMinutes: 15 }),
+        tree: treePayload(),
+        forecast: forecastPayload(),
+        config: JSON.stringify(configDoc()),
+        inspector: JSON.stringify(inspectorDay()),
+    };
+    await page.evaluate(({ schedule, tree, forecast, config, inspector }) => {
+        if (typeof window.__mockHass === "function") return;
         window.__mockRequests = [];
+        window.__inspectorDayBase = JSON.parse(inspector) as InspectorPayload;
+        window.__inspectorDay = ({ range, series, totals, availability, ...overrides } = {}) => ({
+            ...window.__inspectorDayBase,
+            ...overrides,
+            range: { ...window.__inspectorDayBase.range, ...range },
+            series: { ...window.__inspectorDayBase.series, ...series },
+            totals: { ...window.__inspectorDayBase.totals, ...totals },
+            availability: { ...window.__inspectorDayBase.availability, ...availability },
+        });
+        window.__configDocBase = JSON.parse(config) as ConfigDocument;
         const listeners: Array<(message: unknown) => void> = [];
         const controls = new WeakMap<Function, { set: (command: string, response: MockReply) => void; clear: (command: string) => void }>();
         window.__setMockReply = (hass, command, response) => {
@@ -75,7 +97,7 @@ export async function installMockHass(page: Page): Promise<void> {
         };
         const defaults: Record<string, unknown> = {
             "helman/get_appliances": { appliances: [] },
-            "helman/get_config": { config_version: 29, appliances: [], automation: { enabled: false, appliance_optimizers: [], system_optimizers: [] }, energy_nodes: {}, devices: { consumers: [] } },
+            "helman/get_config": window.__configDocBase,
             "helman/get_optimizer_schema": { version: 29, kinds: [], applianceKinds: ["climate", "ev_charger", "generic"] },
             "helman/save_config": { success: true, validation: { valid: true, errors: [], warnings: [] }, reloadStarted: true },
             "helman/get_node_detail": (request: MockRequest) => {
@@ -122,31 +144,15 @@ export async function installMockHass(page: Page): Promise<void> {
                 }
             },
             "helman/inspect_entities": { results: [] },
-            "helman/get_schedule": { executionEnabled: true, slots: [] },
-            "helman/get_device_tree": {
-                sources: [], consumers: [], consumptionTotalSensorId: null,
-                productionTotalSensorId: null,
-                uiConfig: { device_groupings: [], history_buckets: 0, history_bucket_duration: 0 },
-            },
+            "helman/get_schedule": schedule,
+            "helman/get_device_tree": tree,
             "helman/get_history": { buckets: 0, bucket_duration: 0, entity_history: {} },
             "helman/validate_config": { valid: true, errors: [], warnings: [] },
-            "helman/get_forecast": {
-                solar: { status: "unavailable", unit: "Wh", resolution: "quarter_hour", horizonHours: 0, actualHistory: [], points: [] },
-                grid: { status: "unavailable", generatedAt: null, unit: "kWh", resolution: "quarter_hour", horizonHours: 0, startedAt: null, partialReason: null, coverageUntil: null, currentImportPrice: null, importPriceUnit: null, importPricePoints: [], currentExportPrice: null, exportPriceUnit: null, exportPricePoints: [], series: [] },
-                house_consumption: { status: "unavailable", generatedAt: null, unit: "Wh", resolution: "quarter_hour", horizonHours: 0, trainingWindowDays: 0, historyDaysAvailable: 0, requiredHistoryDays: 0, model: null, actualHistory: [], series: [] },
-                battery_capacity: { status: "unavailable", generatedAt: null, startedAt: null, unit: "kWh", resolution: "quarter_hour", horizonHours: 0, model: null, nominalCapacityKwh: null, currentRemainingEnergyKwh: null, currentSoc: null, minSoc: null, maxSoc: null, chargeEfficiency: null, dischargeEfficiency: null, maxChargePowerW: null, maxDischargePowerW: null, partialReason: null, coverageUntil: null, actualHistory: [], series: [] },
-            },
-            "helman/solar_bias/inspector": (request: MockRequest) => ({
-                date: String(request.date ?? ""), timezone: "UTC", status: "unavailable", effectiveVariant: null, trainedAt: null,
-                range: { minDate: "", maxDate: "", canGoPrevious: false, canGoNext: false, isToday: false, isFuture: false },
-                series: { raw: [], corrected: [], actual: [], invalidated: [], factors: [], impact: [], houseForecast: [], houseActual: [], houseActualBreakdown: [], houseForecastBreakdown: [], batterySocForecast: [], batterySocActual: [], gridForecast: [], gridActual: [], batteryForecast: [], batteryActual: [], importPrice: [], exportPrice: [], moneyActual: [], moneyForecast: [] },
-                totals: { rawWh: null, correctedWh: null, actualWh: null, houseForecastWh: null, houseActualWh: null, gridForecastWh: null, gridActualWh: null, batteryForecastWh: null, batteryActualWh: null, moneyActual: null, moneyForecast: null },
-                availability: { hasRawForecast: false, hasCorrectedForecast: false, hasActuals: false, hasInvalidated: false, hasProfile: false, hasHouseForecast: false, hasHouseActual: false, hasBatterySocForecast: false, hasBatterySocActual: false, hasGridForecast: false, hasGridActual: false, hasBatteryForecast: false, hasBatteryActual: false, hasImportPrice: false, hasExportPrice: false },
-                batterySocBounds: [], priceUnit: null, trainingExplainability: null,
-            }),
+            "helman/get_forecast": forecast,
+            "helman/solar_bias/inspector": (request: MockRequest) => window.__inspectorDay({ date: String(request.date ?? "") }),
             "helman/solar_bias/day_aggregates": { days: [], bucket: "day", currency: "CZK", range: { minDate: "", maxDate: "" } },
         };
-    });
+    }, fixtureDefaults);
 }
 
 export async function mockRequests(page: Page): Promise<MockRequest[]> {
@@ -218,80 +224,37 @@ export async function installFakeHass(page: Page, options: FakeHassOptions): Pro
     // See `fixed-clock`.
     await installFixedClock(page, { timers: options.fakeTimers === true });
     await installMockHass(page);
-    await page.evaluate(({ pillDays }) => {
+    const schedule = scheduleSlots({ slotMinutes: 60 });
+    const fixtureTodayMs = Date.parse(`${FIXED_TODAY}T00:00:00Z`);
+    const forecastBase = forecastPayload();
+    const forecast = forecastPayload({
+        solar: {
+            ...forecastBase.solar,
+            status: "available",
+            horizonHours: options.pillDays * 24,
+            points: Array.from({ length: options.pillDays * 24 }, (_, index) => ({
+                timestamp: new Date(fixtureTodayMs + index * 3_600_000).toISOString(),
+                value: index % 24 >= 8 && index % 24 < 16 ? 800 : 0,
+            })),
+        },
+        battery_capacity: {
+            ...forecastBase.battery_capacity,
+            nominalCapacityKwh: 10,
+            currentRemainingEnergyKwh: 5,
+            currentSoc: 50,
+            minSoc: 10,
+            maxSoc: 100,
+            chargeEfficiency: 1,
+            dischargeEfficiency: 1,
+            maxChargePowerW: 5000,
+            maxDischargePowerW: 5000,
+        },
+    });
+    await page.evaluate(({ pillDays, schedule, forecast }) => {
         const dayMs = 86_400_000;
-        const hourMs = 3_600_000;
         const todayMs = Date.parse(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`);
         const isoDay = (offset: number) =>
             new Date(todayMs + offset * dayMs).toISOString().slice(0, 10);
-
-        const schedule = { executionEnabled: true, slots: [] };
-
-        const forecast = {
-            solar: {
-                status: "available",
-                unit: "Wh",
-                resolution: "hour",
-                horizonHours: pillDays * 24,
-                actualHistory: [],
-                points: Array.from({ length: pillDays * 24 }, (_, index) => ({
-                    timestamp: new Date(todayMs + index * hourMs).toISOString(),
-                    value: index % 24 >= 8 && index % 24 < 16 ? 800 : 0,
-                })),
-            },
-            grid: {
-                status: "unavailable",
-                generatedAt: null,
-                unit: "kWh",
-                resolution: "hour",
-                horizonHours: 0,
-                startedAt: null,
-                partialReason: null,
-                coverageUntil: null,
-                currentImportPrice: null,
-                importPriceUnit: null,
-                importPricePoints: [],
-                currentExportPrice: null,
-                exportPriceUnit: null,
-                exportPricePoints: [],
-                series: [],
-            },
-            house_consumption: {
-                status: "unavailable",
-                generatedAt: null,
-                unit: "Wh",
-                resolution: "hour",
-                horizonHours: 0,
-                trainingWindowDays: 0,
-                historyDaysAvailable: 0,
-                requiredHistoryDays: 0,
-                model: null,
-                actualHistory: [],
-                series: [],
-            },
-            battery_capacity: {
-                status: "unavailable",
-                generatedAt: null,
-                startedAt: null,
-                unit: "kWh",
-                resolution: "hour",
-                horizonHours: 0,
-                model: null,
-                nominalCapacityKwh: 10,
-                currentRemainingEnergyKwh: 5,
-                currentSoc: 50,
-                minSoc: 10,
-                maxSoc: 100,
-                chargeEfficiency: 1,
-                dischargeEfficiency: 1,
-                maxChargePowerW: 5000,
-                maxDischargePowerW: 5000,
-                partialReason: null,
-                coverageUntil: null,
-                actualHistory: [],
-                series: [],
-            },
-        };
 
         let actualWh = 6000;
         window.__setActualWh = (value: number) => {
@@ -300,7 +263,7 @@ export async function installFakeHass(page: Page, options: FakeHassOptions): Pro
 
         // A day with real series, so the card draws its chart and totals rather
         // than the "no data" note — the note is indistinguishable from a blank.
-        const inspectorPayload = (date: string) => ({
+        const inspectorPayload = (date: string) => (window.__inspectorDay({
             date,
             timezone: "UTC",
             status: "ok",
@@ -316,9 +279,9 @@ export async function installFakeHass(page: Page, options: FakeHassOptions): Pro
             },
             series: {
                 raw: [],
-                corrected: Array.from({ length: 24 }, (_, hour) => ({
-                    slot: `${String(hour).padStart(2, "0")}:00`,
-                    valueWh: hour >= 8 && hour < 16 ? 500 : 0,
+                corrected: Array.from({ length: 96 }, (_, index) => ({
+                    timestamp: `${date}T${String(Math.floor(index / 4)).padStart(2, "0")}:${String(index % 4 * 15).padStart(2, "0")}:00`,
+                    valueWh: index >= 8 * 4 && index < 16 * 4 ? 125 : 0,
                 })),
                 actual: [],
                 invalidated: [],
@@ -362,7 +325,7 @@ export async function installFakeHass(page: Page, options: FakeHassOptions): Pro
             },
             batterySocBounds: [],
             trainingExplainability: null,
-        });
+        }));
 
         // Measured days for every past day in reach of the pill row. A past
         // week's pills then carry real aggregates, which is what gives
@@ -403,7 +366,7 @@ export async function installFakeHass(page: Page, options: FakeHassOptions): Pro
                     return forecast;
                 },
                 "helman/get_schedule": schedule,
-                "helman/solar_bias/day_aggregates": (msg) => {
+                "helman/solar_bias/day_aggregates": (msg: MockRequest) => {
                     const start = msg.start_date ?? "";
                     const end = msg.end_date ?? "";
                     window.__aggregateRequests.push({ start: String(start), end: String(end), bucket: typeof msg.bucket === "string" ? msg.bucket : null });
@@ -417,7 +380,7 @@ export async function installFakeHass(page: Page, options: FakeHassOptions): Pro
                         range: { minDate: isoDay(-30), maxDate: isoDay(pillDays - 1) },
                     };
                 },
-                "helman/solar_bias/inspector": (msg) => {
+                "helman/solar_bias/inspector": (msg: MockRequest) => {
                     const date = String(msg.date ?? "");
                     window.__requestedDates.push(date);
                     return new Promise((resolvePayload) => {
@@ -426,5 +389,5 @@ export async function installFakeHass(page: Page, options: FakeHassOptions): Pro
                 },
             }),
         };
-    }, { pillDays: options.pillDays });
+    }, { pillDays: options.pillDays, schedule, forecast });
 }

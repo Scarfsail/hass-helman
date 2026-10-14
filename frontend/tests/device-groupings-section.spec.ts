@@ -1,3 +1,4 @@
+import { configDoc } from "./support/payload-builders";
 import { test, expect, type Page } from "@playwright/test";
 import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
@@ -48,11 +49,11 @@ type Device = Record<string, any>;
 
 declare global {
     interface Window {
-        __editorConfig: () => { devices: { groupings?: any[]; consumers: Device[] } };
+        __groupingsConfig: () => { devices: { groupings?: any[]; consumers: Device[] } };
     }
 }
 
-async function mountEditor(page: Page, groupings: unknown[] = [BREAKERS, MODES]): Promise<void> {
+async function mountEditor(page: Page, groupings: Array<typeof BREAKERS> = [BREAKERS, MODES]): Promise<void> {
     await loadBundle(page, "helman-config-editor-panel", EDITOR_BUNDLE);
 
     await page.evaluate(
@@ -60,7 +61,7 @@ async function mountEditor(page: Page, groupings: unknown[] = [BREAKERS, MODES])
             const element = document.createElement(
                 "helman-config-editor-panel",
             ) as HTMLElement & Record<string, unknown>;
-            window.__editorConfig = () => (element as unknown as { _config: any })._config;
+            window.__groupingsConfig = () => (element as unknown as { _config: any })._config;
             element.hass = {
                 language: "en",
                 locale: { language: "en" },
@@ -77,10 +78,10 @@ async function mountEditor(page: Page, groupings: unknown[] = [BREAKERS, MODES])
             document.body.appendChild(element);
         },
         {
-            config: {
-                config_version: 26,
+            config: JSON.parse(JSON.stringify(configDoc({
+
                 devices: { groupings, consumers: [BOILER, WASHER] },
-            },
+            }))),
         },
     );
 
@@ -110,7 +111,7 @@ function groupingCard(page: Page, index: number) {
     return section(page).locator(".grouping-card").nth(index);
 }
 
-const groupings = (page: Page) => page.evaluate(() => window.__editorConfig().devices.groupings);
+const groupings = (page: Page) => page.evaluate(() => window.__groupingsConfig().devices.groupings ?? []);
 
 /** Every consumer's `groups`, by id, children included. */
 const memberships = (page: Page) =>
@@ -121,7 +122,7 @@ const memberships = (page: Page) =>
                 found[device.id] = device.groups;
                 walk(device.children ?? []);
             });
-        walk(window.__editorConfig().devices.consumers);
+        walk(window.__groupingsConfig().devices.consumers);
         return found;
     });
 
@@ -286,7 +287,7 @@ test("a typed id is slugged, and a clash with a sibling gets a suffix", async ({
 
 test("clearing an id reverts it and leaves the config unchanged", async ({ page }) => {
     await mountEditor(page);
-    const before = await page.evaluate(() => JSON.stringify(window.__editorConfig()));
+    const before = await page.evaluate(() => JSON.stringify(window.__groupingsConfig()));
 
     const groupingInput = groupingCard(page, 0).locator("input.grouping-id-input");
     await commit(groupingInput, "  ");
@@ -295,7 +296,7 @@ test("clearing an id reverts it and leaves the config unchanged", async ({ page 
     await commit(groupInput, "");
     await expect(groupInput).toHaveValue("technicka_fv");
 
-    expect(await page.evaluate(() => JSON.stringify(window.__editorConfig()))).toBe(before);
+    expect(await page.evaluate(() => JSON.stringify(window.__groupingsConfig()))).toBe(before);
 });
 
 test("an id being typed survives a re-render, and a slug equal to the stored id reverts the text", async ({ page }) => {

@@ -1,3 +1,4 @@
+import { configDoc } from "./support/payload-builders";
 import { test, expect, type Page } from "@playwright/test";
 import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
@@ -22,8 +23,8 @@ import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
  */
 
 /** A document with something picked at every Energy nodes entity path. */
-const CONFIG = {
-    config_version: 7,
+const CONFIG = configDoc({
+
     energy_nodes: {
         inverter: { controls: { mode: { entity_id: "select.inverter_mode", options: {} } } },
         house: {
@@ -77,7 +78,7 @@ const CONFIG = {
             },
         },
     ] },
-};
+});
 
 /** The same, for the tab whose entity groups live inside device cards. */
 const DEVICE_ENTITY_PATHS = [
@@ -185,7 +186,7 @@ async function mountEditor(page: Page): Promise<void> {
                   })
                 : !!(element as HTMLElement).offsetParent;
         };
-    }, CONFIG);
+    }, JSON.parse(JSON.stringify(CONFIG)));
 
     await expect
         .poll(() =>

@@ -82,7 +82,7 @@ function fakeNode(id: string, name: string, groups: Record<string, string> = {})
         sourcePowerHistory: [
             { solar: { power: 100, color: SOLAR } },
             { solar: { power: 100, color: SOLAR } },
-        ],
+        ] as Array<Record<string, { power: number; color: string }>>,
     };
 }
 

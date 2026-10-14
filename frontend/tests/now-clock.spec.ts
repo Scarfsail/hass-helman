@@ -3,6 +3,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { installFakeHass } from "./support/mock-hass";
 import { FIXED_NOW_ISO } from "./support/fixed-clock";
 import { CARD_BUNDLE, loadBundle } from "./support/card-page";
+import { scheduleSlots } from "./support/payload-builders";
 
 /**
  * What the wall clock is allowed to cost.
@@ -40,7 +41,7 @@ async function mountInspector(page: Page): Promise<void> {
     )).toBe(true);
 
     await page.evaluate(() => {
-        const el = document.createElement("helman-solar-inspector") as HTMLElement &
+        const el = document.createElement("helman-solar-inspector") as unknown as HTMLElement &
             Record<string, unknown>;
         el.hass = window.__fakeHass;
         document.body.appendChild(el);
@@ -138,17 +139,13 @@ test.describe("the schedule host's clock", () => {
         await page.clock.install({ time: new Date(FIXED_NOW_ISO) });
         await loadBundle(page, "scheduling-day-editor-host");
 
-        await page.evaluate(() => {
+        const nowMs = Date.parse(FIXED_NOW_ISO);
+        const dayStartMs = Date.parse(`${FIXED_NOW_ISO.slice(0, 10)}T00:00:00Z`);
+        const schedule = scheduleSlots({ slotMinutes: 60, start: new Date(dayStartMs).toISOString(), count: 24 });
+        const running = schedule.slots.find((slot) => Date.parse(slot.id) <= nowMs && nowMs < Date.parse(slot.id) + 3_600_000);
+        if (running) running.controllables = { boiler: { on: true, setBy: "user" } };
+        await page.evaluate((schedule) => {
             const nowMs = Date.now();
-            const dayStartMs = Date.parse(`${new Date(nowMs).toISOString().slice(0, 10)}T00:00:00Z`);
-            const slots = Array.from({ length: 24 }, (_unused, hour) => {
-                const startMs = dayStartMs + hour * 3_600_000;
-                const running = startMs <= nowMs && nowMs < startMs + 3_600_000;
-                return {
-                    id: new Date(startMs).toISOString(),
-                    controllables: running ? { boiler: { on: true, setBy: "user" } } : {},
-                };
-            });
 
             const hass = {
                 language: "en",
@@ -171,7 +168,7 @@ test.describe("the schedule host's clock", () => {
                     "helman/get_schedule": async (msg: {
                         type: string;
                     }) => {
-                        return { executionEnabled: true, slots };
+                        return schedule;
                     },
                     "helman/get_appliances": async (msg: {
                         type: string;
@@ -221,7 +218,7 @@ test.describe("the schedule host's clock", () => {
             host.addEventListener("schedule-day-model-changed", () => {
                 (window as any).__modelChanges += 1;
             });
-        });
+        }, schedule);
 
         await expect.poll(() => page.evaluate(
             () => ((window as any).__host.lanes as unknown[]).length,

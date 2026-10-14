@@ -249,7 +249,7 @@ async function mountPanel(page: Page, payload: unknown, slotIndex: number | null
     await loadBundle(page, "scheduling-explanation-panel");
 
     await page.evaluate(({ fixture, slotId }) => {
-        const panel = document.createElement("scheduling-explanation-panel") as HTMLElement
+        const panel = document.createElement("scheduling-explanation-panel") as unknown as HTMLElement
             & Record<string, unknown>;
         panel.localize = (key: string) => key;
         panel.payload = fixture;

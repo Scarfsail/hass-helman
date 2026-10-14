@@ -9,6 +9,8 @@ import {
     waitForDayChart,
 } from "./support/inspector-aggregate-harness";
 import { loadBundle } from "./support/card-page";
+import { treeNode, treePayload } from "./support/payload-builders";
+import type { TreeItemDTO } from "../cards/helman-api";
 
 /**
  * A device box's name opens that device's detail.
@@ -57,32 +59,8 @@ async function installHaStubs(page: Page): Promise<void> {
 }
 
 /** A house child DTO with the defaults the backend fills in. */
-function dto(overrides: Record<string, unknown>) {
-    return {
-        powerSensorId: null,
-        switchEntityId: null,
-        sourceType: null,
-        sourceConfig: null,
-        valueType: "default",
-        isSource: false,
-        isUnmeasured: false,
-        isEstimated: false,
-        groups: {},
-        groupBadgeTexts: [],
-        icon: null,
-        compact: false,
-        showAdditionalInfo: false,
-        childrenFullWidth: true,
-        hideChildren: false,
-        hideChildrenIndicator: false,
-        sortChildrenByPower: false,
-        deferrable: false,
-        controllableIds: [],
-        energyEntityId: null,
-        ratioSensorId: null,
-        children: [],
-        ...overrides,
-    };
+function dto(overrides: Partial<TreeItemDTO>) {
+    return treeNode({ childrenFullWidth: true, ...overrides });
 }
 
 /**
@@ -102,7 +80,7 @@ async function mountCard(
     await loadBundle(page, "helman-card");
     await installHaStubs(page);
 
-    const tree = {
+    const tree = treePayload({
         sources: [dto({ id: "solar", displayName: "Solar", powerSensorId: "sensor.solar", isSource: true, sourceType: "solar" })],
         consumers: [
             dto({
@@ -146,7 +124,7 @@ async function mountCard(
             history_buckets: 3,
             history_bucket_duration: 5,
         },
-    };
+    });
 
     await page.evaluate(
         async ({ tree, today, lastHour, stats }) => {

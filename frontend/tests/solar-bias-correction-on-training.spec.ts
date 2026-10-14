@@ -1,3 +1,4 @@
+import { configDoc } from "./support/payload-builders";
 import { test, expect, type Locator, type Page } from "@playwright/test";
 import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
@@ -9,8 +10,8 @@ import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
  * the backend receives holds every solar bias setting in that one block.
  */
 
-const CONFIG = {
-    config_version: 19,
+const CONFIG = configDoc({
+
     energy_nodes: {
         solar: {
             entities: { power: "sensor.solar_power" },
@@ -30,7 +31,7 @@ const CONFIG = {
             slot_invalidation: { max_battery_soc_percent: 90 },
         },
     },
-};
+});
 
 function job(id: string): Record<string, unknown> {
     return {
@@ -113,7 +114,7 @@ async function mountEditor(page: Page): Promise<void> {
             };
             document.body.appendChild(element);
         },
-        { config: CONFIG, trainingStatus: TRAINING_STATUS },
+        { config: JSON.parse(JSON.stringify(CONFIG)), trainingStatus: TRAINING_STATUS },
     );
 
     await expect(page.locator(".tabs button").first()).toBeVisible();

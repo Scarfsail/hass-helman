@@ -1,3 +1,4 @@
+import { configDoc } from "./support/payload-builders";
 import { test, expect, type Page } from "@playwright/test";
 import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
@@ -54,8 +55,8 @@ const SCHEMA = {
 };
 
 /** A document with something picked at every entity path the editor offers. */
-const CONFIG = {
-    config_version: 7,
+const CONFIG = configDoc({
+
     automation: {
         enabled: true,
         system_optimizers: [
@@ -154,7 +155,7 @@ const CONFIG = {
             },
         },
     ] },
-};
+});
 
 /** The ones the user pointed at: loose fields beside a bordered sensor. */
 const CIRCLED_KEYS = [
@@ -223,7 +224,7 @@ async function mountEditor(page: Page): Promise<void> {
             }
             return found;
         };
-    }, { config: CONFIG, schema: SCHEMA });
+    }, { config: JSON.parse(JSON.stringify(CONFIG)), schema: SCHEMA });
 
     await expect
         .poll(() =>

@@ -1,5 +1,8 @@
+import { configDoc } from "./support/payload-builders";
 import { installMockHass } from "./support/mock-hass";
 import { test, expect, type Page } from "@playwright/test";
+import { treeNode, treePayload } from "./support/payload-builders";
+import type { TreeItemDTO } from "../cards/helman-api";
 import { readFileSync } from "node:fs";
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
 import { CARD_BUNDLE, EDITOR_BUNDLE } from "./support/card-page";
@@ -55,8 +58,8 @@ const REQUIRED_BY_KEY: Record<string, number> = {
     [BATTERY_KEY]: 10,
 };
 
-const CONFIG = {
-    config_version: 14,
+const CONFIG = configDoc({
+
     energy_nodes: {
         house: { forecast: { total_energy_entity_id: "sensor.house_energy" } },
         solar: {
@@ -86,7 +89,7 @@ const CONFIG = {
             total_energy_entity_id: "sensor.solar_bias_meter",
         },
     },
-};
+});
 
 /** Deliberately different per key, so a row's numbers cannot be mistaken for another's. */
 const DEPTHS: Record<string, { raw_states: number; statistics: number }> = {
@@ -212,7 +215,7 @@ async function mountEditor(
             document.body.appendChild(element);
         },
         {
-            config: configOverride ?? CONFIG,
+            config: configOverride ?? JSON.parse(JSON.stringify(CONFIG)),
             depths: depthsOverride ?? DEPTHS,
             requiredByKey: REQUIRED_BY_KEY,
             deviceTree: deviceTree ?? null,
@@ -843,36 +846,12 @@ test("a learner on a shared meter also lists its metered siblings' meters", asyn
 });
 
 /** A house child DTO with the defaults the backend fills in. */
-function dto(overrides: Record<string, unknown>) {
-    return {
-        powerSensorId: null,
-        switchEntityId: null,
-        sourceType: null,
-        sourceConfig: null,
-        valueType: "default",
-        isSource: false,
-        isUnmeasured: false,
-        isEstimated: false,
-        groups: {},
-        groupBadgeTexts: [],
-        icon: null,
-        compact: false,
-        showAdditionalInfo: false,
-        childrenFullWidth: true,
-        hideChildren: false,
-        hideChildrenIndicator: false,
-        sortChildrenByPower: false,
-        deferrable: false,
-        controllableIds: [],
-        energyEntityId: null,
-        ratioSensorId: null,
-        children: [],
-        ...overrides,
-    };
+function dto(overrides: Partial<TreeItemDTO>) {
+    return treeNode({ childrenFullWidth: true, ...overrides });
 }
 
 /** The saved tree, holding the base config's dishwasher under its meter. */
-const DEVICE_TREE = {
+const DEVICE_TREE = treePayload({
     sources: [],
     consumers: [
         dto({
@@ -889,8 +868,8 @@ const DEVICE_TREE = {
     ],
     consumptionTotalSensorId: null,
     productionTotalSensorId: null,
-    uiConfig: { history_buckets: 3, history_bucket_duration: 5 },
-};
+    uiConfig: { device_groupings: [], history_buckets: 3, history_bucket_duration: 5 },
+});
 
 test("a device name opens the card's device detail, loaded from the card artifact", async ({
     page,

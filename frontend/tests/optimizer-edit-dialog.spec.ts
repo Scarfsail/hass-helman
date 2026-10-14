@@ -189,7 +189,7 @@ async function mountPanel(page: Page, options: MountOptions = {}): Promise<void>
 
             let reads = 0;
 
-            const panel = document.createElement("scheduling-explanation-panel") as HTMLElement
+            const panel = document.createElement("scheduling-explanation-panel") as unknown as HTMLElement
                 & Record<string, unknown>;
             panel.localize = (key: string) => strings[key] ?? key;
             panel.hass = {

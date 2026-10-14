@@ -1,3 +1,4 @@
+import { configDoc } from "./support/payload-builders";
 import { test, expect, type Page } from "@playwright/test";
 
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
@@ -32,11 +33,11 @@ const BOILER = {
     children: [{ id: "pump", controls: { switch: { entity_id: "switch.pump" } } }],
 };
 
-const CONFIG = {
-    config_version: 25,
+const CONFIG = configDoc({
+
     devices: { consumers: [BOILER] },
     automation: { enabled: true, appliance_optimizers: [], system_optimizers: [] },
-};
+});
 
 const STRINGS: Record<string, string> = {
     "node_detail.device.edit.button": "Edit",

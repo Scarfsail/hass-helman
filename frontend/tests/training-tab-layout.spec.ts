@@ -1,3 +1,4 @@
+import { configDoc } from "./support/payload-builders";
 import { test, expect, type Page } from "@playwright/test";
 import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
@@ -16,8 +17,8 @@ import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
 const DISHWASHER_METER_KEY = "devices.consumers.0.consumption.energy_entity_id";
 
-const CONFIG = {
-    config_version: 19,
+const CONFIG = configDoc({
+
     energy_nodes: {
         house: { forecast: { total_energy_entity_id: "sensor.house_energy" } },
     },
@@ -35,7 +36,7 @@ const CONFIG = {
     training: {
         solar_bias: { total_energy_entity_id: "sensor.solar_bias_energy" },
     },
-};
+});
 
 function job(id: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
     return {
@@ -118,7 +119,7 @@ async function mountEditor(page: Page): Promise<void> {
             };
             document.body.appendChild(element);
         },
-        { config: CONFIG, trainingStatus: TRAINING_STATUS, shortKey: DISHWASHER_METER_KEY },
+        { config: JSON.parse(JSON.stringify(CONFIG)), trainingStatus: TRAINING_STATUS, shortKey: DISHWASHER_METER_KEY },
     );
 
     await expect(page.locator(".tabs button").first()).toBeVisible();

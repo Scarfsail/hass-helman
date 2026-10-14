@@ -1,3 +1,5 @@
+import type { JsonObject } from "../cards/shared/config/types";
+import { configDoc } from "./support/payload-builders";
 import { test, expect, type Page } from "@playwright/test";
 import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
@@ -119,7 +121,7 @@ type Device = Record<string, any>;
 
 declare global {
     interface Window {
-        __editorConfig: () => { devices: { consumers: Device[] }; energy_nodes?: { inverter?: Device } };
+        __devicesConfig: () => { devices: { consumers: Device[] }; energy_nodes?: { inverter?: Device } };
         __inspectKeys: string[];
         __validation: unknown;
         __card: (id: string) => HTMLDetailsElement | null;
@@ -129,9 +131,9 @@ declare global {
 
 async function mountEditor(
     page: Page,
-    devices: unknown[] = DEVICES,
+    devices: JsonObject[] = DEVICES,
     validation: unknown = { valid: true, errors: [], warnings: [] },
-    inverter: unknown = INVERTER,
+    inverter: JsonObject | null = INVERTER,
     vendors: unknown = null,
 ): Promise<void> {
     await loadBundle(page, "helman-config-editor-panel", EDITOR_BUNDLE);
@@ -146,7 +148,7 @@ async function mountEditor(
             const element = document.createElement(
                 "helman-config-editor-panel",
             ) as HTMLElement & Record<string, unknown>;
-            window.__editorConfig = () =>
+            window.__devicesConfig = () =>
                 (element as unknown as { _config: { devices: { consumers: Device[] } } })._config;
             window.__inspectKeys = [];
             window.__validation = report;
@@ -205,11 +207,11 @@ async function mountEditor(
             document.body.appendChild(element);
         },
         {
-            config: {
-                config_version: 28,
+            config: JSON.parse(JSON.stringify(configDoc({
+
                 ...(inverter ? { energy_nodes: { inverter } } : {}),
                 devices: { consumers: devices },
-            },
+            }))),
             placeholders: PLACEHOLDERS,
             report: validation,
             vendors,
@@ -243,7 +245,7 @@ test("the device settings sit above the list and the regex renames the cards", a
     await regex.dispatchEvent("change");
 
     expect(
-        await page.evaluate(() => (window.__editorConfig().devices as any).name_cleaner_regex),
+        await page.evaluate(() => (window.__devicesConfig().devices as any).name_cleaner_regex),
     ).toBe("\\sbreaker$");
     await expect
         .poll(() =>
@@ -301,7 +303,7 @@ async function openTabSection(page: Page, label: string): Promise<void> {
         .evaluate((details) => ((details as HTMLDetailsElement).open = true));
 }
 
-const config = (page: Page) => page.evaluate(() => window.__editorConfig().devices.consumers);
+const config = (page: Page) => page.evaluate(() => window.__devicesConfig().devices.consumers);
 
 /** The ids of the cards the tab shows, in document order, hidden ones left out. */
 const visibleCardIds = (page: Page) =>
@@ -968,7 +970,7 @@ test("the empty state says nothing is imported and offers Add device", async ({ 
     await expect(panel.locator("details.device-card")).toHaveCount(0);
 });
 
-const inverter = (page: Page) => page.evaluate(() => window.__editorConfig().energy_nodes?.inverter);
+const inverter = (page: Page) => page.evaluate(() => window.__devicesConfig().energy_nodes?.inverter);
 
 test("the inverter is edited first on the Energy nodes tab", async ({ page }) => {
     await mountEditor(page);

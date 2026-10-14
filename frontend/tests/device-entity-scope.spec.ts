@@ -1,3 +1,4 @@
+import { configDoc } from "./support/payload-builders";
 import { test, expect, type Page } from "@playwright/test";
 import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
@@ -14,8 +15,8 @@ import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
  * fixture states, as `sensor-kind-pickers.spec.ts` does.
  */
 
-const CONFIG = {
-    config_version: 25,
+const CONFIG = configDoc({
+
     devices: {
         consumers: [
             {
@@ -52,7 +53,7 @@ const CONFIG = {
             },
         ],
     },
-};
+});
 
 const ENTITIES: Record<string, { device_id: string | null }> = {
     "sensor.a_energy": { device_id: "dev_a" },
@@ -140,7 +141,7 @@ async function mountEditor(page: Page): Promise<void> {
             };
             document.body.appendChild(element);
         },
-        { config: CONFIG, fixtures: FIXTURES, entities: ENTITIES, devices: DEVICES },
+        { config: JSON.parse(JSON.stringify(CONFIG)), fixtures: FIXTURES, entities: ENTITIES, devices: DEVICES },
     );
     await page
         .locator("helman-config-editor-panel")

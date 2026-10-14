@@ -41,7 +41,7 @@ async function mountInspector(page: Page): Promise<void> {
     await installFakeHass(page, { pillDays: PILL_DAYS });
 
     await page.evaluate(() => {
-        const el = document.createElement("helman-solar-inspector") as HTMLElement &
+        const el = document.createElement("helman-solar-inspector") as unknown as HTMLElement &
             Record<string, unknown>;
         el.hass = window.__fakeHass;
         document.body.appendChild(el);
