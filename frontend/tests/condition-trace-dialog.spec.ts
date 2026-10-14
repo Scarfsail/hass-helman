@@ -178,7 +178,7 @@ async function mountPanel(page: Page, options: MountOptions = {}): Promise<void>
         (globalThis as Record<string, unknown>).__helmanTranslationsLoaded = loaded;
         const record = (kind: string, name: string) => loaded.push(`${kind}:${name}`);
 
-        const panel = document.createElement("scheduling-explanation-panel") as HTMLElement
+        const panel = document.createElement("scheduling-explanation-panel") as unknown as HTMLElement
             & Record<string, unknown>;
         panel.localize = (key: string) => key;
         panel.payload = fixture;

@@ -1,3 +1,4 @@
+import { configDoc } from "./support/payload-builders";
 import { test, expect, type Page } from "@playwright/test";
 import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
@@ -22,8 +23,8 @@ import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 const GRID_PATH = ["energy_nodes", "grid", "entities", "power"];
 const GRID_KEY = GRID_PATH.join(".");
 
-const STORED_CONFIG = {
-    config_version: 6,
+const STORED_CONFIG = configDoc({
+
     energy_nodes: {
         grid: {
             entities: {
@@ -32,7 +33,7 @@ const STORED_CONFIG = {
             },
         },
     },
-};
+});
 
 /** A token no translation file has a string for, in either locale. */
 const UNKNOWN_TOKEN = "a_token_this_bundle_has_never_heard_of";
@@ -500,7 +501,7 @@ test("clearing a configured entity keeps the saved reading and its revert", asyn
 test("a tab with no groups at all never asks", async ({ page }) => {
     // The early return has to survive the widened filter: nothing picked and
     // nothing saved means no call, not a call with an empty target list.
-    await mountEditor(page, { config: { config_version: 6 } });
+    await mountEditor(page, { config: configDoc({  }) });
     await openTab(page, "Helman card");
     await page.waitForTimeout(2500);
     expect(await requestCount(page)).toBe(0);
@@ -575,10 +576,10 @@ test("a slow answer cannot repaint a reading the user has already cleared", asyn
     // clear reach that branch at all: while the *stored* config still names an
     // entity, the poll rightly keeps asking so the saved reading can be shown.
     await mountEditor(page, {
-        config: {
-            config_version: 6,
+        config: configDoc({
+
             energy_nodes: { grid: { entities: { power: "", power_polarity: "positive_is_import" } } },
-        },
+        }),
     });
     // No tick sync here: with nothing at the path the poll rightly sends
     // nothing at all, so there is no tick to sync to. Wait for the group to

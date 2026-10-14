@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { loadBundle } from "./support/card-page";
+import { scheduleSlots } from "./support/payload-builders";
 
 /**
  * The power card marks shiftable house consumers.
@@ -58,11 +59,22 @@ interface RenderedRow {
  * hence that "on" is a change worth marking.
  */
 async function installFakeBackend(page: Page): Promise<void> {
-    await page.evaluate(() => {
+    const nowMs = await page.evaluate(() => Date.now());
+    const slotStartMs = nowMs - nowMs % 3_600_000;
+    const schedule = scheduleSlots({
+        slotMinutes: 60,
+        start: new Date(slotStartMs - 3_600_000).toISOString(),
+        count: 3,
+    });
+    schedule.slots[1].controllables = {
+        dishwasher: { on: true, setBy: "automation" },
+        boiler: { on: true, setBy: "user" },
+        // A candidate is never executed, and an off action leaves the appliance at rest.
+        pump: { on: true, conditionMet: false, setBy: "user" },
+        fan: { on: false, setBy: "automation" },
+    };
+    await page.evaluate((schedule) => {
         window.__wsSeen = [];
-        const nowMs = Date.now();
-        const slotStartMs = nowMs - nowMs % 3_600_000;
-        const slotId = (ms: number) => new Date(ms).toISOString();
         const appliance = (id: string, entityId: string) => ({
             id,
             name: id,
@@ -81,32 +93,7 @@ async function installFakeBackend(page: Page): Promise<void> {
                 "helman/get_schedule": async (msg: {
                     type: string;
                 }) => {
-                    return {
-                        executionEnabled: true,
-                        slots: [
-                            {
-                                id: slotId(slotStartMs - 3600000),
-                                controllables: {},
-                            },
-                            {
-                                id: slotId(slotStartMs),
-                                controllables: {
-                                    dishwasher: { on: true, setBy: "automation" },
-                                    boiler: { on: true, setBy: "user" },
-                                    // A candidate is never executed, so it is
-                                    // nothing scheduled — and a stop leaves the
-                                    // appliance in its resting state, which is
-                                    // nothing scheduled too.
-                                    pump: { on: true, conditionMet: false, setBy: "user" },
-                                    fan: { on: false, setBy: "automation" },
-                                },
-                            },
-                            {
-                                id: slotId(slotStartMs + 3600000),
-                                controllables: {},
-                            },
-                        ],
-                    };
+                    return schedule;
                 },
                 "helman/get_appliances": async (msg: {
                     type: string;
@@ -138,7 +125,7 @@ async function installFakeBackend(page: Page): Promise<void> {
                 window.__wsSeen.push(msg.type);
             }).callWS,
         };
-    });
+    }, schedule);
 }
 
 /** Mount the house consumers, then read back each box's tint and markers. */

@@ -1,4 +1,6 @@
 import { installMockHass } from "./support/mock-hass";
+import { forecastPayload, scheduleSlots, treeNode, treePayload } from "./support/payload-builders";
+import type { DevicePhase, ForecastPayload, ScheduleControllableActionsDTO, SchedulePayload, ScheduleSlotDTO, TreeItemDTO } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
 import { FIXED_NOW_ISO, installFixedClock } from "./support/fixed-clock";
@@ -46,8 +48,8 @@ type Variant = {
 
 declare global {
     interface Window {
-        __hass: any;
-        __requests: Array<{ type: string; node?: string; section?: string; report?: string }>;
+        __HouseHass: any;
+        __HouseRequests: Array<{ type: string; node?: string; section?: string; report?: string }>;
     }
 }
 
@@ -56,19 +58,10 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
     await page.setContent("<!doctype html><html><body style='margin:0'></body></html>");
     await installMockHass(page);
     await page.addScriptTag({ content: HA_DIALOG_STUB });
-    await page.evaluate((v) => {
-        const profile = v.profile !== false;
-        const item = (id: string, name: string, sensor: string | null, extra: Record<string, unknown> = {}) => ({
-            id, displayName: name, powerSensorId: sensor, ratioSensorId: null, switchEntityId: null,
-            valueType: "default", sourceConfig: null, sourceType: null, isSource: false,
-            isUnmeasured: false, groups: {}, groupBadgeTexts: [], icon: null, compact: false,
-            showAdditionalInfo: false, childrenFullWidth: false, hideChildren: false,
-            hideChildrenIndicator: false, sortChildrenByPower: false, deferrable: false,
-            controllableIds: [], energyEntityId: null, isEstimated: false, children: [],
-            phase: null, ...extra,
-        });
+        const item = (id: string, name: string, sensor: string | null, extra: Partial<TreeItemDTO> = {}) =>
+            treeNode({ id, displayName: name, powerSensorId: sensor, ...extra });
         const rest = (parent: string) => item(`${parent}_unmeasured`, "", `sensor.helman_unmeasured_power_${parent}`, { isUnmeasured: true });
-        const phase = (value: string) => (v.noPhases ? {} : { phase: value });
+        const phase = (value: DevicePhase) => (variant.noPhases ? {} : { phase: value });
         const houseChildren = [
             // A metered L1 kitchen: an oven on its phase, a stale own L2 notwithstanding, and its own rest.
             item("sensor.kitchen_energy", "Kitchen", "sensor.kitchen_power", {
@@ -87,13 +80,15 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             rest("house"),
         ];
         const source = (id: string, sensor: string, sourceType: string) => ({ ...item(id, id, sensor), sourceType, isSource: true });
-        const tree = {
+        const tree = treePayload({
             sources: [source("solar", "sensor.solar", "solar"), source("grid", "sensor.grid", "grid"), source("battery", "sensor.battery", "battery")],
             consumers: [{ ...item("house", "House", "sensor.house"), children: houseChildren }],
             consumptionTotalSensorId: null,
             productionTotalSensorId: null,
             uiConfig: { show_others_group: false, device_groupings: [], history_buckets: 3, history_bucket_duration: 60 },
-        };
+        });
+    await page.evaluate(({ v, tree, forecastDefaults, scheduleDefaults }) => {
+        const profile = v.profile !== false;
         const s = (state: string, unit?: string) => ({ state, attributes: unit ? { unit_of_measurement: unit } : {} });
         const states: Record<string, unknown> = {
             "sensor.solar": s(v.solar ?? "3000", "W"),
@@ -242,16 +237,16 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             ],
         };
         // The plan: the boiler from 13:00 to 14:00, the EV a candidate 15:00–16:00.
-        const slots = [];
+        const slots: ScheduleSlotDTO[] = [];
         for (let i = 0; i < 48; i += 1) {
             const at = new Date(Date.parse("2026-10-21T11:45:00Z") + i * 900_000);
             const hour = at.getUTCHours();
-            const controllables: Record<string, unknown> = { inverter: { kind: "normal", setBy: "automation" } };
+            const controllables: ScheduleControllableActionsDTO = { inverter: { kind: "normal", setBy: "automation" } };
             if (hour === 13) controllables.boiler = { on: true, setBy: "automation" };
             if (hour === 15) controllables.ev = { charge: true, useMode: "Fast", setBy: "automation", conditionMet: false };
             slots.push({ id: at.toISOString().replace(".000Z", "+00:00"), controllables });
         }
-        const schedule = { executionEnabled: !v.executionOff, slots, runtime: { activeSlotId: "2026-10-21T12:00:00+00:00", controllables: {} } };
+        const schedule: SchedulePayload = { ...scheduleDefaults, executionEnabled: !v.executionOff, slots, runtime: { activeSlotId: "2026-10-21T12:00:00+00:00", controllables: {} } };
         // The house forecast: 0.3 kWh in the slot in progress, 0.25 kWh in every later one.
         const houseSlot = (ms: number, kwh: number) => ({
             timestamp: new Date(ms).toISOString().replace(".000Z", "+00:00"),
@@ -259,9 +254,11 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             deferrableConsumers: [],
         });
         const now = Date.parse("2026-10-21T12:00:00Z");
-        const forecast = {
-            solar: { status: "unavailable", points: [], actualHistory: [] },
+        const forecast: ForecastPayload = {
+            ...forecastDefaults,
+            solar: { ...forecastDefaults.solar, status: "unavailable", points: [], actualHistory: [] },
             house_consumption: {
+                ...forecastDefaults.house_consumption,
                 status: "available", generatedAt: "2026-10-21T12:00:00+00:00", unit: "kWh", resolution: "quarter_hour",
                 horizonHours: 48, trainingWindowDays: 56, historyDaysAvailable: 42, requiredHistoryDays: 14, model: "hour_of_week",
                 actualHistory: [],
@@ -269,14 +266,14 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 series: Array.from({ length: 140 }, (_, i) => houseSlot(now + (i + 1) * 900_000, 0.25)),
             },
         };
-        window.__requests = [];
-        window.__hass = {
+        window.__HouseRequests = [];
+        window.__HouseHass = {
             language: "en",
             locale: { language: "en-GB" },
             config: { time_zone: "UTC" },
             connection: {
                 sendMessagePromise: async (msg: { type: string }) => {
-                    window.__requests.push({ type: msg.type });
+                    window.__HouseRequests.push({ type: msg.type });
                     return msg.type === "helman/get_forecast" ? forecast : {};
                 },
                 subscribeMessage: window.__mockHass().connection.subscribeMessage,
@@ -341,16 +338,16 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 section?: string;
                 report?: string;
             }) => {
-                window.__requests.push({ type: msg.type, node: msg.node, section: msg.section, report: msg.report });
+                window.__HouseRequests.push({ type: msg.type, node: msg.node, section: msg.section, report: msg.report });
             }).callWS,
         };
-    }, variant);
+    }, { v: variant, tree, forecastDefaults: forecastPayload(), scheduleDefaults: scheduleSlots({ slotMinutes: 15 }) });
     await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-simple-card"));
     await page.evaluate(async () => {
         const card = document.createElement("helman-simple-card") as any;
         card.setConfig({ type: "custom:helman-simple-card" });
-        card.hass = window.__hass;
+        card.hass = window.__HouseHass;
         document.body.appendChild(card);
     });
 }
@@ -365,9 +362,9 @@ const flow = (page: Page) => content(page).locator("helman-node-flow");
 const flowLabel = (page: Page, side: "in" | "out", id: string) => flow(page).locator(`[data-side="${side}"] [data-flow="${id}"]`);
 const fill = (page: Page, id: string) => flow(page).locator(`[data-glyph="house"] [data-house-fill="${id}"]`);
 const sectionRequests = (page: Page) =>
-    page.evaluate(() => window.__requests.filter((r) => r.type === "helman/get_node_detail" && r.node === "house" && r.section).map((r) => r.section));
+    page.evaluate(() => window.__HouseRequests.filter((r) => r.type === "helman/get_node_detail" && r.node === "house" && r.section).map((r) => r.section));
 const reportRequests = (page: Page) =>
-    page.evaluate(() => window.__requests.filter((r) => r.type === "helman/device_report").length);
+    page.evaluate(() => window.__HouseRequests.filter((r) => r.type === "helman/device_report").length);
 
 async function openDetail(page: Page): Promise<void> {
     await houseCell(page).click();
@@ -408,7 +405,7 @@ test.describe("the house overview", () => {
         // Today's figures come with the overview; the history only with its answer.
         await expect.poll(() => sectionRequests(page)).toEqual(["today"]);
         expect(await reportRequests(page)).toBe(0);
-        expect(await page.evaluate(() => window.__requests.filter((r) => r.type === "helman/get_forecast").length)).toBe(0);
+        expect(await page.evaluate(() => window.__HouseRequests.filter((r) => r.type === "helman/get_forecast").length)).toBe(0);
         await expect(content(page).locator("[data-exception]")).toHaveCount(0);
     });
 
@@ -493,7 +490,7 @@ test.describe("the flow", () => {
         await openDetail(page);
         await page.evaluate(() => {
             const card = document.querySelector("helman-simple-card") as any;
-            const hass = window.__hass;
+            const hass = window.__HouseHass;
             card.hass = { ...hass, states: { ...hass.states, "sensor.battery": { state: "unavailable", attributes: {} } } };
         });
         await expect(flowLabel(page, "in", "solar")).toContainText("–");
@@ -644,7 +641,7 @@ test.describe("what used the most", () => {
         await page.clock.setFixedTime(new Date(Date.parse(FIXED_NOW_ISO) + 6 * 60_000));
         await page.evaluate(() => {
             const card = document.querySelector("helman-simple-card") as any;
-            const hass = window.__hass;
+            const hass = window.__HouseHass;
             card.hass = { ...hass, states: { ...hass.states, "sensor.ev_power": { state: "3", attributes: { unit_of_measurement: "kW" } } } };
         });
         await expect.poll(() => reportRequests(page)).toBe(2);
@@ -852,7 +849,7 @@ test.describe("disclosure and live data", () => {
         await openDetail(page);
         await page.evaluate(() => {
             const card = document.querySelector("helman-simple-card") as any;
-            const hass = window.__hass;
+            const hass = window.__HouseHass;
             card.hass = { ...hass, states: { ...hass.states, "sensor.ev_power": { state: "3", attributes: { unit_of_measurement: "kW" } } } };
         });
         await expect(tile(page, "phases").locator(".value")).toHaveText("L2 4.1 kW");

@@ -1,3 +1,4 @@
+import { configDoc } from "./support/payload-builders";
 import { test, expect, type Page } from "@playwright/test";
 import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
@@ -58,8 +59,8 @@ const controllable = (id: string, name: string) => ({
     },
 });
 
-const CONFIG = {
-    config_version: 7,
+const CONFIG = configDoc({
+
     devices: { consumers: [controllable("boiler", "Boiler"), controllable("pump", "Pump")] },
     automation: {
         enabled: true,
@@ -83,7 +84,7 @@ const CONFIG = {
         ],
         system_optimizers: [],
     },
-};
+});
 
 interface DraftDocument {
     devices: { consumers: { id: string }[] };
@@ -98,7 +99,7 @@ interface DraftDocument {
 
 declare global {
     interface Window {
-        __editorConfig: () => DraftDocument;
+        __sortableConfig: () => DraftDocument;
     }
 }
 
@@ -117,7 +118,7 @@ async function mountEditor(page: Page): Promise<void> {
             const element = document.createElement(
                 "helman-config-editor-panel",
             ) as HTMLElement & Record<string, unknown>;
-            window.__editorConfig = () =>
+            window.__sortableConfig = () =>
                 (element as unknown as { _config: DraftDocument })._config;
             element.hass = {
                 language: "en",
@@ -138,7 +139,7 @@ async function mountEditor(page: Page): Promise<void> {
             };
             document.body.appendChild(element);
         },
-        { config: CONFIG, schema: SCHEMA },
+        { config: JSON.parse(JSON.stringify(CONFIG)), schema: SCHEMA },
     );
 }
 
@@ -209,11 +210,11 @@ async function openFirstOptimizer(page: Page): Promise<void> {
 }
 
 const controllableIds = (page: Page) =>
-    page.evaluate(() => window.__editorConfig().devices.consumers.map((entry) => entry.id));
+    page.evaluate(() => window.__sortableConfig().devices.consumers.map((entry) => entry.id));
 
 const optimizerIds = (page: Page) =>
     page.evaluate(() =>
-        window.__editorConfig().automation.appliance_optimizers.map((entry) => entry.id),
+        window.__sortableConfig().automation.appliance_optimizers.map((entry) => entry.id),
     );
 
 test("the devices list reorders from its own ha-sortable", async ({ page }) => {
@@ -245,7 +246,7 @@ test("a target group reorders its members in priority order", async ({ page }) =
         .poll(() =>
             page.evaluate(() =>
                 window
-                    .__editorConfig()
+                    .__sortableConfig()
                     .automation.appliance_optimizers[0].target.controllables.map(
                         (member) => member.controllable_id,
                     ),
@@ -265,7 +266,7 @@ test("a condition group move stays inside its own card", async ({ page }) => {
         .poll(() =>
             page.evaluate(() =>
                 window
-                    .__editorConfig()
+                    .__sortableConfig()
                     .automation.appliance_optimizers[0].conditions.map(
                         (group) => group.name ?? "unnamed",
                     ),

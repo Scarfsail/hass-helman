@@ -1,3 +1,4 @@
+import { configDoc } from "./support/payload-builders";
 import { test, expect, type Page } from "@playwright/test";
 import { consumerGroups } from "../cards/shared/config/devices";
 import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
@@ -80,7 +81,7 @@ type Device = Record<string, any>;
 
 declare global {
     interface Window {
-        __editorConfig: () => { devices: { groupings?: any[]; consumers: Device[] } };
+        __membershipConfig: () => { devices: { groupings?: any[]; consumers: Device[] } };
     }
 }
 
@@ -92,7 +93,7 @@ async function mountEditor(page: Page): Promise<void> {
             const element = document.createElement(
                 "helman-config-editor-panel",
             ) as HTMLElement & Record<string, unknown>;
-            window.__editorConfig = () => (element as unknown as { _config: any })._config;
+            window.__membershipConfig = () => (element as unknown as { _config: any })._config;
             element.hass = {
                 language: "en",
                 locale: { language: "en" },
@@ -119,10 +120,10 @@ async function mountEditor(page: Page): Promise<void> {
             document.body.appendChild(element);
         },
         {
-            config: {
-                config_version: 26,
+            config: JSON.parse(JSON.stringify(configDoc({
+
                 devices: { groupings: [BREAKERS, MODES], consumers: [AC, BOILER, LAMP] },
-            },
+            }))),
             placeholders: PLACEHOLDERS,
         },
     );
@@ -202,7 +203,7 @@ const memberships = (page: Page) =>
                 found[device.id] = device.groups;
                 walk(device.children ?? []);
             });
-        walk(window.__editorConfig().devices.consumers);
+        walk(window.__membershipConfig().devices.consumers);
         return found;
     });
 

@@ -803,7 +803,7 @@ async function mountPanel(
     await loadBundle(page, "scheduling-explanation-panel");
 
     await page.evaluate(([fixture, translations]) => {
-        const panel = document.createElement("scheduling-explanation-panel") as HTMLElement
+        const panel = document.createElement("scheduling-explanation-panel") as unknown as HTMLElement
             & Record<string, unknown>;
         const strings = translations as Record<string, string>;
         panel.localize = (key: string) => strings[key] ?? key;
@@ -848,7 +848,7 @@ async function openDiagram(page: Page, rowIndex: number): Promise<void> {
  */
 async function selectSlot(page: Page, rowIndex: number, optimizerId: string): Promise<void> {
     await page.evaluate((slotId) => {
-        (document.querySelector("scheduling-explanation-panel") as HTMLElement
+        (document.querySelector("scheduling-explanation-panel") as unknown as HTMLElement
             & Record<string, unknown>).slotId = slotId;
     }, SLOT_IDS[rowIndex]);
 

@@ -1,4 +1,5 @@
 import { installMockHass } from "./support/mock-hass";
+import { treeNode, treePayload } from "./support/payload-builders";
 import { test, expect, type Page } from "@playwright/test";
 import { CARD_BUNDLE } from "./support/card-page";
 
@@ -51,7 +52,16 @@ declare global {
 async function installFixture(page: Page, bucketSeconds: number): Promise<void> {
     await page.setContent("<!doctype html><html><body></body></html>");
     await installMockHass(page);
-    await page.evaluate((bucket) => {
+    const node = (id: string, sensor: string, sourceType: string | null) =>
+        treeNode({ id, displayName: id, powerSensorId: sensor, sourceType, isSource: sourceType !== null });
+    const tree = treePayload({
+        sources: [node("solar", "sensor.solar", "solar"), node("grid", "sensor.grid_in", "grid")],
+        consumers: [node("house", "sensor.house", null)],
+        consumptionTotalSensorId: "sensor.consumption_total",
+        productionTotalSensorId: "sensor.production_total",
+        uiConfig: { show_others_group: false, device_groupings: [], history_buckets: 3, history_bucket_duration: bucketSeconds },
+    });
+    await page.evaluate(({ bucket, treePayload }) => {
         const liveIntervals = new Map<number, number>();
         let markedIntervals = 0;
         let markedFrames = 0;
@@ -84,44 +94,6 @@ async function installFixture(page: Page, bucketSeconds: number): Promise<void> 
         window.__sinceMark = () => ({ intervals: markedIntervals, frames: markedFrames });
         window.__liveBucketIntervals = () =>
             [...liveIntervals.entries()].filter(([, delay]) => delay === bucket * 1000).map(([id]) => id);
-
-        const node = (id: string, sensor: string, sourceType: string | null) => ({
-            id,
-            displayName: id,
-            powerSensorId: sensor,
-            ratioSensorId: null,
-            switchEntityId: null,
-            valueType: "default",
-            sourceConfig: null,
-            sourceType,
-            isSource: sourceType !== null,
-            isUnmeasured: false,
-            groups: {},
-            groupBadgeTexts: [],
-            icon: null,
-            compact: false,
-            showAdditionalInfo: false,
-            childrenFullWidth: false,
-            hideChildren: false,
-            hideChildrenIndicator: false,
-            sortChildrenByPower: false,
-            deferrable: false,
-            controllableIds: [],
-            children: [],
-        });
-
-        const treePayload = {
-            sources: [node("solar", "sensor.solar", "solar"), node("grid", "sensor.grid_in", "grid")],
-            consumers: [node("house", "sensor.house", null)],
-            consumptionTotalSensorId: "sensor.consumption_total",
-            productionTotalSensorId: "sensor.production_total",
-            uiConfig: {
-                show_others_group: false,
-                device_groupings: [],
-                history_buckets: 3,
-                history_bucket_duration: bucket,
-            },
-        };
 
         const historyPayload = {
             buckets: 3,
@@ -174,7 +146,7 @@ async function installFixture(page: Page, bucketSeconds: number): Promise<void> 
                 }
             }).callWS,
         };
-    }, bucketSeconds);
+    }, { bucket: bucketSeconds, treePayload: tree });
     await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-card") && !!customElements.get("helman-simple-card"));
 }

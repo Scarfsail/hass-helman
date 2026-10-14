@@ -1,3 +1,4 @@
+import { configDoc } from "./support/payload-builders";
 import { test, expect, type Page } from "@playwright/test";
 import {
     assignPhase,
@@ -88,12 +89,12 @@ type Device = Record<string, any>;
 
 declare global {
     interface Window {
-        __editorConfig: () => { devices: { groupings?: any[]; consumers: Device[] } };
+        __phaseConfig: () => { devices: { groupings?: any[]; consumers: Device[] } };
         __saved: any[];
     }
 }
 
-async function mountEditor(page: Page, groupings: unknown[] = [BREAKERS]): Promise<void> {
+async function mountEditor(page: Page, groupings: Array<typeof BREAKERS> = [BREAKERS]): Promise<void> {
     await loadBundle(page, "helman-config-editor-panel", EDITOR_BUNDLE);
 
     await page.evaluate(
@@ -101,7 +102,7 @@ async function mountEditor(page: Page, groupings: unknown[] = [BREAKERS]): Promi
             const element = document.createElement(
                 "helman-config-editor-panel",
             ) as HTMLElement & Record<string, unknown>;
-            window.__editorConfig = () => (element as unknown as { _config: any })._config;
+            window.__phaseConfig = () => (element as unknown as { _config: any })._config;
             window.__saved = [];
             element.hass = {
                 language: "en",
@@ -124,10 +125,10 @@ async function mountEditor(page: Page, groupings: unknown[] = [BREAKERS]): Promi
             document.body.appendChild(element);
         },
         {
-            config: {
-                config_version: 26,
+            config: JSON.parse(JSON.stringify(configDoc({
+
                 devices: { ...(groupings.length > 0 ? { groupings } : {}), consumers: [AC, BOILER, LAMP, PANEL] },
-            },
+            }))),
         },
     );
 
@@ -197,7 +198,7 @@ const phases = (page: Page) =>
                 found[device.id] = device.phase;
                 walk(device.children ?? []);
             });
-        walk(window.__editorConfig().devices.consumers);
+        walk(window.__phaseConfig().devices.consumers);
         return found;
     });
 
@@ -375,7 +376,7 @@ test("a drop into a phase writes that device's phase only, and Unassigned delete
         "": ["boiler", "lamp"],
     });
     expect(await phases(page)).toEqual({ ...INITIAL, ac: "L3", pump: "L1", boiler: undefined });
-    expect(await page.evaluate(() => "phase" in window.__editorConfig().devices.consumers[1])).toBe(false);
+    expect(await page.evaluate(() => "phase" in window.__phaseConfig().devices.consumers[1])).toBe(false);
 
     // The device editor's picker shows what the board set.
     const picker = (id: string) =>

@@ -2,6 +2,8 @@ import { test, expect, type Page } from "@playwright/test";
 
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
 import { loadBundle } from "./support/card-page";
+import { treeNode, treePayload } from "./support/payload-builders";
+import type { TreeItemDTO } from "../cards/helman-api";
 
 /**
  * The inverter from the power card's distribution row.
@@ -15,38 +17,15 @@ import { loadBundle } from "./support/card-page";
  */
 
 /** A tree DTO with the defaults the backend fills in. */
-function dto(overrides: Record<string, unknown>) {
-    return {
-        powerSensorId: null,
-        ratioSensorId: null,
-        switchEntityId: null,
-        sourceType: null,
-        sourceConfig: null,
-        valueType: "default",
-        isSource: false,
-        isUnmeasured: false,
-        isEstimated: false,
-        groups: {},
-        groupBadgeTexts: [],
-        icon: null,
-        compact: false,
-        showAdditionalInfo: false,
-        childrenFullWidth: false,
-        hideChildren: false,
-        hideChildrenIndicator: false,
-        sortChildrenByPower: false,
-        deferrable: false,
-        controllableIds: [],
-        children: [],
-        ...overrides,
-    };
+function dto(overrides: Partial<TreeItemDTO>) {
+    return treeNode(overrides);
 }
 
 async function mountCard(page: Page): Promise<void> {
     await loadBundle(page, "helman-card");
     await page.addScriptTag({ content: HA_DIALOG_STUB });
 
-    const tree = {
+    const tree = treePayload({
         sources: [
             dto({ id: "solar", displayName: "Solar", powerSensorId: "sensor.solar", isSource: true, sourceType: "solar" }),
             dto({ id: "battery", displayName: "Battery", powerSensorId: "sensor.battery", isSource: true, sourceType: "battery" }),
@@ -55,7 +34,7 @@ async function mountCard(page: Page): Promise<void> {
         consumptionTotalSensorId: null,
         productionTotalSensorId: null,
         uiConfig: { show_others_group: false, device_groupings: [], history_buckets: 3, history_bucket_duration: 5 },
-    };
+    });
 
     await page.evaluate(async (tree) => {
         const state = (value: string, unit?: string) => ({ state: value, attributes: unit ? { unit_of_measurement: unit } : {} });

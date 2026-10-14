@@ -1,4 +1,5 @@
-import { expect, type Page } from "@playwright/test";
+import type { InspectorPayload } from "../../cards/helman-api";
+import { type Page } from "@playwright/test";
 
 import { loadBundle } from "./card-page";
 import { installFixedClock } from "./fixed-clock";
@@ -74,11 +75,11 @@ export async function mountInspector(
         // only hold them to that if the fixture makes them the same.
         const SLOTS_PER_DAY = 96;
         const houseActual: Array<{ timestamp: string; valueWh: number }> = [];
-        const houseActualBreakdown: Array<Record<string, unknown>> = [];
+        const houseActualBreakdown: InspectorPayload["series"]["houseActualBreakdown"] = [];
         // The day chart resolves a click to the nearest slot the impact series
         // knows, so without these a press in the day view selects nothing at
         // all -- which is not what a bare day payload should mean here.
-        const impact: Array<Record<string, unknown>> = [];
+        const impact: InspectorPayload["series"]["impact"] = [];
         for (let m = 0; m < 1440; m += 15) {
             const hh = String(Math.floor(m / 60)).padStart(2, "0");
             const mm = String(m % 60).padStart(2, "0");
@@ -124,33 +125,28 @@ export async function mountInspector(
             });
         }
 
-        const dayPayload = {
-            date,
+        const dayPayload = window.__inspectorDay({ date,
             timezone: "UTC",
             status: "ok",
             effectiveVariant: null,
             trainedAt: null,
             priceUnit: "CZK/kWh",
-            range: {
-                minDate: dayFloor, maxDate: date, canGoPrevious: true, canGoNext: false,
+            range: { minDate: dayFloor, maxDate: date, canGoPrevious: true, canGoNext: false,
                 isToday: true, isFuture: false,
             },
-            series: {
-                raw: [], corrected, actual: [], invalidated: [], factors: [], impact,
+            series: { raw: [], corrected, actual: [], invalidated: [], factors: [], impact,
                 houseForecast: [], houseActual,
                 houseActualBreakdown, houseForecastBreakdown: [],
                 batterySocForecast: [], batterySocActual: [],
                 gridForecast: [], gridActual: [], batteryForecast: [], batteryActual: [],
                 importPrice: price, exportPrice: [],
             },
-            totals: {
-                rawWh: null, correctedWh: null, actualWh: null,
+            totals: { rawWh: null, correctedWh: null, actualWh: null,
                 houseForecastWh: null, houseActualWh: null,
                 gridForecastWh: null, gridActualWh: null,
                 batteryForecastWh: null, batteryActualWh: null,
             },
-            availability: {
-                hasRawForecast: false, hasCorrectedForecast: true, hasActuals: false,
+            availability: { hasRawForecast: false, hasCorrectedForecast: true, hasActuals: false,
                 hasInvalidated: false, hasProfile: true, hasHouseForecast: false,
                 hasHouseActual: true, hasHouseActualBreakdown: true,
                 hasBatterySocForecast: false, hasBatterySocActual: false,
@@ -159,7 +155,7 @@ export async function mountInspector(
             },
             batterySocBounds: [],
             trainingExplainability: null,
-        };
+        });
 
         (window as any).__spanRequests = [];
         (window as any).__dayRequests = [];

@@ -2,6 +2,8 @@ import { test, expect, type Page } from "@playwright/test";
 
 import { FIXED_NOW_ISO, FIXED_TODAY, installFixedClock } from "./support/fixed-clock";
 import { loadBundle } from "./support/card-page";
+import { forecastPayload, scheduleSlots } from "./support/payload-builders";
+import type { BatteryCapacityForecastHourDTO, GridForecastSlotDTO } from "../cards/helman-api";
 
 /**
  * The solar inspector's day pills.
@@ -53,120 +55,57 @@ async function mountInspector(
     // screen.
     brightPast = false,
 ): Promise<void> {
-    await page.evaluate(({ pillDays, forecastDays, scheduledDays, minDaysBack, firstWeekday, measureToday, brightPast }) => {
+    const fixtureTodayMs = Date.parse(`${FIXED_TODAY}T00:00:00Z`);
+    const slotIds: string[] = [];
+    for (let day = 0; day < SCHEDULED_DAYS; day += 1) {
+        const firstHour = day === 0 && measureToday ? new Date(FIXED_NOW_ISO).getUTCHours() : 0;
+        for (let hour = firstHour; hour < 24; hour += 1) {
+            slotIds.push(new Date(fixtureTodayMs + day * 86_400_000 + hour * 3_600_000).toISOString());
+        }
+    }
+    const schedule = scheduleSlots({
+        slotMinutes: 60,
+        overrides: { slots: slotIds.map((id) => ({ id, controllables: {} })) },
+    });
+
+    const solarPoints: Array<{ timestamp: string; value: number }> = [];
+    const batterySeries: BatteryCapacityForecastHourDTO[] = [];
+    const gridSeries: GridForecastSlotDTO[] = [];
+    for (let day = 0; day < FORECAST_DAYS; day += 1) {
+        for (let hour = 0; hour < 24; hour += 1) {
+            const timestamp = new Date(fixtureTodayMs + day * 86_400_000 + hour * 3_600_000).toISOString();
+            const daylight = hour >= 8 && hour < 16;
+            solarPoints.push({ timestamp, value: daylight ? 1000 / 2 ** day : 0 });
+            batterySeries.push({
+                timestamp, durationHours: 1, socPct: 40 + hour,
+                solarKwh: 0, baselineHouseKwh: 0, netKwh: 0, chargedKwh: 0,
+                dischargedKwh: 0, remainingEnergyKwh: 0, importedFromGridKwh: 0,
+                exportedToGridKwh: 0, hitMinSoc: false, hitMaxSoc: false,
+                limitedByChargePower: false, limitedByDischargePower: false,
+            });
+            gridSeries.push({
+                timestamp, durationHours: 1,
+                importedFromGridKwh: daylight ? 0 : 0.4,
+                exportedToGridKwh: daylight ? 0.6 : 0,
+                availableSurplusKwh: 0,
+            });
+        }
+    }
+    const base = forecastPayload();
+    const forecast = forecastPayload({
+        solar: { ...base.solar, status: "available", horizonHours: FORECAST_DAYS * 24, points: solarPoints },
+        grid: { ...base.grid, status: "available", horizonHours: FORECAST_DAYS * 24, series: gridSeries },
+        battery_capacity: {
+            ...base.battery_capacity, status: "available", horizonHours: FORECAST_DAYS * 24,
+            nominalCapacityKwh: 10, currentRemainingEnergyKwh: 5, currentSoc: 50,
+            minSoc: 10, maxSoc: 100, chargeEfficiency: 1, dischargeEfficiency: 1,
+            maxChargePowerW: 5000, maxDischargePowerW: 5000, series: batterySeries,
+        },
+    });
+    await page.evaluate(({ pillDays, minDaysBack, firstWeekday, measureToday, brightPast, schedule, forecast }) => {
         const dayMs = 86_400_000;
-        const hourMs = 3_600_000;
         const todayMs = Date.parse(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`);
         const isoDay = (offset: number) => new Date(todayMs + offset * dayMs).toISOString().slice(0, 10);
-
-        const slotIds: string[] = [];
-        for (let day = 0; day < scheduledDays; day += 1) {
-            // The backend prunes elapsed slots, so a schedule fetched mid-day
-            // begins at the slot running now -- which is what makes today's
-            // forecast half the *rest* of today and not the whole of it. The
-            // fixture only takes that shape where a test cares, because it is
-            // also what decides today's figures, and the rest of the suite is
-            // written against a whole-day schedule.
-            const firstHour = day === 0 && measureToday ? new Date().getUTCHours() : 0;
-            for (let hour = firstHour; hour < 24; hour += 1) {
-                slotIds.push(new Date(todayMs + day * dayMs + hour * hourMs).toISOString());
-            }
-        }
-
-        const schedule = {
-            executionEnabled: true,
-            slots: slotIds.map((id) => ({
-                id,
-                controllables: {},
-            })),
-        };
-
-        // Solar halves each day; SoC and grid stay flat, so any difference in
-        // the solar bars is the scale and not the data.
-        const solarPoints: Array<{ timestamp: string; value: number }> = [];
-        const batterySeries: Array<{ timestamp: string; durationHours: number; socPct: number }> = [];
-        const gridSeries: Array<Record<string, unknown>> = [];
-        for (let day = 0; day < forecastDays; day += 1) {
-            for (let hour = 0; hour < 24; hour += 1) {
-                const timestamp = new Date(todayMs + day * dayMs + hour * hourMs).toISOString();
-                const daylight = hour >= 8 && hour < 16;
-                solarPoints.push({
-                    timestamp,
-                    value: daylight ? 1000 / 2 ** day : 0,
-                });
-                batterySeries.push({ timestamp, durationHours: 1, socPct: 40 + hour });
-                gridSeries.push({
-                    timestamp,
-                    durationHours: 1,
-                    importedFromGridKwh: daylight ? 0 : 0.4,
-                    exportedToGridKwh: daylight ? 0.6 : 0,
-                    availableSurplusKwh: 0,
-                });
-            }
-        }
-
-        const forecast = {
-            solar: {
-                status: "available",
-                unit: "Wh",
-                resolution: "hour",
-                horizonHours: forecastDays * 24,
-                actualHistory: [],
-                points: solarPoints,
-            },
-            grid: {
-                status: "available",
-                generatedAt: null,
-                unit: "kWh",
-                resolution: "hour",
-                horizonHours: forecastDays * 24,
-                startedAt: null,
-                partialReason: null,
-                coverageUntil: null,
-                currentImportPrice: null,
-                importPriceUnit: null,
-                importPricePoints: [],
-                currentExportPrice: null,
-                exportPriceUnit: null,
-                exportPricePoints: [],
-                series: gridSeries,
-            },
-            house_consumption: {
-                status: "unavailable",
-                generatedAt: null,
-                unit: "Wh",
-                resolution: "hour",
-                horizonHours: 0,
-                trainingWindowDays: 0,
-                historyDaysAvailable: 0,
-                requiredHistoryDays: 0,
-                model: null,
-                actualHistory: [],
-                series: [],
-            },
-            battery_capacity: {
-                status: "available",
-                generatedAt: null,
-                startedAt: null,
-                unit: "kWh",
-                resolution: "hour",
-                horizonHours: forecastDays * 24,
-                model: null,
-                nominalCapacityKwh: 10,
-                currentRemainingEnergyKwh: 5,
-                currentSoc: 50,
-                minSoc: 10,
-                maxSoc: 100,
-                chargeEfficiency: 1,
-                dischargeEfficiency: 1,
-                maxChargePowerW: 5000,
-                maxDischargePowerW: 5000,
-                partialReason: null,
-                coverageUntil: null,
-                actualHistory: [],
-                series: batterySeries,
-            },
-        };
 
         // A day already lived through carries actuals instead of a schedule:
         // production, a measured SoC range, and grid samples signed the
@@ -186,22 +125,19 @@ async function mountInspector(
             }
             : { batterySocActual: [], gridActual: [] };
 
-        const inspectorPayload = (date: string) => ({
-            date,
+        const inspectorPayload = (date: string) => (window.__inspectorDay({ date,
             timezone: "UTC",
             status: "ok",
             effectiveVariant: null,
             trainedAt: null,
-            range: {
-                minDate: isoDay(-minDaysBack),
+            range: { minDate: isoDay(-minDaysBack),
                 maxDate: isoDay(pillDays - 1),
                 canGoPrevious: true,
                 canGoNext: date < isoDay(pillDays - 1),
                 isToday: date === isoDay(0),
                 isFuture: date > isoDay(0),
             },
-            series: {
-                raw: [],
+            series: { raw: [],
                 corrected: [],
                 actual: [],
                 invalidated: [],
@@ -217,8 +153,7 @@ async function mountInspector(
                 batteryForecast: [],
                 batteryActual: [],
             },
-            totals: {
-                rawWh: null,
+            totals: { rawWh: null,
                 correctedWh: null,
                 actualWh: isPast(date) ? 6000 : null,
                 houseForecastWh: null,
@@ -228,8 +163,7 @@ async function mountInspector(
                 batteryForecastWh: null,
                 batteryActualWh: null,
             },
-            availability: {
-                hasRawForecast: false,
+            availability: { hasRawForecast: false,
                 hasCorrectedForecast: false,
                 hasActuals: false,
                 hasInvalidated: false,
@@ -245,7 +179,7 @@ async function mountInspector(
             },
             batterySocBounds: [],
             trainingExplainability: null,
-        });
+        }));
 
         const requestedDates: string[] = [];
         (window as unknown as Record<string, unknown>).__requestedDates = requestedDates;
@@ -253,7 +187,7 @@ async function mountInspector(
         const requestedRanges: string[] = [];
         (window as unknown as Record<string, unknown>).__requestedRanges = requestedRanges;
 
-        const el = document.createElement("helman-solar-inspector") as HTMLElement & Record<string, unknown>;
+        const el = document.createElement("helman-solar-inspector") as unknown as HTMLElement & Record<string, unknown>;
         el.hass = {
             language: "en",
             locale: { language: "en", first_weekday: firstWeekday },
@@ -325,12 +259,10 @@ async function mountInspector(
         document.body.appendChild(el);
     }, {
         pillDays: PILL_DAYS,
-        forecastDays: FORECAST_DAYS,
-        scheduledDays: SCHEDULED_DAYS,
         minDaysBack,
         firstWeekday,
         measureToday,
-        brightPast,
+        brightPast, schedule, forecast,
     });
 
     await page.waitForFunction((expected) => {

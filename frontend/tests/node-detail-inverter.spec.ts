@@ -1,4 +1,6 @@
 import { installMockHass } from "./support/mock-hass";
+import { cardTree, scheduleSlots } from "./support/payload-builders";
+import type { ScheduleActionDTO, SchedulePayload, ScheduleSlotDTO } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
 import { installFixedClock } from "./support/fixed-clock";
@@ -54,8 +56,8 @@ type Variant = {
 
 declare global {
     interface Window {
-        __hass: any;
-        __requests: Array<{ type: string; node?: string; section?: string }>;
+        __InverterHass: any;
+        __InverterRequests: Array<{ type: string; node?: string; section?: string }>;
         __modesFail: boolean;
         __overview: any;
         __modesCalls: number;
@@ -68,23 +70,8 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
     await page.setContent("<!doctype html><html><body style='margin:0'></body></html>");
     await installMockHass(page);
     await page.addScriptTag({ content: HA_DIALOG_STUB });
-    await page.evaluate((v) => {
+    await page.evaluate(({ v, tree, scheduleDefaults }) => {
         const profile = v.profile !== false;
-        const node = (id: string, sensor: string, sourceType: string | null) => ({
-            id, displayName: id, powerSensorId: sensor, ratioSensorId: null, switchEntityId: null,
-            valueType: "default", sourceConfig: null, sourceType, isSource: sourceType !== null,
-            isUnmeasured: false, groups: {}, groupBadgeTexts: [], icon: null, compact: false,
-            showAdditionalInfo: false, childrenFullWidth: false, hideChildren: false,
-            hideChildrenIndicator: false, sortChildrenByPower: false, deferrable: false,
-            controllableIds: [], children: [],
-        });
-        const tree = {
-            sources: [node("solar", "sensor.solar", "solar"), node("grid", "sensor.grid", "grid"), node("battery", "sensor.battery", "battery")],
-            consumers: [node("house", "sensor.house", null)],
-            consumptionTotalSensorId: null,
-            productionTotalSensorId: null,
-            uiConfig: { show_others_group: false, device_groupings: [], history_buckets: 3, history_bucket_duration: 60 },
-        };
         const s = (state: string, unit?: string, friendly?: string) => ({
             state, attributes: { ...(unit ? { unit_of_measurement: unit } : {}), ...(friendly ? { friendly_name: friendly } : {}) },
         });
@@ -199,13 +186,13 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             },
         };
         // 15-minute slots from 11:45 today for a day and a half.
-        const slots = [];
+        const slots: ScheduleSlotDTO[] = [];
         const start = Date.parse(`${day}T11:45:00Z`);
         for (let i = 0; i < 36 * 4; i += 1) {
             const at = new Date(start + i * 900_000);
             const id = at.toISOString().replace(".000Z", "+00:00");
             const hour = at.getUTCHours() + (at.getUTCDate() - 21) * 24;
-            let action: Record<string, unknown> | null = { kind: "normal", setBy: "automation" };
+            let action: ScheduleActionDTO | null = { kind: "normal", setBy: "automation" };
             if (v.stopExportThenEmpty && hour < 13) action = { kind: "stop_export", setBy: "automation" };
             if (v.stopExportThenEmpty && hour === 13) action = null;
             if (!v.noCharge && hour >= 14 && hour < 16) action = { kind: "charge_to_target_soc", targetSoc: 80, setBy: "automation" };
@@ -213,7 +200,8 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             if (v.candidateNow && hour < 14) action = { kind: "discharge_to_target_soc", targetSoc: 30, setBy: "automation", conditionMet: false };
             slots.push({ id, controllables: action ? { inverter: action } : {} });
         }
-        const schedule = {
+        const schedule: SchedulePayload = {
+            ...scheduleDefaults,
             executionEnabled: v.executionEnabled !== false,
             slots,
             runtime: {
@@ -221,12 +209,12 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 controllables: { inverter: { actionKind: "apply", outcome: "success", executedAction: { kind: "normal" }, reason: "scheduled" } },
             },
         };
-        window.__requests = [];
+        window.__InverterRequests = [];
         window.__modesFail = !!v.modesFail;
         window.__overview = overview;
         window.__modesCalls = 0;
         window.__dataChanged = [];
-        window.__hass = {
+        window.__InverterHass = {
             language: "en",
             // A 24-hour English locale, so times read as the assertions write them.
             locale: { language: "en-GB" },
@@ -293,16 +281,16 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 node?: string;
                 section?: string;
             }) => {
-                window.__requests.push({ type: msg.type, node: msg.node, section: msg.section });
+                window.__InverterRequests.push({ type: msg.type, node: msg.node, section: msg.section });
             }).callWS,
         };
-    }, variant);
+    }, { v: variant, tree: cardTree(), scheduleDefaults: scheduleSlots({ slotMinutes: 15 }) });
     await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
     await page.waitForFunction(() => !!customElements.get("helman-simple-card"));
     await page.evaluate(async () => {
         const card = document.createElement("helman-simple-card") as any;
         card.setConfig({ type: "custom:helman-simple-card" });
-        card.hass = window.__hass;
+        card.hass = window.__InverterHass;
         document.body.appendChild(card);
     });
 }
@@ -320,7 +308,7 @@ const strip = (page: Page) => content(page).locator("helman-mode-strip");
 const flow = (page: Page) => content(page).locator("helman-node-flow");
 const flowLabel = (page: Page, side: "in" | "out", id: string) => flow(page).locator(`[data-side="${side}"] [data-flow="${id}"]`);
 const sectionRequests = (page: Page, section?: string) =>
-    page.evaluate((name) => window.__requests.filter((r) => r.type === "helman/get_node_detail" && r.section
+    page.evaluate((name) => window.__InverterRequests.filter((r) => r.type === "helman/get_node_detail" && r.section
         && (name === undefined ? r.section !== "modes" : r.section === name)).length, section);
 
 async function segments(page: Page): Promise<Array<{ tone: string; planned: string; from: string; to: string }>> {
@@ -335,11 +323,11 @@ async function segments(page: Page): Promise<Array<{ tone: string; planned: stri
 async function setStates(page: Page, states: Record<string, string>): Promise<void> {
     await page.evaluate((states) => {
         const card = document.querySelector("helman-simple-card") as any;
-        const hass = window.__hass;
+        const hass = window.__InverterHass;
         const next = { ...hass.states };
         for (const [id, state] of Object.entries(states)) next[id] = { ...next[id], state };
-        window.__hass = { ...hass, states: next };
-        card.hass = window.__hass;
+        window.__InverterHass = { ...hass, states: next };
+        card.hass = window.__InverterHass;
     }, states);
 }
 
@@ -349,7 +337,7 @@ async function announceChange(page: Page): Promise<void> {
 }
 
 const overviewRequests = (page: Page) =>
-    page.evaluate(() => window.__requests.filter((r) => r.type === "helman/get_node_detail" && r.node === "inverter" && !r.section).length);
+    page.evaluate(() => window.__InverterRequests.filter((r) => r.type === "helman/get_node_detail" && r.node === "inverter" && !r.section).length);
 
 async function openDetail(page: Page): Promise<void> {
     await cell(page).click();
@@ -452,7 +440,7 @@ test.describe("the inverter overview", () => {
     test("an overview that fails explains itself with a retry", async ({ page }) => {
         await mount(page);
         await page.evaluate(() => {
-            window.__setMockReply(window.__hass, "helman/get_node_detail", new Error("down"));
+            window.__setMockReply(window.__InverterHass, "helman/get_node_detail", new Error("down"));
         });
         await cell(page).click();
         await expect(content(page)).toContainText("Inverter details could not be loaded.");

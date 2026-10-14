@@ -1,3 +1,4 @@
+import { configDoc } from "./support/payload-builders";
 import { test, expect, type Page } from "@playwright/test";
 import { SWITCH_CONTROL_DOMAINS } from "../cards/shared/config/devices";
 import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
@@ -15,8 +16,8 @@ import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
  * what `includeDomains` and `entityFilter` together admit.
  */
 
-const CONFIG = {
-    config_version: 25,
+const CONFIG = configDoc({
+
     energy_nodes: {
         house: {
             entities: { power: "sensor.house_power" },
@@ -65,7 +66,7 @@ const CONFIG = {
             },
         ],
     },
-};
+});
 
 /** One state per row of the match table, plus the ones no kind admits. */
 const FIXTURES = [
@@ -151,7 +152,7 @@ async function mountEditor(page: Page): Promise<void> {
             };
             document.body.appendChild(element);
         },
-        { config: CONFIG, fixtures: FIXTURES },
+        { config: JSON.parse(JSON.stringify(CONFIG)), fixtures: FIXTURES },
     );
 }
 

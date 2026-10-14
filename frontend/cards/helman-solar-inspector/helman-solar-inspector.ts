@@ -456,7 +456,7 @@ const FAMILY_SERIES: Record<SeriesFamily, readonly [SeriesKey, SeriesKey]> = {
   grid: ["gridActual", "gridForecast"],
 };
 
-type InspectorPayload = {
+export type InspectorPayload = {
   date: string;
   timezone: string;
   /**
@@ -532,6 +532,8 @@ type InspectorPayload = {
     hasProfile: boolean;
     hasHouseForecast: boolean;
     hasHouseActual: boolean;
+    hasHouseActualBreakdown: boolean;
+    hasHouseForecastBreakdown: boolean;
     hasBatterySocForecast: boolean;
     hasBatterySocActual: boolean;
     hasGridForecast: boolean;

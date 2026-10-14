@@ -36,34 +36,29 @@ async function mountPurgedPastDay(
             corrected.push({ timestamp: `${date}T${hh}:${mm}:00`, valueWh: v });
             actual.push({ timestamp: `${date}T${hh}:${mm}:00`, valueWh: v * 1.05 });
         }
-        const payload = {
-            date,
+        const payload = window.__inspectorDay({ date,
             timezone: "UTC",
             status: "ok",
             effectiveVariant: "adjusted",
             trainedAt: "2026-07-11T03:00:00+00:00",
-            range: {
-                minDate: "2026-06-01", maxDate: date,
+            range: { minDate: "2026-06-01", maxDate: date,
                 canGoPrevious: true, canGoNext: true,
                 isToday: false, isFuture: false,
             },
             // Past the forecast entity's purge horizon: no raw curve, and with
             // it no impact — only what the meter measured and the corrected
             // curve rebuilt from the profile.
-            series: {
-                raw: [], corrected, actual, invalidated: [], factors: [], impact: [],
+            series: { raw: [], corrected, actual, invalidated: [], factors: [], impact: [],
                 houseForecast: [], houseActual: [],
                 batterySocForecast: [], batterySocActual: [],
                 gridForecast: [], gridActual: [], batteryForecast: [], batteryActual: [],
             },
-            totals: {
-                rawWh: null, correctedWh: 3000, actualWh: 3150,
+            totals: { rawWh: null, correctedWh: 3000, actualWh: 3150,
                 houseForecastWh: null, houseActualWh: null,
                 gridForecastWh: null, gridActualWh: null,
                 batteryForecastWh: null, batteryActualWh: null,
             },
-            availability: {
-                hasRawForecast: false, hasCorrectedForecast: true, hasActuals: true,
+            availability: { hasRawForecast: false, hasCorrectedForecast: true, hasActuals: true,
                 hasInvalidated: false, hasProfile: true, hasHouseForecast: false,
                 hasHouseActual: false, hasBatterySocForecast: false, hasBatterySocActual: false,
                 hasGridForecast: false, hasGridActual: false, hasBatteryForecast: false,
@@ -101,7 +96,7 @@ async function mountPurgedPastDay(
                     },
                 },
             },
-        };
+        });
 
         document.body.innerHTML = "";
         const el = document.createElement("helman-solar-inspector") as any;

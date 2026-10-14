@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { treeNode, treePayload } from "./support/payload-builders";
 import { loadBundle } from "./support/card-page";
 
 /**
@@ -162,22 +163,19 @@ async function mountInspector(
                 factor: 1,
             });
         }
-        const payload = {
-            date,
+        const payload = window.__inspectorDay({ date,
             timezone: "UTC",
             status: "ok",
             effectiveVariant: null,
             trainedAt: null,
-            range: {
-                minDate: date,
+            range: { minDate: date,
                 maxDate: date,
                 canGoPrevious: false,
                 canGoNext: false,
                 isToday: true,
                 isFuture: false,
             },
-            series: {
-                raw: [],
+            series: { raw: [],
                 corrected,
                 actual: [],
                 invalidated: [],
@@ -194,8 +192,7 @@ async function mountInspector(
                 batteryForecast: [],
                 batteryActual,
             },
-            totals: {
-                rawWh: null,
+            totals: { rawWh: null,
                 correctedWh: null,
                 actualWh: opts.actualTotalWh ?? null,
                 houseForecastWh: null,
@@ -205,8 +202,7 @@ async function mountInspector(
                 batteryForecastWh: null,
                 batteryActualWh: null,
             },
-            availability: {
-                hasRawForecast: false,
+            availability: { hasRawForecast: false,
                 hasCorrectedForecast: true,
                 hasActuals: false,
                 hasInvalidated: false,
@@ -224,7 +220,7 @@ async function mountInspector(
             },
             batterySocBounds: [],
             trainingExplainability: null,
-        };
+        });
 
         // A state per configured switch so the shared badge has something to show.
         const states: Record<string, unknown> = {};
@@ -557,50 +553,18 @@ test.describe("solar inspector house composition", () => {
 
         // Both cards hydrate the same tree: every remainder comes without a
         // name, and each card names it with the one translation.
-        const cardLabels = await page.evaluate(async () => {
-            const remainder = {
-                id: "house_unmeasured",
-                displayName: "",
-                powerSensorId: "sensor.helman_house_unmeasured_power",
-                ratioSensorId: null,
-                switchEntityId: null,
-                valueType: "default",
-                sourceConfig: null,
-                sourceType: null,
-                isSource: false,
-                isUnmeasured: true,
-                groups: {},
-                groupBadgeTexts: [],
-                icon: null,
-                compact: false,
-                showAdditionalInfo: false,
-                childrenFullWidth: false,
-                hideChildren: false,
-                hideChildrenIndicator: false,
-                sortChildrenByPower: false,
-                deferrable: false,
-                controllableIds: [],
-                children: [],
-            };
-            const house = {
-                ...remainder,
-                id: "house",
-                powerSensorId: "sensor.house_power",
-                isUnmeasured: false,
-                children: [remainder],
-            };
-            const tree = {
-                sources: [],
-                consumers: [house],
-                consumptionTotalSensorId: null,
-                productionTotalSensorId: null,
-                uiConfig: {
-                    show_others_group: false,
-                    device_groupings: [],
-                    history_buckets: 3,
-                    history_bucket_duration: 5,
-                },
-            };
+        const remainder = treeNode({
+            id: "house_unmeasured", displayName: "", powerSensorId: "sensor.helman_house_unmeasured_power",
+            isUnmeasured: true,
+        });
+        const tree = treePayload({
+            consumers: [treeNode({
+                ...remainder, id: "house", powerSensorId: "sensor.house_power",
+                isUnmeasured: false, children: [remainder],
+            })],
+            uiConfig: { show_others_group: false, device_groupings: [], history_buckets: 3, history_bucket_duration: 5 },
+        });
+        const cardLabels = await page.evaluate(async (tree) => {
             const hass = {
                 language: "en",
                 locale: { language: "en" },
@@ -638,7 +602,7 @@ test.describe("solar inspector house composition", () => {
                 labels.push(...nodes().filter((node) => node.isUnmeasured).map((node) => node.name));
             }
             return labels;
-        });
+        }, tree);
 
         expect(inspectorLabel).toBe("👻 Untracked consumption");
         expect(cardLabels).toEqual(["👻 Untracked consumption", "👻 Untracked consumption"]);

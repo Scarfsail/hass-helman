@@ -53,22 +53,19 @@ async function mountInspector(page: Page, date: string): Promise<void> {
             money.push({ slot: `${hh}:${mm}`, cost: 0.1, gain: 0 });
             impact.push({ slot: `${hh}:${mm}`, rawWh: v, correctedWh: v, impactWh: 0, factor: 1 });
         }
-        const payload = {
-            date: day,
+        const payload = window.__inspectorDay({ date: day,
             timezone: "UTC",
             status: "ok",
             effectiveVariant: null,
             trainedAt: null,
-            range: {
-                minDate: day,
+            range: { minDate: day,
                 maxDate: day,
                 canGoPrevious: false,
                 canGoNext: false,
                 isToday: true,
                 isFuture: false,
             },
-            series: {
-                raw: [],
+            series: { raw: [],
                 corrected,
                 actual: [],
                 invalidated: [],
@@ -87,8 +84,7 @@ async function mountInspector(page: Page, date: string): Promise<void> {
                 moneyActual: money,
                 moneyForecast: [],
             },
-            totals: {
-                rawWh: null,
+            totals: { rawWh: null,
                 correctedWh: null,
                 actualWh: null,
                 houseForecastWh: null,
@@ -98,8 +94,7 @@ async function mountInspector(page: Page, date: string): Promise<void> {
                 batteryForecastWh: null,
                 batteryActualWh: null,
             },
-            availability: {
-                hasRawForecast: false,
+            availability: { hasRawForecast: false,
                 hasCorrectedForecast: true,
                 hasActuals: false,
                 hasInvalidated: false,
@@ -115,7 +110,7 @@ async function mountInspector(page: Page, date: string): Promise<void> {
             },
             batterySocBounds: [],
             trainingExplainability: null,
-        };
+        });
 
         const el = document.createElement("helman-solar-inspector") as any;
         el.daylightOnlyDefault = false;

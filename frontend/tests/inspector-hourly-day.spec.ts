@@ -33,31 +33,26 @@ async function mountInspector(page: Page, granularity: number): Promise<void> {
                 valueWh: Math.max(0, 400 - Math.abs(m - 720) / 2),
             });
         }
-        const payload = {
-            date,
+        const payload = window.__inspectorDay({ date,
             timezone: "UTC",
             dataGranularityMinutes: granularity,
             status: "ok",
             effectiveVariant: null,
             trainedAt: null,
-            range: {
-                minDate: "2024-03-01", maxDate: date, canGoPrevious: true, canGoNext: false,
+            range: { minDate: "2024-03-01", maxDate: date, canGoPrevious: true, canGoNext: false,
                 isToday: false, isFuture: false,
             },
-            series: {
-                raw: [], corrected: [], actual, invalidated: [], factors: [], impact: [],
+            series: { raw: [], corrected: [], actual, invalidated: [], factors: [], impact: [],
                 houseForecast: [], houseActual: [],
                 batterySocForecast: [], batterySocActual: [],
                 gridForecast: [], gridActual: [], batteryForecast: [], batteryActual: [],
             },
-            totals: {
-                rawWh: null, correctedWh: null, actualWh: 1000,
+            totals: { rawWh: null, correctedWh: null, actualWh: 1000,
                 houseForecastWh: null, houseActualWh: null,
                 gridForecastWh: null, gridActualWh: null,
                 batteryForecastWh: null, batteryActualWh: null,
             },
-            availability: {
-                hasRawForecast: false, hasCorrectedForecast: false, hasActuals: true,
+            availability: { hasRawForecast: false, hasCorrectedForecast: false, hasActuals: true,
                 hasInvalidated: false, hasProfile: true, hasHouseForecast: false,
                 hasHouseActual: false, hasBatterySocForecast: false, hasBatterySocActual: false,
                 hasGridForecast: false, hasGridActual: false, hasBatteryForecast: false,
@@ -65,7 +60,7 @@ async function mountInspector(page: Page, granularity: number): Promise<void> {
             },
             batterySocBounds: [],
             trainingExplainability: null,
-        };
+        });
 
         document.body.innerHTML = "";
         const el = document.createElement("helman-solar-inspector") as any;

@@ -1,3 +1,4 @@
+import { configDoc } from "./support/payload-builders";
 import { test, expect, type Page } from "@playwright/test";
 import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
@@ -19,14 +20,14 @@ import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
  */
 
 /** One solar bias field set, its neighbours and the training time left unset. */
-const STORED_CONFIG = {
-    config_version: 19,
+const STORED_CONFIG = configDoc({
+
     training: {
         solar_bias: {
             clamp_max: 2.5,
         },
     },
-};
+});
 
 /** What the backend serves for the paths this spec looks at. */
 const CONFIG_DEFAULTS = {
@@ -90,7 +91,7 @@ async function mountEditor(page: Page): Promise<void> {
             }).callWS,
         };
         document.body.appendChild(element);
-    }, { config: STORED_CONFIG, defaults: CONFIG_DEFAULTS });
+    }, { config: JSON.parse(JSON.stringify(STORED_CONFIG)), defaults: CONFIG_DEFAULTS });
 
     // The Training tab's panels ship collapsed, and a collapsed <details>
     // renders nothing to query.

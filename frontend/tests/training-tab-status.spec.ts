@@ -1,3 +1,4 @@
+import { configDoc } from "./support/payload-builders";
 import { test, expect, type Page } from "@playwright/test";
 import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
@@ -14,8 +15,8 @@ import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 const HOUSE_TRAINED_AT = "2026-09-12T03:00:00+00:00";
 const HOUSE_ATTEMPT_AT = "2026-09-19T03:01:00+00:00";
 
-const CONFIG = {
-    config_version: 14,
+const CONFIG = configDoc({
+
     energy_nodes: {
         house: { forecast: { total_energy_entity_id: "sensor.house_energy" } },
     },
@@ -44,7 +45,7 @@ const CONFIG = {
         },
     ] },
     training: {},
-};
+});
 
 type Job = Record<string, unknown>;
 
@@ -138,7 +139,7 @@ async function mountEditor(page: Page, trainingStatus: unknown): Promise<void> {
             };
             document.body.appendChild(element);
         },
-        { config: CONFIG, trainingStatus },
+        { config: JSON.parse(JSON.stringify(CONFIG)), trainingStatus },
     );
 
     // The editor renders its tab bar once the config has loaded.

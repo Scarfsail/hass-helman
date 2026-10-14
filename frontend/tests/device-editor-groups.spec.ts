@@ -1,3 +1,4 @@
+import { configDoc } from "./support/payload-builders";
 import { test, expect, type Page } from "@playwright/test";
 import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
@@ -67,11 +68,11 @@ type Device = Record<string, any>;
 
 declare global {
     interface Window {
-        __editorConfig: () => { devices: { consumers: Device[] } };
+        __groupsEditorConfig: () => { devices: { consumers: Device[] } };
     }
 }
 
-async function mountEditor(page: Page, groupings: unknown[] = [BREAKERS, MODES]): Promise<void> {
+async function mountEditor(page: Page, groupings: Array<typeof BREAKERS> = [BREAKERS, MODES]): Promise<void> {
     await loadBundle(page, "helman-config-editor-panel", EDITOR_BUNDLE);
 
     await page.evaluate(
@@ -79,7 +80,7 @@ async function mountEditor(page: Page, groupings: unknown[] = [BREAKERS, MODES])
             const element = document.createElement(
                 "helman-config-editor-panel",
             ) as HTMLElement & Record<string, unknown>;
-            window.__editorConfig = () => (element as unknown as { _config: any })._config;
+            window.__groupsEditorConfig = () => (element as unknown as { _config: any })._config;
             element.hass = {
                 language: "en",
                 locale: { language: "en" },
@@ -106,13 +107,13 @@ async function mountEditor(page: Page, groupings: unknown[] = [BREAKERS, MODES])
             document.body.appendChild(element);
         },
         {
-            config: {
-                config_version: 26,
+            config: JSON.parse(JSON.stringify(configDoc({
+
                 devices: {
                     ...(groupings.length ? { groupings } : {}),
                     consumers: [AC, BOILER, LAMP],
                 },
-            },
+            }))),
         },
     );
 
@@ -160,7 +161,7 @@ const memberships = (page: Page) =>
                 found[device.id] = device.groups;
                 walk(device.children ?? []);
             });
-        walk(window.__editorConfig().devices.consumers);
+        walk(window.__groupsEditorConfig().devices.consumers);
         return found;
     });
 
@@ -206,7 +207,7 @@ test("picking adds, changes and removes the device's own group", async ({ page }
     // "None" removes the key, and the `groups` map once it is empty.
     await pick(page, "klima", "breakers", "");
     await expect.poll(() => memberships(page)).toEqual(INITIAL);
-    await expect.poll(() => page.evaluate(() => "groups" in window.__editorConfig().devices.consumers[0].children[0]))
+    await expect.poll(() => page.evaluate(() => "groups" in window.__groupsEditorConfig().devices.consumers[0].children[0]))
         .toBe(false);
 
     // A device in two groupings keeps the other one.
@@ -241,14 +242,14 @@ test("the phase picker sets, badges and clears the device's own phase", async ({
     await expect(phase.locator("option")).toHaveText(["Unassigned", "L1", "L2", "L3", "Three-phase"]);
     await expect(phase).toHaveValue("");
 
-    const stored = () => page.evaluate(() => window.__editorConfig().devices.consumers[0].phase);
+    const stored = () => page.evaluate(() => window.__groupsEditorConfig().devices.consumers[0].phase);
 
     await choosePhase(page, "ac", "L2");
     await expect.poll(stored).toBe("L2");
     expect((await badges(page, "ac")).map((text) => text.trim())).toEqual(["L2", "Technická FV"]);
 
     await choosePhase(page, "ac", "");
-    await expect.poll(() => page.evaluate(() => "phase" in window.__editorConfig().devices.consumers[0])).toBe(false);
+    await expect.poll(() => page.evaluate(() => "phase" in window.__groupsEditorConfig().devices.consumers[0])).toBe(false);
     // Groups are untouched.
     await expect.poll(() => memberships(page)).toEqual(INITIAL);
 });
