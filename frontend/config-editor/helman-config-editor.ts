@@ -23,25 +23,6 @@ const POWER_POLARITY_OPTIONS = {
 
 type PowerPolarityDevice = keyof typeof POWER_POLARITY_OPTIONS;
 
-/**
- * Shown when the locale has no string for an option -- never the raw enum value.
- *
- * Each option is a complete statement of the convention, not a bare noun. The
- * field asks which sign convention the sensor follows, so an option has to say
- * *which* sign carries the quantity: "Consumption" alone reads as an assertion
- * that the value is positive, which is exactly what half of these deny.
- */
-const POWER_POLARITY_FALLBACK_LABELS: Record<string, string> = {
-  positive_is_production: "Positive = production",
-  negative_is_production: "Negative = production",
-  positive_is_consumption: "Positive = consumption",
-  negative_is_consumption: "Negative = consumption",
-  positive_is_charging: "Positive = charging",
-  positive_is_discharging: "Positive = discharging",
-  positive_is_export: "Positive = export (to the grid)",
-  positive_is_import: "Positive = import (from the grid)",
-};
-
 import {
   appendListItem,
   asJsonArray,
@@ -4607,7 +4588,7 @@ export class HelmanConfigEditorPanel
   private _renderPolarityField(device: PowerPolarityDevice): TemplateResult {
     const path: PathSegment[] = ["energy_nodes", device, "entities", "power_polarity"];
     const label = (value: string) =>
-      this._optionLabel(`editor.fields.power_polarity_${value}`, POWER_POLARITY_FALLBACK_LABELS[value]);
+      this._t(`editor.fields.power_polarity_${value}`);
     // A profile that owns the polarity fixes it: shown read-only, as an owned
     // entity is. One that owns only the entity leaves the user's in force.
     const provision = vendorProvision(this._vendors.vendors, path);
