@@ -199,8 +199,6 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                 training_window_days=56,
                 min_history_days=14,
                 config_fingerprint="fingerprint",
-                canonical_resolution=consumption_module.FORECAST_CANONICAL_RESOLUTION,
-                horizon_hours=forecast_days * 24,
             )
 
     async def test_build_reports_insufficient_history_below_the_minimum(self) -> None:
@@ -342,10 +340,7 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
             forecast_days=1,
         )
 
-        self.assertEqual(payload["resolution"], "quarter_hour")
-        self.assertEqual(payload["horizonHours"], 24)
         self.assertEqual(payload["currentSlot"]["timestamp"], "2026-03-20T21:00:00+01:00")
-        self.assertNotIn("currentHour", payload)
         self.assertEqual(len(payload["series"]), 96)
         self.assertEqual(payload["series"][0]["timestamp"], "2026-03-20T21:15:00+01:00")
 
@@ -355,7 +350,6 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
             forecast_days=7,
         )
 
-        self.assertEqual(payload["horizonHours"], 168)
         self.assertEqual(len(payload["series"]), 672)
 
     def test_quarter_hour_values_sum_back_to_hourly_band(self) -> None:

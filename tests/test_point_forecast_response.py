@@ -43,6 +43,22 @@ class PointForecastResponseTests(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls._dt_patcher.stop()
 
+    def test_solar_response_excludes_metadata_from_cached_pre_upgrade_snapshot(self) -> None:
+        response = point_forecast_response.build_solar_forecast_response(
+            {
+                "status": "available",
+                "unit": "Wh",
+                "resolution": "quarter_hour",
+                "horizonHours": 24,
+                "points": [],
+            },
+            forecast_days=1,
+        )
+
+        self.assertEqual(response["status"], "available")
+        self.assertNotIn("resolution", response)
+        self.assertNotIn("horizonHours", response)
+
     def test_solar_response_splits_an_hourly_feed_onto_the_canonical_grid(self) -> None:
         response = point_forecast_response.build_solar_forecast_response(
             {
@@ -74,8 +90,6 @@ class PointForecastResponseTests(unittest.TestCase):
         )
 
         # 400 Wh over the 21:00 hour is 100 Wh a quarter, 800 over 22:00 is 200.
-        self.assertEqual(response["resolution"], "quarter_hour")
-        self.assertEqual(response["horizonHours"], 24)
         self.assertEqual(response["points"], [
             {"timestamp": "2026-03-20T21:00:00+01:00", "value": 100.0},
             {"timestamp": "2026-03-20T21:15:00+01:00", "value": 100.0},

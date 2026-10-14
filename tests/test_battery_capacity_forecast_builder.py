@@ -189,7 +189,6 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(payload["status"], "partial")
-        self.assertEqual(payload["resolution"], "quarter_hour")
         self.assertEqual(payload["sourceGranularityMinutes"], 15)
         # The history is echoed back exactly as supplied: the builder has no
         # recorder access of its own, so what the caller gathers is what ships.

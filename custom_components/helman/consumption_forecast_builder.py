@@ -13,7 +13,6 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
-    FORECAST_CANONICAL_RESOLUTION,
     HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
     HOUSE_FORECAST_DEFAULT_TRAINING_WINDOW_DAYS,
     HOUSE_FORECAST_MODEL_ID,
@@ -120,8 +119,6 @@ class ConsumptionForecastBuilder:
             consumers_config=consumers_config,
         )
         local_now = dt_util.as_local(reference_time) if reference_time else dt_util.now()
-        canonical_resolution = FORECAST_CANONICAL_RESOLUTION
-        horizon_hours = forecast_days * 24
 
         if total_energy_entity_id is None or profile is None:
             return self._make_payload(
@@ -131,8 +128,6 @@ class ConsumptionForecastBuilder:
                 training_window_days=training_window_days,
                 min_history_days=min_history_days,
                 config_fingerprint=config_fingerprint,
-                resolution=canonical_resolution,
-                horizon_hours=horizon_hours,
                 source_granularity_minutes=self._CANONICAL_GRANULARITY_MINUTES,
                 forecast_days_available=forecast_days,
                 trained_at=trained_at,
@@ -159,8 +154,6 @@ class ConsumptionForecastBuilder:
                 training_window_days=training_window_days,
                 min_history_days=min_history_days,
                 config_fingerprint=config_fingerprint,
-                canonical_resolution=canonical_resolution,
-                horizon_hours=horizon_hours,
                 trained_at=trained_at,
                 last_outcome=last_outcome,
             )
@@ -177,8 +170,6 @@ class ConsumptionForecastBuilder:
         training_window_days: int,
         min_history_days: int,
         config_fingerprint: str,
-        canonical_resolution: Any,
-        horizon_hours: int,
         trained_at: str | None = None,
         last_outcome: str | None = None,
     ) -> dict[str, Any]:
@@ -200,8 +191,6 @@ class ConsumptionForecastBuilder:
                 min_history_days=min_history_days,
                 history_days=profile.history_days,
                 config_fingerprint=config_fingerprint,
-                resolution=canonical_resolution,
-                horizon_hours=horizon_hours,
                 source_granularity_minutes=self._CANONICAL_GRANULARITY_MINUTES,
                 forecast_days_available=forecast_days,
                 trained_at=trained_at,
@@ -253,8 +242,6 @@ class ConsumptionForecastBuilder:
             actual_history=actual_history,
             current_slot=current_slot,
             series=series,
-            resolution=canonical_resolution,
-            horizon_hours=horizon_hours,
             source_granularity_minutes=self._CANONICAL_GRANULARITY_MINUTES,
             forecast_days_available=forecast_days,
             trained_at=trained_at,
@@ -491,8 +478,6 @@ class ConsumptionForecastBuilder:
         status: str,
         training_window_days: int,
         min_history_days: int,
-        resolution: str,
-        horizon_hours: int,
         source_granularity_minutes: int,
         forecast_days_available: int,
         history_days: int = 0,
@@ -508,8 +493,6 @@ class ConsumptionForecastBuilder:
             "status": status,
             "generatedAt": dt_util.now().isoformat(),
             "unit": "kWh",
-            "resolution": resolution,
-            "horizonHours": horizon_hours,
             "trainingWindowDays": training_window_days,
             "historyDaysAvailable": history_days,
             "requiredHistoryDays": min_history_days,

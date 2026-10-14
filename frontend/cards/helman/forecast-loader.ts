@@ -31,8 +31,6 @@ export class ForecastLoader {
     /** Bumped by `invalidate()`: a request from an older generation fills no cache. */
     private _generation = 0;
 
-    constructor(private readonly _forecastDays?: number | null) {}
-
     load(hass: HomeAssistant): Promise<ForecastPayload> {
         const now = new Date();
         const requestHourKey = getLocalHourRequestKey(now);
@@ -52,9 +50,6 @@ export class ForecastLoader {
         const requestMessage: GetForecastRequest = {
             type: "helman/get_forecast",
         };
-        if (this._forecastDays !== null && this._forecastDays !== undefined) {
-            requestMessage.forecast_days = this._forecastDays;
-        }
         const generation = this._generation;
         const request = hass.connection.sendMessagePromise<ForecastPayload>(requestMessage).then((payload) => {
             if (generation !== this._generation) return payload;

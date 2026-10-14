@@ -158,8 +158,6 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         house_snapshot = {"status": "available", "currentSlot": {"timestamp": "2026-05-03T09:45:00+02:00"}}
         solar_snapshot = {
             "status": "available",
-            "resolution": "15m",
-            "horizonHours": 336,
             "points": [
                 {"timestamp": "2026-05-03T10:00:00+02:00", "value": 1200.0}
             ],
@@ -660,8 +658,6 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         coordinator._cached_forecast = {"status": "available"}
         coordinator._cached_solar_forecast = {
             "status": "available",
-            "resolution": "15m",
-            "horizonHours": 336,
             "generatedAt": REFERENCE_TIME.isoformat(),
             "points": [
                 {"timestamp": "2026-05-03T10:00:00+02:00", "value": 1250.25}

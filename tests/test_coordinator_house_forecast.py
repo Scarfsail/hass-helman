@@ -30,7 +30,7 @@ HelmanCoordinator = coordinator_module.HelmanCoordinator
 
 
 class CoordinatorHouseForecastTests(unittest.TestCase):
-    def test_has_matching_forecast_snapshot_rejects_legacy_hourly_shape(self) -> None:
+    def test_has_matching_forecast_snapshot_rejects_missing_canonical_slot(self) -> None:
         coordinator = make_coordinator()
         coordinator._cached_forecast = {
             "status": "available",
@@ -39,10 +39,6 @@ class CoordinatorHouseForecastTests(unittest.TestCase):
             "requiredHistoryDays": 14,
             "configFingerprint": "abc123",
             "model": HOUSE_FORECAST_MODEL_ID,
-            "resolution": "hour",
-            "currentHour": {
-                "timestamp": "2026-03-20T21:00:00+01:00",
-            },
         }
 
         self.assertFalse(

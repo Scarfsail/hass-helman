@@ -118,8 +118,6 @@ def _make_canonical_snapshot() -> dict:
         "status": "available",
         "generatedAt": "2026-03-20T21:16:00+01:00",
         "unit": "kWh",
-        "resolution": "quarter_hour",
-        "horizonHours": 24,
         "trainingWindowDays": 56,
         "historyDaysAvailable": 28,
         "requiredHistoryDays": 14,
@@ -147,13 +145,27 @@ class HouseForecastResponseTests(unittest.TestCase):
     def tearDownClass(cls) -> None:
         cls._house_dt_patcher.stop()
 
+    def test_house_response_excludes_metadata_from_cached_pre_upgrade_snapshot(self) -> None:
+        snapshot = _make_canonical_snapshot()
+        snapshot["resolution"] = "quarter_hour"
+        snapshot["horizonHours"] = 24
+
+        response = house_forecast_response.build_house_forecast_response(
+            snapshot,
+            forecast_days=1,
+        )
+
+        self.assertEqual(response["status"], "available")
+        self.assertEqual(len(response["series"]), 96)
+        self.assertNotIn("resolution", response)
+        self.assertNotIn("horizonHours", response)
+
     def test_quarter_hour_response_keeps_canonical_series_length(self) -> None:
         response = house_forecast_response.build_house_forecast_response(
             _make_canonical_snapshot(),
             forecast_days=1,
         )
 
-        self.assertEqual(response["resolution"], "quarter_hour")
         self.assertEqual(response["currentSlot"]["timestamp"], "2026-03-20T21:15:00+01:00")
         self.assertEqual(len(response["series"]), 96)
         self.assertEqual(response["series"][0]["timestamp"], "2026-03-20T21:30:00+01:00")

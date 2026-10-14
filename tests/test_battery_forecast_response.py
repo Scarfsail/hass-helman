@@ -86,8 +86,6 @@ def _make_snapshot() -> dict:
         "generatedAt": "2026-03-20T21:20:30+01:00",
         "startedAt": "2026-03-20T21:20:00+01:00",
         "unit": "kWh",
-        "resolution": "quarter_hour",
-        "horizonHours": 168,
         "sourceGranularityMinutes": 15,
         "partialReason": "solar_forecast_ended",
         "coverageUntil": "2026-03-20T23:00:00+01:00",
@@ -254,8 +252,6 @@ class BatteryForecastResponseTests(unittest.TestCase):
             forecast_days=1,
         )
 
-        self.assertEqual(response["resolution"], "quarter_hour")
-        self.assertEqual(response["horizonHours"], 24)
         self.assertEqual(len(response["series"]), 7)
         self.assertEqual(response["series"][0]["timestamp"], "2026-03-20T21:20:00+01:00")
         self.assertEqual(len(response["actualHistory"]), 4)

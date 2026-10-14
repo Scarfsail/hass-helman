@@ -93,10 +93,10 @@ async function mountInspector(
     }
     const base = forecastPayload();
     const forecast = forecastPayload({
-        solar: { ...base.solar, status: "available", horizonHours: FORECAST_DAYS * 24, points: solarPoints },
-        grid: { ...base.grid, status: "available", horizonHours: FORECAST_DAYS * 24, series: gridSeries },
+        solar: { ...base.solar, status: "available", points: solarPoints },
+        grid: { ...base.grid, status: "available", series: gridSeries },
         battery_capacity: {
-            ...base.battery_capacity, status: "available", horizonHours: FORECAST_DAYS * 24,
+            ...base.battery_capacity, status: "available",
             nominalCapacityKwh: 10, currentRemainingEnergyKwh: 5, currentSoc: 50,
             minSoc: 10, maxSoc: 100, chargeEfficiency: 1, dischargeEfficiency: 1,
             maxChargePowerW: 5000, maxDischargePowerW: 5000, series: batterySeries,

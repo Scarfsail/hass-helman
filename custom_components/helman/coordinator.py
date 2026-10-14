@@ -91,7 +91,6 @@ from .const import (
     DEFAULT_HISTORY_LOOKBACK_DAYS,
     EVENT_DATA_CHANGED,
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
-    FORECAST_CANONICAL_RESOLUTION,
     FORECAST_STALE_AFTER_SECONDS,
     HOUSE_FORECAST_MODEL_ID,
     MAX_FORECAST_DAYS,
@@ -2644,8 +2643,6 @@ class HelmanCoordinator:
             training_window_days=training_window_days,
             min_history_days=min_history_days,
             config_fingerprint=config_fingerprint,
-            resolution=FORECAST_CANONICAL_RESOLUTION,
-            horizon_hours=MAX_FORECAST_DAYS * 24,
             source_granularity_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
             forecast_days_available=MAX_FORECAST_DAYS,
             trained_at=self._house_profile_trained_at,
@@ -4652,8 +4649,6 @@ class HelmanCoordinator:
             # Do not let optimizers skip unusable battery rails and persist an
             # incomplete plan. The runner reports this as a snapshot failure.
             house_anchor = rebuild.adjusted_house_forecast.get("currentSlot")
-            if not isinstance(house_anchor, dict):
-                house_anchor = rebuild.adjusted_house_forecast.get("currentHour")
             house_anchor_timestamp = (
                 house_anchor.get("timestamp")
                 if isinstance(house_anchor, dict)

@@ -8,7 +8,6 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
-    FORECAST_CANONICAL_RESOLUTION,
 )
 from .forecast_series_fields import (
     BATTERY_PUBLIC_SERIES_FIELDS,
@@ -31,10 +30,8 @@ def build_battery_forecast_response(
         key: deepcopy(value)
         for key, value in snapshot.items()
         if key not in _INTERNAL_SNAPSHOT_FIELDS
-        and key not in {"series", "actualHistory", "resolution", "horizonHours"}
+        and key not in {"series", "actualHistory"}
     }
-    response["resolution"] = FORECAST_CANONICAL_RESOLUTION
-    response["horizonHours"] = forecast_days * 24
     response["actualHistory"] = []
     response["series"] = []
 

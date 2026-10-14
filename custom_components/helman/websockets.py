@@ -11,10 +11,8 @@ from homeassistant.util import dt as dt_util
 from .const import (
     CONFIG_DOCUMENT_VERSION,
     DATA_CHANGED_KIND_CONFIG,
-    DEFAULT_FORECAST_DAYS,
     DOMAIN,
     EVENT_DATA_CHANGED,
-    MAX_FORECAST_DAYS,
 )
 from .automation.spec import OPTIMIZER_SPECS
 from .controllables.spec import appliance_controllable_kinds
@@ -50,9 +48,6 @@ SET_SCHEDULE_REQUEST_SCHEMA = vol.Schema(
 )
 GET_FORECAST_REQUEST_FIELDS = {
     vol.Required("type"): "helman/get_forecast",
-    vol.Optional("forecast_days", default=DEFAULT_FORECAST_DAYS): (
-        lambda value: _validate_forecast_days(value)
-    ),
 }
 
 
@@ -97,16 +92,6 @@ def _validate_optional_config_document(value: object) -> dict | None:
     if value is None or isinstance(value, dict):
         return value
     raise vol.Invalid("saved_config must be a config document or null")
-
-
-def _validate_forecast_days(value: object) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise vol.Invalid("forecast_days must be an integer")
-    if value < 1 or value > MAX_FORECAST_DAYS:
-        raise vol.Invalid(
-            f"forecast_days must be between 1 and {MAX_FORECAST_DAYS}"
-        )
-    return value
 
 
 def async_register_websocket_commands(hass: HomeAssistant) -> None:
@@ -827,7 +812,7 @@ async def ws_get_forecast(
         connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
         return
 
-    forecast = await coordinator.get_forecast(forecast_days=msg["forecast_days"])
+    forecast = await coordinator.get_forecast()
     connection.send_result(msg["id"], forecast)
 
 

@@ -8,7 +8,6 @@ from homeassistant.util import dt as dt_util
 
 from .const import (
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
-    FORECAST_CANONICAL_RESOLUTION,
 )
 
 
@@ -76,8 +75,6 @@ def _build_point_forecast_response(
         for key, value in snapshot.items()
         if key not in {"points", "actualHistory", "resolution", "horizonHours"}
     }
-    response["resolution"] = FORECAST_CANONICAL_RESOLUTION
-    response["horizonHours"] = forecast_days * 24
 
     response["points"] = _build_points(
         snapshot.get("points"),

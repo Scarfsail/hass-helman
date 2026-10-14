@@ -231,7 +231,6 @@ export async function installFakeHass(page: Page, options: FakeHassOptions): Pro
         solar: {
             ...forecastBase.solar,
             status: "available",
-            horizonHours: options.pillDays * 24,
             points: Array.from({ length: options.pillDays * 24 }, (_, index) => ({
                 timestamp: new Date(fixtureTodayMs + index * 3_600_000).toISOString(),
                 value: index % 24 >= 8 && index % 24 < 16 ? 800 : 0,
