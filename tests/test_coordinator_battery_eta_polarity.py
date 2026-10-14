@@ -9,6 +9,7 @@ reach it, so it is tested on its own.
 """
 
 from __future__ import annotations
+from tests._fakes import make_coordinator
 
 import importlib
 import unittest
@@ -53,7 +54,7 @@ def _make_coordinator(battery_power: str, polarity: str | None):
     if polarity is not None:
         entities["power_polarity"] = polarity
 
-    c = object.__new__(coordinator_module.HelmanCoordinator)
+    c = make_coordinator()
     c._active_config = {
         "visualization": {"history_buckets": 5, "history_bucket_duration": 1},
         "energy_nodes": {"battery": {"entities": entities}},
