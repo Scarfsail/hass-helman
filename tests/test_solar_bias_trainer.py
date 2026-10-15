@@ -1145,7 +1145,7 @@ def test_an_hourly_forecast_still_reaches_across_its_four_quarters():
 
 def _count_slot_parses(samples, actuals, cfg):
     """How many ``HH:MM`` keys one training run parses, counted deterministically."""
-    original = trainer._slot_to_minutes
+    original = trainer.slot_to_minutes
     calls = 0
 
     def _counting(slot):
@@ -1153,11 +1153,11 @@ def _count_slot_parses(samples, actuals, cfg):
         calls += 1
         return original(slot)
 
-    trainer._slot_to_minutes = _counting
+    trainer.slot_to_minutes = _counting
     try:
         outcome = trainer.train(samples, actuals, cfg, now=datetime.utcnow())
     finally:
-        trainer._slot_to_minutes = original
+        trainer.slot_to_minutes = original
     return calls, outcome
 
 

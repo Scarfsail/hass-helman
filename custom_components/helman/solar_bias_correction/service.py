@@ -3,22 +3,27 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Iterable, Iterator, Sequence
-from functools import partial
 from copy import deepcopy
 from dataclasses import asdict
 from datetime import date, datetime, time, timedelta
+from functools import partial
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from ..battery_state import read_battery_entity_config, read_battery_soc_bounds_config
 from ..const import GRID_EXPORT_PRICE_ENTITY_ID, GRID_IMPORT_PRICE_ENTITY_ID
+from ..controllables.config import read_carved_meters, read_schedulable_consumers
+from ..grid_price_forecast_builder import (
+    GridImportPriceConfigError,
+    read_grid_import_price_config,
+)
+from ..slot_grid import SLOT, SLOT_LABELS, SLOT_MINUTES, day_slots, slot_to_minutes
+from ..slot_grid import floor_to_slot as _current_slot_start
 from ..span_buckets import add_months, bucket_key, bucket_keys
 from ..span_history_model import read_span_meters
-from ..battery_state import read_battery_entity_config, read_battery_soc_bounds_config
-from ..controllables.config import read_carved_meters, read_schedulable_consumers
-from ..grid_price_forecast_builder import read_grid_import_price_config, GridImportPriceConfigError
 from ..training.schedule import next_scheduled_training_at
 from .actuals import (
     load_actuals_for_day,
@@ -73,7 +78,7 @@ from .models import (
 from .statistics_day import (
     HOUR_MINUTES,
     StatisticsDay,
-    _mean_of,
+    finite_mean,
     load_statistics_day,
 )
 from .trainer import compute_fingerprint, train
@@ -113,8 +118,6 @@ _HISTORY_FLOOR_TTL = timedelta(hours=6)
 #: recorder can carry.
 _HISTORY_FLOOR_RETRY = timedelta(minutes=5)
 
-#: The price rails' own grid, matching the schedule's canonical slot.
-PRICE_RAIL_SLOT_MINUTES = 15
 MINUTES_PER_DAY = 24 * 60
 
 
@@ -957,7 +960,7 @@ class SolarBiasCorrectionService:
 
         current_slot_start = _current_slot_start(local_now) if target_date == today else None
         next_slot = (
-            None if current_slot_start is None else current_slot_start + timedelta(minutes=15)
+            None if current_slot_start is None else current_slot_start + SLOT
         )
 
         # --- Solar forecast ---
@@ -1486,7 +1489,7 @@ class SolarBiasCorrectionService:
                 bounds_entity_ids, numeric_history_by_entity
             ),
             price_unit=price_unit,
-            data_granularity_minutes=HOUR_MINUTES if reads_statistics else 15,
+            data_granularity_minutes=HOUR_MINUTES if reads_statistics else SLOT_MINUTES,
         )
         return inspector_day_to_payload(day)
 
@@ -1529,8 +1532,7 @@ class SolarBiasCorrectionService:
 
         live_min, live_max = self._live_battery_soc_bounds()
         points: list[BatterySocBoundsPoint] = []
-        for slot_index in range(96):
-            slot = f"{slot_index // 4:02d}:{(slot_index % 4) * 15:02d}"
+        for slot in SLOT_LABELS:
             min_pct = min_by_slot.get(slot, live_min)
             max_pct = max_by_slot.get(slot, live_max)
             if min_pct is None and max_pct is None:
@@ -1691,7 +1693,7 @@ class SolarBiasCorrectionService:
             list(entity_ids),
             local_start=local_start,
             local_end=local_start + timedelta(days=1),
-            interval_minutes=15,
+            interval_minutes=SLOT_MINUTES,
         )
 
     def _cumulative_meter_entity_ids(
@@ -1939,7 +1941,7 @@ class SolarBiasCorrectionService:
             slot_maps = [
                 self._consumer_slot_map(
                     self._consumer_own_energy(
-                        consumer, slot_energy_by_entity, slot=timedelta(minutes=15)
+                        consumer, slot_energy_by_entity, slot=SLOT
                     ),
                     target_date,
                 )
@@ -2679,14 +2681,13 @@ def _numeric_history_by_slot(
     if not timeline:
         return {}
     timeline.sort(key=lambda pair: pair[0])
-    _SLOT_MINUTES = 15
+
     local_now = datetime.now(local_tz)
     is_today = target_date == local_now.date()
     by_slot: dict[str, float] = {}
     cursor = 0
     current: float | None = None
-    for slot_index in range(96):
-        slot_start = local_start + timedelta(minutes=slot_index * _SLOT_MINUTES)
+    for slot_start in day_slots(target_date, tzinfo=local_tz, wall_clock=True):
         if is_today and slot_start > local_now:
             break
         while cursor < len(timeline) and timeline[cursor][0] <= slot_start:
@@ -2847,8 +2848,7 @@ def _live_price_rail(
 
     filled: dict[str, float] = {}
     carried: float | None = None
-    for minutes in range(0, MINUTES_PER_DAY, PRICE_RAIL_SLOT_MINUTES):
-        label = f"{minutes // 60:02d}:{minutes % 60:02d}"
+    for label in SLOT_LABELS:
         if label in by_slot:
             carried = by_slot[label]
         if carried is not None:
@@ -2876,9 +2876,8 @@ def _fill_import_rail_from_config(
         lookup_grid_import_price,
     )
 
-    for slot_index in range(96):
-        minute_of_day = slot_index * 15
-        slot = f"{minute_of_day // 60:02d}:{minute_of_day % 60:02d}"
+    for slot in SLOT_LABELS:
+        minute_of_day = slot_to_minutes(slot)
         if slot in by_slot:
             continue
         try:
@@ -2949,8 +2948,7 @@ def _money_points(
     imported = _energy_kwh_by_slot(import_points)
     exported = _energy_kwh_by_slot(export_points)
     points: list[SolarBiasMoneyPoint] = []
-    for slot_index in range(96):
-        slot = f"{slot_index // 4:02d}:{(slot_index % 4) * 15:02d}"
+    for slot in SLOT_LABELS:
         import_kwh = imported.get(slot)
         export_kwh = exported.get(slot)
         cost_rate = import_price_by_slot.get(slot)
@@ -3180,7 +3178,7 @@ def _house_forecast_by_bucket(
     """
     by_bucket: dict[str, float] = {}
     for utc_hour, row in rows.items():
-        mean_w = _mean_of(row)
+        mean_w = finite_mean(row)
         if mean_w is None:
             continue
         key = bucket_key(utc_hour, bucket, local_tz)
@@ -3197,33 +3195,9 @@ def _round_kwh(value_kwh: float | None) -> float | None:
     return None if value_kwh is None else round(value_kwh, 3)
 
 
-def _current_slot_start(local_now: datetime) -> datetime:
-    """Return the start of the 15-min slot containing local_now.
-
-    Imported lazily, like the other recorder_hourly_series helpers here, because
-    that module imports the recorder integration at module scope.
-    """
-    from ..recorder_hourly_series import get_local_current_slot_start
-
-    return get_local_current_slot_start(local_now, interval_minutes=15)
-
-
 def _next_slot_boundary(local_now: datetime) -> datetime:
     """Return the start of the first 15-min slot that begins after the slot containing now."""
-    return _current_slot_start(local_now) + timedelta(minutes=15)
-
-
-def _slot_to_minutes(slot: str) -> int | None:
-    """Turn an "HH:MM" slot label into minutes past midnight."""
-    hour_text, _, minute_text = slot.partition(":")
-    try:
-        hour = int(hour_text)
-        minute = int(minute_text)
-    except ValueError:
-        return None
-    if not (0 <= hour < 24 and 0 <= minute < 60):
-        return None
-    return hour * 60 + minute
+    return _current_slot_start(local_now) + SLOT
 
 
 def _minutes_into_day(cutoff: datetime | None, target_date: date) -> int:
@@ -3285,12 +3259,15 @@ def _slot_points_before(
     that helper's rule.
     """
     limit = _minutes_into_day(cutoff, target_date)
-    return [
-        point
-        for point in points
-        if (minutes := _slot_to_minutes(point.get("slot", ""))) is not None
-        and minutes < limit
-    ]
+    kept = []
+    for point in points:
+        try:
+            minutes = slot_to_minutes(point.get("slot", ""))
+        except ValueError:
+            continue
+        if minutes < limit:
+            kept.append(point)
+    return kept
 
 
 def _slot_energy_points(

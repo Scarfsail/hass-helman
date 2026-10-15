@@ -1,16 +1,16 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 from homeassistant.util import dt as dt_util
 
 from .config_read import parse_timestamp
-
 from .const import (
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
 )
+from .slot_grid import advance, slot_starts
 
 _INTERNAL_SNAPSHOT_FIELDS = {
     "sourceGranularityMinutes",
@@ -72,16 +72,10 @@ def _build_future_series(
         return []
 
     entries: list[dict[str, Any]] = []
-    first_slot_start_utc = dt_util.as_utc(current_slot_start) + timedelta(
-        minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES
-    )
-    for index in range(target_count):
-        slot_start = dt_util.as_local(
-            first_slot_start_utc
-            + timedelta(
-                minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES * index
-            )
-        )
+    for slot_start in slot_starts(
+        advance(current_slot_start),
+        advance(current_slot_start, slot_count=target_count + 1),
+    ):
         entry = canonical_map.get(slot_start)
         if entry is None:
             break

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from homeassistant.util import dt as dt_util
 
+from custom_components.helman.slot_grid import SLOT
+
 import importlib
 import unittest
 from datetime import datetime, timezone
@@ -62,7 +64,7 @@ def _make_house_forecast(
     next_slot_utc = dt_util.as_utc(current_slot_start)
     for index, value in enumerate(future_values, start=1):
         slot_start = dt_util.as_local(
-            next_slot_utc + battery_capacity_forecast_builder._CANONICAL_SLOT_DURATION * index
+            next_slot_utc + SLOT * index
         )
         series.append(
             {

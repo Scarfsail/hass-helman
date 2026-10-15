@@ -59,6 +59,7 @@ from zoneinfo import ZoneInfo
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from ..slot_grid import SLOT_MINUTES, SLOTS_PER_HOUR, day_slots
 from .forecast_slot_sampling import resolve_forecast_slot_values
 
 try:
@@ -80,10 +81,6 @@ except Exception:  # pragma: no cover - Home Assistant API compatibility
 #: The entity this module reads. Helman publishes it; see
 #: ``HelmanSolarForecastCurrentSensor``.
 SOLAR_FORECAST_CURRENT_ENTITY = "sensor.helman_solar_forecast_current"
-
-_SLOT_MINUTES = 15
-_SLOTS_PER_DAY = 24 * 60 // _SLOT_MINUTES
-_SLOTS_PER_HOUR = 60 // _SLOT_MINUTES
 
 #: What the statistics tail's ``mean`` is multiplied by to reach one slot's Wh.
 #:
@@ -126,7 +123,7 @@ async def load_forecast_slots_for_window(
     # only thing that made this loop awkward to share in the first place.
     resolved = resolve_forecast_slot_values(
         timeline, _slot_starts_for_window(first_date, last_date, local_tz=local_tz),
-        slot_minutes=_SLOT_MINUTES,
+        slot_minutes=SLOT_MINUTES,
     )
 
     days: dict[str, dict[str, float]] = {}
@@ -153,11 +150,7 @@ def _slot_starts_for_window(
     starts: list[datetime] = []
     day = first_date
     while day <= last_date:
-        day_start = datetime.combine(day, time.min, tzinfo=local_tz)
-        starts.extend(
-            day_start + timedelta(minutes=index * _SLOT_MINUTES)
-            for index in range(_SLOTS_PER_DAY)
-        )
+        starts.extend(day_slots(day, tzinfo=local_tz, wall_clock=True))
         day += timedelta(days=1)
     return starts
 
@@ -304,8 +297,8 @@ def forecast_slots_from_hourly_statistics(
             continue
         local_hour = utc_hour.astimezone(local_tz)
         slots = days.setdefault(local_hour.date().isoformat(), {})
-        for index in range(_SLOTS_PER_HOUR):
-            slot_key = f"{local_hour.hour:02d}:{index * _SLOT_MINUTES:02d}"
+        for index in range(SLOTS_PER_HOUR):
+            slot_key = f"{local_hour.hour:02d}:{index * SLOT_MINUTES:02d}"
             slots[slot_key] = round(slots.get(slot_key, 0.0) + slot_wh, 4)
     return days
 

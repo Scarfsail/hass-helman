@@ -1,24 +1,25 @@
 from __future__ import annotations
 
-from bisect import bisect_left
-from dataclasses import asdict
-from datetime import datetime
 import hashlib
 import json
 import logging
+from bisect import bisect_left
+from dataclasses import asdict
+from datetime import datetime
 from typing import Dict, List
 
 from ..const import FORECAST_CANONICAL_GRANULARITY_MINUTES
+from ..slot_grid import SLOT_LABELS, slot_to_minutes
 from .models import (
     BiasConfig,
-    TrainerSample,
     SolarActualsWindow,
-    SolarBiasProfile,
-    SolarBiasMetadata,
-    TrainingOutcome,
     SolarBiasContributionRow,
+    SolarBiasMetadata,
+    SolarBiasProfile,
     SolarBiasSlotExplainability,
     SolarBiasTrainingExplainability,
+    TrainerSample,
+    TrainingOutcome,
 )
 
 _DAY_FORECAST_FLOOR_WH = 100.0
@@ -27,7 +28,7 @@ _DAY_RATIO_MAX = 5.0
 _SLOT_FORECAST_SUM_FLOOR_WH = 50.0
 #: What a contribution row says when its ratio was measured over the whole hour.
 _HOURLY_GRAIN_REASON = "hourly_statistics_grain"
-_ALL_SLOTS = [f"{h:02d}:{m:02d}" for h in range(24) for m in (0, 15, 30, 45)]
+_ALL_SLOTS = list(SLOT_LABELS)
 _ALGORITHM_VERSION = (
     "configurable_aggregation_v1+15min_v1+curtailment_inference_v1+live_horizon_v1"
     "+hourly_statistics_tail_v1+carry_staleness_v1"
@@ -87,11 +88,6 @@ def _trimmed_mean(values: List[float]) -> float | None:
     return sum(trimmed) / len(trimmed)
 
 
-def _slot_to_minutes(slot: str) -> int:
-    h, m = slot.split(":")
-    return int(h) * 60 + int(m)
-
-
 class _DayActuals:
     """One day's measured slots, parsed once and indexed for range sums.
 
@@ -114,7 +110,7 @@ class _DayActuals:
         parsed: list[tuple[int, float]] = []
         for slot_key, value in day_actuals.items():
             try:
-                parsed.append((_slot_to_minutes(slot_key), value))
+                parsed.append((slot_to_minutes(slot_key), value))
             except (ValueError, AttributeError):
                 continue
         parsed.sort(key=lambda item: item[0])
@@ -145,7 +141,7 @@ _EMPTY_DAY_ACTUALS = _DayActuals({})
 
 def _forecast_slot_starts(forecast_slot_keys: list[str]) -> Dict[str, int]:
     """Where each forecast slot begins, in minutes into the day, parsed once."""
-    return {slot: _slot_to_minutes(slot) for slot in forecast_slot_keys}
+    return {slot: slot_to_minutes(slot) for slot in forecast_slot_keys}
 
 
 def _forecast_slot_ends(slot_starts: Dict[str, int]) -> Dict[str, int]:
@@ -278,7 +274,7 @@ def _serialize_invalidated_slots_by_date(
     for date, slots in invalidated_slots_by_date.items():
         if not slots:
             continue
-        serialized[date] = sorted(slots, key=_slot_to_minutes)
+        serialized[date] = sorted(slots, key=slot_to_minutes)
     return serialized
 
 
