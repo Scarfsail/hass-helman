@@ -17,6 +17,8 @@ ratio history returned by ``get_history()``. Two properties must hold:
 """
 
 from __future__ import annotations
+
+from custom_components.helman.tree_builder import TreeIndex
 from tests._fakes import make_coordinator
 
 import importlib
@@ -100,7 +102,7 @@ class RatioHistoryTests(unittest.TestCase):
         # Solar carries the whole 1 kW house load; grid contributes nothing. The ratio
         # sensor entities are NOT registered yet (the startup ordering that broke this).
         c = _make_coordinator({HOUSE: "1000", SOLAR: "1000", GRID: "0"})
-        c._init_buffers(TREE)
+        c._init_buffers(TREE, TreeIndex.from_tree(TREE))
 
         ticks = 3  # fewer than history_buckets (5) so any desync would show as length skew
         for _ in range(ticks):
@@ -123,7 +125,7 @@ class RatioHistoryTests(unittest.TestCase):
 
     def test_ratio_sensor_entities_still_updated_when_registered(self):
         c = _make_coordinator({HOUSE: "1000", SOLAR: "1000", GRID: "0"})
-        c._init_buffers(TREE)
+        c._init_buffers(TREE, TreeIndex.from_tree(TREE))
         # Sensor platform registers the ratio entities after buffers were built.
         solar_sensor = _FakeRatioSensor(SOLAR_RATIO)
         grid_sensor = _FakeRatioSensor(GRID_RATIO)
@@ -136,7 +138,7 @@ class RatioHistoryTests(unittest.TestCase):
 
     def test_ratio_sensors_are_marked_virtual(self):
         c = _make_coordinator({HOUSE: "1000", SOLAR: "1000", GRID: "0"})
-        c._init_buffers(TREE)
+        c._init_buffers(TREE, TreeIndex.from_tree(TREE))
         # The derived ratio sensors must be excluded from the Step 1 read loop.
         self.assertIn(SOLAR_RATIO, c._virtual_sensor_ids)
         self.assertIn(GRID_RATIO, c._virtual_sensor_ids)

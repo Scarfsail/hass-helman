@@ -92,7 +92,7 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
         coordinator = make_coordinator()
         coordinator._hass = _make_executor_hass()
         coordinator._active_config = {}
-        coordinator._appliances_registry = AppliancesRuntimeRegistry()
+        coordinator._appliances_registry.current = AppliancesRuntimeRegistry()
         coordinator._build_battery_forecast_sync = Mock(
             return_value={
                 "status": "available",
@@ -158,7 +158,7 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
 
         build_projection_plan.assert_called_once_with(
             generated_at=REFERENCE_TIME.isoformat(),
-            registry=coordinator._appliances_registry,
+            registry=coordinator._appliances_registry.current,
             schedule_document=_make_schedule_document(),
             inputs={"projection": "bundle"},
             hass=None,
@@ -192,7 +192,7 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
         coordinator = make_coordinator()
         coordinator._hass = _make_executor_hass()
         coordinator._active_config = {}
-        coordinator._appliances_registry = AppliancesRuntimeRegistry()
+        coordinator._appliances_registry.current = AppliancesRuntimeRegistry()
         # The async wrapper gathers the run-invariant inputs once, then delegates
         # to the pure snapshot builder (which reads the battery state from the
         # gathered ComputeInputs and calls the pure rebuild core).

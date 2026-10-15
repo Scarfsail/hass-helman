@@ -21,6 +21,8 @@ from typing import Any
 
 from homeassistant.util import dt as dt_util
 
+from ..span_history_model import read_span_meters
+
 from ..battery_state import (
     read_battery_entity_config,
     read_battery_forecast_settings,
@@ -28,7 +30,8 @@ from ..battery_state import (
 from ..const import DOMAIN
 from ..device_reports.reports import ReportQuery
 from ..energy_units import normalize_energy_to_kwh
-from ..vendors import INVERTER_TELEMETRY_KEY, helman_entity_id, resolve_vendor_telemetry
+from ..vendors import INVERTER_TELEMETRY_KEY, helman_entity_id
+from .context import NodeDetailContext
 from .day_stats import day_window
 from .inverter import run_mode_condition
 
@@ -102,7 +105,7 @@ def helman_sensor_ids(
 
 
 def build_battery_overview(
-    hass: Any, config: Mapping[str, Any], now: datetime
+    hass: Any, ctx: NodeDetailContext, now: datetime
 ) -> dict[str, Any]:
     """The battery's mappings and overview facts; no recorder read.
 
@@ -110,15 +113,22 @@ def build_battery_overview(
     absent from ``entities``. A telemetry key the profile has but the registry
     does not (disabled, missing) is present as ``None``.
     """
-    telemetry = resolve_vendor_telemetry(hass, config).get(INVERTER_TELEMETRY_KEY)
+    config = ctx.config
+    telemetry = ctx.telemetry.get(INVERTER_TELEMETRY_KEY)
     battery = _battery_config(config)
     battery_entities = battery.get("entities")
     if not isinstance(battery_entities, Mapping):
         battery_entities = {}
 
+    meters = read_span_meters(config)
     entities: dict[str, str | None] = {}
     for key, slot in _CONFIG_ENTITIES.items():
-        entity_id = battery_entities.get(slot)
+        if slot == "today_charge_energy":
+            entity_id = meters.battery_charge
+        elif slot == "today_discharge_energy":
+            entity_id = meters.battery_discharge
+        else:
+            entity_id = battery_entities.get(slot)
         entities[key] = entity_id if isinstance(entity_id, str) and entity_id else None
     entities.update(helman_sensor_ids(hass, TIME_SENSORS))
     if telemetry is not None:
@@ -153,22 +163,21 @@ def build_battery_overview(
     }
 
 
-async def today_ranking_report(hass: Any, local_now: datetime) -> Mapping[str, Any]:
+async def today_ranking_report(ctx: NodeDetailContext, local_now: datetime) -> Mapping[str, Any]:
     """Today's ranking device report, or ``{"unavailable": reason}``.
 
     The one report the battery's and the solar's "today so far" answers read.
     """
-    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
-    if coordinator is None:
+    if ctx.device_report is None:
         return {"unavailable": "not_loaded"}
     today = local_now.date()
-    return await coordinator.async_device_report(
+    return await ctx.device_report(
         "ranking", ReportQuery(start_date=today, end_date=today)
     )
 
 
 async def async_battery_section(
-    hass: Any, config: Mapping[str, Any], section: str, now: datetime
+    hass: Any, ctx: NodeDetailContext, section: str, now: datetime
 ) -> dict[str, Any]:
     """Today's charge origin, the battery's one history section.
 
@@ -190,7 +199,7 @@ async def async_battery_section(
         "unavailable": None,
         "charge": None,
     }
-    report = await today_ranking_report(hass, local_now)
+    report = await today_ranking_report(ctx, local_now)
     if "unavailable" in report:
         return {**payload, "unavailable": report["unavailable"]}
     return {

@@ -648,56 +648,23 @@ def _validate_solar_bias_correction(
     """The correction settings of ``training.solar_bias`` (flattened in v19)."""
     section = "training"
     base_path = "training.solar_bias"
-
-    # enabled: optional bool
     _validate_optional_bool(
+        report, section, f"{base_path}.enabled", bias_map.get("enabled")
+    )
+    _validate_optional_entity_id(
         report,
         section,
-        f"{base_path}.enabled",
-        bias_map.get("enabled"),
+        f"{base_path}.total_energy_entity_id",
+        bias_map.get("total_energy_entity_id"),
     )
+    for key, bounds in (
+        ("clamp_min", {"ge": 0, "le": 1}),
+        ("clamp_max", {"ge": 1, "le": 10}),
+    ):
+        _validate_optional_number(
+            report, section, f"{base_path}.{key}", bias_map.get(key), **bounds
+        )
 
-    # clamp_min: float in [0, 1]. Zero is the default the reader applies, and
-    # an outage is caught by slot invalidation rather than by this floor, so a
-    # document has to be able to state it.
-    clamp_min = bias_map.get("clamp_min")
-    if clamp_min is not None:
-        if isinstance(clamp_min, bool) or not isinstance(clamp_min, (int, float)):
-            report.add_error(
-                section=section,
-                path=f"{base_path}.clamp_min",
-                code="invalid_type",
-                message=f"{base_path}.clamp_min must be a number",
-            )
-        else:
-            if not (clamp_min >= 0 and clamp_min <= 1):
-                report.add_error(
-                    section=section,
-                    path=f"{base_path}.clamp_min",
-                    code="invalid_range",
-                    message=f"{base_path}.clamp_min must be >= 0 and <= 1",
-                )
-
-    # clamp_max: float in [1, 10]
-    clamp_max = bias_map.get("clamp_max")
-    if clamp_max is not None:
-        if isinstance(clamp_max, bool) or not isinstance(clamp_max, (int, float)):
-            report.add_error(
-                section=section,
-                path=f"{base_path}.clamp_max",
-                code="invalid_type",
-                message=f"{base_path}.clamp_max must be a number",
-            )
-        else:
-            if not (1 <= clamp_max <= 10):
-                report.add_error(
-                    section=section,
-                    path=f"{base_path}.clamp_max",
-                    code="invalid_range",
-                    message=f"{base_path}.clamp_max must be between 1 and 10",
-                )
-
-    # aggregation_method: "ratio_of_sums" or "trimmed_mean"
     aggregation_method = bias_map.get("aggregation_method")
     if aggregation_method is not None:
         if not isinstance(aggregation_method, str):
@@ -715,193 +682,73 @@ def _validate_solar_bias_correction(
                 message=f"{base_path}.aggregation_method must be one of {', '.join(SOLAR_BIAS_AGGREGATION_METHODS)}",
             )
 
-    max_interpolated_consecutive_slots = bias_map.get("max_interpolated_consecutive_slots")
-    if max_interpolated_consecutive_slots is not None:
-        if (
-            isinstance(max_interpolated_consecutive_slots, bool)
-            or not isinstance(max_interpolated_consecutive_slots, int)
-            or not (0 <= max_interpolated_consecutive_slots <= 24)
-        ):
-            report.add_error(
-                section=section,
-                path=f"{base_path}.max_interpolated_consecutive_slots",
-                code="invalid_value",
-                message=(
-                    f"{base_path}.max_interpolated_consecutive_slots must be an integer "
-                    "between 0 and 24"
-                ),
-            )
+    # Keep the historic code for this field while sharing numeric validation.
+    numeric_report = ValidationReport()
+    _validate_optional_number(
+        numeric_report,
+        section,
+        f"{base_path}.max_interpolated_consecutive_slots",
+        bias_map.get("max_interpolated_consecutive_slots"),
+        integer=True,
+        ge=0,
+        le=24,
+    )
+    if numeric_report.errors:
+        report.add_error(
+            section=section,
+            path=f"{base_path}.max_interpolated_consecutive_slots",
+            code="invalid_value",
+            message=f"{base_path}.max_interpolated_consecutive_slots must be an integer between 0 and 24",
+        )
 
     slot_invalidation = bias_map.get("slot_invalidation")
     if slot_invalidation is not None:
-        slot_invalidation_map = _require_mapping(
-            slot_invalidation,
-            f"{base_path}.slot_invalidation",
-            section,
-            report,
-        )
-        if slot_invalidation_map is not None:
-            slot_invalidation_path = f"{base_path}.slot_invalidation"
-            max_battery_soc_percent = slot_invalidation_map.get(
-                "max_battery_soc_percent"
-            )
-            max_battery_soc_present = _has_value(max_battery_soc_percent)
-
-            if max_battery_soc_present:
-                if isinstance(max_battery_soc_percent, bool) or not isinstance(
-                    max_battery_soc_percent, (int, float)
-                ):
-                    report.add_error(
-                        section=section,
-                        path=f"{slot_invalidation_path}.max_battery_soc_percent",
-                        code="invalid_type",
-                        message=(
-                            f"{slot_invalidation_path}.max_battery_soc_percent must "
-                            "be a number"
-                        ),
+        slot_path = f"{base_path}.slot_invalidation"
+        slot_map = _require_mapping(slot_invalidation, slot_path, section, report)
+        if slot_map is not None:
+            max_soc_present = _has_value(slot_map.get("max_battery_soc_percent"))
+            for key, bounds in (
+                ("max_battery_soc_percent", {"gt": 0, "le": 100}),
+                ("curtailment_max_export_w", {"ge": 0}),
+                ("data_glitch_max_slot_wh", {"ge": 0}),
+                ("data_glitch_min_neighbour_forecast_wh", {"ge": 0}),
+                ("curtailment_max_actual_forecast_ratio", {"gt": 0, "le": 1}),
+                ("data_glitch_backfill_max_minutes", {"ge": 0}),
+            ):
+                value = slot_map.get(key)
+                if key != "max_battery_soc_percent" or max_soc_present:
+                    _validate_optional_number(
+                        report, section, f"{slot_path}.{key}", value, **bounds
                     )
-                elif not (0 < max_battery_soc_percent <= 100):
-                    report.add_error(
-                        section=section,
-                        path=f"{slot_invalidation_path}.max_battery_soc_percent",
-                        code="invalid_range",
-                        message=(
-                            f"{slot_invalidation_path}.max_battery_soc_percent must "
-                            "be greater than 0 and at most 100"
-                        ),
-                    )
-
-            # Curtailment inference reads the signed grid power sensor to tell
-            # "battery full and nothing exported" from "battery full and
-            # exporting". Only required once the SoC threshold turns the rule
-            # on — the data-glitch rules below never look at the grid.
-            if max_battery_soc_present and not _has_grid_power_entity(config):
+            if max_soc_present and not _has_grid_power_entity(config):
                 report.add_error(
                     section=section,
-                    path=f"{slot_invalidation_path}.max_battery_soc_percent",
+                    path=f"{slot_path}.max_battery_soc_percent",
                     code="missing_prerequisite",
-                    message=(
-                        f"{slot_invalidation_path}.max_battery_soc_percent requires "
-                        "energy_nodes.grid.entities.power"
-                    ),
+                    message=f"{slot_path}.max_battery_soc_percent requires energy_nodes.grid.entities.power",
                 )
 
             if not _has_battery_capacity_entity(config):
                 report.add_error(
                     section=section,
-                    path=slot_invalidation_path,
+                    path=slot_path,
                     code="missing_prerequisite",
-                    message=(
-                        f"{slot_invalidation_path} requires "
-                        "energy_nodes.battery.entities.capacity"
-                    ),
+                    message=f"{slot_path} requires energy_nodes.battery.entities.capacity",
                 )
 
-            for key in (
-                "curtailment_max_export_w",
-                "data_glitch_max_slot_wh",
-                "data_glitch_min_neighbour_forecast_wh",
-            ):
-                value = slot_invalidation_map.get(key)
-                if value is None:
-                    continue
-                if isinstance(value, bool) or not isinstance(
-                    value, (int, float)
-                ):
-                    report.add_error(
-                        section=section,
-                        path=f"{slot_invalidation_path}.{key}",
-                        code="invalid_type",
-                        message=(
-                            f"{slot_invalidation_path}.{key} must be a number"
-                        ),
-                    )
-                elif value < 0:
-                    report.add_error(
-                        section=section,
-                        path=f"{slot_invalidation_path}.{key}",
-                        code="invalid_range",
-                        message=(
-                            f"{slot_invalidation_path}.{key} must be >= 0"
-                        ),
-                    )
-
-            ratio_value = slot_invalidation_map.get(
-                "curtailment_max_actual_forecast_ratio"
-            )
-            ratio_path = (
-                f"{slot_invalidation_path}.curtailment_max_actual_forecast_ratio"
-            )
-            if ratio_value is not None:
-                if isinstance(ratio_value, bool) or not isinstance(
-                    ratio_value, (int, float)
-                ):
-                    report.add_error(
-                        section=section,
-                        path=ratio_path,
-                        code="invalid_type",
-                        message=f"{ratio_path} must be a number",
-                    )
-                elif not (0 < ratio_value <= 1):
-                    report.add_error(
-                        section=section,
-                        path=ratio_path,
-                        code="invalid_range",
-                        message=(
-                            f"{ratio_path} must be greater than 0 and at most 1"
-                        ),
-                    )
-
-            backfill_value = slot_invalidation_map.get(
-                "data_glitch_backfill_max_minutes"
-            )
-            if backfill_value is not None:
-                if isinstance(backfill_value, bool) or not isinstance(
-                    backfill_value, (int, float)
-                ):
-                    report.add_error(
-                        section=section,
-                        path=f"{slot_invalidation_path}.data_glitch_backfill_max_minutes",
-                        code="invalid_type",
-                        message=(
-                            f"{slot_invalidation_path}.data_glitch_backfill_max_minutes "
-                            "must be a number"
-                        ),
-                    )
-                elif backfill_value < 0:
-                    report.add_error(
-                        section=section,
-                        path=f"{slot_invalidation_path}.data_glitch_backfill_max_minutes",
-                        code="invalid_range",
-                        message=(
-                            f"{slot_invalidation_path}.data_glitch_backfill_max_minutes "
-                            "must be >= 0"
-                        ),
-                    )
-
-    # cross-field validation: clamp_min < clamp_max
+    clamp_min = bias_map.get("clamp_min")
+    clamp_max = bias_map.get("clamp_max")
     if (
-        clamp_min is not None
-        and clamp_max is not None
-        and isinstance(clamp_min, (int, float))
+        isinstance(clamp_min, (int, float))
         and isinstance(clamp_max, (int, float))
+        and not clamp_min < clamp_max
     ):
-        try:
-            if not (clamp_min < clamp_max):
-                report.add_error(
-                    section=section,
-                    path=base_path,
-                    code="invalid_relation",
-                    message="clamp_min must be less than clamp_max",
-                )
-        except Exception:
-            # in case values are not comparable
-            report.add_error(
-                section=section,
-                path=base_path,
-                code="invalid_relation",
-                message="clamp_min must be less than clamp_max",
-            )
+        report.add_error(
+            section=section,
+            path=base_path,
+            code="invalid_relation",
+            message="clamp_min must be less than clamp_max",
+        )
 
 
 def _validate_battery_config(
@@ -2329,15 +2176,54 @@ def _validate_optional_entity_id(
         )
 
 
-def _validate_optional_positive_int(
+def _validate_optional_number(
     report: ValidationReport,
     section: str,
     path: str,
     value: object,
+    *,
+    integer: bool = False,
+    ge: float | None = None,
+    gt: float | None = None,
+    le: float | None = None,
 ) -> None:
+    """Validate an optional numeric leaf, leaving relations to its caller."""
     if value is None:
         return
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+    if isinstance(value, bool) or not isinstance(
+        value, int if integer else (int, float)
+    ):
+        kind = "an integer" if integer else "a number"
+        report.add_error(
+            section=section,
+            path=path,
+            code="invalid_type",
+            message=f"{path} must be {kind}",
+        )
+        return
+    bounds = []
+    if ge is not None:
+        bounds.append((value >= ge, f">= {ge}"))
+    if gt is not None:
+        bounds.append((value > gt, f"> {gt}"))
+    if le is not None:
+        bounds.append((value <= le, f"<= {le}"))
+    if not all(valid for valid, _ in bounds):
+        report.add_error(
+            section=section,
+            path=path,
+            code="invalid_range",
+            message=f"{path} must be "
+            + " and ".join(description for _, description in bounds),
+        )
+
+
+def _validate_optional_positive_int(
+    report: ValidationReport, section: str, path: str, value: object
+) -> None:
+    numeric_report = ValidationReport()
+    _validate_optional_number(numeric_report, section, path, value, integer=True, gt=0)
+    if numeric_report.errors:
         report.add_error(
             section=section,
             path=path,
@@ -2364,25 +2250,12 @@ def _validate_optional_positive_number(
 
 
 def _validate_optional_probability(
-    report: ValidationReport,
-    section: str,
-    path: str,
-    value: object,
+    report: ValidationReport, section: str, path: str, value: object
 ) -> None:
-    if value is None:
-        return
-    if (
-        isinstance(value, bool)
-        or not isinstance(value, (int, float))
-        or value <= 0
-        or value > 1
-    ):
-        report.add_error(
-            section=section,
-            path=path,
-            code="invalid_probability",
-            message=f"{path} must be a number greater than 0 and at most 1",
-        )
+    numeric_report = ValidationReport()
+    _validate_optional_number(numeric_report, section, path, value, gt=0, le=1)
+    if numeric_report.errors:
+        report.add_error(section=section, path=path, code="invalid_probability", message=f"{path} must be a number greater than 0 and at most 1")
 
 
 def _validate_name_cleaner_regex(value: object, report: ValidationReport) -> None:

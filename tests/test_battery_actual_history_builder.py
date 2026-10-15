@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from homeassistant.util import dt as dt_util
-
 import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -9,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
 from _ha_stubs import stub_module
+from homeassistant.util import dt as dt_util
 
 REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
 TZ = ZoneInfo("Europe/Prague")
@@ -68,7 +67,7 @@ class BatteryActualHistoryBuilderTests(unittest.IsolatedAsyncioTestCase):
             async_query_slot_boundary_state_values=query_mock
         )
 
-    async def test_default_interval_keeps_hourly_behavior(self) -> None:
+    async def test_explicit_hourly_interval_keeps_hourly_behavior(self) -> None:
         slot_start = datetime(2026, 3, 20, 20, 0, tzinfo=TZ)
         boundary_samples = {
             dt_util.as_utc(slot_start): 30.0,
@@ -88,6 +87,7 @@ class BatteryActualHistoryBuilderTests(unittest.IsolatedAsyncioTestCase):
                 self._reader(query_mock),
                 "sensor.battery_soc",
                 REFERENCE_TIME,
+                interval_minutes=60,
             )
 
         query_mock.assert_awaited_once_with(

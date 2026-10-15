@@ -34,14 +34,14 @@ from typing import Any
 from homeassistant.util import dt as dt_util
 
 from ..const import (
-    DOMAIN,
     HOUSE_CONSUMPTION_ENTITY_ID,
     house_consumption_phase_entity_id,
 )
 from ..consumption_forecast_profiles import HourOfWeekWinsorizedMeanProfile
 from ..power_polarity import is_power_inverted
-from ..vendors import INVERTER_TELEMETRY_KEY, resolve_vendor_telemetry
+from ..vendors import INVERTER_TELEMETRY_KEY
 from .battery import TIME_SENSORS, helman_sensor_ids, today_ranking_report
+from .context import NodeDetailContext
 from .day_stats import async_day_stats, day_window
 from .inverter import run_mode_condition
 from .solar import in_watts, node_config, node_entity, solar_destinations
@@ -89,7 +89,7 @@ OVERNIGHT_END = time(5)
 
 
 def build_house_overview(
-    hass: Any, config: Mapping[str, Any], now: datetime
+    hass: Any, ctx: NodeDetailContext, now: datetime
 ) -> dict[str, Any]:
     """The house's mappings and overview facts; no recorder read.
 
@@ -98,7 +98,8 @@ def build_house_overview(
     does not (disabled, missing) is present as ``None``. ``pattern`` is offered
     with a house power meter or a house energy meter to read history from.
     """
-    telemetry = resolve_vendor_telemetry(hass, config).get(INVERTER_TELEMETRY_KEY)
+    config = ctx.config
+    telemetry = ctx.telemetry.get(INVERTER_TELEMETRY_KEY)
     house = node_config(config, "house")
 
     entities: dict[str, str | None] = {}
@@ -139,9 +140,10 @@ def build_house_overview(
 
 
 async def async_house_section(
-    hass: Any, config: Mapping[str, Any], section: str, now: datetime
+    hass: Any, ctx: NodeDetailContext, section: str, now: datetime
 ) -> dict[str, Any]:
     """One of the house's sections, over today so far."""
+    config = ctx.config
     local_now = dt_util.as_local(now)
     start, end = day_window(local_now)
     payload: dict[str, Any] = {
@@ -154,7 +156,7 @@ async def async_house_section(
         },
     }
     if section == "today":
-        return {**payload, **await _today(hass, local_now)}
+        return {**payload, **await _today(ctx, local_now)}
     house = node_config(config, "house")
     comparison, overnight = await asyncio.gather(
         _weekday_comparison(hass, _energy_meter(house), local_now),
@@ -164,14 +166,14 @@ async def async_house_section(
         **payload,
         "comparison": comparison,
         "overnight": overnight,
-        "profile": learned_profile(hass),
+        "profile": learned_profile(ctx.house_profile),
     }
 
 
 # --- Today --------------------------------------------------------------------
 
 
-async def _today(hass: Any, local_now: datetime) -> dict[str, Any]:
+async def _today(ctx: NodeDetailContext, local_now: datetime) -> dict[str, Any]:
     """Today's house figures from the ranking report, or why there are none."""
     payload: dict[str, Any] = {
         "currency": None,
@@ -182,7 +184,7 @@ async def _today(hass: Any, local_now: datetime) -> dict[str, Any]:
         "selfConsumption": None,
         "consumers": None,
     }
-    report = await today_ranking_report(hass, local_now)
+    report = await today_ranking_report(ctx, local_now)
     if "unavailable" in report:
         return {**payload, "unavailable": report["unavailable"]}
     nodes = report.get("nodes") or []
@@ -460,17 +462,14 @@ async def _overnight(
     }
 
 
-def learned_profile(hass: Any) -> dict[str, Any] | None:
+def learned_profile(house_profile: tuple[Any, str | None]) -> dict[str, Any] | None:
     """The house forecast's fitted weekday/hour profile, kWh per hour, Monday first.
 
     The base load the forecast learned (deferrable appliances excluded), as
     the forecast serves it: a learned expectation, not measured history.
     ``None`` while no profile is fitted.
     """
-    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
-    if coordinator is None:
-        return None
-    profile, trained_at = coordinator.house_profile
+    profile, trained_at = house_profile
     if profile is None:
         return None
     slot = HourOfWeekWinsorizedMeanProfile.slot_index

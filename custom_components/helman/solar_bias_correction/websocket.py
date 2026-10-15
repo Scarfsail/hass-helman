@@ -1,17 +1,14 @@
 from __future__ import annotations
 
 import logging
-import re
-from datetime import date
 
 import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 
-from ..const import DOMAIN
+from ..ws_common import get_coordinator, validate_dates
 
 _LOGGER = logging.getLogger(__name__)
-_DASHED_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 @websocket_api.websocket_command(
@@ -45,16 +42,7 @@ async def ws_get_solar_bias_inspector(
     msg: dict,
 ) -> None:
     raw_date = msg.get("date")
-    try:
-        if not isinstance(raw_date, str) or _DASHED_DATE_RE.fullmatch(raw_date) is None:
-            raise ValueError
-        date.fromisoformat(raw_date)
-    except ValueError:
-        connection.send_error(
-            msg["id"],
-            "invalid_date",
-            "Date must use YYYY-MM-DD format",
-        )
+    if not validate_dates(connection, msg, raw_date):
         return
 
     service = _get_solar_bias_service(hass, connection, msg)
@@ -111,12 +99,7 @@ async def ws_get_solar_bias_day_aggregates(
     """
     raw_start = msg.get("start_date")
     raw_end = msg.get("end_date")
-    if not _is_dashed_date(raw_start) or not _is_dashed_date(raw_end):
-        connection.send_error(
-            msg["id"],
-            "invalid_date",
-            "Dates must use YYYY-MM-DD format",
-        )
+    if not validate_dates(connection, msg, raw_start, raw_end):
         return
 
     service = _get_solar_bias_service(hass, connection, msg)
@@ -143,37 +126,16 @@ async def ws_get_solar_bias_day_aggregates(
     connection.send_result(msg["id"], payload)
 
 
-def _is_dashed_date(raw_value) -> bool:
-    if not isinstance(raw_value, str) or _DASHED_DATE_RE.fullmatch(raw_value) is None:
-        return False
-    try:
-        date.fromisoformat(raw_value)
-    except ValueError:
-        return False
-    return True
-
-
-def _get_coordinator(
-    hass: HomeAssistant,
-    connection: websocket_api.ActiveConnection,
-    msg: dict,
-):
-    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
-    if coordinator is None:
-        connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
-    return coordinator
-
-
 def _get_solar_bias_service(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ):
-    coordinator = _get_coordinator(hass, connection, msg)
+    coordinator = get_coordinator(hass, connection, msg)
     if coordinator is None:
         return None
 
-    service = getattr(coordinator, "_solar_bias_service", None)
+    service = coordinator.solar_bias_service
     if service is None:
         connection.send_error(
             msg["id"],
@@ -183,14 +145,3 @@ def _get_solar_bias_service(
         return None
 
     return service
-
-
-def _require_admin(
-    connection: websocket_api.ActiveConnection,
-    msg: dict,
-) -> bool:
-    user = getattr(connection, "user", None)
-    if user is None or not getattr(user, "is_admin", False):
-        connection.send_error(msg["id"], "unauthorized", "Admin access required")
-        return False
-    return True

@@ -8,10 +8,12 @@ counts the queries rather than trusting the shape of the call site.
 """
 
 from __future__ import annotations
+import types
+from _fakes import _bias_service_config
+
 
 from _fakes import DummyStore as _DummyStore
 
-import types
 import unittest
 
 import pytest
@@ -169,19 +171,22 @@ def _make_service():
         hass,
         _DummyStore(),
         _make_cfg(),
-        house_energy_entity_id_provider=lambda: HOUSE_METER,
-        grid_import_energy_entity_id_provider=lambda: GRID_IMPORT_METER,
-        grid_export_energy_entity_id_provider=lambda: GRID_EXPORT_METER,
-        battery_charge_energy_entity_id_provider=lambda: BATTERY_CHARGE_METER,
-        battery_discharge_energy_entity_id_provider=lambda: BATTERY_DISCHARGE_METER,
-        house_deferrable_consumers_provider=lambda: [
-            {"energy_entity_id": entity_id, "label": entity_id}
-            for entity_id in CONSUMER_METERS
-        ],
-        battery_soc_entity_id_provider=lambda: SOC_SENSOR,
-        battery_soc_bounds_entity_id_provider=lambda: (
-            MIN_SOC_SENSOR,
-            MAX_SOC_SENSOR,
+        config=_bias_service_config(
+            _make_cfg(),
+            house=HOUSE_METER,
+            grid_import=GRID_IMPORT_METER,
+            grid_export=GRID_EXPORT_METER,
+            battery_charge=BATTERY_CHARGE_METER,
+            battery_discharge=BATTERY_DISCHARGE_METER,
+            carved=[
+                {"energy_entity_id": entity_id, "label": entity_id}
+                for entity_id in CONSUMER_METERS
+            ],
+            soc=SOC_SENSOR,
+            soc_bounds=(
+                MIN_SOC_SENSOR,
+                MAX_SOC_SENSOR,
+            ),
         ),
     )
     service._profile = models.SolarBiasProfile(factors={}, omitted_slots=[])
@@ -244,13 +249,10 @@ class TestInspectorIssuesOneCumulativeEnergyQuery(unittest.IsolatedAsyncioTestCa
         # is that batch's solar column, not a second read of the same meter.
         self.assertEqual(_reads_touching(SOLAR_METER), [QUERIES["batched"][0]])
 
-    async def test_unrelated_provider_failure_keeps_solar_actuals(self):
+    async def test_null_house_config_keeps_solar_actuals(self):
         service = _make_service()
 
-        def _raise_house_provider():
-            raise RuntimeError("house meter unavailable")
-
-        service._house_energy_entity_id_provider = _raise_house_provider
+        service._config["energy_nodes"]["house"] = None
         requested_entity_ids: list[str] = []
 
         async def _load_meter_batch(entity_ids, target_date, local_tz):

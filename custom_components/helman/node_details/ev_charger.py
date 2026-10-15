@@ -36,9 +36,11 @@ from typing import Any
 
 from homeassistant.util import dt as dt_util
 
+from ..config_path import get as config_value
+
 from ..controllables.config import own_meter, peek_controllable_id
-from ..vendors import resolve_vendor_telemetry
 from .battery import today_ranking_report
+from .context import NodeDetailContext
 from .day_stats import SEGMENT_MAX_GAP, async_state_history, day_window, with_live_state
 from .house import ranking_money
 from .inverter import run_mode_condition
@@ -59,7 +61,7 @@ _CONFIG_ENTITIES = {
 
 
 def build_ev_charger_overview(
-    hass: Any, config: Mapping[str, Any], now: datetime, device: Mapping[str, Any]
+    hass: Any, ctx: NodeDetailContext, now: datetime, device: Mapping[str, Any]
 ) -> dict[str, Any]:
     """The charger's mappings and overview facts; no recorder read.
 
@@ -69,7 +71,7 @@ def build_ev_charger_overview(
     ``None``.
     """
     device_id = peek_controllable_id(device)
-    telemetry = resolve_vendor_telemetry(hass, config).get(device_id)
+    telemetry = ctx.telemetry.get(device_id)
 
     entities: dict[str, str | None] = {
         key: _device_entity(device, path) for key, path in _CONFIG_ENTITIES.items()
@@ -94,7 +96,7 @@ def build_ev_charger_overview(
 
 async def async_ev_charger_section(
     hass: Any,
-    config: Mapping[str, Any],
+    ctx: NodeDetailContext,
     section: str,
     now: datetime,
     device: Mapping[str, Any],
@@ -107,7 +109,7 @@ async def async_ev_charger_section(
     this charger.
     """
     if section == "segment":
-        return await _async_segment_section(hass, config, now, device)
+        return await _async_segment_section(hass, ctx, now, device)
     local_now = dt_util.as_local(now)
     start, end = day_window(local_now)
     payload: dict[str, Any] = {
@@ -124,7 +126,7 @@ async def async_ev_charger_section(
         "unavailable": None,
         "charger": None,
     }
-    report = await today_ranking_report(hass, local_now)
+    report = await today_ranking_report(ctx, local_now)
     if "unavailable" in report:
         return {**payload, "unavailable": report["unavailable"]}
     # The device tree, and so the report, names a metered device by its meter
@@ -155,7 +157,7 @@ async def async_ev_charger_section(
 
 
 async def _async_segment_section(
-    hass: Any, config: Mapping[str, Any], now: datetime, device: Mapping[str, Any]
+    hass: Any, ctx: NodeDetailContext, now: datetime, device: Mapping[str, Any]
 ) -> dict[str, Any]:
     """The charging segment's start and today's charging stretches, as recorded.
 
@@ -165,7 +167,7 @@ async def _async_segment_section(
     charging when read, which ends at ``asOf``.
     """
     device_id = peek_controllable_id(device)
-    telemetry = resolve_vendor_telemetry(hass, config).get(device_id)
+    telemetry = ctx.telemetry.get(device_id)
     local_now = dt_util.as_local(now)
     day_start, day_end = day_window(local_now)
     entity_id = telemetry.entities.get("run_mode") if telemetry is not None else None
@@ -273,7 +275,5 @@ def charging_segment_start(
 
 def _device_entity(device: Mapping[str, Any], path: str) -> str | None:
     """The entity id at ``path`` in the device, ``None`` when unset."""
-    value: Any = device
-    for part in path.split("."):
-        value = value.get(part) if isinstance(value, Mapping) else None
+    value = config_value(device, path)
     return value if isinstance(value, str) and value else None

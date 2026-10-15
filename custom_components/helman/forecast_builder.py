@@ -1,26 +1,23 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from .config_read import read_entity_id, read_mapping
 from .const import (
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
     SOLAR_REMAINING_TODAY_ENERGY_ENTITY_ID,
 )
 from .grid_price_forecast_builder import GridPriceForecastBuilder
 from .recorder_hourly_series import TodaySlotEnergyReader
-from .solar_forecast_grid import SLOTS_PER_HOUR, split_hour_by_weights
+from .slot_grid import SLOTS_PER_DAY, SLOTS_PER_HOUR, day_slots, split_hour_by_weights
 
 _LOGGER = logging.getLogger(__name__)
-
-#: Canonical slots in a day without a DST transition.
-_SLOTS_PER_NORMAL_DAY = 24 * 60 // FORECAST_CANONICAL_GRANULARITY_MINUTES
-
 
 class HelmanForecastBuilder:
     def __init__(
@@ -51,13 +48,7 @@ class HelmanForecastBuilder:
         }
 
     async def _build_solar_forecast(self, reference_time: datetime) -> dict[str, Any]:
-        energy_nodes = self._read_dict(self._config.get("energy_nodes"))
-        solar_config = self._read_dict(energy_nodes.get("solar"))
-        solar_forecast = self._read_dict(solar_config.get("forecast"))
-
-        daily_entity_ids = self._read_entity_id_list(
-            solar_forecast.get("daily_energy_entity_ids")
-        )[:8]
+        daily_entity_ids = read_solar_forecast_entities(self._config)[:8]
 
         if not daily_entity_ids:
             return {
@@ -115,7 +106,7 @@ class HelmanForecastBuilder:
         self,
         reference_time: datetime,
         *,
-        interval_minutes: int = 60,
+        interval_minutes: int,
     ) -> list[dict[str, Any]]:
         entity_id = self._read_solar_actual_energy_entity_id()
         if entity_id is None:
@@ -162,7 +153,7 @@ class HelmanForecastBuilder:
         # day is the one benign case: the source publishes a normal 24-hour
         # series and the local axis is an hour shorter or longer, which the
         # positional anchor is there to absorb.
-        if len(values) not in (len(expected_slots), _SLOTS_PER_NORMAL_DAY):
+        if len(values) not in (len(expected_slots), SLOTS_PER_DAY):
             _LOGGER.warning(
                 "Solar forecast for %s on %s has %d values for %d slots; "
                 "anchoring from local midnight will %s",
@@ -256,22 +247,7 @@ class HelmanForecastBuilder:
         return expanded
 
     def _build_local_slots_for_date(self, expected_date: date) -> list[datetime]:
-        local_start = datetime.combine(expected_date, time.min, tzinfo=self._local_tz)
-        local_end = datetime.combine(
-            expected_date + timedelta(days=1),
-            time.min,
-            tzinfo=self._local_tz,
-        )
-
-        slots: list[datetime] = []
-        cursor_utc = dt_util.as_utc(local_start)
-        end_utc = dt_util.as_utc(local_end)
-        step = timedelta(minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES)
-        while cursor_utc < end_utc:
-            slots.append(dt_util.as_local(cursor_utc))
-            cursor_utc += step
-
-        return slots
+        return day_slots(expected_date, tzinfo=self._local_tz)
 
     def _get_state(self, entity_id: str | None):
         if entity_id is None:
@@ -298,28 +274,6 @@ class HelmanForecastBuilder:
 
         return None
 
-    @staticmethod
-    def _read_entity_id(raw_value: Any) -> str | None:
-        if isinstance(raw_value, str) and raw_value.strip():
-            return raw_value.strip()
-        return None
-
-    @staticmethod
-    def _read_dict(raw_value: Any) -> dict[str, Any]:
-        if isinstance(raw_value, dict):
-            return raw_value
-        return {}
-
-    def _read_entity_id_list(self, raw_value: Any) -> list[str]:
-        if not isinstance(raw_value, list):
-            return []
-
-        entity_ids: list[str] = []
-        for item in raw_value:
-            entity_id = self._read_entity_id(item)
-            if entity_id is not None:
-                entity_ids.append(entity_id)
-        return entity_ids
 
     def _read_first_unit(self, entity_ids: list[str | None]) -> str | None:
         for entity_id in entity_ids:
@@ -330,15 +284,14 @@ class HelmanForecastBuilder:
         return None
 
     def _read_solar_actual_energy_entity_id(self) -> str | None:
-        energy_nodes = self._read_dict(self._config.get("energy_nodes"))
-        solar_config = self._read_dict(energy_nodes.get("solar"))
-        forecast_config = self._read_dict(solar_config.get("forecast"))
-        entities = self._read_dict(solar_config.get("entities"))
+        energy_nodes = read_mapping(self._config.get("energy_nodes"))
+        solar_config = read_mapping(energy_nodes.get("solar"))
+        forecast_config = read_mapping(solar_config.get("forecast"))
+        entities = read_mapping(solar_config.get("entities"))
 
-        return (
-            self._read_entity_id(forecast_config.get("total_energy_entity_id"))
-            or self._read_entity_id(entities.get("today_energy"))
-        )
+        return read_entity_id(
+            forecast_config.get("total_energy_entity_id")
+        ) or read_entity_id(entities.get("today_energy"))
 
     @staticmethod
     def _read_unit_from_state(state) -> str | None:
@@ -363,3 +316,14 @@ class HelmanForecastBuilder:
             return parsed.replace(tzinfo=self._local_tz)
 
         return parsed
+
+
+def read_solar_forecast_entities(config: dict[str, Any]) -> list[str]:
+    """Configured daily solar sources, in forecast-day order."""
+    energy_nodes = read_mapping(config.get("energy_nodes"))
+    solar = read_mapping(energy_nodes.get("solar"))
+    forecast = read_mapping(solar.get("forecast"))
+    raw = forecast.get("daily_energy_entity_ids")
+    if not isinstance(raw, list):
+        return []
+    return [entity for value in raw if (entity := read_entity_id(value)) is not None]

@@ -15,9 +15,12 @@ from homeassistant.components.recorder.history import (
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from .config_read import read_float
 from .controllables.config import is_active_state
 from .energy_units import normalize_energy_to_kwh
 from .shared_meter_split import fit_member_weights, split_own_power
+from .slot_grid import floor_to_slot as get_local_current_slot_start
+from .slot_grid import slot_starts as _build_local_slot_starts_until
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -114,30 +117,6 @@ class _UnwrapState:
 
 
 _INITIAL_UNWRAP_STATE = _UnwrapState(offset_kwh=0.0, segment_value_kwh=None)
-
-
-def get_local_current_slot_start(
-    reference_time: datetime,
-    *,
-    interval_minutes: int,
-) -> datetime:
-    validated_interval_minutes = _validate_interval_minutes(interval_minutes)
-    local_day_start = _get_local_day_start(reference_time)
-    local_reference = dt_util.as_local(reference_time)
-    slot_duration_seconds = validated_interval_minutes * 60
-    # Floor from local midnight in UTC so DST gaps/repeated hours normalize to
-    # real local slot boundaries instead of synthetic wall-clock timestamps.
-    elapsed_seconds = max(
-        0.0,
-        (
-            dt_util.as_utc(local_reference) - dt_util.as_utc(local_day_start)
-        ).total_seconds(),
-    )
-    slot_index = int(elapsed_seconds // slot_duration_seconds)
-    slot_start_utc = dt_util.as_utc(local_day_start) + timedelta(
-        seconds=slot_index * slot_duration_seconds
-    )
-    return dt_util.as_local(slot_start_utc)
 
 
 def get_today_completed_local_slots(
@@ -1581,7 +1560,7 @@ def _parse_state_values(states: list[Any]) -> list[tuple[datetime, float]]:
         last_updated = getattr(state, "last_updated", None)
         if last_updated is None:
             continue
-        value = _read_float(getattr(state, "state", None))
+        value = read_float(getattr(state, "state", None))
         if value is None:
             continue
         parsed.append((dt_util.as_utc(last_updated), value))
@@ -1739,7 +1718,7 @@ def _sample_state_values_at_boundaries(
             if state_updated_utc > boundary:
                 break
 
-            parsed_value = _read_float(getattr(state, "state", None))
+            parsed_value = read_float(getattr(state, "state", None))
             if parsed_value is not None:
                 latest_value = parsed_value
             state_index += 1
@@ -2217,26 +2196,6 @@ def _get_local_day_start(reference_time: datetime) -> datetime:
     )
 
 
-def _build_local_slot_starts_until(
-    local_start: datetime,
-    local_end: datetime,
-    *,
-    interval_minutes: int,
-) -> list[datetime]:
-    validated_interval_minutes = _validate_interval_minutes(interval_minutes)
-    if local_end <= local_start:
-        return []
-
-    slots: list[datetime] = []
-    cursor_utc = dt_util.as_utc(local_start)
-    end_utc = dt_util.as_utc(local_end)
-    while cursor_utc < end_utc:
-        slots.append(dt_util.as_local(cursor_utc))
-        cursor_utc += timedelta(minutes=validated_interval_minutes)
-
-    return slots
-
-
 def _validate_interval_minutes(interval_minutes: int) -> int:
     if (
         isinstance(interval_minutes, bool)
@@ -2247,27 +2206,8 @@ def _validate_interval_minutes(interval_minutes: int) -> int:
     return interval_minutes
 
 
-def _read_float(raw_value: Any) -> float | None:
-    if isinstance(raw_value, bool) or raw_value is None:
-        return None
-
-    if isinstance(raw_value, (int, float)):
-        return float(raw_value)
-
-    if isinstance(raw_value, str):
-        stripped = raw_value.strip()
-        if not stripped or stripped.lower() in {"unknown", "unavailable", "none"}:
-            return None
-        try:
-            return float(stripped)
-        except ValueError:
-            return None
-
-    return None
-
-
 def _read_energy_state_kwh(state: Any, *, default_unit: Any) -> float | None:
-    parsed_value = _read_float(getattr(state, "state", None))
+    parsed_value = read_float(getattr(state, "state", None))
     if parsed_value is None:
         return None
 

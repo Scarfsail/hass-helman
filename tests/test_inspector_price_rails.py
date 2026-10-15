@@ -11,11 +11,13 @@ any single source can be blamed for.
 """
 
 from __future__ import annotations
+import sys
+import types
+from _fakes import _bias_service_config
+
 
 from _fakes import DummyStore as _DummyStore
 
-import sys
-import types
 import unittest
 
 import pytest
@@ -475,7 +477,7 @@ class TestLoadRecordedPriceRails(unittest.IsolatedAsyncioTestCase):
             config=SimpleNamespace(time_zone="Europe/Prague"),
             bus=SimpleNamespace(async_fire=lambda *a, **kw: None),
         )
-        return service_mod.SolarBiasCorrectionService(hass, _DummyStore(), _make_cfg())
+        return service_mod.SolarBiasCorrectionService(hass, _DummyStore(), _make_cfg(), config=_bias_service_config(_make_cfg()),)
 
     def _history(self, by_slot):
         return self.span.PriceHistory(by_slot=by_slot)
@@ -581,7 +583,7 @@ class TestRecordedRailAcrossAnOutage(unittest.IsolatedAsyncioTestCase):
             ),
             _DummyStore(),
             _make_cfg(),
-        )
+         config=_bias_service_config(_make_cfg()),)
         with patch.object(
             self.recorder, "get_significant_states", _fake_query
         ), patch.object(
@@ -651,9 +653,9 @@ class _PayloadCase(unittest.IsolatedAsyncioTestCase):
             hass,
             _DummyStore(),
             _make_cfg(),
-            grid_import_price_config_provider=lambda: import_config,
+
             grid_price_snapshot_provider=lambda: price_snapshot or {},
-        )
+         config=_bias_service_config(_make_cfg() ,price=import_config),)
         service._profile = models.SolarBiasProfile(factors={}, omitted_slots=[])
         service._metadata = models.SolarBiasMetadata(
             trained_at="2026-05-01T03:00:00+02:00",

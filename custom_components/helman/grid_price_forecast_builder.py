@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from datetime import datetime, time
 from math import isfinite
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -10,7 +10,9 @@ from zoneinfo import ZoneInfo
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from .config_read import read_entity_id, read_float, read_mapping
 from .const import FORECAST_CANONICAL_GRANULARITY_MINUTES, MAX_FORECAST_DAYS
+from .slot_grid import advance, floor_to_slot, slot_starts
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -68,11 +70,11 @@ class GridPriceForecastBuilder:
         Elapsed entries are kept alongside future ones -- the schedule is what
         the source said, not a forward horizon.
         """
-        energy_nodes = self._read_dict(self._config.get("energy_nodes"))
-        grid_config = self._read_dict(energy_nodes.get("grid"))
-        grid_forecast = self._read_dict(grid_config.get("forecast"))
+        energy_nodes = read_mapping(self._config.get("energy_nodes"))
+        grid_config = read_mapping(energy_nodes.get("grid"))
+        grid_forecast = read_mapping(grid_config.get("forecast"))
 
-        sell_price_entity_id = self._read_entity_id(
+        sell_price_entity_id = read_entity_id(
             grid_forecast.get("sell_price_entity_id")
         )
         if sell_price_entity_id is None:
@@ -83,7 +85,7 @@ class GridPriceForecastBuilder:
         # publishes ``nan`` must not reach the mirror's state, where the
         # recorder would compile it into the long-term series the aggregate
         # money views price off, poisoning that bucket for good.
-        current_price = self._read_float(state.state) if state is not None else None
+        current_price = read_float(state.state) if state is not None else None
         if current_price is not None and not isfinite(current_price):
             current_price = None
         unit = self._read_unit_from_state(state) if state is not None else None
@@ -95,7 +97,7 @@ class GridPriceForecastBuilder:
                 if parsed_timestamp is None:
                     continue
 
-                value = self._read_float(raw_value)
+                value = read_float(raw_value)
                 if value is None or not isfinite(value):
                     continue
 
@@ -166,7 +168,7 @@ class GridPriceForecastBuilder:
         windows: tuple[FixedGridImportPriceWindow, ...],
     ) -> list[dict[str, Any]]:
         points: list[dict[str, Any]] = []
-        current_slot_start = self._get_local_current_slot_start(
+        current_slot_start = floor_to_slot(
             reference_time,
             interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
         )
@@ -174,10 +176,9 @@ class GridPriceForecastBuilder:
             MAX_FORECAST_DAYS * 24 * 60 // FORECAST_CANONICAL_GRANULARITY_MINUTES
         )
 
-        for slot_start in self._build_local_slot_starts_for_horizon(
-            start_time=current_slot_start,
-            slot_count=slot_count,
-            interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
+        for slot_start in slot_starts(
+            current_slot_start,
+            advance(current_slot_start, slot_count=max(0, slot_count)),
         ):
             points.append(
                 {
@@ -205,45 +206,6 @@ class GridPriceForecastBuilder:
             minute_of_day=minute_of_day,
         )
 
-    def _get_local_current_slot_start(
-        self,
-        reference_time: datetime,
-        *,
-        interval_minutes: int,
-    ) -> datetime:
-        local_reference = dt_util.as_local(reference_time)
-        local_day_start = datetime.combine(
-            local_reference.date(),
-            time.min,
-            tzinfo=self._local_tz,
-        )
-        slot_duration_seconds = interval_minutes * 60
-        elapsed_seconds = max(
-            0.0,
-            (
-                dt_util.as_utc(local_reference) - dt_util.as_utc(local_day_start)
-            ).total_seconds(),
-        )
-        slot_index = int(elapsed_seconds // slot_duration_seconds)
-        slot_start_utc = dt_util.as_utc(local_day_start) + timedelta(
-            seconds=slot_index * slot_duration_seconds
-        )
-        return dt_util.as_local(slot_start_utc)
-
-    def _build_local_slot_starts_for_horizon(
-        self,
-        *,
-        start_time: datetime,
-        slot_count: int,
-        interval_minutes: int,
-    ) -> list[datetime]:
-        slots: list[datetime] = []
-        cursor_utc = dt_util.as_utc(start_time)
-        for _ in range(max(0, slot_count)):
-            slots.append(dt_util.as_local(cursor_utc))
-            cursor_utc += timedelta(minutes=interval_minutes)
-
-        return slots
 
     @staticmethod
     def _make_price_snapshot(
@@ -266,38 +228,6 @@ class GridPriceForecastBuilder:
         if entity_id is None:
             return None
         return self._hass.states.get(entity_id)
-
-    @staticmethod
-    def _read_dict(raw_value: Any) -> dict[str, Any]:
-        if isinstance(raw_value, dict):
-            return raw_value
-        return {}
-
-    @staticmethod
-    def _read_entity_id(raw_value: Any) -> str | None:
-        if isinstance(raw_value, str) and raw_value.strip():
-            return raw_value.strip()
-        return None
-
-    @staticmethod
-    def _read_float(raw_value: Any) -> float | None:
-        if isinstance(raw_value, bool) or raw_value is None:
-            return None
-
-        if isinstance(raw_value, (int, float)):
-            return float(raw_value)
-
-        if isinstance(raw_value, str):
-            stripped = raw_value.strip()
-            if not stripped or stripped.lower() in {"unknown", "unavailable", "none"}:
-                return None
-
-            try:
-                return float(stripped)
-            except ValueError:
-                return None
-
-        return None
 
     @staticmethod
     def _read_unit_from_state(state) -> str | None:
@@ -361,9 +291,9 @@ class GridPriceForecastBuilder:
 def read_grid_import_price_config(
     config: dict[str, Any] | Any,
 ) -> FixedGridImportPriceConfig | None:
-    energy_nodes = GridPriceForecastBuilder._read_dict(config.get("energy_nodes"))
-    grid_config = GridPriceForecastBuilder._read_dict(energy_nodes.get("grid"))
-    grid_forecast = GridPriceForecastBuilder._read_dict(grid_config.get("forecast"))
+    energy_nodes = read_mapping(config.get("energy_nodes"))
+    grid_config = read_mapping(energy_nodes.get("grid"))
+    grid_forecast = read_mapping(grid_config.get("forecast"))
 
     raw_unit = grid_forecast.get("import_price_unit")
     raw_windows = grid_forecast.get("import_price_windows")
@@ -437,7 +367,7 @@ def _read_grid_import_price_window(
             f"energy_nodes.grid.forecast.import_price_windows[{index}] must not have the same start and end"
         )
 
-    price = GridPriceForecastBuilder._read_float(raw_value.get("price"))
+    price = read_float(raw_value.get("price"))
     if price is None:
         raise GridImportPriceConfigError(
             f"energy_nodes.grid.forecast.import_price_windows[{index}].price must be numeric"
@@ -477,3 +407,18 @@ def _grid_import_window_contains_minute(
     if window.start_minutes < window.end_minutes:
         return window.start_minutes <= minute_of_day < window.end_minutes
     return minute_of_day >= window.start_minutes or minute_of_day < window.end_minutes
+
+
+def read_grid_entities(config: dict[str, Any]) -> dict[str, str | None]:
+    """The grid's configured entity ids, normalized once for all consumers."""
+    energy_nodes = read_mapping(config.get("energy_nodes"))
+    grid = read_mapping(energy_nodes.get("grid"))
+    entities = read_mapping(grid.get("entities"))
+    return {key: read_entity_id(value) for key, value in entities.items()}
+
+
+def read_grid_sell_price_entity_id(config: dict[str, Any]) -> str | None:
+    energy_nodes = read_mapping(config.get("energy_nodes"))
+    grid = read_mapping(energy_nodes.get("grid"))
+    forecast = read_mapping(grid.get("forecast"))
+    return read_entity_id(forecast.get("sell_price_entity_id"))

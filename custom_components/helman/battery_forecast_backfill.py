@@ -16,7 +16,7 @@ on :mod:`.solar_forecast_backfill`, and the four traps
 * **The hourly figure is not an average of the samples.** The four Wh entities
   each publish *one 15-minute slot's* energy, and the reader
   :func:`~.solar_bias_correction.statistics_day._forecast_wh_points` recovers an
-  hour's forecast energy as ``mean * _KWH_TO_WH * _SLOTS_PER_HOUR``. So the mean
+  hour's forecast energy as ``mean * _KWH_TO_WH * SLOTS_PER_HOUR``. So the mean
   written for an hour is that hour's archived slot values *summed and divided by
   four* -- ``mean * 4`` then reconstructs the sum. Getting this wrong is a
   constant factor on every back-filled day and no error, which is why
@@ -67,6 +67,7 @@ from homeassistant.helpers import storage
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
+from .slot_grid import SLOT_MINUTES, SLOTS_PER_HOUR
 from .solar_bias_correction.battery_forecast_history import (
     BATTERY_NET_FORECAST_CURRENT_ENTITY,
     BATTERY_SOC_FORECAST_CURRENT_ENTITY,
@@ -100,13 +101,11 @@ _SOURCE_STORAGE_VERSION = 1
 _STORAGE_KEY = f"{DOMAIN}.battery_forecast_backfill"
 _STORAGE_VERSION = 1
 
-_SLOT_MINUTES = 15
 #: Fifteen-minute slots per statistics hour. The reader
 #: ``statistics_day._forecast_wh_points`` multiplies an hour's mean by
-#: ``_KWH_TO_WH * _SLOTS_PER_HOUR`` because each Wh entity publishes one slot's
+#: ``_KWH_TO_WH * SLOTS_PER_HOUR`` because each Wh entity publishes one slot's
 #: Wh, so the mean written here is the hour's slot sum divided by this. Keep in
-#: step with ``statistics_day._SLOTS_PER_HOUR``.
-_SLOTS_PER_HOUR = 60 // _SLOT_MINUTES
+#: step with ``statistics_day.SLOTS_PER_HOUR``.
 
 #: How much history one import job covers before the walk pauses. Mirrors the
 #: seven-day chunk the sibling back-fills read in; here the whole source is
@@ -335,14 +334,14 @@ def _hourly_rows(
         samples = samples_by_hour[hour_utc]
         if series.is_energy:
             # The hour's slot sum over four: the reader multiplies an hour's
-            # mean by _SLOTS_PER_HOUR to recover the hour's forecast energy. No
+            # mean by SLOTS_PER_HOUR to recover the hour's forecast energy. No
             # min/max -- for an hour the source archived fewer than four slots
             # for, this synthetic mean falls outside the raw slot values' range,
             # and scaling those by four would only invent a band. Nothing reads
             # them and the recorder's columns are nullable, so leaving them off
             # is the honest row.
             rows.append(
-                StatisticData(start=hour_utc, mean=sum(samples) / _SLOTS_PER_HOUR)
+                StatisticData(start=hour_utc, mean=sum(samples) / SLOTS_PER_HOUR)
             )
         else:
             # A percentage is a level; its hourly figure is the plain mean of
@@ -387,7 +386,7 @@ def _parse_slot(
         minute = int(minute_text)
     except ValueError:
         return None
-    if not (0 <= hour < 24 and 0 <= minute < 60 and minute % _SLOT_MINUTES == 0):
+    if not (0 <= hour < 24 and 0 <= minute < 60 and minute % SLOT_MINUTES == 0):
         return None
     return datetime.combine(day, time(hour, minute), tzinfo=timezone)
 

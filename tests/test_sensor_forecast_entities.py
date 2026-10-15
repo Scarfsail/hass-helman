@@ -1,9 +1,9 @@
 from __future__ import annotations
+import sys
+import types
 from tests._fakes import make_coordinator
 
 import importlib
-import sys
-import types
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
@@ -31,14 +31,35 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
+    async def test_async_setup_entry_tolerates_null_energy_nodes(self):
+        sensor_module = _load_sensor_module()
+        for nodes in (None, {"battery": None}, {"battery": {"entities": None}}):
+            coordinator = SimpleNamespace(
+                get_device_tree=AsyncMock(
+                    return_value={"sources": [], "consumers": []}
+                ),
+                tree_index=SimpleNamespace(qualifying_nodes={}, share_devices={}),
+                config={"energy_nodes": nodes},
+                set_sensors=Mock(),
+                set_entity_factory=Mock(),
+                register_house_consumption_forecast_current_sensor=Mock(),
+                register_solar_forecast_current_sensors=Mock(),
+                register_battery_forecast_current_sensors=Mock(),
+                register_grid_import_price_sensor=Mock(),
+                register_grid_export_price_sensor=Mock(),
+            )
+            hass = SimpleNamespace(data={"helman": {"coordinator": coordinator}})
+            entities = []
+            await sensor_module.async_setup_entry(hass, _FakeEntry(), entities.extend)
+            self.assertTrue(entities)
+
     async def test_async_setup_entry_registers_forecast_entities_with_coordinator(
         self,
     ) -> None:
         sensor_module = _load_sensor_module()
         coordinator = SimpleNamespace(
             get_device_tree=AsyncMock(return_value={"sources": [], "consumers": []}),
-            collect_qualifying_nodes=Mock(return_value={}),
-            collect_share_devices=Mock(return_value={}),
+            tree_index=SimpleNamespace(qualifying_nodes={}, share_devices={}),
             config={},
             set_sensors=Mock(),
             set_entity_factory=Mock(),

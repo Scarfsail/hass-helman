@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.util import dt as dt_util
@@ -21,6 +21,7 @@ from .battery_state import (
     read_battery_entity_config,
     read_battery_forecast_settings,
 )
+from .config_read import parse_timestamp, read_float
 from .const import (
     BATTERY_CAPACITY_FORECAST_MODEL_ID,
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
@@ -28,8 +29,8 @@ from .const import (
 )
 from .recorder_hourly_series import get_local_current_slot_start
 from .scheduling.schedule import EMPTY_SCHEDULE_ACTION
+from .slot_grid import SLOT, advance
 
-_CANONICAL_SLOT_DURATION = timedelta(minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES)
 _CANONICAL_SLOT_HOURS = FORECAST_CANONICAL_GRANULARITY_MINUTES / 60
 _LOGGER = logging.getLogger(__name__)
 
@@ -150,7 +151,7 @@ class BatteryCapacityForecastBuilder:
             started_at_local,
             interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
         )
-        next_slot_start = self._advance_slots(current_slot_start, slot_count=1)
+        next_slot_start = advance(current_slot_start, slot_count=1)
         first_duration_hours = (
             next_slot_start - started_at_local
         ).total_seconds() / 3600
@@ -276,7 +277,7 @@ class BatteryCapacityForecastBuilder:
             else:
                 slot_key = dt_util.as_local(
                     next_slot_start_utc
-                    + (_CANONICAL_SLOT_DURATION * (slot_index - 1))
+                    + (SLOT * (slot_index - 1))
                 )
                 slot_start = slot_key
                 slot_duration_hours = _CANONICAL_SLOT_HOURS
@@ -465,7 +466,7 @@ class BatteryCapacityForecastBuilder:
         current_slot = house_forecast.get("currentSlot")
 
         if isinstance(current_slot, dict):
-            timestamp = self._parse_timestamp(current_slot.get("timestamp"))
+            timestamp = parse_timestamp(current_slot.get("timestamp"))
             if (
                 timestamp is not None
                 and dt_util.as_local(timestamp) == current_slot_start
@@ -481,7 +482,7 @@ class BatteryCapacityForecastBuilder:
         current_slot = house_forecast.get("currentSlot")
         if not isinstance(current_slot, dict):
             return "absent"
-        timestamp = self._parse_timestamp(current_slot.get("timestamp"))
+        timestamp = parse_timestamp(current_slot.get("timestamp"))
         return "unparseable" if timestamp is None else timestamp.isoformat()
 
     def _build_house_series_map(self, house_forecast: dict[str, Any]) -> dict[datetime, float]:
@@ -494,7 +495,7 @@ class BatteryCapacityForecastBuilder:
             if not isinstance(entry, dict):
                 continue
 
-            timestamp = self._parse_timestamp(entry.get("timestamp"))
+            timestamp = parse_timestamp(entry.get("timestamp"))
             value = self._read_house_entry_value(entry)
             if timestamp is None or value is None:
                 continue
@@ -513,8 +514,8 @@ class BatteryCapacityForecastBuilder:
             if not isinstance(point, dict):
                 continue
 
-            timestamp = self._parse_timestamp(point.get("timestamp"))
-            value = self._read_float(point.get("value"))
+            timestamp = parse_timestamp(point.get("timestamp"))
+            value = read_float(point.get("value"))
             if timestamp is None or value is None:
                 continue
 
@@ -535,7 +536,7 @@ class BatteryCapacityForecastBuilder:
         for slot_start, value in parsed_points:
             slot_value = value / slot_value_divisor
             for split_index in range(slot_value_divisor):
-                expanded_slot_start = self._advance_slots(
+                expanded_slot_start = advance(
                     slot_start,
                     slot_count=split_index,
                 )
@@ -550,19 +551,7 @@ class BatteryCapacityForecastBuilder:
         non_deferrable = entry.get("nonDeferrable")
         if not isinstance(non_deferrable, dict):
             return None
-        return BatteryCapacityForecastBuilder._read_float(non_deferrable.get("value"))
-
-    @staticmethod
-    def _parse_timestamp(raw_value: Any) -> datetime | None:
-        if not isinstance(raw_value, str):
-            return None
-        return dt_util.parse_datetime(raw_value)
-
-    @staticmethod
-    def _advance_slots(value: datetime, *, slot_count: int) -> datetime:
-        return dt_util.as_local(
-            dt_util.as_utc(value) + (_CANONICAL_SLOT_DURATION * slot_count)
-        )
+        return read_float(non_deferrable.get("value"))
 
     @staticmethod
     def _get_slot_fraction(duration_hours: float) -> float:
@@ -654,23 +643,3 @@ class BatteryCapacityForecastBuilder:
                 schedule_adjustment_coverage_until
             )
         return payload
-
-    @staticmethod
-    def _read_float(raw_value: Any) -> float | None:
-        if isinstance(raw_value, bool) or raw_value is None:
-            return None
-
-        if isinstance(raw_value, (int, float)):
-            return float(raw_value)
-
-        if isinstance(raw_value, str):
-            stripped = raw_value.strip()
-            if not stripped or stripped.lower() in {"unknown", "unavailable", "none"}:
-                return None
-
-            try:
-                return float(stripped)
-            except ValueError:
-                return None
-
-        return None

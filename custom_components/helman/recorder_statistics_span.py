@@ -84,13 +84,13 @@ containing hour's ``mean`` for every slot they do not.
 from __future__ import annotations
 
 import asyncio
+import logging
+import math
 from bisect import bisect_left
 from collections import OrderedDict
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone, tzinfo
-import logging
-import math
 from typing import Any
 
 from homeassistant.components.recorder import get_instance
@@ -100,6 +100,7 @@ from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .recorder_hourly_series import query_cumulative_slot_energy_changes
+from .slot_grid import SLOT_MINUTES, slot_starts
 from .span_buckets import add_months
 
 _LOGGER = logging.getLogger(__name__)
@@ -832,7 +833,6 @@ def _as_utc(hour: datetime) -> datetime:
 #: -- and because it is the finest grain any tier here can honestly claim: raw
 #: states are sampled onto it, and an hourly mean spread across it says only
 #: what it already said about its own hour.
-PRICE_SLOT_MINUTES = 15
 
 
 @dataclass(frozen=True)
@@ -1025,7 +1025,7 @@ async def query_price_history(
                 unique_ids,
                 local_start=raw_start,
                 local_end=local_end,
-                interval_minutes=PRICE_SLOT_MINUTES,
+                interval_minutes=SLOT_MINUTES,
             )
         except Exception:
             _LOGGER.debug("Raw price history unavailable", exc_info=True)
@@ -1112,7 +1112,7 @@ async def query_price_history(
             if not entity_rows:
                 continue
             for slot in slots:
-                mean = _finite_mean(entity_rows.get(_floor_to_hour(slot)))
+                mean = finite_mean(entity_rows.get(_floor_to_hour(slot)))
                 if mean is not None:
                     resolved[entity_id][slot] = mean
         for entity_id, slots in unproven.items():
@@ -1124,7 +1124,7 @@ async def query_price_history(
             # missing one really does mean a missing hour.
             entity_rows = rows.get(entity_id) or {}
             for slot in slots:
-                if _finite_mean(entity_rows.get(_floor_to_hour(slot))) is None:
+                if finite_mean(entity_rows.get(_floor_to_hour(slot))) is None:
                     resolved[entity_id].pop(slot, None)
 
     return {
@@ -1133,21 +1133,7 @@ async def query_price_history(
 
 
 def _price_slot_starts(local_start: datetime, local_end: datetime) -> list[datetime]:
-    """Every slot the window covers, as UTC instants.
-
-    Stepped in UTC rather than on the wall clock, which is what gives a spring
-    day 92 slots and an autumn day 100 -- and what keeps these keys comparable
-    with the ones the raw sampler hands back, since it walks the same window the
-    same way.
-    """
-    step = timedelta(minutes=PRICE_SLOT_MINUTES)
-    cursor = dt_util.as_utc(local_start)
-    end = dt_util.as_utc(local_end)
-    slots: list[datetime] = []
-    while cursor < end:
-        slots.append(cursor)
-        cursor += step
-    return slots
+    return slot_starts(local_start, local_end, utc=True)
 
 
 async def _raw_price_window_start(
@@ -1230,7 +1216,7 @@ def _is_finite(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
-def _finite_mean(row: Any) -> float | None:
+def finite_mean(row: Any) -> float | None:
     """A statistics row's ``mean``, or ``None`` where it has no usable one.
 
     A row can arrive present but empty -- the span read emits one for an hour it

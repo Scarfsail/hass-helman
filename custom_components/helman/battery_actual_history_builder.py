@@ -16,7 +16,7 @@ async def build_battery_actual_history(
     capacity_entity_id: str,
     reference_time: datetime,
     *,
-    interval_minutes: int = 60,
+    interval_minutes: int,
 ) -> list[dict[str, Any]]:
     """Today's per-slot SoC trajectory, read through the shared reader.
 

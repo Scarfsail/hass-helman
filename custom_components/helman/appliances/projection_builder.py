@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 from homeassistant.util import dt as dt_util
 
+from ..config_read import parse_timestamp, read_float
 from ..const import FORECAST_CANONICAL_GRANULARITY_MINUTES
 from ..recorder_hourly_series import get_local_current_slot_start
 from ..scheduling.schedule import (
@@ -15,6 +16,8 @@ from ..scheduling.schedule import (
     format_slot_id,
     parse_slot_id,
 )
+from ..slot_grid import SLOT, advance
+from ..slot_grid import floor_to_slot as _canonical_slot_start
 from .climate_appliance import ClimateApplianceRuntime
 from .ev_charger import (
     EvChargerApplianceRuntime,
@@ -24,7 +27,6 @@ from .ev_charger import (
 from .generic_appliance import GenericApplianceRuntime
 from .state import AppliancesRuntimeRegistry
 
-_CANONICAL_SLOT_DURATION = timedelta(minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES)
 _CANONICAL_SLOT_HOURS = FORECAST_CANONICAL_GRANULARITY_MINUTES / 60
 _UNAVAILABLE_STATES = {"unknown", "unavailable", "none"}
 
@@ -608,20 +610,6 @@ def _resolve_climate_action_projection(
     return False, None
 
 
-def _canonical_slot_start(reference_time: datetime) -> datetime:
-    """The start of the canonical slot ``reference_time`` falls in.
-
-    The clip only ever cuts through this one slot: everything before it has
-    elapsed and everything after it is whole, so this is the reference that takes
-    the clock out of the projection without inventing energy for a slot that has
-    already gone.
-    """
-    return get_local_current_slot_start(
-        dt_util.as_local(reference_time),
-        interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
-    )
-
-
 def _build_schedule_slot_slices(
     *,
     slot_id: str,
@@ -669,7 +657,7 @@ def _build_time_slices(
     slices: list[_ProjectionTimeSlice] = []
     cursor = slot_start
     while cursor < slot_end:
-        slice_end = min(cursor + _CANONICAL_SLOT_DURATION, slot_end)
+        slice_end = min(cursor + SLOT, slot_end)
         if slice_end <= local_reference_time:
             cursor = slice_end
             continue
@@ -855,7 +843,7 @@ def _read_current_slot_house_value(
     """
     current_slot = house_forecast.get("currentSlot")
     if isinstance(current_slot, dict):
-        timestamp = _parse_timestamp(current_slot.get("timestamp"))
+        timestamp = parse_timestamp(current_slot.get("timestamp"))
         if timestamp is not None and dt_util.as_local(timestamp) == current_slot_start:
             value = _read_house_entry_value(current_slot)
             if value is not None:
@@ -873,7 +861,7 @@ def _build_house_series_map(house_forecast: dict[str, Any]) -> dict[datetime, fl
     for entry in series:
         if not isinstance(entry, dict):
             continue
-        timestamp = _parse_timestamp(entry.get("timestamp"))
+        timestamp = parse_timestamp(entry.get("timestamp"))
         value = _read_house_entry_value(entry)
         if timestamp is None or value is None:
             continue
@@ -894,8 +882,8 @@ def _build_solar_slot_map(solar_forecast: dict[str, Any]) -> dict[datetime, floa
     for point in points:
         if not isinstance(point, dict):
             continue
-        timestamp = _parse_timestamp(point.get("timestamp"))
-        value = _read_float(point.get("value"))
+        timestamp = parse_timestamp(point.get("timestamp"))
+        value = read_float(point.get("value"))
         if timestamp is None or value is None:
             continue
         parsed_points.append((dt_util.as_local(timestamp), value))
@@ -911,7 +899,7 @@ def _build_solar_slot_map(solar_forecast: dict[str, Any]) -> dict[datetime, floa
     for slot_start, value in parsed_points:
         slot_value = value / divisor
         for split_index in range(divisor):
-            expanded_slot_start = _advance_canonical_slots(slot_start, slot_count=split_index)
+            expanded_slot_start = advance(slot_start, slot_count=split_index)
             by_slot[expanded_slot_start] = by_slot.get(expanded_slot_start, 0.0) + slot_value
 
     return by_slot
@@ -921,29 +909,7 @@ def _read_house_entry_value(entry: dict[str, Any]) -> float | None:
     non_deferrable = entry.get("nonDeferrable")
     if not isinstance(non_deferrable, dict):
         return None
-    return _read_float(non_deferrable.get("value"))
-
-
-def _parse_timestamp(raw_value: Any) -> datetime | None:
-    if not isinstance(raw_value, str):
-        return None
-    return dt_util.parse_datetime(raw_value)
-
-
-def _read_float(raw_value: Any) -> float | None:
-    if isinstance(raw_value, bool) or raw_value is None:
-        return None
-    if isinstance(raw_value, (int, float)):
-        return float(raw_value)
-    if isinstance(raw_value, str):
-        stripped = raw_value.strip()
-        if not stripped or stripped.lower() in _UNAVAILABLE_STATES:
-            return None
-        try:
-            return float(stripped)
-        except ValueError:
-            return None
-    return None
+    return read_float(non_deferrable.get("value"))
 
 
 def _get_solar_point_split_factor(points: list[tuple[datetime, float]]) -> int:
@@ -968,9 +934,3 @@ def _get_solar_point_split_factor(points: list[tuple[datetime, float]]) -> int:
     if interval_minutes % FORECAST_CANONICAL_GRANULARITY_MINUTES != 0:
         return 1
     return interval_minutes // FORECAST_CANONICAL_GRANULARITY_MINUTES
-
-
-def _advance_canonical_slots(value: datetime, *, slot_count: int) -> datetime:
-    return dt_util.as_local(
-        dt_util.as_utc(value) + (_CANONICAL_SLOT_DURATION * slot_count)
-    )

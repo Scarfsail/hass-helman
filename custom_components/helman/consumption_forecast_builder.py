@@ -5,14 +5,14 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from .config_read import read_entity_id, read_mapping
 from .const import (
-    FORECAST_CANONICAL_GRANULARITY_MINUTES,
     HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
     HOUSE_FORECAST_DEFAULT_TRAINING_WINDOW_DAYS,
     HOUSE_FORECAST_MODEL_ID,
@@ -21,8 +21,8 @@ from .const import (
 from .consumption_forecast_profiles import (
     NEGATIVE_RESIDUAL_THRESHOLD,
     ZERO_BAND,
-    HouseConsumptionProfile,
     HourOfWeekWinsorizedMeanProfile,
+    HouseConsumptionProfile,
 )
 from .consumption_forecast_statistics import ForecastBand
 from .controllables.config import read_carved_meters
@@ -32,6 +32,7 @@ from .recorder_hourly_series import (
     get_today_completed_local_slots,
     own_energy_changes,
 )
+from .slot_grid import SLOT, SLOT_MINUTES, SLOTS_PER_DAY, advance, slot_starts
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -43,19 +44,43 @@ def read_house_training_window_config(config: dict[str, Any]) -> tuple[int, int]
     live since the v14 relocation. Shared by the builder's live payload and
     the coordinator's training request so the two readers cannot drift apart.
     """
-    training = ConsumptionForecastBuilder._read_dict(config.get("training"))
-    house_consumption = ConsumptionForecastBuilder._read_dict(
+    training = read_mapping(config.get("training"))
+    house_consumption = read_mapping(
         training.get("house_consumption")
     )
-    min_history_days = ConsumptionForecastBuilder._read_positive_int(
+    min_history_days = _read_positive_int(
         house_consumption.get("min_history_days"),
         HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
     )
-    training_window_days = ConsumptionForecastBuilder._read_positive_int(
+    training_window_days = _read_positive_int(
         house_consumption.get("training_window_days"),
         HOUSE_FORECAST_DEFAULT_TRAINING_WINDOW_DAYS,
     )
     return (min_history_days, training_window_days)
+
+
+@dataclass(frozen=True)
+class HouseForecastRequest:
+    total_energy_entity_id: str | None
+    training_window_days: int
+    min_history_days: int
+    config_fingerprint: str
+
+
+def read_house_forecast_request(config: dict[str, Any]) -> HouseForecastRequest:
+    """The house forecast's configuration and the identity of its training data."""
+    energy_nodes = read_mapping(config.get("energy_nodes"))
+    house = read_mapping(energy_nodes.get("house"))
+    forecast = read_mapping(house.get("forecast"))
+    entity_id = read_entity_id(forecast.get("total_energy_entity_id"))
+    min_days, window = read_house_training_window_config(config)
+    fingerprint = ConsumptionForecastBuilder._build_config_fingerprint(
+        total_energy_entity_id=entity_id,
+        training_window_days=window,
+        min_history_days=min_days,
+        consumers_config=read_carved_meters(config),
+    )
+    return HouseForecastRequest(entity_id, window, min_days, fingerprint)
 
 
 @dataclass(frozen=True)
@@ -69,9 +94,6 @@ class _ConsumerSlotHistoryData:
 class ConsumptionForecastBuilder:
     """Builds the house_consumption forecast payload."""
 
-    _CANONICAL_GRANULARITY_MINUTES = FORECAST_CANONICAL_GRANULARITY_MINUTES
-    _SLOTS_PER_HOUR = 60 // _CANONICAL_GRANULARITY_MINUTES
-    _SLOTS_PER_DAY = 24 * _SLOTS_PER_HOUR
     def __init__(
         self,
         hass: HomeAssistant,
@@ -101,23 +123,12 @@ class ConsumptionForecastBuilder:
         recorder scan this path exists to be rid of. The only queries left are
         today-scoped.
         """
-        energy_nodes = self._read_dict(self._config.get("energy_nodes"))
-        house_config = self._read_dict(energy_nodes.get("house"))
-        forecast_config = self._read_dict(house_config.get("forecast"))
-
-        total_energy_entity_id = self._read_entity_id(
-            forecast_config.get("total_energy_entity_id")
-        )
-        min_history_days, training_window_days = read_house_training_window_config(
-            self._config
-        )
+        request = read_house_forecast_request(self._config)
+        total_energy_entity_id = request.total_energy_entity_id
+        training_window_days = request.training_window_days
+        min_history_days = request.min_history_days
+        config_fingerprint = request.config_fingerprint
         consumers_config = read_carved_meters(self._config)
-        config_fingerprint = self._build_config_fingerprint(
-            total_energy_entity_id=total_energy_entity_id,
-            training_window_days=training_window_days,
-            min_history_days=min_history_days,
-            consumers_config=consumers_config,
-        )
         local_now = dt_util.as_local(reference_time) if reference_time else dt_util.now()
 
         if total_energy_entity_id is None or profile is None:
@@ -128,7 +139,7 @@ class ConsumptionForecastBuilder:
                 training_window_days=training_window_days,
                 min_history_days=min_history_days,
                 config_fingerprint=config_fingerprint,
-                source_granularity_minutes=self._CANONICAL_GRANULARITY_MINUTES,
+                source_granularity_minutes=SLOT_MINUTES,
                 forecast_days_available=forecast_days,
                 trained_at=trained_at,
                 last_outcome=last_outcome,
@@ -191,7 +202,7 @@ class ConsumptionForecastBuilder:
                 min_history_days=min_history_days,
                 history_days=profile.history_days,
                 config_fingerprint=config_fingerprint,
-                source_granularity_minutes=self._CANONICAL_GRANULARITY_MINUTES,
+                source_granularity_minutes=SLOT_MINUTES,
                 forecast_days_available=forecast_days,
                 trained_at=trained_at,
                 last_outcome=last_outcome,
@@ -214,14 +225,14 @@ class ConsumptionForecastBuilder:
 
         current_slot_start = get_local_current_slot_start(
             local_now,
-            interval_minutes=self._CANONICAL_GRANULARITY_MINUTES,
+            interval_minutes=SLOT_MINUTES,
         )
         current_slot = self._build_forecast_entry(
             current_slot_start,
             non_deferrable_bands=profile.non_deferrable,
             consumers_config=consumers_config,
             consumer_bands=profile.consumers,
-            interval_minutes=self._CANONICAL_GRANULARITY_MINUTES,
+            interval_minutes=SLOT_MINUTES,
         )
 
         series = self._build_series(
@@ -242,7 +253,7 @@ class ConsumptionForecastBuilder:
             actual_history=actual_history,
             current_slot=current_slot,
             series=series,
-            source_granularity_minutes=self._CANONICAL_GRANULARITY_MINUTES,
+            source_granularity_minutes=SLOT_MINUTES,
             forecast_days_available=forecast_days,
             trained_at=trained_at,
             last_outcome=last_outcome,
@@ -276,7 +287,7 @@ class ConsumptionForecastBuilder:
             consumers=consumers,
             completed_slots=get_today_completed_local_slots(
                 reference_time,
-                interval_minutes=self._CANONICAL_GRANULARITY_MINUTES,
+                interval_minutes=SLOT_MINUTES,
             ),
         )
 
@@ -345,7 +356,7 @@ class ConsumptionForecastBuilder:
         return await self._slot_history.async_query_slot_energy_changes(
             entity_id,
             reference_time,
-            interval_minutes=self._CANONICAL_GRANULARITY_MINUTES,
+            interval_minutes=SLOT_MINUTES,
         )
 
     async def _query_consumer_slot_histories(
@@ -377,7 +388,7 @@ class ConsumptionForecastBuilder:
                         await _slot_history(child_entity_id)
                         for child_entity_id in consumer.get("metered_children", ())
                     ],
-                    slot=timedelta(minutes=self._CANONICAL_GRANULARITY_MINUTES),
+                    slot=SLOT,
                 )
             except Exception:
                 _LOGGER.warning(
@@ -412,7 +423,7 @@ class ConsumptionForecastBuilder:
         non_deferrable_bands: list[ForecastBand],
         consumers_config: list[dict[str, Any]],
         consumer_bands: dict[str, list[ForecastBand]],
-        interval_minutes: int = 60,
+        interval_minutes: int,
     ) -> dict[str, Any]:
         slot = HourOfWeekWinsorizedMeanProfile.slot_index(
             forecast_dt.weekday(),
@@ -454,20 +465,18 @@ class ConsumptionForecastBuilder:
         forecast_days: int,
     ) -> list[dict[str, Any]]:
         series: list[dict[str, Any]] = []
-        slot_duration = timedelta(minutes=self._CANONICAL_GRANULARITY_MINUTES)
-        forecast_start_utc = dt_util.as_utc(current_slot_start) + slot_duration
-        total_slots = forecast_days * self._SLOTS_PER_DAY
-        for index in range(total_slots):
-            forecast_dt = dt_util.as_local(
-                forecast_start_utc + (slot_duration * index)
-            )
+        total_slots = forecast_days * SLOTS_PER_DAY
+        for forecast_dt in slot_starts(
+            advance(current_slot_start),
+            advance(current_slot_start, slot_count=total_slots + 1),
+        ):
             series.append(
                 self._build_forecast_entry(
                     forecast_dt,
                     non_deferrable_bands=non_deferrable_bands,
                     consumers_config=consumers_config,
                     consumer_bands=consumer_bands,
-                    interval_minutes=self._CANONICAL_GRANULARITY_MINUTES,
+                    interval_minutes=SLOT_MINUTES,
                 )
             )
         return series
@@ -526,28 +535,6 @@ class ConsumptionForecastBuilder:
         }
 
     @staticmethod
-    def _read_dict(raw_value: Any) -> dict[str, Any]:
-        if isinstance(raw_value, dict):
-            return raw_value
-        return {}
-
-    @staticmethod
-    def _read_entity_id(raw_value: Any) -> str | None:
-        if isinstance(raw_value, str) and raw_value.strip():
-            return raw_value.strip()
-        return None
-
-    @staticmethod
-    def _read_positive_int(raw_value: Any, default: int) -> int:
-        if isinstance(raw_value, bool):
-            return default
-        if isinstance(raw_value, int) and raw_value > 0:
-            return raw_value
-        if isinstance(raw_value, float) and raw_value.is_integer() and raw_value > 0:
-            return int(raw_value)
-        return default
-
-    @staticmethod
     def _build_config_fingerprint(
         *,
         total_energy_entity_id: str | None,
@@ -585,3 +572,13 @@ class ConsumptionForecastBuilder:
             separators=(",", ":"),
         )
         return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _read_positive_int(raw_value: Any, default: int) -> int:
+    if isinstance(raw_value, bool):
+        return default
+    if isinstance(raw_value, int) and raw_value > 0:
+        return raw_value
+    if isinstance(raw_value, float) and raw_value.is_integer() and raw_value > 0:
+        return int(raw_value)
+    return default

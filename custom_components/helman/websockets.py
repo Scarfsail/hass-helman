@@ -20,9 +20,9 @@ from .config_validation import ValidationReport, validate_config_document
 from .device_reports.reports import MAX_REPORT_DAYS, REPORTS, ReportQuery
 from .span_buckets import BUCKETS
 from .entity_inspection import inspect_targets
-from .node_details import NodeDetailError, async_get_node_detail
+from .node_details import NodeDetailContext, NodeDetailError, async_get_node_detail
+from .ws_common import get_coordinator, map_errors, validate_dates
 from .solar_bias_correction.websocket import (
-    _is_dashed_date,
     ws_get_solar_bias_day_aggregates,
     ws_get_solar_bias_inspector,
     ws_get_solar_bias_status,
@@ -48,16 +48,6 @@ SET_SCHEDULE_REQUEST_SCHEMA = vol.Schema(
 GET_FORECAST_REQUEST_FIELDS = {
     vol.Required("type"): "helman/get_forecast",
 }
-
-
-def _validate_schedule_date(value: object) -> str:
-    """A calendar date as ``YYYY-MM-DD`` — the explanation book's bucket key."""
-    if not isinstance(value, str):
-        raise vol.Invalid("date must be a string")
-    try:
-        return date.fromisoformat(value).isoformat()
-    except ValueError as err:
-        raise vol.Invalid("date must be an ISO calendar date (YYYY-MM-DD)") from err
 
 
 def _validate_controllable_id(value: object) -> str:
@@ -133,6 +123,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     vol.Optional("saved_config"): _validate_optional_config_document,
     vol.Required("targets"): [dict],
 })
+@websocket_api.require_admin
 @callback
 def ws_inspect_entities(
     hass: HomeAssistant,
@@ -160,8 +151,6 @@ def ws_inspect_entities(
     path with no evaluator is a ``status`` on that row, not an error on the
     call.
     """
-    if not _require_admin(connection, msg):
-        return
 
     # Read through the hardware profiles, so a slot a profile fills reads the
     # entity it resolves to rather than "not configured".
@@ -184,8 +173,9 @@ def ws_inspect_entities(
 @websocket_api.websocket_command({
     vol.Required("type"): "helman/get_schedule_explanation",
     vol.Required("controllable_id"): _validate_controllable_id,
-    vol.Required("date"): _validate_schedule_date,
+    vol.Required("date"): str,
 })
+@websocket_api.require_admin
 @callback
 def ws_get_schedule_explanation(
     hass: HomeAssistant,
@@ -203,11 +193,10 @@ def ws_get_schedule_explanation(
     run, for a lane no optimizer targets, or for a date outside what the
     accumulated record still covers.
     """
-    if not _require_admin(connection, msg):
+    if not validate_dates(connection, msg, msg.get("date")):
         return
-    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
-    if not coordinator:
-        connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
+    coordinator = get_coordinator(hass, connection, msg)
+    if coordinator is None:
         return
 
     connection.send_result(
@@ -224,6 +213,7 @@ def ws_get_schedule_explanation(
     vol.Required("optimizer_id"): _validate_optimizer_id,
     vol.Required("group_index"): _validate_group_index,
 })
+@websocket_api.require_admin
 @callback
 def ws_get_condition_trace(
     hass: HomeAssistant,
@@ -243,11 +233,8 @@ def ws_get_condition_trace(
     ``None`` before the first run, for a group with no ``custom`` conditions,
     and for a group that no longer exists.
     """
-    if not _require_admin(connection, msg):
-        return
-    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
-    if not coordinator:
-        connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
+    coordinator = get_coordinator(hass, connection, msg)
+    if coordinator is None:
         return
 
     connection.send_result(
@@ -262,14 +249,13 @@ def ws_get_condition_trace(
 @websocket_api.websocket_command({
     vol.Required("type"): "helman/get_config",
 })
+@websocket_api.require_admin
 @callback
 def ws_get_config(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
-    if not _require_admin(connection, msg):
-        return
     stor: HelmanStorage | None = hass.data.get(DOMAIN, {}).get("storage")
     if not stor:
         connection.send_error(msg["id"], "not_loaded", "Helman storage not available")
@@ -280,6 +266,7 @@ def ws_get_config(
 @websocket_api.websocket_command({
     vol.Required("type"): "helman/get_config_defaults",
 })
+@websocket_api.require_admin
 @callback
 def ws_get_config_defaults(
     hass: HomeAssistant,
@@ -293,14 +280,13 @@ def ws_get_config_defaults(
     would drift, and a hint that disagrees with the backend is worse than no
     hint at all — so the editor asks for them instead of knowing them.
     """
-    if not _require_admin(connection, msg):
-        return
     connection.send_result(msg["id"], dict(CONFIG_FIELD_DEFAULTS))
 
 
 @websocket_api.websocket_command({
     vol.Required("type"): "helman/get_optimizer_schema",
 })
+@websocket_api.require_admin
 @callback
 def ws_get_optimizer_schema(
     hass: HomeAssistant,
@@ -315,8 +301,6 @@ def ws_get_optimizer_schema(
     which is exactly how the editor came to render a `hold_action` field no
     Python code has ever read.
     """
-    if not _require_admin(connection, msg):
-        return
     connection.send_result(
         msg["id"],
         {
@@ -336,12 +320,11 @@ def ws_get_optimizer_schema(
     vol.Required("anchor_entity_ids"): [str],
     vol.Required("config"): dict,
 })
+@websocket_api.require_admin
 @callback
 def ws_suggest_device_entities(
     hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict
 ) -> None:
-    if not _require_admin(connection, msg):
-        return
     from .controllables.suggestions import suggest_entities
 
     connection.send_result(
@@ -353,12 +336,11 @@ def ws_suggest_device_entities(
     vol.Required("type"): "helman/preview_energy_import",
     vol.Required("config"): dict,
 })
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_preview_energy_import(
     hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict
 ) -> None:
-    if not _require_admin(connection, msg):
-        return
     from homeassistant.components.energy import data as energy_data
     from .controllables.import_preview import preview_energy_import
 
@@ -372,14 +354,13 @@ async def ws_preview_energy_import(
     vol.Required("type"): "helman/validate_config",
     vol.Required("config"): dict,
 })
+@websocket_api.require_admin
 @callback
 def ws_validate_config(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
-    if not _require_admin(connection, msg):
-        return
     connection.send_result(
         msg["id"], _validate_with_vendors(hass, msg["config"]).to_dict()
     )
@@ -409,6 +390,7 @@ def _validate_with_vendors(hass: HomeAssistant, config: dict) -> ValidationRepor
     vol.Required("type"): "helman/get_vendors",
     vol.Required("config"): dict,
 })
+@websocket_api.require_admin
 @callback
 def ws_get_vendors(
     hass: HomeAssistant,
@@ -416,8 +398,6 @@ def ws_get_vendors(
     msg: dict,
 ) -> None:
     """The hardware profiles, and what each one owns in the editor's draft."""
-    if not _require_admin(connection, msg):
-        return
     connection.send_result(msg["id"], describe_vendors(hass, msg["config"]))
 
 
@@ -425,14 +405,13 @@ def ws_get_vendors(
     vol.Required("type"): "helman/save_config",
     vol.Required("config"): dict,
 })
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_save_config(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
-    if not _require_admin(connection, msg):
-        return
     domain_data = hass.data.get(DOMAIN, {})
     stor: HelmanStorage | None = domain_data.get("storage")
     if not stor:
@@ -493,15 +472,14 @@ async def ws_get_schedule(
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
-    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
-    if not coordinator:
-        connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
+    coordinator = get_coordinator(hass, connection, msg)
+    if coordinator is None:
         return
 
     try:
         schedule = await coordinator.get_schedule()
     except ScheduleError as err:
-        connection.send_error(msg["id"], err.code, str(err))
+        map_errors(connection, msg, err)
         return
 
     connection.send_result(msg["id"], schedule)
@@ -514,9 +492,8 @@ async def ws_set_schedule(
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
-    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
-    if not coordinator:
-        connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
+    coordinator = get_coordinator(hass, connection, msg)
+    if coordinator is None:
         return
 
     try:
@@ -525,7 +502,7 @@ async def ws_set_schedule(
             set_by="user",
         )
     except ScheduleError as err:
-        connection.send_error(msg["id"], err.code, str(err))
+        map_errors(connection, msg, err)
         return
 
     connection.send_result(msg["id"], {"success": True})
@@ -540,9 +517,8 @@ async def ws_get_appliances(
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
-    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
-    if not coordinator:
-        connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
+    coordinator = get_coordinator(hass, connection, msg)
+    if coordinator is None:
         return
 
     connection.send_result(msg["id"], await coordinator.get_appliances())
@@ -557,9 +533,8 @@ async def ws_get_appliance_projections(
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
-    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
-    if not coordinator:
-        connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
+    coordinator = get_coordinator(hass, connection, msg)
+    if coordinator is None:
         return
 
     connection.send_result(msg["id"], await coordinator.get_appliance_projections())
@@ -575,15 +550,14 @@ async def ws_set_schedule_execution(
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
-    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
-    if not coordinator:
-        connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
+    coordinator = get_coordinator(hass, connection, msg)
+    if coordinator is None:
         return
 
     try:
         enabled = await coordinator.set_schedule_execution(enabled=msg["enabled"])
     except ScheduleError as err:
-        connection.send_error(msg["id"], err.code, str(err))
+        map_errors(connection, msg, err)
         return
 
     connection.send_result(msg["id"], {"success": True, "executionEnabled": enabled})
@@ -599,9 +573,8 @@ def ws_get_controllable_entities(
     msg: dict,
 ) -> None:
     """List what Helman can drive, plus each entity's resting state."""
-    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
-    if not coordinator:
-        connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
+    coordinator = get_coordinator(hass, connection, msg)
+    if coordinator is None:
         return
 
     connection.send_result(
@@ -624,9 +597,8 @@ async def ws_get_entity_actual_history(
     morning from it. This reads the recorder instead, which also answers the
     better question: not what was planned, but what really ran.
     """
-    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
-    if not coordinator:
-        connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
+    coordinator = get_coordinator(hass, connection, msg)
+    if coordinator is None:
         return
 
     connection.send_result(
@@ -643,9 +615,8 @@ async def ws_get_device_tree(
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
-    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
-    if not coordinator:
-        connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
+    coordinator = get_coordinator(hass, connection, msg)
+    if coordinator is None:
         return
     tree = await coordinator.get_device_tree()
     connection.send_result(msg["id"], tree)
@@ -660,9 +631,8 @@ def ws_get_history(
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
-    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
-    if not coordinator:
-        connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
+    coordinator = get_coordinator(hass, connection, msg)
+    if coordinator is None:
         return
     connection.send_result(msg["id"], coordinator.get_history())
 
@@ -683,9 +653,8 @@ def ws_get_device_stats(
     has, the same exposure as ``helman/get_forecast``. The device detail is
     open to every user, and ``helman/training/status`` is not.
     """
-    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
-    if not coordinator:
-        connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
+    coordinator = get_coordinator(hass, connection, msg)
+    if coordinator is None:
         return
     connection.send_result(msg["id"], coordinator.get_device_stats(msg["device_key"]))
 
@@ -717,8 +686,7 @@ async def ws_get_device_report(
     """
     raw_start = msg.get("start_date")
     raw_end = msg.get("end_date")
-    if not _is_dashed_date(raw_start) or not _is_dashed_date(raw_end):
-        connection.send_error(msg["id"], "invalid_date", "Dates must use YYYY-MM-DD format")
+    if not validate_dates(connection, msg, raw_start, raw_end):
         return
     today = dt_util.now().astimezone(ZoneInfo(str(hass.config.time_zone))).date()
     start_date = date.fromisoformat(raw_start)
@@ -734,9 +702,8 @@ async def ws_get_device_report(
         )
         return
 
-    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
-    if not coordinator:
-        connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
+    coordinator = get_coordinator(hass, connection, msg)
+    if coordinator is None:
         return
     try:
         payload = await coordinator.async_device_report(
@@ -771,21 +738,25 @@ async def ws_get_node_detail(
     admin-gated: it carries entity ids and numbers the card already shows, the
     same exposure as ``helman/get_controllable_entities``.
     """
-    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
-    if not coordinator:
-        connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
+    coordinator = get_coordinator(hass, connection, msg)
+    if coordinator is None:
         return
     try:
         payload = await async_get_node_detail(
             hass,
-            coordinator.config,
+            NodeDetailContext(
+                config=coordinator.config,
+                telemetry=coordinator.vendor_telemetry,
+                device_report=coordinator.async_device_report,
+                house_profile=coordinator.house_profile,
+            ),
             node=msg["node"],
             device_id=msg.get("device_id"),
             section=msg.get("section"),
             now=dt_util.now(),
         )
     except NodeDetailError as err:
-        connection.send_error(msg["id"], err.code, str(err))
+        map_errors(connection, msg, err)
         return
     except Exception:
         _LOGGER.exception("Unexpected node detail failure")
@@ -801,9 +772,8 @@ async def ws_get_forecast(
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
-    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
-    if not coordinator:
-        connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
+    coordinator = get_coordinator(hass, connection, msg)
+    if coordinator is None:
         return
 
     forecast = await coordinator.get_forecast()
@@ -813,18 +783,16 @@ async def ws_get_forecast(
 @websocket_api.websocket_command({
     vol.Required("type"): "helman/run_automation",
 })
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_run_automation(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
-    if not _require_admin(connection, msg):
-        return
 
-    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
-    if not coordinator:
-        connection.send_error(msg["id"], "not_loaded", "Helman coordinator not available")
+    coordinator = get_coordinator(hass, connection, msg)
+    if coordinator is None:
         return
 
     result = await coordinator.run_automation(reason="websocket")
@@ -867,14 +835,3 @@ def ws_subscribe_updates(
         EVENT_DATA_CHANGED, _forward
     )
     connection.send_result(msg["id"])
-
-
-def _require_admin(
-    connection: websocket_api.ActiveConnection,
-    msg: dict,
-) -> bool:
-    user = getattr(connection, "user", None)
-    if user is None or not getattr(user, "is_admin", False):
-        connection.send_error(msg["id"], "unauthorized", "Admin access required")
-        return False
-    return True

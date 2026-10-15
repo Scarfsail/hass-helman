@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 from homeassistant.util import dt as dt_util
 
+from .config_read import parse_timestamp, read_float
 from .const import (
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
 )
+from .slot_grid import expand_points_to_grid
 
 
 def build_solar_forecast_response(
@@ -114,23 +116,7 @@ def _expand_points(
     *,
     expansion_mode: str,
 ) -> list[dict[str, Any]]:
-    parsed_points = _read_points(raw_points)
-    if not parsed_points:
-        return []
-
-    split_factor = _get_point_split_factor(parsed_points)
-    expanded: list[dict[str, Any]] = []
-    for point_start, point_value in parsed_points:
-        slot_value = point_value / split_factor if expansion_mode == "split" else point_value
-        for split_index in range(split_factor):
-            slot_start = _advance_slots(point_start, slot_count=split_index)
-            expanded.append(
-                {
-                    "timestamp": slot_start.isoformat(),
-                    "value": round(slot_value, 4),
-                }
-            )
-    return expanded
+    return expand_points_to_grid(_read_points(raw_points), expansion_mode=expansion_mode)
 
 
 def _read_points(raw_points: Any) -> list[tuple[datetime, float]]:
@@ -142,8 +128,8 @@ def _read_points(raw_points: Any) -> list[tuple[datetime, float]]:
         if not isinstance(point, dict):
             continue
 
-        timestamp = _parse_timestamp(point.get("timestamp"))
-        value = _read_float(point.get("value"))
+        timestamp = parse_timestamp(point.get("timestamp"))
+        value = read_float(point.get("value"))
         if timestamp is None or value is None:
             continue
 
@@ -151,64 +137,3 @@ def _read_points(raw_points: Any) -> list[tuple[datetime, float]]:
 
     points.sort(key=lambda item: dt_util.as_utc(item[0]))
     return points
-
-
-def _get_point_split_factor(
-    points: list[tuple[datetime, float]],
-) -> int:
-    if len(points) < 2:
-        return 1
-
-    candidate_intervals: list[int] = []
-    for index in range(1, len(points)):
-        delta_seconds = (
-            dt_util.as_utc(points[index][0]) - dt_util.as_utc(points[index - 1][0])
-        ).total_seconds()
-        if delta_seconds <= 0:
-            continue
-        candidate_intervals.append(int(round(delta_seconds / 60)))
-
-    if not candidate_intervals:
-        return 1
-
-    interval_minutes = min(candidate_intervals)
-    if interval_minutes < FORECAST_CANONICAL_GRANULARITY_MINUTES:
-        return 1
-    if interval_minutes % FORECAST_CANONICAL_GRANULARITY_MINUTES != 0:
-        return 1
-    return interval_minutes // FORECAST_CANONICAL_GRANULARITY_MINUTES
-
-
-def _advance_slots(value: datetime, *, slot_count: int) -> datetime:
-    return dt_util.as_local(
-        dt_util.as_utc(value)
-        + timedelta(
-            minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES * slot_count
-        )
-    )
-
-
-def _parse_timestamp(raw_value: Any) -> datetime | None:
-    if not isinstance(raw_value, str):
-        return None
-    return dt_util.parse_datetime(raw_value)
-
-
-def _read_float(raw_value: Any) -> float | None:
-    if isinstance(raw_value, bool) or raw_value is None:
-        return None
-
-    if isinstance(raw_value, (int, float)):
-        return float(raw_value)
-
-    if isinstance(raw_value, str):
-        stripped = raw_value.strip()
-        if not stripped or stripped.lower() in {"unknown", "unavailable", "none"}:
-            return None
-
-        try:
-            return float(stripped)
-        except ValueError:
-            return None
-
-    return None

@@ -19,7 +19,10 @@ from typing import Any
 
 from homeassistant.util import dt as dt_util
 
-from ..vendors import INVERTER_TELEMETRY_KEY, resolve_vendor_telemetry
+from ..span_history_model import read_span_meters
+
+from ..vendors import INVERTER_TELEMETRY_KEY
+from .context import NodeDetailContext
 from .day_stats import BUCKET, async_day_stats, day_window
 from .inverter import run_mode_condition
 
@@ -47,7 +50,7 @@ _CONFIG_ENTITIES = {
 
 
 def build_grid_overview(
-    hass: Any, config: Mapping[str, Any], now: datetime
+    hass: Any, ctx: NodeDetailContext, now: datetime
 ) -> dict[str, Any]:
     """The grid's mappings and overview facts; no recorder read.
 
@@ -55,7 +58,8 @@ def build_grid_overview(
     absent from ``entities``. A telemetry key the profile has but the registry
     does not (disabled, missing) is present as ``None``.
     """
-    telemetry = resolve_vendor_telemetry(hass, config).get(INVERTER_TELEMETRY_KEY)
+    config = ctx.config
+    telemetry = ctx.telemetry.get(INVERTER_TELEMETRY_KEY)
     energy_nodes = config.get("energy_nodes") if isinstance(config, Mapping) else None
     grid = energy_nodes.get("grid") if isinstance(energy_nodes, Mapping) else None
     if not isinstance(grid, Mapping):
@@ -64,13 +68,19 @@ def build_grid_overview(
     if not isinstance(grid_entities, Mapping):
         grid_entities = {}
 
+    meters = read_span_meters(config)
     entities: dict[str, str | None] = {}
     if telemetry is not None:
         for key in _TELEMETRY_KEYS:
             if key in telemetry.entities:
                 entities[key] = telemetry.entities[key]
     for key, slot in _CONFIG_ENTITIES.items():
-        entity_id = grid_entities.get(slot)
+        if slot == "today_import":
+            entity_id = meters.grid_import
+        elif slot == "today_export":
+            entity_id = meters.grid_export
+        else:
+            entity_id = grid_entities.get(slot)
         entities[key] = entity_id if isinstance(entity_id, str) and entity_id else None
 
     return {
@@ -96,14 +106,14 @@ def build_grid_overview(
 
 
 async def async_grid_section(
-    hass: Any, config: Mapping[str, Any], section: str, now: datetime
+    hass: Any, ctx: NodeDetailContext, section: str, now: datetime
 ) -> dict[str, Any]:
     """Today's phase voltages, the grid's one history section.
 
     ``phases`` holds each phase's day, ``None`` for a phase whose sensor the
     profile does not resolve.
     """
-    telemetry = resolve_vendor_telemetry(hass, config).get(INVERTER_TELEMETRY_KEY)
+    telemetry = ctx.telemetry.get(INVERTER_TELEMETRY_KEY)
     entity_ids = {
         phase: None if telemetry is None else telemetry.entities.get(f"ac_voltage_l{phase}")
         for phase in PHASES

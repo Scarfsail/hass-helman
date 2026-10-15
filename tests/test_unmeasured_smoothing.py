@@ -11,6 +11,8 @@ The coordinator therefore smooths the raw difference before flooring it.
 """
 
 from __future__ import annotations
+
+from custom_components.helman.tree_builder import TreeIndex
 from tests._fakes import make_coordinator
 
 import importlib
@@ -116,7 +118,7 @@ class UnmeasuredSmoothingTests(unittest.TestCase):
             c._compute_derived_powers()
         self.assertTrue(c._unmeasured_raw_history)
 
-        c._init_buffers(TREE)
+        c._init_buffers(TREE, TreeIndex.from_tree(TREE))
         self.assertEqual(c._unmeasured_raw_history, {})
 
 

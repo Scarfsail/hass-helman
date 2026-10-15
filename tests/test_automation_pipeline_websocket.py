@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from homeassistant.exceptions import Unauthorized
+
 from automation_pipeline_support import *
 
 
@@ -12,7 +14,7 @@ class RunAutomationWebsocketTests(unittest.IsolatedAsyncioTestCase):
         )
         connection = _FakeConnection(is_admin=True)
 
-        await ws_run_automation.__wrapped__(
+        await ws_run_automation.__wrapped__.__wrapped__(
             _FakeHass(coordinator),
             connection,
             {"id": 1, "type": "helman/run_automation"},
@@ -33,7 +35,7 @@ class RunAutomationWebsocketTests(unittest.IsolatedAsyncioTestCase):
         )
         connection = _FakeConnection(is_admin=True)
 
-        await ws_run_automation.__wrapped__(
+        await ws_run_automation.__wrapped__.__wrapped__(
             _FakeHass(coordinator),
             connection,
             {"id": 1, "type": "helman/run_automation"},
@@ -56,7 +58,7 @@ class RunAutomationWebsocketTests(unittest.IsolatedAsyncioTestCase):
         )
         connection = _FakeConnection(is_admin=True)
 
-        await ws_run_automation.__wrapped__(
+        await ws_run_automation.__wrapped__.__wrapped__(
             _FakeHass(coordinator),
             connection,
             {"id": 1, "type": "helman/run_automation"},
@@ -77,17 +79,14 @@ class RunAutomationWebsocketTests(unittest.IsolatedAsyncioTestCase):
         coordinator = SimpleNamespace(run_automation=AsyncMock())
         connection = _FakeConnection(is_admin=False)
 
-        await ws_run_automation.__wrapped__(
-            _FakeHass(coordinator),
-            connection,
-            {"id": 1, "type": "helman/run_automation"},
-        )
+        with self.assertRaises(Unauthorized):
+            ws_run_automation(
+                _FakeHass(coordinator),
+                connection,
+                {"id": 1, "type": "helman/run_automation"},
+            )
 
         coordinator.run_automation.assert_not_awaited()
-        self.assertEqual(
-            connection.errors,
-            [(1, "unauthorized", "Admin access required")],
-        )
 
 
 class ScheduleExplanationWebsocketTests(unittest.IsolatedAsyncioTestCase):
@@ -189,15 +188,12 @@ class ScheduleExplanationWebsocketTests(unittest.IsolatedAsyncioTestCase):
         coordinator = SimpleNamespace(get_schedule_explanation=Mock())
         connection = _FakeConnection(is_admin=False)
 
-        ws_get_schedule_explanation(
-            _FakeHass(coordinator), connection, dict(self.MESSAGE)
-        )
+        with self.assertRaises(Unauthorized):
+            ws_get_schedule_explanation(
+                _FakeHass(coordinator), connection, dict(self.MESSAGE)
+            )
 
         coordinator.get_schedule_explanation.assert_not_called()
-        self.assertEqual(
-            connection.errors,
-            [(1, "unauthorized", "Admin access required")],
-        )
 
     async def test_returns_not_loaded_when_the_coordinator_is_missing(self) -> None:
         connection = _FakeConnection(is_admin=True)
@@ -217,8 +213,9 @@ class ScheduleExplanationWebsocketTests(unittest.IsolatedAsyncioTestCase):
 
         schema = ws_get_schedule_explanation._ws_schema
         message = self.MESSAGE
-        with self.assertRaises(vol.Invalid):
-            schema({**message, "date": "31.7.2026"})
+        connection = _FakeConnection(is_admin=True)
+        ws_get_schedule_explanation(SimpleNamespace(data={}), connection, schema({**message, "date": "31.7.2026"}))
+        self.assertEqual(connection.errors[0][1], "invalid_date")
         with self.assertRaises(vol.Invalid):
             schema({**message, "controllable_id": ""})
         self.assertEqual(schema(message)["date"], "2026-07-31")

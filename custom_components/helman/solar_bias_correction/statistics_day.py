@@ -41,14 +41,17 @@ quarters are a weight, not a claim about within-hour production.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
-import logging
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
+
+from ..recorder_statistics_span import finite_mean
+from ..slot_grid import SLOTS_PER_HOUR
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -70,7 +73,6 @@ _KWH_TO_WH = 1000.0
 #: is ``mean x 4``") and spreads that mean across the hour's four slots; this
 #: path emits one point per hour, so it multiplies instead. The house forecast
 #: above needs neither factor because it records power, not per-slot energy.
-_SLOTS_PER_HOUR = HOUR_MINUTES // 15
 
 
 @dataclass(frozen=True)
@@ -247,24 +249,6 @@ def _energy_wh_by_slot(
     return by_slot
 
 
-def _mean_of(row: Any) -> float | None:
-    """A statistics row's ``mean`` as a float, or ``None`` for a row without one.
-
-    A row can arrive present but empty -- the span read emits one for an hour it
-    folded short-term rows onto whether or not any carried a mean -- so presence
-    is not a reading.
-    """
-    if not isinstance(row, dict):
-        return None
-    value = row.get("mean")
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
 def _mean_by_slot(
     rows_by_utc_hour: dict[datetime, Any], target_date: date
 ) -> dict[str, float]:
@@ -277,7 +261,7 @@ def _mean_by_slot(
     """
     by_slot: dict[str, float] = {}
     for local_hour, row in _local_hours(rows_by_utc_hour, target_date):
-        mean = _mean_of(row)
+        mean = finite_mean(row)
         if mean is None:
             continue
         by_slot[local_hour.strftime("%H:%M")] = mean
@@ -295,7 +279,7 @@ def _house_forecast_points(
     """
     points: list[dict] = []
     for local_hour, row in _local_hours(rows_by_utc_hour, target_date):
-        mean_w = _mean_of(row)
+        mean_w = finite_mean(row)
         if mean_w is None:
             continue
         points.append({"timestamp": local_hour.isoformat(), "wh": mean_w})
@@ -309,7 +293,7 @@ def _forecast_wh_points(
 
     These entities publish *one 15-minute slot's* energy, so an hour's ``mean``
     is a quarter of the hour's forecast: the point carries
-    ``mean_kwh * _KWH_TO_WH * _SLOTS_PER_HOUR`` -- the hour's whole forecast
+    ``mean_kwh * _KWH_TO_WH * SLOTS_PER_HOUR`` -- the hour's whole forecast
     energy, commensurable with the hour-total actuals :func:`_energy_wh_by_slot`
     emits on this same path and with the sum that becomes ``gridForecastWh`` /
     ``batteryForecastWh`` and prices ``moneyForecast``. ``forecast_slot_history``
@@ -322,13 +306,13 @@ def _forecast_wh_points(
     """
     points: list[dict] = []
     for local_hour, row in _local_hours(rows_by_utc_hour, target_date):
-        mean_kwh = _mean_of(row)
+        mean_kwh = finite_mean(row)
         if mean_kwh is None:
             continue
         points.append(
             {
                 "timestamp": local_hour.isoformat(),
-                "wh": mean_kwh * _KWH_TO_WH * _SLOTS_PER_HOUR,
+                "wh": mean_kwh * _KWH_TO_WH * SLOTS_PER_HOUR,
             }
         )
     return points

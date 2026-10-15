@@ -4,6 +4,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..battery_state import read_battery_entity_config
+from ..config_read import read_mapping, read_entity_id, read_float
+from ..config_path import get as config_value
+from ..forecast_builder import read_solar_forecast_entities
+from ..grid_price_forecast_builder import read_grid_entities
 from ..power_polarity import is_power_inverted
 from ..const import (
     SOLAR_BIAS_DEFAULT_ENABLED,
@@ -639,64 +643,61 @@ def training_explainability_to_payload(
     }
 
 
-def _read_number(raw_value: Any, default: float) -> float:
+def _read_number(raw_value: Any, default: float | None) -> float | None:
     if isinstance(raw_value, (int, float)) and not isinstance(raw_value, bool):
         return float(raw_value)
     return default
 
 
 def read_bias_config(config: dict[str, Any]) -> BiasConfig:
-    forecast = (
-        config.get("energy_nodes", {}).get("solar", {}).get("forecast", {})
-    )
+    forecast = read_mapping(config_value(config, "energy_nodes.solar.forecast"))
     # Every solar bias setting lives under ``training.solar_bias`` since the
     # v19 relocation -- read on load, so what arrives here has already been
     # migrated; no legacy path or alias handling is needed at this layer.
-    raw_training = config.get("training")
-    training = raw_training if isinstance(raw_training, dict) else {}
-    raw_bias = training.get("solar_bias")
-    bias = raw_bias if isinstance(raw_bias, dict) else {}
+    training = read_mapping(config.get("training"))
+    bias = read_mapping(training.get("solar_bias"))
 
     enabled = bias.get("enabled", SOLAR_BIAS_DEFAULT_ENABLED)
-    min_history_days = bias.get("min_history_days", SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS)
-    max_training_window_days = bias.get(
-        "max_training_window_days", SOLAR_BIAS_DEFAULT_MAX_TRAINING_WINDOW_DAYS
+    min_history_days = int(
+        _read_number(bias.get("min_history_days"), SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS)
+    )
+    max_training_window_days = int(
+        _read_number(
+            bias.get("max_training_window_days"),
+            SOLAR_BIAS_DEFAULT_MAX_TRAINING_WINDOW_DAYS,
+        )
     )
     # Under ``training`` since v18 — the schedule drives the whole nightly
     # training batch.
     training_time = training.get("training_time", SOLAR_BIAS_DEFAULT_TRAINING_TIME)
-    clamp_min = bias.get("clamp_min", SOLAR_BIAS_DEFAULT_CLAMP_MIN)
-    clamp_max = bias.get("clamp_max", SOLAR_BIAS_DEFAULT_CLAMP_MAX)
-    raw_min_valid_slot_days = bias.get(
-        "min_valid_slot_days", SOLAR_BIAS_DEFAULT_MIN_VALID_SLOT_DAYS
+    clamp_min = _read_number(bias.get("clamp_min"), SOLAR_BIAS_DEFAULT_CLAMP_MIN)
+    clamp_max = _read_number(bias.get("clamp_max"), SOLAR_BIAS_DEFAULT_CLAMP_MAX)
+    min_valid_slot_days = int(
+        _read_number(
+            bias.get("min_valid_slot_days"), SOLAR_BIAS_DEFAULT_MIN_VALID_SLOT_DAYS
+        )
     )
-    min_valid_slot_days = SOLAR_BIAS_DEFAULT_MIN_VALID_SLOT_DAYS
-    if isinstance(raw_min_valid_slot_days, (int, float)) and not isinstance(
-        raw_min_valid_slot_days, bool
-    ):
-        min_valid_slot_days = int(raw_min_valid_slot_days)
-    aggregation_method = bias.get("aggregation_method", SOLAR_BIAS_DEFAULT_AGGREGATION_METHOD)
-    raw_max_interp = bias.get(
-        "max_interpolated_consecutive_slots",
-        SOLAR_BIAS_DEFAULT_MAX_INTERPOLATED_CONSECUTIVE_SLOTS,
+    aggregation_method = bias.get(
+        "aggregation_method", SOLAR_BIAS_DEFAULT_AGGREGATION_METHOD
     )
-    max_interpolated_consecutive_slots = (
-        SOLAR_BIAS_DEFAULT_MAX_INTERPOLATED_CONSECUTIVE_SLOTS
+    max_interpolated_consecutive_slots = max(
+        0,
+        int(
+            _read_number(
+                bias.get("max_interpolated_consecutive_slots"),
+                SOLAR_BIAS_DEFAULT_MAX_INTERPOLATED_CONSECUTIVE_SLOTS,
+            )
+        ),
     )
-    if isinstance(raw_max_interp, (int, float)) and not isinstance(raw_max_interp, bool):
-        max_interpolated_consecutive_slots = max(0, int(raw_max_interp))
-    slot_invalidation = bias.get("slot_invalidation") or {}
-
-    daily_energy_entity_ids = forecast.get("daily_energy_entity_ids") or []
-    total_energy_entity_id = bias.get("total_energy_entity_id") or forecast.get(
-        "total_energy_entity_id"
+    slot_invalidation = read_mapping(bias.get("slot_invalidation"))
+    daily_energy_entity_ids = read_solar_forecast_entities(config)
+    # The documented fallback uses the solar forecast's meter when bias has none.
+    total_energy_entity_id = read_entity_id(
+        bias.get("total_energy_entity_id") or forecast.get("total_energy_entity_id")
     )
-    max_battery_soc_percent = slot_invalidation.get("max_battery_soc_percent")
-    slot_invalidation_max_battery_soc_percent = None
-    if isinstance(max_battery_soc_percent, (int, float)) and not isinstance(
-        max_battery_soc_percent, bool
-    ):
-        slot_invalidation_max_battery_soc_percent = float(max_battery_soc_percent)
+    slot_invalidation_max_battery_soc_percent = _read_number(
+        slot_invalidation.get("max_battery_soc_percent"), None
+    )
 
     curtailment_max_export_w = _read_number(
         slot_invalidation.get("curtailment_max_export_w"),
@@ -707,62 +708,38 @@ def read_bias_config(config: dict[str, Any]) -> BiasConfig:
         SOLAR_BIAS_DEFAULT_CURTAILMENT_MAX_ACTUAL_FORECAST_RATIO,
     )
 
-    glitch_max_slot_wh = slot_invalidation.get("data_glitch_max_slot_wh")
-    slot_invalidation_data_glitch_max_slot_wh: float | None = None
-    if isinstance(glitch_max_slot_wh, (int, float)) and not isinstance(
-        glitch_max_slot_wh, bool
-    ):
-        slot_invalidation_data_glitch_max_slot_wh = float(glitch_max_slot_wh)
-
-    glitch_min_neighbour = slot_invalidation.get(
-        "data_glitch_min_neighbour_forecast_wh",
+    slot_invalidation_data_glitch_max_slot_wh = _read_number(
+        slot_invalidation.get("data_glitch_max_slot_wh"), None
+    )
+    slot_invalidation_data_glitch_min_neighbour_forecast_wh = _read_number(
+        slot_invalidation.get("data_glitch_min_neighbour_forecast_wh"),
         SOLAR_BIAS_DEFAULT_DATA_GLITCH_MIN_NEIGHBOUR_FORECAST_WH,
     )
-    slot_invalidation_data_glitch_min_neighbour_forecast_wh = (
-        SOLAR_BIAS_DEFAULT_DATA_GLITCH_MIN_NEIGHBOUR_FORECAST_WH
-    )
-    if isinstance(glitch_min_neighbour, (int, float)) and not isinstance(
-        glitch_min_neighbour, bool
-    ):
-        slot_invalidation_data_glitch_min_neighbour_forecast_wh = float(
-            glitch_min_neighbour
+    slot_invalidation_data_glitch_backfill_max_minutes = int(
+        _read_number(
+            slot_invalidation.get("data_glitch_backfill_max_minutes"),
+            SOLAR_BIAS_DEFAULT_DATA_GLITCH_BACKFILL_MAX_MINUTES,
         )
-
-    glitch_backfill = slot_invalidation.get(
-        "data_glitch_backfill_max_minutes",
-        SOLAR_BIAS_DEFAULT_DATA_GLITCH_BACKFILL_MAX_MINUTES,
     )
-    slot_invalidation_data_glitch_backfill_max_minutes = (
-        SOLAR_BIAS_DEFAULT_DATA_GLITCH_BACKFILL_MAX_MINUTES
-    )
-    if isinstance(glitch_backfill, (int, float)) and not isinstance(
-        glitch_backfill, bool
-    ):
-        slot_invalidation_data_glitch_backfill_max_minutes = int(glitch_backfill)
 
     battery_soc_entity_id = None
     grid_power_entity_id = None
     grid_power_inverted = None
-    energy_nodes = config.get("energy_nodes", {})
+    energy_nodes = read_mapping(config.get("energy_nodes"))
     if slot_invalidation_max_battery_soc_percent is not None:
         battery = read_battery_entity_config(config)
-        battery_soc_entity_id = battery.capacity_entity_id if battery is not None else None
-        grid = energy_nodes.get("grid", {})
-        raw_grid_entity = grid.get("entities", {}).get("power")
-        if isinstance(raw_grid_entity, str) and raw_grid_entity.strip():
-            grid_power_entity_id = raw_grid_entity.strip()
+        battery_soc_entity_id = (
+            battery.capacity_entity_id if battery is not None else None
+        )
+        grid = read_mapping(energy_nodes.get("grid"))
+        grid_power_entity_id = read_grid_entities(config).get("power")
         grid_power_inverted = is_power_inverted(grid, "grid")
 
     solar_max_power_w = None
     if slot_invalidation_data_glitch_max_slot_wh is None:
-        raw_power = energy_nodes.get("solar", {}).get("max_power")
-        if not isinstance(raw_power, bool) and isinstance(raw_power, (int, float, str)):
-            try:
-                power = float(raw_power)
-                if power > 0:
-                    solar_max_power_w = power
-            except ValueError:
-                pass
+        power = read_float(config_value(config, "energy_nodes.solar.max_power"))
+        if power is not None and power > 0:
+            solar_max_power_w = power
 
     return BiasConfig(
         battery_soc_entity_id=battery_soc_entity_id,

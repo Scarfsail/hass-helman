@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from ..slot_grid import SLOT_MINUTES, day_slots
 from .forecast_slot_sampling import resolve_forecast_slot_values
 
 try:
@@ -53,9 +54,6 @@ _WH_ENTITIES = (
     GRID_IMPORT_FORECAST_CURRENT_ENTITY,
     GRID_EXPORT_FORECAST_CURRENT_ENTITY,
 )
-
-_SLOT_MINUTES = 15
-_SLOTS_PER_DAY = 24 * 60 // _SLOT_MINUTES  # 96
 
 _BatteryForecastPoints = tuple[
     list[dict[str, Any]],
@@ -165,10 +163,8 @@ def _hold_forward(
         return {}
     timeline.sort(key=lambda pair: pair[0])
 
-    slot_starts = [
-        day_start_local + timedelta(minutes=slot_index * _SLOT_MINUTES)
-        for slot_index in range(_SLOTS_PER_DAY)
-    ]
+    slot_starts = day_slots(day_start_local.date(), tzinfo=day_start_local.tzinfo, wall_clock=True)
+
     return resolve_forecast_slot_values(
-        timeline, slot_starts, slot_minutes=_SLOT_MINUTES
+        timeline, slot_starts, slot_minutes=SLOT_MINUTES
     )

@@ -269,7 +269,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 }
             ), _storage=storage)
         coordinator._active_config = storage.config
-        coordinator._appliances_registry = build_appliances_runtime_registry(storage.config)
+        coordinator._appliances_registry.current = build_appliances_runtime_registry(storage.config)
 
         response = await coordinator.get_appliances()
 
@@ -287,7 +287,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         hass = FakeHass()
         coordinator = make_coordinator(_hass=hass, _storage=storage)
         coordinator._active_config = storage.config
-        coordinator._appliances_registry = build_appliances_runtime_registry(config)
+        coordinator._appliances_registry.current = build_appliances_runtime_registry(config)
 
         response = await coordinator.get_appliances()
         self.assertEqual(response["appliances"][0]["name"], device["id"])
@@ -323,7 +323,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 }
             ), _storage=storage)
         coordinator._active_config = storage.config
-        coordinator._appliances_registry = build_appliances_runtime_registry(storage.config)
+        coordinator._appliances_registry.current = build_appliances_runtime_registry(storage.config)
 
         with self.assertRaises(ScheduleActionError):
             await coordinator.set_schedule(
@@ -433,7 +433,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             }
         )
 
-        coordinator._appliances_registry = build_appliances_runtime_registry(
+        coordinator._appliances_registry.current = build_appliances_runtime_registry(
             _valid_appliances_config()
         )
 
@@ -1206,7 +1206,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         coordinator, storage, _executor = self._build_coordinator(
             schedule_document={"executionEnabled": False, "slots": {}}
         )
-        coordinator._appliances_registry = build_appliances_runtime_registry(
+        coordinator._appliances_registry.current = build_appliances_runtime_registry(
             _valid_appliances_config()
         )
 
@@ -1248,7 +1248,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         coordinator, _storage, _executor = self._build_coordinator(
             schedule_document={"executionEnabled": False, "slots": {}}
         )
-        coordinator._appliances_registry = build_appliances_runtime_registry(
+        coordinator._appliances_registry.current = build_appliances_runtime_registry(
             _valid_appliances_config()
         )
 
@@ -1285,7 +1285,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 },
             }
         )
-        coordinator._appliances_registry = build_appliances_runtime_registry(
+        coordinator._appliances_registry.current = build_appliances_runtime_registry(
             _valid_appliances_config()
         )
 
@@ -1461,7 +1461,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         coordinator, storage, _executor = self._build_coordinator(
             schedule_document={"executionEnabled": False, "slots": {}}
         )
-        coordinator._appliances_registry = build_appliances_runtime_registry(
+        coordinator._appliances_registry.current = build_appliances_runtime_registry(
             _valid_appliances_config()
         )
 
@@ -1508,7 +1508,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         coordinator, storage, _executor = self._build_coordinator(
             schedule_document={"executionEnabled": False, "slots": {}}
         )
-        coordinator._appliances_registry = build_appliances_runtime_registry(
+        coordinator._appliances_registry.current = build_appliances_runtime_registry(
             _valid_appliances_config()
         )
 
@@ -1925,7 +1925,7 @@ class ScheduleExecutionResponsivenessTests(unittest.IsolatedAsyncioTestCase):
             }
         )
         self.coordinator = make_coordinator(_hass=self.hass, _storage=self.storage)
-        self.coordinator._appliances_registry = build_appliances_runtime_registry(
+        self.coordinator._appliances_registry.current = build_appliances_runtime_registry(
             _valid_appliances_config()
         )
         self.executor = schedule_executor_module.ScheduleExecutor(

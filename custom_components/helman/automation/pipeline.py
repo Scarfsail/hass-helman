@@ -630,7 +630,7 @@ class AutomationRunner:
                 initial_snapshot=initial_snapshot,
                 reference_time=reference_time,
                 control_config=control_config,
-                appliance_registry=self._coordinator._appliances_registry,
+                appliance_registry=self._coordinator._appliances_registry.current,
                 build_snapshot=build_snapshot,
                 resolve_day_contexts=resolve_day_contexts,
             )

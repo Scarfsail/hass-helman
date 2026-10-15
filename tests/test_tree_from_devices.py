@@ -181,7 +181,7 @@ def _upgrade(*extra_rows: dict) -> dict:
 
 def _build(config: dict, states: _States | None = None) -> dict:
     hass = SimpleNamespace(states=states or _States())
-    return asyncio.run(tree_builder.HelmanTreeBuilder(hass, config).build())
+    return asyncio.run(tree_builder.HelmanTreeBuilder(hass, config).build()).tree
 
 
 def _house(tree: dict) -> dict:

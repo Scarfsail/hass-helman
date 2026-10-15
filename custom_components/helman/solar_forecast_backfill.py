@@ -60,6 +60,7 @@ from homeassistant.helpers import storage
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
+from .slot_grid import SLOT_MINUTES, slot_starts
 from .solar_bias_correction.forecast_slot_history import (
     SOLAR_FORECAST_CURRENT_ENTITY,
 )
@@ -67,8 +68,6 @@ from .solar_bias_correction.forecast_slot_history import (
 _LOGGER = logging.getLogger(__name__)
 
 _RECORDER_DOMAIN = "recorder"
-#: The slot grid the source publishes on, and the sensor's own.
-_SLOT_MINUTES = 15
 #: How much history one pass reads and writes before yielding. The source
 #: publishes a handful of times a day, so a week is tens of state rows -- but
 #: each carries a 96-entry attribute map, which is why the chunk is not larger.
@@ -389,19 +388,18 @@ def _slot_samples(
         return []
     samples: list[tuple[datetime, float]] = []
     slot = utc_start.replace(second=0, microsecond=0)
-    slot -= timedelta(minutes=slot.minute % _SLOT_MINUTES)
+    slot -= timedelta(minutes=slot.minute % SLOT_MINUTES)
     if slot < utc_start:
-        slot += timedelta(minutes=_SLOT_MINUTES)
+        slot += timedelta(minutes=SLOT_MINUTES)
 
     index = 0
     latest: dict[datetime, float] | None = None
-    while slot < utc_end:
+    for slot in slot_starts(slot, utc_end, utc=True):
         while index < len(publications) and publications[index][0] <= slot:
             latest = publications[index][1]
             index += 1
         if latest is not None and slot in latest:
             samples.append((slot, latest[slot]))
-        slot += timedelta(minutes=_SLOT_MINUTES)
     return samples
 
 

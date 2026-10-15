@@ -68,7 +68,7 @@ class ComputeInputs:
 
     battery_live_state: "BatteryLiveState | None" = None
     # The registry the run computes against, pinned on the loop with everything
-    # else. The coordinator rebinds ``_appliances_registry`` whenever a climate
+    # else. The registry holder refreshes ``current`` whenever a climate
     # entity's capabilities are re-resolved, which several loop-side request
     # handlers do; a compute path reading the attribute from a worker could
     # otherwise cost the projection against one version of an appliance and

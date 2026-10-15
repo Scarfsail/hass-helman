@@ -23,6 +23,8 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
+from ..config_path import get as _value_at
+
 from ..const import (
     DOMAIN,
     EV_CHARGING_UNIQUE_ID_PREFIX,
@@ -672,14 +674,6 @@ def _unique_id(template: EntityTemplate, entry: Any) -> str:
     """
     name = entry.options.get("name") or entry.data.get("name") or entry.title
     return template[1].format(name=name)
-
-
-def _value_at(document: Any, dotted_path: str) -> Any:
-    for key in dotted_path.split("."):
-        if not isinstance(document, Mapping):
-            return None
-        document = document.get(key)
-    return document
 
 
 def _set_value_at(document: dict[str, Any], dotted_path: str, value: Any) -> None:

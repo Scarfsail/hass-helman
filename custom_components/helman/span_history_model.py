@@ -122,3 +122,28 @@ def recorder_tail_start(
         return None
     tail_end = min(utc_now, period_end)
     return max(local_start.astimezone(timezone.utc), tail_end - TAIL_LOOKBACK)
+
+
+def read_span_meters(config: dict[str, Any]) -> SpanMeters:
+    """The six cumulative meters shared by inspector spans and device reports."""
+    from .config_path import get
+    from .config_read import read_entity_id
+    from .battery_state import read_battery_entities
+    from .grid_price_forecast_builder import read_grid_entities
+
+    grid = read_grid_entities(config)
+    battery = read_battery_entities(config)
+    # The bias meter overrides the documented solar-forecast meter fallback.
+    solar = get(config, "training.solar_bias.total_energy_entity_id") or get(
+        config, "energy_nodes.solar.forecast.total_energy_entity_id"
+    )
+    return SpanMeters(
+        read_entity_id(solar),
+        grid.get("today_import"),
+        grid.get("today_export"),
+        read_entity_id(
+            get(config, "energy_nodes.house.forecast.total_energy_entity_id")
+        ),
+        battery.get("today_charge_energy"),
+        battery.get("today_discharge_energy"),
+    )

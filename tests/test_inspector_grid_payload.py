@@ -1,9 +1,11 @@
 from __future__ import annotations
+import sys
+import types
+from _fakes import _bias_service_config
+
 
 from _fakes import DummyStore as _DummyStore
 
-import sys
-import types
 import unittest
 from datetime import date, datetime
 from types import SimpleNamespace
@@ -156,8 +158,11 @@ class TestLoadGridActualSides(unittest.IsolatedAsyncioTestCase):
             hass,
             _DummyStore(),
             _make_cfg(),
-            grid_import_energy_entity_id_provider=lambda: "sensor.grid_import",
-            grid_export_energy_entity_id_provider=lambda: "sensor.grid_export",
+            config=_bias_service_config(
+                _make_cfg(),
+                grid_import="sensor.grid_import",
+                grid_export="sensor.grid_export",
+            ),
         )
         by_entity = {
             "sensor.grid_import": {_slot(6): 0.3},
@@ -186,7 +191,7 @@ class TestGridActualFailureStaysContained(unittest.IsolatedAsyncioTestCase):
         )
         service = service_mod.SolarBiasCorrectionService(
             hass, _DummyStore(), _make_cfg()
-        )
+        , config=_bias_service_config(_make_cfg()),)
 
         async def _boom():
             raise RuntimeError("recorder is down")
@@ -207,8 +212,9 @@ class TestLoadGridActual(unittest.IsolatedAsyncioTestCase):
             hass,
             _DummyStore(),
             _make_cfg(),
-            grid_import_energy_entity_id_provider=lambda: import_entity,
-            grid_export_energy_entity_id_provider=lambda: export_entity,
+            config=_bias_service_config(
+                _make_cfg(), grid_import=import_entity, grid_export=export_entity
+            ),
         )
 
     async def test_nets_the_two_meters_per_slot(self):
@@ -284,8 +290,11 @@ class TestInspectorGridPayload(unittest.IsolatedAsyncioTestCase):
             hass,
             _DummyStore(),
             _make_cfg(),
-            grid_import_energy_entity_id_provider=lambda: "sensor.grid_import",
-            grid_export_energy_entity_id_provider=lambda: "sensor.grid_export",
+            config=_bias_service_config(
+                _make_cfg(),
+                grid_import="sensor.grid_import",
+                grid_export="sensor.grid_export",
+            ),
         )
         service._profile = models.SolarBiasProfile(factors={}, omitted_slots=[])
         service._metadata = models.SolarBiasMetadata(

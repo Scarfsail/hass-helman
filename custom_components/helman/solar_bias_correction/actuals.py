@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
-import logging
 from typing import Any
 from zoneinfo import ZoneInfo
+
+from ..slot_grid import SLOT_MINUTES, SUB_SLOT_OFFSETS_MIN
 
 try:
     from homeassistant.components.recorder import get_instance
@@ -19,6 +21,7 @@ except Exception:  # pragma: no cover - Home Assistant API compatibility
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from ..config_read import read_entity_id
 from .forecast_slot_history import (
     ForecastSlotWindow,
     load_spliced_forecast_slots_for_window,
@@ -39,47 +42,11 @@ try:
 except Exception:  # pragma: no cover - Home Assistant API compatibility
     query_hourly_statistics = None  # type: ignore[assignment]
     query_oldest_state_date = None  # type: ignore[assignment]
-try:
-    from ..recorder_hourly_series import (
-        get_local_current_slot_start,
-        query_cumulative_slot_energy_changes,
-        query_cumulative_slot_energy_changes_for_windows,
-    )
-except Exception:  # pragma: no cover - test stub compatibility
-    def get_local_current_slot_start(
-        local_now: datetime,
-        interval_minutes: int,
-    ) -> datetime:
-        floored_minute = (local_now.minute // interval_minutes) * interval_minutes
-        return local_now.replace(
-            minute=floored_minute,
-            second=0,
-            microsecond=0,
-        )
-
-    async def query_cumulative_slot_energy_changes(
-        hass: HomeAssistant,
-        entity_id: str,
-        *,
-        local_start: datetime,
-        local_end: datetime,
-        interval_minutes: int,
-        liveness_instants: Sequence[datetime] | None = None,
-    ) -> dict[datetime, float]:
-        del hass, entity_id, local_start, local_end, interval_minutes
-        del liveness_instants
-        return {}
-
-    async def query_cumulative_slot_energy_changes_for_windows(
-        hass: HomeAssistant,
-        entity_id: str,
-        windows: Sequence[tuple[datetime, datetime]],
-        *,
-        interval_minutes: int,
-    ) -> list[dict[datetime, float]]:
-        del hass, entity_id, interval_minutes
-        return [{} for _ in windows]
-
+from ..recorder_hourly_series import (
+    get_local_current_slot_start,
+    query_cumulative_slot_energy_changes,
+    query_cumulative_slot_energy_changes_for_windows,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -99,7 +66,7 @@ async def load_actuals_for_day(
     on its own that the recorder was up while it said nothing, so without a
     trace its quiet stretches read as recorder gaps and drop out (#208).
     """
-    entity_id = _read_entity_id(cfg.total_energy_entity_id)
+    entity_id = read_entity_id(cfg.total_energy_entity_id)
     if entity_id is None:
         return {}
     return await _read_day_slot_actuals(
@@ -145,7 +112,7 @@ async def load_actuals_window(
     are named in ``hourly_grain_dates``, because nothing downstream can tell the
     two grains apart from the numbers alone.
     """
-    entity_id = _read_entity_id(cfg.total_energy_entity_id)
+    entity_id = read_entity_id(cfg.total_energy_entity_id)
     if entity_id is None or days <= 0:
         return SolarActualsWindow(
             slot_actuals_by_date={},
@@ -294,7 +261,7 @@ async def _read_day_slot_actuals(
         entity_id,
         local_start=local_start,
         local_end=local_end,
-        interval_minutes=15,
+        interval_minutes=SLOT_MINUTES,
         liveness_instants=liveness_instants,
     )
     return _slot_actuals_from_slot_energy(values_by_slot)
@@ -324,7 +291,7 @@ async def _read_slot_actuals_for_dates(
         hass,
         entity_id,
         windows,
-        interval_minutes=15,
+        interval_minutes=SLOT_MINUTES,
     )
     return {
         str(target_date): _slot_actuals_from_slot_energy(values_by_slot)
@@ -343,7 +310,7 @@ def _day_window(
     if target_date == local_now.date():
         local_end = min(
             local_end,
-            get_local_current_slot_start(local_now, interval_minutes=15),
+            get_local_current_slot_start(local_now, interval_minutes=SLOT_MINUTES),
         )
     return local_start, local_end
 
@@ -391,14 +358,6 @@ def _slot_actuals_from_slot_energy(
         dt_util.as_local(slot_start).strftime("%H:%M"): round(value_kwh * 1000.0, 4)
         for slot_start, value_kwh in sorted(values_by_slot.items())
     }
-
-
-def _read_entity_id(raw_value: Any) -> str | None:
-    if isinstance(raw_value, str):
-        entity_id = raw_value.strip()
-        if entity_id:
-            return entity_id
-    return None
 
 
 async def _load_invalidated_slots_for_window(
@@ -556,7 +515,7 @@ def _expand_hourly_invalidations(
                 hour = int(slot_key.split(":", 1)[0])
             except (AttributeError, ValueError):
                 continue
-            day_slots.update(f"{hour:02d}:{minute:02d}" for minute in (0, 15, 30, 45))
+            day_slots.update(f"{hour:02d}:{minute:02d}" for minute in SUB_SLOT_OFFSETS_MIN)
         expanded[day] = day_slots
     return expanded
 
@@ -954,7 +913,7 @@ def _build_day_grid_slot_inputs(
         except ValueError:
             continue
 
-        minutes = (0,) if day in hourly_days else (0, 15, 30, 45)
+        minutes = (0,) if day in hourly_days else SUB_SLOT_OFFSETS_MIN
         day_slot_starts: list[datetime] = []
         day_slot_keys: list[str] = []
         for hour in range(24):
@@ -1068,5 +1027,3 @@ def _parse_numeric_state_value(raw_value: Any) -> float | None:
         except ValueError:
             return None
     return None
-
-

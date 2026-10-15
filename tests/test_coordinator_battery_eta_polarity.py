@@ -9,6 +9,8 @@ reach it, so it is tested on its own.
 """
 
 from __future__ import annotations
+
+from custom_components.helman.tree_builder import TreeIndex
 from tests._fakes import make_coordinator
 
 import importlib
@@ -84,7 +86,7 @@ def _make_coordinator(battery_power: str, polarity: str | None):
     c._compute_charging_eta = lambda avg: (c.charging_avg_seen.append(avg), (60, "", 100))[1]
     c._compute_discharging_eta = lambda avg: (c.discharging_avg_seen.append(avg), (90, "", 10))[1]
 
-    c._init_buffers(TREE)
+    c._init_buffers(TREE, TreeIndex.from_tree(TREE))
     return c
 
 
@@ -132,3 +134,12 @@ class BatteryEtaPolarityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_tick_tolerates_null_energy_nodes_and_battery():
+    for nodes in (None, {"battery": None}, {"battery": {"entities": None}}):
+        coordinator = _make_coordinator("2000", None)
+        coordinator._active_config["energy_nodes"] = nodes
+        coordinator._tick(datetime(2026, 8, 25, 12, 0, 0))
+        assert coordinator.charging_avg_seen == []
+        assert coordinator.discharging_avg_seen == []

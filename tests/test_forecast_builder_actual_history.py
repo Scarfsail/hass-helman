@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from homeassistant.util import dt as dt_util
-
 import importlib
 import unittest
 from datetime import date, datetime, timezone
@@ -10,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
 from _ha_stubs import stub_module
+from homeassistant.util import dt as dt_util
 
 REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
 TZ = ZoneInfo("Europe/Prague")
@@ -82,7 +81,7 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-    async def test_build_solar_actual_history_defaults_to_hourly_query(self) -> None:
+    async def test_build_solar_actual_history_explicit_hourly_query(self) -> None:
         slot_start = datetime(2026, 3, 20, 20, 0, tzinfo=TZ)
         query_mock = AsyncMock(return_value={dt_util.as_utc(slot_start): 1.5})
         forecast_builder_module, builder = self._make_builder(query_mock=query_mock)
@@ -98,7 +97,7 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
                 {"dt_util": dt_util},
             ),
         ):
-            actual_history = await builder._build_solar_actual_history(REFERENCE_TIME)
+            actual_history = await builder._build_solar_actual_history(REFERENCE_TIME, interval_minutes=60)
 
         query_mock.assert_awaited_once_with(
             "sensor.solar_actual",
@@ -175,7 +174,7 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
                 {"dt_util": dt_util},
             ),
         ):
-            actual_history = await builder._build_solar_actual_history(REFERENCE_TIME)
+            actual_history = await builder._build_solar_actual_history(REFERENCE_TIME, interval_minutes=60)
 
         query_mock.assert_not_awaited()
         self.assertEqual(actual_history, [])

@@ -24,6 +24,8 @@ style of ``test_inspector_span_aggregates.py``.
 """
 
 from __future__ import annotations
+from _fakes import _bias_service_config
+
 
 from _fakes import DummyStore as _DummyStore
 
@@ -202,12 +204,15 @@ def _make_service(*, with_consumers: bool = False):
         hass,
         _DummyStore(),
         cfg,
-        house_energy_entity_id_provider=lambda: HOUSE_METER,
-        grid_import_energy_entity_id_provider=lambda: GRID_IMPORT_METER,
-        grid_export_energy_entity_id_provider=lambda: GRID_EXPORT_METER,
-        battery_charge_energy_entity_id_provider=lambda: BATTERY_CHARGE_METER,
-        battery_discharge_energy_entity_id_provider=lambda: BATTERY_DISCHARGE_METER,
-        battery_soc_entity_id_provider=lambda: BATTERY_SOC,
+        config=_bias_service_config(
+            cfg,
+            house=HOUSE_METER,
+            grid_import=GRID_IMPORT_METER,
+            grid_export=GRID_EXPORT_METER,
+            battery_charge=BATTERY_CHARGE_METER,
+            battery_discharge=BATTERY_DISCHARGE_METER,
+            soc=BATTERY_SOC,
+        ),
     )
     if with_consumers:
         async def _device_consumers():
@@ -658,3 +663,10 @@ def _solar_meter_batch(by_slot_wh: dict[str, float]):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf"), "unknown", None])
+def test_corrupt_statistics_means_are_missing_in_day_and_span(value):
+    from custom_components.helman.solar_bias_correction import statistics_day
+    assert span_mod.finite_mean({"mean": value}) is None
+    assert statistics_day.finite_mean({"mean": value}) is None

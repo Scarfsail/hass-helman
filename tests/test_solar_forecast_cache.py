@@ -428,9 +428,13 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             "rawPoints": [{"timestamp": previous_slot_at, "value": 1250.25}],
         }
         coordinator._storage = SimpleNamespace(config={})
-        coordinator._read_house_forecast_config = Mock(
-            return_value=("sensor.house_total", 56, 14, "fp")
-        )
+        coordinator._active_config = {
+            "energy_nodes": {
+                "house": {
+                    "forecast": {"total_energy_entity_id": "sensor.house_total"}
+                }
+            }
+        }
         coordinator._has_matching_forecast_snapshot = Mock(return_value=True)
         coordinator._invalidate_battery_forecast_cache = Mock()
         coordinator._async_refresh_forecast = AsyncMock()
@@ -471,9 +475,13 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         coordinator._ingest_grid_export_price = Mock(
             return_value={"status": "available", "currentPrice": 2.5}
         )
-        coordinator._read_house_forecast_config = Mock(
-            return_value=("sensor.house_total", 56, 14, "new-fingerprint")
-        )
+        coordinator._active_config = {
+            "energy_nodes": {
+                "house": {
+                    "forecast": {"total_energy_entity_id": "sensor.house_total"}
+                }
+            }
+        }
         coordinator._invalidate_battery_forecast_cache = Mock()
         coordinator._async_refresh_forecast = AsyncMock()
         coordinator._async_get_appliance_forecast_pipeline = AsyncMock(
@@ -503,7 +511,9 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         # runs the startup refresh) puts a matching snapshot back.
         rebuilt = _make_matching_house_snapshot(
             coordinator_module,
-            config_fingerprint="new-fingerprint",
+            config_fingerprint=coordinator_module.read_house_forecast_request(
+                coordinator._active_config
+            ).config_fingerprint,
         )
 
         async def _rebuild(*, reason: str, reference_time=None) -> None:
@@ -541,9 +551,13 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
                     "rawPoints": [],
                 }
                 coordinator._storage = SimpleNamespace(config={})
-                coordinator._read_house_forecast_config = Mock(
-                    return_value=("sensor.house_total", 56, 14, "fp")
-                )
+                coordinator._active_config = {
+                    "energy_nodes": {
+                        "house": {
+                            "forecast": {"total_energy_entity_id": "sensor.house_total"}
+                        }
+                    }
+                }
                 coordinator._has_matching_forecast_snapshot = Mock(
                     return_value=True
                 )
@@ -682,9 +696,13 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         coordinator._ingest_grid_export_price = Mock(
             return_value={"status": "available", "currentPrice": 2.5}
         )
-        coordinator._read_house_forecast_config = Mock(
-            return_value=("sensor.house_total", 56, 14, "fp")
-        )
+        coordinator._active_config = {
+            "energy_nodes": {
+                "house": {
+                    "forecast": {"total_energy_entity_id": "sensor.house_total"}
+                }
+            }
+        }
         coordinator._has_compatible_forecast_snapshot = Mock(return_value=True)
         coordinator._async_refresh_forecast_and_request_automation = AsyncMock()
         coordinator._async_get_appliance_forecast_pipeline = AsyncMock(
@@ -1002,9 +1020,13 @@ class DegradedSolarRebuildTests(unittest.IsolatedAsyncioTestCase):
             )
 
         coordinator._storage = SimpleNamespace(config={})
-        coordinator._read_house_forecast_config = Mock(
-            return_value=("sensor.house_total", 56, 14, "fp")
-        )
+        coordinator._active_config = {
+            "energy_nodes": {
+                "house": {
+                    "forecast": {"total_energy_entity_id": "sensor.house_total"}
+                }
+            }
+        }
         coordinator._has_matching_forecast_snapshot = Mock(return_value=True)
         coordinator._cached_forecast = {
             "status": "available",
