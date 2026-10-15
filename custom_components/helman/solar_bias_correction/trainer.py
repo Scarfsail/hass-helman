@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from bisect import bisect_left
+from dataclasses import asdict
 from datetime import datetime
 import hashlib
+import json
 import logging
 from typing import Dict, List
 
@@ -31,6 +33,7 @@ _ALGORITHM_VERSION = (
     "+hourly_statistics_tail_v1+carry_staleness_v1"
 )
 _LOGGER = logging.getLogger(__name__)
+_NOT_FINGERPRINTED = {"enabled", "training_time"}
 
 
 def compute_fingerprint(cfg: BiasConfig) -> str:
@@ -45,29 +48,17 @@ def compute_fingerprint(cfg: BiasConfig) -> str:
     (``[0]`` is today's), so swapping two of them changes which one feeds which
     day.
     """
-    payload = (
-        f"algo={_ALGORITHM_VERSION};"
-        f"min_history_days={cfg.min_history_days};"
-        f"clamp_min={cfg.clamp_min};"
-        f"clamp_max={cfg.clamp_max};"
-        f"min_valid_slot_days={cfg.min_valid_slot_days};"
-        f"aggregation_method={cfg.aggregation_method};"
-        "slot_invalidation_max_battery_soc_percent="
-        f"{cfg.slot_invalidation_max_battery_soc_percent};"
-        "slot_invalidation_curtailment_max_export_w="
-        f"{cfg.slot_invalidation_curtailment_max_export_w};"
-        "slot_invalidation_curtailment_max_actual_forecast_ratio="
-        f"{cfg.slot_invalidation_curtailment_max_actual_forecast_ratio};"
-        "slot_invalidation_data_glitch_max_slot_wh="
-        f"{cfg.slot_invalidation_data_glitch_max_slot_wh};"
-        "slot_invalidation_data_glitch_min_neighbour_forecast_wh="
-        f"{cfg.slot_invalidation_data_glitch_min_neighbour_forecast_wh};"
-        "slot_invalidation_data_glitch_backfill_max_minutes="
-        f"{cfg.slot_invalidation_data_glitch_backfill_max_minutes};"
-        "max_interpolated_consecutive_slots="
-        f"{cfg.max_interpolated_consecutive_slots};"
-        f"total_energy_entity_id={cfg.total_energy_entity_id};"
-        f"daily_energy_entity_ids={','.join(cfg.daily_energy_entity_ids)}"
+    payload = json.dumps(
+        {
+            "algorithm_version": _ALGORITHM_VERSION,
+            "config": {
+                key: value
+                for key, value in asdict(cfg).items()
+                if key not in _NOT_FINGERPRINTED
+            },
+        },
+        sort_keys=True,
+        separators=(",", ":"),
     )
     h = hashlib.sha256(payload.encode("utf-8")).hexdigest()
     return f"sha256:{h}"

@@ -36,7 +36,8 @@ on :mod:`.solar_forecast_backfill`, and the four traps
 Unlike ``solar_forecast_backfill``, whose source was perishable raw states, this
 one's source is a static file -- which is why P3 could wait, and why an
 interrupted run simply re-imports on the next start (``async_import_statistics``
-upserts) rather than needing a resumable cursor. A per-entity done-marker keeps
+upserts), using the persisted original ownership boundary rather than probing
+imported rows as Home Assistant-owned history. A per-entity done-marker keeps
 a finished series from being walked again.
 
 A missing or unreadable source file is a no-op: a fresh install never had one,
@@ -143,7 +144,8 @@ class BatteryForecastBackfillStore:
 
     Persisted payload shape (v1)::
 
-        {"version": 1, "done": ["sensor.x", "sensor.y", ...]}
+        {"version": 1, "done": ["sensor.x", ...],
+         "first_owned": {"sensor.x": "2026-05-01T00:00:00+00:00", ...}}
 
     Per entity rather than one flag for all five: the source is static, so a
     series once written is written for good, and a run cut short by a restart
@@ -155,9 +157,12 @@ class BatteryForecastBackfillStore:
     def __init__(self, hass: HomeAssistant) -> None:
         self._store = storage.Store(hass, _STORAGE_VERSION, _STORAGE_KEY)
         self._done: set[str] = set()
+        self._first_owned: dict[str, str] = {}
 
     async def async_load(self) -> None:
         stored = await self._store.async_load()
+        first_owned = stored.get("first_owned") if isinstance(stored, dict) else None
+        self._first_owned = first_owned if isinstance(first_owned, dict) else {}
         done = stored.get("done") if isinstance(stored, dict) else None
         if not isinstance(done, list):
             self._done = set()
@@ -167,10 +172,31 @@ class BatteryForecastBackfillStore:
     def done_for(self, entity_id: str) -> bool:
         return entity_id in self._done
 
+    def first_owned_for(self, entity_id: str) -> datetime | None:
+        """The ownership boundary observed before any import, or None if unseen."""
+        raw = self._first_owned.get(entity_id)
+        if not isinstance(raw, str):
+            return None
+        try:
+            return dt_util.as_utc(datetime.fromisoformat(raw))
+        except ValueError:
+            return None
+
+    async def async_record_first_owned(self, entity_id: str, hour: datetime) -> None:
+        self._first_owned[entity_id] = hour.isoformat()
+        await self._async_save()
+
     async def async_mark_done(self, entity_id: str) -> None:
         self._done.add(entity_id)
+        await self._async_save()
+
+    async def _async_save(self) -> None:
         await self._store.async_save(
-            {"version": _STORAGE_VERSION, "done": sorted(self._done)}
+            {
+                "version": _STORAGE_VERSION,
+                "done": sorted(self._done),
+                "first_owned": dict(self._first_owned),
+            }
         )
 
 
@@ -201,7 +227,11 @@ async def async_backfill_battery_forecast_statistics(
         timezone = ZoneInfo(str(hass.config.time_zone))
         written = 0
         for series in pending:
-            written += await _backfill_series(hass, series, days, timezone)
+            first_owned = marker.first_owned_for(series.entity_id)
+            if first_owned is None:
+                first_owned = await _first_hour_home_assistant_owns(hass, series.entity_id)
+                await marker.async_record_first_owned(series.entity_id, first_owned)
+            written += await _backfill_series(hass, series, days, timezone, first_owned)
             await marker.async_mark_done(series.entity_id)
 
         _LOGGER.info(
@@ -240,11 +270,11 @@ async def _backfill_series(
     series: _Series,
     days: dict[str, Any],
     timezone: ZoneInfo,
+    first_owned: datetime,
 ) -> int:
     """Import one series' hourly rows, paced in chunks. Returns the row count."""
     from .recorder_statistics_span import async_forget_imported_statistics
 
-    first_owned = await _first_hour_home_assistant_owns(hass, series.entity_id)
     rows = _hourly_rows(series, days, timezone, before=first_owned)
     if not rows:
         return 0

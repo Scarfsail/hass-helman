@@ -166,6 +166,7 @@ class HelmanStorage:
 
     @property
     def config(self) -> dict[str, Any]:
+        """Unresolved; use ``active_config`` or ``resolve_vendor_config``."""
         return self._config
 
     @property

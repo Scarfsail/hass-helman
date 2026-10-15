@@ -33,6 +33,7 @@ from .controllables.config import (
     read_groupings,
 )
 from .scheduling.actuation import ScheduleActuator
+from .vendors import resolve_vendor_config
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -57,11 +58,20 @@ GROUP_ACTION_SCHEMA = vol.Schema(
 )
 
 
+def active_config(hass: HomeAssistant) -> dict[str, Any]:
+    """The loaded entry's runtime config, or a resolved stored config before load."""
+    domain_data = hass.data[DOMAIN]
+    coordinator = domain_data.get("coordinator")
+    if coordinator is not None:
+        return coordinator.config
+    return resolve_vendor_config(hass, domain_data["storage"].config)[0]
+
+
 def _resolve_group(
     hass: HomeAssistant, data: Mapping[str, Any]
 ) -> tuple[list[str], list[str]]:
     """The group's ``(entity ids, skipped device ids)``; unknown group raises."""
-    config = hass.data[DOMAIN]["storage"].config
+    config = active_config(hass)
     grouping_id, group_id = data["grouping"], data["group"]
     if not group_exists(config, grouping_id, group_id):
         raise ServiceValidationError(
