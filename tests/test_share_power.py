@@ -147,7 +147,7 @@ class SharePowerTests(unittest.TestCase):
 
     def test_power_reading_converts_live_units_before_polarity(self) -> None:
         c = _make_coordinator({HOUSE: "2.4"})
-        for unit, expected in (("kW", 2400), ("KW", 2400), ("kw", 2400), ("MW", 2400000), ("mW", 2400000), ("W", 2.4), ("w", 2.4), (None, 2.4), ("VA", None)):
+        for unit, expected in (("kW", 2400), ("KW", 2400), ("kw", 2400), ("MW", 2400000), ("mW", None), ("W", 2.4), ("w", 2.4), (None, 2.4), ("VA", None)):
             with self.subTest(unit=unit):
                 c._hass.states.get = lambda entity_id: SimpleNamespace(
                     state="-2.4", attributes={"unit_of_measurement": unit}

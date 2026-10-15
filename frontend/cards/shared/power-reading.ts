@@ -9,6 +9,7 @@ export const WATTS: Record<string, number> = { w: 1, kw: 1000, mw: 1_000_000 };
  */
 export function powerUnitFactor(hass: HomeAssistant, entityId: string | null | undefined): number | null {
     const unit = entityId ? hass.states?.[entityId]?.attributes?.unit_of_measurement as string | undefined : undefined;
+    if (unit === "mW") return null;
     return unit ? WATTS[unit.toLowerCase()] ?? null : 1;
 }
 

@@ -253,6 +253,7 @@ test.describe("device detail from the power card", () => {
         ["KW", "3", "3.0 kW"],
         ["kw", "3", "3.0 kW"],
         ["MW", "0.003", "3.0 kW"],
+        ["mW", "500", "—"],
         ["VA", "3", "—"],
     ]) {
         test(`device detail converts live ${unit} readings`, async ({ page }) => {
