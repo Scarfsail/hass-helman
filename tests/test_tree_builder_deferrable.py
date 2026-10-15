@@ -47,7 +47,7 @@ def _built_house_children(devices):
         "energy_nodes": {"house": {"entities": {"power": "sensor.house_power"}}},
         "devices": {"consumers": devices},
     }
-    tree = asyncio.run(HelmanTreeBuilder(_Hass(), config).build())
+    tree = asyncio.run(HelmanTreeBuilder(_Hass(), config).build()).tree
     (house,) = tree["consumers"]
     return {node["id"]: node for node in house["children"]}
 

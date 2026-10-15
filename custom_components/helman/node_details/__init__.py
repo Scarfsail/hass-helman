@@ -18,6 +18,7 @@ from typing import Any
 
 from ..controllables.config import iter_devices, peek_controllable_id, peek_controllable_kind
 from ..controllables.spec import CONTROLLABLE_KIND_EV_CHARGER
+from .context import NodeDetailContext
 from .battery import async_battery_section, build_battery_overview
 from .ev_charger import async_ev_charger_section, build_ev_charger_overview
 from .flows import FLOWS_SECTION, async_flows_section
@@ -87,7 +88,7 @@ NODE_DETAILS: dict[str, NodeDetail] = {
 
 async def async_get_node_detail(
     hass: Any,
-    config: Mapping[str, Any],
+    ctx: NodeDetailContext,
     *,
     node: str,
     device_id: str | None,
@@ -105,7 +106,7 @@ async def async_get_node_detail(
             )
         device_args: tuple[Mapping[str, Any], ...] = ()
     else:
-        device = _find_device(config, device_id, detail.device_kind)
+        device = _find_device(ctx.config, device_id, detail.device_kind)
         if device is None:
             raise NodeDetailError(
                 "invalid_device",
@@ -113,14 +114,14 @@ async def async_get_node_detail(
             )
         device_args = (device,)
     if section is None:
-        return detail.overview(hass, config, now, *device_args)
+        return detail.overview(hass, ctx, now, *device_args)
     if section not in detail.sections:
         raise NodeDetailError(
             "unknown_section", f"The {node} detail has no section {section!r}"
         )
     if section == FLOWS_SECTION:
-        return await async_flows_section(hass, node, now)
-    return await detail.section(hass, config, section, now, *device_args)
+        return await async_flows_section(hass, ctx, node, now)
+    return await detail.section(hass, ctx, section, now, *device_args)
 
 
 def _find_device(

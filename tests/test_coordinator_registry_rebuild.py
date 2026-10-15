@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from custom_components.helman.tree_builder import TreeIndex
+
 import asyncio
 import unittest
 from collections import deque
@@ -16,7 +18,7 @@ from custom_components.helman.vendors import DeviceTelemetry, PROFILES
 TREE = {
     "sources": [],
     "consumers": [
-        {"id": "house", "powerSensorId": "sensor.house_power", "children": []}
+        {"id": "house", "powerSensorId": "sensor.house_power", "children": [{"id": "house_unmeasured", "isUnmeasured": True, "powerSensorId": "sensor.helman_unmeasured"}]}
     ],
 }
 
@@ -34,6 +36,7 @@ class RegistryRebuildTests(unittest.IsolatedAsyncioTestCase):
         async def slow_tree():
             entered.set()
             await release.wait()
+            coordinator._tree_index = TreeIndex.from_tree({**TREE, "consumers": []})
             return {**TREE, "consumers": []}
 
         coordinator.get_device_tree = slow_tree
@@ -62,7 +65,7 @@ class RegistryRebuildTests(unittest.IsolatedAsyncioTestCase):
         coordinator = make_coordinator(_hass=FakeHass())
         coordinator._cached_tree = TREE
         coordinator._power_sensor_ids = ["sensor.house_power"]
-        coordinator._init_buffers(TREE)
+        coordinator._init_buffers(TREE, TreeIndex.from_tree(TREE))
         history = coordinator._power_history["sensor.house_power"]
         history.append(123.0)
         coordinator.get_device_tree = AsyncMock(return_value=TREE)
@@ -107,7 +110,7 @@ class RegistryRebuildTests(unittest.IsolatedAsyncioTestCase):
             }
 
         with patch.object(coordinator_module, "resolve_vendor_telemetry", side_effect=resolve_telemetry):
-            coordinator._init_buffers(TREE)
+            coordinator._init_buffers(TREE, TreeIndex.from_tree(TREE))
             history = coordinator._power_history["sensor.house_power"]
             history.append(123.0)
             self.assertEqual(coordinator._compute_house_phase_powers()[1], 100.0)
@@ -125,12 +128,9 @@ class RegistryRebuildTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_changed_tree_keeps_surviving_history(self) -> None:
         coordinator = make_coordinator(_hass=FakeHass())
-        coordinator._collect_unmeasured_entity_id_map = lambda _tree: {
-            "house": "sensor.helman_unmeasured"
-        }
         coordinator._cached_tree = TREE
         coordinator._power_sensor_ids = ["sensor.house_power"]
-        coordinator._init_buffers(TREE)
+        coordinator._init_buffers(TREE, TreeIndex.from_tree(TREE))
         history = coordinator._power_history["sensor.house_power"]
         history.append(123.0)
         raw_history = deque([20.0, 30.0], maxlen=3)
@@ -142,6 +142,7 @@ class RegistryRebuildTests(unittest.IsolatedAsyncioTestCase):
                 {"id": "other", "powerSensorId": "sensor.other_power", "children": []},
             ],
         }
+        coordinator._tree_index = TreeIndex.from_tree(new_tree)
         coordinator.get_device_tree = AsyncMock(return_value=new_tree)
         coordinator._sync_derived_sensors = AsyncMock()
         coordinator._start_tick = lambda: None

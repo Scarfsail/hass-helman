@@ -52,7 +52,7 @@ class _Hass:
 
 def _build(config: dict) -> dict:
     """Run the real async build."""
-    return asyncio.run(HelmanTreeBuilder(_Hass(), config).build())
+    return asyncio.run(HelmanTreeBuilder(_Hass(), config).build()).tree
 
 
 def _value_types(tree: dict) -> dict[str, str]:

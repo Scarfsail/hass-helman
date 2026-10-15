@@ -38,8 +38,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
                 get_device_tree=AsyncMock(
                     return_value={"sources": [], "consumers": []}
                 ),
-                collect_qualifying_nodes=Mock(return_value={}),
-                collect_share_devices=Mock(return_value={}),
+                tree_index=SimpleNamespace(qualifying_nodes={}, share_devices={}),
                 config={"energy_nodes": nodes},
                 set_sensors=Mock(),
                 set_entity_factory=Mock(),
@@ -60,8 +59,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
         sensor_module = _load_sensor_module()
         coordinator = SimpleNamespace(
             get_device_tree=AsyncMock(return_value={"sources": [], "consumers": []}),
-            collect_qualifying_nodes=Mock(return_value={}),
-            collect_share_devices=Mock(return_value={}),
+            tree_index=SimpleNamespace(qualifying_nodes={}, share_devices={}),
             config={},
             set_sensors=Mock(),
             set_entity_factory=Mock(),

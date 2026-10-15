@@ -16,6 +16,7 @@ from typing import Any
 from homeassistant.util import dt as dt_util
 
 from .battery import charge_origin_kwh, today_ranking_report
+from .context import NodeDetailContext
 from .day_stats import day_window
 from .solar import solar_destinations
 
@@ -83,7 +84,7 @@ def _battery_export_kwh(solar: Mapping[str, Any]) -> float:
     return max(0.0, solar["otherExportKwh"] - unresolved_in_mixed_hours)
 
 
-async def async_flows_section(hass: Any, node: str, now: datetime) -> dict[str, Any]:
+async def async_flows_section(hass: Any, ctx: NodeDetailContext, node: str, now: datetime) -> dict[str, Any]:
     """Today's flows for ``node``'s detail, or why there are none.
 
     The period, currency and ``complete`` are carried as the other "today so
@@ -105,7 +106,7 @@ async def async_flows_section(hass: Any, node: str, now: datetime) -> dict[str, 
         "unavailable": None,
         "flows": None,
     }
-    report = await today_ranking_report(hass, local_now)
+    report = await today_ranking_report(ctx, local_now)
     if "unavailable" in report:
         return {**payload, "unavailable": report["unavailable"]}
     return {

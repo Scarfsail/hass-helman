@@ -9,6 +9,8 @@ the short-circuit. A ``hass`` with states and a bus is all the built-in
 
 from __future__ import annotations
 
+from homeassistant.exceptions import Unauthorized
+
 from _fakes import FakeHass as SharedFakeHass, make_coordinator
 
 from _fakes import FakeConnection as SharedFakeConnection
@@ -719,12 +721,10 @@ class ConditionTraceWebsocketTests(unittest.IsolatedAsyncioTestCase):
         coordinator = SimpleNamespace(get_condition_trace=Mock())
         connection = FakeConnection(is_admin=False)
 
-        ws_get_condition_trace(self._hass(coordinator), connection, dict(self.MESSAGE))
+        with self.assertRaises(Unauthorized):
+            ws_get_condition_trace(self._hass(coordinator), connection, dict(self.MESSAGE))
 
         coordinator.get_condition_trace.assert_not_called()
-        self.assertEqual(
-            connection.errors, [(1, "unauthorized", "Admin access required")]
-        )
 
     async def test_returns_not_loaded_when_the_coordinator_is_missing(self) -> None:
         connection = FakeConnection()

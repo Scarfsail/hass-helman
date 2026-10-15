@@ -75,7 +75,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
         coordinator = make_coordinator()
         coordinator._hass = SimpleNamespace()
         coordinator._active_config = {}
-        coordinator._appliances_registry = build_appliances_runtime_registry(
+        coordinator._appliances_registry.current = build_appliances_runtime_registry(
             {"devices": {"consumers": []}}
         )
         coordinator._automation_input_bundle = None
@@ -149,7 +149,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         coordinator = make_coordinator()
-        coordinator._appliances_registry = build_appliances_runtime_registry(
+        coordinator._appliances_registry.current = build_appliances_runtime_registry(
             {
                 "devices": {"consumers": [
                     {
@@ -241,7 +241,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
         self,
     ) -> None:
         coordinator = make_coordinator()
-        coordinator._appliances_registry = build_appliances_runtime_registry(
+        coordinator._appliances_registry.current = build_appliances_runtime_registry(
             {
                 "devices": {"consumers": [
                     {
@@ -604,7 +604,7 @@ class ApplianceRuntimeHistoryResolutionTests(unittest.IsolatedAsyncioTestCase):
     def _coordinator(self, reader):
         coordinator = make_coordinator()
         coordinator._active_config = {}
-        coordinator._appliances_registry = build_appliances_runtime_registry(
+        coordinator._appliances_registry.current = build_appliances_runtime_registry(
             self.APPLIANCES
         )
         coordinator._appliance_runtime_history = reader
@@ -783,7 +783,7 @@ class ApplianceEnergyAdoptionTests(unittest.TestCase):
                 },
             ]}
         }
-        coordinator._appliances_registry = build_appliances_runtime_registry(
+        coordinator._appliances_registry.current = build_appliances_runtime_registry(
             coordinator._active_config
         )
         return coordinator
@@ -969,7 +969,7 @@ class ApplianceEnergyAdoptionTests(unittest.TestCase):
         figure", so an untrained appliance degrades rather than disappearing."""
         coordinator = self._make_coordinator(section=None)
         coordinator._appliance_energy_estimates = {"dishwasher": 0.83}
-        appliances = list(coordinator._appliances_registry.appliances)
+        appliances = list(coordinator._appliances_registry.current.appliances)
         untrained = SimpleNamespace(id="never-trained")
         coordinator._iter_projected_history_appliances = (
             lambda **_kwargs: [*appliances, untrained]

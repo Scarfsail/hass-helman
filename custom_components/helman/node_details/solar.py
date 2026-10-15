@@ -32,8 +32,9 @@ from homeassistant.util import dt as dt_util
 
 from ..power_polarity import is_power_inverted
 from ..power_reading import power_unit_factor
-from ..vendors import INVERTER_TELEMETRY_KEY, resolve_vendor_telemetry
+from ..vendors import INVERTER_TELEMETRY_KEY
 from .battery import charge_origin_kwh, today_ranking_report
+from .context import NodeDetailContext
 from .day_stats import BUCKET, async_day_stats, day_window
 from .inverter import run_mode_condition
 
@@ -54,7 +55,7 @@ _TELEMETRY_KEYS = (
 
 
 def build_solar_overview(
-    hass: Any, config: Mapping[str, Any], now: datetime
+    hass: Any, ctx: NodeDetailContext, now: datetime
 ) -> dict[str, Any]:
     """The solar node's mappings and overview facts; no recorder read.
 
@@ -63,7 +64,8 @@ def build_solar_overview(
     does not (disabled, missing) is present as ``None``. ``strings`` are the
     strings whose power the profile resolves; the string question needs two.
     """
-    telemetry = resolve_vendor_telemetry(hass, config).get(INVERTER_TELEMETRY_KEY)
+    config = ctx.config
+    telemetry = ctx.telemetry.get(INVERTER_TELEMETRY_KEY)
     solar = node_config(config, "solar")
     grid = node_config(config, "grid")
 
@@ -103,9 +105,10 @@ def build_solar_overview(
 
 
 async def async_solar_section(
-    hass: Any, config: Mapping[str, Any], section: str, now: datetime
+    hass: Any, ctx: NodeDetailContext, section: str, now: datetime
 ) -> dict[str, Any]:
     """One of the solar node's history sections, over today so far."""
+    config = ctx.config
     local_now = dt_util.as_local(now)
     start, end = day_window(local_now)
     payload: dict[str, Any] = {
@@ -118,7 +121,7 @@ async def async_solar_section(
         },
     }
     if section == "destinations":
-        return {**payload, **await _destinations(hass, local_now)}
+        return {**payload, **await _destinations(ctx, local_now)}
     stop = min(end, dt_util.as_utc(now))
     if section == "production":
         solar = node_config(config, "solar")
@@ -136,7 +139,7 @@ async def async_solar_section(
             else in_watts(day, inverted=is_power_inverted(solar, "solar")),
             "unit": None if day is None else day["unit"],
         }
-    telemetry = resolve_vendor_telemetry(hass, config).get(INVERTER_TELEMETRY_KEY)
+    telemetry = ctx.telemetry.get(INVERTER_TELEMETRY_KEY)
     entity_ids = {
         str(string): None if telemetry is None else telemetry.entities.get(f"pv_power_{string}")
         for string in STRINGS
@@ -288,7 +291,7 @@ def solar_destinations(report: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-async def _destinations(hass: Any, local_now: datetime) -> dict[str, Any]:
+async def _destinations(ctx: NodeDetailContext, local_now: datetime) -> dict[str, Any]:
     """Today's solar destinations, or why there are none."""
     payload: dict[str, Any] = {
         "currency": None,
@@ -297,7 +300,7 @@ async def _destinations(hass: Any, local_now: datetime) -> dict[str, Any]:
         "destinations": None,
         "charge": None,
     }
-    report = await today_ranking_report(hass, local_now)
+    report = await today_ranking_report(ctx, local_now)
     if "unavailable" in report:
         return {**payload, "unavailable": report["unavailable"]}
     if not (report.get("meters") or {}).get("solar"):

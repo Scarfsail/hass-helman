@@ -42,7 +42,7 @@ def _make_coordinator() -> HelmanCoordinator:
     )
     coordinator._load_schedule_document = lambda: coordinator._storage.schedule_document
     coordinator._active_config = {}
-    coordinator._appliances_registry = coordinator_module.AppliancesRuntimeRegistry()
+    coordinator._appliances_registry.current = coordinator_module.AppliancesRuntimeRegistry()
     coordinator._cached_battery_forecast = None
     coordinator._cached_battery_forecast_expires_at = None
     coordinator._cached_battery_forecast_house_generated_at = None
@@ -380,7 +380,7 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         build_input_bundle.assert_called_once()
         build_plan.assert_called_once_with(
             generated_at=REFERENCE_TIME.isoformat(),
-            registry=coordinator._appliances_registry,
+            registry=coordinator._appliances_registry.current,
             schedule_document=_make_schedule_document(),
             inputs=build_input_bundle.return_value,
             hass=None,
@@ -1543,8 +1543,8 @@ class ApplianceForecastPipelineDedupeTests(unittest.IsolatedAsyncioTestCase):
     async def test_the_run_computes_against_the_registry_it_pinned(self) -> None:
         """The registry travels with the other inputs pinned on the loop.
 
-        ``_refresh_climate_appliance_capabilities`` rebinds
-        ``_appliances_registry``, and several loop-side request handlers call
+        ``AppliancesRegistryHolder.refresh`` replaces
+        ``current``, and several loop-side request handlers call
         it. With the simulation on a worker, a rebind between the gather and
         the build would otherwise cost the projection against a different
         version of an appliance than the run pinned.
@@ -1553,7 +1553,7 @@ class ApplianceForecastPipelineDedupeTests(unittest.IsolatedAsyncioTestCase):
         coordinator._build_battery_forecast_sync = Mock(
             return_value=_make_battery_forecast()
         )
-        pinned = coordinator._appliances_registry
+        pinned = coordinator._appliances_registry.current
         gather = coordinator._async_gather_compute_inputs
         used: list[object] = []
 
@@ -1561,7 +1561,7 @@ class ApplianceForecastPipelineDedupeTests(unittest.IsolatedAsyncioTestCase):
             compute_inputs = await gather(**kwargs)
             # Stands in for a climate entity coming back from unavailable
             # while this run is in flight.
-            coordinator._appliances_registry = (
+            coordinator._appliances_registry.current = (
                 coordinator_module.AppliancesRuntimeRegistry()
             )
             return compute_inputs
@@ -1586,7 +1586,7 @@ class ApplianceForecastPipelineDedupeTests(unittest.IsolatedAsyncioTestCase):
         # Identity, not equality: two empty registries compare equal.
         self.assertEqual(len(used), 1)
         self.assertIs(used[0], pinned)
-        self.assertIsNot(coordinator._appliances_registry, pinned)
+        self.assertIsNot(coordinator._appliances_registry.current, pinned)
 
     async def test_pipeline_build_simulates_off_the_loop_without_touching_states(
         self,

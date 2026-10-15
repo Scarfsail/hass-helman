@@ -27,8 +27,9 @@ from homeassistant.util import dt as dt_util
 
 from ..controllables.spec import CONTROLLABLE_KIND_INVERTER, CONTROLLABLE_SPECS
 from ..scheduling.schedule import read_schedule_control_config
-from ..vendors import INVERTER_TELEMETRY_KEY, resolve_vendor_telemetry
+from ..vendors import INVERTER_TELEMETRY_KEY
 from ..vendors.modes import BoundWrite, bound_mode_writes, first_matching_option, mode_agreement
+from .context import NodeDetailContext
 from .day_stats import SEGMENT_MAX_GAP, async_day_stats, async_state_history, day_window, with_live_state
 
 #: Config-backed readings the inverter answers use, beside the telemetry, by
@@ -41,7 +42,7 @@ _CONFIG_ENTITIES = {
 
 
 def build_inverter_overview(
-    hass: Any, config: Mapping[str, Any], now: datetime
+    hass: Any, ctx: NodeDetailContext, now: datetime
 ) -> dict[str, Any]:
     """The inverter's mappings and overview facts; no recorder read.
 
@@ -51,8 +52,9 @@ def build_inverter_overview(
     ``entities`` then carry no telemetry keys. A telemetry key the profile has
     but the registry does not (disabled, missing) is present as ``None``.
     """
+    config = ctx.config
     control = read_schedule_control_config(config)
-    telemetry = resolve_vendor_telemetry(hass, config).get(INVERTER_TELEMETRY_KEY)
+    telemetry = ctx.telemetry.get(INVERTER_TELEMETRY_KEY)
 
     mode: dict[str, Any] | None = None
     commanded: str | None = None
@@ -114,13 +116,14 @@ def build_inverter_overview(
 
 
 async def async_inverter_section(
-    hass: Any, config: Mapping[str, Any], section: str, now: datetime
+    hass: Any, ctx: NodeDetailContext, section: str, now: datetime
 ) -> dict[str, Any]:
     """Today's inverter temperature, or today's observed modes (``modes``).
 
     ``temperature`` is ``None`` when the profile resolves no temperature sensor.
     """
-    telemetry = resolve_vendor_telemetry(hass, config).get(INVERTER_TELEMETRY_KEY)
+    config = ctx.config
+    telemetry = ctx.telemetry.get(INVERTER_TELEMETRY_KEY)
     if section == "modes":
         return await _async_modes_section(hass, config, now, telemetry)
     entity_id = None if telemetry is None else telemetry.entities.get("inverter_temperature")

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from homeassistant.exceptions import Unauthorized
+
 from _fakes import FakeHass as SharedFakeHass
 
 from _fakes import FakeBus, FakeConnection as SharedFakeConnection
@@ -22,7 +24,7 @@ from custom_components.helman.websockets import (
     ws_validate_config,
 )
 
-_save_config_handler = ws_save_config.__wrapped__
+_save_config_handler = ws_save_config.__wrapped__.__wrapped__
 
 
 def _invalid_config() -> dict:
@@ -157,17 +159,14 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
     def test_get_config_requires_admin(self) -> None:
         connection = FakeConnection(is_admin=False)
 
-        ws_get_config(
-            FakeHass(FakeStorage({"history_buckets": 60})),
-            connection,
-            {"id": 1, "type": "helman/get_config"},
-        )
+        with self.assertRaises(Unauthorized):
+            ws_get_config(
+                FakeHass(FakeStorage({"history_buckets": 60})),
+                connection,
+                {"id": 1, "type": "helman/get_config"},
+            )
 
         self.assertEqual(connection.results, [])
-        self.assertEqual(
-            connection.errors,
-            [(1, "unauthorized", "Admin access required")],
-        )
 
     def test_get_config_returns_config_for_admin(self) -> None:
         connection = FakeConnection(is_admin=True)
@@ -203,17 +202,14 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
     def test_get_config_defaults_requires_admin(self) -> None:
         connection = FakeConnection(is_admin=False)
 
-        ws_get_config_defaults(
-            FakeHass(FakeStorage()),
-            connection,
-            {"id": 1, "type": "helman/get_config_defaults"},
-        )
+        with self.assertRaises(Unauthorized):
+            ws_get_config_defaults(
+                FakeHass(FakeStorage()),
+                connection,
+                {"id": 1, "type": "helman/get_config_defaults"},
+            )
 
         self.assertEqual(connection.results, [])
-        self.assertEqual(
-            connection.errors,
-            [(1, "unauthorized", "Admin access required")],
-        )
 
     def test_get_config_defaults_serves_dotted_paths(self) -> None:
         connection = FakeConnection(is_admin=True)
@@ -381,14 +377,14 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
     def test_get_vendors_requires_admin(self) -> None:
         connection = FakeConnection(is_admin=False)
 
-        ws_get_vendors(
-            FakeHass(FakeStorage()),
-            connection,
-            {"id": 1, "type": "helman/get_vendors", "config": {}},
-        )
+        with self.assertRaises(Unauthorized):
+            ws_get_vendors(
+                FakeHass(FakeStorage()),
+                connection,
+                {"id": 1, "type": "helman/get_vendors", "config": {}},
+            )
 
         self.assertEqual(connection.results, [])
-        self.assertEqual(connection.errors[0][1], "unauthorized")
 
     async def test_save_config_does_not_persist_invalid_document(self) -> None:
         storage = FakeStorage()

@@ -1,6 +1,9 @@
 """Admin checks precede registry and Energy reads; preview never persists."""
 
+from homeassistant.exceptions import Unauthorized
+
 import asyncio
+import pytest
 from types import SimpleNamespace as NS
 from unittest.mock import AsyncMock, Mock, patch
 from custom_components.helman.websockets import (
@@ -17,12 +20,11 @@ def test_non_admin_suggestions_never_read_registry():
     conn = connection(False)
     with patch(
         "custom_components.helman.controllables.suggestions.suggest_entities"
-    ) as helper:
+    ) as helper, pytest.raises(Unauthorized):
         ws_suggest_device_entities(
             NS(), conn, {"id": 1, "anchor_entity_ids": ["sensor.energy"], "config": {}}
         )
     helper.assert_not_called()
-    conn.send_error.assert_called_once_with(1, "unauthorized", "Admin access required")
     conn.send_result.assert_not_called()
 
 
@@ -30,12 +32,9 @@ def test_non_admin_preview_never_reads_energy():
     conn = connection(False)
     with patch(
         "homeassistant.components.energy.data.async_get_manager", new_callable=AsyncMock
-    ) as manager:
-        asyncio.run(
-            ws_preview_energy_import.__wrapped__(NS(), conn, {"id": 1, "config": {}})
-        )
+    ) as manager, pytest.raises(Unauthorized):
+        ws_preview_energy_import(NS(), conn, {"id": 1, "config": {}})
     manager.assert_not_awaited()
-    conn.send_error.assert_called_once_with(1, "unauthorized", "Admin access required")
     conn.send_result.assert_not_called()
 
 
@@ -56,7 +55,7 @@ def test_preview_uses_editor_draft_and_current_energy_without_saving():
         ),
     ):
         asyncio.run(
-            ws_preview_energy_import.__wrapped__(
+            ws_preview_energy_import.__wrapped__.__wrapped__(
                 hass, conn, {"id": 1, "config": config}
             )
         )

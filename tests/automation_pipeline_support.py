@@ -277,7 +277,8 @@ class _FakeCoordinator:
         self._snapshot_factory = snapshot_factory
         self._persist_changed = persist_changed
         self._control_config = control_config
-        self._appliances_registry = AppliancesRuntimeRegistry()
+        from custom_components.helman.appliances.registry_holder import AppliancesRegistryHolder
+        self._appliances_registry = AppliancesRegistryHolder(None, lambda: {})
         self._hass = SimpleNamespace(
             async_add_executor_job=self._async_add_executor_job
         )
