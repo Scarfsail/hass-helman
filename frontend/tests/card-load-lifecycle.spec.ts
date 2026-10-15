@@ -32,8 +32,9 @@ declare global {
         /** Let the held `helman/get_history` responses return. */
         __resolveHistory: () => void;
         __rejectHistory: () => void;
+        __resolveInverter: () => void;
         /** How many requests of each kind are still held open. */
-        __pending: () => { tree: number; history: number };
+        __pending: () => { tree: number; history: number; inverter: number };
         __setTreeBuckets: (count: number) => void;
         __omitHouseHistory: () => void;
         /** Start counting timer and animation-frame installs from now. */
@@ -116,11 +117,13 @@ async function installFixture(page: Page, bucketSeconds: number): Promise<void> 
 
         const heldTree: Array<{ resolve: () => void; reject: () => void }> = [];
         const heldHistory: Array<{ resolve: () => void; reject: () => void }> = [];
+        const heldInverter: Array<() => void> = [];
         window.__resolveTree = () => { heldTree.splice(0).forEach((request) => request.resolve()); };
         window.__rejectTree = () => { heldTree.splice(0).forEach((request) => request.reject()); };
         window.__resolveHistory = () => { heldHistory.splice(0).forEach((request) => request.resolve()); };
         window.__rejectHistory = () => { heldHistory.splice(0).forEach((request) => request.reject()); };
-        window.__pending = () => ({ tree: heldTree.length, history: heldHistory.length });
+        window.__resolveInverter = () => { heldInverter.splice(0).forEach((resolve) => resolve()); };
+        window.__pending = () => ({ tree: heldTree.length, history: heldHistory.length, inverter: heldInverter.length });
 
         const states: Record<string, unknown> = {};
         for (const id of Object.keys(historyPayload.entity_history)) {
@@ -156,6 +159,18 @@ async function installFixture(page: Page, bucketSeconds: number): Promise<void> 
                     type: string;
                 }) => {
                     return { entities: [] };
+                },
+                "helman/get_node_detail": async (msg: {
+                    type: string;
+                    node: string;
+                }) => {
+                    if (msg.node !== "inverter") return {};
+                    return new Promise((resolve) => heldInverter.push(() => resolve({
+                        node: "inverter",
+                        configured: true,
+                        mode: { entityId: "select.inverter_mode", actionOptions: { normal: "normal" } },
+                        entities: { link_success_rate: "sensor.inverter_link_success_rate" },
+                    })));
                 }
             }).callWS,
         };
@@ -307,6 +322,56 @@ for (const tag of ["helman-card", "helman-simple-card"] as const) {
 
 for (const tag of ["helman-card", "helman-simple-card"] as const) {
     for (const failedRead of ["tree", "history"] as const) {
+        for (const detach of [false, true]) {
+            test(`${tag}: pending inverter ${detach ? "stays obsolete after detach" : "recovers"} when ${failedRead} refresh fails`, async ({ page }) => {
+                await installFixture(page, BUCKET_SECONDS);
+                const result = await page.evaluate(async ({ tag, failedRead, detach }) => {
+                    const card = document.createElement(tag) as any;
+                    await card.setConfig({ type: `custom:${tag}` });
+                    card.hass = window.__hass;
+                    document.body.appendChild(card);
+                    await new Promise<void>((done) => setTimeout(done, 0));
+                    window.__resolveTree();
+                    await new Promise<void>((done) => setTimeout(done, 0));
+                    window.__resolveHistory();
+                    await new Promise<void>((done) => setTimeout(done, 0));
+                    const oldEngine = card._historyEngine;
+                    const pendingBeforeRefresh = window.__pending().inverter;
+
+                    const refresh = tag === "helman-card"
+                        ? card._loadBackendData(true)
+                        : card._loadFromBackend(true);
+                    await new Promise<void>((done) => setTimeout(done, 0));
+                    if (failedRead === "tree") window.__rejectTree();
+                    else {
+                        window.__resolveTree();
+                        await new Promise<void>((done) => setTimeout(done, 0));
+                        window.__rejectHistory();
+                    }
+                    await refresh;
+                    const retained = card._historyEngine === oldEngine && card._inverter === null;
+                    if (detach) card.remove();
+                    window.__resolveInverter();
+                    await new Promise<void>((done) => setTimeout(done, 0));
+                    const result = {
+                        pendingBeforeRefresh,
+                        retained,
+                        inverterLoaded: card._inverter?.node === "inverter",
+                        watching: card._watchedEntityIds.has("select.inverter_mode")
+                            && card._watchedEntityIds.has("sensor.inverter_link_success_rate"),
+                    };
+                    if (!detach) card.remove();
+                    return result;
+                }, { tag, failedRead, detach });
+
+                expect(result).toEqual({
+                    pendingBeforeRefresh: 1,
+                    retained: true,
+                    inverterLoaded: !detach,
+                    watching: !detach,
+                });
+            });
+        }
         test(`${tag}: a failed ${failedRead} refresh keeps history live until replacement`, async ({ page }) => {
             await installFixture(page, BUCKET_SECONDS);
             const result = await page.evaluate(async ({ tag, failedRead }) => {

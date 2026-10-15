@@ -447,6 +447,11 @@ export class HelmanCard extends LitElement implements LovelaceCard {
             // Logged even for an obsolete load: the guard is there to keep stale data
             // out of the card, not to hide a backend failure that raced a detach.
             console.error('Helman: failed to load backend data', error);
+            // The retained tree still needs its inverter. Rejoin an older pending
+            // read with this generation so its result can populate the cell.
+            if (!obsolete() && this._historyEngine && !this._inverter) {
+                void this._loadInverter(obsolete, false);
+            }
         }
     }
 
