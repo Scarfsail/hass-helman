@@ -6,6 +6,8 @@ so faking the record would test nothing.
 """
 
 from __future__ import annotations
+
+from homeassistant.exceptions import Unauthorized
 from _fakes import _bias_service_config
 
 from tests._fakes import make_coordinator
@@ -201,7 +203,7 @@ async def _train_now(coordinator, *, job=None, is_admin: bool = True):
     msg = {"id": 1, "type": "helman/training/train_now"}
     if job is not None:
         msg["job"] = job
-    await training_ws.ws_train_now.__wrapped__(_hass(coordinator), connection, msg)
+    await training_ws.ws_train_now.__wrapped__.__wrapped__(_hass(coordinator), connection, msg)
     return connection
 
 
@@ -210,7 +212,7 @@ async def _train_now_with_hass(hass, *, job=None):
     msg = {"id": 1, "type": "helman/training/train_now"}
     if job is not None:
         msg["job"] = job
-    await training_ws.ws_train_now.__wrapped__(hass, connection, msg)
+    await training_ws.ws_train_now.__wrapped__.__wrapped__(hass, connection, msg)
     return connection
 
 
@@ -628,10 +630,8 @@ class DeviceStatsWebsocketTests(unittest.TestCase):
 
 class TrainingStatusAdminTests(unittest.TestCase):
     def test_status_refuses_a_non_admin(self) -> None:
-        connection = _status(_make_coordinator(), is_admin=False)
-
-        self.assertEqual(connection.results, [])
-        self.assertEqual(connection.errors, [(1, "unauthorized", "Admin access required")])
+        with self.assertRaises(Unauthorized):
+            _status(_make_coordinator(), is_admin=False)
 
 
 class TrainNowTests(unittest.IsolatedAsyncioTestCase):
@@ -813,10 +813,8 @@ class TrainNowTests(unittest.IsolatedAsyncioTestCase):
         house_job = _StubJob("profile_trained")
         coordinator = _make_coordinator(house_job=house_job)
 
-        connection = await _train_now(coordinator, is_admin=False)
-
-        self.assertEqual(connection.results, [])
-        self.assertEqual(connection.errors, [(1, "unauthorized", "Admin access required")])
+        with self.assertRaises(Unauthorized):
+            training_ws.ws_train_now(SimpleNamespace(), FakeConnection(is_admin=False), {"id": 1})
         self.assertEqual(house_job.calls, 0)
 
 

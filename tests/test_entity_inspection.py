@@ -18,6 +18,8 @@ asserting on prose, the boundary this package exists to hold has moved.
 
 from __future__ import annotations
 
+from homeassistant.exceptions import Unauthorized
+
 import asyncio
 import types
 import unittest
@@ -1379,9 +1381,9 @@ class TestWebsocketCommand(unittest.TestCase):
 
     def test_a_non_admin_is_refused(self):
         connection = _Connection(is_admin=False)
-        ws_inspect_entities(_Hass(), connection, self._msg())
+        with self.assertRaises(Unauthorized):
+            ws_inspect_entities(_Hass(), connection, self._msg())
         self.assertEqual(connection.results, [])
-        self.assertEqual(connection.errors, [(1, "unauthorized", "Admin access required")])
 
     def test_the_result_is_one_row_per_target(self):
         connection = _Connection()

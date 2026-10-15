@@ -6,7 +6,7 @@ import functools
 import logging
 import time
 from collections.abc import Collection, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from collections import OrderedDict, deque
 from datetime import date, datetime, timedelta, timezone
 from statistics import median
@@ -48,6 +48,7 @@ from .appliances.projection_response import (
     build_empty_appliance_projections_response,
 )
 from .appliances.state import AppliancesRuntimeRegistry
+from .appliances.registry_holder import AppliancesRegistryHolder
 from .automation.compute_inputs import (
     ComputeInputs,
     CustomConditionGroupResult,
@@ -77,7 +78,6 @@ from .automation.ownership import (
 from .automation.snapshot import OptimizationContext, OptimizationSnapshot
 from .automation.triggers import AutomationTriggerCoordinator
 from .appliances.climate_appliance import ClimateApplianceRuntime
-from .appliances.climate_appliance import resolve_supported_climate_modes
 from .battery_capacity_forecast_builder import BatteryCapacityForecastBuilder
 from .battery_forecast_response import build_battery_forecast_response
 from .battery_state import (
@@ -115,15 +115,12 @@ from .consumption_forecast_builder import (
 from .controllables.config import (
     entity_friendly_name,
     is_active_state,
-    iter_device_paths,
     iter_devices,
     own_meter,
     peek_controllable_id,
     read_carved_meters,
-    read_name_cleaner_regex,
     read_schedulable_consumers,
     read_shared_meters,
-    resolve_device_name,
     running_active_states,
     running_signal,
 )
@@ -219,9 +216,9 @@ from .training.house_consumption import (
 )
 from .training.house_consumption import health_for as house_consumption_health_for
 from .span_history_model import SpanMeters, recorder_tail_start, read_span_meters
-from .tree_builder import HelmanTreeBuilder
+from .tree_builder import HelmanTreeBuilder, TreeIndex
 from .node_details.inverter import run_mode_condition
-from .vendors import INVERTER_TELEMETRY_KEY, resolve_vendor_config, resolve_vendor_telemetry
+from .vendors import DeviceTelemetry, INVERTER_TELEMETRY_KEY, resolve_vendor_config, resolve_vendor_telemetry
 
 _LOGGER = logging.getLogger(__name__)
 # Sentinel distinguishing "battery live state not supplied" from "supplied as
@@ -693,6 +690,7 @@ class HelmanCoordinator:
         self._hass = hass
         self._storage = storage
         self._cached_tree: dict | None = None
+        self._tree_index: TreeIndex | None = None
         self._buffer_tree: dict | None = None
         self._unloaded = False
         self._device_datasets: OrderedDict[
@@ -709,6 +707,7 @@ class HelmanCoordinator:
         # The inverter's telemetry the measured house phases compute from,
         # resolved per tree rebuild in _init_buffers.
         self._inverter_telemetry: Any = None
+        self._vendor_telemetry: dict[str, DeviceTelemetry] = {}
         self._async_add_entities: Callable | None = None
         self._unmeasured_sensor_factory: Callable | None = None
         self._share_sensors: dict[str, Any] = {}
@@ -879,13 +878,13 @@ class HelmanCoordinator:
                 ),
                 read_schedule_control_config=self._read_schedule_executor_control_config,
                 read_battery_state=self._read_schedule_executor_battery_state,
-                read_appliances_registry=lambda: self._appliances_registry,
+                read_appliances_registry=lambda: self._appliances_registry.current,
                 check_reality_and_maybe_replan=(
                     self._async_reality_check_and_maybe_replan
                 ),
             ),
         )
-        self._appliances_registry = AppliancesRuntimeRegistry()
+        self._appliances_registry = AppliancesRegistryHolder(self._hass, lambda: self._active_config)
         self._solar_bias_store: Any = None
         self._solar_bias_service: SolarBiasCorrectionService | None = None
         self._training_artifacts_store: TrainingArtifactsStore | None = None
@@ -993,35 +992,6 @@ class HelmanCoordinator:
         # write happened: the explanation book and the derived forecasts still
         # moved, and the inspector draws those.
         self._fire_data_changed(DATA_CHANGED_KIND_PLAN)
-
-    @staticmethod
-    def collect_qualifying_nodes(tree: dict) -> dict[str, str | None]:
-        """Return {node_id: parent_power_sensor_id} for non-virtual consumer nodes with unmeasured children."""
-        result: dict[str, str | None] = {}
-
-        def walk(nodes: list) -> None:
-            for node in nodes:
-                children = node.get("children", [])
-                if not node.get("isVirtual") and any(c.get("isUnmeasured") for c in children):
-                    result[node["id"]] = node.get("powerSensorId")
-                walk(children)
-
-        walk(tree.get("consumers", []))
-        return result
-
-    @staticmethod
-    def collect_share_devices(tree: dict) -> dict[str, tuple[str, str]]:
-        """Return {node_id: (share_entity_id, display_name)} for every meterless child device."""
-        result: dict[str, tuple[str, str]] = {}
-
-        def walk(nodes: list) -> None:
-            for node in nodes:
-                if node.get("isEstimated") and node.get("powerSensorId"):
-                    result[node["id"]] = (node["powerSensorId"], node.get("displayName") or node["id"])
-                walk(node.get("children", []))
-
-        walk(tree.get("consumers", []))
-        return result
 
     def set_sensors(
         self,
@@ -1181,7 +1151,7 @@ class HelmanCoordinator:
                 "Nightly training batch not scheduled due to invalid training time: %s",
                 bias_config.training_time,
             )
-        self._appliances_registry = build_appliances_runtime_registry(
+        self._appliances_registry.current = build_appliances_runtime_registry(
             self._active_config,
             logger=_LOGGER,
             friendly_name=functools.partial(entity_friendly_name, self._hass),
@@ -1211,10 +1181,10 @@ class HelmanCoordinator:
 
         # Build tree upfront to learn which power sensors to track
         tree = await self.get_device_tree()
-        self._power_sensor_ids = self._collect_power_sensor_ids(tree)
-        self._source_sensor_ids = self._collect_source_sensor_ids(tree)
-        self._source_value_types = self._collect_source_value_types(tree)
-        self._init_buffers(tree)
+        self._power_sensor_ids = list(self.tree_index.power_sensor_ids)
+        self._source_sensor_ids = list(self.tree_index.source_sensor_ids)
+        self._source_value_types = dict(self.tree_index.source_value_types)
+        self._init_buffers(tree, self.tree_index)
         self._start_tick()
 
         # House forecast: load persisted snapshot and schedule recurring
@@ -1362,10 +1332,10 @@ class HelmanCoordinator:
                 self._refresh_inverter_telemetry()
                 return
             self._stop_tick()
-            self._power_sensor_ids = self._collect_power_sensor_ids(tree)
-            self._source_sensor_ids = self._collect_source_sensor_ids(tree)
-            self._source_value_types = self._collect_source_value_types(tree)
-            self._init_buffers(tree)
+            self._power_sensor_ids = list(self.tree_index.power_sensor_ids)
+            self._source_sensor_ids = list(self.tree_index.source_sensor_ids)
+            self._source_value_types = dict(self.tree_index.source_value_types)
+            self._init_buffers(tree, self.tree_index)
             self._start_tick()
             if self._unloaded:
                 return
@@ -1384,14 +1354,14 @@ class HelmanCoordinator:
                 self._unmeasured_sensors,
                 {
                     node_id: (parent_sensor_id,)
-                    for node_id, parent_sensor_id in self.collect_qualifying_nodes(tree).items()
+                    for node_id, parent_sensor_id in self.tree_index.qualifying_nodes.items()
                 },
                 self._unmeasured_sensor_factory,
             )
         if self._share_sensor_factory is not None:
             self._sync_node_sensors(
                 self._share_sensors,
-                self.collect_share_devices(tree),
+                self.tree_index.share_devices,
                 self._share_sensor_factory,
             )
 
@@ -1422,11 +1392,23 @@ class HelmanCoordinator:
             sensors.update(new_sensors)
             self._async_add_entities(list(new_sensors.values()))
 
+    @property
+    def vendor_telemetry(self) -> Mapping[str, DeviceTelemetry]:
+        return self._vendor_telemetry
+
+    @property
+    def tree_index(self) -> TreeIndex:
+        """Static memberships of the last built device tree."""
+        assert self._tree_index is not None
+        return self._tree_index
+
     async def get_device_tree(self) -> dict:
         """Return cached or freshly built device tree."""
         if self._cached_tree is None:
             builder = HelmanTreeBuilder(self._hass, self._active_config)
-            self._cached_tree = await builder.build()
+            built = await builder.build()
+            self._cached_tree = built.tree
+            self._tree_index = built.index
         return self._cached_tree
 
     async def async_device_report(self, report: str, query: ReportQuery) -> dict[str, Any]:
@@ -1634,6 +1616,14 @@ class HelmanCoordinator:
         )
         self._grid_price_snapshot_cache = (slot_start, snapshot)
         return snapshot
+
+    @property
+    def training_batch(self) -> TrainingBatch | None:
+        return self._training_batch
+
+    @property
+    def solar_bias_service(self) -> SolarBiasCorrectionService | None:
+        return self._solar_bias_service
 
     def build_training_status(self) -> dict[str, Any]:
         """Every training job's status, for the config editor's Training tab.
@@ -2581,10 +2571,10 @@ class HelmanCoordinator:
         The card filters this against live entity state, so it reacts to state
         changes without asking the backend again.
         """
-        self._refresh_appliance_metadata()
+        self._appliances_registry.refresh()
         return build_controllable_entities(
             control_config=self._read_schedule_control_config(),
-            registry=self._appliances_registry,
+            registry=self._appliances_registry.current,
         )
 
     async def async_get_entity_actual_history(
@@ -2613,83 +2603,8 @@ class HelmanCoordinator:
             for entity in entities
         }
 
-    def _refresh_appliance_metadata(self) -> None:
-        """Resolve identity and climate capabilities from currently available states."""
-        config = self._active_config
-        devices = {
-            device["id"].strip(): device
-            for _path, device, _parent in iter_device_paths(config)
-            if isinstance(device, Mapping) and isinstance(device.get("id"), str)
-        }
-        cleaner = read_name_cleaner_regex(config)
-        friendly_name = functools.partial(entity_friendly_name, self._hass)
-        refreshed_appliances = []
-        changed = False
-
-        for appliance in self._appliances_registry.appliances:
-            refreshed_appliance = appliance
-            device = devices.get(appliance.id)
-            if device is not None:
-                name = resolve_device_name(
-                    device,
-                    friendly_name=friendly_name,
-                    cleaner_regex=cleaner,
-                )
-                if name != appliance.name:
-                    refreshed_appliance = replace(refreshed_appliance, name=name)
-            if isinstance(refreshed_appliance, ClimateApplianceRuntime):
-                refreshed_appliance = self._resolve_climate_appliance_capabilities(
-                    refreshed_appliance
-                )
-            refreshed_appliances.append(refreshed_appliance)
-            if refreshed_appliance != appliance:
-                changed = True
-
-        if changed:
-            self._appliances_registry = AppliancesRuntimeRegistry.from_appliances(
-                refreshed_appliances
-            )
-
-    def _resolve_climate_appliance_capabilities(
-        self,
-        appliance: ClimateApplianceRuntime,
-    ) -> ClimateApplianceRuntime:
-        climate_state = self._hass.states.get(appliance.climate_entity_id)
-        if climate_state is None:
-            return appliance
-
-        raw_state = getattr(climate_state, "state", None)
-        if (
-            not isinstance(raw_state, str)
-            or not raw_state.strip()
-            or raw_state.strip().lower() in _UNAVAILABLE_ENTITY_STATES
-        ):
-            return appliance
-
-        raw_attributes = getattr(climate_state, "attributes", {})
-        if not isinstance(raw_attributes, Mapping):
-            return appliance
-
-        raw_hvac_modes = raw_attributes.get("hvac_modes")
-        if not isinstance(raw_hvac_modes, (list, tuple)) or not raw_hvac_modes:
-            return appliance
-
-        hvac_modes: list[str] = []
-        for raw_mode in raw_hvac_modes:
-            if not isinstance(raw_mode, str) or not raw_mode.strip():
-                return appliance
-            hvac_modes.append(raw_mode.strip())
-
-        supported_modes = resolve_supported_climate_modes(hvac_modes)
-        stop_hvac_mode = "off" if "off" in hvac_modes else None
-        return replace(
-            appliance,
-            supported_modes=supported_modes,
-            stop_hvac_mode=stop_hvac_mode,
-        )
-
     async def _async_normalize_schedule_document(self) -> None:
-        self._refresh_appliance_metadata()
+        self._appliances_registry.refresh()
         raw_document = self._storage.schedule_document
         if raw_document is None:
             return
@@ -2698,7 +2613,7 @@ class HelmanCoordinator:
             schedule_document = schedule_document_from_dict(raw_document)
             schedule_document = normalize_schedule_document_for_registry(
                 schedule_document,
-                appliances_registry=self._appliances_registry,
+                appliances_registry=self._appliances_registry.current,
             )
         except ScheduleError as err:
             # The slots are what became incompatible; whether the user had
@@ -2756,11 +2671,11 @@ class HelmanCoordinator:
         *,
         reference_time: datetime,
     ) -> tuple[ScheduleDocument, ScheduleDocument]:
-        self._refresh_appliance_metadata()
+        self._appliances_registry.refresh()
         loaded_document = self._load_schedule_document()
         schedule_document = normalize_schedule_document_for_registry(
             loaded_document,
-            appliances_registry=self._appliances_registry,
+            appliances_registry=self._appliances_registry.current,
         )
         pruned_slots = prune_expired_slots(
             stored_slots=schedule_document.slots,
@@ -2813,7 +2728,7 @@ class HelmanCoordinator:
             ],
             reference_time=reference_time,
             battery_soc_bounds=self._read_battery_soc_bounds(),
-            appliances_registry=self._appliances_registry,
+            appliances_registry=self._appliances_registry.current,
         )
         return ScheduleDocument(
             execution_enabled=schedule_document.execution_enabled,
@@ -2869,8 +2784,8 @@ class HelmanCoordinator:
             )
 
     async def get_appliances(self) -> ApplianceMetadataResponseDict:
-        self._refresh_appliance_metadata()
-        return build_appliances_response(self._appliances_registry)
+        self._appliances_registry.refresh()
+        return build_appliances_response(self._appliances_registry.current)
 
     def get_raw_solar_forecast_points(self) -> list[dict[str, Any]]:
         snapshot = self._cached_solar_forecast or {}
@@ -3228,7 +3143,7 @@ class HelmanCoordinator:
         return round(total / 1000.0, 4)
 
     async def get_appliance_projections(self) -> ApplianceProjectionsResponseDict:
-        self._refresh_appliance_metadata()
+        self._appliances_registry.refresh()
         request_now = dt_util.now()
         canonical_solar_forecast = await self._async_get_canonical_solar_forecast(
             reference_time=request_now
@@ -3254,7 +3169,7 @@ class HelmanCoordinator:
             return build_empty_appliance_projections_response(generated_at=plan.generated_at)
         return build_appliance_projections_response(
             plan=plan,
-            registry=self._appliances_registry,
+            registry=self._appliances_registry.current,
             hass=self._hass,
         )
 
@@ -3330,7 +3245,7 @@ class HelmanCoordinator:
                 slots=slots,
                 reference_time=request_now,
                 battery_soc_bounds=self._read_battery_soc_bounds(),
-                appliances_registry=self._appliances_registry,
+                appliances_registry=self._appliances_registry.current,
             )
             stamped_slots = [
                 with_slot_set_by(slot, set_by=set_by) for slot in normalized_slots
@@ -3393,7 +3308,7 @@ class HelmanCoordinator:
         )
         canonical_document = normalize_schedule_document_for_registry(
             merged_document,
-            appliances_registry=self._appliances_registry,
+            appliances_registry=self._appliances_registry.current,
         )
         if canonical_document == latest_document:
             return False
@@ -4037,11 +3952,11 @@ class HelmanCoordinator:
         )
         return ComputeInputs(
             battery_live_state=battery_live_state,
-            appliances_registry=self._appliances_registry,
+            appliances_registry=self._appliances_registry.current,
             battery_actual_history=battery_actual_history,
             vehicle_remaining_capacity_kwh_by_vehicle_id=(
                 read_vehicle_remaining_capacity_kwh_by_vehicle_id(
-                    self._hass, self._appliances_registry
+                    self._hass, self._appliances_registry.current
                 )
             ),
             condition_met_by_optimizer_id=_condition_met_map(custom_condition_results),
@@ -4384,11 +4299,11 @@ class HelmanCoordinator:
         """The registry this run computes against.
 
         Taken from the inputs pinned on the event loop, so a rebind of
-        ``_appliances_registry`` mid-build cannot make one half of a run
+        ``_appliances_registry.current`` mid-build cannot make one half of a run
         disagree with the other. The attribute is the fallback for a caller
         that built its inputs without one.
         """
-        return compute_inputs.appliances_registry or self._appliances_registry
+        return compute_inputs.appliances_registry or self._appliances_registry.current
 
     def _build_forecast_rebuild_pure(
         self,
@@ -5275,7 +5190,7 @@ class HelmanCoordinator:
     ) -> list[GenericApplianceRuntime | ClimateApplianceRuntime]:
         return [
             appliance
-            for appliance in self._appliances_registry.appliances
+            for appliance in self._appliances_registry.current.appliances
             if isinstance(appliance, (GenericApplianceRuntime, ClimateApplianceRuntime))
         ]
 
@@ -5292,7 +5207,7 @@ class HelmanCoordinator:
                 if appliance_id in seen_appliance_ids:
                     continue
 
-                appliance = self._appliances_registry.get_appliance(appliance_id)
+                appliance = self._appliances_registry.current.get_appliance(appliance_id)
                 if not self._is_projected_history_action_active(
                     appliance=appliance,
                     action=action,
@@ -5475,102 +5390,24 @@ class HelmanCoordinator:
         await self._automation_triggers.request_debounced(reason="condition_changed")
         return True
 
-    def _collect_power_sensor_ids(self, tree: dict) -> list[str]:
-        """Collect all unique power_sensor_id values from the tree dict."""
-        ids: set[str] = set()
-
-        def traverse(nodes: list) -> None:
-            for node in nodes:
-                sensor_id = node.get("powerSensorId")
-                if sensor_id:
-                    ids.add(sensor_id)
-                traverse(node.get("children", []))
-
-        traverse(tree.get("sources", []))
-        traverse(tree.get("consumers", []))
-        return list(ids)
-
-    def _collect_source_sensor_ids(self, tree: dict) -> list[str]:
-        """Collect power_sensor_id values for top-level source nodes only."""
-        ids: list[str] = []
-        for node in tree.get("sources", []):
-            sensor_id = node.get("powerSensorId")
-            if sensor_id:
-                ids.append(sensor_id)
-        return ids
-
-    @staticmethod
-    def _collect_source_ratio_entity_ids(tree: dict) -> dict[str, str]:
-        """Return {source_power_sensor_id → ratio_sensor_entity_id} for top-level sources.
-
-        Derived from the tree so the tick can create and fill source-ratio history buffers
-        without waiting for the sensor platform to register the ratio sensor entity objects.
-        """
-        ids: dict[str, str] = {}
-        for node in tree.get("sources", []):
-            power_id = node.get("powerSensorId")
-            ratio_id = node.get("ratioSensorId")
-            if power_id and ratio_id:
-                ids[power_id] = ratio_id
-        return ids
-
-    def _collect_source_value_types(self, tree: dict) -> dict[str, str]:
-        """Return a mapping of source power_sensor_id → value_type."""
-        types: dict[str, str] = {}
-        for node in tree.get("sources", []):
-            sensor_id = node.get("powerSensorId")
-            if sensor_id:
-                types[sensor_id] = node.get("valueType", "default")
-        return types
-
-    @staticmethod
-    def _collect_virtual_sensor_ids(tree: dict) -> set[str]:
-        """Collect powerSensorId values for unmeasured and share nodes (computed by tick)."""
-        ids: set[str] = set()
-
-        def walk(nodes: list) -> None:
-            for node in nodes:
-                if (node.get("isUnmeasured") or node.get("isEstimated")) and node.get("powerSensorId"):
-                    ids.add(node["powerSensorId"])
-                walk(node.get("children", []))
-
-        walk(tree.get("consumers", []))
-        return ids
-
-    @staticmethod
-    def _collect_unmeasured_entity_id_map(tree: dict) -> dict[str, str]:
-        """Return {parent_node_id: unmeasured_entity_id} for nodes with unmeasured children."""
-        result: dict[str, str] = {}
-
-        def walk(nodes: list) -> None:
-            for node in nodes:
-                if not node.get("isVirtual"):
-                    for child in node.get("children", []):
-                        if child.get("isUnmeasured") and child.get("powerSensorId"):
-                            result[node["id"]] = child["powerSensorId"]
-                walk(node.get("children", []))
-
-        walk(tree.get("consumers", []))
-        return result
-
     def _visualization_config(self) -> dict[str, Any]:
         return read_visualization(self._active_config)
 
-    def _init_buffers(self, tree: dict) -> None:
+    def _init_buffers(self, tree: dict, index: TreeIndex) -> None:
         """Initialize rolling deques, retaining history for surviving sensors."""
         history_buckets: int = self._visualization_config()["history_buckets"]
         previous_history = self._power_history
         previous_unmeasured = self._unmeasured_raw_history
         previous_unmeasured_ids = self._unmeasured_entity_id_map
 
-        self._virtual_sensor_ids = self._collect_virtual_sensor_ids(tree)
+        self._virtual_sensor_ids = set(index.virtual_sensor_ids)
         self._virtual_sensor_ids.add(CONSUMPTION_TOTAL_ENTITY_ID)
         self._virtual_sensor_ids.add(PRODUCTION_TOTAL_ENTITY_ID)
 
-        self._unmeasured_entity_id_map = self._collect_unmeasured_entity_id_map(tree)
+        self._unmeasured_entity_id_map = dict(index.unmeasured_entity_id_map)
         self._share_entity_id_map = {
             node_id: entity_id
-            for node_id, (entity_id, _name) in self.collect_share_devices(tree).items()
+            for node_id, (entity_id, _name) in index.share_devices.items()
         }
         # The very members the shared-meter history split reads, with the same
         # running signal each, so the live split cannot pick other devices.
@@ -5615,7 +5452,7 @@ class HelmanCoordinator:
         # every past consumer bucket with its fallback colour instead of the source colours.
         # Mark them virtual: their values are computed by _tick Step 3, so the Step 1 real-sensor
         # read loop must not also append them (that would double-append per tick and desync them).
-        self._source_ratio_entity_ids = self._collect_source_ratio_entity_ids(tree)
+        self._source_ratio_entity_ids = dict(index.source_ratio_entity_ids)
         for ratio_entity_id in self._source_ratio_entity_ids.values():
             self._power_history[ratio_entity_id] = previous_history.get(
                 ratio_entity_id, deque(maxlen=history_buckets)
@@ -5624,9 +5461,8 @@ class HelmanCoordinator:
         self._buffer_tree = tree
 
     def _refresh_inverter_telemetry(self) -> None:
-        self._inverter_telemetry = resolve_vendor_telemetry(
-            self._hass, self._active_config
-        ).get(INVERTER_TELEMETRY_KEY)
+        self._vendor_telemetry = resolve_vendor_telemetry(self._hass, self._active_config)
+        self._inverter_telemetry = self._vendor_telemetry.get(INVERTER_TELEMETRY_KEY)
 
     def _start_tick(self) -> None:
         """Start the periodic tick using HA's time-interval tracker."""
@@ -5706,10 +5542,10 @@ class HelmanCoordinator:
         # entities. The sensor objects, when present, are used only to publish the displayed value.
         if self._source_ratio_entity_ids:
             normalized = {
-                src: self._normalize_source_value(
+                src: max(0.0, watts_for_value_type(
                     self._power_history[src][-1] if self._power_history.get(src) else 0.0,
                     self._source_value_types.get(src, "default"),
-                )
+                ))
                 for src in self._source_sensor_ids
                 if src in self._power_history
             }
@@ -5755,16 +5591,6 @@ class HelmanCoordinator:
                     else (None, "", None)
                 )
                 self._battery_time_to_empty.update_value(minutes, target_time, target_soc)
-
-    @staticmethod
-    def _normalize_source_value(raw: float, value_type: str) -> float:
-        """Convert a raw source sensor reading to an absolute positive power contribution."""
-        if value_type == "negative":
-            return abs(min(0.0, raw))
-        if value_type == "positive":
-            return max(0.0, raw)
-        # "default" — trust the raw value; guard against negatives
-        return max(0.0, raw)
 
     def get_history(self) -> dict:
         """Return a pure dict copy of the in-memory rolling buffer. Zero computation."""
@@ -5922,7 +5748,7 @@ class HelmanCoordinator:
             if node.get("isVirtual"):
                 continue
             raw = self._read_power(node.get("powerSensorId"), "default")
-            total += self._normalize_source_value(raw, node.get("valueType", "default"))
+            total += max(0.0, watts_for_value_type(raw, node.get("valueType", "default")))
         return total
 
     def _compute_derived_powers(

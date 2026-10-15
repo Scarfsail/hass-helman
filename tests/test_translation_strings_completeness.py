@@ -58,12 +58,7 @@ def _load_entity_translation_keys() -> set[str]:
                 "consumers": [],
             }
         ),
-        collect_qualifying_nodes=Mock(
-            return_value={"house": "sensor.house_power"}
-        ),
-        collect_share_devices=Mock(
-            return_value={"klima-obyvak": ("sensor.helman_share_power_klima_obyvak", "Klima")}
-        ),
+        tree_index=SimpleNamespace(qualifying_nodes={"house": "sensor.house_power"}, share_devices={"klima-obyvak": ("sensor.helman_share_power_klima_obyvak", "Klima")}),
         config={},
         set_sensors=Mock(),
         set_entity_factory=Mock(),

@@ -4,6 +4,7 @@ from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
 from functools import partial
 from typing import Literal
+from types import MappingProxyType
 
 from homeassistant.core import HomeAssistant
 
@@ -33,6 +34,80 @@ from .power_polarity import consumer_value_type, source_value_type
 def share_power_entity_id(device_id: str) -> str:
     """The Helman sensor publishing a meterless child's share of its parent's power."""
     return f"sensor.helman_share_power_{share_sensor_slug(device_id)}"
+
+
+def unmeasured_power_entity_id(node_id: str) -> str:
+    """Keep the historical leading-sensor-prefix rule for remainder sensors."""
+    return f"sensor.helman_unmeasured_power_{node_id.removeprefix('sensor.')}"
+
+
+@dataclass(frozen=True)
+class TreeIndex:
+    qualifying_nodes: Mapping[str, str | None]
+    share_devices: Mapping[str, tuple[str, str]]
+    power_sensor_ids: frozenset[str]
+    source_sensor_ids: tuple[str, ...]
+    source_ratio_entity_ids: Mapping[str, str]
+    source_value_types: Mapping[str, str]
+    virtual_sensor_ids: frozenset[str]
+    unmeasured_entity_id_map: Mapping[str, str]
+
+    @classmethod
+    def from_tree(cls, tree: dict) -> TreeIndex:
+        """Index static memberships once, preserving the source order and node rules."""
+        qualifying: dict[str, str | None] = {}
+        shares: dict[str, tuple[str, str]] = {}
+        powers: set[str] = set()
+        virtual: set[str] = set()
+        unmeasured: dict[str, str] = {}
+
+        def walk(nodes: list[dict], *, consumers: bool) -> None:
+            for node in nodes:
+                power = node.get("powerSensorId")
+                children = node.get("children", [])
+                if power:
+                    powers.add(power)
+                if consumers:
+                    if not node.get("isVirtual"):
+                        if any(child.get("isUnmeasured") for child in children):
+                            qualifying[node["id"]] = power
+                        for child in children:
+                            if child.get("isUnmeasured") and child.get("powerSensorId"):
+                                unmeasured[node["id"]] = child["powerSensorId"]
+                    if power and (node.get("isUnmeasured") or node.get("isEstimated")):
+                        virtual.add(power)
+                    if power and node.get("isEstimated"):
+                        shares[node["id"]] = (power, node.get("displayName") or node["id"])
+                walk(children, consumers=consumers)
+
+        sources = tree.get("sources", [])
+        walk(sources, consumers=False)
+        walk(tree.get("consumers", []), consumers=True)
+        return cls(
+            qualifying_nodes=MappingProxyType(qualifying),
+            share_devices=MappingProxyType(shares),
+            power_sensor_ids=frozenset(powers),
+            source_sensor_ids=tuple(
+                node["powerSensorId"] for node in sources if node.get("powerSensorId")
+            ),
+            source_ratio_entity_ids=MappingProxyType({
+                node["powerSensorId"]: node["ratioSensorId"]
+                for node in sources
+                if node.get("powerSensorId") and node.get("ratioSensorId")
+            }),
+            source_value_types=MappingProxyType({
+                node["powerSensorId"]: node.get("valueType", "default")
+                for node in sources if node.get("powerSensorId")
+            }),
+            virtual_sensor_ids=frozenset(virtual),
+            unmeasured_entity_id_map=MappingProxyType(unmeasured),
+        )
+
+
+@dataclass(frozen=True)
+class DeviceTree:
+    tree: dict
+    index: TreeIndex
 
 
 @dataclass
@@ -125,8 +200,8 @@ class HelmanTreeBuilder:
     def _visualization(self) -> dict:
         return read_visualization(self._config)
 
-    async def build(self) -> dict:
-        """Build and return the full device tree as a serializable dict."""
+    async def build(self) -> DeviceTree:
+        """Build the serializable tree together with its static runtime index."""
         energy_nodes = self._config.get("energy_nodes", {})
         visualization = self._visualization()
         groupings = read_groupings(self._config)
@@ -218,7 +293,7 @@ class HelmanTreeBuilder:
                 icon="mdi:transmission-tower-import",
             ))
 
-        return {
+        tree = {
             "sources": [s.to_dict() for s in sources],
             "consumers": [c.to_dict() for c in consumers],
             "consumptionTotalSensorId": CONSUMPTION_TOTAL_ENTITY_ID,
@@ -231,6 +306,8 @@ class HelmanTreeBuilder:
                 "history_bucket_duration": visualization["history_bucket_duration"],
             },
         }
+
+        return DeviceTree(tree, TreeIndex.from_tree(tree))
 
     def _make_source_node(
         self,
@@ -449,14 +526,12 @@ class HelmanTreeBuilder:
             slug = item.id.replace(".", "_")
             # The tree item's own ``id`` keeps the historical dot-to-underscore
             # slug -- it is only a frontend list key. ``power_sensor_id`` is the
-            # actual Helman entity id, which ``HelmanUnmeasuredPowerSensor``
-            # builds by stripping a leading "sensor." rather than underscoring
-            # it, so it is computed separately here to match.
-            entity_slug = item.id.removeprefix("sensor.")
+            # actual Helman entity id, shared with the sensor platform through
+            # ``unmeasured_power_entity_id`` (strip a leading "sensor.").
             unmeasured = TreeItemDTO(
                 id=f"{slug}_unmeasured",
                 display_name="",
-                power_sensor_id=f"sensor.helman_unmeasured_power_{entity_slug}",
+                power_sensor_id=unmeasured_power_entity_id(item.id),
                 switch_entity_id=None,
                 is_source=False,
                 is_unmeasured=True,

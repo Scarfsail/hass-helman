@@ -10,6 +10,8 @@ is tested, not a hand-written tree.
 """
 
 from __future__ import annotations
+
+from custom_components.helman.tree_builder import TreeIndex
 from tests._fakes import make_coordinator
 
 import asyncio
@@ -104,17 +106,17 @@ def _make_coordinator(
         },
     }
     hass = SimpleNamespace(states=_States(states))
-    tree = asyncio.run(tree_builder.HelmanTreeBuilder(hass, config).build())
+    tree = asyncio.run(tree_builder.HelmanTreeBuilder(hass, config).build()).tree
 
     c = make_coordinator()
     c._active_config = config
     c._hass = hass
     c._cached_tree = tree
     c._unmeasured_raw_history = {}
-    c._power_sensor_ids = c._collect_power_sensor_ids(tree)
+    c._power_sensor_ids = list(TreeIndex.from_tree(tree).power_sensor_ids)
     c._source_ratio_entity_ids = {}
     c._shared_meter_weights = dict(weights or {})
-    c._init_buffers(tree)
+    c._init_buffers(tree, TreeIndex.from_tree(tree))
     return c
 
 
@@ -169,7 +171,7 @@ class SharePowerTests(unittest.TestCase):
                 state.attributes["unit_of_measurement"] = "kW"
             return state
         c._hass.states.get = get
-        c._init_buffers(c._cached_tree)
+        c._init_buffers(c._cached_tree, TreeIndex.from_tree(c._cached_tree))
         c._unmeasured_sensors = {house["id"]: _Sensor()}
         c._share_sensors = {}
         c._battery_time_to_full = c._battery_time_to_empty = None
@@ -268,8 +270,8 @@ class SharePowerTests(unittest.TestCase):
         del c._active_config["devices"]["consumers"][0]["consumption"]["power_entity_id"]
         c._cached_tree = asyncio.run(
             tree_builder.HelmanTreeBuilder(c._hass, c._active_config).build()
-        )
-        c._init_buffers(c._cached_tree)
+        ).tree
+        c._init_buffers(c._cached_tree, TreeIndex.from_tree(c._cached_tree))
 
         unmeasured, shares = c._compute_derived_powers()
 

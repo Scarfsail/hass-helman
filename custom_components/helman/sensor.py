@@ -10,6 +10,7 @@ from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .battery_state import read_battery_entities
+from .tree_builder import unmeasured_power_entity_id
 
 from .const import (
     CONSUMPTION_TOTAL_ENTITY_ID,
@@ -25,16 +26,6 @@ from .const import (
 _HYSTERESIS_W: float = 5.0
 _HYSTERESIS_MAX_GAP_S: float = 30.0
 
-
-def _unmeasured_slug(node_id: str) -> str:
-    """The id portion the unmeasured entity id and unique id are built from.
-
-    The node id *is* the source entity id for every non-root node (the tree
-    walks ``included_in_stat`` and the root is the sole exception, named
-    ``"house"``), so a leading ``sensor.`` is stripped rather than kept as a
-    stuttering ``sensor_`` fragment in the Helman entity's own id.
-    """
-    return node_id.removeprefix("sensor.")
 
 
 class _HelmanDeviceEntity(SensorEntity):
@@ -65,8 +56,8 @@ async def async_setup_entry(
     coordinator = hass.data[DOMAIN]["coordinator"]
 
     tree = await coordinator.get_device_tree()
-    qualifying_nodes = coordinator.collect_qualifying_nodes(tree)
-    share_devices = coordinator.collect_share_devices(tree)
+    qualifying_nodes = coordinator.tree_index.qualifying_nodes
+    share_devices = coordinator.tree_index.share_devices
 
     battery_entities = read_battery_entities(coordinator.config)
     required_battery_ids = [
@@ -310,8 +301,8 @@ class HelmanUnmeasuredPowerSensor(_HelmanDerivedPowerSensor):
     ) -> None:
         super().__init__(coordinator, entry)
         self._parent_sensor_id = parent_sensor_id
-        slug = _unmeasured_slug(node_id)
-        self.entity_id = f"sensor.helman_unmeasured_power_{slug}"
+        slug = node_id.removeprefix("sensor.")
+        self.entity_id = unmeasured_power_entity_id(node_id)
         self._attr_unique_id = f"{entry.entry_id}_unmeasured_power_{slug}"
         parent_state = hass.states.get(parent_sensor_id) if parent_sensor_id else None
         parent_name = (

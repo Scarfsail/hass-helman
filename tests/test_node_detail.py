@@ -14,10 +14,26 @@ from homeassistant.util import dt as dt_util
 from custom_components.helman import websockets as websockets_module
 from custom_components.helman.node_details import (
     NodeDetailError,
-    async_get_node_detail,
+    async_get_node_detail as get_detail,
+    NodeDetailContext,
 )
 from custom_components.helman.node_details import day_stats
 from custom_components.helman.vendors import PROFILES, DeviceTelemetry
+
+def resolve_detail_telemetry(hass, config):
+    return {}
+
+
+async def async_get_node_detail(hass, config, **kwargs):
+    coordinator = getattr(hass, "data", {}).get("helman", {}).get("coordinator")
+    ctx = NodeDetailContext(
+        config=config,
+        telemetry=resolve_detail_telemetry(hass, config),
+        device_report=getattr(coordinator, "async_device_report", None),
+        house_profile=getattr(coordinator, "house_profile", (None, None)),
+    )
+    return await get_detail(hass, ctx, **kwargs)
+
 
 PRAGUE = ZoneInfo("Europe/Prague")
 UTC = timezone.utc
@@ -94,7 +110,7 @@ def overview(states, *, cfg=None, tele=None):
     cfg = config() if cfg is None else cfg
     with (
         patch(
-            "custom_components.helman.node_details.inverter.resolve_vendor_telemetry",
+            "test_node_detail.resolve_detail_telemetry",
             return_value=telemetry() if tele is None else tele,
         ),
         patch("custom_components.helman.vendors.resolve_unique_ids", side_effect=resolve_controls),
@@ -166,7 +182,7 @@ def test_a_section_reads_only_its_history():
 
     with (
         patch(
-            "custom_components.helman.node_details.inverter.resolve_vendor_telemetry",
+            "test_node_detail.resolve_detail_telemetry",
             return_value=telemetry(),
         ),
         patch(
@@ -196,7 +212,7 @@ def test_a_section_reads_only_its_history():
 
 def test_a_section_without_its_sensor_is_a_typed_null():
     with patch(
-        "custom_components.helman.node_details.inverter.resolve_vendor_telemetry",
+        "test_node_detail.resolve_detail_telemetry",
         return_value=telemetry({"inverter_temperature": None}),
     ):
         payload = asyncio.run(
@@ -323,7 +339,7 @@ def modes_section(history, *, live=None, cfg=None, tele=None):
     }
     with (
         patch(
-            "custom_components.helman.node_details.inverter.resolve_vendor_telemetry",
+            "test_node_detail.resolve_detail_telemetry",
             return_value=telemetry() if tele is None else tele,
         ),
         patch("custom_components.helman.vendors.resolve_unique_ids", side_effect=resolve_controls),
@@ -611,7 +627,7 @@ def test_websocket_errors_carry_the_registry_code():
         send_result=lambda *args: sent.append(("result", args)),
         send_error=lambda msg_id, code, message: sent.append(("error", code)),
     )
-    hass = NS(data={"helman": {"coordinator": NS(config=config())}})
+    hass = NS(data={"helman": {"coordinator": NS(config=config(), vendor_telemetry={}, async_device_report=None, house_profile=(None, None))}})
 
     asyncio.run(
         websockets_module.ws_get_node_detail.__wrapped__(
@@ -652,7 +668,7 @@ def grid_detail(*, cfg=None, tele=None, section=None, day_stats_result=None, sta
 
     with (
         patch(
-            "custom_components.helman.node_details.grid.resolve_vendor_telemetry",
+            "test_node_detail.resolve_detail_telemetry",
             return_value=telemetry(GRID_TELEMETRY) if tele is None else tele,
         ),
         patch(
@@ -921,7 +937,7 @@ def battery_detail(*, cfg=None, tele=None, states=None, section=None, report=Non
         data={"helman": {"coordinator": NS(async_device_report=device_report)}},
     )
     with patch(
-        "custom_components.helman.node_details.battery.resolve_vendor_telemetry",
+        "test_node_detail.resolve_detail_telemetry",
         return_value=telemetry(BATTERY_TELEMETRY) if tele is None else tele,
     ):
         payload = asyncio.run(
@@ -1182,7 +1198,7 @@ def solar_detail(*, cfg=None, tele=None, section=None, day_stats_result=None, st
     hass.data = {"helman": {"coordinator": NS(async_device_report=device_report)}}
     with (
         patch(
-            "custom_components.helman.node_details.solar.resolve_vendor_telemetry",
+            "test_node_detail.resolve_detail_telemetry",
             return_value=telemetry(SOLAR_TELEMETRY) if tele is None else tele,
         ),
         patch(
@@ -1685,7 +1701,7 @@ def house_detail(
     }
     with (
         patch(
-            "custom_components.helman.node_details.house.resolve_vendor_telemetry",
+            "test_node_detail.resolve_detail_telemetry",
             return_value=telemetry({"run_mode": RUN_MODE, **{f"eps_power_l{p}": e for p, e in EPS.items()}})
             if tele is None
             else tele,
@@ -2114,7 +2130,7 @@ def ev_detail(
         data={"helman": {"coordinator": NS(async_device_report=device_report)}},
     )
     with patch(
-        "custom_components.helman.node_details.ev_charger.resolve_vendor_telemetry",
+        "test_node_detail.resolve_detail_telemetry",
         return_value=ev_telemetry() if tele is None else tele,
     ), patch(
         "custom_components.helman.node_details.ev_charger.async_state_history",
@@ -2341,7 +2357,7 @@ def test_the_charging_stretches_are_read_through_the_one_state_history_read():
               return_value=NS(async_add_executor_job=_executor)),
         patch("homeassistant.components.recorder.history.get_significant_states",
               get_significant_states),
-        patch("custom_components.helman.node_details.ev_charger.resolve_vendor_telemetry",
+        patch("test_node_detail.resolve_detail_telemetry",
               return_value=ev_telemetry()),
     ):
         segment = asyncio.run(

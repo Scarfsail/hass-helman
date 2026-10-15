@@ -4,7 +4,7 @@ import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
 
-from ..solar_bias_correction.websocket import _get_coordinator, _require_admin
+from ..ws_common import get_coordinator
 
 #: The batch's sub-jobs, in batch order.
 _JOB_IDS = ("solar_bias", "house_consumption", "appliance_energy")
@@ -15,6 +15,7 @@ _JOB_IDS = ("solar_bias", "house_consumption", "appliance_energy")
         vol.Required("type"): "helman/training/status",
     }
 )
+@websocket_api.require_admin
 @callback
 def ws_get_training_status(
     hass: HomeAssistant,
@@ -23,8 +24,6 @@ def ws_get_training_status(
 ) -> None:
     """Every training job's status. Admin only: its one consumer is the config
     editor, and it carries entity ids, appliance ids and raw exception text."""
-    if not _require_admin(connection, msg):
-        return
     coordinator = _get_training_coordinator(hass, connection, msg)
     if coordinator is None:
         return
@@ -38,6 +37,7 @@ def ws_get_training_status(
         vol.Optional("job"): vol.In(_JOB_IDS),
     }
 )
+@websocket_api.require_admin
 @websocket_api.async_response
 async def ws_train_now(
     hass: HomeAssistant,
@@ -50,17 +50,15 @@ async def ws_train_now(
     startup and config-save triggers, but a click on one job must never be
     answered with the outcome of a different run it happened to join.
     """
-    if not _require_admin(connection, msg):
-        return
     run_coordinator = _get_training_coordinator(hass, connection, msg)
     if run_coordinator is None:
         return
 
-    batch = run_coordinator._training_batch
+    batch = run_coordinator.training_batch
     job = msg.get("job")
     # No await from here until the run is dispatched: the busy check and the
     # dispatch are atomic on the event loop.
-    solar_service = run_coordinator._solar_bias_service
+    solar_service = run_coordinator.solar_bias_service
     if batch.is_running:
         current_job = batch.current_job
         connection.send_error(
@@ -112,10 +110,10 @@ def _get_training_coordinator(
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ):
-    coordinator = _get_coordinator(hass, connection, msg)
+    coordinator = get_coordinator(hass, connection, msg)
     if coordinator is None:
         return None
-    if getattr(coordinator, "_training_batch", None) is None:
+    if coordinator.training_batch is None:
         connection.send_error(
             msg["id"], "not_loaded", "Helman training batch not available"
         )
