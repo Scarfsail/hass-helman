@@ -4958,13 +4958,15 @@ export class HelmanConfigEditorPanel
         this._scopeYamlValues = {};
         this._deviceYamlValues = {};
       }
+      if (response.validation?.valid !== false) {
+        await this._rebaselineConfig();
+        this._staleConfigNotice = false;
+      }
       if (response.success) {
         // The document this save wrote is what the editor now agrees with, so
         // the reload's own announcements compare equal and say nothing. Re-read
         // rather than reuse the draft: the backend stamps `config_version` on
         // write, and the baseline has to be what a later read will return.
-        await this._rebaselineConfig();
-        this._staleConfigNotice = false;
         this._liveApplianceMetadata = await this._loadLiveApplianceMetadata();
         // The tree is built from the saved config, so a device just added or
         // re-metered only becomes clickable once it is re-read.

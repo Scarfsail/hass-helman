@@ -10,6 +10,7 @@ import { applyValueType, InverterDetailPayload, TreeItemDTO, TreePayload } from 
 import { hydrateItem } from "./tree-item-hydrator";
 import { HistoryEngine } from "./history-engine";
 import { getSharedHelmanStore } from "./store";
+import { getSharedDataChangedFeed } from "./data-changed";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import {
     buildNodeDetailParams,
@@ -67,6 +68,8 @@ export class HelmanCard extends LitElement implements LovelaceCard {
      */
     private _loadGeneration = 0;
     private _localize?: LocalizeFunction;
+    private _localizeLanguage?: string;
+    private _unsubscribeDataChanged?: () => void;
     private _sourceNodes: TreeItem[] = [];
     private _watchedEntityIds: Set<string> = new Set();
     /** Entity ids the schedule editor host resolved, folded into the filter. */
@@ -111,9 +114,21 @@ export class HelmanCard extends LitElement implements LovelaceCard {
     public set hass(hass: HomeAssistant) {
         const previous = this._latestHass;
         this._latestHass = hass;
-        if (!this._localize) this._localize = getLocalizeFunction(hass);
+        const language = hass.locale?.language ?? hass.language;
+        const languageChanged = language !== this._localizeLanguage;
+        if (languageChanged || !this._localize) {
+            this._localizeLanguage = language;
+            this._localize = getLocalizeFunction({ ...hass, language });
+            if (languageChanged && this._deviceTree.length) {
+                for (const item of this._deviceTree) {
+                    if (item.id === "sources") item.name = this._localize("card.sources_title");
+                    if (item.id === "consumers") item.name = this._localize("card.consumers_title");
+                }
+                this._deviceTree = [...this._deviceTree];
+            }
+        }
 
-        if (!previous) {
+        if (!previous || languageChanged) {
             this._hass = hass;
             return;
         }
@@ -152,6 +167,9 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         this.addEventListener("show-node-detail", this._handleShowNodeDetail);
         this.addEventListener("show-device-detail", this._handleShowDeviceDetail);
         if (this._latestHass) {
+            this._unsubscribeDataChanged = getSharedDataChangedFeed(this._latestHass).subscribe((kinds) => {
+                if (kinds.has("config")) void this._loadBackendData(true);
+            });
             await this._loadBackendData();
         }
     }
@@ -162,6 +180,8 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         this.removeEventListener(WATCHED_ENTITIES_EVENT, this._handleWatchedEntities);
         this.removeEventListener("show-node-detail", this._handleShowNodeDetail);
         this.removeEventListener("show-device-detail", this._handleShowDeviceDetail);
+        this._unsubscribeDataChanged?.();
+        this._unsubscribeDataChanged = undefined;
         this._loadGeneration += 1;
         this._historyEngine?.stop();
     }
@@ -379,7 +399,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         };
     }
 
-    private async _loadBackendData(): Promise<void> {
+    private async _loadBackendData(freshTree = false): Promise<void> {
         const generation = ++this._loadGeneration;
         // Superseded by a later load, or the card is gone. Either way this
         // response belongs to nobody: commit none of it.
@@ -387,7 +407,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         this._historyEngine?.stop();
         try {
             const store = getSharedHelmanStore(this._latestHass!);
-            const treePayload = await store.getDeviceTree();
+            const treePayload = await store.getDeviceTree({ fresh: freshTree });
             if (obsolete()) return;
             this._uiConfig = treePayload.uiConfig;
             this._deviceTree = this._hydrateTreeItems(treePayload);

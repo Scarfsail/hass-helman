@@ -430,7 +430,7 @@ export class HelmanDeviceEditDialog extends LitElement {
         }
         try {
             const current = asJsonObject(await this.hass.callWS<unknown>({ type: "helman/get_config" }));
-            if (current === null) {
+            if (current === undefined) {
                 return "unknown";
             }
             return canonicalJson(current) === this._baseline ? "same" : "changed";

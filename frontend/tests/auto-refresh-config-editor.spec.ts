@@ -109,13 +109,9 @@ async function mountEditor(page: Page): Promise<Locator> {
                     }) => {
                         saveCalls += 1;
                         const succeeded = window.__saveSucceeds;
-                        if (succeeded) {
-                            stored = request.config;
-                        }
+                        stored = { ...(request.config as Record<string, unknown>), config_version: 30 };
                         queueMicrotask(() => {
-                            if (succeeded) {
-                                window.__fireDataChanged("config");
-                            }
+                            window.__fireDataChanged("config");
                         });
                         return {
                             success: succeeded,
@@ -244,4 +240,18 @@ test("the machine that saved hears its own write and ignores it", async ({ page 
         "The stored config changed elsewhere — reload to see it",
     );
     expect(await readBadges(page)).not.toContain("Unsaved changes");
+});
+
+test("a landed save whose reload failed does not report its own write as an external change", async ({ page }) => {
+    await mountEditor(page);
+    await makeDirty(page);
+    await page.evaluate(() => { window.__saveSucceeds = false; });
+    await page.evaluate(() => {
+        const button = Array.from(document.querySelector("helman-config-editor-panel")?.shadowRoot?.querySelectorAll("button") ?? [])
+            .find((candidate) => /save/i.test(candidate.textContent ?? ""));
+        (button as HTMLButtonElement | undefined)?.click();
+    });
+    await expect.poll(() => page.evaluate(() => window.__saveCalls())).toBe(1);
+    await page.waitForTimeout(600);
+    expect(await readBadges(page)).not.toContain("The stored config changed elsewhere — reload to see it");
 });

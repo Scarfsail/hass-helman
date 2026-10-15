@@ -576,7 +576,7 @@ export class HelmanOptimizerEditDialog extends LitElement {
         }
         try {
             const current = asJsonObject(await this.hass.callWS<unknown>({ type: "helman/get_config" }));
-            if (current === null) {
+            if (current === undefined) {
                 return "unknown";
             }
             return canonicalJson(current) === this._baseline ? "same" : "changed";
@@ -631,7 +631,7 @@ export class HelmanOptimizerEditDialog extends LitElement {
         }
         try {
             const current = asJsonObject(await this.hass.callWS<unknown>({ type: "helman/get_config" }));
-            if (current !== null) {
+            if (current !== undefined) {
                 this._baseline = canonicalJson(current);
             }
         } catch {
@@ -665,6 +665,7 @@ export class HelmanOptimizerEditDialog extends LitElement {
 
     /** Closing on an unsaved draft asks first; the draft is the user's work. */
     private _handleCloseRequest = (): void => {
+        if (this._saving) return;
         if (this._dirty && !window.confirm(this._text("discard"))) {
             return;
         }
@@ -692,9 +693,14 @@ export class HelmanOptimizerEditDialog extends LitElement {
         // Ours, so it stops here: the day editor this is mounted inside hides
         // through an `ha-dialog` of its own, and the event's path crosses it.
         event.stopPropagation();
-        if (this._closing || !this._dirty) {
+        if (this._closing) {
             return;
         }
+        if (this._saving) {
+            event.preventDefault();
+            return;
+        }
+        if (!this._dirty) return;
         event.preventDefault();
         if (window.confirm(this._text("discard"))) {
             this._close();
