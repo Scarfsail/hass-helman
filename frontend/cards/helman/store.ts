@@ -161,8 +161,11 @@ class HelmanStoreImpl implements HelmanStore {
      * ask together. `fresh` skips joining a request sent before a state changed.
      */
     public getNodeDetail<T>(request: Omit<GetNodeDetailRequest, "type">, options?: { fresh?: boolean }): Promise<T> {
-        if (options?.fresh) return this._client.getNodeDetail<T>(request);
         const key = `get_node_detail:${request.node}:${request.device_id ?? ""}:${request.section ?? ""}`;
+        // A config refresh replaces the inverter overview for every card sharing
+        // this connection, including one mounted while the new read is pending.
+        if (options?.fresh && request.node === "inverter" && !request.section) this._inFlight.delete(key);
+        else if (options?.fresh) return this._client.getNodeDetail<T>(request);
         return this._dedupe(key, () => this._client.getNodeDetail<T>(request));
     }
 }

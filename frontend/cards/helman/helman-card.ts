@@ -120,9 +120,10 @@ export class HelmanCard extends LitElement implements LovelaceCard {
             this._localizeLanguage = language;
             this._localize = getLocalizeFunction({ ...hass, language });
             if (languageChanged && this._deviceTree.length) {
-                for (const item of this._deviceTree) {
+                for (const item of HistoryEngine.walkTree(this._deviceTree)) {
                     if (item.id === "sources") item.name = this._localize("card.sources_title");
                     if (item.id === "consumers") item.name = this._localize("card.consumers_title");
+                    if (item.isUnmeasured) item.name = this._localize("house_section.unmeasured");
                 }
                 this._deviceTree = [...this._deviceTree];
             }
@@ -412,6 +413,13 @@ export class HelmanCard extends LitElement implements LovelaceCard {
             this._uiConfig = treePayload.uiConfig;
             this._deviceTree = this._hydrateTreeItems(treePayload);
             this._sourceNodes = this._collectSourceNodes(this._deviceTree);
+            if (this._dialogRequest instanceof TreeItem) {
+                const old = this._dialogRequest;
+                this._dialogRequest = HistoryEngine.walkTree(this._deviceTree)
+                    .find((item) => item.id === old.id && item.isSource === old.isSource) ?? null;
+                this._detailEntityIds = [];
+            }
+            if (freshTree) this._inverter = null;
             this._rebuildWatchedEntityIds();
 
             const history = await store.getHistory();
@@ -432,7 +440,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
                 () => this._sourceNodes,
             );
             engine.advanceBuckets(this._deviceTree, this._sourceNodes);
-            void this._loadInverter(obsolete);
+            void this._loadInverter(obsolete, freshTree);
         } catch (error) {
             // Logged even for an obsolete load: the guard is there to keep stale data
             // out of the card, not to hide a backend failure that raced a detach.
@@ -441,10 +449,10 @@ export class HelmanCard extends LitElement implements LovelaceCard {
     }
 
     /** The inverter overview, after the card has drawn: a failure only leaves the cell out. */
-    private async _loadInverter(obsolete: () => boolean): Promise<void> {
+    private async _loadInverter(obsolete: () => boolean, fresh: boolean): Promise<void> {
         try {
             const payload = await getSharedHelmanStore(this._latestHass!)
-                .getNodeDetail<InverterDetailPayload>({ node: "inverter" });
+                .getNodeDetail<InverterDetailPayload>({ node: "inverter" }, { fresh });
             if (obsolete()) return;
             this._inverter = payload;
             this._rebuildWatchedEntityIds();
@@ -517,7 +525,8 @@ export class HelmanCard extends LitElement implements LovelaceCard {
 
         // Also watch battery SOC/remaining-energy entities so the dialog
         // reflects live values even when no power/ratio entity changed.
-        const { sourcesChildren, consumersChildren } = this._computedNodes ?? {};
+        const sourcesChildren = this._deviceTree.find((item) => item.id === "sources")?.children;
+        const consumersChildren = this._deviceTree.find((item) => item.id === "consumers")?.children;
         const batteryProducerNode = sourcesChildren?.find((n) => n.sourceType === "battery");
         const batteryConsumerNode = consumersChildren?.find((n) => n.sourceType === "battery");
         const batteryConfig = (batteryProducerNode?.nodeConfig ?? batteryConsumerNode?.nodeConfig) as import("./energy-node-config").BatteryNodeConfig | undefined;

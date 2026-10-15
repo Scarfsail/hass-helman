@@ -258,6 +258,11 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         if (languageChanged || !this._localize) {
             this._localizeLanguage = language;
             this._localize = getLocalizeFunction({ ...hass, language });
+            if (languageChanged) {
+                for (const item of HistoryEngine.walkTree(this._topLevelNodes())) {
+                    if (item.isUnmeasured) item.name = this._localize("house_section.unmeasured");
+                }
+            }
         }
 
         if (!previous || languageChanged || this._watchedEntityIds.size === 0) {
@@ -457,10 +462,10 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
     };
 
     /** The inverter overview, after the card has drawn: a failure only leaves the cell out. */
-    private async _loadInverter(obsolete: () => boolean): Promise<void> {
+    private async _loadInverter(obsolete: () => boolean, fresh: boolean): Promise<void> {
         try {
             const payload = await getSharedHelmanStore(this._latestHass!)
-                .getNodeDetail<InverterDetailPayload>({ node: "inverter" });
+                .getNodeDetail<InverterDetailPayload>({ node: "inverter" }, { fresh });
             if (obsolete()) return;
             this._inverter = payload;
             this._rebuildWatchedEntityIds();
@@ -551,7 +556,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             if (this._houseDTO) {
                 this._houseNode = this._hydrateItem(this._houseDTO, histBuckets);
                 if (!this._houseNode.sourceType) this._houseNode.sourceType = 'house';
-            }
+            } else this._houseNode = null;
 
             this._productionNode  = payload.productionTotalSensorId
                 ? new TreeItem('production-total', '', payload.productionTotalSensorId, null, histBuckets)
@@ -561,6 +566,14 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
                 ? new TreeItem('consumption-total', '', payload.consumptionTotalSensorId, null, histBuckets)
                 : null;
             if (this._consumptionNode) this._consumptionNode.isSource = true;
+
+            if (this._dialogRequest instanceof TreeItem) {
+                const old = this._dialogRequest;
+                this._dialogRequest = HistoryEngine.walkTree(this._topLevelNodes())
+                    .find((item) => item.id === old.id && item.isSource === old.isSource) ?? null;
+                this._detailEntityIds = [];
+            }
+            if (freshTree) this._inverter = null;
 
             const history = await store.getHistory();
             if (obsolete()) return false;
@@ -578,7 +591,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             );
             engine.advanceBuckets(this._topLevelNodes(), this._sourceNodes);
             this._rebuildWatchedEntityIds();
-            void this._loadInverter(obsolete);
+            void this._loadInverter(obsolete, freshTree);
             return true;
         } catch (err) {
             // Logged even for an obsolete load: the guard is there to keep stale data

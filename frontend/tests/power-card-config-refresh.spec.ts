@@ -1,9 +1,127 @@
 import { test, expect } from "@playwright/test";
 import { CARD_BUNDLE } from "./support/card-page";
 import { installMockHass } from "./support/mock-hass";
-import { cardTree } from "./support/payload-builders";
+import { cardTree, treeNode } from "./support/payload-builders";
 
 for (const tag of ["helman-card", "helman-simple-card"] as const) {
+    test(`${tag} keeps a refreshed inverter when the older overview resolves last`, async ({ page }) => {
+        await page.setContent("<!doctype html><html><body></body></html>");
+        await installMockHass(page);
+        await page.evaluate((tree) => {
+            const releases: Array<() => void> = [];
+            (window as any).__releaseInverter = (index: number) => releases[index]();
+            (window as any).__hass = {
+                ...window.__mockHass({
+                    "helman/get_device_tree": tree,
+                    "helman/get_history": { entity_history: {} },
+                    "helman/get_node_detail": () => new Promise((resolve) => {
+                        const index = releases.length;
+                        releases.push(() => resolve({ entities: { link_success_rate: index === 0 ? "sensor.old_inverter" : "sensor.new_inverter" } }));
+                    }),
+                }),
+                language: "en", locale: { language: "en" }, config: { time_zone: "UTC" }, states: {},
+            };
+        }, cardTree());
+        await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
+        await page.evaluate((name) => {
+            const card = document.createElement(name) as any;
+            card.setConfig({ type: `custom:${name}` });
+            card.hass = (window as any).__hass;
+            document.body.appendChild(card);
+        }, tag);
+        const inverterRequests = () => page.evaluate(() => window.__mockRequests.filter((request) => request.type === "helman/get_node_detail" && request.node === "inverter").length);
+        await expect.poll(inverterRequests).toBe(1);
+        await page.evaluate(() => window.__fireDataChanged("config"));
+        await expect.poll(inverterRequests).toBe(2);
+        await page.evaluate((name) => {
+            const card = document.createElement(name) as any;
+            card.setConfig({ type: `custom:${name}` });
+            card.hass = (window as any).__hass;
+            card.id = "late-card";
+            document.body.appendChild(card);
+        }, tag);
+        await expect.poll(() => page.evaluate(() => !!(document.getElementById("late-card") as any)?._historyEngine)).toBe(true);
+        expect(await inverterRequests()).toBe(2);
+        await page.evaluate(() => (window as any).__releaseInverter(1));
+        await expect.poll(() => page.evaluate((name) => (document.querySelector(name) as any)._inverter?.entities.link_success_rate, tag)).toBe("sensor.new_inverter");
+        await expect.poll(() => page.evaluate(() => (document.getElementById("late-card") as any)._inverter?.entities.link_success_rate)).toBe("sensor.new_inverter");
+        await page.evaluate(() => (window as any).__releaseInverter(0));
+        expect(await page.evaluate((name) => {
+            const card = document.querySelector(name) as any;
+            return { inverter: card._inverter?.entities.link_success_rate, oldWatched: card._watchedEntityIds.has("sensor.old_inverter"), newWatched: card._watchedEntityIds.has("sensor.new_inverter") };
+        }, tag)).toEqual({ inverter: "sensor.new_inverter", oldWatched: false, newWatched: true });
+    });
+
+    test(`${tag} remaps an open device detail to the refreshed tree`, async ({ page }) => {
+        await page.setContent("<!doctype html><html><body></body></html>");
+        await installMockHass(page);
+        const initial = cardTree();
+        initial.consumers[0].children = [treeNode({ id: "appliance", displayName: "Old appliance", powerSensorId: "sensor.old_appliance", energyEntityId: "sensor.appliance_energy" })];
+        await page.evaluate((tree) => {
+            (window as any).__tree = tree;
+            (window as any).__hass = {
+                ...window.__mockHass({ "helman/get_device_tree": () => (window as any).__tree, "helman/get_history": { entity_history: {} } }),
+                language: "en", locale: { language: "en" }, config: { time_zone: "UTC" }, states: {},
+            };
+        }, initial);
+        await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
+        await page.evaluate((name) => {
+            const card = document.createElement(name) as any;
+            card.setConfig({ type: `custom:${name}` });
+            card.hass = (window as any).__hass;
+            document.body.appendChild(card);
+        }, tag);
+        await expect.poll(() => page.evaluate((name) => {
+            const card = document.querySelector(name) as any;
+            return name === "helman-card" ? card._deviceTree[1]?.children[0]?.children.length : card._houseNode?.children.length;
+        }, tag)).toBe(1);
+        await page.evaluate((name) => {
+            const card = document.querySelector(name) as any;
+            card._dialogRequest = name === "helman-card" ? card._deviceTree[1].children[0].children[0] : card._houseNode.children[0];
+            card._detailEntityIds = ["sensor.old_appliance"];
+            card._rebuildWatchedEntityIds();
+            const next = structuredClone((window as any).__tree);
+            next.consumers[0].children[0].displayName = "New appliance";
+            next.consumers[0].children[0].powerSensorId = "sensor.new_appliance";
+            (window as any).__tree = next;
+            window.__fireDataChanged("config");
+        }, tag);
+        await expect.poll(() => page.evaluate((name) => (document.querySelector(name) as any)._dialogRequest?.name, tag)).toBe("New appliance");
+        expect(await page.evaluate((name) => {
+            const card = document.querySelector(name) as any;
+            return { sensor: card._dialogRequest?.powerSensorId, oldWatched: card._watchedEntityIds.has("sensor.old_appliance"), newWatched: card._watchedEntityIds.has("sensor.new_appliance") };
+        }, tag)).toEqual({ sensor: "sensor.new_appliance", oldWatched: false, newWatched: true });
+        await page.evaluate(() => {
+            const next = structuredClone((window as any).__tree);
+            next.consumers[0].children = [];
+            (window as any).__tree = next;
+            window.__fireDataChanged("config");
+        });
+        await expect.poll(() => page.evaluate((name) => (document.querySelector(name) as any)._dialogRequest, tag)).toBeNull();
+        expect(await page.evaluate((name) => (document.querySelector(name) as any)._watchedEntityIds.has("sensor.new_appliance"), tag)).toBe(false);
+    });
+
+    test(`${tag} relocalizes nested unmeasured rows`, async ({ page }) => {
+        await page.setContent("<!doctype html><html><body></body></html>");
+        await installMockHass(page);
+        const tree = cardTree();
+        tree.consumers[0].children = [treeNode({ id: "remainder", displayName: "", isUnmeasured: true })];
+        await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
+        const names = await page.evaluate(async ({ name, tree }) => {
+            const card = document.createElement(name) as any;
+            card.setConfig({ type: `custom:${name}` });
+            card.hass = { ...window.__mockHass({ "helman/get_device_tree": tree, "helman/get_history": { entity_history: {} } }), language: "en", locale: { language: "en" }, config: { time_zone: "UTC" }, states: {} };
+            document.body.appendChild(card);
+            const remainder = () => name === "helman-card" ? card._deviceTree[1]?.children[0]?.children[0] : card._houseNode?.children[0];
+            while (!remainder()) await new Promise((resolve) => setTimeout(resolve, 10));
+            const before = remainder().name;
+            card.hass = { ...card._latestHass, language: "cs", locale: { language: "cs" } };
+            await card.updateComplete;
+            return { before, after: remainder().name };
+        }, { name: tag, tree });
+        expect(names).toEqual({ before: "👻 Untracked consumption", after: "👻 Nesledovaná spotřeba" });
+    });
+
     test(`${tag} shares the fresh tree with cards mounted after a config announcement`, async ({ page }) => {
         await page.setContent("<!doctype html><html><body></body></html>");
         await installMockHass(page);
