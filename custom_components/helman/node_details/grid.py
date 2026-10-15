@@ -19,6 +19,8 @@ from typing import Any
 
 from homeassistant.util import dt as dt_util
 
+from ..span_history_model import read_span_meters
+
 from ..vendors import INVERTER_TELEMETRY_KEY, resolve_vendor_telemetry
 from .day_stats import BUCKET, async_day_stats, day_window
 from .inverter import run_mode_condition
@@ -64,13 +66,19 @@ def build_grid_overview(
     if not isinstance(grid_entities, Mapping):
         grid_entities = {}
 
+    meters = read_span_meters(config)
     entities: dict[str, str | None] = {}
     if telemetry is not None:
         for key in _TELEMETRY_KEYS:
             if key in telemetry.entities:
                 entities[key] = telemetry.entities[key]
     for key, slot in _CONFIG_ENTITIES.items():
-        entity_id = grid_entities.get(slot)
+        if slot == "today_import":
+            entity_id = meters.grid_import
+        elif slot == "today_export":
+            entity_id = meters.grid_export
+        else:
+            entity_id = grid_entities.get(slot)
         entities[key] = entity_id if isinstance(entity_id, str) and entity_id else None
 
     return {

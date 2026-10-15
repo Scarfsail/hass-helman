@@ -2,11 +2,9 @@
 #
 # Run the Python unit test suite one process per file, JOBS files at a time.
 #
-# WHY per-file: many test modules install their own conflicting ``sys.modules``
-# stubs at import time (some need the real ``homeassistant`` package present,
-# others need it absent). Importing them all into a single ``pytest tests/``
-# process causes cross-file pollution and spurious failures. Running each file
-# in a fresh interpreter keeps them isolated. See tests/conftest.py.
+# Each file runs in a fresh interpreter for independent results and parallel
+# execution. The shared tests/conftest.py also isolates module imports when the
+# suite runs together with pytest tests/.
 #
 # Parallelism: files run JOBS at a time (default: $(nproc)), each still in its
 # own interpreter. Every file's output is captured separately, and once all of

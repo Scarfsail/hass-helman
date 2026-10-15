@@ -1,9 +1,11 @@
 from __future__ import annotations
+import sys
+import types
+from _fakes import _bias_service_config
+
 
 from _fakes import DummyStore as _DummyStore
 
-import sys
-import types
 import unittest
 from datetime import date, datetime
 from types import SimpleNamespace
@@ -140,7 +142,7 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
             _DummyStore(),
             _make_cfg(),
             battery_forecast_provider=_battery_forecast_provider,
-            battery_soc_entity_id_provider=lambda: "sensor.battery_soc",
+            config=_bias_service_config(_make_cfg(), soc="sensor.battery_soc"),
         )
         service._profile = models.SolarBiasProfile(factors={}, omitted_slots=[])
         service._metadata = models.SolarBiasMetadata(
@@ -311,7 +313,7 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
                 {"timestamp": f"{TODAY}T10:30:00+02:00", "nonDeferrable": {"value": 0.5}},
             ],
         }
-        service._house_scheduled_consumers_provider = lambda: SCHEDULED_CONSUMERS
+        service._house_scheduled_consumers = lambda: SCHEDULED_CONSUMERS
         service._house_forecast_composition_provider = lambda: {
             "original_house_forecast": {
                 "status": "available",
@@ -505,9 +507,7 @@ class TestInspectorForecastComposition(_InspectorHarness):
     def _service(self, snapshot=None, *, composition=..., consumers=None):
         service = super()._service(snapshot or _snapshot())
         service._house_forecast_snapshot_provider = lambda: ADJUSTED_HOUSE_FORECAST
-        service._house_scheduled_consumers_provider = lambda: (
-            SCHEDULED_CONSUMERS if consumers is None else consumers
-        )
+        service._house_scheduled_consumers = lambda: SCHEDULED_CONSUMERS if consumers is None else consumers
         if composition is ...:
             composition = {
                 "original_house_forecast": ORIGINAL_HOUSE_FORECAST,

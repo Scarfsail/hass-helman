@@ -6,6 +6,8 @@ from typing import Any
 
 from homeassistant.util import dt as dt_util
 
+from .config_read import parse_timestamp
+
 from .const import (
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
 )
@@ -36,7 +38,7 @@ def build_house_forecast_response(
         return response
 
     current_slot = snapshot.get("currentSlot")
-    current_slot_start = _parse_timestamp(
+    current_slot_start = parse_timestamp(
         current_slot.get("timestamp") if isinstance(current_slot, dict) else None
     )
     if current_slot_start is None:
@@ -101,7 +103,7 @@ def _build_actual_history(
     for entry in raw_history:
         if not isinstance(entry, dict):
             continue
-        timestamp = _parse_timestamp(entry.get("timestamp"))
+        timestamp = parse_timestamp(entry.get("timestamp"))
         if timestamp is None or dt_util.as_utc(timestamp) >= current_slot_start_utc:
             continue
         filtered_entries.append(deepcopy(entry))
@@ -112,7 +114,7 @@ def _build_entry_map(snapshot: dict[str, Any]) -> dict[datetime, dict[str, Any]]
     result: dict[datetime, dict[str, Any]] = {}
     current_slot = snapshot.get("currentSlot")
     if isinstance(current_slot, dict):
-        current_slot_start = _parse_timestamp(current_slot.get("timestamp"))
+        current_slot_start = parse_timestamp(current_slot.get("timestamp"))
         if current_slot_start is not None:
             result[current_slot_start] = deepcopy(current_slot)
 
@@ -123,17 +125,11 @@ def _build_entry_map(snapshot: dict[str, Any]) -> dict[datetime, dict[str, Any]]
     for entry in series:
         if not isinstance(entry, dict):
             continue
-        slot_start = _parse_timestamp(entry.get("timestamp"))
+        slot_start = parse_timestamp(entry.get("timestamp"))
         if slot_start is None:
             continue
         result[slot_start] = deepcopy(entry)
     return result
-
-
-def _parse_timestamp(raw_value: Any) -> datetime | None:
-    if not isinstance(raw_value, str):
-        return None
-    return dt_util.parse_datetime(raw_value)
 
 
 def _require_dict(raw_value: Any) -> dict[str, Any]:

@@ -10,6 +10,8 @@ from zoneinfo import ZoneInfo
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from .config_read import read_mapping, read_entity_id, read_float
+
 from .const import FORECAST_CANONICAL_GRANULARITY_MINUTES, MAX_FORECAST_DAYS
 
 _LOGGER = logging.getLogger(__name__)
@@ -68,11 +70,11 @@ class GridPriceForecastBuilder:
         Elapsed entries are kept alongside future ones -- the schedule is what
         the source said, not a forward horizon.
         """
-        energy_nodes = self._read_dict(self._config.get("energy_nodes"))
-        grid_config = self._read_dict(energy_nodes.get("grid"))
-        grid_forecast = self._read_dict(grid_config.get("forecast"))
+        energy_nodes = read_mapping(self._config.get("energy_nodes"))
+        grid_config = read_mapping(energy_nodes.get("grid"))
+        grid_forecast = read_mapping(grid_config.get("forecast"))
 
-        sell_price_entity_id = self._read_entity_id(
+        sell_price_entity_id = read_entity_id(
             grid_forecast.get("sell_price_entity_id")
         )
         if sell_price_entity_id is None:
@@ -83,7 +85,7 @@ class GridPriceForecastBuilder:
         # publishes ``nan`` must not reach the mirror's state, where the
         # recorder would compile it into the long-term series the aggregate
         # money views price off, poisoning that bucket for good.
-        current_price = self._read_float(state.state) if state is not None else None
+        current_price = read_float(state.state) if state is not None else None
         if current_price is not None and not isfinite(current_price):
             current_price = None
         unit = self._read_unit_from_state(state) if state is not None else None
@@ -95,7 +97,7 @@ class GridPriceForecastBuilder:
                 if parsed_timestamp is None:
                     continue
 
-                value = self._read_float(raw_value)
+                value = read_float(raw_value)
                 if value is None or not isfinite(value):
                     continue
 
@@ -268,38 +270,6 @@ class GridPriceForecastBuilder:
         return self._hass.states.get(entity_id)
 
     @staticmethod
-    def _read_dict(raw_value: Any) -> dict[str, Any]:
-        if isinstance(raw_value, dict):
-            return raw_value
-        return {}
-
-    @staticmethod
-    def _read_entity_id(raw_value: Any) -> str | None:
-        if isinstance(raw_value, str) and raw_value.strip():
-            return raw_value.strip()
-        return None
-
-    @staticmethod
-    def _read_float(raw_value: Any) -> float | None:
-        if isinstance(raw_value, bool) or raw_value is None:
-            return None
-
-        if isinstance(raw_value, (int, float)):
-            return float(raw_value)
-
-        if isinstance(raw_value, str):
-            stripped = raw_value.strip()
-            if not stripped or stripped.lower() in {"unknown", "unavailable", "none"}:
-                return None
-
-            try:
-                return float(stripped)
-            except ValueError:
-                return None
-
-        return None
-
-    @staticmethod
     def _read_unit_from_state(state) -> str | None:
         if state is None:
             return None
@@ -361,9 +331,9 @@ class GridPriceForecastBuilder:
 def read_grid_import_price_config(
     config: dict[str, Any] | Any,
 ) -> FixedGridImportPriceConfig | None:
-    energy_nodes = GridPriceForecastBuilder._read_dict(config.get("energy_nodes"))
-    grid_config = GridPriceForecastBuilder._read_dict(energy_nodes.get("grid"))
-    grid_forecast = GridPriceForecastBuilder._read_dict(grid_config.get("forecast"))
+    energy_nodes = read_mapping(config.get("energy_nodes"))
+    grid_config = read_mapping(energy_nodes.get("grid"))
+    grid_forecast = read_mapping(grid_config.get("forecast"))
 
     raw_unit = grid_forecast.get("import_price_unit")
     raw_windows = grid_forecast.get("import_price_windows")
@@ -437,7 +407,7 @@ def _read_grid_import_price_window(
             f"energy_nodes.grid.forecast.import_price_windows[{index}] must not have the same start and end"
         )
 
-    price = GridPriceForecastBuilder._read_float(raw_value.get("price"))
+    price = read_float(raw_value.get("price"))
     if price is None:
         raise GridImportPriceConfigError(
             f"energy_nodes.grid.forecast.import_price_windows[{index}].price must be numeric"
@@ -477,3 +447,18 @@ def _grid_import_window_contains_minute(
     if window.start_minutes < window.end_minutes:
         return window.start_minutes <= minute_of_day < window.end_minutes
     return minute_of_day >= window.start_minutes or minute_of_day < window.end_minutes
+
+
+def read_grid_entities(config: dict[str, Any]) -> dict[str, str | None]:
+    """The grid's configured entity ids, normalized once for all consumers."""
+    energy_nodes = read_mapping(config.get("energy_nodes"))
+    grid = read_mapping(energy_nodes.get("grid"))
+    entities = read_mapping(grid.get("entities"))
+    return {key: read_entity_id(value) for key, value in entities.items()}
+
+
+def read_grid_sell_price_entity_id(config: dict[str, Any]) -> str | None:
+    energy_nodes = read_mapping(config.get("energy_nodes"))
+    grid = read_mapping(energy_nodes.get("grid"))
+    forecast = read_mapping(grid.get("forecast"))
+    return read_entity_id(forecast.get("sell_price_entity_id"))

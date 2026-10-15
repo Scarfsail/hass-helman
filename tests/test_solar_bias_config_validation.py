@@ -432,3 +432,40 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_bias_numeric_validation_codes_are_stable():
+    cases = [
+        ("clamp_min", True, "invalid_type"),
+        ("clamp_min", -1, "invalid_range"),
+        ("clamp_max", "2", "invalid_type"),
+        ("clamp_max", 11, "invalid_range"),
+        ("max_interpolated_consecutive_slots", True, "invalid_value"),
+        ("max_interpolated_consecutive_slots", 25, "invalid_value"),
+        ("min_history_days", False, "invalid_range"),
+        ("slot_invalidation.max_battery_soc_percent", "90", "invalid_type"),
+        ("slot_invalidation.max_battery_soc_percent", 101, "invalid_range"),
+        ("slot_invalidation.curtailment_max_export_w", -1, "invalid_range"),
+    ]
+    for key, value, code in cases:
+        config = _valid_config()
+        bias = config.setdefault("training", {}).setdefault("solar_bias", {})
+        if "." in key:
+            parent, leaf = key.split(".")
+            bias[parent] = {leaf: value}
+        else:
+            bias[key] = value
+        report = validate_config_document(config)
+        assert any(
+            e.path == "training.solar_bias." + key and e.code == code
+            for e in report.errors
+        ), (key, report.errors)
+
+
+def test_bias_total_energy_entity_id_is_validated():
+    config = _valid_config()
+    config.setdefault("training", {})["solar_bias"] = {
+        "total_energy_entity_id": "invalid"
+    }
+    report = validate_config_document(config)
+    assert any(e.path == "training.solar_bias.total_energy_entity_id" and e.code == "invalid_entity_id" for e in report.errors)

@@ -21,6 +21,8 @@ from typing import Any
 
 from homeassistant.util import dt as dt_util
 
+from ..span_history_model import read_span_meters
+
 from ..battery_state import (
     read_battery_entity_config,
     read_battery_forecast_settings,
@@ -116,9 +118,15 @@ def build_battery_overview(
     if not isinstance(battery_entities, Mapping):
         battery_entities = {}
 
+    meters = read_span_meters(config)
     entities: dict[str, str | None] = {}
     for key, slot in _CONFIG_ENTITIES.items():
-        entity_id = battery_entities.get(slot)
+        if slot == "today_charge_energy":
+            entity_id = meters.battery_charge
+        elif slot == "today_discharge_energy":
+            entity_id = meters.battery_discharge
+        else:
+            entity_id = battery_entities.get(slot)
         entities[key] = entity_id if isinstance(entity_id, str) and entity_id else None
     entities.update(helman_sensor_ids(hass, TIME_SENSORS))
     if telemetry is not None:

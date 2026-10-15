@@ -20,6 +20,8 @@ of ``test_inspector_recorder_query_count.py``.
 """
 
 from __future__ import annotations
+from _fakes import _bias_service_config
+
 
 from _fakes import DummyStore as _DummyStore
 
@@ -219,13 +221,16 @@ def _make_service(*, import_price_config=None):
         hass,
         _DummyStore(),
         cfg,
-        house_energy_entity_id_provider=lambda: HOUSE_METER,
-        grid_import_energy_entity_id_provider=lambda: GRID_IMPORT_METER,
-        grid_export_energy_entity_id_provider=lambda: GRID_EXPORT_METER,
-        battery_charge_energy_entity_id_provider=lambda: BATTERY_CHARGE_METER,
-        battery_discharge_energy_entity_id_provider=lambda: BATTERY_DISCHARGE_METER,
-        battery_soc_entity_id_provider=lambda: BATTERY_SOC,
-        grid_import_price_config_provider=lambda: import_price_config,
+        config=_bias_service_config(
+            cfg,
+            house=HOUSE_METER,
+            grid_import=GRID_IMPORT_METER,
+            grid_export=GRID_EXPORT_METER,
+            battery_charge=BATTERY_CHARGE_METER,
+            battery_discharge=BATTERY_DISCHARGE_METER,
+            price=import_price_config,
+            soc=BATTERY_SOC,
+        ),
     )
 
 
@@ -255,9 +260,9 @@ def _make_service_with_consumers():
             {"energy_entity_id": FRIDGE_METER, "label": "Fridge"},
         ]
 
-    service._house_deferrable_consumers_provider = lambda: [
+    service._house_deferrable_consumers = lambda: service._normalize_consumers([
         {"energy_entity_id": WASHER_METER, "label": "Washer", "ids": ["washer"]}
-    ]
+    ], deferrable=True)
     service._house_device_consumers_provider = _device_consumers
     return service
 
@@ -661,14 +666,14 @@ class TestHouseBreakdown(unittest.IsolatedAsyncioTestCase):
             }
         )
         service = _make_service_with_consumers()
-        service._house_deferrable_consumers_provider = lambda: [
+        service._house_deferrable_consumers = lambda: service._normalize_consumers([
             {
                 "energy_entity_id": WASHER_METER,
                 "label": "Washer",
                 "ids": ["washer"],
                 "metered_children": [FRIDGE_METER],
             }
-        ]
+        ], deferrable=True)
 
         payload = await service.async_get_span_aggregates(
             "2026-04-23", "2026-04-23", house_breakdown=True

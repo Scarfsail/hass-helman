@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.util import dt as dt_util
 
+from .config_read import parse_timestamp, read_float
+
 from .battery_slot_simulation import (
     is_baseline_schedule_action,
     is_supported_schedule_action,
@@ -465,7 +467,7 @@ class BatteryCapacityForecastBuilder:
         current_slot = house_forecast.get("currentSlot")
 
         if isinstance(current_slot, dict):
-            timestamp = self._parse_timestamp(current_slot.get("timestamp"))
+            timestamp = parse_timestamp(current_slot.get("timestamp"))
             if (
                 timestamp is not None
                 and dt_util.as_local(timestamp) == current_slot_start
@@ -481,7 +483,7 @@ class BatteryCapacityForecastBuilder:
         current_slot = house_forecast.get("currentSlot")
         if not isinstance(current_slot, dict):
             return "absent"
-        timestamp = self._parse_timestamp(current_slot.get("timestamp"))
+        timestamp = parse_timestamp(current_slot.get("timestamp"))
         return "unparseable" if timestamp is None else timestamp.isoformat()
 
     def _build_house_series_map(self, house_forecast: dict[str, Any]) -> dict[datetime, float]:
@@ -494,7 +496,7 @@ class BatteryCapacityForecastBuilder:
             if not isinstance(entry, dict):
                 continue
 
-            timestamp = self._parse_timestamp(entry.get("timestamp"))
+            timestamp = parse_timestamp(entry.get("timestamp"))
             value = self._read_house_entry_value(entry)
             if timestamp is None or value is None:
                 continue
@@ -513,8 +515,8 @@ class BatteryCapacityForecastBuilder:
             if not isinstance(point, dict):
                 continue
 
-            timestamp = self._parse_timestamp(point.get("timestamp"))
-            value = self._read_float(point.get("value"))
+            timestamp = parse_timestamp(point.get("timestamp"))
+            value = read_float(point.get("value"))
             if timestamp is None or value is None:
                 continue
 
@@ -550,13 +552,7 @@ class BatteryCapacityForecastBuilder:
         non_deferrable = entry.get("nonDeferrable")
         if not isinstance(non_deferrable, dict):
             return None
-        return BatteryCapacityForecastBuilder._read_float(non_deferrable.get("value"))
-
-    @staticmethod
-    def _parse_timestamp(raw_value: Any) -> datetime | None:
-        if not isinstance(raw_value, str):
-            return None
-        return dt_util.parse_datetime(raw_value)
+        return read_float(non_deferrable.get("value"))
 
     @staticmethod
     def _advance_slots(value: datetime, *, slot_count: int) -> datetime:
@@ -654,23 +650,3 @@ class BatteryCapacityForecastBuilder:
                 schedule_adjustment_coverage_until
             )
         return payload
-
-    @staticmethod
-    def _read_float(raw_value: Any) -> float | None:
-        if isinstance(raw_value, bool) or raw_value is None:
-            return None
-
-        if isinstance(raw_value, (int, float)):
-            return float(raw_value)
-
-        if isinstance(raw_value, str):
-            stripped = raw_value.strip()
-            if not stripped or stripped.lower() in {"unknown", "unavailable", "none"}:
-                return None
-
-            try:
-                return float(stripped)
-            except ValueError:
-                return None
-
-        return None

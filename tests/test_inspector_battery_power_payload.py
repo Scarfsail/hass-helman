@@ -1,9 +1,11 @@
 from __future__ import annotations
+import sys
+import types
+from _fakes import _bias_service_config
+
 
 from _fakes import DummyStore as _DummyStore
 
-import sys
-import types
 import unittest
 from datetime import date, datetime
 from types import SimpleNamespace
@@ -113,8 +115,11 @@ class TestLoadBatteryActual(unittest.IsolatedAsyncioTestCase):
             hass,
             _DummyStore(),
             _make_cfg(),
-            battery_charge_energy_entity_id_provider=lambda: charge_entity,
-            battery_discharge_energy_entity_id_provider=lambda: discharge_entity,
+            config=_bias_service_config(
+                _make_cfg(),
+                battery_charge=charge_entity,
+                battery_discharge=discharge_entity,
+            ),
         )
 
     async def test_nets_the_two_meters_per_slot(self):
@@ -199,7 +204,7 @@ class TestRecordedBatteryForecastPoints(unittest.IsolatedAsyncioTestCase):
             hass,
             _DummyStore(),
             _make_cfg(),
-        )
+         config=_bias_service_config(_make_cfg()),)
 
     def _loader(self, *, soc=None, grid_net=None, battery_net=None):
         return AsyncMock(
