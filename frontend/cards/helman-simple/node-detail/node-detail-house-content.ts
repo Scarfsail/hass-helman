@@ -36,7 +36,8 @@ import {
 import { todayIso } from "../../shared/today-iso";
 import "../../helman-device-reports/device-report-ranking";
 import { IDLE_W, NodeDetailContentBase, TODAY_REFRESH_MS, type NodeFlow, type SectionState } from "./node-detail-base";
-import { powerUnitFactor, readingNumber } from "./node-detail-readings";
+import { readingNumber } from "./node-detail-readings";
+import { powerUnitFactor, readPowerW } from "../../shared/power-reading";
 import { dayKey, todayAndTomorrow } from "./node-detail-schedule";
 import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { HouseDetailParams } from "./node-detail-types";
@@ -1406,16 +1407,10 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
 
     // ── Readings and formatting ─────────────────────────────────────────────
 
-    /**
-     * The card's live house reading in W, `null` while the sensor has no
-     * reading. The card passes the value as read, so the sensor's unit
-     * converts it; a unit-less sensor is W, as on the card.
-     */
+    /** The card passes its live house reading in W, preserving its polarity. */
     private _powerNow(): number | null {
         const entityId = this._overview.status === "ready" ? this._overview.payload.entities.power : null;
-        if (!entityId || readingNumber(this.hass, entityId) === null) return null;
-        const factor = powerUnitFactor(this.hass, entityId);
-        return factor === null ? null : this.params.power * factor;
+        return readPowerW(this.hass, entityId) === null ? null : this.params.power;
     }
 
     private _periodText(payload: { period: { start: string }; asOf: string }): string {

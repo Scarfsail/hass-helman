@@ -31,6 +31,7 @@ from typing import Any
 from homeassistant.util import dt as dt_util
 
 from ..power_polarity import is_power_inverted
+from ..power_reading import WATTS
 from ..vendors import INVERTER_TELEMETRY_KEY, resolve_vendor_telemetry
 from .battery import charge_origin_kwh, today_ranking_report
 from .day_stats import BUCKET, async_day_stats, day_window
@@ -50,9 +51,6 @@ _TELEMETRY_KEYS = (
     "manual_mode",
     "run_mode",
 )
-
-#: Power units a day of power is converted from, to W. Any other is not guessed at.
-_WATTS = {"W": 1.0, "kW": 1000.0, "MW": 1_000_000.0}
 
 
 def build_solar_overview(
@@ -168,7 +166,7 @@ def in_watts(day: Mapping[str, Any], *, inverted: bool = False) -> dict[str, Any
     An inverted sensor reads production negative: its values are negated, and
     its lowest reading becomes the highest production.
     """
-    factor = _WATTS.get(day.get("unit") or "W")
+    factor = WATTS.get(day.get("unit") or "W")
     if factor is None:
         return None
     scale = -factor if inverted else factor

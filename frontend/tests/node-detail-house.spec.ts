@@ -29,6 +29,7 @@ type Variant = {
     profile?: boolean;
     /** The house power sensor's state, W. */
     power?: string;
+    powerUnit?: string;
     /** The solar, battery (charging positive) and grid (importing positive) sensors' states, W. */
     solar?: string;
     battery?: string;
@@ -94,7 +95,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             "sensor.solar": s(v.solar ?? "3000", "W"),
             "sensor.grid": s(v.grid ?? "2000", "W"),
             "sensor.battery": s(v.battery ?? "-1000", "W"),
-            "sensor.house": s(v.power ?? "7800", "W"),
+            "sensor.house": s(v.power ?? "7800", v.powerUnit ?? "W"),
             "sensor.kitchen_power": s("1500", "W"),
             "sensor.oven_power": s("1000", "W"),
             "sensor.helman_unmeasured_power_kitchen_energy": s("500", "W"),
@@ -898,4 +899,10 @@ test.describe("screenshots", { tag: "@screens" }, () => {
             });
         }
     }
+});
+
+test("the house detail receives watts exactly once from a kW sensor", async ({ page }) => {
+    await mount(page, { power: "2.4", powerUnit: "kW" });
+    await openDetail(page);
+    await expect(content(page).locator("[data-overview] .status")).toHaveText("Using 2.4 kW.");
 });

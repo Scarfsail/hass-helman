@@ -27,7 +27,8 @@ import "../../shared/day-line-chart";
 import type { DayLineSeries } from "../../shared/day-line-chart";
 import type { FlowItem } from "../../shared/node-flow";
 import { IDLE_W, NodeDetailContentBase, TODAY_REFRESH_MS, type NodeFlow, type SectionState } from "./node-detail-base";
-import { powerUnitFactor, readEnergyKWh, WATTS } from "./node-detail-readings";
+import { readEnergyKWh } from "./node-detail-readings";
+import { WATTS } from "../../shared/power-reading";
 import {
     currentRun,
     currentRuntime,
@@ -1338,17 +1339,9 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
 
     // ── Readings and formatting ─────────────────────────────────────────────
 
-    /** A power reading in W, `null` when missing, not numeric or in another unit. */
-    /**
-     * The card's live solar reading in W. The card passes the sensor's value
-     * as read, so the sensor's unit converts it; a unit-less sensor is W, as on
-     * the card, and an unknown unit is no reading.
-     */
+    /** The card passes its live solar reading in W, or null when unreadable. */
     private _powerNow(): number | null {
-        const power = this.params.power;
-        if (power === null) return null;
-        const factor = powerUnitFactor(this.hass, this._overview.status === "ready" ? this._overview.payload.entities.power : null);
-        return factor === null ? null : power * factor;
+        return this.params.power;
     }
 
     private _watts(overview: SolarDetailPayload, key: string): number | null {

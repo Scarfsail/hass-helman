@@ -28,7 +28,8 @@ import "./simple-card-house";
 import { computeDominantSourceColorCached } from "../color-utils";
 import { getFlowColor, getFlowGlow } from "./flow-colors";
 import { DEFAULT_SOLAR_MAX_W, IDLE_W, liveFlows, type LiveFlows } from "./live-flows";
-import { powerUnitFactor, readingNumber } from "./node-detail/node-detail-readings";
+import { readingNumber } from "./node-detail/node-detail-readings";
+import { powerUnitFactor, readPowerW } from "../shared/power-reading";
 
 // ──────────────────────────────── Internal model ──────────────────────────────
 
@@ -672,20 +673,18 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
     };
 
     private _readEnergyValues(hass: HomeAssistant, map: EnergyEntityMap): EnergyValues {
-        const rawPower = (entityId: string | null): number =>
-            entityId ? parseFloat(hass.states[entityId]?.state ?? "0") || 0 : 0;
+        const rawPower = (entityId: string | null): number => readPowerW(hass, entityId) ?? 0;
 
-        const batterySoc = Math.max(0, Math.min(100, rawPower(map.batterySocEntityId)));
-        const gridRaw = map.gridPowerEntityId ? parseFloat(hass.states[map.gridPowerEntityId]?.state ?? "") : NaN;
-        const gridReading = Number.isFinite(gridRaw) ? gridRaw : null;
-        const batteryRaw = map.batteryPowerEntityId ? parseFloat(hass.states[map.batteryPowerEntityId]?.state ?? "") : NaN;
-        const batteryReading = Number.isFinite(batteryRaw) ? (map.batteryInverted ? -batteryRaw : batteryRaw) : null;
-        const solarRaw = map.solarPowerEntityId ? parseFloat(hass.states[map.solarPowerEntityId]?.state ?? "") : NaN;
-        const solarPower = applyValueType(Number.isFinite(solarRaw) ? solarRaw : 0, map.solarValueType);
+        const batterySoc = Math.max(0, Math.min(100, (readingNumber(hass, map.batterySocEntityId) ?? 0)));
+        const gridReading = readPowerW(hass, map.gridPowerEntityId);
+        const batteryRaw = readPowerW(hass, map.batteryPowerEntityId);
+        const batteryReading = batteryRaw === null ? null : map.batteryInverted ? -batteryRaw : batteryRaw;
+        const solarRaw = readPowerW(hass, map.solarPowerEntityId);
+        const solarPower = applyValueType(solarRaw ?? 0, map.solarValueType);
 
         return {
             solarPower,
-            solarPowerReading: Number.isFinite(solarRaw) ? solarPower : null,
+            solarPowerReading: solarRaw === null ? null : solarPower,
             gridPower:    applyValueType(rawPower(map.gridPowerEntityId),    map.gridValueType),
             gridPowerSigned: gridReading === null ? null : map.gridValueType === "negative" ? -gridReading : gridReading,
             batteryPower: map.batteryInverted
@@ -693,13 +692,12 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
                 : rawPower(map.batteryPowerEntityId),
             batteryPowerReading: batteryReading,
             batterySoc,
-            batteryMinSoc: rawPower(map.batteryMinSocEntityId) || 10,
+            batteryMinSoc: readingNumber(hass, map.batteryMinSocEntityId) || 10,
             // applyValueType("default") passes the raw value through, so the
             // clamp this card has always applied stays outside it. For an
             // inverted house sensor the value is already a magnitude.
             housePower:   Math.max(0, applyValueType(rawPower(map.housePowerEntityId), map.houseValueType)),
-            houseReadable: map.housePowerEntityId !== null
-                && Number.isFinite(parseFloat(hass.states[map.housePowerEntityId]?.state ?? "")),
+            houseReadable: readPowerW(hass, map.housePowerEntityId) !== null,
         };
     }
 

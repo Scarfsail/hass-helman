@@ -1,3 +1,4 @@
+import { readPowerW } from "../shared/power-reading";
 import type { HomeAssistant } from "../../types/ha";
 import { HistoryPayload, applyValueType } from "../helman-api";
 import { TreeItem } from "./tree-item";
@@ -122,7 +123,7 @@ export class HistoryEngine {
                 item.powerHistory.shift();
             }
             if (item.powerSensorId) {
-                const rawPower = parseFloat(hass.states[item.powerSensorId]?.state ?? '0') || 0;
+                const rawPower = readPowerW(hass, item.powerSensorId) ?? 0;
                 const power = applyValueType(rawPower, item.valueType);
                 if (item.powerHistory.length === 0) item.powerHistory.push(0);
                 item.powerHistory[item.powerHistory.length - 1] = power;

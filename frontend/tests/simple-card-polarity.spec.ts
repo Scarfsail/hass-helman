@@ -119,3 +119,26 @@ test("a missing sensor still reads zero on either convention", async ({ page }) 
     }));
     expect(values).toEqual({ batteryPower: -0, housePower: 0 });
 });
+
+test("power units convert live while SOC remains a percentage", async ({ page }) => {
+    await loadBundle(page, "helman-simple-card");
+    const values = await page.evaluate((map) => {
+        const card = document.createElement("helman-simple-card") as any;
+        const states: Record<string, any> = {
+            "sensor.house_power": { state: "2.4", attributes: { unit_of_measurement: "kW" } },
+            "sensor.battery_power": { state: "-0.001", attributes: { unit_of_measurement: "MW" } },
+            "sensor.solar": { state: "4.2", attributes: { unit_of_measurement: "kW" } },
+            "sensor.soc": { state: "75", attributes: { unit_of_measurement: "%" } },
+        };
+        const read = () => card._readEnergyValues({ states }, map);
+        const first = read();
+        states["sensor.house_power"].attributes.unit_of_measurement = "W";
+        const second = read();
+        states["sensor.house_power"].attributes.unit_of_measurement = "VA";
+        const unknown = read();
+        return { first, second, unknown };
+    }, entityMap({ solarPowerEntityId: "sensor.solar", batterySocEntityId: "sensor.soc" }));
+    expect(values.first).toMatchObject({ housePower: 2400, solarPower: 4200, solarPowerReading: 4200, batteryPower: -1000, batterySoc: 75 });
+    expect(values.second.housePower).toBe(2.4);
+    expect(values.unknown).toMatchObject({ housePower: 0, houseReadable: false });
+});
