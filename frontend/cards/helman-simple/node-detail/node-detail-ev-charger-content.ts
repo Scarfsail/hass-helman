@@ -29,7 +29,8 @@ import { resolveScheduleSlotBoundaries, type ScheduleSlotBoundary } from "../../
 import { getSharedScheduleOwner } from "../../shared/schedule/schedule-owner";
 import { DEFAULT_SOLAR_MAX_W } from "../live-flows";
 import { IDLE_W, NodeDetailContentBase, TODAY_REFRESH_MS, type FlowNode, type NodeFlow, type SectionState } from "./node-detail-base";
-import { announceWatchedEntities, powerUnitFactor, readEnergyKWh, readingNumber } from "./node-detail-readings";
+import { announceWatchedEntities, readEnergyKWh, readingNumber } from "./node-detail-readings";
+import { powerUnitFactor } from "../../shared/power-reading";
 import { dayKey, todayAndTomorrow } from "./node-detail-schedule";
 import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { DeviceDetailParams } from "./node-detail-types";

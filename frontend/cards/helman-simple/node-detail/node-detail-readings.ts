@@ -17,18 +17,6 @@ export function readingText(
     return unit ? stateObj.state + " " + unit : stateObj.state;
 }
 
-/** Power units a reading converts from, to W; any other is no reading. */
-export const WATTS: Record<string, number> = { W: 1, kW: 1000, MW: 1_000_000 };
-
-/**
- * What a power reading multiplies by to be W: a unit-less sensor is W, as on
- * the card; `null` in a unit not known.
- */
-export function powerUnitFactor(hass: HomeAssistant, entityId: string | null | undefined): number | null {
-    const unit = entityId ? hass.states[entityId]?.attributes.unit_of_measurement as string | undefined : undefined;
-    return unit ? WATTS[unit] ?? null : 1;
-}
-
 /** A reading as a number, `null` when missing or not numeric. */
 export function readingNumber(hass: HomeAssistant, entityId: string | null | undefined): number | null {
     const raw = entityId ? hass.states[entityId]?.state : undefined;

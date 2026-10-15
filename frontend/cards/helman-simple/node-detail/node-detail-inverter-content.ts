@@ -35,7 +35,7 @@ import {
     todayAndTomorrow,
     type ScheduleRun,
 } from "./node-detail-schedule";
-import { powerUnitFactor } from "./node-detail-readings";
+import { powerUnitFactor } from "../../shared/power-reading";
 import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { InverterDetailParams } from "./node-detail-types";
 

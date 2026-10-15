@@ -1,3 +1,4 @@
+import { readPowerW } from "../shared/power-reading";
 import { LitElement, css, html } from "lit-element"
 import { customElement, state } from "lit/decorators.js";
 import type { HomeAssistant, LovelaceCard, LovelaceCardEditor } from "../../types/ha";
@@ -338,10 +339,8 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         const batteryConsumerNode = consumersChildren.find((device) => device.sourceType === "battery") ?? null;
         // The open detail reads the sensors' current states, signed as the
         // simple card signs them; the tree's powerValue moves only on history ticks.
-        const raw = (entityId: string | null | undefined): number | null => {
-            const value = entityId ? parseFloat(this._hass?.states[entityId]?.state ?? "") : NaN;
-            return Number.isFinite(value) ? value : null;
-        };
+        const raw = (entityId: string | null | undefined): number | null =>
+            this._hass ? readPowerW(this._hass, entityId) : null;
         const batteryNode = batteryProducerNode ?? batteryConsumerNode;
         const batteryRaw = raw(batteryNode?.powerSensorId);
         const solarRaw = raw(solarNode?.powerSensorId);

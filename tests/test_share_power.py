@@ -145,6 +145,43 @@ class SharePowerTests(unittest.TestCase):
         )
         return c, _tick(c)
 
+    def test_power_reading_converts_live_units_before_polarity(self) -> None:
+        c = _make_coordinator({HOUSE: "2.4"})
+        for unit, expected in (("kW", 2400), ("KW", 2400), ("kw", 2400), ("MW", 2400000), ("mW", None), ("W", 2.4), ("w", 2.4), (None, 2.4), ("VA", None)):
+            with self.subTest(unit=unit):
+                c._hass.states.get = lambda entity_id: SimpleNamespace(
+                    state="-2.4", attributes={"unit_of_measurement": unit}
+                )
+                self.assertEqual(c._read_power_or_none(HOUSE, "negative"), expected)
+
+    def test_tick_converts_mixed_units_before_computing_remainder(self) -> None:
+        c = _make_coordinator({HOUSE: "2.4", BREAKER_POWER: "150", HEATER_POWER: "500"})
+        house = c._cached_tree["consumers"][0]
+        house["children"] = [
+            {"id": "a", "powerSensorId": BREAKER_POWER, "children": []},
+            {"id": "b", "powerSensorId": HEATER_POWER, "children": []},
+            {"id": "rest", "powerSensorId": "sensor.house_rest", "isUnmeasured": True, "children": []},
+        ]
+        original_get = c._hass.states.get
+        def get(entity_id):
+            state = original_get(entity_id)
+            if state is not None and entity_id == HOUSE:
+                state.attributes["unit_of_measurement"] = "kW"
+            return state
+        c._hass.states.get = get
+        c._init_buffers(c._cached_tree)
+        c._unmeasured_sensors = {house["id"]: _Sensor()}
+        c._share_sensors = {}
+        c._battery_time_to_full = c._battery_time_to_empty = None
+        c._consumption_total_sensor = c._production_total_sensor = None
+        c._house_consumption_sensors = []
+        c._source_ratio_sensors = {}
+        c._source_sensor_ids = []
+
+        c._tick(datetime(2026, 9, 26, 12, 0, 0))
+
+        self.assertEqual(c._unmeasured_sensors[house["id"]].values, [1750.0])
+
     def test_no_child_running_leaves_everything_on_the_remainder(self) -> None:
         _c, (remainder, shares) = self._run(())
 
