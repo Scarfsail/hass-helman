@@ -4944,6 +4944,8 @@ export class HelmanConfigEditorPanel
       return;
     }
     const { config, pruned } = this._prunedConfig();
+    const draftAtSave = canonicalJson(this._config);
+    const submittedConfig = canonicalJson(config);
     this._saving = true;
     try {
       const response = await this.hass.callWS<SaveConfigResponse>({
@@ -4951,7 +4953,7 @@ export class HelmanConfigEditorPanel
         config,
       });
       this._validation = response.validation;
-      if (pruned && response.validation.valid) {
+      if (pruned && response.validation.valid && canonicalJson(this._config) === draftAtSave) {
         // Written, so what was written is the draft from here on. The YAML
         // editors would otherwise keep showing, and re-apply, the pruned phases.
         this._config = config;
@@ -4961,6 +4963,12 @@ export class HelmanConfigEditorPanel
       if (response.validation?.valid !== false) {
         await this._rebaselineConfig();
         this._staleConfigNotice = false;
+        // A failed entry reload does not undo the write. Keep edits made while
+        // the save was in flight dirty, even though the saved draft is clean.
+        const normalized = this._config
+          ? this._normalizeApplianceOptimizerTargets(this._config)
+          : false;
+        this._dirty = normalized || canonicalJson(this._config) !== submittedConfig;
       }
       if (response.success) {
         // The document this save wrote is what the editor now agrees with, so
@@ -4971,9 +4979,10 @@ export class HelmanConfigEditorPanel
         // The tree is built from the saved config, so a device just added or
         // re-metered only becomes clickable once it is re-read.
         if (this._deviceTreeRequested) void this._loadDeviceTree();
-        this._dirty = this._config
+        const normalized = this._config
           ? this._normalizeApplianceOptimizerTargets(this._config)
           : false;
+        this._dirty = this._dirty || normalized;
         this._message = {
           kind: "success",
           text: response.reloadStarted
