@@ -11,11 +11,13 @@ it -- alongside the pricing properties themselves, which moved here from
 """
 
 from __future__ import annotations
+import sys
+import types
+from _fakes import _bias_service_config
+
 
 from _fakes import DummyStore as _DummyStore
 
-import sys
-import types
 import unittest
 
 import pytest
@@ -201,7 +203,7 @@ class TestRunningSlotSplit(unittest.IsolatedAsyncioTestCase):
             _DummyStore(),
             _make_cfg(),
             grid_price_snapshot_provider=lambda: price_snapshot or {},
-        )
+         config=_bias_service_config(_make_cfg()),)
         service._profile = models.SolarBiasProfile(factors={}, omitted_slots=[])
         service._metadata = models.SolarBiasMetadata(
             trained_at="2026-05-01T03:00:00+02:00",

@@ -9,6 +9,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from .battery_state import read_battery_entities
+
 from .const import (
     CONSUMPTION_TOTAL_ENTITY_ID,
     DOMAIN,
@@ -66,11 +68,7 @@ async def async_setup_entry(
     qualifying_nodes = coordinator.collect_qualifying_nodes(tree)
     share_devices = coordinator.collect_share_devices(tree)
 
-    battery_entities = (
-        coordinator.config.get("energy_nodes", {})
-        .get("battery", {})
-        .get("entities", {})
-    )
+    battery_entities = read_battery_entities(coordinator.config)
     required_battery_ids = [
         v for k, v in battery_entities.items()
         if k in {"remaining_energy", "capacity", "min_soc", "max_soc"} and v

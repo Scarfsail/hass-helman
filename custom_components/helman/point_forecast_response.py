@@ -6,6 +6,8 @@ from typing import Any
 
 from homeassistant.util import dt as dt_util
 
+from .config_read import parse_timestamp, read_float
+
 from .const import (
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
 )
@@ -142,8 +144,8 @@ def _read_points(raw_points: Any) -> list[tuple[datetime, float]]:
         if not isinstance(point, dict):
             continue
 
-        timestamp = _parse_timestamp(point.get("timestamp"))
-        value = _read_float(point.get("value"))
+        timestamp = parse_timestamp(point.get("timestamp"))
+        value = read_float(point.get("value"))
         if timestamp is None or value is None:
             continue
 
@@ -186,29 +188,3 @@ def _advance_slots(value: datetime, *, slot_count: int) -> datetime:
             minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES * slot_count
         )
     )
-
-
-def _parse_timestamp(raw_value: Any) -> datetime | None:
-    if not isinstance(raw_value, str):
-        return None
-    return dt_util.parse_datetime(raw_value)
-
-
-def _read_float(raw_value: Any) -> float | None:
-    if isinstance(raw_value, bool) or raw_value is None:
-        return None
-
-    if isinstance(raw_value, (int, float)):
-        return float(raw_value)
-
-    if isinstance(raw_value, str):
-        stripped = raw_value.strip()
-        if not stripped or stripped.lower() in {"unknown", "unavailable", "none"}:
-            return None
-
-        try:
-            return float(stripped)
-        except ValueError:
-            return None
-
-    return None

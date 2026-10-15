@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import unittest
 from datetime import datetime
+import unittest
 
 from _fakes import (
     _valid_config, _inverter_controllable, _generic_appliance,
@@ -1840,3 +1840,20 @@ class DeviceTreeValidationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_legacy_numeric_validation_codes_are_stable():
+    from custom_components.helman.config_validation import (
+        ValidationReport,
+        _validate_optional_positive_int,
+        _validate_optional_probability,
+    )
+
+    for validator, code in (
+        (_validate_optional_positive_int, "invalid_positive_int"),
+        (_validate_optional_probability, "invalid_probability"),
+    ):
+        for value in (True, "1", -1, 0):
+            report = ValidationReport()
+            validator(report, "training", "training.value", value)
+            assert [error.code for error in report.errors] == [code]

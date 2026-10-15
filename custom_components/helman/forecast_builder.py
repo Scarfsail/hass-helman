@@ -8,6 +8,8 @@ from zoneinfo import ZoneInfo
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from .config_read import read_mapping, read_entity_id
+
 from .const import (
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
     SOLAR_REMAINING_TODAY_ENERGY_ENTITY_ID,
@@ -51,13 +53,7 @@ class HelmanForecastBuilder:
         }
 
     async def _build_solar_forecast(self, reference_time: datetime) -> dict[str, Any]:
-        energy_nodes = self._read_dict(self._config.get("energy_nodes"))
-        solar_config = self._read_dict(energy_nodes.get("solar"))
-        solar_forecast = self._read_dict(solar_config.get("forecast"))
-
-        daily_entity_ids = self._read_entity_id_list(
-            solar_forecast.get("daily_energy_entity_ids")
-        )[:8]
+        daily_entity_ids = read_solar_forecast_entities(self._config)[:8]
 
         if not daily_entity_ids:
             return {
@@ -298,28 +294,6 @@ class HelmanForecastBuilder:
 
         return None
 
-    @staticmethod
-    def _read_entity_id(raw_value: Any) -> str | None:
-        if isinstance(raw_value, str) and raw_value.strip():
-            return raw_value.strip()
-        return None
-
-    @staticmethod
-    def _read_dict(raw_value: Any) -> dict[str, Any]:
-        if isinstance(raw_value, dict):
-            return raw_value
-        return {}
-
-    def _read_entity_id_list(self, raw_value: Any) -> list[str]:
-        if not isinstance(raw_value, list):
-            return []
-
-        entity_ids: list[str] = []
-        for item in raw_value:
-            entity_id = self._read_entity_id(item)
-            if entity_id is not None:
-                entity_ids.append(entity_id)
-        return entity_ids
 
     def _read_first_unit(self, entity_ids: list[str | None]) -> str | None:
         for entity_id in entity_ids:
@@ -330,15 +304,14 @@ class HelmanForecastBuilder:
         return None
 
     def _read_solar_actual_energy_entity_id(self) -> str | None:
-        energy_nodes = self._read_dict(self._config.get("energy_nodes"))
-        solar_config = self._read_dict(energy_nodes.get("solar"))
-        forecast_config = self._read_dict(solar_config.get("forecast"))
-        entities = self._read_dict(solar_config.get("entities"))
+        energy_nodes = read_mapping(self._config.get("energy_nodes"))
+        solar_config = read_mapping(energy_nodes.get("solar"))
+        forecast_config = read_mapping(solar_config.get("forecast"))
+        entities = read_mapping(solar_config.get("entities"))
 
-        return (
-            self._read_entity_id(forecast_config.get("total_energy_entity_id"))
-            or self._read_entity_id(entities.get("today_energy"))
-        )
+        return read_entity_id(
+            forecast_config.get("total_energy_entity_id")
+        ) or read_entity_id(entities.get("today_energy"))
 
     @staticmethod
     def _read_unit_from_state(state) -> str | None:
@@ -363,3 +336,14 @@ class HelmanForecastBuilder:
             return parsed.replace(tzinfo=self._local_tz)
 
         return parsed
+
+
+def read_solar_forecast_entities(config: dict[str, Any]) -> list[str]:
+    """Configured daily solar sources, in forecast-day order."""
+    energy_nodes = read_mapping(config.get("energy_nodes"))
+    solar = read_mapping(energy_nodes.get("solar"))
+    forecast = read_mapping(solar.get("forecast"))
+    raw = forecast.get("daily_energy_entity_ids")
+    if not isinstance(raw, list):
+        return []
+    return [entity for value in raw if (entity := read_entity_id(value)) is not None]

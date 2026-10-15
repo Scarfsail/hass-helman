@@ -6,6 +6,8 @@ from typing import Any
 
 from homeassistant.util import dt as dt_util
 
+from .config_read import parse_timestamp
+
 from .const import (
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
 )
@@ -38,7 +40,7 @@ def build_battery_forecast_response(
     if snapshot.get("status") not in {"available", "partial"}:
         return response
 
-    started_at = _parse_timestamp(snapshot.get("startedAt"))
+    started_at = parse_timestamp(snapshot.get("startedAt"))
     if started_at is None:
         return response
 
@@ -77,7 +79,7 @@ def _build_actual_history(
         entry
         for entry in _read_entries(snapshot.get("actualHistory"))
         if (
-            (timestamp := _parse_timestamp(entry.get("timestamp"))) is not None
+            (timestamp := parse_timestamp(entry.get("timestamp"))) is not None
             and dt_util.as_utc(timestamp) < current_slot_start_utc
         )
     ]
@@ -87,9 +89,3 @@ def _read_entries(raw_value: Any) -> list[dict[str, Any]]:
     if not isinstance(raw_value, list):
         return []
     return [deepcopy(entry) for entry in raw_value if isinstance(entry, dict)]
-
-
-def _parse_timestamp(raw_value: Any) -> datetime | None:
-    if not isinstance(raw_value, str):
-        return None
-    return dt_util.parse_datetime(raw_value)

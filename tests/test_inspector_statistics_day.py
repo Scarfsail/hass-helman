@@ -24,6 +24,8 @@ style of ``test_inspector_span_aggregates.py``.
 """
 
 from __future__ import annotations
+from _fakes import _bias_service_config
+
 
 from _fakes import DummyStore as _DummyStore
 
@@ -202,12 +204,15 @@ def _make_service(*, with_consumers: bool = False):
         hass,
         _DummyStore(),
         cfg,
-        house_energy_entity_id_provider=lambda: HOUSE_METER,
-        grid_import_energy_entity_id_provider=lambda: GRID_IMPORT_METER,
-        grid_export_energy_entity_id_provider=lambda: GRID_EXPORT_METER,
-        battery_charge_energy_entity_id_provider=lambda: BATTERY_CHARGE_METER,
-        battery_discharge_energy_entity_id_provider=lambda: BATTERY_DISCHARGE_METER,
-        battery_soc_entity_id_provider=lambda: BATTERY_SOC,
+        config=_bias_service_config(
+            cfg,
+            house=HOUSE_METER,
+            grid_import=GRID_IMPORT_METER,
+            grid_export=GRID_EXPORT_METER,
+            battery_charge=BATTERY_CHARGE_METER,
+            battery_discharge=BATTERY_DISCHARGE_METER,
+            soc=BATTERY_SOC,
+        ),
     )
     if with_consumers:
         async def _device_consumers():

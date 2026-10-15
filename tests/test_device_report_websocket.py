@@ -8,6 +8,8 @@ dataset tests' business.
 """
 
 from __future__ import annotations
+
+from _fakes import _bias_service_config
 from tests._fakes import make_coordinator
 
 from _fakes import FakeConnection
@@ -128,6 +130,16 @@ class DeviceReportTestCase(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.recorder = FakeRecorder()
         self.coordinator = make_coordinator()
+        self.coordinator._active_config = _bias_service_config(
+            SimpleNamespace(
+                total_energy_entity_id=METERS.solar, daily_energy_entity_ids=[]
+            ),
+            house=METERS.house,
+            grid_import=METERS.grid_import,
+            grid_export=METERS.grid_export,
+            battery_charge=METERS.battery_charge,
+            battery_discharge=METERS.battery_discharge,
+        )
         self.coordinator._cached_tree = TREE
         self.coordinator._device_datasets = OrderedDict()
         self.coordinator._solar_bias_service = FakeService()
@@ -509,7 +521,7 @@ class TestUnavailable(DeviceReportTestCase):
         self.assertEqual(self.recorder.calls, [])
 
     async def test_without_a_house_meter(self):
-        self.coordinator._solar_bias_service = FakeService(METERS._replace(house=None))
+        self.coordinator._active_config["energy_nodes"]["house"]["forecast"]["total_energy_entity_id"] = None
         payload = await self.report(self.NOW, "2026-09-01", "2026-09-10")
         self.assertEqual(payload, {"unavailable": "no_house_meter"})
         self.assertEqual(self.recorder.calls, [])

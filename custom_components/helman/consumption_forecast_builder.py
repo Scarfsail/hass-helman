@@ -11,6 +11,8 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from .config_read import read_mapping, read_entity_id
+
 from .const import (
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
     HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
@@ -43,19 +45,43 @@ def read_house_training_window_config(config: dict[str, Any]) -> tuple[int, int]
     live since the v14 relocation. Shared by the builder's live payload and
     the coordinator's training request so the two readers cannot drift apart.
     """
-    training = ConsumptionForecastBuilder._read_dict(config.get("training"))
-    house_consumption = ConsumptionForecastBuilder._read_dict(
+    training = read_mapping(config.get("training"))
+    house_consumption = read_mapping(
         training.get("house_consumption")
     )
-    min_history_days = ConsumptionForecastBuilder._read_positive_int(
+    min_history_days = _read_positive_int(
         house_consumption.get("min_history_days"),
         HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
     )
-    training_window_days = ConsumptionForecastBuilder._read_positive_int(
+    training_window_days = _read_positive_int(
         house_consumption.get("training_window_days"),
         HOUSE_FORECAST_DEFAULT_TRAINING_WINDOW_DAYS,
     )
     return (min_history_days, training_window_days)
+
+
+@dataclass(frozen=True)
+class HouseForecastRequest:
+    total_energy_entity_id: str | None
+    training_window_days: int
+    min_history_days: int
+    config_fingerprint: str
+
+
+def read_house_forecast_request(config: dict[str, Any]) -> HouseForecastRequest:
+    """The house forecast's configuration and the identity of its training data."""
+    energy_nodes = read_mapping(config.get("energy_nodes"))
+    house = read_mapping(energy_nodes.get("house"))
+    forecast = read_mapping(house.get("forecast"))
+    entity_id = read_entity_id(forecast.get("total_energy_entity_id"))
+    min_days, window = read_house_training_window_config(config)
+    fingerprint = ConsumptionForecastBuilder._build_config_fingerprint(
+        total_energy_entity_id=entity_id,
+        training_window_days=window,
+        min_history_days=min_days,
+        consumers_config=read_carved_meters(config),
+    )
+    return HouseForecastRequest(entity_id, window, min_days, fingerprint)
 
 
 @dataclass(frozen=True)
@@ -72,6 +98,7 @@ class ConsumptionForecastBuilder:
     _CANONICAL_GRANULARITY_MINUTES = FORECAST_CANONICAL_GRANULARITY_MINUTES
     _SLOTS_PER_HOUR = 60 // _CANONICAL_GRANULARITY_MINUTES
     _SLOTS_PER_DAY = 24 * _SLOTS_PER_HOUR
+
     def __init__(
         self,
         hass: HomeAssistant,
@@ -101,23 +128,12 @@ class ConsumptionForecastBuilder:
         recorder scan this path exists to be rid of. The only queries left are
         today-scoped.
         """
-        energy_nodes = self._read_dict(self._config.get("energy_nodes"))
-        house_config = self._read_dict(energy_nodes.get("house"))
-        forecast_config = self._read_dict(house_config.get("forecast"))
-
-        total_energy_entity_id = self._read_entity_id(
-            forecast_config.get("total_energy_entity_id")
-        )
-        min_history_days, training_window_days = read_house_training_window_config(
-            self._config
-        )
+        request = read_house_forecast_request(self._config)
+        total_energy_entity_id = request.total_energy_entity_id
+        training_window_days = request.training_window_days
+        min_history_days = request.min_history_days
+        config_fingerprint = request.config_fingerprint
         consumers_config = read_carved_meters(self._config)
-        config_fingerprint = self._build_config_fingerprint(
-            total_energy_entity_id=total_energy_entity_id,
-            training_window_days=training_window_days,
-            min_history_days=min_history_days,
-            consumers_config=consumers_config,
-        )
         local_now = dt_util.as_local(reference_time) if reference_time else dt_util.now()
 
         if total_energy_entity_id is None or profile is None:
@@ -526,28 +542,6 @@ class ConsumptionForecastBuilder:
         }
 
     @staticmethod
-    def _read_dict(raw_value: Any) -> dict[str, Any]:
-        if isinstance(raw_value, dict):
-            return raw_value
-        return {}
-
-    @staticmethod
-    def _read_entity_id(raw_value: Any) -> str | None:
-        if isinstance(raw_value, str) and raw_value.strip():
-            return raw_value.strip()
-        return None
-
-    @staticmethod
-    def _read_positive_int(raw_value: Any, default: int) -> int:
-        if isinstance(raw_value, bool):
-            return default
-        if isinstance(raw_value, int) and raw_value > 0:
-            return raw_value
-        if isinstance(raw_value, float) and raw_value.is_integer() and raw_value > 0:
-            return int(raw_value)
-        return default
-
-    @staticmethod
     def _build_config_fingerprint(
         *,
         total_energy_entity_id: str | None,
@@ -585,3 +579,13 @@ class ConsumptionForecastBuilder:
             separators=(",", ":"),
         )
         return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _read_positive_int(raw_value: Any, default: int) -> int:
+    if isinstance(raw_value, bool):
+        return default
+    if isinstance(raw_value, int) and raw_value > 0:
+        return raw_value
+    if isinstance(raw_value, float) and raw_value.is_integer() and raw_value > 0:
+        return int(raw_value)
+    return default

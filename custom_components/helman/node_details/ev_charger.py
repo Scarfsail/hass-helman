@@ -36,6 +36,8 @@ from typing import Any
 
 from homeassistant.util import dt as dt_util
 
+from ..config_path import get as config_value
+
 from ..controllables.config import own_meter, peek_controllable_id
 from ..vendors import resolve_vendor_telemetry
 from .battery import today_ranking_report
@@ -273,7 +275,5 @@ def charging_segment_start(
 
 def _device_entity(device: Mapping[str, Any], path: str) -> str | None:
     """The entity id at ``path`` in the device, ``None`` when unset."""
-    value: Any = device
-    for part in path.split("."):
-        value = value.get(part) if isinstance(value, Mapping) else None
+    value = config_value(device, path)
     return value if isinstance(value, str) and value else None

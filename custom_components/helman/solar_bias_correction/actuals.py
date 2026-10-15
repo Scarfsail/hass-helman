@@ -19,6 +19,8 @@ except Exception:  # pragma: no cover - Home Assistant API compatibility
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from ..config_read import read_entity_id
+
 from .forecast_slot_history import (
     ForecastSlotWindow,
     load_spliced_forecast_slots_for_window,
@@ -99,7 +101,7 @@ async def load_actuals_for_day(
     on its own that the recorder was up while it said nothing, so without a
     trace its quiet stretches read as recorder gaps and drop out (#208).
     """
-    entity_id = _read_entity_id(cfg.total_energy_entity_id)
+    entity_id = read_entity_id(cfg.total_energy_entity_id)
     if entity_id is None:
         return {}
     return await _read_day_slot_actuals(
@@ -145,7 +147,7 @@ async def load_actuals_window(
     are named in ``hourly_grain_dates``, because nothing downstream can tell the
     two grains apart from the numbers alone.
     """
-    entity_id = _read_entity_id(cfg.total_energy_entity_id)
+    entity_id = read_entity_id(cfg.total_energy_entity_id)
     if entity_id is None or days <= 0:
         return SolarActualsWindow(
             slot_actuals_by_date={},
@@ -391,14 +393,6 @@ def _slot_actuals_from_slot_energy(
         dt_util.as_local(slot_start).strftime("%H:%M"): round(value_kwh * 1000.0, 4)
         for slot_start, value_kwh in sorted(values_by_slot.items())
     }
-
-
-def _read_entity_id(raw_value: Any) -> str | None:
-    if isinstance(raw_value, str):
-        entity_id = raw_value.strip()
-        if entity_id:
-            return entity_id
-    return None
 
 
 async def _load_invalidated_slots_for_window(
@@ -1068,5 +1062,3 @@ def _parse_numeric_state_value(raw_value: Any) -> float | None:
         except ValueError:
             return None
     return None
-
-

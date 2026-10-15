@@ -1,10 +1,12 @@
 from __future__ import annotations
-
-from _fakes import DummyStore as _DummyStore
-
 import asyncio
 import sys
 import types
+from _fakes import _bias_service_config
+
+
+from _fakes import DummyStore as _DummyStore
+
 import unittest
 
 import pytest
@@ -96,14 +98,21 @@ async def _inspector_payload(
         bus=SimpleNamespace(async_fire=lambda *a, **kw: None),
         data={},
     )
+    carved = service_kwargs.pop("house_deferrable_consumers_provider", lambda: [])()
+    bounds = service_kwargs.pop("battery_soc_bounds_entity_id_provider", lambda: None)()
     service = service_mod.SolarBiasCorrectionService(
         hass,
         _DummyStore(),
         _make_cfg(),
         battery_forecast_provider=_battery_forecast_provider,
-        house_energy_entity_id_provider=lambda: "sensor.house_energy",
-        battery_soc_entity_id_provider=lambda: "sensor.battery_soc",
         **service_kwargs,
+        config=_bias_service_config(
+            _make_cfg(),
+            house="sensor.house_energy",
+            soc="sensor.battery_soc",
+            carved=carved,
+            soc_bounds=bounds,
+        ),
     )
 
     service._profile = models.SolarBiasProfile(factors={}, omitted_slots=[])

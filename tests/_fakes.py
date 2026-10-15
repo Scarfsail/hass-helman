@@ -434,3 +434,89 @@ class FakeExecutor:
     def clear_appliance_memories(self) -> None:
         self.events.append("clear_appliance_memories")
 
+
+def _bias_service_config(
+    cfg,
+    *,
+    house=None,
+    grid_import=None,
+    grid_export=None,
+    battery_charge=None,
+    battery_discharge=None,
+    price=None,
+    soc=None,
+    soc_bounds=None,
+    carved=(),
+    scheduled=(),
+):
+    """A service's real config document for inspector fixtures."""
+    forecast = {}
+    if price is not None:
+        forecast = {
+            "import_price_unit": price.unit,
+            "import_price_windows": [
+                {
+                    "start": f"{w.start_minutes // 60:02d}:{w.start_minutes % 60:02d}",
+                    "end": f"{w.end_minutes // 60:02d}:{w.end_minutes % 60:02d}",
+                    "price": w.price,
+                }
+                for w in price.windows
+            ],
+        }
+    devices = []
+    for consumer in carved:
+        ids = consumer.get("ids", [])
+        device = {
+            "name": consumer.get("label"),
+            "consumption": {"energy_entity_id": consumer.get("energy_entity_id")},
+        }
+        if len(ids) <= 1:
+            device.update(schedulable=True)
+            if ids:
+                device["id"] = ids[0]
+        else:
+            device["children"] = [{"id": key, "schedulable": True} for key in ids]
+        device.setdefault("children", []).extend(
+            {"consumption": {"energy_entity_id": meter}}
+            for meter in consumer.get("metered_children", [])
+        )
+        devices.append(device)
+    for consumer in scheduled:
+        devices.append(
+            {
+                "id": consumer.get("id"),
+                "name": consumer.get("label"),
+                "schedulable": True,
+                "consumption": {"energy_entity_id": consumer.get("energy_entity_id")},
+            }
+        )
+    battery_entities = {
+        "today_charge_energy": battery_charge,
+        "today_discharge_energy": battery_discharge,
+    }
+    if soc is not None:
+        battery_entities.update(
+            capacity=soc,
+            remaining_energy="sensor.remaining",
+            min_soc="sensor.min_soc",
+            max_soc="sensor.max_soc",
+        )
+    if soc_bounds is not None:
+        battery_entities.update(min_soc=soc_bounds[0], max_soc=soc_bounds[1])
+    return {
+        "devices": {"consumers": devices},
+        "training": {
+            "solar_bias": {"total_energy_entity_id": cfg.total_energy_entity_id}
+        },
+        "energy_nodes": {
+            "solar": {
+                "forecast": {"daily_energy_entity_ids": cfg.daily_energy_entity_ids}
+            },
+            "house": {"forecast": {"total_energy_entity_id": house}},
+            "grid": {
+                "entities": {"today_import": grid_import, "today_export": grid_export},
+                "forecast": forecast,
+            },
+            "battery": {"entities": battery_entities},
+        },
+    }

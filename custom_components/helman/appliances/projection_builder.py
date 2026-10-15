@@ -7,6 +7,8 @@ from typing import Any
 
 from homeassistant.util import dt as dt_util
 
+from ..config_read import parse_timestamp, read_float
+
 from ..const import FORECAST_CANONICAL_GRANULARITY_MINUTES
 from ..recorder_hourly_series import get_local_current_slot_start
 from ..scheduling.schedule import (
@@ -855,7 +857,7 @@ def _read_current_slot_house_value(
     """
     current_slot = house_forecast.get("currentSlot")
     if isinstance(current_slot, dict):
-        timestamp = _parse_timestamp(current_slot.get("timestamp"))
+        timestamp = parse_timestamp(current_slot.get("timestamp"))
         if timestamp is not None and dt_util.as_local(timestamp) == current_slot_start:
             value = _read_house_entry_value(current_slot)
             if value is not None:
@@ -873,7 +875,7 @@ def _build_house_series_map(house_forecast: dict[str, Any]) -> dict[datetime, fl
     for entry in series:
         if not isinstance(entry, dict):
             continue
-        timestamp = _parse_timestamp(entry.get("timestamp"))
+        timestamp = parse_timestamp(entry.get("timestamp"))
         value = _read_house_entry_value(entry)
         if timestamp is None or value is None:
             continue
@@ -894,8 +896,8 @@ def _build_solar_slot_map(solar_forecast: dict[str, Any]) -> dict[datetime, floa
     for point in points:
         if not isinstance(point, dict):
             continue
-        timestamp = _parse_timestamp(point.get("timestamp"))
-        value = _read_float(point.get("value"))
+        timestamp = parse_timestamp(point.get("timestamp"))
+        value = read_float(point.get("value"))
         if timestamp is None or value is None:
             continue
         parsed_points.append((dt_util.as_local(timestamp), value))
@@ -921,29 +923,7 @@ def _read_house_entry_value(entry: dict[str, Any]) -> float | None:
     non_deferrable = entry.get("nonDeferrable")
     if not isinstance(non_deferrable, dict):
         return None
-    return _read_float(non_deferrable.get("value"))
-
-
-def _parse_timestamp(raw_value: Any) -> datetime | None:
-    if not isinstance(raw_value, str):
-        return None
-    return dt_util.parse_datetime(raw_value)
-
-
-def _read_float(raw_value: Any) -> float | None:
-    if isinstance(raw_value, bool) or raw_value is None:
-        return None
-    if isinstance(raw_value, (int, float)):
-        return float(raw_value)
-    if isinstance(raw_value, str):
-        stripped = raw_value.strip()
-        if not stripped or stripped.lower() in _UNAVAILABLE_STATES:
-            return None
-        try:
-            return float(stripped)
-        except ValueError:
-            return None
-    return None
+    return read_float(non_deferrable.get("value"))
 
 
 def _get_solar_point_split_factor(points: list[tuple[datetime, float]]) -> int:

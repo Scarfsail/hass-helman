@@ -5,6 +5,8 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 
+from .config_read import read_mapping, read_entity_id, read_float
+
 from .const import (
     BATTERY_CAPACITY_FORECAST_DEFAULT_CHARGE_EFFICIENCY,
     BATTERY_CAPACITY_FORECAST_DEFAULT_DISCHARGE_EFFICIENCY,
@@ -53,12 +55,12 @@ class BatteryLiveState:
 
 
 def read_battery_entity_config(config: dict[str, Any]) -> BatteryEntityConfig | None:
-    energy_nodes = _read_dict(config.get("energy_nodes"))
-    battery_config = _read_dict(energy_nodes.get("battery"))
-    entities = _read_dict(battery_config.get("entities"))
+    energy_nodes = read_mapping(config.get("energy_nodes"))
+    battery_config = read_mapping(energy_nodes.get("battery"))
+    entities = read_mapping(battery_config.get("entities"))
 
-    remaining_energy_entity_id = _read_entity_id(entities.get("remaining_energy"))
-    capacity_entity_id = _read_entity_id(entities.get("capacity"))
+    remaining_energy_entity_id = read_entity_id(entities.get("remaining_energy"))
+    capacity_entity_id = read_entity_id(entities.get("capacity"))
     soc_bounds_config = read_battery_soc_bounds_config(config)
 
     if (
@@ -77,18 +79,18 @@ def read_battery_entity_config(config: dict[str, Any]) -> BatteryEntityConfig | 
 
 
 def describe_battery_entity_config_issue(config: dict[str, Any]) -> str | None:
-    energy_nodes = _read_dict(config.get("energy_nodes"))
-    battery_config = _read_dict(energy_nodes.get("battery"))
-    entities = _read_dict(battery_config.get("entities"))
+    energy_nodes = read_mapping(config.get("energy_nodes"))
+    battery_config = read_mapping(energy_nodes.get("battery"))
+    entities = read_mapping(battery_config.get("entities"))
 
     missing_fields: list[str] = []
-    if _read_entity_id(entities.get("remaining_energy")) is None:
+    if read_entity_id(entities.get("remaining_energy")) is None:
         missing_fields.append("energy_nodes.battery.entities.remaining_energy")
-    if _read_entity_id(entities.get("capacity")) is None:
+    if read_entity_id(entities.get("capacity")) is None:
         missing_fields.append("energy_nodes.battery.entities.capacity")
-    if _read_entity_id(entities.get("min_soc")) is None:
+    if read_entity_id(entities.get("min_soc")) is None:
         missing_fields.append("energy_nodes.battery.entities.min_soc")
-    if _read_entity_id(entities.get("max_soc")) is None:
+    if read_entity_id(entities.get("max_soc")) is None:
         missing_fields.append("energy_nodes.battery.entities.max_soc")
 
     if not missing_fields:
@@ -108,12 +110,12 @@ class BatterySocBounds:
 def read_battery_soc_bounds_config(
     config: dict[str, Any],
 ) -> BatterySocBoundsConfig | None:
-    energy_nodes = _read_dict(config.get("energy_nodes"))
-    battery_config = _read_dict(energy_nodes.get("battery"))
-    entities = _read_dict(battery_config.get("entities"))
+    energy_nodes = read_mapping(config.get("energy_nodes"))
+    battery_config = read_mapping(energy_nodes.get("battery"))
+    entities = read_mapping(battery_config.get("entities"))
 
-    min_soc_entity_id = _read_entity_id(entities.get("min_soc"))
-    max_soc_entity_id = _read_entity_id(entities.get("max_soc"))
+    min_soc_entity_id = read_entity_id(entities.get("min_soc"))
+    max_soc_entity_id = read_entity_id(entities.get("max_soc"))
 
     if min_soc_entity_id is None or max_soc_entity_id is None:
         return None
@@ -125,9 +127,9 @@ def read_battery_soc_bounds_config(
 
 
 def read_battery_forecast_settings(config: dict[str, Any]) -> BatteryForecastSettings:
-    energy_nodes = _read_dict(config.get("energy_nodes"))
-    battery_config = _read_dict(energy_nodes.get("battery"))
-    forecast_config = _read_dict(battery_config.get("forecast"))
+    energy_nodes = read_mapping(config.get("energy_nodes"))
+    battery_config = read_mapping(energy_nodes.get("battery"))
+    forecast_config = read_mapping(battery_config.get("forecast"))
 
     return BatteryForecastSettings(
         charge_efficiency=_read_probability(
@@ -304,50 +306,18 @@ def _read_battery_soc_bounds_result(
 def _read_state_float(state) -> float | None:
     if state is None:
         return None
-    return _read_float(state.state)
-
-
-def _read_dict(raw_value: Any) -> dict[str, Any]:
-    if isinstance(raw_value, dict):
-        return raw_value
-    return {}
-
-
-def _read_entity_id(raw_value: Any) -> str | None:
-    if isinstance(raw_value, str) and raw_value.strip():
-        return raw_value.strip()
-    return None
-
-
-def _read_float(raw_value: Any) -> float | None:
-    if isinstance(raw_value, bool) or raw_value is None:
-        return None
-
-    if isinstance(raw_value, (int, float)):
-        return float(raw_value)
-
-    if isinstance(raw_value, str):
-        stripped = raw_value.strip()
-        if not stripped or stripped.lower() in {"unknown", "unavailable", "none"}:
-            return None
-
-        try:
-            return float(stripped)
-        except ValueError:
-            return None
-
-    return None
+    return read_float(state.state)
 
 
 def _read_positive_float(raw_value: Any) -> float | None:
-    parsed = _read_float(raw_value)
+    parsed = read_float(raw_value)
     if parsed is None or parsed <= 0:
         return None
     return parsed
 
 
 def _read_probability(raw_value: Any, default: float) -> float:
-    parsed = _read_float(raw_value)
+    parsed = read_float(raw_value)
     if parsed is None or parsed <= 0 or parsed > 1:
         return default
     return parsed
@@ -366,3 +336,11 @@ def _describe_numeric_state_issue(*, entity_id: str, state: Any, label: str) -> 
             return f"{label} entity '{entity_id}' has unavailable state {stripped!r}"
 
     return f"{label} entity '{entity_id}' has non-numeric state {raw_state!r}"
+
+
+def read_battery_entities(config: dict[str, Any]) -> dict[str, str | None]:
+    """The battery entity ids, including optional power and energy meters."""
+    energy_nodes = read_mapping(config.get("energy_nodes"))
+    battery = read_mapping(energy_nodes.get("battery"))
+    entities = read_mapping(battery.get("entities"))
+    return {key: read_entity_id(value) for key, value in entities.items()}

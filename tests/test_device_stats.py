@@ -368,3 +368,9 @@ class MemberRecordTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_numeric_reader_keeps_its_finite_only_contract():
+    assert device_stats._read_float(True) == 1.0
+    for value in (float("nan"), float("inf"), "-inf", "unknown", None):
+        assert device_stats._read_float(value) is None

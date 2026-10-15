@@ -6,6 +6,8 @@ so faking the record would test nothing.
 """
 
 from __future__ import annotations
+from _fakes import _bias_service_config
+
 from tests._fakes import make_coordinator
 
 from _fakes import FakeConnection as SharedFakeConnection
@@ -126,7 +128,7 @@ def _make_bias_service(*, enabled: bool = True, metadata=None, profile=None):
         ),
         _BiasStore(),
         _bias_cfg(enabled=enabled),
-    )
+     config=_bias_service_config(_bias_cfg(enabled=enabled)),)
     if metadata is not None:
         service._metadata = metadata
     service._profile = profile

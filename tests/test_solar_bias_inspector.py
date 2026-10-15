@@ -1,4 +1,8 @@
 from __future__ import annotations
+from unittest.mock import patch, AsyncMock
+from zoneinfo import ZoneInfo
+from _fakes import _bias_service_config
+
 
 from _fakes import DummyStore as _DummyStore
 
@@ -8,9 +12,6 @@ import importlib
 import pytest
 from datetime import date, datetime, time, timezone
 from types import SimpleNamespace
-from zoneinfo import ZoneInfo
-from unittest.mock import patch, AsyncMock
-
 
 
 models = importlib.import_module("custom_components.helman.solar_bias_correction.models")
@@ -396,7 +397,7 @@ def _make_service(canonical_provider=None, recorded=None):
         _DummyStore(),
         _make_cfg(),
         canonical_solar_forecast_provider=canonical_provider,
-    )
+     config=_bias_service_config(_make_cfg()),)
 
 
 def _canonical_provider(raw_points, corrected_points=None):
@@ -1245,9 +1246,13 @@ def _stat_rows(rows):
 
 def test_day_aggregates_fold_hourly_statistics_into_local_days_in_one_read():
     service = _make_service()
-    service._grid_import_energy_entity_id_provider = lambda: "sensor.grid_import"
-    service._grid_export_energy_entity_id_provider = lambda: "sensor.grid_export"
-    service._battery_soc_entity_id_provider = lambda: "sensor.battery_soc"
+    service._config["energy_nodes"]["grid"]["entities"]["today_import"] = (
+        "sensor.grid_import"
+    )
+    service._config["energy_nodes"]["grid"]["entities"]["today_export"] = (
+        "sensor.grid_export"
+    )
+    service._config["energy_nodes"]["battery"]["entities"].update(capacity="sensor.battery_soc", remaining_energy="sensor.remaining", min_soc="sensor.min_soc", max_soc="sensor.max_soc")
 
     reads: list[tuple] = []
     span_mod, original_query = _install_fake_statistics_reader(

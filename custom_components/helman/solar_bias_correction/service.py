@@ -15,7 +15,10 @@ from homeassistant.util import dt as dt_util
 
 from ..const import GRID_EXPORT_PRICE_ENTITY_ID, GRID_IMPORT_PRICE_ENTITY_ID
 from ..span_buckets import add_months, bucket_key, bucket_keys
-from ..span_history_model import SpanMeters
+from ..span_history_model import read_span_meters
+from ..battery_state import read_battery_entity_config, read_battery_soc_bounds_config
+from ..controllables.config import read_carved_meters, read_schedulable_consumers
+from ..grid_price_forecast_builder import read_grid_import_price_config, GridImportPriceConfigError
 from ..training.schedule import next_scheduled_training_at
 from .actuals import (
     load_actuals_for_day,
@@ -126,49 +129,25 @@ class SolarBiasCorrectionService:
         store: SolarBiasCorrectionStore,
         cfg: BiasConfig,
         *,
+        config: dict[str, Any],
         canonical_solar_forecast_provider=None,
         battery_forecast_provider=None,
         house_forecast_snapshot_provider=None,
         house_forecast_composition_provider=None,
-        house_energy_entity_id_provider=None,
-        house_deferrable_consumers_provider=None,
-        house_scheduled_consumers_provider=None,
         house_device_consumers_provider=None,
-        battery_soc_entity_id_provider=None,
         battery_soc_bounds_provider=None,
-        battery_soc_bounds_entity_id_provider=None,
-        grid_import_energy_entity_id_provider=None,
-        grid_export_energy_entity_id_provider=None,
-        battery_charge_energy_entity_id_provider=None,
-        battery_discharge_energy_entity_id_provider=None,
-        grid_import_price_config_provider=None,
         grid_price_snapshot_provider=None,
     ) -> None:
         self._hass = hass
         self._store = store
         self._cfg = cfg
+        self._config = config
         self._canonical_solar_forecast_provider = canonical_solar_forecast_provider
         self._battery_forecast_provider = battery_forecast_provider
         self._house_forecast_snapshot_provider = house_forecast_snapshot_provider
         self._house_forecast_composition_provider = house_forecast_composition_provider
-        self._house_energy_entity_id_provider = house_energy_entity_id_provider
-        self._house_deferrable_consumers_provider = house_deferrable_consumers_provider
-        self._house_scheduled_consumers_provider = house_scheduled_consumers_provider
         self._house_device_consumers_provider = house_device_consumers_provider
-        self._battery_soc_entity_id_provider = battery_soc_entity_id_provider
         self._battery_soc_bounds_provider = battery_soc_bounds_provider
-        self._battery_soc_bounds_entity_id_provider = (
-            battery_soc_bounds_entity_id_provider
-        )
-        self._grid_import_energy_entity_id_provider = grid_import_energy_entity_id_provider
-        self._grid_export_energy_entity_id_provider = grid_export_energy_entity_id_provider
-        self._battery_charge_energy_entity_id_provider = (
-            battery_charge_energy_entity_id_provider
-        )
-        self._battery_discharge_energy_entity_id_provider = (
-            battery_discharge_energy_entity_id_provider
-        )
-        self._grid_import_price_config_provider = grid_import_price_config_provider
         self._grid_price_snapshot_provider = grid_price_snapshot_provider
         self._profile: SolarBiasProfile | None = None
         self._metadata = self._build_default_metadata(last_outcome="no_training_yet")
@@ -450,11 +429,8 @@ class SolarBiasCorrectionService:
                 datetime.combine(newest_bucket_start, time(0, 0), tzinfo=local_tz),
             )
 
-        def _entity_id(provider) -> str | None:
-            return provider() if provider is not None else None
-
-        meters = self.energy_meter_entity_ids()
-        soc_entity = _entity_id(self._battery_soc_entity_id_provider)
+        meters = read_span_meters(self._config)
+        soc_entity = self._battery_soc_entity_id()
         # The same roster the day view splits its house actual by, so a day
         # column and that day's slots itemise the same appliances under the same
         # labels. Resolved before the read because its meters join the one query
@@ -593,14 +569,6 @@ class SolarBiasCorrectionService:
     # the same inputs. These are the public names for them; the private ones stay
     # this service's own.
 
-    def energy_meter_entity_ids(self) -> SpanMeters:
-        """The six meters, by role. See :meth:`_energy_meter_entity_ids`."""
-        return SpanMeters(*self._energy_meter_entity_ids())
-
-    def grid_import_price_config(self):
-        """The import-price window table, or None. See :meth:`_grid_import_price_config`."""
-        return self._grid_import_price_config()
-
     async def async_resolve_span_currency(self, import_price_config) -> str | None:
         """The money columns' unit. See :meth:`_resolve_span_currency`."""
         return await self._resolve_span_currency(import_price_config)
@@ -625,54 +593,6 @@ class SolarBiasCorrectionService:
             if isinstance(unit, str) and unit:
                 return unit
         return await self._grid_export_price_unit()
-
-    def _energy_meter_entity_ids(
-        self,
-    ) -> tuple[str | None, str | None, str | None, str | None, str | None, str | None]:
-        """The six meters whose history the inspector actually draws.
-
-        Solar, grid import, grid export, house, battery charge, battery
-        discharge -- in that order, and always in that order, because two callers
-        unpack this positionally. The house entry is the house's *own* meter and
-        never solar/grid/battery arithmetic: the day view reads this same meter,
-        and a second, subtractive definition of house load would disagree with
-        the number sitting next to it.
-
-        These are the meters, and only the meters. The battery SoC sensor and the
-        price rails are read alongside them by the span aggregates, but they are
-        not history in the sense that matters here -- a month with prices and no
-        meters has nothing to draw -- which is why the history floor asks about
-        this list rather than about everything the span read touches.
-        """
-
-        def _entity_id(provider) -> str | None:
-            return provider() if provider is not None else None
-
-        return (
-            self._configured_solar_meter_entity_id(),
-            _entity_id(self._grid_import_energy_entity_id_provider),
-            _entity_id(self._grid_export_energy_entity_id_provider),
-            _entity_id(self._house_energy_entity_id_provider),
-            _entity_id(self._battery_charge_energy_entity_id_provider),
-            _entity_id(self._battery_discharge_energy_entity_id_provider),
-        )
-
-    def _configured_solar_meter_entity_id(self) -> str | None:
-        """The normalized solar meter id from bias configuration."""
-        raw_entity_id = self._cfg.total_energy_entity_id
-        if not isinstance(raw_entity_id, str):
-            return None
-        entity_id = raw_entity_id.strip()
-        return entity_id or None
-
-    def _solar_meter_entity_id(self) -> str | None:
-        """The configured solar meter, or ``None``.
-
-        Resolve it independently of the other meter providers so a failure in
-        one of those providers only costs its own series. Both inspector meter
-        rosters share the normalization helper above.
-        """
-        return self._configured_solar_meter_entity_id()
 
     async def _async_history_floor(self, local_now: datetime) -> date:
         """The oldest date the inspector may be browsed back to.
@@ -774,7 +694,7 @@ class SolarBiasCorrectionService:
 
         return await query_oldest_statistics_date(
             self._hass,
-            self._energy_meter_entity_ids(),
+            read_span_meters(self._config),
             local_tz=ZoneInfo(str(self._hass.config.time_zone)),
         )
 
@@ -858,31 +778,18 @@ class SolarBiasCorrectionService:
         per series is a serial round-trip per series however the awaits are
         arranged.
 
-        Every id is resolved behind its own boundary, the way
-        :meth:`_cumulative_meter_entity_ids` resolves the meters': a provider
-        that raises costs its own series and nothing else. Without that, one bad
-        provider would fail the whole day here, where on the raw path the same
-        provider only empties the one series its ``_guarded_points`` wraps.
+        Unconfigured meters remain absent from the shared config reader.
         """
         from .house_forecast_history import HOUSE_FORECAST_CURRENT_ENTITY
 
-        def _entity_id(provider) -> str | None:
-            if provider is None:
-                return None
-            try:
-                return provider()
-            except Exception:
-                _LOGGER.exception("Entity id provider failed for inspector statistics day")
-                return None
-
-        solar_entity = self._solar_meter_entity_id()
+        solar_entity = read_span_meters(self._config).solar
         return await load_statistics_day(
             self._hass,
             target_date,
             local_tz=local_tz,
             solar_entity_id=solar_entity,
             meter_entity_ids=meter_entity_ids,
-            battery_soc_entity_id=_entity_id(self._battery_soc_entity_id_provider),
+            battery_soc_entity_id=self._battery_soc_entity_id(),
             house_forecast_entity_id=HOUSE_FORECAST_CURRENT_ENTITY,
             # The five battery-forecast entities are Helman's own, pinned by id
             # like the house forecast above rather than resolved from config.
@@ -973,7 +880,7 @@ class SolarBiasCorrectionService:
                 _LOGGER.exception(
                     "Failed to load house consumer breakdown for inspector"
                 )
-            solar_meter_entity_id = self._solar_meter_entity_id()
+            solar_meter_entity_id = read_span_meters(self._config).solar
             meter_entity_ids = self._cumulative_meter_entity_ids(
                 breakdown_consumers_for_day,
                 solar_entity_id=solar_meter_entity_id,
@@ -1593,13 +1500,10 @@ class SolarBiasCorrectionService:
             return (None, None)
 
     def _battery_soc_bounds_entity_ids(self) -> tuple[str | None, str | None]:
-        if self._battery_soc_bounds_entity_id_provider is None:
+        bounds = read_battery_soc_bounds_config(self._config)
+        if bounds is None:
             return (None, None)
-        try:
-            return self._battery_soc_bounds_entity_id_provider() or (None, None)
-        except Exception:
-            _LOGGER.exception("Battery SoC bounds entity id provider failed")
-            return (None, None)
+        return (bounds.min_soc_entity_id, bounds.max_soc_entity_id)
 
     def _battery_soc_bounds_for_date(
         self,
@@ -1806,30 +1710,22 @@ class SolarBiasCorrectionService:
         (#245). ``solar_entity_id`` is passed in when the caller has already
         resolved it, so one inspector day resolves it once.
 
-        A provider that raises costs only its own meter here. Its series still
-        calls it and still fails, and its own error boundary still degrades that
-        one series — which is what a failing provider cost before the reads were
-        batched, and must keep costing now that they share a query.
         """
 
-        def _entity_id(provider) -> str | None:
-            if provider is None:
-                return None
-            try:
-                return provider()
-            except Exception:
-                _LOGGER.exception("Meter entity id provider failed for inspector")
-                return None
-
+        meters = read_span_meters(self._config)
         candidates = [
             solar_entity_id,
-            _entity_id(self._house_energy_entity_id_provider),
-            _entity_id(self._grid_import_energy_entity_id_provider),
-            _entity_id(self._grid_export_energy_entity_id_provider),
-            _entity_id(self._battery_charge_energy_entity_id_provider),
-            _entity_id(self._battery_discharge_energy_entity_id_provider),
+            meters.house,
+            meters.grid_import,
+            meters.grid_export,
+            meters.battery_charge,
+            meters.battery_discharge,
             *(consumer["energy_entity_id"] for consumer in consumers),
-            *(child for consumer in consumers for child in consumer["metered_children"]),
+            *(
+                child
+                for consumer in consumers
+                for child in consumer["metered_children"]
+            ),
         ]
         return [entity_id for entity_id in candidates if entity_id]
 
@@ -1839,9 +1735,7 @@ class SolarBiasCorrectionService:
         slot_energy_by_entity: dict[str, dict[datetime, float]],
     ) -> list[dict]:
         """Load per-15-min house energy actuals for target_date."""
-        if self._house_energy_entity_id_provider is None:
-            return []
-        entity_id = self._house_energy_entity_id_provider()
+        entity_id = read_span_meters(self._config).house
         if not entity_id:
             return []
         by_slot = slot_energy_by_entity.get(entity_id) or {}
@@ -1933,31 +1827,10 @@ class SolarBiasCorrectionService:
         return result
 
     def _house_deferrable_consumers(self) -> list[dict]:
-        """The configured deferrable appliances: ``energy_entity_id`` + ``label``."""
-        if self._house_deferrable_consumers_provider is None:
-            return []
-        try:
-            raw = self._house_deferrable_consumers_provider() or []
-        except Exception:
-            _LOGGER.exception("House deferrable consumers provider failed")
-            return []
-        return self._normalize_consumers(raw, deferrable=True)
+        return self._normalize_consumers(read_carved_meters(self._config), deferrable=True)
 
     def _house_scheduled_consumers(self) -> list[dict]:
-        """Every schedulable controllable by id, for naming the forecast's rows.
-
-        Taken raw rather than through :meth:`_normalize_consumers`, which exists
-        to enforce a usable meter — the whole point here is that a scheduled
-        appliance without one still gets a row.
-        """
-        if self._house_scheduled_consumers_provider is None:
-            return []
-        try:
-            raw = self._house_scheduled_consumers_provider() or []
-        except Exception:
-            _LOGGER.exception("House scheduled consumers provider failed")
-            return []
-        return [consumer for consumer in raw if isinstance(consumer, dict)]
+        return read_schedulable_consumers(self._config)
 
     async def _house_device_consumers(self) -> list[dict]:
         """Individually-measured house devices from the shared device tree."""
@@ -2098,11 +1971,9 @@ class SolarBiasCorrectionService:
         fields does.
         """
 
-        def _entity_id(provider) -> str | None:
-            return provider() if provider is not None else None
-
-        import_entity = _entity_id(self._grid_import_energy_entity_id_provider)
-        export_entity = _entity_id(self._grid_export_energy_entity_id_provider)
+        meters = read_span_meters(self._config)
+        import_entity = meters.grid_import
+        export_entity = meters.grid_export
         if not import_entity and not export_entity:
             return [], [], []
 
@@ -2201,11 +2072,9 @@ class SolarBiasCorrectionService:
         renders whatever it can, and the config editor is where a broken window
         table gets reported.
         """
-        if self._grid_import_price_config_provider is None:
-            return None
         try:
-            return self._grid_import_price_config_provider()
-        except Exception:
+            return read_grid_import_price_config(self._config)
+        except GridImportPriceConfigError:
             _LOGGER.exception("Failed to read the grid import price config")
             return None
 
@@ -2238,11 +2107,9 @@ class SolarBiasCorrectionService:
         contributes zero, the same way the grid meters behave.
         """
 
-        def _entity_id(provider) -> str | None:
-            return provider() if provider is not None else None
-
-        charge_entity = _entity_id(self._battery_charge_energy_entity_id_provider)
-        discharge_entity = _entity_id(self._battery_discharge_energy_entity_id_provider)
+        meters = read_span_meters(self._config)
+        charge_entity = meters.battery_charge
+        discharge_entity = meters.battery_discharge
         if not charge_entity and not discharge_entity:
             return []
 
@@ -2257,19 +2124,8 @@ class SolarBiasCorrectionService:
         return _slot_energy_points(net_wh_by_slot, target_date)
 
     def _battery_soc_entity_id(self) -> str | None:
-        """The configured SoC sensor, or ``None`` -- and never raising.
-
-        Resolved before the numeric batch is issued rather than inside the
-        series that draws it, so a provider that raises costs the SoC series and
-        leaves the bounds -- which now share its read -- alone.
-        """
-        if self._battery_soc_entity_id_provider is None:
-            return None
-        try:
-            return self._battery_soc_entity_id_provider()
-        except Exception:
-            _LOGGER.exception("Battery SoC entity id provider failed for inspector")
-            return None
+        battery = read_battery_entity_config(self._config)
+        return battery.capacity_entity_id if battery is not None else None
 
     @staticmethod
     def _battery_soc_actual_points(
