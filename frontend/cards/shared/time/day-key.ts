@@ -1,3 +1,54 @@
+/**
+ * Today's day key (`YYYY-MM-DD`) in Home Assistant's time zone.
+ *
+ * Shared by the solar inspector and the device reports, which both have to
+ * agree with the backend about which local day "today" is.
+ */
+
+/** A calendar date as its `YYYY-MM-DD` key. */
+export function formatIsoDate(year: number, month: number, day: number): string {
+    return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+/** The local day `value` falls on in `timeZone`, or in the browser's zone without one. */
+export function isoDateInTimeZone(value: Date, timeZone: string | undefined): string {
+    if (!timeZone) {
+        return formatIsoDate(value.getFullYear(), value.getMonth() + 1, value.getDate());
+    }
+
+    const parts = _getLocalDateTimeFormatter(timeZone).formatToParts(value);
+    const year = Number(parts.find((part) => part.type === "year")?.value);
+    const month = Number(parts.find((part) => part.type === "month")?.value);
+    const day = Number(parts.find((part) => part.type === "day")?.value);
+    if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+        return formatIsoDate(value.getFullYear(), value.getMonth() + 1, value.getDate());
+    }
+    return formatIsoDate(year, month, day);
+}
+
+let todayMemo: { second: number; timeZone: string | undefined; value: string } | null = null;
+
+/**
+ * Today's day key, recomputed at most once a second.
+ *
+ * It is asked for several times per render and the answer only changes at
+ * midnight, so a second of staleness is invisible -- but only a second: this
+ * deliberately does not ride the coarse `now-clock` resolution, because half
+ * a minute of lag at midnight is a visibly wrong answer. The time zone is
+ * part of the key because it really does change.
+ */
+export function todayKey(timeZone: string | undefined): string {
+    const second = Math.floor(Date.now() / 1000);
+    const memo = todayMemo;
+    if (memo !== null && memo.second === second && memo.timeZone === timeZone) {
+        return memo.value;
+    }
+
+    const value = isoDateInTimeZone(new Date(), timeZone);
+    todayMemo = { second, timeZone, value };
+    return value;
+}
+
 export interface LocalDateTimeParts {
     dayKey: string;
     hour: number;
@@ -9,6 +60,7 @@ export interface LocalDateTimeDescriptor extends LocalDateTimeParts {
 }
 
 const MAX_LOCAL_DATE_TIME_DESCRIPTOR_CACHE_SIZE = 2048;
+/** One formatter per time zone serves day keys and local time descriptors. */
 const LOCAL_DATE_TIME_FORMATTERS = new Map<string, Intl.DateTimeFormat>();
 const LOCAL_DATE_TIME_DESCRIPTOR_CACHE = new Map<string, LocalDateTimeDescriptor | null>();
 
@@ -132,4 +184,25 @@ function _getLocalDateTimeFormatter(timeZone: string): Intl.DateTimeFormat {
     });
     LOCAL_DATE_TIME_FORMATTERS.set(timeZone, nextFormatter);
     return nextFormatter;
+}
+
+/** Strict calendar day parsing; callers choose their own invalid-input fallback. */
+export function parseDayKey(value: string): { year: number; month: number; day: number } | null {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+    if (!match) return null;
+    const year = Number(match[1]), month = Number(match[2]), day = Number(match[3]);
+    const date = new Date(`${value}T00:00:00Z`);
+    return date.getUTCFullYear() === year && date.getUTCMonth() + 1 === month && date.getUTCDate() === day
+        ? { year, month, day } : null;
+}
+
+export function addDays(dayKey: string, days: number): string {
+    const date = new Date(`${dayKey}T00:00:00Z`);
+    date.setUTCDate(date.getUTCDate() + days);
+    return date.toISOString().slice(0, 10);
+}
+
+/** Calendar days from start to end, independent of daylight saving time. */
+export function daysBetween(start: string, end: string): number {
+    return Math.round((Date.parse(`${end}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) / 86_400_000);
 }

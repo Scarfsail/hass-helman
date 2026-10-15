@@ -1,3 +1,4 @@
+import { addDays, parseDayKey } from "../shared/time/day-key";
 import { getScheduleGridScaleMagnitude } from "../shared/schedule/model/grid-surplus-display";
 import { aggregateScheduleDayForecast, buildScheduleTableForecastMeta } from "../shared/schedule/model/schedule-table-forecast";
 import { formatScheduleDayLabel } from "../shared/schedule/model/schedule-time";
@@ -132,7 +133,7 @@ export function buildDayPillKeys(startDayKey: string, endDayKey: string, maximum
     let cursor = startDayKey;
     while (cursor <= endDayKey && keys.length < Math.min(MAX_CALENDAR_DAYS, maximum)) {
         keys.push(cursor);
-        cursor = _addDay(cursor);
+        cursor = addDays(cursor, 1);
     }
 
     return keys;
@@ -511,11 +512,5 @@ function _finiteOrNull(value: number | null | undefined): number | null {
 }
 
 function _isDayKey(value: string): boolean {
-    return /^\d{4}-\d{2}-\d{2}$/.test(value);
-}
-
-function _addDay(dayKey: string): string {
-    const date = new Date(`${dayKey}T00:00:00Z`);
-    date.setUTCDate(date.getUTCDate() + 1);
-    return date.toISOString().slice(0, 10);
+    return parseDayKey(value) !== null;
 }

@@ -1,3 +1,4 @@
+import { slotMinutes, formatClock } from "../shared/time/slot-time";
 import { LitElement, css, html, svg, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { nothing } from "lit-html";
@@ -259,7 +260,7 @@ export class HelmanSolarPriceStrip extends LitElement {
             if (!Number.isFinite(value)) {
                 continue;
             }
-            const minutes = this._slotToMinutes(point.slot);
+            const minutes = slotMinutes(point.slot);
             if (minutes === null) {
                 continue;
             }
@@ -287,21 +288,6 @@ export class HelmanSolarPriceStrip extends LitElement {
     }
 
     /** Turn an `HH:MM` slot label into its minute-of-day, or null if malformed. */
-    private _slotToMinutes(slot: unknown): number | null {
-        if (typeof slot !== "string") {
-            return null;
-        }
-        const [hourText, minuteText] = slot.split(":");
-        const hour = Number(hourText);
-        const minute = Number(minuteText);
-        if (!Number.isInteger(hour) || !Number.isInteger(minute)) {
-            return null;
-        }
-        if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
-            return null;
-        }
-        return hour * 60 + minute;
-    }
 
     /**
      * Minute-of-day the day turns from measured into upcoming: the start of the
@@ -777,7 +763,7 @@ export class HelmanSolarPriceStrip extends LitElement {
             x: event.clientX,
             y: event.clientY,
             title: titleColumn
-                ? `${this._formatMinutes(titleColumn.startMinutes)} – ${this._formatMinutes(titleColumn.endMinutes)}`
+                ? `${formatClock(titleColumn.startMinutes)} – ${formatClock(titleColumn.endMinutes)}`
                 : undefined,
             hasActual: false,
             rows,
@@ -826,11 +812,6 @@ export class HelmanSolarPriceStrip extends LitElement {
         );
     }
 
-    private _formatMinutes(minutes: number): string {
-        const hours = Math.floor(minutes / 60);
-        const mins = minutes % 60;
-        return `${String(hours).padStart(2, "0")}:${String(mins).padStart(2, "0")}`;
-    }
 
     private _t(key: string): string {
         const localize: LocalizeFunction = this.hass

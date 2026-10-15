@@ -1,5 +1,5 @@
 import type { DeviceReportQuery } from "../helman-api";
-import { formatIsoDate } from "../shared/today-iso";
+import { formatIsoDate, addDays, parseDayKey } from "../shared/time/day-key";
 
 /** The periods the shell offers, in the order it offers them. */
 export const PERIOD_PRESETS = [
@@ -18,7 +18,7 @@ export type PeriodPreset = (typeof PERIOD_PRESETS)[number];
 export const DEFAULT_PERIOD_PRESET: PeriodPreset = "last_30";
 
 function parseIsoDate(value: string): Date {
-    const [year, month, day] = value.split("-").map(Number);
+    const { year, month, day } = parseDayKey(value) ?? { year: NaN, month: NaN, day: NaN };
     return new Date(Date.UTC(year, month - 1, day));
 }
 
@@ -26,11 +26,6 @@ function isoOf(date: Date): string {
     return formatIsoDate(date.getUTCFullYear(), date.getUTCMonth() + 1, date.getUTCDate());
 }
 
-function addDays(value: string, delta: number): string {
-    const date = parseIsoDate(value);
-    date.setUTCDate(date.getUTCDate() + delta);
-    return isoOf(date);
-}
 
 /**
  * The dates a preset covers, given today's local day key.

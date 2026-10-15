@@ -1,3 +1,4 @@
+import { timestampMinutes } from "../shared/time/slot-time";
 export type PowerPoint = { timestamp: string; valueWh: number };
 export type ChartEntry<TPoint extends PowerPoint = PowerPoint> = {
   point: TPoint;
@@ -14,7 +15,7 @@ export function toAveragePower<TPoint extends PowerPoint>(
   options: AveragePowerOptions = {},
 ): ChartEntry<TPoint>[] {
   const parsed = points
-    .map((point) => ({ point, minutes: pointMinutes(point.timestamp) }))
+    .map((point) => ({ point, minutes: timestampMinutes(point.timestamp) }))
     .filter(
       (entry): entry is { point: TPoint; minutes: number } =>
         entry.minutes !== null && Number.isFinite(entry.point.valueWh),
@@ -45,22 +46,4 @@ export function toAveragePower<TPoint extends PowerPoint>(
     const powerW = hours > 0 ? entry.point.valueWh / hours : 0;
     return { point: entry.point, minutes: entry.minutes, powerW };
   });
-}
-
-function pointMinutes(timestamp: string): number | null {
-  const match = timestamp.match(/T(\d{2}):(\d{2})/);
-  if (!match) return null;
-  const hour = Number(match[1]);
-  const minute = Number(match[2]);
-  if (
-    !Number.isFinite(hour) ||
-    !Number.isFinite(minute) ||
-    hour < 0 ||
-    hour > 23 ||
-    minute < 0 ||
-    minute > 59
-  ) {
-    return null;
-  }
-  return hour * 60 + minute;
 }

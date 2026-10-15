@@ -1,3 +1,5 @@
+import { SLOT_MS } from "../../shared/time/slot-time";
+import { phaseSign } from "../../shared/power-reading";
 import { css, html, nothing, unsafeCSS } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { fillTemplate } from "../../localize/localize";
@@ -33,7 +35,7 @@ import {
     isScheduleClimateApplianceAction,
     isScheduleEvChargerAction,
 } from "../../shared/schedule/schedule-types";
-import { todayIso } from "../../shared/today-iso";
+import { todayKey } from "../../shared/time/day-key";
 import "../../helman-device-reports/device-report-ranking";
 import { IDLE_W, NodeDetailContentBase, NEW_DAY_RETRY_MS, TODAY_REFRESH_MS, type NodeFlow, type SectionState } from "./node-detail-base";
 import { readingNumber } from "./node-detail-readings";
@@ -43,9 +45,6 @@ import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyl
 import type { HouseDetailParams } from "./node-detail-types";
 
 type QuestionId = "sources" | "consumers" | "next" | "pattern" | "phases";
-
-/** The forecast's canonical slot. */
-const SLOT_MS = 15 * 60_000;
 
 /** The consumers the flow draws by name; the rest is "everything else". */
 const TOP_CONSUMERS = 3;
@@ -333,7 +332,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         if (this._pattern?.status === "ready" && stale(this._isToday(this._pattern.payload.period.start), this._patternRequestedAt)) void this._loadPattern();
         // The full ranking only while its evidence is open.
         if (this._open === "consumers" && this._evidenceOpen && this._ranking?.status === "ready"
-            && stale(this._rankingDate === todayIso(this._timeZone), this._rankingRequestedAt)) void this._loadRanking();
+            && stale(this._rankingDate === todayKey(this._timeZone), this._rankingRequestedAt)) void this._loadRanking();
     }
 
     protected updated(changed: Map<string, unknown>): void {
@@ -441,7 +440,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
     private async _loadRanking(): Promise<void> {
         const request = ++this._rankingRequest;
         if (this._ranking?.status !== "ready") this._ranking = { status: "loading" };
-        const today = todayIso(this._timeZone);
+        const today = todayKey(this._timeZone);
         this._rankingRequestedAt = Date.now();
         try {
             const payload = await fetchDeviceReport(this.hass, "ranking", { start_date: today, end_date: today });
@@ -889,7 +888,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
             `;
         }
         if (!ranking.payload) return html`<p class="note">${this._t("today.unavailable_not_loaded")}</p>`;
-        const today = todayIso(this._timeZone);
+        const today = todayKey(this._timeZone);
         return html`
             <helman-device-report-ranking
                 data-ranking
@@ -1375,7 +1374,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
     private _renderPhasesEvidence(overview: HouseDetailPayload) {
         const hasInputs = [1, 2, 3].some((phase) => `ac_power_l${phase}` in overview.entities);
         // The meter shown import-positive, whichever way the profile reads it.
-        const meterSign = overview.phasePowerPolarity === "positive_is_export" ? -1 : 1;
+        const meterSign = phaseSign(overview.phasePowerPolarity);
         const cell = (watts: number | null, sign = 1) => watts === null ? "–" : Math.round(watts * sign) + " W";
         return html`
             ${hasInputs ? html`

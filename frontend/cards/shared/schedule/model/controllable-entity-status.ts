@@ -1,3 +1,4 @@
+import { isReadableState } from "../../power-reading";
 import type { HassEntity } from "home-assistant-js-websocket";
 import type { HomeAssistant } from "../../../../types/ha";
 import type { ControllableEntityDTO } from "../../../helman-api";
@@ -18,7 +19,6 @@ import {
     isScheduleInverterAction,
 } from "../schedule-types";
 
-const UNAVAILABLE_STATES = new Set(["unknown", "unavailable", ""]);
 const FALLBACK_APPLIANCE_ICON = "mdi:flash-outline";
 
 /** The appliance facts the schedule chips need to render an action. */
@@ -142,7 +142,7 @@ export function buildControllableEntityStatuses({
         const appliance = entity.kind === "inverter"
             ? null
             : appliancesByEntityId.get(entity.entityId) ?? null;
-        const isAvailable = !UNAVAILABLE_STATES.has(stateObj.state);
+        const isAvailable = isReadableState(stateObj.state);
         // An entity nobody can read is not "running", so it counts as at rest
         // rather than as doing something.
         const isNormal = !isAvailable || stateObj.state === entity.normalState;
@@ -607,7 +607,7 @@ function _readOptionalState(
     }
 
     const state = states[entityId]?.state;
-    return state === undefined || UNAVAILABLE_STATES.has(state) ? null : state;
+    return isReadableState(state) ? state : null;
 }
 
 function _readLastChangedMs(stateObj: HassEntity): number | null {

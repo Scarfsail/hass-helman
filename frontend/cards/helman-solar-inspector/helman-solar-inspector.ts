@@ -1,3 +1,4 @@
+import { slotMinutes, formatClock } from "../shared/time/slot-time";
 import { LitElement, css, html, svg, unsafeCSS, type PropertyValues, type TemplateResult } from "lit";
 import { property, query, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../types/ha";
@@ -42,7 +43,7 @@ import {
 } from "../shared/hover-tooltip";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import { dispatchWatchedEntities } from "../shared/hass-change";
-import { formatIsoDate, todayIso } from "../shared/today-iso";
+import { formatIsoDate, todayKey, addDays, daysBetween, parseDayKey } from "../shared/time/day-key";
 import "./helman-solar-schedule-band-strip";
 import "../shared/schedule/dialogs/scheduling-day-editor-host";
 import type {
@@ -3684,7 +3685,6 @@ export class HelmanSolarInspector extends LitElement {
     `;
   }
 
-
   /** Minute-of-day of every selected slot, for the strips' bands. */
   private _selectedMinutes(payload: InspectorPayload): number[] {
     const minutes: number[] = [];
@@ -4788,9 +4788,8 @@ export class HelmanSolarInspector extends LitElement {
         <g clip-path="url(#plot-clip-impact)">
         ${payload.series.impact.map((point) => {
           if (point.impactWh === null || !Number.isFinite(point.impactWh)) return "";
-          const m = /^(\d{2}):(\d{2})$/.exec(point.slot);
-          if (!m) return "";
-          const minutes = Number(m[1]) * 60 + Number(m[2]);
+          const minutes = slotMinutes(point.slot);
+          if (minutes === null) return "";
           const x = layout.xForMinutes(minutes);
           const w = Math.max(3, layout.slotWidth);
           const h = Math.max(2, (Math.abs(point.impactWh) / maxImpact) * (stripHeight - 4));
@@ -4863,9 +4862,7 @@ export class HelmanSolarInspector extends LitElement {
     if (!(width > 0)) return [];
     const slots: string[] = [];
     for (let minutes = 0; minutes < 24 * 60; minutes += width) {
-      const hh = String(Math.floor(minutes / 60)).padStart(2, "0");
-      const mm = String(minutes % 60).padStart(2, "0");
-      slots.push(`${hh}:${mm}`);
+      slots.push(minutesToSlot(minutes));
     }
     return slots;
   }
@@ -4997,7 +4994,7 @@ export class HelmanSolarInspector extends LitElement {
     }
     if (runs.length === 0) return slots.join(", ");
     return runs
-      .map(([start, end]) => `${minutesToSlot(start)} – ${end >= 24 * 60 ? "24:00" : minutesToSlot(end)}`)
+      .map(([start, end]) => `${formatClock(start)} – ${formatClock(end)}`)
       .join(", ");
   }
 
@@ -6070,32 +6067,18 @@ export class HelmanSolarInspector extends LitElement {
       // House pills only carry elapsed days, so the row is a seven-day block
       // ending today rather than one starting there -- otherwise the panel
       // opens on a row of unavailable gauges.
-      const daysBack = Math.max(0, Math.round(
-        (Date.parse(`${today}T00:00:00Z`) - Date.parse(`${selected}T00:00:00Z`)) / 86_400_000,
-      ));
-      const end = this._addDays(today, -7 * Math.floor(daysBack / 7));
-      return { start: this._addDays(end, -6), end };
+      const daysBack = Math.max(0, daysBetween(selected, today));
+      const end = addDays(today, -7 * Math.floor(daysBack / 7));
+      return { start: addDays(end, -6), end };
     }
     if (selected >= today) {
       return { start: today, end: this._dayRange?.maxDate ?? today };
     }
 
-    const daysBack = Math.round(
-      (Date.parse(`${today}T00:00:00Z`) - Date.parse(`${selected}T00:00:00Z`)) / 86_400_000,
-    );
+    const daysBack = daysBetween(selected, today);
     const weeksBack = Math.ceil(daysBack / 7);
-    const start = this._addDays(today, -7 * weeksBack);
-    return { start, end: this._addDays(start, 6) };
-  }
-
-  private _addDays(dayKey: string, delta: number): string {
-    const current = this._parseIsoDate(dayKey);
-    const moved = new Date(Date.UTC(current.year, current.month - 1, current.day + delta));
-    return formatIsoDate(
-      moved.getUTCFullYear(),
-      moved.getUTCMonth() + 1,
-      moved.getUTCDate(),
-    );
+    const start = addDays(today, -7 * weeksBack);
+    return { start, end: addDays(start, 6) };
   }
 
   /**
@@ -6256,22 +6239,13 @@ export class HelmanSolarInspector extends LitElement {
     );
   }
 
-  /** Today's day key in the time zone this card reads dates in. See `shared/today-iso`. */
+  /** Today's day key in the time zone this card reads dates in. See `shared/time/day-key`. */
   private _todayIso() {
-    return todayIso(this._haTimeZone());
+    return todayKey(this._haTimeZone());
   }
 
   private _parseIsoDate(value: string): { year: number; month: number; day: number } {
-    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-    if (!match) {
-      const today = this._todayIso();
-      return this._parseIsoDate(today);
-    }
-    return {
-      year: Number(match[1]),
-      month: Number(match[2]),
-      day: Number(match[3]),
-    };
+    return parseDayKey(value) ?? parseDayKey(this._todayIso())!;
   }
 
   private _formatDay(value: string) {
@@ -6441,9 +6415,8 @@ export class HelmanSolarInspector extends LitElement {
     selectedSlot: string | null,
   ) {
     if (!selectedSlot) return "";
-    const m = /^(\d{2}):(\d{2})$/.exec(selectedSlot);
-    if (!m) return "";
-    const minutes = Number(m[1]) * 60 + Number(m[2]);
+    const minutes = slotMinutes(selectedSlot);
+    if (minutes === null) return "";
     // A slot cropped out of the daylight window has no place on the axis.
     if (minutes < layout.dayStartMinutes || minutes >= layout.dayEndMinutes) return "";
     const x = layout.xForMinutes(minutes);

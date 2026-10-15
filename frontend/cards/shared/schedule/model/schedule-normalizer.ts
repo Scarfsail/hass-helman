@@ -9,7 +9,6 @@ import {
 import {
     deriveScheduleGranularityMinutes,
     getScheduleDayKey,
-    getScheduleSlotDayKey,
     getScheduleSlotStartMs,
     getScheduleTimeRangeLabels,
     resolveScheduleSlotBoundaries,
@@ -197,7 +196,7 @@ function _normalizeSlot({
     timeZone: string;
     locale: string;
 }): Omit<ScheduleSlot, "index" | "isCurrent"> {
-    const dayKey = getScheduleSlotDayKey(slot.id, timeZone);
+    const dayKey = getScheduleDayKey(slot.id, timeZone);
     if (dayKey === null) {
         throw new Error(`schedule: failed to derive day key for slot "${slot.id}"`);
     }

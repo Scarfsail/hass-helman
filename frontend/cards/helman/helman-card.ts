@@ -1,4 +1,4 @@
-import { readPowerW } from "../shared/power-reading";
+import { applyValueType, readPowerW } from "../shared/power-reading";
 import { LitElement, css, html } from "lit-element"
 import { customElement, state } from "lit/decorators.js";
 import type { HomeAssistant, LovelaceCard, LovelaceCardEditor } from "../../types/ha";
@@ -6,7 +6,7 @@ import { TreeItem } from "./tree-item";
 import "./tree-item-row";
 import "./tree-item-list";
 import { HelmanCardConfig, HelmanUiConfig } from "./HelmanCardConfig";
-import { applyValueType, InverterDetailPayload, TreePayload } from "../helman-api";
+import { InverterDetailPayload, TreePayload } from "../helman-api";
 import { hydrateItem } from "./tree-item-hydrator";
 import { HistoryEngine } from "./history-engine";
 import { getSharedHelmanStore } from "./store";

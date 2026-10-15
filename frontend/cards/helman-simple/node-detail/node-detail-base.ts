@@ -8,7 +8,7 @@ import type { HelmanSolarInspectorCardConfig } from "../../helman-solar-inspecto
 import { getSharedDataChangedFeed } from "../../helman/data-changed";
 import { ForecastLoader } from "../../helman/forecast-loader";
 import { startNowClock } from "../../shared/now-clock";
-import { isoDateInTimeZone, todayIso } from "../../shared/today-iso";
+import { isoDateInTimeZone, todayKey } from "../../shared/time/day-key";
 import { getSharedHelmanStore } from "../../helman/store";
 import { formatScheduleTime } from "../../shared/schedule/model/schedule-time";
 import {
@@ -218,7 +218,7 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
 
     /** Whether a period that starts at `start` is today in HA's time zone. */
     protected _isToday(start: string): boolean {
-        return isoDateInTimeZone(new Date(start), this._timeZone) === todayIso(this._timeZone);
+        return isoDateInTimeZone(new Date(start), this._timeZone) === todayKey(this._timeZone);
     }
 
     /**

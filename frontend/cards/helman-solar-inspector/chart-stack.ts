@@ -1,3 +1,4 @@
+import { DEFAULT_SLOT_MINUTES as SLOT_MINUTES } from "../shared/time/slot-time";
 import type { ChartEntry } from "./chart-power";
 
 /**
@@ -19,7 +20,7 @@ export type StackBand = {
   top: Map<number, number>;
 };
 
-export const SLOT_MINUTES = 15;
+export { DEFAULT_SLOT_MINUTES as SLOT_MINUTES } from "../shared/time/slot-time";
 
 export function toSlotMap(entries: ChartEntry[]): Map<number, number> {
   return new Map(entries.map((entry) => [entry.minutes, entry.powerW]));
