@@ -463,3 +463,36 @@ test("simple card forwards schedule editor watched entity changes", async ({ pag
     });
     expect(state).toBe("on");
 });
+
+test("simple card forwards the latest hass when schedule watches arrive late", async ({ page }) => {
+    await page.setContent("<!doctype html><html><body></body></html>");
+    await installMockHass(page);
+    await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
+    await page.evaluate((tree) => {
+        const card = document.createElement("helman-simple-card") as any;
+        card.setConfig({ type: "custom:helman-simple-card" });
+        card.hass = { ...window.__mockHass({
+            "helman/get_device_tree": tree,
+            "helman/get_history": { entity_history: {} },
+        }), language: "en", locale: { language: "en" }, states: {
+            "sensor.schedule": { state: "off", attributes: {} },
+            "sensor.solar": { state: "100", attributes: {} },
+        }, config: { time_zone: "UTC" } };
+        document.body.appendChild(card);
+    }, cardTree());
+    await expect.poll(() => page.evaluate(() => !!(document.querySelector("helman-simple-card") as any)._entityMap)).toBe(true);
+    const state = await page.evaluate(async () => {
+        const card = document.querySelector("helman-simple-card") as any;
+        const old = card._latestHass;
+        card.hass = { ...old, states: {
+            ...old.states, "sensor.schedule": { state: "on", attributes: {} },
+        } };
+        const before = card._hass.states["sensor.schedule"].state;
+        card.dispatchEvent(new CustomEvent("helman-watched-entities", {
+            detail: { entityIds: ["sensor.schedule"] }, bubbles: true, composed: true,
+        }));
+        await card.updateComplete;
+        return { before, after: card._hass.states["sensor.schedule"].state };
+    });
+    expect(state).toEqual({ before: "off", after: "on" });
+});

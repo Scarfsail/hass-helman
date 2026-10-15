@@ -29,9 +29,13 @@ declare global {
         /** Let the held `helman/get_device_tree` responses return. */
         __resolveTree: () => void;
         __rejectTree: () => void;
+        __resolveTreeAt: (index: number) => void;
+        __rejectTreeAt: (index: number) => void;
         /** Let the held `helman/get_history` responses return. */
         __resolveHistory: () => void;
         __rejectHistory: () => void;
+        __resolveHistoryAt: (index: number) => void;
+        __rejectHistoryAt: (index: number) => void;
         __resolveInverter: () => void;
         /** How many requests of each kind are still held open. */
         __pending: () => { tree: number; history: number; inverter: number };
@@ -120,8 +124,12 @@ async function installFixture(page: Page, bucketSeconds: number): Promise<void> 
         const heldInverter: Array<() => void> = [];
         window.__resolveTree = () => { heldTree.splice(0).forEach((request) => request.resolve()); };
         window.__rejectTree = () => { heldTree.splice(0).forEach((request) => request.reject()); };
+        window.__resolveTreeAt = (index) => { heldTree.splice(index, 1)[0].resolve(); };
+        window.__rejectTreeAt = (index) => { heldTree.splice(index, 1)[0].reject(); };
         window.__resolveHistory = () => { heldHistory.splice(0).forEach((request) => request.resolve()); };
         window.__rejectHistory = () => { heldHistory.splice(0).forEach((request) => request.reject()); };
+        window.__resolveHistoryAt = (index) => { heldHistory.splice(index, 1)[0].resolve(); };
+        window.__rejectHistoryAt = (index) => { heldHistory.splice(index, 1)[0].reject(); };
         window.__resolveInverter = () => { heldInverter.splice(0).forEach((resolve) => resolve()); };
         window.__pending = () => ({ tree: heldTree.length, history: heldHistory.length, inverter: heldInverter.length });
 
@@ -144,8 +152,9 @@ async function installFixture(page: Page, bucketSeconds: number): Promise<void> 
                 "helman/get_device_tree": async (msg: {
                     type: string;
                 }) => {
+                    const requestedTree = currentTree;
                     return new Promise((resolve, reject) => heldTree.push({
-                        resolve: () => resolve(currentTree), reject: () => reject(new Error("tree unavailable")),
+                        resolve: () => resolve(requestedTree), reject: () => reject(new Error("tree unavailable")),
                     }));
                 },
                 "helman/get_history": async (msg: {
@@ -317,6 +326,91 @@ for (const tag of ["helman-card", "helman-simple-card"] as const) {
             expect(result.committed).toBeGreaterThan(0);
             if (result.loading !== undefined) expect(result.loading).toBe(false);
         });
+    });
+}
+
+for (const tag of ["helman-card", "helman-simple-card"] as const) {
+    for (const failedRead of ["tree", "history"] as const) {
+        test(`${tag}: failed ${failedRead} refresh recovers a superseded initial load`, async ({ page }) => {
+            await installFixture(page, BUCKET_SECONDS);
+            await page.evaluate((name) => {
+                const card = document.createElement(name) as any;
+                card.setConfig({ type: `custom:${name}` });
+                card.hass = window.__hass;
+                document.body.appendChild(card);
+            }, tag);
+            await expect.poll(() => page.evaluate(() => window.__pending().tree)).toBe(1);
+            await page.evaluate(() => {
+                window.__setTreeBuckets(4);
+                window.__fireDataChanged("config");
+            });
+            await expect.poll(() => page.evaluate(() => window.__pending().tree)).toBe(2);
+            if (failedRead === "tree") {
+                await page.evaluate(() => window.__rejectTreeAt(1));
+            } else {
+                await page.evaluate(() => window.__resolveTreeAt(1));
+                await expect.poll(() => page.evaluate(() => window.__pending().history)).toBe(1);
+                await page.evaluate(() => window.__rejectHistoryAt(0));
+            }
+            await expect.poll(() => page.evaluate(() => window.__pending().tree)).toBe(2);
+            await page.evaluate(() => window.__resolveTreeAt(1));
+            await expect.poll(() => page.evaluate(() => window.__pending().history)).toBe(1);
+            await page.evaluate(() => window.__resolveHistory());
+            await expect.poll(() => page.evaluate((name) => !!(document.querySelector(name) as any)._historyEngine, tag)).toBe(true);
+            await page.evaluate(() => window.__resolveTreeAt(0));
+            expect(await page.evaluate((name) => {
+                const card = document.querySelector(name) as any;
+                return { buckets: card._uiConfig.history_buckets, engines: window.__liveBucketIntervals().length };
+            }, tag)).toEqual({ buckets: 4, engines: 1 });
+        });
+    }
+
+    test(`${tag}: initial recovery is bounded and detached responses stay obsolete`, async ({ page }) => {
+        await installFixture(page, BUCKET_SECONDS);
+        await page.evaluate((name) => {
+            const card = document.createElement(name) as any;
+            card.setConfig({ type: `custom:${name}` });
+            card.hass = window.__hass;
+            document.body.appendChild(card);
+        }, tag);
+        await expect.poll(() => page.evaluate(() => window.__pending().tree)).toBe(1);
+        await page.evaluate(() => window.__fireDataChanged("config"));
+        await expect.poll(() => page.evaluate(() => window.__pending().tree)).toBe(2);
+        await page.evaluate(() => window.__rejectTreeAt(1));
+        await expect.poll(() => page.evaluate(() => window.__pending().tree)).toBe(2);
+        await page.evaluate(() => window.__rejectTreeAt(1));
+        expect(await page.evaluate(() => window.__pending())).toEqual({ tree: 1, history: 0, inverter: 0 });
+        await page.evaluate((name) => {
+            (document.querySelector(name) as any).remove();
+            window.__resolveTreeAt(0);
+        }, tag);
+        expect(await page.evaluate((name) => {
+            const card = document.querySelector(name) as any;
+            return { pending: window.__pending(), engines: window.__liveBucketIntervals().length, connected: !!card };
+        }, tag)).toEqual({ pending: { tree: 0, history: 0, inverter: 0 }, engines: 0, connected: false });
+    });
+
+    test(`${tag}: pending initial recovery stays obsolete after detach`, async ({ page }) => {
+        await installFixture(page, BUCKET_SECONDS);
+        await page.evaluate((name) => {
+            const card = document.createElement(name) as any;
+            card.setConfig({ type: `custom:${name}` });
+            card.hass = window.__hass;
+            document.body.appendChild(card);
+        }, tag);
+        await expect.poll(() => page.evaluate(() => window.__pending().tree)).toBe(1);
+        await page.evaluate(() => window.__fireDataChanged("config"));
+        await expect.poll(() => page.evaluate(() => window.__pending().tree)).toBe(2);
+        await page.evaluate(() => window.__rejectTreeAt(1));
+        await expect.poll(() => page.evaluate(() => window.__pending().tree)).toBe(2);
+        const result = await page.evaluate(async (name) => {
+            const card = document.querySelector(name) as any;
+            card.remove();
+            window.__resolveTree();
+            await new Promise<void>((done) => setTimeout(done, 0));
+            return { engine: !!card._historyEngine, pending: window.__pending(), intervals: window.__liveBucketIntervals().length };
+        }, tag);
+        expect(result).toEqual({ engine: false, pending: { tree: 0, history: 0, inverter: 0 }, intervals: 0 });
     });
 }
 

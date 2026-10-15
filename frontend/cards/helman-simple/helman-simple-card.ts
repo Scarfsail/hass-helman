@@ -489,6 +489,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             && [...next].every((id) => this._scheduleWatchedIds.has(id))) return;
         this._scheduleWatchedIds = next;
         this._rebuildWatchedEntityIds();
+        if (this._latestHass) this._hass = this._latestHass;
     };
 
     private _rebuildWatchedEntityIds(): void {
@@ -526,7 +527,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         return parts.join("; ");
     }
 
-    private async _loadFromBackend(freshTree = false): Promise<boolean> {
+    private async _loadFromBackend(freshTree = false, retryInitial = true): Promise<boolean> {
         const generation = ++this._loadGeneration;
         // Superseded by a later load, or the card is gone. Either way this
         // response belongs to nobody: commit none of it.
@@ -610,6 +611,11 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             // Logged even for an obsolete load: the guard is there to keep stale data
             // out of the card, not to hide a backend failure that raced a detach.
             console.error("helman-simple-card: failed to load backend data", err);
+            // A config event can supersede the initial load before any tree is
+            // installed. Give that failed refresh one new, post-event read.
+            if (!obsolete() && freshTree && retryInitial && !this._historyEngine) {
+                void this._loadFromBackend(true, false);
+            }
             // Keep the inverter request useful for the retained card state.
             if (!obsolete() && this._historyEngine && !this._inverter) {
                 void this._loadInverter(obsolete, false);
