@@ -798,7 +798,13 @@ class ScheduleExecutor:
             ),
             tuple(
                 sorted(
-                    (appliance_id, item.action_kind, item.outcome, item.error_code)
+                    (
+                        appliance_id,
+                        item.action_kind,
+                        item.outcome,
+                        item.error_code,
+                        item.message,
+                    )
                     for appliance_id, item in runtime.appliances.items()
                 )
             ),

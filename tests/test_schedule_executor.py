@@ -58,6 +58,7 @@ from custom_components.helman.scheduling.schedule_executor import (  # noqa: E40
 )
 from custom_components.helman.scheduling.runtime_status import (  # noqa: E402
     ActiveSlotRuntimeStatus,
+    ApplianceRuntimeStatus,
     InverterRuntimeStatus,
     ScheduleExecutionStatus,
 )
@@ -271,6 +272,38 @@ class RuntimeAnnouncementTests(unittest.IsolatedAsyncioTestCase):
         executor._set_execution_status(status("unavailable", "second"))
         executor._set_execution_status(status("invalid_option", "third"))
 
+        self.assertEqual(announced, ["schedule", "schedule"])
+
+    async def test_changed_appliance_diagnostic_announces_without_retry_noise(self) -> None:
+        announced = []
+        executor, _hass, _store = _build_executor(
+            entity_id="select.mode",
+            state=None,
+            document=ScheduleDocument(execution_enabled=True, slots={}),
+            announce_schedule_changed=lambda: announced.append("schedule"),
+        )
+
+        def status(message: str, reconciled_at: str) -> ScheduleExecutionStatus:
+            return ScheduleExecutionStatus(
+                active_slot_id=CURRENT_SLOT_ID,
+                active_slot_runtime=ActiveSlotRuntimeStatus(
+                    appliances={
+                        "garage-ev": ApplianceRuntimeStatus(
+                            action_kind="apply",
+                            outcome="failed",
+                            error_code="execution_unavailable",
+                            message=message,
+                        )
+                    },
+                    reconciled_at=reconciled_at,
+                ),
+            )
+
+        executor._set_execution_status(status("Switch is absent", "first"))
+        executor._set_execution_status(status("Switch is unavailable", "second"))
+        self.assertEqual(announced, ["schedule", "schedule"])
+
+        executor._set_execution_status(status("Switch is unavailable", "third"))
         self.assertEqual(announced, ["schedule", "schedule"])
 
     async def test_executor_prune_uses_quiet_persistence(self) -> None:
