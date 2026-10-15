@@ -861,3 +861,32 @@ test("a disconnected loading section can recover after reconnect", async ({ page
     await page.evaluate(() => { (window as any).__releaseSection(); (window as any).__releaseSection(); });
     await expect.poll(() => content(page).evaluate((element: any) => element._pattern?.status)).toBe("ready");
 });
+
+
+test("an idle Today retries a delayed previous-day answer on the clock", async ({ page }) => {
+    await page.clock.install({ time: new Date(FIXED_NOW_ISO) });
+    await mount(page);
+    await openDetail(page);
+    await flow(page).locator("[data-scope='today']").click();
+    await expect(flow(page)).toContainText("11:55");
+    await holdSection(page, "house", "today");
+    const before = (await sectionRequestLog(page, "house", "today")).length;
+    await page.clock.setFixedTime(new Date("2026-10-22T00:00:00Z"));
+    await page.clock.pauseAt(new Date("2026-10-22T00:00:00Z"));
+    await page.clock.setSystemTime(new Date("2026-10-22T00:00:00Z"));
+    await powerTick(page, "node-detail-house-content", 0);
+    expect((await sectionRequestLog(page, "house", "today")).length - before).toBe(1);
+    await page.clock.runFor(10_000);
+    await page.evaluate(() => (window as any).__releaseSection());
+    await expect(flow(page)).toContainText("00:00–00:00");
+    // No further hass updates: the shared clock alone must arrange the retry.
+    await page.clock.runFor(20_000);
+    expect((await sectionRequestLog(page, "house", "today")).length - before).toBe(1);
+    await page.clock.runFor(30_000);
+    await expect.poll(async () => (await sectionRequestLog(page, "house", "today")).length - before).toBe(2);
+    // A pending retry must not trigger another read within the retry interval.
+    await page.clock.runFor(20_000);
+    expect((await sectionRequestLog(page, "house", "today")).length - before).toBe(2);
+    await page.evaluate(() => (window as any).__releaseSection(true));
+    await expect.poll(() => content(page).evaluate((element: any) => element._today?.status)).toBe("ready");
+});

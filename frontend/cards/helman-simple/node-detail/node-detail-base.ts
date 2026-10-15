@@ -206,6 +206,12 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
         super.updated(changed);
         const now = Date.now();
         let next = now + TODAY_REFRESH_MS;
+        const { state, requestedAt } = this._todaySection();
+        if (this._flowScope === "today" && state?.status === "ready" && !this._isToday(state.payload.period.start)) {
+            // Staleness uses a strict age comparison; wake after the retry interval.
+            const retryAt = requestedAt + NEW_DAY_RETRY_MS + 1;
+            if (retryAt > now && retryAt < next) next = retryAt;
+        }
         for (const at of this._clockBoundaries()) if (at > now && at < next) next = at;
         this._nextBoundary = next;
     }
