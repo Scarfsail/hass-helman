@@ -67,6 +67,8 @@ export class HelmanCard extends LitElement implements LovelaceCard {
      * an interval nothing ever stops (#232).
      */
     private _loadGeneration = 0;
+    // Inverter reads belong to the displayed tree, even while a replacement is staged.
+    private _inverterGeneration = 0;
     private _localize?: LocalizeFunction;
     private _localizeLanguage?: string;
     private _unsubscribeDataChanged?: () => void;
@@ -186,6 +188,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         this._unsubscribeDataChanged?.();
         this._unsubscribeDataChanged = undefined;
         this._loadGeneration += 1;
+        this._inverterGeneration += 1;
         this._historyEngine?.stop();
     }
 
@@ -443,7 +446,11 @@ export class HelmanCard extends LitElement implements LovelaceCard {
                 () => this._sourceNodes,
             );
             engine.advanceBuckets(this._deviceTree, this._sourceNodes);
-            void this._loadInverter(obsolete, freshTree);
+            const inverterGeneration = ++this._inverterGeneration;
+            void this._loadInverter(
+                () => inverterGeneration !== this._inverterGeneration || !this.isConnected,
+                freshTree,
+            );
         } catch (error) {
             // Logged even for an obsolete load: the guard is there to keep stale data
             // out of the card, not to hide a backend failure that raced a detach.
@@ -452,11 +459,6 @@ export class HelmanCard extends LitElement implements LovelaceCard {
             // installed. Give that failed refresh one new, post-event read.
             if (!obsolete() && freshTree && retryInitial && !this._historyEngine) {
                 void this._loadBackendData(true, false);
-            }
-            // The retained tree still needs its inverter. Rejoin an older pending
-            // read with this generation so its result can populate the cell.
-            if (!obsolete() && this._historyEngine) {
-                void this._loadInverter(obsolete, false);
             }
         }
     }

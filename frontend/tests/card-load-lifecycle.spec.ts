@@ -466,6 +466,47 @@ for (const tag of ["helman-card", "helman-simple-card"] as const) {
                 });
             });
         }
+        test(`${tag}: failed ${failedRead} refresh retains a healthy inverter without another read`, async ({ page }) => {
+            await installFixture(page, BUCKET_SECONDS);
+            const result = await page.evaluate(async ({ tag, failedRead }) => {
+                const card = document.createElement(tag) as any;
+                card.setConfig({ type: `custom:${tag}` });
+                card.hass = window.__hass;
+                document.body.appendChild(card);
+                const drain = () => new Promise<void>((done) => setTimeout(done, 0));
+                await drain();
+                window.__resolveTree();
+                await drain();
+                window.__resolveHistory();
+                await drain();
+                window.__resolveInverter();
+                await drain();
+                const inverter = card._inverter;
+                const watched = [...card._watchedEntityIds];
+                const engine = card._historyEngine;
+                const refresh = tag === "helman-card" ? card._loadBackendData(true) : card._loadFromBackend(true);
+                await drain();
+                if (failedRead === "tree") window.__rejectTree();
+                else {
+                    window.__resolveTree();
+                    await drain();
+                    window.__rejectHistory();
+                }
+                await drain();
+                await refresh;
+                const pending = window.__pending().inverter;
+                window.__resolveInverter();
+                await drain();
+                const result = {
+                    pending,
+                    retained: !!inverter && card._inverter === inverter && card._historyEngine === engine,
+                    watched: JSON.stringify([...card._watchedEntityIds]) === JSON.stringify(watched),
+                };
+                card.remove();
+                return result;
+            }, { tag, failedRead });
+            expect(result).toEqual({ pending: 0, retained: true, watched: true });
+        });
         test(`${tag}: a failed ${failedRead} refresh keeps history live until replacement`, async ({ page }) => {
             await installFixture(page, BUCKET_SECONDS);
             const result = await page.evaluate(async ({ tag, failedRead }) => {

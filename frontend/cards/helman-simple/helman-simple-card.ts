@@ -229,6 +229,8 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
      * an interval nothing ever stops (#232).
      */
     private _loadGeneration = 0;
+    // Inverter reads belong to the displayed tree, even while a replacement is staged.
+    private _inverterGeneration = 0;
     private _uiConfig?: HelmanUiConfig;
     private _flowColors?: { solar: string; grid: string; battery: string };
     private _flowGlows?:  { solar: string; grid: string; battery: string };
@@ -313,6 +315,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         this._unsubscribeDataChanged?.();
         this._unsubscribeDataChanged = undefined;
         this._loadGeneration += 1;
+        this._inverterGeneration += 1;
         this._historyEngine?.stop();
     }
 
@@ -605,7 +608,11 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             );
             engine.advanceBuckets(this._topLevelNodes(), this._sourceNodes);
             this._rebuildWatchedEntityIds();
-            void this._loadInverter(obsolete, freshTree);
+            const inverterGeneration = ++this._inverterGeneration;
+            void this._loadInverter(
+                () => inverterGeneration !== this._inverterGeneration || !this.isConnected,
+                freshTree,
+            );
             return true;
         } catch (err) {
             // Logged even for an obsolete load: the guard is there to keep stale data
@@ -615,10 +622,6 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             // installed. Give that failed refresh one new, post-event read.
             if (!obsolete() && freshTree && retryInitial && !this._historyEngine) {
                 void this._loadFromBackend(true, false);
-            }
-            // Keep the inverter request useful for the retained card state.
-            if (!obsolete() && this._historyEngine) {
-                void this._loadInverter(obsolete, false);
             }
             return false;
         } finally {
