@@ -176,6 +176,59 @@ for (const tag of ["helman-card", "helman-simple-card"] as const) {
         await expect.poll(() => currentTree("third")).toBe(expected);
     });
 
+    test(`${tag} uses fresh history after a config announcement while old history is pending`, async ({ page }) => {
+        await page.setContent("<!doctype html><html><body></body></html>");
+        await installMockHass(page);
+        await page.evaluate((initial) => {
+            const next = structuredClone(initial);
+            next.sources[0].powerSensorId = "sensor.new_solar";
+            const releases: Array<() => void> = [];
+            (window as any).__releaseHistory = (index: number) => releases[index]();
+            (window as any).__hass = {
+                ...window.__mockHass({
+                    "helman/get_device_tree": () => window.__mockRequests.filter((request) => request.type === "helman/get_device_tree").length === 1 ? initial : next,
+                    "helman/get_history": () => new Promise((resolve) => {
+                        const index = releases.length;
+                        releases.push(() => resolve({ entity_history: index === 0
+                            ? { "sensor.old_solar": [4, 5] }
+                            : { "sensor.new_solar": [37, 38] } }));
+                    }),
+                }),
+                language: "en", locale: { language: "en" }, config: { time_zone: "UTC" }, states: {},
+            };
+        }, cardTree());
+        await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
+        const mount = (id: string) => page.evaluate(({ name, id }) => {
+            const card = document.createElement(name) as any;
+            card.id = id;
+            card.setConfig({ type: `custom:${name}` });
+            card.hass = (window as any).__hass;
+            document.body.appendChild(card);
+        }, { name: tag, id });
+        const treeRequests = () => page.evaluate(() => window.__mockRequests.filter((request) => request.type === "helman/get_device_tree").length);
+        const historyRequests = () => page.evaluate(() => window.__mockRequests.filter((request) => request.type === "helman/get_history").length);
+        const solarHistory = (id: string) => page.evaluate(({ name, id }) => {
+            const card = document.getElementById(id) as any;
+            const solar = name === "helman-card" ? card._deviceTree[0]?.children[0] : card._solarNode;
+            return { sensor: solar?.powerSensorId, firstBucket: solar?.powerHistory[0] };
+        }, { name: tag, id });
+
+        await mount("first");
+        await expect.poll(historyRequests).toBe(1);
+        await page.evaluate(() => window.__fireDataChanged("config"));
+        await expect.poll(historyRequests).toBe(2);
+        await mount("second");
+        await expect.poll(treeRequests).toBe(3);
+        await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
+        expect(await historyRequests()).toBe(2);
+        await page.evaluate(() => (window as any).__releaseHistory(1));
+        await expect.poll(() => solarHistory("first")).toEqual({ sensor: "sensor.new_solar", firstBucket: 37 });
+        await expect.poll(() => solarHistory("second")).toEqual({ sensor: "sensor.new_solar", firstBucket: 37 });
+        await page.evaluate(() => (window as any).__releaseHistory(0));
+        expect(await solarHistory("first")).toEqual({ sensor: "sensor.new_solar", firstBucket: 37 });
+        expect(await solarHistory("second")).toEqual({ sensor: "sensor.new_solar", firstBucket: 37 });
+    });
+
     test(`${tag} ignores an older pending tree after a config announcement`, async ({ page }) => {
         await page.setContent("<!doctype html><html><body></body></html>");
         await installMockHass(page);

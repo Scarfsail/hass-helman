@@ -535,7 +535,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             const store = getSharedHelmanStore(this._latestHass!);
             const payload = await store.getDeviceTree({ fresh: freshTree });
             if (obsolete()) return false;
-            const history = await store.getHistory();
+            const history = await store.getHistory({ fresh: freshTree });
             if (obsolete()) return false;
             const entityMap = this._buildEntityMap(payload);
             const energy = this._readEnergyValues(this._latestHass!, entityMap);

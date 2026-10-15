@@ -33,7 +33,7 @@ export interface HelmanStore {
     getAppliances(): Promise<AppliancesPayload>;
     getApplianceProjections(): Promise<ApplianceProjectionsPayload>;
     getDeviceTree(options?: { fresh?: boolean }): Promise<TreePayload>;
-    getHistory(): Promise<HistoryPayload>;
+    getHistory(options?: { fresh?: boolean }): Promise<HistoryPayload>;
     getNodeDetail<T>(request: Omit<GetNodeDetailRequest, "type">, options?: { fresh?: boolean }): Promise<T>;
 }
 
@@ -152,7 +152,8 @@ class HelmanStoreImpl implements HelmanStore {
         return this._dedupe("get_device_tree", () => this._client.getDeviceTree());
     }
 
-    public getHistory(): Promise<HistoryPayload> {
+    public getHistory(options?: { fresh?: boolean }): Promise<HistoryPayload> {
+        if (options?.fresh) this._inFlight.delete("get_history");
         return this._dedupe("get_history", () => this._client.getHistory());
     }
 
