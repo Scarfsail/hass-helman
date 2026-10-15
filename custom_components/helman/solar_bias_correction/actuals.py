@@ -19,8 +19,6 @@ except Exception:  # pragma: no cover - Home Assistant API compatibility
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
-from ..const import DOMAIN
-from ..power_polarity import is_power_inverted
 from .forecast_slot_history import (
     ForecastSlotWindow,
     load_spliced_forecast_slots_for_window,
@@ -160,7 +158,7 @@ async def load_actuals_window(
 
     # Resolved before anything is read: which entities the tail read has to
     # cover depends on whether curtailment can run at all.
-    curtailment_entities = _resolve_curtailment_entities(hass, cfg)
+    curtailment_entities = _resolve_curtailment_entities(cfg)
     tail = await _resolve_statistics_tail(
         hass,
         entity_id,
@@ -576,26 +574,25 @@ def _union_invalidations(
 
 
 def _resolve_curtailment_entities(
-    hass: HomeAssistant,
     cfg: BiasConfig,
 ) -> tuple[str, str] | None:
     """``(battery SoC entity, grid power entity)`` when curtailment can run.
 
     None when the SoC threshold is unset — the rule is off — or when either
-    sensor is missing from the runtime config, which is worth a warning: the
+    sensor is missing from the training snapshot, which is worth a warning: the
     user asked for curtailment invalidation and is not getting it.
     """
     if cfg.slot_invalidation_max_battery_soc_percent is None:
         return None
 
-    soc_entity_id = _read_battery_soc_entity_id_from_runtime_config(hass)
+    soc_entity_id = cfg.battery_soc_entity_id
     if soc_entity_id is None:
         _LOGGER.warning(
             "Solar bias slot invalidation is configured, but energy_nodes.battery.entities.capacity is unavailable at runtime; skipping curtailment invalidation for this training window"
         )
         return None
 
-    grid_power_entity_id = _read_grid_power_entity_id_from_runtime_config(hass)
+    grid_power_entity_id = cfg.grid_power_entity_id
     if grid_power_entity_id is None:
         _LOGGER.warning(
             "Solar bias slot invalidation is configured, but energy_nodes.grid.entities.power is unavailable at runtime; skipping curtailment invalidation for this training window"
@@ -707,7 +704,7 @@ async def _load_curtailment_invalidations(
     # curtailment filter inverts, invalidating exporting slots and keeping
     # genuinely curtailed ones. Normalise here rather than widening that
     # contract, which several call sites rely on.
-    grid_power_inverted = _read_grid_power_inverted_from_runtime_config(hass)
+    grid_power_inverted = cfg.grid_power_inverted
 
     soc_samples_utc: list[StateSample] = []
     grid_power_samples_utc: list[StateSample] = []
@@ -868,7 +865,7 @@ def _load_data_glitch_invalidations(
     difference between the two runs -- the rules themselves are unchanged, the
     backfill walk and the neighbour radius both being in minutes already.
     """
-    max_slot_wh = _resolve_data_glitch_max_slot_wh(hass, cfg)
+    max_slot_wh = _resolve_data_glitch_max_slot_wh(cfg)
     min_neighbour_forecast_wh = (
         cfg.slot_invalidation_data_glitch_min_neighbour_forecast_wh
     )
@@ -920,87 +917,15 @@ def _load_data_glitch_invalidations(
 
 
 def _resolve_data_glitch_max_slot_wh(
-    hass: HomeAssistant,
     cfg: BiasConfig,
 ) -> float | None:
     if cfg.slot_invalidation_data_glitch_max_slot_wh is not None:
         return cfg.slot_invalidation_data_glitch_max_slot_wh
-    solar_max_power_w = _read_solar_max_power_from_runtime_config(hass)
+    solar_max_power_w = cfg.solar_max_power_w
     if solar_max_power_w is None or solar_max_power_w <= 0:
         return None
     # 15-minute slot at full inverter output, with 5% headroom.
     return solar_max_power_w * 0.25 * 1.05
-
-
-def _read_solar_max_power_from_runtime_config(hass: HomeAssistant) -> float | None:
-    runtime_config = getattr(
-        hass.data.get(DOMAIN, {}).get("coordinator"),
-        "config",
-        None,
-    )
-    if not isinstance(runtime_config, dict):
-        return None
-    solar_config = runtime_config.get("energy_nodes", {}).get("solar", {})
-    raw_value = solar_config.get("max_power")
-    if isinstance(raw_value, bool) or raw_value is None:
-        return None
-    if isinstance(raw_value, (int, float)):
-        return float(raw_value)
-    if isinstance(raw_value, str):
-        try:
-            return float(raw_value.strip())
-        except ValueError:
-            return None
-    return None
-
-
-def _read_battery_soc_entity_id_from_runtime_config(hass: HomeAssistant) -> str | None:
-    return _read_device_entity_id_from_runtime_config(hass, "battery", "capacity")
-
-
-def _read_grid_power_entity_id_from_runtime_config(hass: HomeAssistant) -> str | None:
-    """The signed grid power sensor.
-
-    Its own convention is whatever ``power_polarity`` says; callers here
-    normalise to positive-is-export via
-    :func:`_read_grid_power_inverted_from_runtime_config`.
-    """
-    return _read_device_entity_id_from_runtime_config(hass, "grid", "power")
-
-
-def _read_grid_power_inverted_from_runtime_config(hass: HomeAssistant) -> bool:
-    """Whether the configured grid sensor reads positive-is-import."""
-    runtime_config = getattr(
-        hass.data.get(DOMAIN, {}).get("coordinator"),
-        "config",
-        None,
-    )
-    if not isinstance(runtime_config, dict):
-        return False
-    energy_nodes = runtime_config.get("energy_nodes")
-    if not isinstance(energy_nodes, dict):
-        return False
-    return is_power_inverted(energy_nodes.get("grid"), "grid")
-
-
-def _read_device_entity_id_from_runtime_config(
-    hass: HomeAssistant,
-    device: str,
-    entity_key: str,
-) -> str | None:
-    runtime_config = getattr(
-        hass.data.get(DOMAIN, {}).get("coordinator"),
-        "config",
-        None,
-    )
-    if not isinstance(runtime_config, dict):
-        return None
-
-    device_config = runtime_config.get("energy_nodes", {}).get(device, {})
-    entities = device_config.get("entities", {})
-    if not isinstance(entities, dict):
-        return None
-    return _read_entity_id(entities.get(entity_key))
 
 
 def _build_day_grid_slot_inputs(

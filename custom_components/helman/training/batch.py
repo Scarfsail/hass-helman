@@ -96,8 +96,8 @@ class TrainingBatch:
         """Run only the house consumption fit.
 
         Startup and config-save refits want the profile, not a bias re-train:
-        the bias fingerprint is untouched by a forecast config change, so
-        re-training it on every reload would be pure cost. It shares the
+        bias staleness is reported until nightly or manual training replaces
+        the profile. Re-training on every reload would be costly. It shares the
         batch's single flight all the same — the two jobs read the same
         recorder on the same executor thread and must never overlap.
         """

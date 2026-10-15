@@ -2549,7 +2549,8 @@ class HelmanCoordinator:
         # Tracked so it can be cancelled on unload, for the reason the sibling
         # tasks are: a reload builds a fresh coordinator whose "started" flag is
         # False, and a second run would re-read the file and re-import. The
-        # imports upsert, so nothing corrupts -- but it is wasted work.
+        # persisted original ownership boundaries let an interrupted series
+        # safely re-import its chunks; completed series are skipped.
         self._battery_forecast_backfill_task = self._hass.async_create_background_task(
             async_backfill_battery_forecast_statistics(self._hass),
             "helman_battery_forecast_backfill",

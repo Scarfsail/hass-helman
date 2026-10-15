@@ -377,35 +377,10 @@ def test_compute_fingerprint_includes_algorithm_version():
     cfg = make_cfg()
     fp = trainer.compute_fingerprint(cfg)
     assert fp.startswith("sha256:")
-    expected_payload = (
-        "algo=configurable_aggregation_v1+15min_v1+curtailment_inference_v1"
-        "+live_horizon_v1+hourly_statistics_tail_v1+carry_staleness_v1;"
-        f"min_history_days={cfg.min_history_days};"
-        f"clamp_min={cfg.clamp_min};"
-        f"clamp_max={cfg.clamp_max};"
-        f"min_valid_slot_days={cfg.min_valid_slot_days};"
-        f"aggregation_method={cfg.aggregation_method};"
-        "slot_invalidation_max_battery_soc_percent="
-        f"{cfg.slot_invalidation_max_battery_soc_percent};"
-        "slot_invalidation_curtailment_max_export_w="
-        f"{cfg.slot_invalidation_curtailment_max_export_w};"
-        "slot_invalidation_curtailment_max_actual_forecast_ratio="
-        f"{cfg.slot_invalidation_curtailment_max_actual_forecast_ratio};"
-        "slot_invalidation_data_glitch_max_slot_wh="
-        f"{cfg.slot_invalidation_data_glitch_max_slot_wh};"
-        "slot_invalidation_data_glitch_min_neighbour_forecast_wh="
-        f"{cfg.slot_invalidation_data_glitch_min_neighbour_forecast_wh};"
-        "slot_invalidation_data_glitch_backfill_max_minutes="
-        f"{cfg.slot_invalidation_data_glitch_backfill_max_minutes};"
-        "max_interpolated_consecutive_slots="
-        f"{cfg.max_interpolated_consecutive_slots};"
-        f"total_energy_entity_id={cfg.total_energy_entity_id};"
-        f"daily_energy_entity_ids={','.join(cfg.daily_energy_entity_ids)}"
-    )
-    import hashlib
+    from unittest.mock import patch
 
-    expected = "sha256:" + hashlib.sha256(expected_payload.encode("utf-8")).hexdigest()
-    assert fp == expected
+    with patch.object(trainer, "_ALGORITHM_VERSION", "changed_algorithm"):
+        assert trainer.compute_fingerprint(cfg) != fp
 
 
 def test_slot_factor_uses_trimmed_mean_of_daily_ratios():
@@ -1254,3 +1229,59 @@ def test_an_hourly_days_ratios_are_computed_once_for_the_fit_and_its_explanation
         for row in slot_explainability.rows:
             if row.status == "included":
                 assert row.reason == "hourly_statistics_grain"
+
+
+def test_fingerprint_tracks_effective_invalidation_inputs():
+    from copy import deepcopy
+    from custom_components.helman.solar_bias_correction.models import read_bias_config
+
+    config = {"energy_nodes": {
+        "battery": {"entities": {"capacity": "sensor.soc", "remaining_energy": "sensor.energy",
+            "min_soc": "number.min", "max_soc": "number.max"}},
+        "grid": {"entities": {"power": "sensor.grid"}},
+        "solar": {"max_power": 5000}},
+        "training": {"solar_bias": {"slot_invalidation": {"max_battery_soc_percent": 90}}}}
+    def fingerprint(value):
+        return trainer.compute_fingerprint(read_bias_config(value))
+    baseline = fingerprint(config)
+    for path, value in [
+        (("energy_nodes", "battery", "entities", "capacity"), "sensor.other_soc"),
+        (("energy_nodes", "grid", "entities", "power"), "sensor.other_grid"),
+        (("energy_nodes", "grid", "entities", "power_polarity"), "positive_is_import"),
+        (("energy_nodes", "solar", "max_power"), 6000),
+        (("training", "solar_bias", "max_training_window_days"), 45),
+    ]:
+        changed = deepcopy(config)
+        target = changed
+        for key in path[:-1]:
+            target = target[key]
+        target[path[-1]] = value
+        assert fingerprint(changed) != baseline, path
+
+    config["training"]["solar_bias"]["slot_invalidation"] = {"data_glitch_max_slot_wh": 1000}
+    baseline = fingerprint(config)
+    config["energy_nodes"]["battery"]["entities"]["capacity"] = "sensor.unused"
+    config["energy_nodes"]["grid"]["entities"] = {
+        "power": "sensor.unused", "power_polarity": "positive_is_import"
+    }
+    config["energy_nodes"]["solar"]["max_power"] = 8000
+    config["training"]["solar_bias"]["enabled"] = not read_bias_config(config).enabled
+    config["training"]["training_time"] = "03:47:00"
+    assert fingerprint(config) == baseline
+
+
+def test_bias_soc_snapshot_requires_canonical_battery_entity_config():
+    from custom_components.helman.solar_bias_correction.models import read_bias_config
+
+    config = {
+        "energy_nodes": {"battery": {"entities": {"capacity": "sensor.soc"}}},
+        "training": {"solar_bias": {"slot_invalidation": {"max_battery_soc_percent": 90}}},
+    }
+    assert read_bias_config(config).battery_soc_entity_id is None
+    config["energy_nodes"]["battery"]["entities"].update(
+        remaining_energy="sensor.energy", min_soc="number.min", max_soc="number.max"
+    )
+    snapshot = read_bias_config(config)
+    assert snapshot.battery_soc_entity_id == "sensor.soc"
+    config["energy_nodes"]["battery"]["entities"]["capacity"] = "sensor.changed"
+    assert snapshot.battery_soc_entity_id == "sensor.soc"

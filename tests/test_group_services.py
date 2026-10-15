@@ -91,6 +91,35 @@ NIGHT = ["switch.boiler", "light.boiler", "climate.ac"]
 
 
 class GroupResolverTests(unittest.TestCase):
+    def test_profile_charger_uses_resolved_charging_switch(self) -> None:
+        config = {
+            "devices": {
+                "groupings": [{"id": "power", "groups": [{"id": "night"}]}],
+                "consumers": [{"id": "wallbox", "kind": "ev_charger",
+                    "profile": {"id": "solax_ev_charger", "device_id": "charger"},
+                    "groups": {"power": "night"}}],
+            }
+        }
+        hass = SimpleNamespace(data={DOMAIN: {"storage": SimpleNamespace(config=config)}})
+        with patch("custom_components.helman.vendors._bound_device_entry", return_value=None), patch(
+            "homeassistant.helpers.entity_registry.async_get",
+            return_value=SimpleNamespace(async_get_entity_id=lambda *args: None),
+        ):
+            self.assertEqual(
+                group_services._resolve_group(hass, {"grouping": "power", "group": "night"}),
+                (["switch.helman_ev_charging_wallbox"], []),
+            )
+
+    def test_loaded_entry_uses_its_runtime_snapshot(self) -> None:
+        hass = SimpleNamespace(data={DOMAIN: {
+            "storage": SimpleNamespace(config={}),
+            "coordinator": SimpleNamespace(config=CONFIG),
+        }})
+        self.assertEqual(
+            group_services._resolve_group(hass, {"grouping": "power", "group": "night"}),
+            (NIGHT, ["no_control"]),
+        )
+
     def test_direct_members_in_tree_order_deduplicated(self) -> None:
         entity_ids, skipped = group_member_entities(CONFIG, "power", "night")
         self.assertEqual(entity_ids, NIGHT)

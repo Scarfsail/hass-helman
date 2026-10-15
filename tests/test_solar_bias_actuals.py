@@ -172,10 +172,13 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_load_actuals_window_feature_off_returns_empty_invalidation_map(self) -> None:
         hass = SimpleNamespace(
-            data={"helman": {"coordinator": SimpleNamespace(config={})}},
             config=SimpleNamespace(time_zone="UTC"),
         )
         cfg = SimpleNamespace(
+            battery_soc_entity_id=None,
+            grid_power_entity_id=None,
+            grid_power_inverted=False,
+            solar_max_power_w=None,
             total_energy_entity_id="sensor.solax_total_solar_energy",
             slot_invalidation_max_battery_soc_percent=None,
             slot_invalidation_curtailment_max_export_w=50.0,
@@ -215,10 +218,13 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
     async def test_raw_days_are_asked_for_in_one_read_rather_than_one_each(self) -> None:
         """Every raw-state day of the window goes into a single batched read (#241)."""
         hass = SimpleNamespace(
-            data={"helman": {"coordinator": SimpleNamespace(config={})}},
             config=SimpleNamespace(time_zone="UTC"),
         )
         cfg = SimpleNamespace(
+            battery_soc_entity_id=None,
+            grid_power_entity_id=None,
+            grid_power_inverted=False,
+            solar_max_power_w=None,
             total_energy_entity_id="sensor.solax_total_solar_energy",
             slot_invalidation_max_battery_soc_percent=None,
             slot_invalidation_curtailment_max_export_w=50.0,
@@ -274,25 +280,13 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_load_actuals_window_feature_on_calls_evaluator_with_utc_slots(self) -> None:
         hass = SimpleNamespace(
-            data={
-                "helman": {
-                    "coordinator": SimpleNamespace(
-                        config={
-                            "energy_nodes": {
-                                "battery": {
-                                    "entities": {
-                                        "capacity": "sensor.battery_soc",
-                                    }
-                                },
-                                "grid": {"entities": {"power": "sensor.grid_power"}},
-                            }
-                        }
-                    )
-                }
-            },
             config=SimpleNamespace(time_zone="UTC"),
         )
         cfg = SimpleNamespace(
+            battery_soc_entity_id='sensor.battery_soc',
+            grid_power_entity_id='sensor.grid_power',
+            grid_power_inverted=False,
+            solar_max_power_w=None,
             total_energy_entity_id="sensor.solax_total_solar_energy",
             slot_invalidation_max_battery_soc_percent=87.0,
             slot_invalidation_curtailment_max_export_w=50.0,
@@ -338,25 +332,14 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
 
     async def _run_with_grid_polarity(self, polarity):
         """Run one window with the grid device on ``polarity``; return the samples passed on."""
-        grid_entities = {"power": "sensor.grid_power"}
-        if polarity is not None:
-            grid_entities["power_polarity"] = polarity
         hass = SimpleNamespace(
-            data={
-                "helman": {
-                    "coordinator": SimpleNamespace(
-                        config={
-                            "energy_nodes": {
-                                "battery": {"entities": {"capacity": "sensor.battery_soc"}},
-                                "grid": {"entities": grid_entities},
-                            }
-                        }
-                    )
-                }
-            },
             config=SimpleNamespace(time_zone="UTC"),
         )
         cfg = SimpleNamespace(
+            battery_soc_entity_id='sensor.battery_soc',
+            grid_power_entity_id='sensor.grid_power',
+            grid_power_inverted=polarity == "positive_is_import",
+            solar_max_power_w=None,
             total_energy_entity_id="sensor.solax_total_solar_energy",
             slot_invalidation_max_battery_soc_percent=87.0,
             slot_invalidation_curtailment_max_export_w=50.0,
@@ -417,10 +400,13 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_load_actuals_window_skips_invalidation_when_battery_soc_entity_is_missing(self) -> None:
         hass = SimpleNamespace(
-            data={"helman": {"coordinator": SimpleNamespace(config={})}},
             config=SimpleNamespace(time_zone="UTC"),
         )
         cfg = SimpleNamespace(
+            battery_soc_entity_id=None,
+            grid_power_entity_id=None,
+            grid_power_inverted=False,
+            solar_max_power_w=None,
             total_energy_entity_id="sensor.solax_total_solar_energy",
             slot_invalidation_max_battery_soc_percent=87.0,
             slot_invalidation_curtailment_max_export_w=50.0,
@@ -453,10 +439,13 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_load_actuals_window_logs_warning_when_battery_soc_entity_is_missing(self) -> None:
         hass = SimpleNamespace(
-            data={"helman": {"coordinator": SimpleNamespace(config={})}},
             config=SimpleNamespace(time_zone="UTC"),
         )
         cfg = SimpleNamespace(
+            battery_soc_entity_id=None,
+            grid_power_entity_id=None,
+            grid_power_inverted=False,
+            solar_max_power_w=None,
             total_energy_entity_id="sensor.solax_total_solar_energy",
             slot_invalidation_max_battery_soc_percent=87.0,
             slot_invalidation_curtailment_max_export_w=50.0,
@@ -484,22 +473,13 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
         """Curtailment cannot tell a clipped slot from an exporting one without
         the grid sensor, so it stands down and says so."""
         hass = SimpleNamespace(
-            data={
-                "helman": {
-                    "coordinator": SimpleNamespace(
-                        config={
-                            "energy_nodes": {
-                                "battery": {
-                                    "entities": {"capacity": "sensor.battery_soc"}
-                                }
-                            }
-                        }
-                    )
-                }
-            },
             config=SimpleNamespace(time_zone="UTC"),
         )
         cfg = SimpleNamespace(
+            battery_soc_entity_id='sensor.battery_soc',
+            grid_power_entity_id=None,
+            grid_power_inverted=False,
+            solar_max_power_w=None,
             total_energy_entity_id="sensor.solax_total_solar_energy",
             slot_invalidation_max_battery_soc_percent=87.0,
             slot_invalidation_curtailment_max_export_w=50.0,
@@ -538,27 +518,15 @@ class SolarBiasActualsTests(unittest.IsolatedAsyncioTestCase):
             any("grid.entities.power" in message for message in captured_logs.output)
         )
 
-    async def test_load_actuals_window_uses_capacity_entity_without_soc_bounds(self) -> None:
+    async def test_load_actuals_window_uses_snapshot_soc_entity(self) -> None:
         hass = SimpleNamespace(
-            data={
-                "helman": {
-                    "coordinator": SimpleNamespace(
-                        config={
-                            "energy_nodes": {
-                                "battery": {
-                                    "entities": {
-                                        "capacity": "sensor.battery_soc",
-                                    }
-                                },
-                                "grid": {"entities": {"power": "sensor.grid_power"}},
-                            }
-                        }
-                    )
-                }
-            },
             config=SimpleNamespace(time_zone="UTC"),
         )
         cfg = SimpleNamespace(
+            battery_soc_entity_id='sensor.battery_soc',
+            grid_power_entity_id='sensor.grid_power',
+            grid_power_inverted=False,
+            solar_max_power_w=None,
             total_energy_entity_id="sensor.solax_total_solar_energy",
             slot_invalidation_max_battery_soc_percent=87.0,
             slot_invalidation_curtailment_max_export_w=50.0,

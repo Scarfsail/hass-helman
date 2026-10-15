@@ -528,6 +528,9 @@ class HourGrainCurtailmentTests(unittest.IsolatedAsyncioTestCase):
         recorder.actual_scale = {hour: 0.4 for hour in range(24)}
 
         cfg = _cfg(
+            battery_soc_entity_id=SOC,
+            grid_power_entity_id=GRID,
+            grid_power_inverted=inverted,
             slot_invalidation_max_battery_soc_percent=90.0,
             slot_invalidation_curtailment_max_export_w=50.0,
             slot_invalidation_curtailment_max_actual_forecast_ratio=0.8,
@@ -610,6 +613,9 @@ class SplitHorizonTests(unittest.IsolatedAsyncioTestCase):
         recorder.actual_scale = {hour: actual_scale for hour in range(24)}
 
         cfg = _cfg(
+            battery_soc_entity_id=SOC,
+            grid_power_entity_id=GRID,
+            grid_power_inverted=False,
             slot_invalidation_max_battery_soc_percent=90.0,
             slot_invalidation_curtailment_max_export_w=50.0,
             slot_invalidation_curtailment_max_actual_forecast_ratio=0.8,

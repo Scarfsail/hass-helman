@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..battery_state import read_battery_entity_config
+from ..power_polarity import is_power_inverted
 from ..const import (
     SOLAR_BIAS_DEFAULT_ENABLED,
     SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS,
@@ -48,6 +50,12 @@ class BiasConfig:
     slot_invalidation_data_glitch_backfill_max_minutes: int = (
         SOLAR_BIAS_DEFAULT_DATA_GLITCH_BACKFILL_MAX_MINUTES
     )
+    # Effective invalidation inputs belong to the training snapshot. Inactive
+    # rules carry None so changes to unused sensors do not stale the profile.
+    battery_soc_entity_id: str | None = None
+    grid_power_entity_id: str | None = None
+    grid_power_inverted: bool | None = None
+    solar_max_power_w: float | None = None
     max_training_window_days: int = SOLAR_BIAS_DEFAULT_MAX_TRAINING_WINDOW_DAYS
 
 
@@ -732,7 +740,35 @@ def read_bias_config(config: dict[str, Any]) -> BiasConfig:
     ):
         slot_invalidation_data_glitch_backfill_max_minutes = int(glitch_backfill)
 
+    battery_soc_entity_id = None
+    grid_power_entity_id = None
+    grid_power_inverted = None
+    energy_nodes = config.get("energy_nodes", {})
+    if slot_invalidation_max_battery_soc_percent is not None:
+        battery = read_battery_entity_config(config)
+        battery_soc_entity_id = battery.capacity_entity_id if battery is not None else None
+        grid = energy_nodes.get("grid", {})
+        raw_grid_entity = grid.get("entities", {}).get("power")
+        if isinstance(raw_grid_entity, str) and raw_grid_entity.strip():
+            grid_power_entity_id = raw_grid_entity.strip()
+        grid_power_inverted = is_power_inverted(grid, "grid")
+
+    solar_max_power_w = None
+    if slot_invalidation_data_glitch_max_slot_wh is None:
+        raw_power = energy_nodes.get("solar", {}).get("max_power")
+        if not isinstance(raw_power, bool) and isinstance(raw_power, (int, float, str)):
+            try:
+                power = float(raw_power)
+                if power > 0:
+                    solar_max_power_w = power
+            except ValueError:
+                pass
+
     return BiasConfig(
+        battery_soc_entity_id=battery_soc_entity_id,
+        grid_power_entity_id=grid_power_entity_id,
+        grid_power_inverted=grid_power_inverted,
+        solar_max_power_w=solar_max_power_w,
         enabled=enabled,
         min_history_days=min_history_days,
         training_time=training_time,

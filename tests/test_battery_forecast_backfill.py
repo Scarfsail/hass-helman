@@ -333,6 +333,33 @@ class TestMonthCacheInvalidation(unittest.TestCase):
 
 
 class TestDoneMarker(unittest.TestCase):
+    def test_cancelled_chunk_resumes_using_original_owned_boundary(self):
+        days = {f"2026-04-{day:02d}": {"07:00": {"socPct": 50.0}} for day in range(1, 21)}
+        _FakeStore._SOURCES = {mod._SOURCE_STORAGE_KEY: {"days": days}}
+        _FakeStore._MARKER = {}
+        imported = []
+
+        async def first_owned(*args):
+            return FAR_FUTURE
+
+        async def cancel_after_chunk(*args):
+            raise asyncio.CancelledError
+
+        with patch.object(mod, "storage", SimpleNamespace(Store=_FakeStore)), patch.object(
+            mod, "_first_hour_home_assistant_owns", first_owned
+        ), patch.object(span, "async_forget_imported_statistics", cancel_after_chunk), patch.object(
+            mod, "async_import_statistics", lambda hass, meta, rows: imported.extend(rows)
+        ):
+            with self.assertRaises(asyncio.CancelledError):
+                asyncio.run(mod.async_backfill_battery_forecast_statistics(HASS))
+        self.assertTrue(imported)
+        marker = dict(_FakeStore._MARKER)
+        self.assertNotIn(SOC, marker.get(mod._STORAGE_KEY, {}).get("done", []))
+        imports, finished = _run(days, marker=marker, first_owned=imported[0]["start"])
+        all_rows = _rows_for(imports, SOC)
+        self.assertEqual(len(all_rows), 20)
+        self.assertIn(SOC, finished["done"])
+
     def test_a_second_run_writes_nothing(self):
         days = {"2026-05-20": {"07:00": {"socPct": 50.0, "gridNetWh": 100.0}}}
 
