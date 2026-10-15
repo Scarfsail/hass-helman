@@ -243,6 +243,9 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         this._projectionRequest += 1;
         this._todayRequest += 1;
         this._segmentRequest += 1;
+        if (this._projection?.status === "loading") this._projection = null;
+        if (this._today?.status === "loading") this._today = null;
+        if (this._segment?.status === "loading") this._segment = null;
     }
 
     protected _onDataChanged(): void {

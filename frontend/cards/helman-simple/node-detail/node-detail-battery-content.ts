@@ -127,6 +127,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
         this._unsubscribeSchedule?.();
         this._unsubscribeSchedule = undefined;
         this._chargeRequest += 1;
+        if (this._charge?.status === "loading") this._charge = null;
     }
 
     protected _onDataChanged(): void {
@@ -184,8 +185,6 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
             if (this._charge?.status !== "ready") this._charge = { status: "error" };
         }
     }
-
-    /** Whether a period that starts at `start` is today in HA's time zone. */
 
     // ── Disclosure ──────────────────────────────────────────────────────────
 

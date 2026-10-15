@@ -35,7 +35,7 @@ import {
 } from "../../shared/schedule/schedule-types";
 import { todayIso } from "../../shared/today-iso";
 import "../../helman-device-reports/device-report-ranking";
-import { IDLE_W, NodeDetailContentBase, TODAY_REFRESH_MS, type NodeFlow, type SectionState } from "./node-detail-base";
+import { IDLE_W, NodeDetailContentBase, NEW_DAY_RETRY_MS, TODAY_REFRESH_MS, type NodeFlow, type SectionState } from "./node-detail-base";
 import { readingNumber } from "./node-detail-readings";
 import { powerUnitFactor, readPowerW } from "../../shared/power-reading";
 import { dayKey, todayAndTomorrow } from "./node-detail-schedule";
@@ -43,9 +43,6 @@ import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyl
 import type { HouseDetailParams } from "./node-detail-types";
 
 type QuestionId = "sources" | "consumers" | "next" | "pattern" | "phases";
-
-/** How often a stale day's figures are retried after midnight. */
-const NEW_DAY_RETRY_MS = 30_000;
 
 /** The forecast's canonical slot. */
 const SLOT_MS = 15 * 60_000;
@@ -332,7 +329,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
             const age = Date.now() - requestedAt;
             return age > TODAY_REFRESH_MS || (!isToday && age > NEW_DAY_RETRY_MS);
         };
-        if (this._today?.status === "ready" && stale(this._isToday(this._today.payload.period.start), this._todayRequestedAt)) void this._loadToday();
+        if (this._today?.status === "ready" && this._todayStale()) void this._loadToday();
         if (this._pattern?.status === "ready" && stale(this._isToday(this._pattern.payload.period.start), this._patternRequestedAt)) void this._loadPattern();
         // The full ranking only while its evidence is open.
         if (this._open === "consumers" && this._evidenceOpen && this._ranking?.status === "ready"
@@ -358,6 +355,9 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         this._todayRequest += 1;
         this._patternRequest += 1;
         this._rankingRequest += 1;
+        if (this._today?.status === "loading") this._today = null;
+        if (this._pattern?.status === "loading") this._pattern = null;
+        if (this._ranking?.status === "loading") this._ranking = null;
     }
 
     protected _onDataChanged(): void {

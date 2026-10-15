@@ -1,10 +1,7 @@
-import { installMockHass } from "./support/mock-hass";
-import { scheduleSlots, treeNode, treePayload } from "./support/payload-builders";
+import { prepareNodeDetailPage, mountSimpleCard, nodeDetailLocators, sectionRequestLog, treeNode, holdSection, powerTick, reconnectDetail } from "./support/node-detail-harness";
+import { scheduleSlots, treePayload } from "./support/payload-builders";
 import type { EvChargerUseMode, ScheduleControllableActionsDTO, SchedulePayload, ScheduleSlotDTO, TreeItemDTO } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
-import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
-import { installFixedClock } from "./support/fixed-clock";
-import { CARD_BUNDLE } from "./support/card-page";
 import { expectReducedMotionStill } from "./support/node-flow";
 
 /**
@@ -80,12 +77,7 @@ declare global {
 }
 
 async function mount(page: Page, variant: Variant = {}): Promise<void> {
-    await installFixedClock(page);
-    await page.setContent("<!doctype html><html><body style='margin:0'></body></html>");
-    await installMockHass(page);
-    await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-card"));
-    await page.addScriptTag({ content: HA_DIALOG_STUB });
+    await prepareNodeDetailPage(page);
         const dto = (overrides: Partial<TreeItemDTO>) => treeNode({ childrenFullWidth: true, ...overrides });
         const tree = treePayload({
             sources: [
@@ -135,9 +127,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
         document.addEventListener("hass-more-info", (event) => window.__moreInfo.push((event as CustomEvent).detail.entityId));
         const profile = v.profile !== false;
         const updated = "2026-10-21T11:59:50+00:00";
-        const s = (state: string, unit?: string, at = updated, changedAt = at) => ({
-            state, last_reported: at, last_updated: changedAt, last_changed: changedAt, attributes: unit ? { unit_of_measurement: unit } : {},
-        });
+        const s = (value: string, unit?: string, at = updated, changedAt = at) => window.__nodeDetailState(value, unit, {}, at, changedAt);
         const phases = v.phases ?? ["2100", "2150", "2150"];
         const phaseAt = new Date(Date.parse(updated) - (v.phasesAgeS ?? 0) * 1000).toISOString();
         const phaseChangedAt = new Date(Date.parse(phaseAt) - (v.phasesHeldS ?? 0) * 1000).toISOString();
@@ -276,63 +266,19 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             generatedAt: v.projectionGeneratedAt ?? "2026-10-21T12:00:00+00:00",
             appliances: v.projectionEmpty ? {} : { "garage-ev": { series } },
         };
-        window.__EvChargerRequests = [];
-        window.__EvChargerHass = {
-            language: "en",
-            locale: { language: "en-GB" },
-            config: { time_zone: v.timeZone ?? "UTC" },
-            user: { is_admin: true },
-            callService: async (domain: string, service: string, data: Record<string, unknown>) => {
+        window.__EvChargerHass = window.__configureNodeDetail({
+            states, tree, overviews: { ev_charger: overview }, sections: { ev_charger: { today, segment } }, schedule,
+            timeZone: v.timeZone,
+            hass: { user: { is_admin: true }, callService: async (domain: string, service: string, data: Record<string, unknown>) => {
                 window.__serviceCalls.push([domain, service, data]);
-            },
-            connection: {
-                sendMessagePromise: async () => ({}),
-                subscribeMessage: window.__mockHass().connection.subscribeMessage,
-            },
-            states,
-            callWS: window.__mockHass({
-                "helman/get_device_tree": async (msg: {
-                    type: string;
-                    node?: string;
-                    section?: string;
-                    device_id?: string;
-                }) => {
-                    return tree;
-                },
-                "helman/get_history": async (msg: {
-                    type: string;
-                    node?: string;
-                    section?: string;
-                    device_id?: string;
-                }) => {
-                    return { entity_history: {} };
-                },
-                "helman/get_schedule": async (msg: {
-                    type: string;
-                    node?: string;
-                    section?: string;
-                    device_id?: string;
-                }) => {
-                    return schedule;
-                },
-                "helman/get_appliances": async (msg: {
-                    type: string;
-                    node?: string;
-                    section?: string;
-                    device_id?: string;
-                }) => {
-                    return appliances;
-                },
-                "helman/get_appliance_projections": async (msg: {
-                    type: string;
-                    node?: string;
-                    section?: string;
-                    device_id?: string;
-                }) => {
-                    if (v.projectionFails || (window as any).__projectionDown)
-                        throw new Error("projection down");
+            } },
+            replies: {
+                "helman/get_appliances": appliances,
+                "helman/get_appliance_projections": () => {
+                    if (v.projectionFails || (window as any).__projectionDown) throw new Error("projection down");
                     return projection;
                 },
+                "recorder/statistic_during_period": { change: 1 },
                 "helman/get_node_detail": async (msg: {
                     type: string;
                     node?: string;
@@ -347,30 +293,11 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                         throw new Error("today down");
                     return msg.section ? today : overview;
                 },
-                "recorder/statistic_during_period": async (msg: {
-                    type: string;
-                    node?: string;
-                    section?: string;
-                    device_id?: string;
-                }) => {
-                    return { change: 1 };
-                }
-            }, (msg: {
-                type: string;
-                node?: string;
-                section?: string;
-                device_id?: string;
-            }) => {
-                window.__EvChargerRequests.push({ type: msg.type, node: msg.node, section: msg.section, device_id: msg.device_id });
-            }).callWS,
-        };
+            },
+        });
+        window.__EvChargerRequests = window.__NodeDetailRequests;
     }, { v: variant, tree, scheduleDefaults: scheduleSlots({ slotMinutes: 15 }) });
-    await page.evaluate(async () => {
-        const card = document.createElement("helman-card") as any;
-        await card.setConfig({ type: "custom:helman-card" });
-        card.hass = window.__EvChargerHass;
-        document.body.appendChild(card);
-    });
+    await mountSimpleCard(page, undefined, "helman-card");
     await expect.poll(() => page.evaluate(() => window.__deepAll(document, "helman-tree-item").length)).toBeGreaterThan(1);
 }
 
@@ -383,22 +310,15 @@ async function openDevice(page: Page, name: string): Promise<void> {
     }, name);
 }
 
-const content = (page: Page) => page.locator("node-detail-ev-charger-content");
+const { content, question, header, evidence, tile, flow, flowLabel } = nodeDetailLocators("ev-charger");
 const overview = (page: Page) => content(page).locator("[data-overview]");
-const question = (page: Page, id: string) => content(page).locator(`helman-node-question[data-question="${id}"]`);
-const header = (page: Page, id: string) => question(page, id).locator("button.header");
-const evidence = (page: Page, id: string) => question(page, id).locator("button.evidence-toggle");
-const tile = (page: Page, id: string) => content(page).locator(`helman-node-tile[data-question="${id}"]`);
-const flow = (page: Page) => content(page).locator("helman-node-flow");
-const flowLabel = (page: Page, side: "in" | "out", id: string) => flow(page).locator(`[data-side="${side}"] [data-flow="${id}"]`);
 const glyph = (page: Page) => content(page).locator("helman-soc-glyph");
 const strip = (page: Page) => content(page).locator("helman-mode-strip");
 const switchLine = (page: Page) => content(page).locator("[data-switch-line]");
 // The card's own inverter overview, for its distribution row's cell, is not the detail's.
 const requests = (page: Page, type: string) =>
     page.evaluate((type) => window.__EvChargerRequests.filter((r) => r.type === type && r.node !== "inverter"), type);
-const sectionRequests = async (page: Page, section: string) =>
-    (await requests(page, "helman/get_node_detail")).filter((r) => r.section === section).length;
+const sectionRequests = async (page: Page, section: string) => (await sectionRequestLog(page, "ev_charger", section)).length;
 
 async function openCharger(page: Page, variant: Variant = {}): Promise<void> {
     await mount(page, variant);
@@ -1221,4 +1141,44 @@ test.describe("screenshots", { tag: "@screens" }, () => {
             });
         }
     }
+});
+
+
+test("Today across midnight throttles power ticks and accepts a late answer", async ({ page }) => {
+    await openCharger(page);
+    await flow(page).locator("[data-scope='today']").click();
+    await expect(flow(page)).toContainText("11:55");
+    await holdSection(page, "ev_charger", "today");
+    const before = (await sectionRequestLog(page, "ev_charger", "today")).length;
+    for (let second = 0; second < 10; second += 1) {
+        await page.clock.setFixedTime(new Date(Date.parse("2026-10-22T00:00:00Z") + second * 1000));
+        await powerTick(page, "node-detail-ev-charger-content", second);
+    }
+    expect((await sectionRequestLog(page, "ev_charger", "today")).length - before).toBe(1);
+    // A delayed answer can still be for yesterday; accept it, then wait out the retry interval.
+    await page.evaluate(() => (window as any).__releaseSection());
+    await expect(flow(page)).toContainText("00:00–00:00");
+    await expect(flowLabel(page, "in", "solar")).toContainText("kWh");
+    for (let second = 10; second <= 30; second += 1) {
+        await page.clock.setFixedTime(new Date(Date.parse("2026-10-22T00:00:00Z") + second * 1000));
+        await powerTick(page, "node-detail-ev-charger-content", second);
+    }
+    expect((await sectionRequestLog(page, "ev_charger", "today")).length - before).toBe(1);
+    await page.clock.setFixedTime(new Date("2026-10-22T00:00:31Z"));
+    await powerTick(page, "node-detail-ev-charger-content", 31);
+    expect((await sectionRequestLog(page, "ev_charger", "today")).length - before).toBe(2);
+    await page.evaluate(() => (window as any).__releaseSection(true));
+    await expect.poll(() => content(page).evaluate((element: any) => element._today?.status)).toBe("ready");
+});
+
+
+test("a disconnected loading section can recover after reconnect", async ({ page }) => {
+    await openCharger(page);
+    await holdSection(page, "ev_charger", "today");
+    await flow(page).locator("[data-scope='today']").click();
+    await expect.poll(() => content(page).evaluate((element: any) => element._today?.status)).toBe("loading");
+    expect(await reconnectDetail(page, "node-detail-ev-charger-content", "_today")).toBeNull();
+    await expect.poll(() => content(page).evaluate((element: any) => element._today?.status)).toBe("loading");
+    await page.evaluate(() => { (window as any).__releaseSection(); (window as any).__releaseSection(); });
+    await expect.poll(() => content(page).evaluate((element: any) => element._today?.status)).toBe("ready");
 });

@@ -30,6 +30,9 @@ export { IDLE_W };
 /** How stale a "today so far" answer may get before it is re-read, while visible. */
 export const TODAY_REFRESH_MS = 5 * 60_000;
 
+/** Retry an answer from the previous day without issuing a read on every power tick. */
+export const NEW_DAY_RETRY_MS = 30_000;
+
 /** The Today flow is drawn at the Now scale × this many hours, kWh. */
 export const TODAY_SCALE_HOURS = 4;
 
@@ -203,6 +206,12 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
         super.updated(changed);
         const now = Date.now();
         let next = now + TODAY_REFRESH_MS;
+        const { state, requestedAt } = this._todaySection();
+        if (this._flowScope === "today" && state?.status === "ready" && !this._isToday(state.payload.period.start)) {
+            // Staleness uses a strict age comparison; wake after the retry interval.
+            const retryAt = requestedAt + NEW_DAY_RETRY_MS + 1;
+            if (retryAt > now && retryAt < next) next = retryAt;
+        }
         for (const at of this._clockBoundaries()) if (at > now && at < next) next = at;
         this._nextBoundary = next;
     }
@@ -272,9 +281,10 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
     /** Whether today's section needs a read: none yet, from another day, or older than the refresh period. */
     protected _todayStale(): boolean {
         const { state, requestedAt } = this._todaySection();
-        return state?.status !== "ready"
-            || !this._isToday(state.payload.period.start)
-            || Date.now() - requestedAt > TODAY_REFRESH_MS;
+        if (state?.status !== "ready") return true;
+        const age = Date.now() - requestedAt;
+        return age > TODAY_REFRESH_MS
+            || (!this._isToday(state.payload.period.start) && age > NEW_DAY_RETRY_MS);
     }
 
     /** Today's flows, the node's `flows` section; a refresh keeps the day's figures on screen. */
