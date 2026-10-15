@@ -207,12 +207,12 @@ test.describe("the distribution row's inverter cell", () => {
     }
 });
 
-test("live history and detail context use watts for kW sensors", async ({ page }) => {
+test("live history and detail context use watts for mixed-case power units", async ({ page }) => {
     await mountCard(page);
     const values = await page.evaluate(() => {
         const card = document.querySelector("helman-card") as any;
         const hass = (window as any).__hass;
-        hass.states["sensor.house"] = { state: "2.4", attributes: { unit_of_measurement: "kW" } };
+        hass.states["sensor.house"] = { state: "2.4", attributes: { unit_of_measurement: "KW" } };
         hass.states["sensor.solar"] = { state: "4.2", attributes: { unit_of_measurement: "kW" } };
         card.hass = { ...hass };
         card._historyEngine.advanceBuckets(card._computedNodes.sourcesChildren, card._computedNodes.sourcesChildren);

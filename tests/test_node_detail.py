@@ -1278,13 +1278,14 @@ def test_a_configured_capacity_that_divides_nothing_is_none(max_power):
     assert payload["configuredMaxPowerW"] is None
 
 
-def test_the_production_section_reports_the_peak_in_watts():
-    stats = {"sensor.solar_power": power_day([(at(12), 7.5), (at(12, 5), 9.8)], unit="kW")}
+@pytest.mark.parametrize("unit", ["kW", "KW", "kw"])
+def test_the_production_section_reports_the_peak_in_watts(unit):
+    stats = {"sensor.solar_power": power_day([(at(12), 7.5), (at(12, 5), 9.8)], unit=unit)}
 
     payload, calls, _ = solar_detail(section="production", day_stats_result=stats)
 
     assert calls == [["sensor.solar_power"]]
-    assert payload["unit"] == "kW"
+    assert payload["unit"] == unit
     power = payload["power"]
     assert power["unit"] == "W"
     assert power["max"] == pytest.approx(9800.0)

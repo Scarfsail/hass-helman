@@ -5,6 +5,7 @@ import type { LocalizeFunction } from "../../localize/localize";
 import type { TreeItem } from "../../helman/tree-item";
 import type { DeviceDetailParams } from "./node-detail-types";
 import { nodeDetailSharedStyles } from "./node-detail-shared-styles";
+import { readPowerW } from "../../shared/power-reading";
 import { formatPower } from "../../power-format";
 import "../../appliance-switch-badge";
 import { fetchDeviceStats, type DeviceStats, type DeviceStatsSpread } from "../../helman-api";
@@ -172,8 +173,8 @@ export class NodeDetailDeviceContent extends LitElement {
     }
 
     private _livePower(item: TreeItem): string {
-        const raw = parseFloat(this.hass.states?.[powerEntity(item) ?? ""]?.state ?? "");
-        return Number.isFinite(raw) ? formatPower(raw).display : "—";
+        const power = readPowerW(this.hass, powerEntity(item));
+        return power === null ? "—" : formatPower(power).display;
     }
 
     private _tile(key: "today" | "last_hour", value: Reading, meter: string) {

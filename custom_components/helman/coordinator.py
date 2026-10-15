@@ -138,7 +138,7 @@ from .device_reports.reports import ReportQuery, build_report
 from .house_device_consumers import extract_house_device_consumers
 from .house_forecast_response import build_house_forecast_response
 from .point_forecast_response import build_solar_forecast_response
-from .power_reading import WATTS
+from .power_reading import power_unit_factor
 from .power_polarity import is_power_inverted, watts_for_value_type
 from .solar_bias_correction.response import build_bias_correction_payload
 from .recorder_hourly_series import (
@@ -5894,7 +5894,7 @@ class HelmanCoordinator:
             raw = float(state.state)
         except ValueError:
             return None
-        factor = WATTS.get(getattr(state, "attributes", {}).get("unit_of_measurement") or "W")
+        factor = power_unit_factor(getattr(state, "attributes", {}).get("unit_of_measurement"))
         return None if factor is None else watts_for_value_type(raw * factor, value_type)
 
     def _read_battery_state(self):

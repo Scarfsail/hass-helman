@@ -915,13 +915,13 @@ test.describe("disclosure and live data", () => {
         await expect(content(page).locator("helman-node-question")).toHaveCount(0);
     });
 
-    test("live readings reach the open flow", async ({ page }) => {
+    test("mixed-case power units reach the open flow in watts", async ({ page }) => {
         await mount(page);
         await openDetail(page);
         await page.evaluate(() => {
             const card = document.querySelector("helman-simple-card") as any;
             const hass = window.__SolarHass;
-            card.hass = { ...hass, states: { ...hass.states, "sensor.solax_pv_power_1": { state: "3000", attributes: { unit_of_measurement: "W" } } } };
+            card.hass = { ...hass, states: { ...hass.states, "sensor.solax_pv_power_1": { state: "3", attributes: { unit_of_measurement: "KW" } } } };
         });
         await expect(flowLabel(page, "in", "string-1")).toContainText("3.0 kW");
     });

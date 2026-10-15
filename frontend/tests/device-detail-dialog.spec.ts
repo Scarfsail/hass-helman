@@ -248,6 +248,32 @@ test.describe("device detail from the power card", () => {
         }]);
     });
 
+    for (const [unit, value, expected] of [
+        ["kW", "3", "3.0 kW"],
+        ["KW", "3", "3.0 kW"],
+        ["kw", "3", "3.0 kW"],
+        ["MW", "0.003", "3.0 kW"],
+        ["VA", "3", "—"],
+    ]) {
+        test(`device detail converts live ${unit} readings`, async ({ page }) => {
+            await clickInRow(page, "Boiler", ".deviceName");
+            await page.evaluate(({ unit, value }) => {
+                const content = (window as any).__deepAll(document, "node-detail-device-content")[0];
+                content.hass = {
+                    ...content.hass,
+                    states: {
+                        ...content.hass.states,
+                        "sensor.boiler_power": { state: value, attributes: { unit_of_measurement: unit } },
+                    },
+                };
+            }, { unit, value });
+            await expect.poll(() => page.evaluate(() => {
+                const content = (window as any).__deepAll(document, "node-detail-device-content")[0];
+                return content.shadowRoot.querySelector(".power")?.textContent.trim();
+            })).toBe(expected);
+        });
+    }
+
     test("a meterless device opens with no energy tiles", async ({ page }) => {
         await clickInRow(page, "Boiler", ".childrenToggle");
         await expect.poll(() => rowNames(page)).toContain("Pump");

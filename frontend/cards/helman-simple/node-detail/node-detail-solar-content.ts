@@ -28,7 +28,7 @@ import type { DayLineSeries } from "../../shared/day-line-chart";
 import type { FlowItem } from "../../shared/node-flow";
 import { IDLE_W, NodeDetailContentBase, TODAY_REFRESH_MS, type NodeFlow, type SectionState } from "./node-detail-base";
 import { readEnergyKWh } from "./node-detail-readings";
-import { WATTS } from "../../shared/power-reading";
+import { powerUnitFactor } from "../../shared/power-reading";
 import {
     currentRun,
     currentRuntime,
@@ -1345,7 +1345,9 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
     }
 
     private _watts(overview: SolarDetailPayload, key: string): number | null {
-        return this._scaled(overview, key, WATTS);
+        const value = this._number(overview, key);
+        const factor = powerUnitFactor(this.hass, overview.entities[key]);
+        return value === null || factor === null || value < 0 ? null : value * factor;
     }
 
     private _periodText(startMs: number, endMs: number): string {
