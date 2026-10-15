@@ -1,10 +1,7 @@
-import { installMockHass } from "./support/mock-hass";
+import { prepareNodeDetailPage, mountSimpleCard, nodeDetailLocators, sectionRequestLog, holdSection, reconnectDetail } from "./support/node-detail-harness";
 import { cardTree, forecastPayload, scheduleSlots } from "./support/payload-builders";
 import type { ForecastPayload, ScheduleActionDTO, SchedulePayload, ScheduleSlotDTO } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
-import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
-import { installFixedClock } from "./support/fixed-clock";
-import { CARD_BUNDLE } from "./support/card-page";
 import { expectReducedMotionStill } from "./support/node-flow";
 
 /**
@@ -64,15 +61,10 @@ declare global {
 }
 
 async function mount(page: Page, variant: Variant = {}): Promise<void> {
-    await installFixedClock(page);
-    await page.setContent("<!doctype html><html><body style='margin:0'></body></html>");
-    await installMockHass(page);
-    await page.addScriptTag({ content: HA_DIALOG_STUB });
+    await prepareNodeDetailPage(page);
     await page.evaluate(({ v, tree, forecastDefaults, scheduleDefaults }) => {
         const profile = v.profile !== false;
-        const s = (state: string, unit?: string, attributes: Record<string, unknown> = {}) => ({
-            state, attributes: { ...(unit ? { unit_of_measurement: unit } : {}), ...attributes },
-        });
+        const s = window.__nodeDetailState;
         const telemetry: Record<string, [string, string, string?]> = {
             battery_voltage: ["sensor.solax_battery_voltage_charge", "355.6", "V"],
             battery_current: ["sensor.solax_battery_current_charge", "-5.9", "A"],
@@ -187,103 +179,22 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 series: [forecastSlot(`${day}T12:00:00+00:00`, 66), forecastSlot(`${day}T12:15:00+00:00`, 64)],
             },
         };
-        const flowsSection = {
-            node: "battery", section: "flows", asOf: "2026-10-21T12:00:00+00:00",
-            period: { start: `${day}T00:00:00+00:00`, end: "2026-10-22T00:00:00+00:00" },
-            currency: "CZK/kWh", complete: false, unavailable: v.flowsUnavailable ?? null,
-            flows: v.flowsUnavailable ? null : {
-                solarToHouse: 5.1, solarToBattery: 4.2, solarToGrid: 2.0, solarUnresolved: 0.4,
-                gridToBattery: 1.5, unknownToBattery: 0.3, gridToBatteryCost: 4.0,
-                batteryToHouse: 3.6, gridToHouse: 1.2, unknownToHouse: 0.1, batteryToGrid: 0,
-            },
-        };
-        const inverter = {
-            node: "inverter", asOf: "2026-10-21T12:00:00+00:00", configured: false, profile: null, mode: null,
-            entities: v.ratedPower ? { rated_power: "sensor.solax_inverter_power_type" } : {}, maxAllowedExportPower: 9900,
-            agreement: { status: "unknown", reason: "no_profile", commanded: null, observedOption: null, registers: [] },
-            condition: null, sections: [],
-        };
-        window.__BatteryRequests = [];
+        const flowsSection = window.__flowsSection("battery", { unavailable: v.flowsUnavailable ?? null, flows: v.flowsUnavailable ? null : { ...window.__flowsSection("battery").flows, solarToGrid: 2.0 } });
+        const inverter = window.__inverterOverview({ entities: v.ratedPower ? { rated_power: "sensor.solax_inverter_power_type" } : {} });
         window.__moreInfo = [];
         document.addEventListener("hass-more-info", (event) => window.__moreInfo.push((event as CustomEvent).detail.entityId));
-        window.__BatteryHass = {
-            language: "en",
-            // A 24-hour English locale, so times read as the assertions write them.
-            locale: { language: "en-GB" },
-            config: { time_zone: "UTC" },
-            connection: {
-                sendMessagePromise: async (msg: { type: string }) => {
-                    window.__BatteryRequests.push({ type: msg.type });
-                    if (msg.type === "helman/get_forecast" && v.forecastFails) throw new Error("forecast down");
-                    return msg.type === "helman/get_forecast" ? forecast : {};
-                },
-                subscribeMessage: window.__mockHass().connection.subscribeMessage,
-            },
-            states,
-            callWS: window.__mockHass({
-                "helman/get_device_tree": async (msg: {
-                    type: string;
-                    node?: string;
-                    section?: string;
-                }) => {
-                    return tree;
-                },
-                "helman/get_history": async (msg: {
-                    type: string;
-                    node?: string;
-                    section?: string;
-                }) => {
-                    return { entity_history: {} };
-                },
-                "helman/get_schedule": async (msg: {
-                    type: string;
-                    node?: string;
-                    section?: string;
-                }) => {
-                    return schedule;
-                },
-                "helman/get_node_detail": async (msg: {
-                    type: string;
-                    node?: string;
-                    section?: string;
-                }) => {
-                    if (msg.node === "inverter")
-                        return inverter;
-                    if (msg.section === "flows")
-                        return flowsSection;
-                    return msg.section ? section : overview;
-                }
-            }, (msg: {
-                type: string;
-                node?: string;
-                section?: string;
-            }) => {
-                window.__BatteryRequests.push({ type: msg.type, node: msg.node, section: msg.section });
-            }).callWS,
-        };
+        window.__BatteryHass = window.__configureNodeDetail({
+            states, tree, overviews: { battery: overview, inverter }, sections: { battery: { flows: flowsSection, charge: section } }, forecast: v.forecastFails ? "error" : forecast, schedule,
+        });
+        window.__BatteryRequests = window.__NodeDetailRequests;
     }, { v: variant, tree: cardTree(), forecastDefaults: forecastPayload(), scheduleDefaults: scheduleSlots({ slotMinutes: 15 }) });
-    await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-simple-card"));
-    await page.evaluate(async () => {
-        const card = document.createElement("helman-simple-card") as any;
-        card.setConfig({ type: "custom:helman-simple-card" });
-        card.hass = window.__BatteryHass;
-        document.body.appendChild(card);
-    });
+    await mountSimpleCard(page);
 }
 
+const { content, question, header, evidence, tile, flow, flowLabel } = nodeDetailLocators("battery");
 const batteryCell = (page: Page) => page.locator(".node-cell:has(simple-card-battery)");
-const content = (page: Page) => page.locator("node-detail-battery-content");
-const question = (page: Page, id: string) => page.locator(`helman-node-question[data-question="${id}"]`);
-const header = (page: Page, id: string) => question(page, id).locator("button.header");
-const evidence = (page: Page, id: string) => question(page, id).locator("button.evidence-toggle");
-const tile = (page: Page, id: string) => page.locator(`helman-node-tile[data-question="${id}"]`);
-const flow = (page: Page) => content(page).locator("helman-node-flow");
 const glyph = (page: Page) => content(page).locator("helman-soc-glyph");
-const flowLabel = (page: Page, side: "in" | "out", id: string) => flow(page).locator(`[data-side="${side}"] [data-flow="${id}"]`);
-const sectionRequests = (page: Page, section?: string) =>
-    page.evaluate((name) => window.__BatteryRequests.filter((r) => r.type === "helman/get_node_detail" && r.node === "battery" && r.section
-        && (name === undefined || r.section === name)).length, section);
+const sectionRequests = async (page: Page, section?: string) => (await sectionRequestLog(page, "battery", section)).length;
 
 /** A ribbon's thickness where it meets the centre, px: the gap between its two ends there. */
 async function ribbonThickness(page: Page, id: string): Promise<number> {
@@ -869,4 +780,19 @@ test.describe("screenshots", { tag: "@screens" }, () => {
             });
         }
     }
+});
+
+
+test("a disconnected loading section can recover after reconnect", async ({ page }) => {
+    await mount(page);
+    await openDetail(page);
+    await holdSection(page, "battery", "charge");
+    await open(page, "charge");
+    await expect.poll(() => content(page).evaluate((element: any) => element._charge?.status)).toBe("loading");
+    expect(await reconnectDetail(page, "node-detail-battery-content", "_charge")).toBeNull();
+    await header(page, "charge").click();
+    await open(page, "charge");
+    await expect.poll(() => content(page).evaluate((element: any) => element._charge?.status)).toBe("loading");
+    await page.evaluate(() => { (window as any).__releaseSection(); (window as any).__releaseSection(); });
+    await expect.poll(() => content(page).evaluate((element: any) => element._charge?.status)).toBe("ready");
 });

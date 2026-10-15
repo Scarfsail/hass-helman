@@ -1,10 +1,8 @@
-import { installMockHass } from "./support/mock-hass";
-import { forecastPayload, scheduleSlots, treeNode, treePayload } from "./support/payload-builders";
+import { prepareNodeDetailPage, mountSimpleCard, nodeDetailLocators, sectionRequestLog, treeNode, holdSection, powerTick, reconnectDetail } from "./support/node-detail-harness";
+import { forecastPayload, scheduleSlots, treePayload } from "./support/payload-builders";
 import type { DevicePhase, ForecastPayload, ScheduleControllableActionsDTO, SchedulePayload, ScheduleSlotDTO, TreeItemDTO } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
-import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
-import { FIXED_NOW_ISO, installFixedClock } from "./support/fixed-clock";
-import { CARD_BUNDLE } from "./support/card-page";
+import { FIXED_NOW_ISO } from "./support/fixed-clock";
 import { expectReducedMotionStill } from "./support/node-flow";
 
 /**
@@ -55,10 +53,7 @@ declare global {
 }
 
 async function mount(page: Page, variant: Variant = {}): Promise<void> {
-    await installFixedClock(page);
-    await page.setContent("<!doctype html><html><body style='margin:0'></body></html>");
-    await installMockHass(page);
-    await page.addScriptTag({ content: HA_DIALOG_STUB });
+    await prepareNodeDetailPage(page);
         const item = (id: string, name: string, sensor: string | null, extra: Partial<TreeItemDTO> = {}) =>
             treeNode({ id, displayName: name, powerSensorId: sensor, ...extra });
         const rest = (parent: string) => item(`${parent}_unmeasured`, "", `sensor.helman_unmeasured_power_${parent}`, { isUnmeasured: true });
@@ -90,7 +85,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
         });
     await page.evaluate(({ v, tree, forecastDefaults, scheduleDefaults }) => {
         const profile = v.profile !== false;
-        const s = (state: string, unit?: string) => ({ state, attributes: unit ? { unit_of_measurement: unit } : {} });
+        const s = window.__nodeDetailState;
         const states: Record<string, unknown> = {
             "sensor.solar": s(v.solar ?? "3000", "W"),
             "sensor.grid": s(v.grid ?? "2000", "W"),
@@ -267,103 +262,21 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 series: Array.from({ length: 140 }, (_, i) => houseSlot(now + (i + 1) * 900_000, 0.25)),
             },
         };
-        window.__HouseRequests = [];
-        window.__HouseHass = {
-            language: "en",
-            locale: { language: "en-GB" },
-            config: { time_zone: "UTC" },
-            connection: {
-                sendMessagePromise: async (msg: { type: string }) => {
-                    window.__HouseRequests.push({ type: msg.type });
-                    return msg.type === "helman/get_forecast" ? forecast : {};
-                },
-                subscribeMessage: window.__mockHass().connection.subscribeMessage,
+        window.__HouseHass = window.__configureNodeDetail({
+            states, tree, overviews: { house: overview, inverter: window.__inverterOverview({ maxAllowedExportPower: null }) }, sections: { house: { today, pattern } }, forecast, schedule,
+            replies: {
+                "helman/device_report": ranking,
             },
-            states,
-            callWS: window.__mockHass({
-                "helman/get_device_tree": async (msg: {
-                    type: string;
-                    node?: string;
-                    section?: string;
-                    report?: string;
-                }) => {
-                    return tree;
-                },
-                "helman/get_history": async (msg: {
-                    type: string;
-                    node?: string;
-                    section?: string;
-                    report?: string;
-                }) => {
-                    return { entity_history: {} };
-                },
-                "helman/get_schedule": async (msg: {
-                    type: string;
-                    node?: string;
-                    section?: string;
-                    report?: string;
-                }) => {
-                    return schedule;
-                },
-                "helman/device_report": async (msg: {
-                    type: string;
-                    node?: string;
-                    section?: string;
-                    report?: string;
-                }) => {
-                    return ranking;
-                },
-                "helman/get_node_detail": async (msg: {
-                    type: string;
-                    node?: string;
-                    section?: string;
-                    report?: string;
-                }) => {
-                    if (msg.node === "inverter") {
-                        return {
-                            node: "inverter", asOf: "2026-10-21T12:00:00+00:00", configured: false, profile: null, mode: null,
-                            entities: {}, maxAllowedExportPower: null,
-                            agreement: { status: "unknown", reason: "no_profile", commanded: null, observedOption: null, registers: [] },
-                            condition: null, sections: [],
-                        };
-                    }
-                    if (msg.section === "today")
-                        return today;
-                    if (msg.section === "pattern")
-                        return pattern;
-                    return overview;
-                }
-            }, (msg: {
-                type: string;
-                node?: string;
-                section?: string;
-                report?: string;
-            }) => {
-                window.__HouseRequests.push({ type: msg.type, node: msg.node, section: msg.section, report: msg.report });
-            }).callWS,
-        };
+        });
+        window.__HouseRequests = window.__NodeDetailRequests;
     }, { v: variant, tree, forecastDefaults: forecastPayload(), scheduleDefaults: scheduleSlots({ slotMinutes: 15 }) });
-    await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-simple-card"));
-    await page.evaluate(async () => {
-        const card = document.createElement("helman-simple-card") as any;
-        card.setConfig({ type: "custom:helman-simple-card" });
-        card.hass = window.__HouseHass;
-        document.body.appendChild(card);
-    });
+    await mountSimpleCard(page);
 }
 
+const { content, question, header, evidence, tile, flow, flowLabel } = nodeDetailLocators("house");
 const houseCell = (page: Page) => page.locator(".node-cell:has(simple-card-house)");
-const content = (page: Page) => page.locator("node-detail-house-content");
-const question = (page: Page, id: string) => page.locator(`helman-node-question[data-question="${id}"]`);
-const header = (page: Page, id: string) => question(page, id).locator("button.header");
-const evidence = (page: Page, id: string) => question(page, id).locator("button.evidence-toggle");
-const tile = (page: Page, id: string) => page.locator(`helman-node-tile[data-question="${id}"]`);
-const flow = (page: Page) => content(page).locator("helman-node-flow");
-const flowLabel = (page: Page, side: "in" | "out", id: string) => flow(page).locator(`[data-side="${side}"] [data-flow="${id}"]`);
 const fill = (page: Page, id: string) => flow(page).locator(`[data-glyph="house"] [data-house-fill="${id}"]`);
-const sectionRequests = (page: Page) =>
-    page.evaluate(() => window.__HouseRequests.filter((r) => r.type === "helman/get_node_detail" && r.node === "house" && r.section).map((r) => r.section));
+const sectionRequests = async (page: Page) => (await sectionRequestLog(page, "house")).map((r) => r.section);
 const reportRequests = (page: Page) =>
     page.evaluate(() => window.__HouseRequests.filter((r) => r.type === "helman/device_report").length);
 
@@ -905,4 +818,46 @@ test("the house detail receives watts exactly once from a kW sensor", async ({ p
     await mount(page, { power: "2.4", powerUnit: "kW" });
     await openDetail(page);
     await expect(content(page).locator("[data-overview] .status")).toHaveText("Using 2.4 kW.");
+});
+
+
+test("Today across midnight throttles power ticks and accepts a late answer", async ({ page }) => {
+    await mount(page);
+    await openDetail(page);
+    await flow(page).locator("[data-scope='today']").click();
+    await expect(flow(page)).toContainText("11:55");
+    await holdSection(page, "house", "today");
+    const before = (await sectionRequestLog(page, "house", "today")).length;
+    for (let second = 0; second < 10; second += 1) {
+        await page.clock.setFixedTime(new Date(Date.parse("2026-10-22T00:00:00Z") + second * 1000));
+        await powerTick(page, "node-detail-house-content", second);
+    }
+    expect((await sectionRequestLog(page, "house", "today")).length - before).toBe(1);
+    // A delayed answer can still be for yesterday; accept it, then wait out the retry interval.
+    await page.evaluate(() => (window as any).__releaseSection());
+    await expect(flow(page)).toContainText("00:00–00:00");
+    await expect(flowLabel(page, "in", "solar")).toContainText("kWh");
+    for (let second = 10; second <= 30; second += 1) {
+        await page.clock.setFixedTime(new Date(Date.parse("2026-10-22T00:00:00Z") + second * 1000));
+        await powerTick(page, "node-detail-house-content", second);
+    }
+    expect((await sectionRequestLog(page, "house", "today")).length - before).toBe(1);
+    await page.clock.setFixedTime(new Date("2026-10-22T00:00:31Z"));
+    await powerTick(page, "node-detail-house-content", 31);
+    expect((await sectionRequestLog(page, "house", "today")).length - before).toBe(2);
+    await page.evaluate(() => (window as any).__releaseSection(true));
+    await expect.poll(() => content(page).evaluate((element: any) => element._today?.status)).toBe("ready");
+});
+
+
+test("a disconnected loading section can recover after reconnect", async ({ page }) => {
+    await mount(page);
+    await openDetail(page);
+    await holdSection(page, "house", "pattern");
+    await open(page, "pattern");
+    await expect.poll(() => content(page).evaluate((element: any) => element._pattern?.status)).toBe("loading");
+    expect(await reconnectDetail(page, "node-detail-house-content", "_pattern")).toBeNull();
+    await expect.poll(() => content(page).evaluate((element: any) => element._pattern?.status)).toBe("loading");
+    await page.evaluate(() => { (window as any).__releaseSection(); (window as any).__releaseSection(); });
+    await expect.poll(() => content(page).evaluate((element: any) => element._pattern?.status)).toBe("ready");
 });

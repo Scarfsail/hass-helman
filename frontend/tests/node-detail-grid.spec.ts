@@ -1,10 +1,7 @@
-import { installMockHass } from "./support/mock-hass";
+import { prepareNodeDetailPage, mountSimpleCard, nodeDetailLocators, sectionRequestLog } from "./support/node-detail-harness";
 import { cardTree, forecastPayload } from "./support/payload-builders";
 import type { ForecastPayload } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
-import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
-import { installFixedClock } from "./support/fixed-clock";
-import { CARD_BUNDLE } from "./support/card-page";
 import { expectReducedMotionStill } from "./support/node-flow";
 
 /**
@@ -62,15 +59,10 @@ declare global {
 }
 
 async function mount(page: Page, variant: Variant = {}): Promise<void> {
-    await installFixedClock(page);
-    await page.setContent("<!doctype html><html><body style='margin:0'></body></html>");
-    await installMockHass(page);
-    await page.addScriptTag({ content: HA_DIALOG_STUB });
+    await prepareNodeDetailPage(page);
     await page.evaluate(({ v, tree, forecastDefaults }) => {
         const profile = v.profile !== false;
-        const s = (state: string, unit?: string, friendly?: string) => ({
-            state, attributes: { ...(unit ? { unit_of_measurement: unit } : {}), ...(friendly ? { friendly_name: friendly } : {}) },
-        });
+        const s = window.__nodeDetailState;
         // measured_power_l* reads positive while exporting.
         const telemetry: Record<string, [string, string, string?]> = {
             grid_power_l1: ["sensor.solax_measured_power_l1", "-400", "W"],
@@ -98,7 +90,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
         if (profile) {
             for (const [key, [entityId, state, unit]] of Object.entries(telemetry)) {
                 entities[key] = entityId;
-                states[entityId] = s(state, unit, key.replace(/_/g, " "));
+                states[entityId] = s(state, unit, { friendly_name: key.replace(/_/g, " ") });
             }
         }
         const overview = {
@@ -165,107 +157,25 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 ],
             },
         };
-        const flowsSection = {
-            node: "grid", section: "flows", asOf: "2026-10-21T12:00:00+00:00",
-            period: { start: `${day}T00:00:00+00:00`, end: "2026-10-22T00:00:00+00:00" },
-            currency: "CZK/kWh", complete: false, unavailable: v.flowsUnavailable ?? null,
-            flows: v.flowsUnavailable ? null : {
-                solarToHouse: 5.1, solarToBattery: 4.2, solarToGrid: 5.8, solarUnresolved: 0.4,
-                gridToBattery: 1.5, unknownToBattery: 0.3, gridToBatteryCost: 4.0,
-                batteryToHouse: 3.6, gridToHouse: 1.2, unknownToHouse: 0.1, batteryToGrid: 0,
+        const flowsSection = window.__flowsSection("grid", { unavailable: v.flowsUnavailable ?? null, ...(v.flowsUnavailable ? { flows: null } : {}) });
+        const inverter = window.__inverterOverview({ entities: v.ratedPower ? { rated_power: "sensor.solax_inverter_power_type" } : {} });
+        window.__GridHass = window.__configureNodeDetail({
+            states, tree, overviews: { grid: overview, inverter }, sections: { grid: { flows: flowsSection, voltage: v.sectionFails ? "error" : section } }, forecast,
+            replies: {
+                "helman/solar_bias/day_aggregates": aggregates,
             },
-        };
-        const inverter = {
-            node: "inverter", asOf: "2026-10-21T12:00:00+00:00", configured: false, profile: null, mode: null,
-            entities: v.ratedPower ? { rated_power: "sensor.solax_inverter_power_type" } : {}, maxAllowedExportPower: 9900,
-            agreement: { status: "unknown", reason: "no_profile", commanded: null, observedOption: null, registers: [] },
-            condition: null, sections: [],
-        };
-        window.__GridRequests = [];
-        window.__GridHass = {
-            language: "en",
-            // A 24-hour English locale, so times read as the assertions write them.
-            locale: { language: "en-GB" },
-            config: { time_zone: "UTC" },
-            connection: {
-                sendMessagePromise: async (msg: { type: string }) => {
-                    window.__GridRequests.push({ type: msg.type });
-                    return msg.type === "helman/get_forecast" ? forecast : {};
-                },
-                subscribeMessage: window.__mockHass().connection.subscribeMessage,
-            },
-            states,
-            callWS: window.__mockHass({
-                "helman/get_device_tree": async (msg: {
-                    type: string;
-                    node?: string;
-                    section?: string;
-                }) => {
-                    return tree;
-                },
-                "helman/get_history": async (msg: {
-                    type: string;
-                    node?: string;
-                    section?: string;
-                }) => {
-                    return { entity_history: {} };
-                },
-                "helman/solar_bias/day_aggregates": async (msg: {
-                    type: string;
-                    node?: string;
-                    section?: string;
-                }) => {
-                    return aggregates;
-                },
-                "helman/get_node_detail": async (msg: {
-                    type: string;
-                    node?: string;
-                    section?: string;
-                }) => {
-                    if (msg.node === "inverter")
-                        return inverter;
-                    if (msg.section === "flows")
-                        return flowsSection;
-                    if (msg.section) {
-                        if (v.sectionFails)
-                            throw new Error("recorder down");
-                        return section;
-                    }
-                    return overview;
-                }
-            }, (msg: {
-                type: string;
-                node?: string;
-                section?: string;
-            }) => {
-                window.__GridRequests.push({ type: msg.type, node: msg.node, section: msg.section });
-            }).callWS,
-        };
+        });
+        window.__GridRequests = window.__NodeDetailRequests;
     }, { v: variant, tree: cardTree(variant.positiveGridNode ? "positive" : "default"), forecastDefaults: forecastPayload() });
-    await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-simple-card"));
-    await page.evaluate(async () => {
-        const card = document.createElement("helman-simple-card") as any;
-        card.setConfig({ type: "custom:helman-simple-card" });
-        card.hass = window.__GridHass;
-        document.body.appendChild(card);
-    });
+    await mountSimpleCard(page);
 }
 
 
+const { content, question, header, evidence, tile, flow, flowLabel } = nodeDetailLocators("grid");
 const gridCell = (page: Page) => page.locator(".node-cell:has(simple-card-grid)");
-const content = (page: Page) => page.locator("node-detail-grid-content");
-const question = (page: Page, id: string) => page.locator(`helman-node-question[data-question="${id}"]`);
-const header = (page: Page, id: string) => question(page, id).locator("button.header");
-const evidence = (page: Page, id: string) => question(page, id).locator("button.evidence-toggle");
-const tile = (page: Page, id: string) => page.locator(`helman-node-tile[data-question="${id}"]`);
 const picture = (page: Page) => content(page).locator("[data-phase-picture]");
 const phase = (page: Page, n: number) => picture(page).locator(`[data-phase-bar="${n}"]`);
-const flow = (page: Page) => content(page).locator("helman-node-flow");
-const flowLabel = (page: Page, side: "in" | "out", id: string) => flow(page).locator(`[data-side="${side}"] [data-flow="${id}"]`);
-const sectionRequests = (page: Page, section?: string) =>
-    page.evaluate((name) => window.__GridRequests.filter((r) => r.type === "helman/get_node_detail" && r.node === "grid" && r.section
-        && (name === undefined || r.section === name)).length, section);
+const sectionRequests = async (page: Page, section?: string) => (await sectionRequestLog(page, "grid", section)).length;
 
 /** An element's inline `left` or `width`, in % of its track. */
 async function percent(locator: ReturnType<Page["locator"]>, property: "left" | "width" | "right"): Promise<number> {

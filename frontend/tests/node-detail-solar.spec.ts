@@ -1,10 +1,7 @@
-import { installMockHass } from "./support/mock-hass";
+import { prepareNodeDetailPage, mountSimpleCard, nodeDetailLocators, sectionRequestLog } from "./support/node-detail-harness";
 import { cardTree, forecastPayload, scheduleSlots } from "./support/payload-builders";
 import type { ForecastPayload, ForecastStatus, ScheduleActionDTO, SchedulePayload, ScheduleSlotDTO } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
-import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
-import { installFixedClock } from "./support/fixed-clock";
-import { CARD_BUNDLE } from "./support/card-page";
 import { expectReducedMotionStill } from "./support/node-flow";
 
 /**
@@ -110,15 +107,10 @@ declare global {
 }
 
 async function mount(page: Page, variant: Variant = {}): Promise<void> {
-    await installFixedClock(page);
-    await page.setContent("<!doctype html><html><body style='margin:0'></body></html>");
-    await installMockHass(page);
-    await page.addScriptTag({ content: HA_DIALOG_STUB });
+    await prepareNodeDetailPage(page);
     await page.evaluate(({ v, points, tree, forecastDefaults, scheduleDefaults }) => {
         const profile = v.profile !== false;
-        const s = (state: string, unit?: string, attributes: Record<string, unknown> = {}) => ({
-            state, attributes: { ...(unit ? { unit_of_measurement: unit } : {}), ...attributes },
-        });
+        const s = window.__nodeDetailState;
         const night = !!v.night;
         const telemetry: Record<string, [string, string, string?]> = {
             pv_power_1: ["sensor.solax_pv_power_1", night ? "0" : "2400", "W"],
@@ -296,103 +288,23 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             },
             batterySocBounds: [], priceUnit: null, trainingExplainability: null,
         });
-        const inverter = {
-            node: "inverter", asOf: "2026-10-21T12:00:00+00:00", configured: false, profile: null, mode: null,
-            entities: {}, maxAllowedExportPower: 9900,
-            agreement: { status: "unknown", reason: "no_profile", commanded: null, observedOption: null, registers: [] },
-            condition: null, sections: [],
-        };
-        window.__SolarRequests = [];
-        window.__SolarHass = {
-            language: "en",
-            locale: { language: "en-GB" },
-            config: { time_zone: "UTC" },
-            connection: {
-                sendMessagePromise: async (msg: { type: string }) => {
-                    window.__SolarRequests.push({ type: msg.type });
-                    if (msg.type === "helman/get_forecast" && v.forecastFails) throw new Error("forecast down");
-                    return msg.type === "helman/get_forecast" ? forecast : {};
-                },
-                subscribeMessage: window.__mockHass().connection.subscribeMessage,
+        const inverter = window.__inverterOverview();
+        window.__SolarHass = window.__configureNodeDetail({
+            states, tree, overviews: { solar: overview, inverter }, sections: { solar: { ...sections, ...(v.sectionFails ? { production: "error" } : {}) } }, forecast: v.forecastFails ? "error" : forecast, schedule,
+            replies: {
+                "helman/solar_bias/inspector": inspectorDay,
+                "helman/solar_bias/day_aggregates": { days: [] },
             },
-            states,
-            callWS: window.__mockHass({
-                "helman/get_device_tree": async (msg: {
-                    type: string;
-                    node?: string;
-                    section?: string;
-                }) => {
-                    return tree;
-                },
-                "helman/get_history": async (msg: {
-                    type: string;
-                    node?: string;
-                    section?: string;
-                }) => {
-                    return { entity_history: {} };
-                },
-                "helman/get_schedule": async (msg: {
-                    type: string;
-                    node?: string;
-                    section?: string;
-                }) => {
-                    return schedule;
-                },
-                "helman/solar_bias/inspector": async (msg: {
-                    type: string;
-                    node?: string;
-                    section?: string;
-                }) => {
-                    return inspectorDay;
-                },
-                "helman/solar_bias/day_aggregates": async (msg: {
-                    type: string;
-                    node?: string;
-                    section?: string;
-                }) => {
-                    return { days: [] };
-                },
-                "helman/get_node_detail": async (msg: {
-                    type: string;
-                    node?: string;
-                    section?: string;
-                }) => {
-                    if (msg.node === "inverter")
-                        return inverter;
-                    if (msg.section === "production" && v.sectionFails)
-                        throw new Error("recorder down");
-                    return msg.section ? sections[msg.section] : overview;
-                }
-            }, (msg: {
-                type: string;
-                node?: string;
-                section?: string;
-            }) => {
-                window.__SolarRequests.push({ type: msg.type, node: msg.node, section: msg.section });
-            }).callWS,
-        };
+        });
+        window.__SolarRequests = window.__NodeDetailRequests;
     }, { v: variant, points: forecastPoints(!!variant.night), tree: cardTree(), forecastDefaults: forecastPayload(), scheduleDefaults: scheduleSlots({ slotMinutes: 15 }) });
-    await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
-    await page.waitForFunction(() => !!customElements.get("helman-simple-card"));
-    await page.evaluate(async () => {
-        const card = document.createElement("helman-simple-card") as any;
-        card.setConfig({ type: "custom:helman-simple-card" });
-        card.hass = window.__SolarHass;
-        document.body.appendChild(card);
-    });
+    await mountSimpleCard(page);
 }
 
+const { content, question, header, evidence, tile, flow, flowLabel } = nodeDetailLocators("solar");
 const solarCell = (page: Page) => page.locator(".node-cell:has(simple-card-solar)");
-const content = (page: Page) => page.locator("node-detail-solar-content");
-const question = (page: Page, id: string) => page.locator(`helman-node-question[data-question="${id}"]`);
-const header = (page: Page, id: string) => question(page, id).locator("button.header");
-const evidence = (page: Page, id: string) => question(page, id).locator("button.evidence-toggle");
-const tile = (page: Page, id: string) => page.locator(`helman-node-tile[data-question="${id}"]`);
 const curve = (page: Page) => content(page).locator("[data-production-curve]");
-const flow = (page: Page) => content(page).locator("helman-node-flow");
-const flowLabel = (page: Page, side: "in" | "out", id: string) => flow(page).locator(`[data-side="${side}"] [data-flow="${id}"]`);
-const sectionRequests = (page: Page) =>
-    page.evaluate(() => window.__SolarRequests.filter((r) => r.type === "helman/get_node_detail" && r.node === "solar" && r.section).map((r) => r.section));
+const sectionRequests = async (page: Page) => (await sectionRequestLog(page, "solar")).map((r) => r.section);
 
 /** Open a question the way a reader does: its tile, or the picture that absorbed it. */
 async function open(page: Page, id: string): Promise<void> {
