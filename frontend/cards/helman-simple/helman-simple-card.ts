@@ -617,7 +617,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
                 void this._loadFromBackend(true, false);
             }
             // Keep the inverter request useful for the retained card state.
-            if (!obsolete() && this._historyEngine && !this._inverter) {
+            if (!obsolete() && this._historyEngine) {
                 void this._loadInverter(obsolete, false);
             }
             return false;

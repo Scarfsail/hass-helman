@@ -48,6 +48,68 @@ for (const tag of ["helman-card", "helman-simple-card"] as const) {
         await expect.poll(overview).toEqual({ id: "sensor.new_inverter", oldWatched: false, newWatched: true });
     });
 
+    for (const failedRequest of ["tree", "history"] as const) {
+        test(`${tag} rejoins a pending inverter after a retained ${failedRequest} refresh fails`, async ({ page }) => {
+            await page.setContent("<!doctype html><html><body></body></html>");
+            await installMockHass(page);
+            await page.evaluate(({ tree, failedRequest }) => {
+                let treeRequests = 0;
+                let historyRequests = 0;
+                let overviewRequests = 0;
+                (window as any).__releaseInverter = () => undefined;
+                (window as any).__hass = {
+                    ...window.__mockHass({
+                        "helman/get_device_tree": () => {
+                            if (++treeRequests === 3 && failedRequest === "tree") throw new Error("temporary tree failure");
+                            return tree;
+                        },
+                        "helman/get_history": () => {
+                            if (++historyRequests === 3 && failedRequest === "history") throw new Error("temporary history failure");
+                            return { entity_history: {} };
+                        },
+                        "helman/get_node_detail": () => {
+                            if (++overviewRequests === 1) return { entities: { link_success_rate: "sensor.old_inverter" } };
+                            return new Promise((resolve) => {
+                                (window as any).__releaseInverter = () => resolve({ entities: { link_success_rate: "sensor.new_inverter" } });
+                            });
+                        },
+                    }),
+                    language: "en", locale: { language: "en" }, config: { time_zone: "UTC" }, states: {},
+                };
+            }, { tree: cardTree(), failedRequest });
+            await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
+            await page.evaluate((name) => {
+                const card = document.createElement(name) as any;
+                card.setConfig({ type: `custom:${name}` });
+                card.hass = (window as any).__hass;
+                document.body.appendChild(card);
+            }, tag);
+            const requests = (type: string) => page.evaluate((type) =>
+                window.__mockRequests.filter((request) => request.type === type).length, type);
+            const overview = () => page.evaluate((name) => {
+                const card = document.querySelector(name) as any;
+                return {
+                    id: card._inverter?.entities.link_success_rate,
+                    oldWatched: card._watchedEntityIds.has("sensor.old_inverter"),
+                    newWatched: card._watchedEntityIds.has("sensor.new_inverter"),
+                };
+            }, tag);
+            const oldOverview = { id: "sensor.old_inverter", oldWatched: true, newWatched: false };
+            await expect.poll(overview).toEqual(oldOverview);
+            await page.evaluate(() => window.__fireDataChanged("config"));
+            await expect.poll(() => requests("helman/get_node_detail")).toBe(2);
+            await page.evaluate(() => window.__fireDataChanged("config"));
+            await expect.poll(() => requests(failedRequest === "tree" ? "helman/get_device_tree" : "helman/get_history")).toBe(3);
+            expect(await overview()).toEqual(oldOverview);
+            await page.evaluate(async () => {
+                await new Promise((resolve) => setTimeout(resolve, 0));
+                (window as any).__releaseInverter();
+            });
+            await expect.poll(overview).toEqual({ id: "sensor.new_inverter", oldWatched: false, newWatched: true });
+            expect(await requests("helman/get_node_detail")).toBe(2);
+        });
+    }
+
     test(`${tag} keeps a refreshed inverter when the older overview resolves last`, async ({ page }) => {
         await page.setContent("<!doctype html><html><body></body></html>");
         await installMockHass(page);

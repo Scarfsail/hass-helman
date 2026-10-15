@@ -455,7 +455,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
             }
             // The retained tree still needs its inverter. Rejoin an older pending
             // read with this generation so its result can populate the cell.
-            if (!obsolete() && this._historyEngine && !this._inverter) {
+            if (!obsolete() && this._historyEngine) {
                 void this._loadInverter(obsolete, false);
             }
         }
