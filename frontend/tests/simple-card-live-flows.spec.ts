@@ -199,4 +199,20 @@ test.describe("the card draws the split as before", () => {
         expect(drawn[2]).toMatchObject({ x1: "138", y1: "48", x2: "62", y2: "120" });
         expect(drawn[2].width).toBeCloseTo(stroke(400, 11500));
     });
+
+    test("solar over the idle threshold draws no path to a house taking none of it", async ({ page }) => {
+        await mountCard(page, { solar: 1000, house: 0, battery: 0, grid: -1000 });
+        expect(flows(1000, 0, 0, -1000).solarToHouse).toBe(0);
+        const drawn = await lines(page);
+        expect(drawn).toHaveLength(1);
+        expect(drawn[0]).toMatchObject({ stroke: SOLAR, x1: "-22.5", x2: "53" });
+    });
+
+    test("grid import draws no path to the battery when solar covers its charge", async ({ page }) => {
+        await mountCard(page, { solar: 1500, house: 1000, battery: 500, grid: 100 });
+        expect(flows(1500, 1000, 500, 100).gridToBattery).toBe(0);
+        const drawn = await lines(page);
+        expect(drawn.map((line) => line.stroke)).toEqual([SOLAR, SOLAR]);
+        expect(drawn.some((line) => line.stroke === GRID)).toBe(false);
+    });
 });

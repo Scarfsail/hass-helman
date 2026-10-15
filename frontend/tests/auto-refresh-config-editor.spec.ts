@@ -43,6 +43,7 @@ declare global {
         __fireDataChanged: (kind: string) => void;
         /** Whether `helman/save_config` should report a successful reload. */
         __saveSucceeds: boolean;
+        __saveValid: boolean;
     }
 }
 
@@ -60,6 +61,7 @@ async function mountEditor(page: Page): Promise<Locator> {
             let saveCalls = 0;
             window.__saveCalls = () => saveCalls;
             window.__saveSucceeds = true;
+            window.__saveValid = true;
 
             const listeners: Array<(event: unknown) => void> = [];
             window.__fireDataChanged = (kind: string) => {
@@ -109,17 +111,16 @@ async function mountEditor(page: Page): Promise<Locator> {
                     }) => {
                         saveCalls += 1;
                         const succeeded = window.__saveSucceeds;
-                        if (succeeded) {
-                            stored = request.config;
-                        }
-                        queueMicrotask(() => {
-                            if (succeeded) {
+                        const valid = window.__saveValid;
+                        if (valid) {
+                            stored = { ...(request.config as Record<string, unknown>), config_version: 30 };
+                            queueMicrotask(() => {
                                 window.__fireDataChanged("config");
-                            }
-                        });
+                            });
+                        }
                         return {
-                            success: succeeded,
-                            validation: { valid: true, errors: [], warnings: [] },
+                            success: valid && succeeded,
+                            validation: { valid, errors: [], warnings: [] },
                             reloadStarted: true,
                             reloadSucceeded: succeeded,
                             reloadError: null,
@@ -244,4 +245,40 @@ test("the machine that saved hears its own write and ignores it", async ({ page 
         "The stored config changed elsewhere — reload to see it",
     );
     expect(await readBadges(page)).not.toContain("Unsaved changes");
+});
+
+test("a landed save whose reload failed does not report its own write as an external change", async ({ page }) => {
+    await mountEditor(page);
+    await makeDirty(page);
+    await page.evaluate(() => { window.__saveSucceeds = false; });
+    await page.evaluate(() => {
+        const button = Array.from(document.querySelector("helman-config-editor-panel")?.shadowRoot?.querySelectorAll("button") ?? [])
+            .find((candidate) => /save/i.test(candidate.textContent ?? ""));
+        (button as HTMLButtonElement | undefined)?.click();
+    });
+    await expect.poll(() => page.evaluate(() => window.__saveCalls())).toBe(1);
+    await page.waitForTimeout(600);
+    expect(await readBadges(page)).not.toContain("The stored config changed elsewhere — reload to see it");
+    expect(await readBadges(page)).not.toContain("Unsaved changes");
+    const prompts: string[] = [];
+    page.on("dialog", (dialog) => {
+        prompts.push(dialog.message());
+        void dialog.dismiss();
+    });
+    await page.locator("helman-config-editor-panel").getByRole("button", { name: "Reload stored config" }).click();
+    await expect.poll(() => page.evaluate(() => window.__getConfigCalls())).toBe(4);
+    expect(prompts).toEqual([]);
+});
+
+test("a rejected save keeps the unsaved draft dirty", async ({ page }) => {
+    await mountEditor(page);
+    await makeDirty(page);
+    await page.evaluate(() => { window.__saveValid = false; });
+    await page.evaluate(() => {
+        const button = Array.from(document.querySelector("helman-config-editor-panel")?.shadowRoot?.querySelectorAll("button") ?? [])
+            .find((candidate) => /save/i.test(candidate.textContent ?? ""));
+        (button as HTMLButtonElement | undefined)?.click();
+    });
+    await expect.poll(() => page.evaluate(() => window.__saveCalls())).toBe(1);
+    expect(await readBadges(page)).toContain("Unsaved changes");
 });

@@ -32,8 +32,8 @@ export interface HelmanStore {
     getEntityActualHistory(): Promise<EntityActualHistoryPayload>;
     getAppliances(): Promise<AppliancesPayload>;
     getApplianceProjections(): Promise<ApplianceProjectionsPayload>;
-    getDeviceTree(): Promise<TreePayload>;
-    getHistory(): Promise<HistoryPayload>;
+    getDeviceTree(options?: { fresh?: boolean }): Promise<TreePayload>;
+    getHistory(options?: { fresh?: boolean }): Promise<HistoryPayload>;
     getNodeDetail<T>(request: Omit<GetNodeDetailRequest, "type">, options?: { fresh?: boolean }): Promise<T>;
 }
 
@@ -147,11 +147,13 @@ class HelmanStoreImpl implements HelmanStore {
         return this._client.getApplianceProjections();
     }
 
-    public getDeviceTree(): Promise<TreePayload> {
+    public getDeviceTree(options?: { fresh?: boolean }): Promise<TreePayload> {
+        if (options?.fresh) this._inFlight.delete("get_device_tree");
         return this._dedupe("get_device_tree", () => this._client.getDeviceTree());
     }
 
-    public getHistory(): Promise<HistoryPayload> {
+    public getHistory(options?: { fresh?: boolean }): Promise<HistoryPayload> {
+        if (options?.fresh) this._inFlight.delete("get_history");
         return this._dedupe("get_history", () => this._client.getHistory());
     }
 
@@ -160,8 +162,11 @@ class HelmanStoreImpl implements HelmanStore {
      * ask together. `fresh` skips joining a request sent before a state changed.
      */
     public getNodeDetail<T>(request: Omit<GetNodeDetailRequest, "type">, options?: { fresh?: boolean }): Promise<T> {
-        if (options?.fresh) return this._client.getNodeDetail<T>(request);
         const key = `get_node_detail:${request.node}:${request.device_id ?? ""}:${request.section ?? ""}`;
+        // A config refresh replaces the inverter overview for every card sharing
+        // this connection, including one mounted while the new read is pending.
+        if (options?.fresh && request.node === "inverter" && !request.section) this._inFlight.delete(key);
+        else if (options?.fresh) return this._client.getNodeDetail<T>(request);
         return this._dedupe(key, () => this._client.getNodeDetail<T>(request));
     }
 }

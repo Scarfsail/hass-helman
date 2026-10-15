@@ -28,10 +28,19 @@ declare global {
     interface Window {
         /** Let the held `helman/get_device_tree` responses return. */
         __resolveTree: () => void;
+        __rejectTree: () => void;
+        __resolveTreeAt: (index: number) => void;
+        __rejectTreeAt: (index: number) => void;
         /** Let the held `helman/get_history` responses return. */
         __resolveHistory: () => void;
+        __rejectHistory: () => void;
+        __resolveHistoryAt: (index: number) => void;
+        __rejectHistoryAt: (index: number) => void;
+        __resolveInverter: () => void;
         /** How many requests of each kind are still held open. */
-        __pending: () => { tree: number; history: number };
+        __pending: () => { tree: number; history: number; inverter: number };
+        __setTreeBuckets: (count: number) => void;
+        __omitHouseHistory: () => void;
         /** Start counting timer and animation-frame installs from now. */
         __mark: () => void;
         /** Timers and frames installed since `__mark`. */
@@ -62,6 +71,7 @@ async function installFixture(page: Page, bucketSeconds: number): Promise<void> 
         uiConfig: { show_others_group: false, device_groupings: [], history_buckets: 3, history_bucket_duration: bucketSeconds },
     });
     await page.evaluate(({ bucket, treePayload }) => {
+        let currentTree = treePayload;
         const liveIntervals = new Map<number, number>();
         let markedIntervals = 0;
         let markedFrames = 0;
@@ -104,12 +114,24 @@ async function installFixture(page: Page, bucketSeconds: number): Promise<void> 
                 "sensor.consumption_total": [100, 100, 100],
             },
         };
+        window.__setTreeBuckets = (count) => {
+            currentTree = { ...currentTree, uiConfig: { ...currentTree.uiConfig, history_buckets: count } };
+        };
+        window.__omitHouseHistory = () => { delete (historyPayload.entity_history as Record<string, number[]>)["sensor.house"]; };
 
-        const heldTree: Array<() => void> = [];
-        const heldHistory: Array<() => void> = [];
-        window.__resolveTree = () => { heldTree.splice(0).forEach((release) => release()); };
-        window.__resolveHistory = () => { heldHistory.splice(0).forEach((release) => release()); };
-        window.__pending = () => ({ tree: heldTree.length, history: heldHistory.length });
+        const heldTree: Array<{ resolve: () => void; reject: () => void }> = [];
+        const heldHistory: Array<{ resolve: () => void; reject: () => void }> = [];
+        const heldInverter: Array<() => void> = [];
+        window.__resolveTree = () => { heldTree.splice(0).forEach((request) => request.resolve()); };
+        window.__rejectTree = () => { heldTree.splice(0).forEach((request) => request.reject()); };
+        window.__resolveTreeAt = (index) => { heldTree.splice(index, 1)[0].resolve(); };
+        window.__rejectTreeAt = (index) => { heldTree.splice(index, 1)[0].reject(); };
+        window.__resolveHistory = () => { heldHistory.splice(0).forEach((request) => request.resolve()); };
+        window.__rejectHistory = () => { heldHistory.splice(0).forEach((request) => request.reject()); };
+        window.__resolveHistoryAt = (index) => { heldHistory.splice(index, 1)[0].resolve(); };
+        window.__rejectHistoryAt = (index) => { heldHistory.splice(index, 1)[0].reject(); };
+        window.__resolveInverter = () => { heldInverter.splice(0).forEach((resolve) => resolve()); };
+        window.__pending = () => ({ tree: heldTree.length, history: heldHistory.length, inverter: heldInverter.length });
 
         const states: Record<string, unknown> = {};
         for (const id of Object.keys(historyPayload.entity_history)) {
@@ -130,17 +152,34 @@ async function installFixture(page: Page, bucketSeconds: number): Promise<void> 
                 "helman/get_device_tree": async (msg: {
                     type: string;
                 }) => {
-                    return new Promise((release) => heldTree.push(() => release(treePayload)));
+                    const requestedTree = currentTree;
+                    return new Promise((resolve, reject) => heldTree.push({
+                        resolve: () => resolve(requestedTree), reject: () => reject(new Error("tree unavailable")),
+                    }));
                 },
                 "helman/get_history": async (msg: {
                     type: string;
                 }) => {
-                    return new Promise((release) => heldHistory.push(() => release(historyPayload)));
+                    return new Promise((resolve, reject) => heldHistory.push({
+                        resolve: () => resolve(historyPayload), reject: () => reject(new Error("history unavailable")),
+                    }));
                 },
                 "helman/get_controllable_entities": async (msg: {
                     type: string;
                 }) => {
                     return { entities: [] };
+                },
+                "helman/get_node_detail": async (msg: {
+                    type: string;
+                    node: string;
+                }) => {
+                    if (msg.node !== "inverter") return {};
+                    return new Promise((resolve) => heldInverter.push(() => resolve({
+                        node: "inverter",
+                        configured: true,
+                        mode: { entityId: "select.inverter_mode", actionOptions: { normal: "normal" } },
+                        entities: { link_success_rate: "sensor.inverter_link_success_rate" },
+                    })));
                 }
             }).callWS,
         };
@@ -289,6 +328,295 @@ for (const tag of ["helman-card", "helman-simple-card"] as const) {
         });
     });
 }
+
+for (const tag of ["helman-card", "helman-simple-card"] as const) {
+    for (const failedRead of ["tree", "history"] as const) {
+        test(`${tag}: failed ${failedRead} refresh recovers a superseded initial load`, async ({ page }) => {
+            await installFixture(page, BUCKET_SECONDS);
+            await page.evaluate((name) => {
+                const card = document.createElement(name) as any;
+                card.setConfig({ type: `custom:${name}` });
+                card.hass = window.__hass;
+                document.body.appendChild(card);
+            }, tag);
+            await expect.poll(() => page.evaluate(() => window.__pending().tree)).toBe(1);
+            await page.evaluate(() => {
+                window.__setTreeBuckets(4);
+                window.__fireDataChanged("config");
+            });
+            await expect.poll(() => page.evaluate(() => window.__pending().tree)).toBe(2);
+            if (failedRead === "tree") {
+                await page.evaluate(() => window.__rejectTreeAt(1));
+            } else {
+                await page.evaluate(() => window.__resolveTreeAt(1));
+                await expect.poll(() => page.evaluate(() => window.__pending().history)).toBe(1);
+                await page.evaluate(() => window.__rejectHistoryAt(0));
+            }
+            await expect.poll(() => page.evaluate(() => window.__pending().tree)).toBe(2);
+            await page.evaluate(() => window.__resolveTreeAt(1));
+            await expect.poll(() => page.evaluate(() => window.__pending().history)).toBe(1);
+            await page.evaluate(() => window.__resolveHistory());
+            await expect.poll(() => page.evaluate((name) => !!(document.querySelector(name) as any)._historyEngine, tag)).toBe(true);
+            await page.evaluate(() => window.__resolveTreeAt(0));
+            expect(await page.evaluate((name) => {
+                const card = document.querySelector(name) as any;
+                return { buckets: card._uiConfig.history_buckets, engines: window.__liveBucketIntervals().length };
+            }, tag)).toEqual({ buckets: 4, engines: 1 });
+        });
+    }
+
+    test(`${tag}: initial recovery is bounded and detached responses stay obsolete`, async ({ page }) => {
+        await installFixture(page, BUCKET_SECONDS);
+        await page.evaluate((name) => {
+            const card = document.createElement(name) as any;
+            card.setConfig({ type: `custom:${name}` });
+            card.hass = window.__hass;
+            document.body.appendChild(card);
+        }, tag);
+        await expect.poll(() => page.evaluate(() => window.__pending().tree)).toBe(1);
+        await page.evaluate(() => window.__fireDataChanged("config"));
+        await expect.poll(() => page.evaluate(() => window.__pending().tree)).toBe(2);
+        await page.evaluate(() => window.__rejectTreeAt(1));
+        await expect.poll(() => page.evaluate(() => window.__pending().tree)).toBe(2);
+        await page.evaluate(() => window.__rejectTreeAt(1));
+        expect(await page.evaluate(() => window.__pending())).toEqual({ tree: 1, history: 0, inverter: 0 });
+        await page.evaluate((name) => {
+            (document.querySelector(name) as any).remove();
+            window.__resolveTreeAt(0);
+        }, tag);
+        expect(await page.evaluate((name) => {
+            const card = document.querySelector(name) as any;
+            return { pending: window.__pending(), engines: window.__liveBucketIntervals().length, connected: !!card };
+        }, tag)).toEqual({ pending: { tree: 0, history: 0, inverter: 0 }, engines: 0, connected: false });
+    });
+
+    test(`${tag}: pending initial recovery stays obsolete after detach`, async ({ page }) => {
+        await installFixture(page, BUCKET_SECONDS);
+        await page.evaluate((name) => {
+            const card = document.createElement(name) as any;
+            card.setConfig({ type: `custom:${name}` });
+            card.hass = window.__hass;
+            document.body.appendChild(card);
+        }, tag);
+        await expect.poll(() => page.evaluate(() => window.__pending().tree)).toBe(1);
+        await page.evaluate(() => window.__fireDataChanged("config"));
+        await expect.poll(() => page.evaluate(() => window.__pending().tree)).toBe(2);
+        await page.evaluate(() => window.__rejectTreeAt(1));
+        await expect.poll(() => page.evaluate(() => window.__pending().tree)).toBe(2);
+        const result = await page.evaluate(async (name) => {
+            const card = document.querySelector(name) as any;
+            card.remove();
+            window.__resolveTree();
+            await new Promise<void>((done) => setTimeout(done, 0));
+            return { engine: !!card._historyEngine, pending: window.__pending(), intervals: window.__liveBucketIntervals().length };
+        }, tag);
+        expect(result).toEqual({ engine: false, pending: { tree: 0, history: 0, inverter: 0 }, intervals: 0 });
+    });
+}
+
+for (const tag of ["helman-card", "helman-simple-card"] as const) {
+    for (const failedRead of ["tree", "history"] as const) {
+        for (const detach of [false, true]) {
+            test(`${tag}: pending inverter ${detach ? "stays obsolete after detach" : "recovers"} when ${failedRead} refresh fails`, async ({ page }) => {
+                await installFixture(page, BUCKET_SECONDS);
+                const result = await page.evaluate(async ({ tag, failedRead, detach }) => {
+                    const card = document.createElement(tag) as any;
+                    await card.setConfig({ type: `custom:${tag}` });
+                    card.hass = window.__hass;
+                    document.body.appendChild(card);
+                    await new Promise<void>((done) => setTimeout(done, 0));
+                    window.__resolveTree();
+                    await new Promise<void>((done) => setTimeout(done, 0));
+                    window.__resolveHistory();
+                    await new Promise<void>((done) => setTimeout(done, 0));
+                    const oldEngine = card._historyEngine;
+                    const pendingBeforeRefresh = window.__pending().inverter;
+
+                    const refresh = tag === "helman-card"
+                        ? card._loadBackendData(true)
+                        : card._loadFromBackend(true);
+                    await new Promise<void>((done) => setTimeout(done, 0));
+                    if (failedRead === "tree") window.__rejectTree();
+                    else {
+                        window.__resolveTree();
+                        await new Promise<void>((done) => setTimeout(done, 0));
+                        window.__rejectHistory();
+                    }
+                    await refresh;
+                    const retained = card._historyEngine === oldEngine && card._inverter === null;
+                    if (detach) card.remove();
+                    window.__resolveInverter();
+                    await new Promise<void>((done) => setTimeout(done, 0));
+                    const result = {
+                        pendingBeforeRefresh,
+                        retained,
+                        inverterLoaded: card._inverter?.node === "inverter",
+                        watching: card._watchedEntityIds.has("select.inverter_mode")
+                            && card._watchedEntityIds.has("sensor.inverter_link_success_rate"),
+                    };
+                    if (!detach) card.remove();
+                    return result;
+                }, { tag, failedRead, detach });
+
+                expect(result).toEqual({
+                    pendingBeforeRefresh: 1,
+                    retained: true,
+                    inverterLoaded: !detach,
+                    watching: !detach,
+                });
+            });
+        }
+        test(`${tag}: failed ${failedRead} refresh retains a healthy inverter without another read`, async ({ page }) => {
+            await installFixture(page, BUCKET_SECONDS);
+            const result = await page.evaluate(async ({ tag, failedRead }) => {
+                const card = document.createElement(tag) as any;
+                card.setConfig({ type: `custom:${tag}` });
+                card.hass = window.__hass;
+                document.body.appendChild(card);
+                const drain = () => new Promise<void>((done) => setTimeout(done, 0));
+                await drain();
+                window.__resolveTree();
+                await drain();
+                window.__resolveHistory();
+                await drain();
+                window.__resolveInverter();
+                await drain();
+                const inverter = card._inverter;
+                const watched = [...card._watchedEntityIds];
+                const engine = card._historyEngine;
+                const refresh = tag === "helman-card" ? card._loadBackendData(true) : card._loadFromBackend(true);
+                await drain();
+                if (failedRead === "tree") window.__rejectTree();
+                else {
+                    window.__resolveTree();
+                    await drain();
+                    window.__rejectHistory();
+                }
+                await drain();
+                await refresh;
+                const pending = window.__pending().inverter;
+                window.__resolveInverter();
+                await drain();
+                const result = {
+                    pending,
+                    retained: !!inverter && card._inverter === inverter && card._historyEngine === engine,
+                    watched: JSON.stringify([...card._watchedEntityIds]) === JSON.stringify(watched),
+                };
+                card.remove();
+                return result;
+            }, { tag, failedRead });
+            expect(result).toEqual({ pending: 0, retained: true, watched: true });
+        });
+        test(`${tag}: a failed ${failedRead} refresh keeps history live until replacement`, async ({ page }) => {
+            await installFixture(page, BUCKET_SECONDS);
+            const result = await page.evaluate(async ({ tag, failedRead }) => {
+                const card = document.createElement(tag) as any;
+                await card.setConfig({ type: `custom:${tag}` });
+                card.hass = window.__hass;
+                document.body.appendChild(card);
+                await new Promise<void>((done) => setTimeout(done, 0));
+                window.__resolveTree();
+                await new Promise<void>((done) => setTimeout(done, 0));
+                window.__resolveHistory();
+                await new Promise<void>((done) => setTimeout(done, 0));
+
+                const oldEngine = card._historyEngine;
+                const oldNode = tag === "helman-card"
+                    ? card._deviceTree[1].children[0]
+                    : card._houseNode;
+                const refresh = () => tag === "helman-card"
+                    ? card._loadBackendData(true)
+                    : card._loadFromBackend(true);
+                const first = refresh();
+                await new Promise<void>((done) => setTimeout(done, 0));
+                const duringTree = card._historyEngine === oldEngine
+                    && window.__liveBucketIntervals().includes(oldEngine._interval);
+                if (failedRead === "tree") window.__rejectTree();
+                else {
+                    window.__resolveTree();
+                    await new Promise<void>((done) => setTimeout(done, 0));
+                    if (window.__pending().history !== 1) throw new Error("history was not requested");
+                    window.__rejectHistory();
+                }
+                await first;
+                const afterFailure = card._historyEngine === oldEngine
+                    && window.__liveBucketIntervals().length === 1
+                    && window.__liveBucketIntervals()[0] === oldEngine._interval
+                    && (tag === "helman-card" ? card._deviceTree[1].children[0] : card._houseNode) === oldNode;
+
+                (window.__hass as any).states["sensor.house"] = { state: "250", attributes: {} };
+                oldEngine.advanceBuckets(
+                    tag === "helman-card" ? card._deviceTree : card._topLevelNodes(),
+                    card._sourceNodes,
+                );
+                const updatedPower = oldNode.powerValue;
+
+                const second = refresh();
+                await new Promise<void>((done) => setTimeout(done, 0));
+                window.__resolveTree();
+                await new Promise<void>((done) => setTimeout(done, 0));
+                window.__resolveHistory();
+                await second;
+                const newEngine = card._historyEngine;
+                const replaced = newEngine !== oldEngine
+                    && oldEngine._interval === undefined
+                    && window.__liveBucketIntervals().length === 1
+                    && window.__liveBucketIntervals()[0] === newEngine._interval;
+                card.remove();
+                return { duringTree, afterFailure, updatedPower, replaced, remaining: window.__liveBucketIntervals().length };
+            }, { tag, failedRead });
+
+            expect(result).toEqual({
+                duringTree: true,
+                afterFailure: true,
+                updatedPower: 250,
+                replaced: true,
+                remaining: 0,
+            });
+        });
+    }
+}
+
+test("helman-card: children use the incoming bucket count on mount and refresh", async ({ page }) => {
+    await installFixture(page, BUCKET_SECONDS);
+    const counts = await page.evaluate(async () => {
+        window.__omitHouseHistory();
+        const card = document.createElement("helman-card") as any;
+        await card.setConfig({ type: "custom:helman-card" });
+        card.hass = window.__hass;
+        document.body.appendChild(card);
+        await new Promise<void>((done) => setTimeout(done, 0));
+        window.__resolveTree();
+        await new Promise<void>((done) => setTimeout(done, 0));
+        window.__resolveHistory();
+        await new Promise<void>((done) => setTimeout(done, 0));
+
+        const initial = {
+            root: card._deviceTree[1].historyBuckets,
+            child: card._deviceTree[1].children[0].historyBuckets,
+        };
+        window.__setTreeBuckets(5);
+        const refresh = card._loadBackendData(true);
+        await new Promise<void>((done) => setTimeout(done, 0));
+        window.__resolveTree();
+        await new Promise<void>((done) => setTimeout(done, 0));
+        const visibleDuringRefresh = card._deviceTree[1].children[0].historyBuckets;
+        window.__resolveHistory();
+        await refresh;
+        const updated = {
+            root: card._deviceTree[1].historyBuckets,
+            child: card._deviceTree[1].children[0].historyBuckets,
+        };
+        card.remove();
+        return { initial, visibleDuringRefresh, updated };
+    });
+
+    expect(counts).toEqual({
+        initial: { root: 3, child: 3 },
+        visibleDuringRefresh: 3,
+        updated: { root: 5, child: 5 },
+    });
+});
 
 test.describe("helman-card: root titles", () => {
     test.beforeEach(async ({ page }) => {

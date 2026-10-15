@@ -6,6 +6,7 @@ import { getLocalizeFunction, LocalizeFunction } from "../localize/localize";
 import { ValueType, TreeItemDTO, TreePayload, HelmanUiConfig, InverterDetailPayload, applyValueType } from "../helman-api";
 import { HistoryEngine } from "../helman/history-engine";
 import { getSharedHelmanStore } from "../helman/store";
+import { getSharedDataChangedFeed } from "../helman/data-changed";
 import { TreeItem } from "../helman/tree-item";
 import { hydrateItem } from "../helman/tree-item-hydrator";
 import type { NodeType } from "./node-detail/node-detail-types";
@@ -30,6 +31,7 @@ import { getFlowColor, getFlowGlow } from "./flow-colors";
 import { DEFAULT_SOLAR_MAX_W, IDLE_W, liveFlows, type LiveFlows } from "./live-flows";
 import { readingNumber } from "./node-detail/node-detail-readings";
 import { powerUnitFactor, readPowerW } from "../shared/power-reading";
+import { WATCHED_ENTITIES_EVENT, type WatchedEntitiesDetail } from "../shared/hass-change";
 
 // ──────────────────────────────── Internal model ──────────────────────────────
 
@@ -198,8 +200,11 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
     private _config!: HelmanSimpleCardConfig;
     private _entityMap: EnergyEntityMap | null = null;
     private _localize?: LocalizeFunction;
+    private _localizeLanguage?: string;
+    private _unsubscribeDataChanged?: () => void;
     private _latestHass?: HomeAssistant;
     private _watchedEntityIds: Set<string> = new Set();
+    private _scheduleWatchedIds: Set<string> = new Set();
     /** The readings the open node detail announced it reads live. */
     private _detailEntityIds: string[] = [];
     private _solarDTO:           TreeItemDTO | null = null;
@@ -224,6 +229,8 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
      * an interval nothing ever stops (#232).
      */
     private _loadGeneration = 0;
+    // Inverter reads belong to the displayed tree, even while a replacement is staged.
+    private _inverterGeneration = 0;
     private _uiConfig?: HelmanUiConfig;
     private _flowColors?: { solar: string; grid: string; battery: string };
     private _flowGlows?:  { solar: string; grid: string; battery: string };
@@ -248,9 +255,19 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
     public set hass(hass: HomeAssistant) {
         const previous = this._latestHass;
         this._latestHass = hass;
-        if (!this._localize) this._localize = getLocalizeFunction(hass);
+        const language = hass.locale?.language ?? hass.language;
+        const languageChanged = language !== this._localizeLanguage;
+        if (languageChanged || !this._localize) {
+            this._localizeLanguage = language;
+            this._localize = getLocalizeFunction({ ...hass, language });
+            if (languageChanged) {
+                for (const item of HistoryEngine.walkTree(this._topLevelNodes())) {
+                    if (item.isUnmeasured) item.name = this._localize("house_section.unmeasured");
+                }
+            }
+        }
 
-        if (!previous || this._watchedEntityIds.size === 0) {
+        if (!previous || languageChanged || this._watchedEntityIds.size === 0) {
             this._hass = hass;
             if (this._entityMap) this._energy = this._readEnergyValues(hass, this._entityMap);
             return;
@@ -279,9 +296,13 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         // answer — so this card hosts the editor too rather than leaving a
         // control that does nothing.
         this.addEventListener(OPEN_SCHEDULE_EDITOR_EVENT, this._handleOpenScheduleEditor);
+        this.addEventListener(WATCHED_ENTITIES_EVENT, this._handleWatchedEntities);
         // A device name in the house detail swaps the open dialog to that device.
         this.addEventListener("show-device-detail", this._handleShowDeviceDetail);
         if (this._latestHass) {
+            this._unsubscribeDataChanged = getSharedDataChangedFeed(this._latestHass).subscribe((kinds) => {
+                if (kinds.has("config")) void this._loadFromBackend(true);
+            });
             await this._loadFromBackend();
         }
     }
@@ -289,8 +310,12 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
     disconnectedCallback(): void {
         super.disconnectedCallback();
         this.removeEventListener(OPEN_SCHEDULE_EDITOR_EVENT, this._handleOpenScheduleEditor);
+        this.removeEventListener(WATCHED_ENTITIES_EVENT, this._handleWatchedEntities);
         this.removeEventListener("show-device-detail", this._handleShowDeviceDetail);
+        this._unsubscribeDataChanged?.();
+        this._unsubscribeDataChanged = undefined;
         this._loadGeneration += 1;
+        this._inverterGeneration += 1;
         this._historyEngine?.stop();
     }
 
@@ -319,43 +344,26 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
                 batterySoc, batteryMinSoc } = this._energy;
 
         // One activation threshold for every flow, as the details read it.
-        const solarActive   = solarPower > IDLE_W;
         const battCharge    = batteryPower > IDLE_W;
         const flows = liveFlows(this._energy);
-        const solarExportingToGrid = flows.solarToGrid > 0;
-        const solarToGridPower  = flows.solarToGrid;
-        const solarToHousePower = flows.solarToHouse;
-        const solarToBattPower  = flows.solarToBattery;
-        const battToHousePower  = flows.batteryToHouse;
-        const battToGridPower   = flows.batteryToGrid;
         const effectiveGridPower = flows.gridPower;
-        const gridImport = effectiveGridPower > IDLE_W;
 
         const em = this._entityMap;
-        const intensity = (power: number, max: number) => Math.min(Math.abs(power) / max, 1);
         // Stroke width scales linearly from 1.5 to 12 px based on the power ratio; minimum ensures visibility.
-        const thick = (i: number) => Math.max(1.5, i * 12);
-
-        const gridToBattPower  = flows.gridToBattery;
-        const gridToHousePower = flows.gridToHouse;
-
-        // ── Intensities: ratio of each flow's power to its source's max power ──
-        const solarToHouseI = intensity(solarToHousePower, em.solarMaxPower);
-        const solarToGridI  = intensity(solarToGridPower,  em.solarMaxPower);
-        const solarToBattI  = intensity(solarToBattPower,  em.solarMaxPower);
-        const gridToBattI   = intensity(gridToBattPower,   em.gridMaxPower);
-        const gridToHouseI  = intensity(gridToHousePower,  em.gridMaxPower);
-        const battToHouseI  = intensity(battToHousePower,  em.batteryMaxPower);
-        const battToGridI   = intensity(battToGridPower,   em.batteryMaxPower);
-
-        // ── Stroke widths (px, unified scale for all flows) ────────────────────
-        const solarToHouseT = thick(solarToHouseI);
-        const solarToGridT  = thick(solarToGridI);
-        const solarToBattT  = thick(solarToBattI);
-        const gridToBattT   = thick(gridToBattI);
-        const gridToHouseT  = thick(gridToHouseI);
-        const battToHouseT  = thick(battToHouseI);
-        const battToGridT   = thick(battToGridI);
+        const edgeList = [
+            { key: "solarToGrid", max: em.solarMaxPower },
+            { key: "solarToHouse", max: em.solarMaxPower },
+            { key: "solarToBattery", max: em.solarMaxPower },
+            { key: "gridToBattery", max: em.gridMaxPower },
+            { key: "gridToHouse", max: em.gridMaxPower },
+            { key: "batteryToHouse", max: em.batteryMaxPower },
+            { key: "batteryToGrid", max: em.batteryMaxPower },
+        ] as const;
+        const edge = (key: typeof edgeList[number]["key"]) => {
+            const power = flows[key];
+            const max = edgeList.find((entry) => entry.key === key)!.max;
+            return { active: power > 0, width: Math.max(1.5, Math.min(power / max, 1) * 12) };
+        };
 
         const solarFlowColor   = this._flowColors!.solar;
         const gridFlowColor    = this._flowColors!.grid;
@@ -364,7 +372,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         // ── Source colors for consumer components ──────────────────────────────
         // Battery charge color: derived from live power flows to avoid backend color discrepancies
         const battSourceColor  = battCharge
-            ? (solarToBattPower >= gridToBattPower ? solarFlowColor : gridFlowColor)
+            ? (flows.solarToBattery >= flows.gridToBattery ? solarFlowColor : gridFlowColor)
             : undefined;
         const gridSourceColor  = this._gridConsumerNode    ? computeDominantSourceColorCached(this._gridConsumerNode)    : undefined;
         const houseSourceColor = this._houseNode           ? computeDominantSourceColorCached(this._houseNode)           : undefined;
@@ -381,7 +389,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
                             <simple-card-solar .power=${solarPower}></simple-card-solar>
                         </div>
                         <div class="connector-h">
-                            ${solarExportingToGrid ? this._flowH(solarFlowColor, this._flowGlows!.solar, false, solarToGridT, 22.5, 33) : ""}
+                            ${edge("solarToGrid").active ? this._flowH(solarFlowColor, this._flowGlows!.solar, false, edge("solarToGrid").width, 22.5, 33) : ""}
                         </div>
                         <div class="node-cell" @click=${() => this._openNode("grid")}>
                             <simple-card-grid .power=${effectiveGridPower} .sourceColor=${gridSourceColor}></simple-card-grid>
@@ -389,7 +397,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
 
                         <!-- ── Row 2: vertical connectors ── -->
                         <div class="connector-v">
-                            ${solarActive ? this._flowV(solarFlowColor, this._flowGlows!.solar, false, solarToHouseT) : ""}
+                            ${edge("solarToHouse").active ? this._flowV(solarFlowColor, this._flowGlows!.solar, false, edge("solarToHouse").width) : ""}
                         </div>
                         <div class="center-cell">
                             <helman-inverter-cell
@@ -400,8 +408,8 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
                             ></helman-inverter-cell>
                         </div>
                         <div class="connector-v">
-                            ${(gridImport && battCharge) ? this._flowV(gridFlowColor, this._flowGlows!.grid, false, gridToBattT) : ""}
-                            ${battToGridPower > IDLE_W ? this._flowV(batteryFlowColor, this._flowGlows!.battery, true, battToGridT) : ""}
+                            ${edge("gridToBattery").active ? this._flowV(gridFlowColor, this._flowGlows!.grid, false, edge("gridToBattery").width) : ""}
+                            ${edge("batteryToGrid").active ? this._flowV(batteryFlowColor, this._flowGlows!.battery, true, edge("batteryToGrid").width) : ""}
                         </div>
 
                         <!-- ── Row 3: House ─── connector ─── Battery ── -->
@@ -418,7 +426,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
                             ></simple-card-battery>
                         </div>
 
-                        ${this._renderFlowOverlay(solarToBattPower > IDLE_W, gridToHousePower > IDLE_W, battToHousePower > IDLE_W, solarToBattT, gridToHouseT, battToHouseT)}
+                        ${this._renderFlowOverlay(edge("solarToBattery"), edge("gridToHouse"), edge("batteryToHouse"))}
 
                     </div>
                 </div>
@@ -457,10 +465,10 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
     };
 
     /** The inverter overview, after the card has drawn: a failure only leaves the cell out. */
-    private async _loadInverter(obsolete: () => boolean): Promise<void> {
+    private async _loadInverter(obsolete: () => boolean, fresh: boolean): Promise<void> {
         try {
             const payload = await getSharedHelmanStore(this._latestHass!)
-                .getNodeDetail<InverterDetailPayload>({ node: "inverter" });
+                .getNodeDetail<InverterDetailPayload>({ node: "inverter" }, { fresh });
             if (obsolete()) return;
             this._inverter = payload;
             this._rebuildWatchedEntityIds();
@@ -476,6 +484,15 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         this.shadowRoot
             ?.querySelector<SchedulingDayEditorHost>("scheduling-day-editor-host")
             ?.openFor(detail.target);
+    };
+
+    private _handleWatchedEntities = (event: Event): void => {
+        const next = new Set((event as CustomEvent<WatchedEntitiesDetail>).detail.entityIds);
+        if (next.size === this._scheduleWatchedIds.size
+            && [...next].every((id) => this._scheduleWatchedIds.has(id))) return;
+        this._scheduleWatchedIds = next;
+        this._rebuildWatchedEntityIds();
+        if (this._latestHass) this._hass = this._latestHass;
     };
 
     private _rebuildWatchedEntityIds(): void {
@@ -498,6 +515,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         addNode(this._gridConsumerNode);
         addNode(this._houseNode);
         for (const id of this._detailEntityIds) ids.add(id);
+        for (const id of this._scheduleWatchedIds) ids.add(id);
         // The centre cell's mode and link cue.
         for (const id of inverterCellEntityIds(this._inverter)) ids.add(id);
         this._watchedEntityIds = ids;
@@ -512,55 +530,76 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         return parts.join("; ");
     }
 
-    private async _loadFromBackend(): Promise<boolean> {
+    private async _loadFromBackend(freshTree = false, retryInitial = true): Promise<boolean> {
         const generation = ++this._loadGeneration;
         // Superseded by a later load, or the card is gone. Either way this
         // response belongs to nobody: commit none of it.
         const obsolete = () => generation !== this._loadGeneration || !this.isConnected;
-        this._historyEngine?.stop();
         try {
             const store = getSharedHelmanStore(this._latestHass!);
-            const payload = await store.getDeviceTree();
+            const payload = await store.getDeviceTree({ fresh: freshTree });
             if (obsolete()) return false;
-            this._uiConfig = payload.uiConfig;
-            this._entityMap = this._buildEntityMap(payload);
-            this._energy = this._readEnergyValues(this._latestHass!, this._entityMap);
-
+            const history = await store.getHistory({ fresh: freshTree });
+            if (obsolete()) return false;
+            const entityMap = this._buildEntityMap(payload);
+            const energy = this._readEnergyValues(this._latestHass!, entityMap);
             const histBuckets = payload.uiConfig.history_buckets;
-            this._solarNode          = this._solarDTO          ? this._hydrateItem(this._solarDTO,          histBuckets) : null;
-            this._gridProducerNode   = this._gridDTO            ? this._hydrateItem(this._gridDTO,            histBuckets) : null;
-            this._batteryProducerNode = this._batteryDTO        ? this._hydrateItem(this._batteryDTO,        histBuckets) : null;
-            this._batteryConsumerNode = this._batteryConsumerDTO ? this._hydrateItem(this._batteryConsumerDTO, histBuckets) : null;
-            this._gridConsumerNode   = this._gridConsumerDTO    ? this._hydrateItem(this._gridConsumerDTO,    histBuckets) : null;
+            const solarNode           = this._solarDTO           ? this._hydrateItem(this._solarDTO,           histBuckets) : null;
+            const gridProducerNode    = this._gridDTO            ? this._hydrateItem(this._gridDTO,            histBuckets) : null;
+            const batteryProducerNode = this._batteryDTO         ? this._hydrateItem(this._batteryDTO,         histBuckets) : null;
+            const batteryConsumerNode = this._batteryConsumerDTO ? this._hydrateItem(this._batteryConsumerDTO, histBuckets) : null;
+            const gridConsumerNode    = this._gridConsumerDTO    ? this._hydrateItem(this._gridConsumerDTO,    histBuckets) : null;
 
             // Consumer-side DTOs don't carry sourceType — propagate from the matching source node
-            if (this._batteryConsumerNode && !this._batteryConsumerNode.sourceType)
-                this._batteryConsumerNode.sourceType = this._batteryProducerNode?.sourceType;
-            if (this._gridConsumerNode && !this._gridConsumerNode.sourceType)
-                this._gridConsumerNode.sourceType = this._gridProducerNode?.sourceType;
+            if (batteryConsumerNode && !batteryConsumerNode.sourceType)
+                batteryConsumerNode.sourceType = batteryProducerNode?.sourceType;
+            if (gridConsumerNode && !gridConsumerNode.sourceType)
+                gridConsumerNode.sourceType = gridProducerNode?.sourceType;
 
-            if (this._houseDTO) {
-                this._houseNode = this._hydrateItem(this._houseDTO, histBuckets);
-                if (!this._houseNode.sourceType) this._houseNode.sourceType = 'house';
-            }
+            const houseNode = this._houseDTO ? this._hydrateItem(this._houseDTO, histBuckets) : null;
+            if (houseNode && !houseNode.sourceType) houseNode.sourceType = 'house';
 
-            this._productionNode  = payload.productionTotalSensorId
+            const productionNode = payload.productionTotalSensorId
                 ? new TreeItem('production-total', '', payload.productionTotalSensorId, null, histBuckets)
                 : null;
-            if (this._productionNode) this._productionNode.isSource = true;
-            this._consumptionNode = payload.consumptionTotalSensorId
+            if (productionNode) productionNode.isSource = true;
+            const consumptionNode = payload.consumptionTotalSensorId
                 ? new TreeItem('consumption-total', '', payload.consumptionTotalSensorId, null, histBuckets)
                 : null;
-            if (this._consumptionNode) this._consumptionNode.isSource = true;
+            if (consumptionNode) consumptionNode.isSource = true;
 
-            const history = await store.getHistory();
-            if (obsolete()) return false;
+            const sourceNodes = [solarNode, gridProducerNode, batteryProducerNode]
+                .filter((node): node is TreeItem => node !== null);
+            const topLevelNodes = [
+                ...sourceNodes, houseNode, batteryConsumerNode, gridConsumerNode,
+                productionNode, consumptionNode,
+            ].filter((node): node is TreeItem => node !== null);
             const engine = new HistoryEngine(
                 () => this._latestHass,
                 histBuckets,
                 () => { this._historyRevision++; },
             );
-            engine.applyHistory(history, HistoryEngine.walkTree(this._topLevelNodes()), this._sourceNodes);
+            engine.applyHistory(history, HistoryEngine.walkTree(topLevelNodes), sourceNodes);
+
+            this._historyEngine?.stop();
+            this._uiConfig = payload.uiConfig;
+            this._entityMap = entityMap;
+            this._energy = energy;
+            this._solarNode = solarNode;
+            this._gridProducerNode = gridProducerNode;
+            this._batteryProducerNode = batteryProducerNode;
+            this._batteryConsumerNode = batteryConsumerNode;
+            this._gridConsumerNode = gridConsumerNode;
+            this._houseNode = houseNode;
+            this._productionNode = productionNode;
+            this._consumptionNode = consumptionNode;
+
+            if (this._dialogRequest instanceof TreeItem) {
+                const old = this._dialogRequest;
+                this._dialogRequest = HistoryEngine.walkTree(topLevelNodes)
+                    .find((item) => item.id === old.id && item.isSource === old.isSource) ?? null;
+                this._detailEntityIds = [];
+            }
             this._historyEngine = engine;
             engine.start(
                 this._uiConfig.history_bucket_duration,
@@ -569,12 +608,21 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             );
             engine.advanceBuckets(this._topLevelNodes(), this._sourceNodes);
             this._rebuildWatchedEntityIds();
-            void this._loadInverter(obsolete);
+            const inverterGeneration = ++this._inverterGeneration;
+            void this._loadInverter(
+                () => inverterGeneration !== this._inverterGeneration || !this.isConnected,
+                freshTree,
+            );
             return true;
         } catch (err) {
             // Logged even for an obsolete load: the guard is there to keep stale data
             // out of the card, not to hide a backend failure that raced a detach.
             console.error("helman-simple-card: failed to load backend data", err);
+            // A config event can supersede the initial load before any tree is
+            // installed. Give that failed refresh one new, post-event read.
+            if (!obsolete() && freshTree && retryInitial && !this._historyEngine) {
+                void this._loadFromBackend(true, false);
+            }
             return false;
         } finally {
             if (!obsolete()) this._loading = false;
@@ -701,8 +749,8 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         };
     }
 
-    private _renderFlowOverlay(solarToBatt: boolean, gridToHouse: boolean, battToHouse: boolean, solarToBattT: number, gridToHouseT: number, battToHouseT: number) {
-        if (!solarToBatt && !gridToHouse && !battToHouse) return "";
+    private _renderFlowOverlay(solarToBatt: { active: boolean; width: number }, gridToHouse: { active: boolean; width: number }, battToHouse: { active: boolean; width: number }) {
+        if (!solarToBatt.active && !gridToHouse.active && !battToHouse.active) return "";
         const solarFlowColor   = this._flowColors!.solar;
         const gridFlowColor    = this._flowColors!.grid;
         const batteryFlowColor = this._flowColors!.battery;
@@ -717,30 +765,30 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             <svg class="diagonal-overlay" viewBox="0 0 200 168"
                  preserveAspectRatio="none"
                  xmlns="http://www.w3.org/2000/svg">
-                ${ solarToBatt ? svg`
+                ${ solarToBatt.active ? svg`
                     <line x1="62" y1="48" x2="138" y2="120"
                           stroke="${solarFlowColor}"
-                          stroke-width=${solarToBattT}
+                          stroke-width=${solarToBatt.width}
                           stroke-linecap="round"
                           stroke-dasharray="2 16"
                           vector-effect="non-scaling-stroke"
                           style="animation: flow-diagonal 1.6s linear infinite;
                                  filter: drop-shadow(0 0 3px ${solarFlowGlow})" />
                 ` : ""}
-                ${ gridToHouse ? svg`
+                ${ gridToHouse.active ? svg`
                     <line x1="138" y1="48" x2="62" y2="120"
                           stroke="${gridFlowColor}"
-                          stroke-width=${gridToHouseT}
+                          stroke-width=${gridToHouse.width}
                           stroke-linecap="round"
                           stroke-dasharray="2 16"
                           vector-effect="non-scaling-stroke"
                           style="animation: flow-diagonal 1.6s linear infinite;
                                  filter: drop-shadow(0 0 3px ${gridFlowGlow})" />
                 ` : ""}
-                ${ battToHouse ? svg`
+                ${ battToHouse.active ? svg`
                     <line x1="130" y1="133" x2="70" y2="133"
                           stroke="${batteryFlowColor}"
-                          stroke-width=${battToHouseT}
+                          stroke-width=${battToHouse.width}
                           stroke-linecap="round"
                           stroke-dasharray="2 16"
                           vector-effect="non-scaling-stroke"

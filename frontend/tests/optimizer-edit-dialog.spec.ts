@@ -142,6 +142,7 @@ interface MountOptions {
     payload?: unknown;
     applianceName?: string | null;
     schema?: unknown;
+    holdSave?: boolean;
 }
 
 async function mountPanel(page: Page, options: MountOptions = {}): Promise<void> {
@@ -153,12 +154,13 @@ async function mountPanel(page: Page, options: MountOptions = {}): Promise<void>
         payload = PAYLOAD,
         applianceName = null,
         schema = SCHEMA,
+        holdSave = false,
     } = options;
 
     await loadBundle(page, "scheduling-explanation-panel");
 
     await page.evaluate(
-        ({ fixture, slotId, admin, schema, configs, save, strings, appliance }) => {
+        ({ fixture, slotId, admin, schema, configs, save, strings, appliance, holdSave }) => {
             // The card enters YAML mode only once `ha-yaml-editor` is defined,
             // and the chunk it walks for does not exist in a bare page. The
             // stub short-circuits the walk; the YAML tests drive it with the
@@ -169,6 +171,8 @@ async function mountPanel(page: Page, options: MountOptions = {}): Promise<void>
             const calls: { type: string; config?: unknown }[] = [];
             const globals = window as unknown as Record<string, unknown>;
             globals.__calls = calls;
+            let releaseSave: (() => void) | undefined;
+            globals.__releaseSave = () => releaseSave?.();
 
             // The dialog closes on a successful save and hands the "restart
             // started" line to Home Assistant's own toast on the way out.
@@ -226,6 +230,7 @@ async function mountPanel(page: Page, options: MountOptions = {}): Promise<void>
                         type: string;
                         config?: unknown;
                     }) => {
+                        if (holdSave) await new Promise<void>((resolve) => { releaseSave = resolve; });
                         return save;
                     }
                 }, (request: {
@@ -251,6 +256,7 @@ async function mountPanel(page: Page, options: MountOptions = {}): Promise<void>
             save: saveResponse,
             strings: STRINGS,
             appliance: applianceName,
+            holdSave,
         },
     );
 
@@ -328,6 +334,23 @@ async function calls(page: Page): Promise<{ type: string; config?: unknown }[]> 
 }
 
 test.describe("editing the deciding optimizer from the slot diagram", () => {
+    test("a pending save prevents Cancel and dialog hide", async ({ page }) => {
+        await mountPanel(page, { holdSave: true });
+        await openDialog(page);
+        await editThreshold(page, "0.5");
+        await dialog(page).getByText("Save and reload").click();
+        await expect.poll(async () => (await calls(page)).some((call) => call.type === "helman/save_config")).toBe(true);
+        await page.evaluate(() => {
+            const host = document.querySelector("scheduling-explanation-panel")!.shadowRoot!
+                .querySelector("helman-optimizer-edit-dialog") as any;
+            host._dirty = false;
+        });
+        await dialog(page).getByText("Cancel").click({ force: true });
+        await expect(dialog(page)).toHaveCount(1);
+        expect(await requestHide(page)).toBe(false);
+        await expect(dialog(page)).toHaveCount(1);
+        await page.evaluate(() => ((window as any).__releaseSave as () => void)());
+    });
     test("an admin is offered the edit button in the diagram head", async ({ page }) => {
         await mountPanel(page);
         await expect(editButton(page)).toHaveCount(1);
