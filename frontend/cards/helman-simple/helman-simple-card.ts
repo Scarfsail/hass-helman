@@ -596,8 +596,6 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
                     .find((item) => item.id === old.id && item.isSource === old.isSource) ?? null;
                 this._detailEntityIds = [];
             }
-            if (freshTree) this._inverter = null;
-
             this._historyEngine = engine;
             engine.start(
                 this._uiConfig.history_bucket_duration,

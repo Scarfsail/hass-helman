@@ -94,7 +94,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
      */
     @state() private _historyRevision = 0;
     @state() private _uiConfig?: HelmanUiConfig;
-    /** The overview the distribution row's inverter cell reads; `null` until loaded, or when it failed. */
+    /** The last successful overview the distribution row's inverter cell reads; `null` until loaded. */
     @state() private _inverter: InverterDetailPayload | null = null;
     @state() private _computedNodes?: {
         sourcesNode: TreeItem | undefined;
@@ -120,9 +120,11 @@ export class HelmanCard extends LitElement implements LovelaceCard {
             this._localizeLanguage = language;
             this._localize = getLocalizeFunction({ ...hass, language });
             if (languageChanged && this._deviceTree.length) {
+                for (const root of this._deviceTree) {
+                    if (root.id === "sources") root.name = this._localize("card.sources_title");
+                    if (root.id === "consumers") root.name = this._localize("card.consumers_title");
+                }
                 for (const item of HistoryEngine.walkTree(this._deviceTree)) {
-                    if (item.id === "sources") item.name = this._localize("card.sources_title");
-                    if (item.id === "consumers") item.name = this._localize("card.consumers_title");
                     if (item.isUnmeasured) item.name = this._localize("house_section.unmeasured");
                 }
                 this._deviceTree = [...this._deviceTree];
@@ -430,7 +432,6 @@ export class HelmanCard extends LitElement implements LovelaceCard {
                     .find((item) => item.id === old.id && item.isSource === old.isSource) ?? null;
                 this._detailEntityIds = [];
             }
-            if (freshTree) this._inverter = null;
             this._rebuildWatchedEntityIds();
 
             this._historyEngine = engine;
