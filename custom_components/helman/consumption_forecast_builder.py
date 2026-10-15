@@ -5,16 +5,14 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
-from .config_read import read_mapping, read_entity_id
-
+from .config_read import read_entity_id, read_mapping
 from .const import (
-    FORECAST_CANONICAL_GRANULARITY_MINUTES,
     HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
     HOUSE_FORECAST_DEFAULT_TRAINING_WINDOW_DAYS,
     HOUSE_FORECAST_MODEL_ID,
@@ -23,8 +21,8 @@ from .const import (
 from .consumption_forecast_profiles import (
     NEGATIVE_RESIDUAL_THRESHOLD,
     ZERO_BAND,
-    HouseConsumptionProfile,
     HourOfWeekWinsorizedMeanProfile,
+    HouseConsumptionProfile,
 )
 from .consumption_forecast_statistics import ForecastBand
 from .controllables.config import read_carved_meters
@@ -34,6 +32,7 @@ from .recorder_hourly_series import (
     get_today_completed_local_slots,
     own_energy_changes,
 )
+from .slot_grid import SLOT, SLOT_MINUTES, SLOTS_PER_DAY, advance, slot_starts
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -95,10 +94,6 @@ class _ConsumerSlotHistoryData:
 class ConsumptionForecastBuilder:
     """Builds the house_consumption forecast payload."""
 
-    _CANONICAL_GRANULARITY_MINUTES = FORECAST_CANONICAL_GRANULARITY_MINUTES
-    _SLOTS_PER_HOUR = 60 // _CANONICAL_GRANULARITY_MINUTES
-    _SLOTS_PER_DAY = 24 * _SLOTS_PER_HOUR
-
     def __init__(
         self,
         hass: HomeAssistant,
@@ -144,7 +139,7 @@ class ConsumptionForecastBuilder:
                 training_window_days=training_window_days,
                 min_history_days=min_history_days,
                 config_fingerprint=config_fingerprint,
-                source_granularity_minutes=self._CANONICAL_GRANULARITY_MINUTES,
+                source_granularity_minutes=SLOT_MINUTES,
                 forecast_days_available=forecast_days,
                 trained_at=trained_at,
                 last_outcome=last_outcome,
@@ -207,7 +202,7 @@ class ConsumptionForecastBuilder:
                 min_history_days=min_history_days,
                 history_days=profile.history_days,
                 config_fingerprint=config_fingerprint,
-                source_granularity_minutes=self._CANONICAL_GRANULARITY_MINUTES,
+                source_granularity_minutes=SLOT_MINUTES,
                 forecast_days_available=forecast_days,
                 trained_at=trained_at,
                 last_outcome=last_outcome,
@@ -230,14 +225,14 @@ class ConsumptionForecastBuilder:
 
         current_slot_start = get_local_current_slot_start(
             local_now,
-            interval_minutes=self._CANONICAL_GRANULARITY_MINUTES,
+            interval_minutes=SLOT_MINUTES,
         )
         current_slot = self._build_forecast_entry(
             current_slot_start,
             non_deferrable_bands=profile.non_deferrable,
             consumers_config=consumers_config,
             consumer_bands=profile.consumers,
-            interval_minutes=self._CANONICAL_GRANULARITY_MINUTES,
+            interval_minutes=SLOT_MINUTES,
         )
 
         series = self._build_series(
@@ -258,7 +253,7 @@ class ConsumptionForecastBuilder:
             actual_history=actual_history,
             current_slot=current_slot,
             series=series,
-            source_granularity_minutes=self._CANONICAL_GRANULARITY_MINUTES,
+            source_granularity_minutes=SLOT_MINUTES,
             forecast_days_available=forecast_days,
             trained_at=trained_at,
             last_outcome=last_outcome,
@@ -292,7 +287,7 @@ class ConsumptionForecastBuilder:
             consumers=consumers,
             completed_slots=get_today_completed_local_slots(
                 reference_time,
-                interval_minutes=self._CANONICAL_GRANULARITY_MINUTES,
+                interval_minutes=SLOT_MINUTES,
             ),
         )
 
@@ -361,7 +356,7 @@ class ConsumptionForecastBuilder:
         return await self._slot_history.async_query_slot_energy_changes(
             entity_id,
             reference_time,
-            interval_minutes=self._CANONICAL_GRANULARITY_MINUTES,
+            interval_minutes=SLOT_MINUTES,
         )
 
     async def _query_consumer_slot_histories(
@@ -393,7 +388,7 @@ class ConsumptionForecastBuilder:
                         await _slot_history(child_entity_id)
                         for child_entity_id in consumer.get("metered_children", ())
                     ],
-                    slot=timedelta(minutes=self._CANONICAL_GRANULARITY_MINUTES),
+                    slot=SLOT,
                 )
             except Exception:
                 _LOGGER.warning(
@@ -428,7 +423,7 @@ class ConsumptionForecastBuilder:
         non_deferrable_bands: list[ForecastBand],
         consumers_config: list[dict[str, Any]],
         consumer_bands: dict[str, list[ForecastBand]],
-        interval_minutes: int = 60,
+        interval_minutes: int,
     ) -> dict[str, Any]:
         slot = HourOfWeekWinsorizedMeanProfile.slot_index(
             forecast_dt.weekday(),
@@ -470,20 +465,18 @@ class ConsumptionForecastBuilder:
         forecast_days: int,
     ) -> list[dict[str, Any]]:
         series: list[dict[str, Any]] = []
-        slot_duration = timedelta(minutes=self._CANONICAL_GRANULARITY_MINUTES)
-        forecast_start_utc = dt_util.as_utc(current_slot_start) + slot_duration
-        total_slots = forecast_days * self._SLOTS_PER_DAY
-        for index in range(total_slots):
-            forecast_dt = dt_util.as_local(
-                forecast_start_utc + (slot_duration * index)
-            )
+        total_slots = forecast_days * SLOTS_PER_DAY
+        for forecast_dt in slot_starts(
+            advance(current_slot_start),
+            advance(current_slot_start, slot_count=total_slots + 1),
+        ):
             series.append(
                 self._build_forecast_entry(
                     forecast_dt,
                     non_deferrable_bands=non_deferrable_bands,
                     consumers_config=consumers_config,
                     consumer_bands=consumer_bands,
-                    interval_minutes=self._CANONICAL_GRANULARITY_MINUTES,
+                    interval_minutes=SLOT_MINUTES,
                 )
             )
         return series

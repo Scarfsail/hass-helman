@@ -24,6 +24,7 @@ from ..scheduling.schedule import (
     iter_horizon_slot_ids,
     parse_slot_id,
 )
+from ..slot_grid import floor_to_slot as canonical_bucket_start
 
 if TYPE_CHECKING:
     from .snapshot import OptimizationSnapshot
@@ -46,37 +47,6 @@ def read_optional_float(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return float(value)
-
-
-def canonical_bucket_start(
-    timestamp: datetime,
-    *,
-    granularity_minutes: int = FORECAST_CANONICAL_GRANULARITY_MINUTES,
-) -> datetime:
-    """Floor ``timestamp`` to its forecast bucket start, in local time.
-
-    Bucketing is anchored at local midnight (not at the epoch) so a DST shift
-    cannot slide the grid off the day boundary.
-    """
-    local_reference = dt_util.as_local(timestamp)
-    local_day_start = local_reference.replace(
-        hour=0,
-        minute=0,
-        second=0,
-        microsecond=0,
-    )
-    slot_duration_seconds = granularity_minutes * 60
-    elapsed_seconds = max(
-        0.0,
-        (
-            dt_util.as_utc(local_reference) - dt_util.as_utc(local_day_start)
-        ).total_seconds(),
-    )
-    slot_index = int(elapsed_seconds // slot_duration_seconds)
-    slot_start_utc = dt_util.as_utc(local_day_start) + timedelta(
-        seconds=slot_index * slot_duration_seconds
-    )
-    return dt_util.as_local(slot_start_utc)
 
 
 def read_price_by_bucket(price_forecast: dict[str, Any]) -> dict[datetime, float]:

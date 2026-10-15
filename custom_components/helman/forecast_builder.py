@@ -1,28 +1,23 @@
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
-from .config_read import read_mapping, read_entity_id
-
+from .config_read import read_entity_id, read_mapping
 from .const import (
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
     SOLAR_REMAINING_TODAY_ENERGY_ENTITY_ID,
 )
 from .grid_price_forecast_builder import GridPriceForecastBuilder
 from .recorder_hourly_series import TodaySlotEnergyReader
-from .solar_forecast_grid import SLOTS_PER_HOUR, split_hour_by_weights
+from .slot_grid import SLOTS_PER_DAY, SLOTS_PER_HOUR, day_slots, split_hour_by_weights
 
 _LOGGER = logging.getLogger(__name__)
-
-#: Canonical slots in a day without a DST transition.
-_SLOTS_PER_NORMAL_DAY = 24 * 60 // FORECAST_CANONICAL_GRANULARITY_MINUTES
-
 
 class HelmanForecastBuilder:
     def __init__(
@@ -111,7 +106,7 @@ class HelmanForecastBuilder:
         self,
         reference_time: datetime,
         *,
-        interval_minutes: int = 60,
+        interval_minutes: int,
     ) -> list[dict[str, Any]]:
         entity_id = self._read_solar_actual_energy_entity_id()
         if entity_id is None:
@@ -158,7 +153,7 @@ class HelmanForecastBuilder:
         # day is the one benign case: the source publishes a normal 24-hour
         # series and the local axis is an hour shorter or longer, which the
         # positional anchor is there to absorb.
-        if len(values) not in (len(expected_slots), _SLOTS_PER_NORMAL_DAY):
+        if len(values) not in (len(expected_slots), SLOTS_PER_DAY):
             _LOGGER.warning(
                 "Solar forecast for %s on %s has %d values for %d slots; "
                 "anchoring from local midnight will %s",
@@ -252,22 +247,7 @@ class HelmanForecastBuilder:
         return expanded
 
     def _build_local_slots_for_date(self, expected_date: date) -> list[datetime]:
-        local_start = datetime.combine(expected_date, time.min, tzinfo=self._local_tz)
-        local_end = datetime.combine(
-            expected_date + timedelta(days=1),
-            time.min,
-            tzinfo=self._local_tz,
-        )
-
-        slots: list[datetime] = []
-        cursor_utc = dt_util.as_utc(local_start)
-        end_utc = dt_util.as_utc(local_end)
-        step = timedelta(minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES)
-        while cursor_utc < end_utc:
-            slots.append(dt_util.as_local(cursor_utc))
-            cursor_utc += step
-
-        return slots
+        return day_slots(expected_date, tzinfo=self._local_tz)
 
     def _get_state(self, entity_id: str | None):
         if entity_id is None:

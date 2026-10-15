@@ -663,3 +663,10 @@ def _solar_meter_batch(by_slot_wh: dict[str, float]):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf"), "unknown", None])
+def test_corrupt_statistics_means_are_missing_in_day_and_span(value):
+    from custom_components.helman.solar_bias_correction import statistics_day
+    assert span_mod.finite_mean({"mean": value}) is None
+    assert statistics_day.finite_mean({"mean": value}) is None

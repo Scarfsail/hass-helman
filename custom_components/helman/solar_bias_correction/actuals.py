@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
-import logging
 from typing import Any
 from zoneinfo import ZoneInfo
+
+from ..slot_grid import SLOT_MINUTES, SUB_SLOT_OFFSETS_MIN
 
 try:
     from homeassistant.components.recorder import get_instance
@@ -20,7 +22,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from ..config_read import read_entity_id
-
 from .forecast_slot_history import (
     ForecastSlotWindow,
     load_spliced_forecast_slots_for_window,
@@ -41,47 +42,11 @@ try:
 except Exception:  # pragma: no cover - Home Assistant API compatibility
     query_hourly_statistics = None  # type: ignore[assignment]
     query_oldest_state_date = None  # type: ignore[assignment]
-try:
-    from ..recorder_hourly_series import (
-        get_local_current_slot_start,
-        query_cumulative_slot_energy_changes,
-        query_cumulative_slot_energy_changes_for_windows,
-    )
-except Exception:  # pragma: no cover - test stub compatibility
-    def get_local_current_slot_start(
-        local_now: datetime,
-        interval_minutes: int,
-    ) -> datetime:
-        floored_minute = (local_now.minute // interval_minutes) * interval_minutes
-        return local_now.replace(
-            minute=floored_minute,
-            second=0,
-            microsecond=0,
-        )
-
-    async def query_cumulative_slot_energy_changes(
-        hass: HomeAssistant,
-        entity_id: str,
-        *,
-        local_start: datetime,
-        local_end: datetime,
-        interval_minutes: int,
-        liveness_instants: Sequence[datetime] | None = None,
-    ) -> dict[datetime, float]:
-        del hass, entity_id, local_start, local_end, interval_minutes
-        del liveness_instants
-        return {}
-
-    async def query_cumulative_slot_energy_changes_for_windows(
-        hass: HomeAssistant,
-        entity_id: str,
-        windows: Sequence[tuple[datetime, datetime]],
-        *,
-        interval_minutes: int,
-    ) -> list[dict[datetime, float]]:
-        del hass, entity_id, interval_minutes
-        return [{} for _ in windows]
-
+from ..recorder_hourly_series import (
+    get_local_current_slot_start,
+    query_cumulative_slot_energy_changes,
+    query_cumulative_slot_energy_changes_for_windows,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -296,7 +261,7 @@ async def _read_day_slot_actuals(
         entity_id,
         local_start=local_start,
         local_end=local_end,
-        interval_minutes=15,
+        interval_minutes=SLOT_MINUTES,
         liveness_instants=liveness_instants,
     )
     return _slot_actuals_from_slot_energy(values_by_slot)
@@ -326,7 +291,7 @@ async def _read_slot_actuals_for_dates(
         hass,
         entity_id,
         windows,
-        interval_minutes=15,
+        interval_minutes=SLOT_MINUTES,
     )
     return {
         str(target_date): _slot_actuals_from_slot_energy(values_by_slot)
@@ -345,7 +310,7 @@ def _day_window(
     if target_date == local_now.date():
         local_end = min(
             local_end,
-            get_local_current_slot_start(local_now, interval_minutes=15),
+            get_local_current_slot_start(local_now, interval_minutes=SLOT_MINUTES),
         )
     return local_start, local_end
 
@@ -550,7 +515,7 @@ def _expand_hourly_invalidations(
                 hour = int(slot_key.split(":", 1)[0])
             except (AttributeError, ValueError):
                 continue
-            day_slots.update(f"{hour:02d}:{minute:02d}" for minute in (0, 15, 30, 45))
+            day_slots.update(f"{hour:02d}:{minute:02d}" for minute in SUB_SLOT_OFFSETS_MIN)
         expanded[day] = day_slots
     return expanded
 
@@ -948,7 +913,7 @@ def _build_day_grid_slot_inputs(
         except ValueError:
             continue
 
-        minutes = (0,) if day in hourly_days else (0, 15, 30, 45)
+        minutes = (0,) if day in hourly_days else SUB_SLOT_OFFSETS_MIN
         day_slot_starts: list[datetime] = []
         day_slot_keys: list[str] = []
         for hour in range(24):

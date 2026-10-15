@@ -21,13 +21,15 @@ hours. The window stops at ``now``: nothing after it is a bucket.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-import math
 from typing import Any
 
 from homeassistant.util import dt as dt_util
+
+from ..slot_grid import slot_starts
 
 BUCKET = timedelta(minutes=5)
 
@@ -64,12 +66,7 @@ def day_window(local_day_start: datetime) -> tuple[datetime, datetime]:
 
 
 def _bucket_starts(start: datetime, stop: datetime) -> list[datetime]:
-    starts = []
-    cursor = start
-    while cursor < stop:
-        starts.append(cursor)
-        cursor += BUCKET
-    return starts
+    return slot_starts(start, stop, interval_minutes=5, utc=True)
 
 
 def buckets_from_statistics(

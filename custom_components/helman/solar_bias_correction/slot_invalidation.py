@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 
+from ..slot_grid import slot_to_minutes
+
 
 @dataclass(frozen=True)
 class StateSample:
@@ -185,26 +187,18 @@ def _segment_values(
     return values
 
 
-_SLOT_MINUTES = 15
-
-
-def _slot_to_minutes(slot_key: str) -> int:
-    hour_text, minute_text = slot_key.split(":", 1)
-    return int(hour_text) * 60 + int(minute_text)
-
-
 def _has_nonzero_neighbour_within_minutes(
     slot_key: str,
     day_actuals: dict[str, float],
     *,
     radius_minutes: int,
 ) -> bool:
-    target = _slot_to_minutes(slot_key)
+    target = slot_to_minutes(slot_key)
     for other_key, other_value in day_actuals.items():
         if other_key == slot_key:
             continue
         try:
-            other_minutes = _slot_to_minutes(other_key)
+            other_minutes = slot_to_minutes(other_key)
         except (AttributeError, ValueError):
             continue
         if abs(other_minutes - target) > radius_minutes:
@@ -259,7 +253,7 @@ def compute_data_glitch_invalidations(
         day_forecast = forecast_slot_wh_by_date.get(day, {})
         invalidated_for_day: set[str] = set()
 
-        sorted_slots = sorted(day_actuals, key=_slot_to_minutes)
+        sorted_slots = sorted(day_actuals, key=slot_to_minutes)
 
         # Rule 1 + 2: spike + backfill
         if max_slot_wh is not None and max_slot_wh > 0:
@@ -270,14 +264,14 @@ def compute_data_glitch_invalidations(
                 invalidated_for_day.add(slot_key)
                 # Walk backwards while preceding slots are zero, within the
                 # configured backfill window.
-                spike_minutes = _slot_to_minutes(slot_key)
+                spike_minutes = slot_to_minutes(slot_key)
                 for back_index in range(index - 1, -1, -1):
                     back_key = sorted_slots[back_index]
                     back_actual = day_actuals.get(back_key, 0.0)
                     if back_actual != 0:
                         break
                     if (
-                        spike_minutes - _slot_to_minutes(back_key)
+                        spike_minutes - slot_to_minutes(back_key)
                         > backfill_max_minutes
                     ):
                         break

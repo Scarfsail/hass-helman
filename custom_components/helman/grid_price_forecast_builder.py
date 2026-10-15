@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta
+from datetime import datetime, time
 from math import isfinite
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -10,9 +10,9 @@ from zoneinfo import ZoneInfo
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
-from .config_read import read_mapping, read_entity_id, read_float
-
+from .config_read import read_entity_id, read_float, read_mapping
 from .const import FORECAST_CANONICAL_GRANULARITY_MINUTES, MAX_FORECAST_DAYS
+from .slot_grid import advance, floor_to_slot, slot_starts
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -168,7 +168,7 @@ class GridPriceForecastBuilder:
         windows: tuple[FixedGridImportPriceWindow, ...],
     ) -> list[dict[str, Any]]:
         points: list[dict[str, Any]] = []
-        current_slot_start = self._get_local_current_slot_start(
+        current_slot_start = floor_to_slot(
             reference_time,
             interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
         )
@@ -176,10 +176,9 @@ class GridPriceForecastBuilder:
             MAX_FORECAST_DAYS * 24 * 60 // FORECAST_CANONICAL_GRANULARITY_MINUTES
         )
 
-        for slot_start in self._build_local_slot_starts_for_horizon(
-            start_time=current_slot_start,
-            slot_count=slot_count,
-            interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
+        for slot_start in slot_starts(
+            current_slot_start,
+            advance(current_slot_start, slot_count=max(0, slot_count)),
         ):
             points.append(
                 {
@@ -207,45 +206,6 @@ class GridPriceForecastBuilder:
             minute_of_day=minute_of_day,
         )
 
-    def _get_local_current_slot_start(
-        self,
-        reference_time: datetime,
-        *,
-        interval_minutes: int,
-    ) -> datetime:
-        local_reference = dt_util.as_local(reference_time)
-        local_day_start = datetime.combine(
-            local_reference.date(),
-            time.min,
-            tzinfo=self._local_tz,
-        )
-        slot_duration_seconds = interval_minutes * 60
-        elapsed_seconds = max(
-            0.0,
-            (
-                dt_util.as_utc(local_reference) - dt_util.as_utc(local_day_start)
-            ).total_seconds(),
-        )
-        slot_index = int(elapsed_seconds // slot_duration_seconds)
-        slot_start_utc = dt_util.as_utc(local_day_start) + timedelta(
-            seconds=slot_index * slot_duration_seconds
-        )
-        return dt_util.as_local(slot_start_utc)
-
-    def _build_local_slot_starts_for_horizon(
-        self,
-        *,
-        start_time: datetime,
-        slot_count: int,
-        interval_minutes: int,
-    ) -> list[datetime]:
-        slots: list[datetime] = []
-        cursor_utc = dt_util.as_utc(start_time)
-        for _ in range(max(0, slot_count)):
-            slots.append(dt_util.as_local(cursor_utc))
-            cursor_utc += timedelta(minutes=interval_minutes)
-
-        return slots
 
     @staticmethod
     def _make_price_snapshot(

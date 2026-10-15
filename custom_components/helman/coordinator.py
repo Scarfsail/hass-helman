@@ -198,6 +198,7 @@ from .scheduling.schedule_executor import (
     ScheduleExecutorDependencies,
 )
 from .shared_meter_split import split_own_power
+from .slot_grid import SLOT, SLOT_MINUTES
 from .solar_bias_correction.models import read_bias_config
 from .visualization import read_visualization
 from .solar_bias_correction.service import SolarBiasCorrectionService
@@ -2928,7 +2929,7 @@ class HelmanCoordinator:
 
         timezone = ZoneInfo(str(self._hass.config.time_zone))
         slot_start = get_local_current_slot_start(
-            dt_util.as_local(dt_util.now()), interval_minutes=15
+            dt_util.as_local(dt_util.now()), interval_minutes=SLOT_MINUTES
         )
         for point in points:
             if not isinstance(point, dict):
@@ -3012,9 +3013,9 @@ class HelmanCoordinator:
         """
         timezone = ZoneInfo(str(self._hass.config.time_zone))
         slot_start = get_local_current_slot_start(
-            dt_util.as_local(dt_util.now()), interval_minutes=15
+            dt_util.as_local(dt_util.now()), interval_minutes=SLOT_MINUTES
         )
-        slot_end = slot_start + timedelta(minutes=15)
+        slot_end = slot_start + SLOT
         slot_key = slot_start.isoformat()
 
         def refuse(reason: str, message: str, *args: object) -> None:
@@ -3197,7 +3198,7 @@ class HelmanCoordinator:
             slot_start = dt_util.as_local(dt_util.parse_datetime(ts_raw))
             if slot_start is None:
                 continue
-            slot_end = slot_start + timedelta(minutes=15)
+            slot_end = slot_start + SLOT
             if slot_start <= now_local < slot_end:
                 nd = entry.get("nonDeferrable") or {}
                 nd_kwh = nd.get("value") if isinstance(nd, dict) else None

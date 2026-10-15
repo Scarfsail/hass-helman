@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from ..slot_grid import SLOT_MINUTES, day_slots
 from .forecast_slot_sampling import resolve_forecast_slot_values
 
 try:
@@ -18,9 +19,8 @@ except Exception:  # pragma: no cover
     get_significant_states = None  # type: ignore[assignment]
 
 HOUSE_FORECAST_CURRENT_ENTITY = "sensor.helman_house_consumption_forecast_current"
-_SLOT_MINUTES = 15
-_SLOTS_PER_DAY = 24 * 60 // _SLOT_MINUTES  # 96
-_SLOT_FRACTION_OF_HOUR = _SLOT_MINUTES / 60  # 0.25
+
+_SLOT_FRACTION_OF_HOUR = SLOT_MINUTES / 60  # 0.25
 
 
 async def load_house_forecast_points_for_day(
@@ -77,13 +77,11 @@ async def load_house_forecast_points_for_day(
         return []
     timeline.sort(key=lambda pair: pair[0])
 
-    slot_starts = [
-        day_start_local + timedelta(minutes=slot_index * _SLOT_MINUTES)
-        for slot_index in range(_SLOTS_PER_DAY)
-    ]
+    slot_starts = day_slots(target_date, tzinfo=local_tz, wall_clock=True)
+
     return [
         {"timestamp": slot_start.isoformat(), "wh": value_w * _SLOT_FRACTION_OF_HOUR}
         for slot_start, value_w in resolve_forecast_slot_values(
-            timeline, slot_starts, slot_minutes=_SLOT_MINUTES
+            timeline, slot_starts, slot_minutes=SLOT_MINUTES
         ).items()
     ]
