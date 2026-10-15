@@ -6,7 +6,7 @@ import { TreeItem } from "./tree-item";
 import "./tree-item-row";
 import "./tree-item-list";
 import { HelmanCardConfig, HelmanUiConfig } from "./HelmanCardConfig";
-import { applyValueType, InverterDetailPayload, TreeItemDTO, TreePayload } from "../helman-api";
+import { applyValueType, InverterDetailPayload, TreePayload } from "../helman-api";
 import { hydrateItem } from "./tree-item-hydrator";
 import { HistoryEngine } from "./history-engine";
 import { getSharedHelmanStore } from "./store";
@@ -405,14 +405,25 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         // Superseded by a later load, or the card is gone. Either way this
         // response belongs to nobody: commit none of it.
         const obsolete = () => generation !== this._loadGeneration || !this.isConnected;
-        this._historyEngine?.stop();
         try {
             const store = getSharedHelmanStore(this._latestHass!);
             const treePayload = await store.getDeviceTree({ fresh: freshTree });
             if (obsolete()) return;
+            const history = await store.getHistory();
+            if (obsolete()) return;
+            const deviceTree = this._hydrateTreeItems(treePayload);
+            const sourceNodes = this._collectSourceNodes(deviceTree);
+            const engine = new HistoryEngine(
+                () => this._latestHass,
+                treePayload.uiConfig.history_buckets,
+                () => { this._historyRevision++; },
+            );
+            engine.applyHistory(history, HistoryEngine.walkTree(deviceTree), sourceNodes);
+
+            this._historyEngine?.stop();
             this._uiConfig = treePayload.uiConfig;
-            this._deviceTree = this._hydrateTreeItems(treePayload);
-            this._sourceNodes = this._collectSourceNodes(this._deviceTree);
+            this._deviceTree = deviceTree;
+            this._sourceNodes = sourceNodes;
             if (this._dialogRequest instanceof TreeItem) {
                 const old = this._dialogRequest;
                 this._dialogRequest = HistoryEngine.walkTree(this._deviceTree)
@@ -422,15 +433,6 @@ export class HelmanCard extends LitElement implements LovelaceCard {
             if (freshTree) this._inverter = null;
             this._rebuildWatchedEntityIds();
 
-            const history = await store.getHistory();
-            if (obsolete()) return;
-            const histBuckets = this._uiConfig.history_buckets;
-            const engine = new HistoryEngine(
-                () => this._latestHass,
-                histBuckets,
-                () => { this._historyRevision++; },
-            );
-            engine.applyHistory(history, HistoryEngine.walkTree(this._deviceTree), this._sourceNodes);
             this._historyEngine = engine;
             this.requestUpdate();
 
@@ -462,10 +464,6 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         }
     }
 
-    private _hydrateItem(dto: TreeItemDTO): TreeItem {
-        return hydrateItem(dto, this._uiConfig?.history_buckets ?? 60, this._localize!);
-    }
-
     private _hydrateTreeItems(payload: TreePayload): TreeItem[] {
         const { sources, consumers, consumptionTotalSensorId, productionTotalSensorId, uiConfig } = payload;
         const historyBuckets = uiConfig.history_buckets;
@@ -483,7 +481,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
             sourcesNode.childrenCollapsed = false;
             sourcesNode.icon = 'mdi:lightning-bolt-outline';
             sourcesNode.powerSensorId = productionTotalSensorId;
-            sourcesNode.children = sources.map(dto => this._hydrateItem(dto));
+            sourcesNode.children = sources.map(dto => hydrateItem(dto, historyBuckets, this._localize!));
             roots.push(sourcesNode);
         }
 
@@ -493,7 +491,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
             consumersNode.hideChildrenIndicator = true;
             consumersNode.icon = 'mdi:lightning-bolt-outline';
             consumersNode.powerSensorId = consumptionTotalSensorId;
-            consumersNode.children = consumers.map(dto => this._hydrateItem(dto));
+            consumersNode.children = consumers.map(dto => hydrateItem(dto, historyBuckets, this._localize!));
             // Propagate sourceType to consumer nodes. Source counterparts (battery/grid) inherit
             // from the sourceTypeByDeviceId map; house is identified by its well-known id.
             const propagateSourceType = (items: TreeItem[]) => {

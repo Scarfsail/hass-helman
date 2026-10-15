@@ -531,58 +531,73 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         // Superseded by a later load, or the card is gone. Either way this
         // response belongs to nobody: commit none of it.
         const obsolete = () => generation !== this._loadGeneration || !this.isConnected;
-        this._historyEngine?.stop();
         try {
             const store = getSharedHelmanStore(this._latestHass!);
             const payload = await store.getDeviceTree({ fresh: freshTree });
             if (obsolete()) return false;
-            this._uiConfig = payload.uiConfig;
-            this._entityMap = this._buildEntityMap(payload);
-            this._energy = this._readEnergyValues(this._latestHass!, this._entityMap);
-
-            const histBuckets = payload.uiConfig.history_buckets;
-            this._solarNode          = this._solarDTO          ? this._hydrateItem(this._solarDTO,          histBuckets) : null;
-            this._gridProducerNode   = this._gridDTO            ? this._hydrateItem(this._gridDTO,            histBuckets) : null;
-            this._batteryProducerNode = this._batteryDTO        ? this._hydrateItem(this._batteryDTO,        histBuckets) : null;
-            this._batteryConsumerNode = this._batteryConsumerDTO ? this._hydrateItem(this._batteryConsumerDTO, histBuckets) : null;
-            this._gridConsumerNode   = this._gridConsumerDTO    ? this._hydrateItem(this._gridConsumerDTO,    histBuckets) : null;
-
-            // Consumer-side DTOs don't carry sourceType — propagate from the matching source node
-            if (this._batteryConsumerNode && !this._batteryConsumerNode.sourceType)
-                this._batteryConsumerNode.sourceType = this._batteryProducerNode?.sourceType;
-            if (this._gridConsumerNode && !this._gridConsumerNode.sourceType)
-                this._gridConsumerNode.sourceType = this._gridProducerNode?.sourceType;
-
-            if (this._houseDTO) {
-                this._houseNode = this._hydrateItem(this._houseDTO, histBuckets);
-                if (!this._houseNode.sourceType) this._houseNode.sourceType = 'house';
-            } else this._houseNode = null;
-
-            this._productionNode  = payload.productionTotalSensorId
-                ? new TreeItem('production-total', '', payload.productionTotalSensorId, null, histBuckets)
-                : null;
-            if (this._productionNode) this._productionNode.isSource = true;
-            this._consumptionNode = payload.consumptionTotalSensorId
-                ? new TreeItem('consumption-total', '', payload.consumptionTotalSensorId, null, histBuckets)
-                : null;
-            if (this._consumptionNode) this._consumptionNode.isSource = true;
-
-            if (this._dialogRequest instanceof TreeItem) {
-                const old = this._dialogRequest;
-                this._dialogRequest = HistoryEngine.walkTree(this._topLevelNodes())
-                    .find((item) => item.id === old.id && item.isSource === old.isSource) ?? null;
-                this._detailEntityIds = [];
-            }
-            if (freshTree) this._inverter = null;
-
             const history = await store.getHistory();
             if (obsolete()) return false;
+            const entityMap = this._buildEntityMap(payload);
+            const energy = this._readEnergyValues(this._latestHass!, entityMap);
+            const histBuckets = payload.uiConfig.history_buckets;
+            const solarNode           = this._solarDTO           ? this._hydrateItem(this._solarDTO,           histBuckets) : null;
+            const gridProducerNode    = this._gridDTO            ? this._hydrateItem(this._gridDTO,            histBuckets) : null;
+            const batteryProducerNode = this._batteryDTO         ? this._hydrateItem(this._batteryDTO,         histBuckets) : null;
+            const batteryConsumerNode = this._batteryConsumerDTO ? this._hydrateItem(this._batteryConsumerDTO, histBuckets) : null;
+            const gridConsumerNode    = this._gridConsumerDTO    ? this._hydrateItem(this._gridConsumerDTO,    histBuckets) : null;
+
+            // Consumer-side DTOs don't carry sourceType — propagate from the matching source node
+            if (batteryConsumerNode && !batteryConsumerNode.sourceType)
+                batteryConsumerNode.sourceType = batteryProducerNode?.sourceType;
+            if (gridConsumerNode && !gridConsumerNode.sourceType)
+                gridConsumerNode.sourceType = gridProducerNode?.sourceType;
+
+            const houseNode = this._houseDTO ? this._hydrateItem(this._houseDTO, histBuckets) : null;
+            if (houseNode && !houseNode.sourceType) houseNode.sourceType = 'house';
+
+            const productionNode = payload.productionTotalSensorId
+                ? new TreeItem('production-total', '', payload.productionTotalSensorId, null, histBuckets)
+                : null;
+            if (productionNode) productionNode.isSource = true;
+            const consumptionNode = payload.consumptionTotalSensorId
+                ? new TreeItem('consumption-total', '', payload.consumptionTotalSensorId, null, histBuckets)
+                : null;
+            if (consumptionNode) consumptionNode.isSource = true;
+
+            const sourceNodes = [solarNode, gridProducerNode, batteryProducerNode]
+                .filter((node): node is TreeItem => node !== null);
+            const topLevelNodes = [
+                ...sourceNodes, houseNode, batteryConsumerNode, gridConsumerNode,
+                productionNode, consumptionNode,
+            ].filter((node): node is TreeItem => node !== null);
             const engine = new HistoryEngine(
                 () => this._latestHass,
                 histBuckets,
                 () => { this._historyRevision++; },
             );
-            engine.applyHistory(history, HistoryEngine.walkTree(this._topLevelNodes()), this._sourceNodes);
+            engine.applyHistory(history, HistoryEngine.walkTree(topLevelNodes), sourceNodes);
+
+            this._historyEngine?.stop();
+            this._uiConfig = payload.uiConfig;
+            this._entityMap = entityMap;
+            this._energy = energy;
+            this._solarNode = solarNode;
+            this._gridProducerNode = gridProducerNode;
+            this._batteryProducerNode = batteryProducerNode;
+            this._batteryConsumerNode = batteryConsumerNode;
+            this._gridConsumerNode = gridConsumerNode;
+            this._houseNode = houseNode;
+            this._productionNode = productionNode;
+            this._consumptionNode = consumptionNode;
+
+            if (this._dialogRequest instanceof TreeItem) {
+                const old = this._dialogRequest;
+                this._dialogRequest = HistoryEngine.walkTree(topLevelNodes)
+                    .find((item) => item.id === old.id && item.isSource === old.isSource) ?? null;
+                this._detailEntityIds = [];
+            }
+            if (freshTree) this._inverter = null;
+
             this._historyEngine = engine;
             engine.start(
                 this._uiConfig.history_bucket_duration,
