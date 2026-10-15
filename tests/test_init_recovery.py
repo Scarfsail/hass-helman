@@ -6,6 +6,7 @@ import importlib
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
+from custom_components.helman.const import DATA_CHANGED_KIND_CONFIG, EVENT_DATA_CHANGED
 
 
 class _FakeStorage:
@@ -57,6 +58,7 @@ class FakeHass(SharedFakeHass):
         super().__init__()
         self.data: dict = {}
         self.config_entries = FakeConfigEntries()
+        self.is_running = False
 
 
 class InitRecoveryTests(unittest.IsolatedAsyncioTestCase):
@@ -111,6 +113,17 @@ class InitRecoveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.panel_mod.register_calls, 1)
         self.assertEqual(self.websockets_mod.register_calls, 1)
         self.assertEqual(self.group_services_mod.register_calls, 1)
+
+    async def test_runtime_entry_setup_announces_config_once(self) -> None:
+        hass = FakeHass()
+        hass.is_running = True
+
+        await self.helman_init.async_setup_entry(hass, FakeConfigEntry())
+
+        self.assertEqual(
+            [data for event, data in hass.bus.fired if event == EVENT_DATA_CHANGED],
+            [{"kind": DATA_CHANGED_KIND_CONFIG}],
+        )
 
     async def test_setup_entry_failure_keeps_storage_available_for_recovery(self) -> None:
         hass = FakeHass()

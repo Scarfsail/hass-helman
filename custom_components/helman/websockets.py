@@ -10,7 +10,6 @@ from homeassistant.components.websocket_api import async_register_command
 from homeassistant.util import dt as dt_util
 from .const import (
     CONFIG_DOCUMENT_VERSION,
-    DATA_CHANGED_KIND_CONFIG,
     DOMAIN,
     EVENT_DATA_CHANGED,
 )
@@ -472,11 +471,6 @@ async def ws_save_config(
         reload_succeeded = await hass.config_entries.async_reload(entries[0].entry_id)
     except Exception as err:
         reload_error = str(err)
-
-    if reload_succeeded:
-        # After the reload, never before: a subscriber that reloads on this
-        # event has to read the config the entry is now actually running on.
-        hass.bus.async_fire(EVENT_DATA_CHANGED, {"kind": DATA_CHANGED_KIND_CONFIG})
 
     connection.send_result(
         msg["id"],

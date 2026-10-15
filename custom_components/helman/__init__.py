@@ -6,7 +6,9 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.util import slugify
 
 from .const import (
+    DATA_CHANGED_KIND_CONFIG,
     DOMAIN,
+    EVENT_DATA_CHANGED,
     SENSOR_UNIQUE_ID_MIGRATIONS,
     SENSOR_UNIQUE_ID_MIGRATIONS_V3,
     UNMEASURED_POWER_UNIQUE_ID_SUFFIX,
@@ -203,6 +205,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await coordinator.async_unload()
         domain_data.pop("coordinator", None)
         raise
+    if hass.is_running:
+        hass.bus.async_fire(EVENT_DATA_CHANGED, {"kind": DATA_CHANGED_KIND_CONFIG})
     return True
 
 

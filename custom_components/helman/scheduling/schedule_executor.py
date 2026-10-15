@@ -77,6 +77,8 @@ class ScheduleExecutorDependencies:
     check_reality_and_maybe_replan: Callable[[datetime], Awaitable[bool]] | None = (
         None
     )
+    save_pruned_schedule_document: Callable[[ScheduleDocument], Awaitable[None]] | None = None
+    announce_schedule_changed: Callable[[], None] | None = None
 
 
 @dataclass
@@ -668,13 +670,15 @@ class ScheduleExecutor:
             first_error = appliance_result.first_error
 
         self._runtime.appliance_memories = appliance_result.memories
-        self._runtime.execution_status = ScheduleExecutionStatus(
-            active_slot_id=current_slot_id,
-            active_slot_runtime=ActiveSlotRuntimeStatus(
-                inverter=inverter_runtime,
-                appliances=appliance_result.runtimes,
-                reconciled_at=self._format_reconciled_at(request_now),
-            ),
+        self._set_execution_status(
+            ScheduleExecutionStatus(
+                active_slot_id=current_slot_id,
+                active_slot_runtime=ActiveSlotRuntimeStatus(
+                    inverter=inverter_runtime,
+                    appliances=appliance_result.runtimes,
+                    reconciled_at=self._format_reconciled_at(request_now),
+                ),
+            )
         )
         if first_error is not None:
             raise first_error
@@ -730,9 +734,11 @@ class ScheduleExecutor:
             await self._inverter_executor.async_restore_normal(
                 control_config=control_config
             )
-            self._runtime.execution_status = ScheduleExecutionStatus(
-                active_slot_id=None,
-                active_slot_runtime=None,
+            self._set_execution_status(
+                ScheduleExecutionStatus(
+                    active_slot_id=None,
+                    active_slot_runtime=None,
+                )
             )
             self._runtime.appliance_memories = {}
             self._runtime.last_error = None
@@ -755,8 +761,54 @@ class ScheduleExecutor:
             slots=pruned_slots,
         )
         if pruned_document != schedule_document:
-            await self._dependencies.save_schedule_document(pruned_document)
+            save_pruned = (
+                self._dependencies.save_pruned_schedule_document
+                or self._dependencies.save_schedule_document
+            )
+            await save_pruned(pruned_document)
         return pruned_document
+
+    def _set_execution_status(self, status: ScheduleExecutionStatus) -> None:
+        previous = self._runtime.execution_status
+        self._runtime.execution_status = status
+        if (
+            self._material_status(previous) != self._material_status(status)
+            and self._dependencies.announce_schedule_changed is not None
+        ):
+            self._dependencies.announce_schedule_changed()
+
+    @staticmethod
+    def _material_status(status: ScheduleExecutionStatus) -> tuple:
+        runtime = status.active_slot_runtime
+        if runtime is None:
+            return (status.active_slot_id, None)
+        inverter = runtime.inverter
+        return (
+            status.active_slot_id,
+            (
+                None
+                if inverter is None
+                else (
+                    inverter.action_kind,
+                    inverter.outcome,
+                    inverter.executed_action,
+                    inverter.reason,
+                    inverter.error_code,
+                )
+            ),
+            tuple(
+                sorted(
+                    (
+                        appliance_id,
+                        item.action_kind,
+                        item.outcome,
+                        item.error_code,
+                        item.message,
+                    )
+                    for appliance_id, item in runtime.appliances.items()
+                )
+            ),
+        )
 
     def _build_failure_log_context(self) -> str:
         parts: list[str] = []
