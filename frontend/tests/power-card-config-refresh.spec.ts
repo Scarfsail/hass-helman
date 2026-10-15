@@ -4,6 +4,60 @@ import { installMockHass } from "./support/mock-hass";
 import { cardTree } from "./support/payload-builders";
 
 for (const tag of ["helman-card", "helman-simple-card"] as const) {
+    test(`${tag} shares the fresh tree with cards mounted after a config announcement`, async ({ page }) => {
+        await page.setContent("<!doctype html><html><body></body></html>");
+        await installMockHass(page);
+        await page.evaluate((initial) => {
+            const next = structuredClone(initial);
+            next.sources[0].powerSensorId = "sensor.new_solar";
+            next.sources[0].displayName = "New solar meter";
+            const releases: Array<() => void> = [];
+            (window as any).__releaseTree = (index: number) => releases[index]();
+            (window as any).__hass = {
+                ...window.__mockHass({
+                    "helman/get_device_tree": () => new Promise((resolve) => {
+                        const index = releases.length;
+                        releases.push(() => resolve(index === 0 ? initial : next));
+                    }),
+                    "helman/get_history": { entity_history: {} },
+                }),
+                language: "en", locale: { language: "en" }, config: { time_zone: "UTC" }, states: {},
+            };
+        }, cardTree());
+        await page.addScriptTag({ path: CARD_BUNDLE, type: "module" });
+        const mount = (id: string) => page.evaluate(({ name, id }) => {
+            const card = document.createElement(name) as any;
+            card.id = id;
+            card.setConfig({ type: `custom:${name}` });
+            card.hass = (window as any).__hass;
+            document.body.appendChild(card);
+        }, { name: tag, id });
+        const treeRequests = () => page.evaluate(() => window.__mockRequests.filter((request) => request.type === "helman/get_device_tree").length);
+        const currentTree = (id: string) => page.evaluate(({ name, id }) => {
+            const card = document.getElementById(id) as any;
+            return name === "helman-card"
+                ? card._deviceTree[0]?.children[0]?.name
+                : card._entityMap?.solarPowerEntityId;
+        }, { name: tag, id });
+        const expected = tag === "helman-card" ? "New solar meter" : "sensor.new_solar";
+
+        await mount("first");
+        await expect.poll(treeRequests).toBe(1);
+        await page.evaluate(() => window.__fireDataChanged("config"));
+        await expect.poll(treeRequests).toBe(2);
+        await mount("second");
+        await page.evaluate(async () => {
+            (window as any).__releaseTree(0);
+            await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        expect(await currentTree("second")).toBeFalsy();
+        await mount("third");
+        expect(await treeRequests()).toBe(2);
+        await page.evaluate(() => (window as any).__releaseTree(1));
+        await expect.poll(() => currentTree("second")).toBe(expected);
+        await expect.poll(() => currentTree("third")).toBe(expected);
+    });
+
     test(`${tag} ignores an older pending tree after a config announcement`, async ({ page }) => {
         await page.setContent("<!doctype html><html><body></body></html>");
         await installMockHass(page);

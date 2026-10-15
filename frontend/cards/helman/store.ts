@@ -148,7 +148,7 @@ class HelmanStoreImpl implements HelmanStore {
     }
 
     public getDeviceTree(options?: { fresh?: boolean }): Promise<TreePayload> {
-        if (options?.fresh) return this._client.getDeviceTree();
+        if (options?.fresh) this._inFlight.delete("get_device_tree");
         return this._dedupe("get_device_tree", () => this._client.getDeviceTree());
     }
 
