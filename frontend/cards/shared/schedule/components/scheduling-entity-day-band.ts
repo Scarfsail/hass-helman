@@ -1,3 +1,4 @@
+import { pad2 } from "../../time/slot-time";
 import { LitElement, css, html, type PropertyValues } from "lit-element";
 import { customElement, property, state } from "lit/decorators.js";
 import { nothing } from "lit-html";
@@ -1345,7 +1346,7 @@ export class SchedulingEntityDayBand extends LitElement {
                 : percent >= 100 - AXIS_EDGE_PERCENT ? " edge-end" : "";
             return [html`
                 <span class=${`axis-tick${edge}`} style=${`left: ${percent}%`}>
-                    ${String(tick.hour).padStart(2, "0")}
+                    ${pad2(tick.hour)}
                 </span>
             `];
         });

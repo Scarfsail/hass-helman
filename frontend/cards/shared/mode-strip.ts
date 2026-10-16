@@ -1,3 +1,4 @@
+import { pad2 } from "./time/slot-time";
 import { LitElement, css, html, nothing } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { renderNowMarker } from "../helman-solar-inspector/now-marker";
@@ -183,7 +184,7 @@ export class HelmanModeStrip extends LitElement {
             </div>
             <div class="hours" aria-hidden="true">
                 ${this._ticks().map((tick) => html`
-                    <span class=${this._edge(pct(tick.at))} style="left: ${pct(tick.at).toFixed(2)}%">${String(tick.hour).padStart(2, "0")}</span>
+                    <span class=${this._edge(pct(tick.at))} style="left: ${pct(tick.at).toFixed(2)}%">${pad2(tick.hour)}</span>
                 `)}
             </div>
             <span class="sr">${drawn.map(({ start, end, segment }) =>

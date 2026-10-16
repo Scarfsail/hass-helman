@@ -84,7 +84,6 @@ export interface AggregateBucketHoverDetail {
  */
 const CHART = { height: 240, marginTop: 16, marginRight: 16, marginBottom: 24, marginLeft: 44 } as const;
 
-
 /**
  * How a picked column is drawn, and how a pointed-at one is -- the day view's
  * own two treatments, character for character.
@@ -266,7 +265,7 @@ export class HelmanSolarAggregateChart extends LitElement {
      */
     @property({ type: String }) public hoveredKey: string | null = null;
 
-    private _t(key: string): string {
+    private _t(key: string, values?: Record<string, string | number>): string {
         const localize: LocalizeFunction = this.hass
             ? getLocalizeFunction(this.hass)
             : (raw: string) => raw;

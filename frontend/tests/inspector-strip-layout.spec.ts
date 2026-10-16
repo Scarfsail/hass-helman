@@ -158,3 +158,30 @@ test.describe("solar inspector strip layout", () => {
         expect(layout.heights).toEqual({ soc: 65, prices: 65, money: 65 });
     });
 });
+
+// Review fixture: opt-in artifacts alongside the existing node-detail captures.
+test("screenshots of price and money strips", { tag: "@screens" }, async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 1000 });
+    await mountInspector(page);
+    for (const name of ["price", "money"]) {
+        const strip = page.locator(`helman-solar-${name}-strip`);
+        await strip.screenshot({ path: `${process.env.SCREENS}/inspector-${name}-strip.png` });
+        await strip.evaluate((element: any) => {
+            const svg = element.shadowRoot.querySelector("svg");
+            const box = svg.getBoundingClientRect();
+            const geometry = element.geometry;
+            const svgX = geometry.marginLeft + geometry.plotWidth * (1439 - geometry.startMinutes) / (geometry.endMinutes - geometry.startMinutes);
+            svg.dispatchEvent(new MouseEvent("mousemove", {
+                clientX: box.left + svgX / geometry.width * box.width,
+                clientY: box.top + box.height / 2,
+                bubbles: true,
+            }));
+        });
+        const tooltip = page.locator(".hover-tooltip");
+        await expect(tooltip).toBeVisible();
+        // Keep the end-of-day review popup fully readable at the viewport edge.
+        await tooltip.evaluate((element: HTMLElement) => { element.style.left = "50vw"; });
+        await tooltip.screenshot({ path: `${process.env.SCREENS}/inspector-${name}-tooltip.png` });
+        await page.mouse.move(0, 0);
+    }
+});

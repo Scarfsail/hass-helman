@@ -2,7 +2,7 @@ import { LitElement, css, html } from "lit-element";
 import { customElement, property, state } from "lit/decorators.js";
 import { nothing } from "lit-html";
 import type { HomeAssistant } from "../../../../types/ha";
-import type { LocalizeFunction } from "../../../localize/localize";
+import { getLocalizeFunction, type LocalizeFunction } from "../../../localize/localize";
 import "./scheduling-logic-diagram";
 import "../dialogs/scheduling-condition-trace-dialog";
 import "../../optimizer/helman-optimizer-edit-dialog";
@@ -584,7 +584,7 @@ export class SchedulingExplanationPanel extends LitElement {
         }
         const full = `${KEY_PREFIX}.${group}.${key}`;
         const translated = this.localize(full);
-        return translated === full || translated === undefined ? key : translated;
+        return (this.localize.has?.(full) ?? getLocalizeFunction().has(full)) ? translated : key;
     }
 
     /**

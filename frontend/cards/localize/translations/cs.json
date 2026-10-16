@@ -1409,34 +1409,15 @@
     },
     "why": {
       "title": "Proč?",
-      "no_change": "Tento běh hodnotu nezměnil.",
-      "automation_generic": "Podrobné zdůvodnění pro tento slot není k dispozici.",
-      "manual_note": "Nastaveno ručně — dopad této akce automatizace nesleduje."
+      "no_change": "Tento běh hodnotu nezměnil."
     },
-    "actions": {
-      "refresh": "Obnovit",
-      "select_interval": "Vybrat celý interval",
-      "select_slot": "Vybrat slot",
-      "select_hour": "Vybrat celou hodinu",
-      "expand_day": "Rozbalit den",
-      "expand_hour": "Rozbalit hodinu",
-      "expand_appliance_actions": "Rozbalit akce spotřebičů",
-      "collapse_day": "Sbalit den",
-      "collapse_hour": "Sbalit hodinu",
-      "collapse_appliance_actions": "Sbalit akce spotřebičů",
-      "edit_hour": "Upravit hodinu",
-      "edit_selected": "Upravit vybrané"
-    },
+    "actions": {},
     "now": {
       "title": "Teď",
       "unavailable": "Aktuální slot není k dispozici.",
       "scheduled": "Naplánováno",
       "running": "Běží",
       "reason": "Důvod",
-      "compliance_ok": "Podle plánu",
-      "compliance_off": "Mimo plán",
-      "execution_disabled": "Provádění je vypnuté – plán se zobrazuje, ale neprovádí",
-      "runtime_unavailable": "Stav běhu není k dispozici.",
       "actor": {
         "inverter": "Střídač"
       },
@@ -1444,12 +1425,10 @@
         "applied": "Použito",
         "failed": "Selhalo",
         "no_change": "Beze změny",
-        "stopped": "Zastaveno",
-        "status_unavailable": "Stav není k dispozici"
+        "stopped": "Zastaveno"
       },
       "detail": {
-        "expected": "Očekáváno",
-        "no_scheduled_action": "Bez naplánované akce"
+        "expected": "Očekáváno"
       }
     },
     "forecast": {
@@ -1465,11 +1444,7 @@
       "expected": "očekáváno"
     },
     "dialog": {
-      "title": {
-        "edit_selection": "Upravit vybrané sloty"
-      },
-      "interval": "Interval",
-      "selection": "Výběr",
+      "title": {},
       "action": "Akce",
       "inverter": "Střídač",
       "appliances": "Spotřebiče",
@@ -1478,14 +1453,6 @@
         "configured": "Akce je nastavená",
         "not_configured": "Akce není nastavená"
       },
-      "choose_action": "Vyberte akci, která se má použít na vybrané sloty.",
-      "multiple_actions_defined": "Ve vybraných slotech je nastaveno více různých akcí.",
-      "existing_actions": "Aktuální akce",
-      "overwrite_existing_actions": "Přepsat jednou akcí",
-      "automation_owns_action": "Automatizace nyní vlastní tuto akci.",
-      "mixed_authorship_summary": "Vybrané sloty obsahují akce od uživatele i automatizace.",
-      "keep_existing": "Ponechat beze změny",
-      "replace_with_manual_action": "Nahradit ruční akcí",
       "appliance": {
         "no_action": "Bez zásahu",
         "turn_on": "Zapnout",
@@ -1495,7 +1462,6 @@
         "vehicle": "Vozidlo",
         "mode": "Režim",
         "eco_gear": "ECO stupeň",
-        "missing_metadata": "Metadata pro tento spotřebič nejsou k dispozici, proto lze akce jen zobrazit.",
         "unsupported_authoring": "Autorování pro tento typ spotřebiče zatím není v plánování dostupné."
       },
       "appliance_kind": {
@@ -1504,29 +1470,16 @@
         "climate": "Klimatizace"
       },
       "target_soc": "Cílové SoC",
-      "affects_prefix": "Ovlivní",
       "cancel": "Zrušit",
       "apply": "Použít změny"
     },
-    "copy": {
-      "slot_one": "slot",
-      "slot_few": "sloty",
-      "slot_many": "slotů",
-      "selected_prefix": "Vybráno"
-    },
+    "copy": {},
     "error": {
-      "invalid_slots": "Vybrané sloty nejsou platné.",
-      "invalid_action": "Vybraná akce není platná.",
       "not_configured": "Plánování není správně nakonfigurované.",
-      "execution_unavailable": "Provádění plánu není momentálně dostupné.",
-      "appliances_unavailable": "Metadata spotřebičů se nepodařilo načíst.",
-      "unknown": "Nepodařilo se načíst nebo upravit rozvrh.",
-      "showing_last_good": "Zobrazuji poslední známý rozvrh."
+      "unknown": "Nepodařilo se načíst nebo upravit rozvrh."
     },
     "running": {
       "label": "Běží",
-      "restore_all": "Vrátit vše do normálu",
-      "restoring": "Vracím do normálu…",
       "unavailable": "nedostupné"
     },
     "entity_editor": {
@@ -1586,13 +1539,9 @@
         "title": "Podmínky slotu",
         "empty": "Pro tento slot nemá optimalizátor žádný záznam.",
         "group": "Skupina",
-        "no_params": "bez parametrů",
         "no_conditions": "Tato skupina nemá nastavené žádné podmínky.",
         "custom": "Vlastní podmínky",
-        "custom_entry": "Podmínka",
         "gates": "Další rozhodnutí",
-        "expand": "Rozbalit dílčí podmínky",
-        "collapse": "Sbalit dílčí podmínky",
         "configured": "nastaveno",
         "actual": "naměřeno"
       },

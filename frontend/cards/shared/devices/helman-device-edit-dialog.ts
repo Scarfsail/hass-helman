@@ -3,7 +3,7 @@ import type { HomeAssistant } from "../../../types/ha";
 import { LitElement, css, html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 
-import type { LocalizeFunction } from "../../localize/localize";
+import { getLocalizeFunction, type LocalizeFunction } from "../../localize/localize";
 import { defineOnce } from "../define-once";
 import { loadHaForm, loadHaSortable } from "../load-ha-elements";
 import { DataChangedController } from "../../helman/data-changed";
@@ -19,10 +19,6 @@ import { EntityInspectionController } from "../config/entity-inspection-controll
 import { formatError, stringValue } from "../config/form-fields";
 import { configFormStyles } from "../config/form-styles";
 import { resolvedDraft } from "../config/resolved-draft";
-import {
-    getLocalizeFunction,
-    type LocalizeFunction as EditorLocalizeFunction,
-} from "../config/localize/localize";
 import type {
     JsonObject,
     ValidationReport,
@@ -142,7 +138,6 @@ export class HelmanDeviceEditDialog extends LitElement {
     /** The stored document itself, for the entity groups' saved readings and reverts. */
     private _saved: JsonObject | null = null;
 
-
     /** The key the current view was loaded for; a new key reloads. */
     private _loadedKey: string | null = null;
 
@@ -152,8 +147,6 @@ export class HelmanDeviceEditDialog extends LitElement {
     /** The close is settled -- see `_close`. */
     private _closing = false;
 
-    /** The `editor.*` strings, from the config editor's own table. */
-    private _editorLocalize: EditorLocalizeFunction | null = null;
 
     private _inspections = new EntityInspectionController(this, {
         hass: () => this.hass,
@@ -206,9 +199,9 @@ export class HelmanDeviceEditDialog extends LitElement {
                     ${this._stale
                         ? html`
                               <div class="message error stale">
-                                  <span>${this._editorText("editor.status.changed_elsewhere")}</span>
+                                  <span>${this._translate("editor.status.changed_elsewhere")}</span>
                                   <button type="button" class="add-button" @click=${this._handleReload}>
-                                      ${this._editorText("editor.actions.reload_config")}
+                                      ${this._translate("editor.actions.reload_config")}
                                   </button>
                               </div>
                           `
@@ -226,7 +219,7 @@ export class HelmanDeviceEditDialog extends LitElement {
                                   .disabled=${this._stale || this._saving}
                                   @click=${this._handleSave}
                               >
-                                  ${this._editorText(
+                                  ${this._translate(
                                       this._saving
                                           ? "editor.actions.saving"
                                           : "editor.actions.save_and_reload",
@@ -256,7 +249,7 @@ export class HelmanDeviceEditDialog extends LitElement {
             case "not_found":
                 return html`
                     <div class="placeholder error">
-                        ${this._text("not_found").replaceAll("{key}", this.deviceKey)}
+                        ${this._translate(`${KEY_PREFIX}.not_found`, { key: this.deviceKey })}
                     </div>
                 `;
             case "ready": {
@@ -271,7 +264,7 @@ export class HelmanDeviceEditDialog extends LitElement {
                         .expanded=${true}
                         ?inert=${this._saving}
                         .hass=${this.hass}
-                        .localize=${(key: string) => this._editorText(key)}
+                        .localize=${this._translate}
                         .validation=${this._validation}
                         .vendors=${this._vendors.vendors}
                         .inspections=${this._inspections.results}
@@ -287,17 +280,19 @@ export class HelmanDeviceEditDialog extends LitElement {
         return view.kind === "ready" ? findDeviceByKey(view.config, view.deviceId, "id")?.path ?? null : null;
     }
 
+    private _translate = getLocalizeFunction();
+
     private async _load(): Promise<void> {
         const hass = this.hass;
         if (!hass) {
             return;
         }
+        this._translate = getLocalizeFunction(hass, this.localize);
         this._view = { kind: "loading" };
         this._dirty = false;
         this._stale = false;
         this._validation = null;
         this._loadedKey = this.deviceKey;
-        this._editorLocalize = getLocalizeFunction(hass);
         try {
             const document = asJsonObject(await callHelman(hass, "helman/get_config", {}));
             if (!document) {
@@ -365,7 +360,7 @@ export class HelmanDeviceEditDialog extends LitElement {
                 this._stale = true;
                 this._message = {
                     kind: "error",
-                    text: this._editorText("editor.status.changed_elsewhere"),
+                    text: this._translate("editor.status.changed_elsewhere"),
                 };
                 return;
             }
@@ -384,7 +379,7 @@ export class HelmanDeviceEditDialog extends LitElement {
                 this._dirty = false;
             }
             if (response.success) {
-                this._notify(this._editorText(
+                this._notify(this._translate(
                     response.reloadStarted
                         ? "editor.messages.config_saved_reload_started"
                         : "editor.messages.config_saved",
@@ -396,7 +391,7 @@ export class HelmanDeviceEditDialog extends LitElement {
                 kind: "error",
                 text:
                     response.reloadError ??
-                    this._editorText(
+                    this._translate(
                         response.validation?.valid
                             ? "editor.messages.config_saved_reload_failed"
                             : "editor.messages.save_rejected",
@@ -405,7 +400,7 @@ export class HelmanDeviceEditDialog extends LitElement {
         } catch (error) {
             this._message = {
                 kind: "error",
-                text: `${this._editorText("editor.messages.save_failed")} ${formatError(error, String(error))}`,
+                text: `${this._translate("editor.messages.save_failed")} ${formatError(error, String(error))}`,
             };
         } finally {
             this._saving = false;
@@ -476,7 +471,7 @@ export class HelmanDeviceEditDialog extends LitElement {
 
     /** Throw the draft away and read the config again. */
     private _handleReload = (): void => {
-        if (this._dirty && !window.confirm(this._editorText("editor.confirm.discard_changes"))) {
+        if (this._dirty && !window.confirm(this._translate("editor.confirm.discard_changes"))) {
             return;
         }
         this._message = null;
@@ -549,12 +544,9 @@ export class HelmanDeviceEditDialog extends LitElement {
     }
 
     private _text(suffix: string): string {
-        return this.localize(`${KEY_PREFIX}.${suffix}`);
+        return this._translate(`${KEY_PREFIX}.${suffix}`);
     }
 
-    private _editorText(key: string): string {
-        return this._editorLocalize?.(key) ?? key;
-    }
 }
 
 defineOnce("helman-device-edit-dialog", HelmanDeviceEditDialog);

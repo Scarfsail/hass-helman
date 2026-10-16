@@ -10,9 +10,8 @@ import {
     type FormFieldHost,
 } from "./form-fields";
 import {
-    MISSING_TRANSLATION_PREFIX,
     getLocalizeFunction,
-} from "./localize/localize";
+} from "../../localize/localize";
 import type { PathSegment } from "./types";
 import { SENSOR_KIND_FILTERS, type SensorKind } from "./sensor-kind";
 import type { HaEntityPickerEntityFilterFunc } from "../../../types/ha";
@@ -593,16 +592,9 @@ export class HelmanEntityGroup extends LitElement {
         params: Record<string, unknown>,
     ): string | null {
         const localize = getLocalizeFunction(this.hass ?? undefined);
-        const template = localize(key);
-        if (!template || template === key || template.startsWith(MISSING_TRANSLATION_PREFIX)) {
-            return null;
-        }
-        let text = template;
-        for (const [name, value] of Object.entries(params)) {
-            text = text.split("{" + name + "}").join(String(value));
-        }
-        text = text.trim();
-        return text ? text : null;
+        if (!localize.has(key)) return null;
+        const values = Object.fromEntries(Object.entries(params).map(([name, value]) => [name, String(value)]));
+        return localize(key, values).trim() || null;
     }
 
     /**
@@ -619,7 +611,7 @@ export class HelmanEntityGroup extends LitElement {
         return this._localizeWithParams("editor.facts.history_depth_split", params);
     }
 
-    private _t(key: string): string {
+    private _t(key: string, values?: Record<string, string | number>): string {
         return this.fieldHost ? this.fieldHost.t(key) : getLocalizeFunction(this.hass ?? undefined)(key);
     }
 

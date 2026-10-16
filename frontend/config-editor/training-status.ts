@@ -3,9 +3,8 @@ import { LitElement, css, html, nothing } from "lit";
 import type { PropertyValues, TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import {
-  MISSING_TRANSLATION_PREFIX,
   getLocalizeFunction,
-} from "../cards/shared/config/localize/localize";
+} from "../cards/localize/localize";
 import type { DeviceStats } from "../cards/helman-api";
 
 /**
@@ -269,7 +268,7 @@ class TrainingStatusBase extends LitElement {
           "error",
           failed
             .map(([failedJob, outcome]) =>
-              this._tFormat("training.outcome_failed", {
+              this._t("training.outcome_failed", {
                 job: this._jobLabel(failedJob),
                 reason: this._tValue(
                   `training.outcomes.${failedJob}.${String(outcome)}`,
@@ -296,7 +295,7 @@ class TrainingStatusBase extends LitElement {
       } else {
         this._setMessage(
           "error",
-          this._tFormat("training.request_failed", {
+          this._t("training.request_failed", {
             error: error?.message || this._t("common.unknown"),
           }),
         );
@@ -314,7 +313,7 @@ class TrainingStatusBase extends LitElement {
   }
 
   private _didNotRun(job: string | undefined, reason: string): string {
-    return this._tFormat("training.did_not_run", {
+    return this._t("training.did_not_run", {
       job: job ? this._jobLabel(job) : this._t("training.all_jobs"),
       reason: this._tValue(`training.did_not_run_reasons.${reason}`, reason),
     });
@@ -369,22 +368,15 @@ class TrainingStatusBase extends LitElement {
     return `${this._formatDate(value)} (${age})`;
   }
 
-  protected _t(key: string): string {
-    return getLocalizeFunction(this.hass ?? undefined)(key);
+  protected _t(key: string, values?: Record<string, string | number>): string {
+    return getLocalizeFunction(this.hass ?? undefined)(key, values);
   }
 
   protected _tValue(key: string, fallback: string): string {
-    const translated = this._t(key);
-    return translated.startsWith(MISSING_TRANSLATION_PREFIX) ? fallback : translated;
+    const t = getLocalizeFunction(this.hass ?? undefined);
+    return t.has(key) ? t(key) : fallback;
   }
 
-  protected _tFormat(key: string, values: Record<string, string | number>): string {
-    let text = this._t(key);
-    for (const [name, value] of Object.entries(values)) {
-      text = text.replaceAll(`{${name}}`, String(value));
-    }
-    return text;
-  }
 }
 
 /** The batch: when it runs, whether it is running now, and Train all now. */
@@ -611,7 +603,7 @@ export class HelmanSolarBiasDiagnostics extends TrainingStatusBase {
         <div class="status-grid">
           ${this._renderRow(
             this._t("bias_correction.status_panel.training_days_used"),
-            this._tFormat("bias_correction.status_panel.training_days_required", {
+            this._t("bias_correction.status_panel.training_days_required", {
               used: diagnostics.usableDays ?? 0,
               required: diagnostics.minHistoryDays ?? 0,
             }),
@@ -624,7 +616,7 @@ export class HelmanSolarBiasDiagnostics extends TrainingStatusBase {
           ${hasFactors
             ? this._renderRow(
                 this._t("training.diagnostics.factor_summary"),
-                this._tFormat("training.diagnostics.factor_summary_value", {
+                this._t("training.diagnostics.factor_summary_value", {
                   min: min.toFixed(2),
                   median: median.toFixed(2),
                   max: max.toFixed(2),

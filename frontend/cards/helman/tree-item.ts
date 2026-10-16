@@ -1,6 +1,6 @@
 import { EnergyNodeConfig } from "./energy-node-config";
 import type { DevicePhase, ValueType } from "../helman-api";
-import type { ValueKind } from "../power-format";
+import type { ValueKind } from "../shared/format";
 
 export class TreeItem {
     constructor(id: string, name: string, powerSensorId: string | null, switchEntityId: string | null, historyBuckets: number, nodeConfig?: EnergyNodeConfig) {

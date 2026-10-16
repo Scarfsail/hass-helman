@@ -1,6 +1,7 @@
+import { formatPower } from "../shared/format";
 import { LitElement, css, html, svg } from "lit-element";
 import { customElement, property } from "lit/decorators.js";
-import { formatPower } from "../power-format";
+
 import { getGridInternalFlowColors } from "./flow-colors";
 import { simpleCardSharedStyles } from "./simple-card-shared-styles";
 

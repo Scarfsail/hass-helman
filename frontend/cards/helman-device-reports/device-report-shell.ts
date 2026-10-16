@@ -1,3 +1,4 @@
+import { formatKwh } from "../shared/format";
 import { callHelman } from "../shared/data/helman-commands";
 import { LitElement, css, html, nothing, type PropertyValues } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
@@ -13,7 +14,7 @@ import {
 } from "../helman-api";
 import { DataChangedController } from "../helman/data-changed";
 import { fillTemplate, getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
-import { formatKwhValue } from "../shared/forecast-value-format";
+
 import {
     HoverTooltipController,
     hoverTooltipStyles,
@@ -459,7 +460,7 @@ export class HelmanDeviceReportShell extends LitElement {
         for (const { kind, kwh } of quality) {
             rows.push({
                 ...tooltipRow("", fillTemplate(t("device_reports.quality." + kind), {
-                    kwh: formatKwhValue(kwh),
+                    kwh: formatKwh(Math.abs(kwh)),
                     pct: String(Math.round((kwh / house) * 100)),
                 })),
                 quality: kind,

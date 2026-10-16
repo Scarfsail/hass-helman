@@ -1,3 +1,4 @@
+import { formatKwh } from "../shared/format";
 import { LitElement, css, html, nothing, type PropertyValues } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type {
@@ -8,7 +9,7 @@ import type {
     OverTimeSeries,
 } from "../helman-api";
 import { fillTemplate, type LocalizeFunction } from "../localize/localize";
-import { formatKwhValue } from "../shared/forecast-value-format";
+
 import {
     HoverTooltipController,
     hoverTooltipStyles,
@@ -224,7 +225,7 @@ export class HelmanDeviceReportOverTime extends LitElement {
         }
     }
 
-    private _t(key: string): string {
+    private _t(key: string, values?: Record<string, string | number>): string {
         return this.localize ? this.localize(key) : key;
     }
 
@@ -302,12 +303,12 @@ export class HelmanDeviceReportOverTime extends LitElement {
         total: number,
     ): TooltipBody {
         const rows = segments.map((segment, index) =>
-            tooltipRow(legend[index].label, formatKwhValue(segment.kwh) + " kWh", legend[index].color));
-        rows.push(tooltipRow(this._t("device_reports.over_time.total"), formatKwhValue(total) + " kWh"));
-        rows.push(tooltipRow(this._t("device_reports.over_time.house"), formatKwhValue(bucket.house) + " kWh"));
+            tooltipRow(legend[index].label, formatKwh(Math.abs(segment.kwh)) + " kWh", legend[index].color));
+        rows.push(tooltipRow(this._t("device_reports.over_time.total"), formatKwh(Math.abs(total)) + " kWh"));
+        rows.push(tooltipRow(this._t("device_reports.over_time.house"), formatKwh(Math.abs(bucket.house)) + " kWh"));
         if (bucket.overallocated > 0) {
             rows.push(tooltipRow("", fillTemplate(this._t("device_reports.over_time.overallocated"), {
-                kwh: formatKwhValue(bucket.overallocated),
+                kwh: formatKwh(Math.abs(bucket.overallocated)),
             })));
         }
         return {

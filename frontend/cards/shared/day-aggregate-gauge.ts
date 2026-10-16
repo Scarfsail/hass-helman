@@ -1,3 +1,4 @@
+import { formatKwh, formatMoney, isZeroKwhDisplayValue } from "./format";
 import { css, html } from "lit-element";
 import { nothing } from "lit-html";
 import type { LocalizeFunction } from "../localize/localize";
@@ -6,16 +7,6 @@ import type {
     ScheduleTableDayAggregateModel,
     ScheduleTableDayAggregateScale,
 } from "./schedule/schedule-table-types";
-import {
-    formatKwhValue,
-    formatGridEnergy,
-    formatPositiveGridDisplayValue,
-    formatPriceValue,
-    formatSolarGaugeTitle,
-    formatSolarGaugeValue,
-    formatVisiblePriceValue,
-    isZeroKwhDisplayValue,
-} from "./forecast-value-format";
 
 /**
  * The whole-day gauges: one horizontal bar per metric, read at a glance against
@@ -431,12 +422,12 @@ function _renderSolarGauge(options: DayAggregateGaugeOptions) {
             ` : nothing}
             <span class="day-aggregate-gauge-value">
                 ${measuredWh === null
-                    ? formatSolarGaugeValue(aggregate.solarWh)
+                    ? formatKwh((aggregate.solarWh) / 1000, { precision: "gauge" })
                     // Unspaced, because the pill is 74px at its widest and both
                     // figures have to survive a phone-width card -- with the
                     // spaces the strip ellipsised to "1.4" and the day the two
                     // figures exist for was the one that lost them.
-                    : `${formatSolarGaugeValue(measuredWh)}/${formatSolarGaugeValue(aggregate.solarWh)}`}
+                    : `${formatKwh((measuredWh) / 1000, { precision: "gauge" })}/${formatKwh((aggregate.solarWh) / 1000, { precision: "gauge" })}`}
             </span>
         </div>
     `;
@@ -492,12 +483,12 @@ function _renderGridGauge(options: DayAggregateGaugeOptions) {
             <span class="day-aggregate-gauge-pair">
                 ${hasImport ? html`
                     <span class="day-aggregate-gauge-value import">
-                        ${formatKwhValue(aggregate.gridImportKwh)}
+                        ${formatKwh(Math.abs(aggregate.gridImportKwh))}
                     </span>
                 ` : nothing}
                 ${hasPositiveDisplay && positiveDisplay.kind !== null ? html`
                     <span class=${`day-aggregate-gauge-value ${positiveDisplay.kind}`}>
-                        ${formatPositiveGridDisplayValue(positiveDisplay.valueKwh)}
+                        ${("+" + formatKwh(Math.abs(positiveDisplay.valueKwh)))}
                     </span>
                 ` : nothing}
             </span>
@@ -558,12 +549,12 @@ function _renderPriceGauge(options: DayAggregateGaugeOptions) {
             <span class="day-aggregate-price-pair">
                 ${hasNegative ? html`
                     <span class="day-aggregate-gauge-value negative">
-                        ${formatVisiblePriceValue(aggregate.priceNegativeMin!)}
+                        ${formatMoney(aggregate.priceNegativeMin!, "", { precision: "axis" })}
                     </span>
                 ` : nothing}
                 ${hasPositive ? html`
                     <span class="day-aggregate-gauge-value positive">
-                        ${formatVisiblePriceValue(aggregate.pricePositiveMin!)} : ${formatVisiblePriceValue(aggregate.pricePositiveMax!)}
+                        ${formatMoney(aggregate.pricePositiveMin!, "", { precision: "axis" })} : ${formatMoney(aggregate.pricePositiveMax!, "", { precision: "axis" })}
                     </span>
                 ` : nothing}
             </span>
@@ -586,12 +577,12 @@ export function buildDaySolarAggregateTitle(
 ): string {
     const label = localize("scheduling.forecast.solar_label");
     if (measuredWh === null) {
-        return `${label}: ${formatSolarGaugeTitle(wh)}`;
+        return `${label}: ${(formatKwh((wh) / 1000, { precision: "gauge" }) + " kWh")}`;
     }
     // Both figures are spelled out, because "4.2 / 7.8" on the bar is only
     // readable once something has said which of the two has already happened.
-    return `${label}: ${formatSolarGaugeTitle(measuredWh)} ${localize("scheduling.forecast.measured")}`
-        + ` · ${formatSolarGaugeTitle(wh)} ${localize("scheduling.forecast.expected")}`;
+    return `${label}: ${(formatKwh((measuredWh) / 1000, { precision: "gauge" }) + " kWh")} ${localize("scheduling.forecast.measured")}`
+        + ` · ${(formatKwh((wh) / 1000, { precision: "gauge" }) + " kWh")} ${localize("scheduling.forecast.expected")}`;
 }
 
 export function buildDayGridAggregateTitle(
@@ -600,15 +591,15 @@ export function buildDayGridAggregateTitle(
 ): string {
     const titleParts = [
         localize("scheduling.forecast.grid_label"),
-        `${localize("scheduling.forecast.import")}: ${formatGridEnergy(aggregate.gridImportKwh ?? 0)}`,
-        `${localize("scheduling.forecast.export")}: ${formatGridEnergy(aggregate.gridExportKwh ?? 0)}`,
+        `${localize("scheduling.forecast.import")}: ${(formatKwh(Math.abs(aggregate.gridImportKwh ?? 0)) + " kWh")}`,
+        `${localize("scheduling.forecast.export")}: ${(formatKwh(Math.abs(aggregate.gridExportKwh ?? 0)) + " kWh")}`,
     ];
     if (
         aggregate.availableSurplusKwh !== null
         && !isZeroKwhDisplayValue(aggregate.availableSurplusKwh)
     ) {
         titleParts.push(
-            `${localize("scheduling.forecast.surplus")}: ${formatGridEnergy(aggregate.availableSurplusKwh)}`,
+            `${localize("scheduling.forecast.surplus")}: ${(formatKwh(Math.abs(aggregate.availableSurplusKwh)) + " kWh")}`,
         );
     }
     return titleParts.join(" · ");
@@ -622,15 +613,15 @@ export function buildDayPriceAggregateTitle(
     const ranges: string[] = [];
     if (aggregate.priceNegativeMin !== null && aggregate.priceNegativeMax !== null) {
         ranges.push(
-            `${formatPriceValue(aggregate.priceNegativeMin, unit)} to ${formatPriceValue(aggregate.priceNegativeMax, unit)}`,
+            `${formatMoney(aggregate.priceNegativeMin, unit)} to ${formatMoney(aggregate.priceNegativeMax, unit)}`,
         );
     }
     if (aggregate.pricePositiveMin !== null && aggregate.pricePositiveMax !== null) {
         ranges.push(
-            `${formatPriceValue(aggregate.pricePositiveMin, unit)} to ${formatPriceValue(aggregate.pricePositiveMax, unit)}`,
+            `${formatMoney(aggregate.pricePositiveMin, unit)} to ${formatMoney(aggregate.pricePositiveMax, unit)}`,
         );
     }
 
-    const title = ranges.length > 0 ? ranges.join(" · ") : formatPriceValue(0, unit);
+    const title = ranges.length > 0 ? ranges.join(" · ") : formatMoney(0, unit);
     return `${localize("scheduling.forecast.price_label")}: ${title}`;
 }
