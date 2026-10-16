@@ -37,11 +37,15 @@ class TrainingBatch:
         solar_bias_service: SolarBiasCorrectionService,
         house_consumption_job: HouseConsumptionTrainingJob,
         appliance_energy_job: ApplianceEnergyTrainingJob,
+        on_job_finished: Callable[[], None],
     ) -> None:
         self._hass = hass
         self._solar_bias_service = solar_bias_service
         self._house_consumption_job = house_consumption_job
         self._appliance_energy_job = appliance_energy_job
+        #: Called once as each sub-job finishes, failed or not -- never as one
+        #: starts -- so the frontend learns of a new result without polling.
+        self._on_job_finished = on_job_finished
         self._create_task = getattr(hass, "async_create_task", asyncio.create_task)
         self._unsub: Callable[[], None] | None = None
         #: The run currently in flight, if any, so a second trigger joins it
@@ -184,6 +188,10 @@ class TrainingBatch:
             self.last_outcomes[name] = "training_failed"
         finally:
             self.current_job = None
+        try:
+            self._on_job_finished()
+        except Exception:
+            _LOGGER.exception("Training sub-job %s finish callback failed", name)
 
     async def _async_train_solar_bias(self) -> str:
         try:

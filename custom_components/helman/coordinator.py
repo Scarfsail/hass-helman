@@ -98,6 +98,7 @@ from .const import (
     DATA_CHANGED_KIND_PLAN,
     DATA_CHANGED_KIND_SCHEDULE,
     DATA_CHANGED_KIND_SOLAR_BIAS,
+    DATA_CHANGED_KIND_TRAINING,
     DEFAULT_FORECAST_DAYS,
     DEFAULT_HISTORY_LOOKBACK_DAYS,
     EVENT_DATA_CHANGED,
@@ -1143,6 +1144,9 @@ class HelmanCoordinator:
                 read_request=self._read_appliance_energy_training_request,
                 on_trained=self._async_on_appliance_energy_trained,
             ),
+            on_job_finished=functools.partial(
+                self._fire_data_changed, DATA_CHANGED_KIND_TRAINING
+            ),
         )
         try:
             self._training_batch.schedule(bias_config.training_time)
@@ -1438,14 +1442,14 @@ class HelmanCoordinator:
         # Resolved per request, not cached with the dataset: both are cheap, and
         # the navigation range moves daily.
         floor = await service.async_history_floor(now)
-        currency = await service.async_resolve_span_currency(price_config)
+        price_unit = await service.async_resolve_span_currency(price_config)
         return await self._hass.async_add_executor_job(
             functools.partial(
                 build_report,
                 report,
                 dataset,
                 query,
-                currency=currency,
+                price_unit=price_unit,
                 navigation_range={
                     "minDate": floor.isoformat(),
                     "maxDate": now.date().isoformat(),
@@ -1640,28 +1644,44 @@ class HelmanCoordinator:
         house = store.house_consumption
         appliance = store.appliance_energy
         jobs = [
-            _training_job_status(
-                "solar_bias",
-                enabled=solar["enabled"],
-                health=solar_health,
-                last_outcome=solar["lastOutcome"],
-                error_reason=solar["errorReason"],
-                trained_at=solar["trainedAt"],
-                last_attempt_at=solar["lastAttemptAt"],
-                artifact_in_use=solar["effectiveVariant"] == "adjusted",
-                is_stale=solar["isStale"],
-                # A wholesale failure carries the previous run's dropped days
-                # forward, because they still explain the preserved profile.
-                # They are not this attempt's, so they are not its issues.
-                issues=(
-                    []
-                    if solar_health == "failed"
-                    else [
-                        {"subject": day["date"], "reason": day["reason"]}
-                        for day in solar["droppedDays"]
-                    ]
+            {
+                **_training_job_status(
+                    "solar_bias",
+                    enabled=solar["enabled"],
+                    health=solar_health,
+                    last_outcome=solar["lastOutcome"],
+                    error_reason=solar["errorReason"],
+                    trained_at=solar["trainedAt"],
+                    last_attempt_at=solar["lastAttemptAt"],
+                    artifact_in_use=solar["effectiveVariant"] == "adjusted",
+                    is_stale=solar["isStale"],
+                    # A wholesale failure carries the previous run's dropped days
+                    # forward, because they still explain the preserved profile.
+                    # They are not this attempt's, so they are not its issues.
+                    issues=(
+                        []
+                        if solar_health == "failed"
+                        else [
+                            {"subject": day["date"], "reason": day["reason"]}
+                            for day in solar["droppedDays"]
+                        ]
+                    ),
                 ),
-            ),
+                # The Training tab's diagnostics, picked from the bias status
+                # whose other fields this entry already carries.
+                "details": {
+                    key: solar[key]
+                    for key in (
+                        "minHistoryDays",
+                        "usableDays",
+                        "omittedSlotCount",
+                        "invalidatedSlotCount",
+                        "factorSummary",
+                        "effectiveVariant",
+                        "fallbackReason",
+                    )
+                },
+            },
             _stored_training_job_status(
                 "house_consumption",
                 house,

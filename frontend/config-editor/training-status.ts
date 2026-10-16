@@ -1,6 +1,6 @@
-import { callHelman, type SolarBiasStatus } from "../cards/shared/data/helman-commands";
+import { callHelman } from "../cards/shared/data/helman-commands";
 import { LitElement, css, html, nothing } from "lit";
-import type { PropertyValues, TemplateResult } from "lit";
+import type { TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import {
   getLocalizeFunction,
@@ -36,6 +36,19 @@ export interface TrainingJobStatus {
   estimates?: Record<string, number>;
   /** Present on `appliance_energy` only: every device's usage record, by deviceKey. */
   devices?: Record<string, DeviceStats>;
+  /** Present on `solar_bias` only: the Training tab's diagnostics. */
+  details?: SolarBiasDetails;
+}
+
+/** The solar bias figures the Training tab shows beside the job's status. */
+export interface SolarBiasDetails {
+  minHistoryDays: number;
+  usableDays: number;
+  omittedSlotCount: number;
+  invalidatedSlotCount: number;
+  factorSummary: { min: number | null; max: number | null; median: number | null };
+  effectiveVariant: string;
+  fallbackReason: string | null;
 }
 
 export interface TrainingStatus {
@@ -49,13 +62,16 @@ export interface TrainingStatus {
 }
 
 /**
- * Fired after a Train now request. `status` is the payload the command
- * returned, or `null` when it returned none and the owner should poll.
+ * Fired when a Train now request goes out (`started`) and after it settles.
+ * `status` is the payload the command returned, or `null` when it returned
+ * none and the owner should poll.
  */
 export const TRAINING_STATUS_CHANGED = "helman-training-status-changed";
 
 export interface TrainingStatusChangedDetail {
   status: TrainingStatus | null;
+  /** The request just went out: no event announces a run starting, so the owner marks it running itself. */
+  started?: boolean;
 }
 
 /** A websocket answer that is a status payload, or `null`. */
@@ -249,6 +265,7 @@ class TrainingStatusBase extends LitElement {
     if (this.disabled || this._requesting || !this.hass) return;
     this._requesting = true;
     this._message = "";
+    this._announce({ status: null, started: true });
     let status: TrainingStatus | null = null;
     try {
       const result = await callHelman(this.hass, "helman/training/train_now", { ...(job ? { job } : {}) });
@@ -303,9 +320,13 @@ class TrainingStatusBase extends LitElement {
     } finally {
       this._requesting = false;
     }
+    this._announce({ status });
+  }
+
+  private _announce(detail: TrainingStatusChangedDetail): void {
     this.dispatchEvent(
       new CustomEvent<TrainingStatusChangedDetail>(TRAINING_STATUS_CHANGED, {
-        detail: { status },
+        detail,
         bubbles: true,
         composed: true,
       }),
@@ -543,58 +564,12 @@ export class HelmanTrainingIssues extends TrainingStatusBase {
  * repeated here.
  */
 export class HelmanSolarBiasDiagnostics extends TrainingStatusBase {
-  /**
-   * The solar job's entry; a new attempt or result refetches the figures, and
-   * so does a config save or toggle, which changes the effective variant and
-   * fallback reason without any attempt.
-   */
+  /** The solar job's entry; the figures are its `details`. */
   @property({ attribute: false }) job: TrainingJobStatus | null = null;
-  /** Canonical saved-config revision; diagnostics are computed from that config. */
-  @property({ attribute: false }) configRevision: string | null = null;
-
-  @state() private _diagnostics: SolarBiasStatus | null = null;
-  private _loadedFor: string | null = null;
-  private _loadingFor: string | null = null;
-
-  protected updated(changed: PropertyValues<this>): void {
-    super.updated(changed);
-    const job = this.job;
-    const key = [
-      job?.trainedAt,
-      job?.lastAttemptAt,
-      job?.enabled,
-      job?.isStale,
-      job?.artifactInUse,
-      this.configRevision,
-    ].join("|");
-    if (
-      this.hass &&
-      this.configRevision !== null &&
-      key !== this._loadedFor &&
-      key !== this._loadingFor
-    ) {
-      this._loadingFor = key;
-      void this._load(key);
-    }
-  }
-
-  private async _load(key: string): Promise<void> {
-    try {
-      const diagnostics = await callHelman(this.hass, "helman/solar_bias/status", {});
-      if (this._loadingFor === key) {
-        this._diagnostics = diagnostics;
-        this._loadedFor = key;
-      }
-    } catch {
-      // Diagnostics are secondary to the shared status above; keep the last.
-    } finally {
-      if (this._loadingFor === key) this._loadingFor = null;
-    }
-  }
 
   render(): TemplateResult | typeof nothing {
-    const diagnostics = this._diagnostics;
-    if (!diagnostics || typeof diagnostics !== "object") return nothing;
+    const diagnostics = this.job?.details;
+    if (!diagnostics) return nothing;
     const { min, median, max } = diagnostics.factorSummary ?? {};
     const hasFactors = typeof min === "number" && typeof median === "number" && typeof max === "number";
     return html`

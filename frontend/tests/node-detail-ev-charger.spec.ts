@@ -199,7 +199,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
         const today = {
             node: "ev_charger", section: "today", deviceId: "garage-ev", asOf: "2026-10-21T11:55:00+00:00",
             period: { start: "2026-10-21T00:00:00+00:00", end: "2026-10-22T00:00:00+00:00" },
-            currency: "CZK/kWh", complete: false, unavailable: null,
+            priceUnit: "CZK/kWh", complete: false, unavailable: null,
             charger: {
                 kwh: 6.4, coverage: 0.95, estimated: false,
                 sources: { solar: 4.0, battery: 0.4, grid: 1.8, unattributed: 0.2 },

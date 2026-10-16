@@ -13,24 +13,6 @@ _LOGGER = logging.getLogger(__name__)
 
 @websocket_api.websocket_command(
     {
-        vol.Required("type"): "helman/solar_bias/status",
-    }
-)
-@callback
-def ws_get_solar_bias_status(
-    hass: HomeAssistant,
-    connection: websocket_api.ActiveConnection,
-    msg: dict,
-) -> None:
-    service = _get_solar_bias_service(hass, connection, msg)
-    if service is None:
-        return
-
-    connection.send_result(msg["id"], service.get_status_payload())
-
-
-@websocket_api.websocket_command(
-    {
         vol.Required("type"): "helman/solar_bias/inspector",
         vol.Required("date"): str,
     }

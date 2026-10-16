@@ -121,7 +121,7 @@ async def async_ev_charger_section(
             "start": dt_util.as_local(start).isoformat(),
             "end": dt_util.as_local(end).isoformat(),
         },
-        "currency": None,
+        "priceUnit": None,
         "complete": False,
         "unavailable": None,
         "charger": None,
@@ -138,8 +138,8 @@ async def async_ev_charger_section(
     base = {
         **payload,
         # The report's dataset can be a few minutes older than the request.
-        **({"asOf": report["as_of"]} if report.get("as_of") else {}),
-        "currency": report.get("currency"),
+        "asOf": report["asOf"],
+        "priceUnit": report.get("priceUnit"),
         "complete": bool(report.get("complete")),
     }
     if node is None:

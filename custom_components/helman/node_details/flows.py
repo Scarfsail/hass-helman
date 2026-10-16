@@ -46,7 +46,7 @@ def today_flows(report: Mapping[str, Any]) -> dict[str, Any]:
     grid_meter = bool(meters.get("grid"))
     battery_meter = bool(meters.get("battery"))
     solar = solar_destinations(report) if solar_meter else None
-    charge = charge_origin_kwh(report.get("charge_origin") or {}) if battery_meter else None
+    charge = charge_origin_kwh(report.get("chargeOrigin") or {}) if battery_meter else None
     nodes = report.get("nodes") or []
     sources = (nodes[0].get("sources") or {}) if nodes else None
 
@@ -87,7 +87,7 @@ def _battery_export_kwh(solar: Mapping[str, Any]) -> float:
 async def async_flows_section(hass: Any, ctx: NodeDetailContext, node: str, now: datetime) -> dict[str, Any]:
     """Today's flows for ``node``'s detail, or why there are none.
 
-    The period, currency and ``complete`` are carried as the other "today so
+    The period, ``priceUnit`` and ``complete`` are carried as the other "today so
     far" sections carry them. ``flows`` is ``None`` with an ``unavailable``
     reason when the reports cannot be built.
     """
@@ -101,7 +101,7 @@ async def async_flows_section(hass: Any, ctx: NodeDetailContext, node: str, now:
             "start": dt_util.as_local(start).isoformat(),
             "end": dt_util.as_local(end).isoformat(),
         },
-        "currency": None,
+        "priceUnit": None,
         "complete": False,
         "unavailable": None,
         "flows": None,
@@ -112,8 +112,8 @@ async def async_flows_section(hass: Any, ctx: NodeDetailContext, node: str, now:
     return {
         **payload,
         # The report's dataset can be a few minutes older than the request.
-        **({"asOf": report["as_of"]} if report.get("as_of") else {}),
-        "currency": report.get("currency"),
+        "asOf": report["asOf"],
+        "priceUnit": report.get("priceUnit"),
         "complete": bool(report.get("complete")),
         "flows": today_flows(report),
     }

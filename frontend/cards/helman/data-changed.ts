@@ -5,8 +5,8 @@ import type { ReactiveController, ReactiveControllerHost } from "lit";
  *
  * The backend fires one coarse `helman_data_changed` whenever something a card
  * draws has been rewritten — a re-planned schedule, a saved config, a retrained
- * bias profile. This module owns the single subscription to it and hands the
- * signal to whoever is listening.
+ * bias profile, a finished training job. This module owns the single
+ * subscription to it and hands the signal to whoever is listening.
  *
  * One subscription per *connection*, not per card: a dashboard showing the
  * scheduling card and the inspector side by side should cost Home Assistant one
@@ -35,7 +35,7 @@ export interface DataChangedHost {
 type HelmanConnection = DataChangedConnection;
 
 /** The kinds the backend currently emits. Advisory — see the listener contract. */
-export type DataChangedKind = "schedule" | "plan" | "config" | "solar_bias";
+export type DataChangedKind = "schedule" | "plan" | "config" | "solar_bias" | "training";
 
 /**
  * Called once per collapsed batch, with every kind seen in that batch.

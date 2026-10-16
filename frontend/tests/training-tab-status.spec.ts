@@ -1,6 +1,7 @@
 import { configDoc } from "./support/payload-builders";
 import { test, expect, type Page } from "@playwright/test";
 import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
+import { installFixedClock } from "./support/fixed-clock";
 
 /**
  * The Training tab's per-job status panels (issue #305).
@@ -9,7 +10,8 @@ import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
  * fixture below picks each job's normalized `health` and facts, and every
  * assertion traces a treatment back to them. `helman/training/train_now` is
  * faked too, recording what each button sent and answering with whatever the
- * test put in `window.__trainNow`.
+ * test put in `window.__trainNow`. The solar job's diagnostics ride its
+ * `details`: there is no second request for them.
  */
 
 const HOUSE_TRAINED_AT = "2026-09-12T03:00:00+00:00";
@@ -49,9 +51,20 @@ const CONFIG = configDoc({
 
 type Job = Record<string, unknown>;
 
+const SOLAR_DETAILS = {
+    minHistoryDays: 10,
+    usableDays: 7,
+    omittedSlotCount: 3,
+    invalidatedSlotCount: 2,
+    factorSummary: { min: 0.8, median: 1, max: 1.2 },
+    effectiveVariant: "raw",
+    fallbackReason: "insufficient_history",
+};
+
 function job(id: string, overrides: Job = {}): Job {
     return {
         id,
+        ...(id === "solar_bias" ? { details: SOLAR_DETAILS } : {}),
         enabled: true,
         health: "ok",
         lastOutcome: id === "appliance_energy" ? "estimates_trained" : "profile_trained",
@@ -84,7 +97,12 @@ function status(
     };
 }
 
-async function mountEditor(page: Page, trainingStatus: unknown): Promise<void> {
+async function mountEditor(
+    page: Page,
+    trainingStatus: unknown,
+    options: { fakeTimers?: boolean } = {},
+): Promise<void> {
+    if (options.fakeTimers) await installFixedClock(page, { timers: true });
     await loadBundle(page, "helman-config-editor-panel", EDITOR_BUNDLE);
 
     await page.evaluate(
@@ -92,9 +110,6 @@ async function mountEditor(page: Page, trainingStatus: unknown): Promise<void> {
             const w = window as any;
             w.__trainingStatus = trainingStatus;
             w.__trainRequests = [];
-            w.__solarDiagnosticsRequests = 0;
-            w.__solarDiagnosticsFailures = 0;
-            w.__solarMinHistoryDays = 10;
             w.__trainNow = { result: { outcomes: {}, status: trainingStatus } };
             const element = document.createElement(
                 "helman-config-editor-panel",
@@ -113,28 +128,11 @@ async function mountEditor(page: Page, trainingStatus: unknown): Promise<void> {
                     },
                     "helman/training/train_now": async (request: any) => {
                         w.__trainRequests.push(JSON.parse(JSON.stringify(request)));
+                        if (w.__trainNow.pending) await w.__trainNow.pending;
                         if (w.__trainNow.error)
                             throw w.__trainNow.error;
                         return JSON.parse(JSON.stringify(w.__trainNow.result));
                     },
-                    "helman/solar_bias/status": async (request: any) => {
-                        w.__solarDiagnosticsRequests += 1;
-                        if (w.__solarDiagnosticsFailures > 0) {
-                            w.__solarDiagnosticsFailures -= 1;
-                            throw new Error("temporary websocket interruption");
-                        }
-                        return {
-                            enabled: true,
-                            minHistoryDays: w.__solarMinHistoryDays,
-                            usableDays: 7,
-                            omittedSlotCount: 3,
-                            invalidatedSlotCount: 2,
-                            factorSummary: { min: 0.8, median: 1, max: 1.2 },
-                            effectiveVariant: "raw",
-                            fallbackReason: "insufficient_history",
-                            droppedDays: [{ date: "2026-09-15", reason: "day_ratio_out_of_band" }],
-                        };
-                    }
                 }).callWS,
             };
             document.body.appendChild(element);
@@ -489,6 +487,13 @@ test("the appliance panel lists every consumer device", async ({ page }) => {
     await expect(section).toContainText("Devices tab");
 });
 
+/** How many times the editor has asked for the training status so far. */
+function statusRequests(page: Page): Promise<number> {
+    return page.evaluate(
+        () => window.__mockRequests.filter((request) => request.type === "helman/training/status").length,
+    );
+}
+
 test("the solar panel shows its diagnostics under a neutral heading", async ({ page }) => {
     await mountEditor(page, status());
     await openTrainingTab(page);
@@ -496,47 +501,108 @@ test("the solar panel shows its diagnostics under a neutral heading", async ({ p
     const diagnostics = page.locator("helman-solar-bias-diagnostics .container");
     await expect(diagnostics).toContainText("Solar bias diagnostics");
     await expect(diagnostics).toContainText("7 / 10 required");
+    await expect(diagnostics).toContainText("min 0.80 / median 1.00 / max 1.20");
     // Dropped days arrive as the job's issues, never repeated here.
     await expect(diagnostics).not.toContainText("2026-09-15");
+    // Read from the training status the tab already has: one request, no second.
+    const commands = await page.evaluate(() => window.__mockRequests.map((request) => request.type));
+    expect([...new Set(commands.filter((command) => command.endsWith("/status")))]).toEqual(["helman/training/status"]);
 });
 
-test("the solar diagnostics refresh when the saved config revision changes", async ({ page }) => {
+test("a training event reloads the status", async ({ page }) => {
     await mountEditor(page, status());
     await openTrainingTab(page);
+    await expect(healthBadge(page, "house_consumption")).toHaveClass(/health-ok/);
 
+    await page.evaluate((next) => {
+        (window as any).__trainingStatus = next;
+        window.__fireDataChanged("training");
+    }, status({ house_consumption: { health: "degraded" } }));
+
+    await expect(healthBadge(page, "house_consumption")).toHaveClass(/health-degraded/);
+});
+
+test("a config event reloads the solar diagnostics with the status", async ({ page }) => {
+    await mountEditor(page, status());
+    await openTrainingTab(page);
     const diagnostics = page.locator("helman-solar-bias-diagnostics .container");
     await expect(diagnostics).toContainText("7 / 10 required");
 
-    await page.locator("helman-solar-bias-diagnostics").evaluate((element) => {
-        const w = window as any;
-        w.__solarMinHistoryDays = 14;
-        (element as any).configRevision = '{"config_version":15}';
-    });
+    await page.evaluate((next) => {
+        (window as any).__trainingStatus = next;
+        window.__fireDataChanged("config");
+    }, status({ solar_bias: { details: { ...SOLAR_DETAILS, minHistoryDays: 14 } } }));
 
     await expect(diagnostics).toContainText("7 / 14 required");
 });
 
-test("the solar diagnostics retry the same key after a transient failure", async ({ page }) => {
-    await mountEditor(page, status());
+test("with no run in progress the status is never polled", async ({ page }) => {
+    await mountEditor(page, status(), { fakeTimers: true });
     await openTrainingTab(page);
-    const requestsBeforeFailure = await page.evaluate(
-        () => (window as any).__solarDiagnosticsRequests,
-    );
+    // Once on mount, once on opening the tab.
+    await expect.poll(() => statusRequests(page)).toBe(2);
 
-    await page.locator("helman-solar-bias-diagnostics").evaluate((element) => {
+    await page.clock.runFor(5 * 60_000);
+
+    expect(await statusRequests(page)).toBe(2);
+});
+
+test("opening the Training tab reloads the status", async ({ page }) => {
+    await mountEditor(page, status());
+    await expect.poll(() => statusRequests(page)).toBe(1);
+
+    // A run started elsewhere: no event announces it.
+    await page.evaluate((next) => {
+        (window as any).__trainingStatus = next;
+    }, status({}, { isRunning: true, currentJob: "house_consumption" }));
+    await openTrainingTab(page);
+
+    await expect(page.locator("helman-training-status .running-job")).toHaveText("House consumption");
+});
+
+test("Train now shows the run in progress and polls until it settles", async ({ page }) => {
+    await mountEditor(page, status(), { fakeTimers: true });
+    await openTrainingTab(page);
+    await expect.poll(() => statusRequests(page)).toBe(2);
+
+    await page.evaluate((running) => {
         const w = window as any;
-        w.__solarMinHistoryDays = 12;
-        w.__solarDiagnosticsFailures = 1;
-        (element as any).configRevision = '{"config_version":15}';
-    });
-    await expect.poll(() => page.evaluate(() => (window as any).__solarDiagnosticsRequests))
-        .toBe(requestsBeforeFailure + 1);
+        w.__trainingStatus = running;
+        w.__trainNow.pending = new Promise((resolve) => (w.__releaseTrainNow = resolve));
+    }, status({}, { isRunning: true, currentJob: "house_consumption" }));
+    await page.locator("helman-training-status button.train-all").click();
 
-    await page.locator("helman-solar-bias-diagnostics").evaluate((element) => {
-        (element as any).job = { ...(element as any).job };
-    });
+    // Shown running at once, before any status answer says so.
+    await expect(page.locator("helman-training-status .running-job")).toHaveText("Starting");
+    expect(await statusRequests(page)).toBe(2);
+    await page.clock.runFor(15_000);
+    await expect.poll(() => statusRequests(page)).toBe(3);
+    await expect(page.locator("helman-training-status .running-job")).toHaveText("House consumption");
 
-    await expect(page.locator("helman-solar-bias-diagnostics .container")).toContainText("7 / 12 required");
-    await expect.poll(() => page.evaluate(() => (window as any).__solarDiagnosticsRequests))
-        .toBe(requestsBeforeFailure + 2);
+    // The run ends: train_now answers with a status that is not running.
+    await page.evaluate(() => (window as any).__releaseTrainNow());
+    await expect(page.locator("helman-training-status .running-job")).toHaveCount(0);
+    await page.clock.runFor(5 * 60_000);
+    expect(await statusRequests(page)).toBe(3);
+});
+
+test("while a run is in progress the status is polled every 15 s, until it ends", async ({ page }) => {
+    await mountEditor(page, status({}, { isRunning: true, currentJob: "solar_bias" }), { fakeTimers: true });
+    await openTrainingTab(page);
+    await expect.poll(() => statusRequests(page)).toBe(2);
+
+    await page.clock.runFor(14_000);
+    expect(await statusRequests(page)).toBe(2);
+    await page.clock.runFor(1_000);
+    await expect.poll(() => statusRequests(page)).toBe(3);
+
+    await page.evaluate((next) => {
+        (window as any).__trainingStatus = next;
+    }, status());
+    await page.clock.runFor(15_000);
+    await expect.poll(() => statusRequests(page)).toBe(4);
+    await expect(page.locator("helman-training-status .running-job")).toHaveCount(0);
+
+    await page.clock.runFor(5 * 60_000);
+    expect(await statusRequests(page)).toBe(4);
 });

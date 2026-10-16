@@ -161,11 +161,11 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
         });
         const today = v.todayUnavailable
             ? {
-                node: "house", section: "today", asOf: "2026-10-21T12:00:00+00:00", period, currency: null, complete: false,
+                node: "house", section: "today", asOf: "2026-10-21T12:00:00+00:00", period, priceUnit: null, complete: false,
                 unavailable: "no_house_meter", house: null, independence: null, selfConsumption: null, consumers: null,
             }
             : {
-                node: "house", section: "today", asOf: "2026-10-21T11:55:00+00:00", period, currency: "CZK/kWh", complete: false,
+                node: "house", section: "today", asOf: "2026-10-21T11:55:00+00:00", period, priceUnit: "CZK/kWh", complete: false,
                 unavailable: null,
                 house: {
                     kwh: 20, coverage: 1,
@@ -215,21 +215,21 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             },
         };
         const ranking = {
-            report: "ranking", start_date: "2026-10-21", end_date: "2026-10-21", currency: "CZK/kWh",
-            complete: false, as_of: "2026-10-21T11:55:00+00:00", range: { minDate: "2026-01-01", maxDate: "2026-10-21" },
+            report: "ranking", startDate: "2026-10-21", endDate: "2026-10-21", priceUnit: "CZK/kWh",
+            complete: false, asOf: "2026-10-21T11:55:00+00:00", range: { minDate: "2026-01-01", maxDate: "2026-10-21" },
             meters: { grid: true, solar: true, battery: true, house: true },
-            charge_origin: {}, solar_totals: {}, house_kwh: 20, ambiguous_kwh: 0, unattributed_kwh: 2, mismatch_kwh: 0,
+            chargeOrigin: {}, solarTotals: {}, houseKwh: 20, ambiguousKwh: 0, unattributedKwh: 2, mismatchKwh: 0,
             nodes: [
-                { id: "house", label: "", icon: null, estimated: false, unmeasured: false, kwh: 20, coverage: 1, first_hour: null,
-                  parent_id: null, depth: 0, children: ["sensor.ev_energy"],
+                { id: "house", label: "", icon: null, estimated: false, unmeasured: false, kwh: 20, coverage: 1, firstHour: null,
+                  parentId: null, depth: 0, children: ["sensor.ev_energy"],
                   sources: { solar: 8, battery: 4, grid: 6, unattributed: 2 },
-                  money: { paid: { amount: 25.4, priced_kwh: 18, unpriced_kwh: 2, tariff_kwh: 0 }, forgone: { amount: 6.1, priced_kwh: 18, unpriced_kwh: 2 } },
-                  overallocated_kwh: 0 },
-                { id: "sensor.ev_energy", label: "EV", icon: null, estimated: false, unmeasured: false, kwh: 6, coverage: 1, first_hour: null,
-                  parent_id: "house", depth: 1, children: [],
+                  money: { paid: { amount: 25.4, pricedKwh: 18, unpricedKwh: 2, tariffKwh: 0 }, forgone: { amount: 6.1, pricedKwh: 18, unpricedKwh: 2 } },
+                  overallocatedKwh: 0 },
+                { id: "sensor.ev_energy", label: "EV", icon: null, estimated: false, unmeasured: false, kwh: 6, coverage: 1, firstHour: null,
+                  parentId: "house", depth: 1, children: [],
                   sources: { solar: 2, battery: 1, grid: 3, unattributed: 0 },
-                  money: { paid: { amount: 12, priced_kwh: 6, unpriced_kwh: 0, tariff_kwh: 0 }, forgone: { amount: 1.2, priced_kwh: 6, unpriced_kwh: 0 } },
-                  overallocated_kwh: 0 },
+                  money: { paid: { amount: 12, pricedKwh: 6, unpricedKwh: 0, tariffKwh: 0 }, forgone: { amount: 1.2, pricedKwh: 6, unpricedKwh: 0 } },
+                  overallocatedKwh: 0 },
             ],
         };
         // The plan: the boiler from 13:00 to 14:00, the EV a candidate 15:00–16:00.

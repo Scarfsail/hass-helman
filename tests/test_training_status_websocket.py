@@ -178,6 +178,9 @@ def _make_coordinator(
         solar_bias_service=coordinator._solar_bias_service,
         house_consumption_job=house_job or _StubJob("profile_trained"),
         appliance_energy_job=appliance_job or _StubJob("estimates_trained"),
+        on_job_finished=lambda: coordinator._fire_data_changed(
+            const.DATA_CHANGED_KIND_TRAINING
+        ),
     )
     return coordinator
 
@@ -401,6 +404,38 @@ class TrainingStatusTests(unittest.TestCase):
                     solar["issues"],
                     [{"subject": "2026-07-30", "reason": "day_forecast_too_low"}],
                 )
+
+    def test_the_solar_job_carries_its_diagnostics(self) -> None:
+        """The Training tab's diagnostics come from this one request: there is
+        no second solar-bias status command to ask."""
+        service = _make_bias_service(
+            metadata=_bias_metadata(
+                "profile_trained",
+                omitted_slot_count=3,
+                invalidated_slot_count=2,
+                factor_min=0.8,
+                factor_median=1.0,
+                factor_max=1.2,
+            ),
+            profile=_bias_profile(),
+        )
+        payload = self._payload(_make_coordinator(bias_service=service))
+
+        solar = _job(payload, "solar_bias")
+        self.assertEqual(
+            solar["details"],
+            {
+                "minHistoryDays": 2,
+                "usableDays": 12,
+                "omittedSlotCount": 3,
+                "invalidatedSlotCount": 2,
+                "factorSummary": {"min": 0.8, "max": 1.2, "median": 1.0},
+                "effectiveVariant": "adjusted",
+                "fallbackReason": None,
+            },
+        )
+        self.assertNotIn("details", _job(payload, "house_consumption"))
+        self.assertNotIn("details", _job(payload, "appliance_energy"))
 
     def test_disabled_solar_is_idle(self) -> None:
         service = _make_bias_service(
@@ -677,6 +712,46 @@ class TrainNowTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual((house_job.calls, appliance_job.calls), (0, 1))
         service.async_train.assert_not_awaited()
+
+    async def test_each_finished_job_fires_one_training_event(self) -> None:
+        for job in ("solar_bias", "house_consumption", "appliance_energy"):
+            with self.subTest(job=job):
+                service = _make_bias_service()
+                service.async_train = AsyncMock(
+                    return_value={"lastOutcome": "profile_trained"}
+                )
+                coordinator = _make_coordinator(bias_service=service)
+
+                connection = await _train_now(coordinator, job=job)
+
+                self.assertEqual(connection.errors, [])
+                self.assertEqual(
+                    coordinator._hass.bus.fired,
+                    [(const.EVENT_DATA_CHANGED, {"kind": "training"})],
+                )
+
+    async def test_a_started_job_fires_no_training_event(self) -> None:
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        class _SlowHouseJob:
+            async def async_train(self_inner):
+                started.set()
+                await release.wait()
+                return "profile_trained"
+
+        coordinator = _make_coordinator(house_job=_SlowHouseJob())
+
+        run = asyncio.ensure_future(_train_now(coordinator, job="house_consumption"))
+        await started.wait()
+        self.assertEqual(coordinator._hass.bus.fired, [])
+        release.set()
+        await run
+
+        self.assertEqual(
+            coordinator._hass.bus.fired,
+            [(const.EVENT_DATA_CHANGED, {"kind": "training"})],
+        )
 
     async def test_solar_bias_reports_a_failure_the_service_caught(self) -> None:
         """Never ``profile_trained`` beside a ``failed`` job."""

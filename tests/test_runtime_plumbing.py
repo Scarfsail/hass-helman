@@ -7,7 +7,6 @@ from homeassistant.exceptions import Unauthorized
 from custom_components.helman import tree_builder, websockets
 from custom_components.helman.sensor import HelmanUnmeasuredPowerSensor
 from custom_components.helman.training import websocket as training_ws
-from custom_components.helman.solar_bias_correction import websocket as solar_ws
 
 TREE = {
     "sources": [
@@ -138,15 +137,9 @@ def test_public_commands_allow_non_admin():
         send_result=lambda *args: results.append(args),
         subscriptions={},
     )
-    service = SimpleNamespace(get_status_payload=lambda: {"ready": True})
-    coordinator = SimpleNamespace(solar_bias_service=service)
-    hass = SimpleNamespace(
-        data={"helman": {"coordinator": coordinator}},
-        bus=SimpleNamespace(async_listen=lambda *_: None),
-    )
+    hass = SimpleNamespace(bus=SimpleNamespace(async_listen=lambda *_: None))
     websockets.ws_subscribe_updates(hass, connection, {"id": 1})
-    solar_ws.ws_get_solar_bias_status(hass, connection, {"id": 2})
-    assert results == [(1,), (2, {"ready": True})]
+    assert results == [(1,)]
 
 
 def test_schedule_rejects_compact_date_with_invalid_date():

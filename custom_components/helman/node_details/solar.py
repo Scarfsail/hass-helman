@@ -260,7 +260,7 @@ def string_energy(
 def solar_destinations(report: Mapping[str, Any]) -> dict[str, Any]:
     """Where a report's period of solar went, estimated, with what stays open.
 
-    The report's ``solar_totals`` sum the same per-hour flows the source mix
+    The report's ``solarTotals`` sum the same per-hour flows the source mix
     and the charge origin are solved from: in each hour with a source mix,
     solar straight to the house, into the battery and to the grid. What the
     meters do not explain in those hours, and all solar in hours without a
@@ -269,15 +269,15 @@ def solar_destinations(report: Mapping[str, Any]) -> dict[str, Any]:
     did not account for (``otherExportKwh``) came from the battery. Every
     figure is kWh over the report's period.
     """
-    totals = report.get("solar_totals") or {}
+    totals = report.get("solarTotals") or {}
 
     def kwh(key: str) -> float:
         return max(0.0, float(totals.get(key) or 0.0))
 
-    attributed = kwh("attributed_kwh")
-    unattributed = kwh("unattributed_kwh")
-    house, battery, export = kwh("house_kwh"), kwh("battery_kwh"), kwh("export_kwh")
-    measured_export = kwh("measured_export_kwh")
+    attributed = kwh("attributedKwh")
+    unattributed = kwh("unattributedKwh")
+    house, battery, export = kwh("houseKwh"), kwh("batteryKwh"), kwh("exportKwh")
+    measured_export = kwh("measuredExportKwh")
     return {
         "producedKwh": round(attributed + unattributed, 3),
         "attributedKwh": round(attributed, 3),
@@ -294,7 +294,7 @@ def solar_destinations(report: Mapping[str, Any]) -> dict[str, Any]:
 async def _destinations(ctx: NodeDetailContext, local_now: datetime) -> dict[str, Any]:
     """Today's solar destinations, or why there are none."""
     payload: dict[str, Any] = {
-        "currency": None,
+        "priceUnit": None,
         "complete": False,
         "unavailable": None,
         "destinations": None,
@@ -308,11 +308,11 @@ async def _destinations(ctx: NodeDetailContext, local_now: datetime) -> dict[str
     return {
         **payload,
         # The report's dataset can be a few minutes older than the request.
-        **({"asOf": report["as_of"]} if report.get("as_of") else {}),
-        "currency": report.get("currency"),
+        "asOf": report["asOf"],
+        "priceUnit": report.get("priceUnit"),
         "complete": bool(report.get("complete")),
         "destinations": solar_destinations(report),
-        "charge": charge_origin_kwh(report["charge_origin"]),
+        "charge": charge_origin_kwh(report["chargeOrigin"]),
     }
 
 

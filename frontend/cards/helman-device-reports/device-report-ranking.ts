@@ -98,7 +98,7 @@ function buildModel(payload: RankingReportPayload, sort: SortMode): RankingModel
 }
 
 function isPartial(side: DeviceReportMoneySide, kwh: number): boolean {
-    return kwh > 0 && side.unpriced_kwh > MARK_SHARE * kwh;
+    return kwh > 0 && side.unpricedKwh > MARK_SHARE * kwh;
 }
 
 function percent(part: number, whole: number): string {
@@ -318,19 +318,19 @@ export class HelmanDeviceReportRanking extends LitElement {
     }
 
     private _money(amount: number | null): string {
-        // The payload's currency is the price unit (CZK/kWh); an amount is in CZK.
-        const currency = currencyFromPriceUnit(this.payload?.currency);
+        // The payload carries the price unit (CZK/kWh); an amount is in CZK.
+        const currency = currencyFromPriceUnit(this.payload?.priceUnit);
         return amount === null ? "—" : formatMoney(amount, currency || null, { precision: "ranking" });
     }
 
     private _pricedTitle(side: DeviceReportMoneySide, kwh: number): string {
         let title = fillTemplate(this._t("device_reports.ranking.priced"), {
-            priced: formatKwh(Math.abs(side.priced_kwh)),
+            priced: formatKwh(Math.abs(side.pricedKwh)),
             total: formatKwh(Math.abs(kwh)),
         });
-        if ((side.tariff_kwh ?? 0) > 0) {
+        if ((side.tariffKwh ?? 0) > 0) {
             title += "; " + fillTemplate(this._t("device_reports.ranking.tariff"), {
-                kwh: formatKwh(Math.abs(side.tariff_kwh ?? 0)),
+                kwh: formatKwh(Math.abs(side.tariffKwh ?? 0)),
             });
         }
         return title;
@@ -378,10 +378,10 @@ export class HelmanDeviceReportRanking extends LitElement {
             ...this._moneyRows(node, "paid"),
             ...this._moneyRows(node, "forgone"),
         ];
-        if (partlyCovered(node.coverage)) rows.push(coverageRow(this._t.bind(this), node.coverage, node.first_hour));
-        if (node.overallocated_kwh > MARK_SHARE * node.kwh && node.overallocated_kwh > 0) {
+        if (partlyCovered(node.coverage)) rows.push(coverageRow(this._t.bind(this), node.coverage, node.firstHour));
+        if (node.overallocatedKwh > MARK_SHARE * node.kwh && node.overallocatedKwh > 0) {
             rows.push(tooltipRow("", fillTemplate(this._t("device_reports.ranking.overallocated"), {
-                kwh: formatKwh(Math.abs(node.overallocated_kwh)),
+                kwh: formatKwh(Math.abs(node.overallocatedKwh)),
             })));
         }
         return { title: this._label(node, model.house), hasActual: false, rows };

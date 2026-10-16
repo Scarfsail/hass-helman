@@ -140,7 +140,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
         const section = {
             node: "battery", section: "charge", asOf: "2026-10-21T12:00:00+00:00",
             period: { start: `${day}T00:00:00+00:00`, end: "2026-10-22T00:00:00+00:00" },
-            currency: "CZK/kWh", complete: false, unavailable: null, charge,
+            priceUnit: "CZK/kWh", complete: false, unavailable: null, charge,
         };
         // 15-minute slots from 11:45 today for a day and a half.
         const slots: ScheduleSlotDTO[] = [];

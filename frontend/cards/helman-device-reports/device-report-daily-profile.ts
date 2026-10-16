@@ -163,7 +163,7 @@ export class HelmanDeviceReportDailyProfile extends LitElement {
     /**
      * A mean price for the hover, the only place its value is shown: two
      * decimals, since hours a few hundredths apart are what this view compares.
-     * The payload's currency is already the price unit (CZK/kWh).
+     * `unit` is the payload's price unit (CZK/kWh).
      */
     private _rate(rate: number | null, unit: string | null): string {
         return rate === null ? "—" : rate.toFixed(2) + (unit ? " " + unit : "");
@@ -172,20 +172,20 @@ export class HelmanDeviceReportDailyProfile extends LitElement {
     /** What every cell of an hour carries in its hover: that hour's mean prices. */
     private _priceRows(payload: DailyProfileReportPayload, hour: number): TooltipRow[] {
         return (["import", "export"] as const).map((side) => {
-            const rate = (side === "import" ? payload.import_rate : payload.export_rate)[hour] ?? null;
+            const rate = (side === "import" ? payload.importRate : payload.exportRate)[hour] ?? null;
             const color = rate !== null && rate < 0
                 ? PRICE_NEGATIVE_COLOR
                 : side === "import" ? GRID_IMPORT_COLOR : GRID_EXPORT_COLOR;
             return tooltipRow(
                 this._t("device_reports.daily_profile." + side),
-                this._rate(rate, payload.currency),
+                this._rate(rate, payload.priceUnit),
                 color,
             );
         });
     }
 
     private _coverageRow(row: DailyProfileRow): TooltipRow {
-        return coverageRow(this._t.bind(this), row.coverage, row.first_hour);
+        return coverageRow(this._t.bind(this), row.coverage, row.firstHour);
     }
 
     /** A device's label: its coverage, its peak hour and its mean energy per day. */
@@ -283,7 +283,7 @@ export class HelmanDeviceReportDailyProfile extends LitElement {
             };
         });
         const prices = (["import", "export"] as const).map((side): HeatRow => {
-            const rates = side === "import" ? payload.import_rate : payload.export_rate;
+            const rates = side === "import" ? payload.importRate : payload.exportRate;
             const color = side === "import" ? GRID_IMPORT_COLOR : GRID_EXPORT_COLOR;
             // Shaded from the row's cheapest hour to its dearest, not from zero:
             // prices that differ by fees on top of a common base would otherwise
@@ -296,7 +296,7 @@ export class HelmanDeviceReportDailyProfile extends LitElement {
                 id: side,
                 label,
                 swatchStyle: "",
-                tooltip: this._priceTooltip(label, rates, payload.currency),
+                tooltip: this._priceTooltip(label, rates, payload.priceUnit),
                 cells: HOURS.map((hour): Cell => {
                     const rate = rates[hour] ?? null;
                     const tooltip = { title: hourSpan(hour), hasActual: false, rows: priceRows[hour] };

@@ -176,7 +176,7 @@ async def async_house_section(
 async def _today(ctx: NodeDetailContext, local_now: datetime) -> dict[str, Any]:
     """Today's house figures from the ranking report, or why there are none."""
     payload: dict[str, Any] = {
-        "currency": None,
+        "priceUnit": None,
         "complete": False,
         "unavailable": None,
         "house": None,
@@ -195,16 +195,16 @@ async def _today(ctx: NodeDetailContext, local_now: datetime) -> dict[str, Any]:
     return {
         **payload,
         # The report's dataset can be a few minutes older than the request.
-        **({"asOf": report["as_of"]} if report.get("as_of") else {}),
-        "currency": report.get("currency"),
+        "asOf": report["asOf"],
+        "priceUnit": report.get("priceUnit"),
         "complete": bool(report.get("complete")),
         "house": {
             "kwh": round(house_kwh, 3),
             "coverage": house.get("coverage", 0.0),
             "sources": house.get("sources") or {},
             "money": ranking_money(house),
-            "ambiguousKwh": report.get("ambiguous_kwh", 0.0),
-            "mismatchKwh": report.get("mismatch_kwh", 0.0),
+            "ambiguousKwh": report.get("ambiguousKwh", 0.0),
+            "mismatchKwh": report.get("mismatchKwh", 0.0),
         },
         "independence": grid_independence(house_kwh, house.get("sources") or {}),
         "selfConsumption": solar_self_consumption(report),
@@ -299,7 +299,7 @@ def top_consumers(nodes: Sequence[Mapping[str, Any]], count: int = TOP_CONSUMERS
         "top": ranked[:count],
         "others": {"count": len(rest), "kwh": round(sum(item["kwh"] for item in rest), 3)},
         "unmeasuredKwh": unmeasured,
-        "overallocatedKwh": round(sum(node.get("overallocated_kwh") or 0.0 for node in nodes), 3),
+        "overallocatedKwh": round(sum(node.get("overallocatedKwh") or 0.0 for node in nodes), 3),
     }
 
 
@@ -314,11 +314,11 @@ def ranking_money(node: Mapping[str, Any]) -> dict[str, Any]:
     forgone = money.get("forgone") or {}
     return {
         "paid": paid.get("amount"),
-        "paidPricedKwh": paid.get("priced_kwh", 0.0),
-        "paidUnpricedKwh": paid.get("unpriced_kwh", 0.0),
+        "paidPricedKwh": paid.get("pricedKwh", 0.0),
+        "paidUnpricedKwh": paid.get("unpricedKwh", 0.0),
         "forgone": forgone.get("amount"),
-        "forgonePricedKwh": forgone.get("priced_kwh", 0.0),
-        "forgoneUnpricedKwh": forgone.get("unpriced_kwh", 0.0),
+        "forgonePricedKwh": forgone.get("pricedKwh", 0.0),
+        "forgoneUnpricedKwh": forgone.get("unpricedKwh", 0.0),
     }
 
 

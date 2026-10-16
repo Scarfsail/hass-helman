@@ -9,7 +9,7 @@ condition the hardware explicitly reports. The plan and the planned SoC come
 from the existing schedule and forecast clients, so they are not repeated.
 
 The one section is ``charge``: today's charge origin from the device reports'
-``charge_origin``, converted from period-weighted fractions to kWh. It is what
+``chargeOrigin``, converted from period-weighted fractions to kWh. It is what
 charged the battery today, not an inventory of what is stored in it now.
 """
 
@@ -181,7 +181,7 @@ async def async_battery_section(
 ) -> dict[str, Any]:
     """Today's charge origin, the battery's one history section.
 
-    Reuses the device reports' ``charge_origin`` for today. ``charge`` is
+    Reuses the device reports' ``chargeOrigin`` for today. ``charge`` is
     ``None`` with an ``unavailable`` reason when the reports cannot be built.
     """
     local_now = dt_util.as_local(now)
@@ -194,7 +194,7 @@ async def async_battery_section(
             "start": dt_util.as_local(start).isoformat(),
             "end": dt_util.as_local(end).isoformat(),
         },
-        "currency": None,
+        "priceUnit": None,
         "complete": False,
         "unavailable": None,
         "charge": None,
@@ -205,17 +205,17 @@ async def async_battery_section(
     return {
         **payload,
         # The report's dataset can be a few minutes older than the request.
-        **({"asOf": report["as_of"]} if report.get("as_of") else {}),
-        "currency": report.get("currency"),
+        "asOf": report["asOf"],
+        "priceUnit": report.get("priceUnit"),
         "complete": bool(report.get("complete")),
-        "charge": charge_origin_kwh(report["charge_origin"]),
+        "charge": charge_origin_kwh(report["chargeOrigin"]),
     }
 
 
 def charge_origin_kwh(origin: Mapping[str, Any]) -> dict[str, Any]:
     """The report's charge-origin fractions as kWh of the period's charge.
 
-    Each fraction is of ``charged_kwh``, so each share is ``charged_kwh ×
+    Each fraction is of ``chargedKwh``, so each share is ``chargedKwh ×
     fraction``; nothing is dropped, so ``solar + grid + unknown`` is the
     charge. The paid cost prices only the rated grid share at the
     energy-weighted import rate, and the forgone export value only the rated
@@ -223,17 +223,17 @@ def charge_origin_kwh(origin: Mapping[str, Any]) -> dict[str, Any]:
     rate is ``None``. With no charge in the period every share is zero and
     there is nothing to price.
     """
-    charged = max(0.0, float(origin.get("charged_kwh") or 0.0))
+    charged = max(0.0, float(origin.get("chargedKwh") or 0.0))
 
     def share(key: str) -> float:
         return round(charged * float(origin.get(key) or 0.0), 3)
 
-    grid_priced = share("grid_recorded") + share("grid_tariff")
+    grid_priced = share("gridRecorded") + share("gridTariff")
     grid = share("grid")
-    solar_priced = share("solar_priced")
+    solar_priced = share("solarPriced")
     solar = share("solar")
-    paid_rate = origin.get("paid_rate")
-    forgone_rate = origin.get("forgone_rate")
+    paid_rate = origin.get("paidRate")
+    forgone_rate = origin.get("forgoneRate")
 
     def money(kwh: float, priced_kwh: float, rate: Any) -> float | None:
         if kwh <= 0:
@@ -248,10 +248,10 @@ def charge_origin_kwh(origin: Mapping[str, Any]) -> dict[str, Any]:
         "gridKwh": grid,
         "unknownKwh": share("unknown"),
         "gridPricedKwh": round(grid_priced, 3),
-        "gridTariffKwh": share("grid_tariff"),
-        "gridUnpricedKwh": share("grid_unpriced"),
+        "gridTariffKwh": share("gridTariff"),
+        "gridUnpricedKwh": share("gridUnpriced"),
         "solarPricedKwh": solar_priced,
-        "solarUnpricedKwh": share("solar_unpriced"),
+        "solarUnpricedKwh": share("solarUnpriced"),
         "paidRate": paid_rate,
         "forgoneRate": forgone_rate,
         "paidCost": money(grid, grid_priced, paid_rate),

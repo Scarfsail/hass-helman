@@ -165,12 +165,12 @@ export async function installMockHass(page: Page): Promise<void> {
                     throw new Error(`No node detail for '${String(node)}'`);
                 }
                 if (request.section === "flows") return {
-                    node, section: "flows", asOf, period, currency: null, complete: false,
+                    node, section: "flows", asOf, period, priceUnit: null, complete: false,
                     unavailable: "not_loaded", flows: null,
                 };
                 if (request.section) {
                     const section = request.section;
-                    const empty = { node, section, asOf, period, currency: null, complete: false, unavailable: "not_loaded" };
+                    const empty = { node, section, asOf, period, priceUnit: null, complete: false, unavailable: "not_loaded" };
                     if (node === "battery" && section === "charge") return { ...empty, charge: null };
                     if (node === "house" && section === "today") return { ...empty, house: null, independence: null, selfConsumption: null, consumers: null };
                     if (node === "solar" && section === "destinations") return { ...empty, destinations: null, charge: null };

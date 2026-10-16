@@ -246,12 +246,16 @@ class _StubApplianceEnergyJob:
 
 class TrainingBatchTests(unittest.IsolatedAsyncioTestCase):
     def _make_batch(self, *, bias_service, house_job, appliance_energy_job=None):
-        return batch_module.TrainingBatch(
+        self.finished: list[dict[str, str]] = []
+        batch = batch_module.TrainingBatch(
             _make_hass(),
             solar_bias_service=bias_service,
             house_consumption_job=house_job,
             appliance_energy_job=appliance_energy_job or _StubApplianceEnergyJob(),
+            # Records which outcomes had landed when the announcement went out.
+            on_job_finished=lambda: self.finished.append(dict(batch.last_outcomes)),
         )
+        return batch
 
     def _make_recording_house_job(self, order, *, error=None):
         class _Job:
@@ -306,6 +310,31 @@ class TrainingBatchTests(unittest.IsolatedAsyncioTestCase):
                 "house_consumption": "profile_trained",
                 "appliance_energy": "not_configured",
             },
+        )
+
+    async def test_a_raising_finish_callback_does_not_stop_the_next_one(
+        self,
+    ) -> None:
+        order: list[str] = []
+
+        def _raise() -> None:
+            raise RuntimeError("bus blew up")
+
+        batch = batch_module.TrainingBatch(
+            _make_hass(),
+            solar_bias_service=_FakeBiasService(),
+            house_consumption_job=self._make_recording_house_job(order),
+            appliance_energy_job=_StubApplianceEnergyJob(),
+            on_job_finished=_raise,
+        )
+
+        with self.assertLogs(batch_module._LOGGER, level="ERROR"):
+            await batch.async_run(reason="test")
+
+        self.assertEqual(order, ["house_start", "house_end"])
+        self.assertEqual(
+            set(batch.last_outcomes),
+            {"solar_bias", "house_consumption", "appliance_energy"},
         )
 
     async def test_bias_disabled_still_fits_the_house_profile(self) -> None:
@@ -437,6 +466,62 @@ class TrainingBatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seen, ["house_consumption"])
         self.assertIsNone(batch.current_job)
 
+    async def test_each_finished_job_announces_itself_once(self) -> None:
+        """Every job, run alone or in the batch, failed or not: one call per
+        finished job, made after its outcome is recorded."""
+        def make_batch():
+            return self._make_batch(
+                bias_service=_FakeBiasService(error=RuntimeError("bias blew up")),
+                house_job=self._make_recording_house_job([]),
+            )
+
+        batch = make_batch()
+        for run in (
+            batch.async_run_solar_bias,
+            batch.async_run_house_consumption,
+            batch.async_run_appliance_energy,
+        ):
+            self.finished.clear()
+            with self.assertLogs(batch_module._LOGGER, level="DEBUG"):
+                await run(reason="manual")
+            self.assertEqual(len(self.finished), 1, run.__name__)
+
+        batch = make_batch()
+        with self.assertLogs(batch_module._LOGGER, level="ERROR"):
+            await batch.async_run(reason="scheduled")
+        self.assertEqual(
+            self.finished,
+            [
+                {"solar_bias": "training_failed"},
+                {"solar_bias": "training_failed", "house_consumption": "profile_trained"},
+                {
+                    "solar_bias": "training_failed",
+                    "house_consumption": "profile_trained",
+                    "appliance_energy": "not_configured",
+                },
+            ],
+        )
+
+    async def test_a_started_job_announces_nothing_until_it_finishes(self) -> None:
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        class _SlowJob:
+            async def async_train(self_inner):
+                started.set()
+                await release.wait()
+                return "profile_trained"
+
+        batch = self._make_batch(bias_service=_FakeBiasService(), house_job=_SlowJob())
+
+        run = asyncio.ensure_future(batch.async_run_house_consumption(reason="startup"))
+        await started.wait()
+        self.assertEqual(self.finished, [])
+        release.set()
+        await run
+
+        self.assertEqual(self.finished, [{"house_consumption": "profile_trained"}])
+
     def test_next_scheduled_at_follows_the_schedule(self) -> None:
         batch = self._make_batch(
             bias_service=_FakeBiasService(),
@@ -482,6 +567,7 @@ class TrainingBatchTests(unittest.IsolatedAsyncioTestCase):
             solar_bias_service=_FakeBiasService(),
             house_consumption_job=self._make_recording_house_job([]),
             appliance_energy_job=_StubApplianceEnergyJob(),
+            on_job_finished=lambda: None,
         )
         original = batch_module.async_track_time_change
         batch_module.async_track_time_change = _track_time_change

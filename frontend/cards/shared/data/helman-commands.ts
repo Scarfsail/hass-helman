@@ -135,27 +135,6 @@ export interface ScheduleExplanationPayload {
     optimizers: ExplanationOptimizerRows[];
 }
 
-export interface SolarBiasStatus {
-    enabled: boolean;
-    minHistoryDays: number;
-    slotInvalidationEnabled: boolean;
-    status: string;
-    effectiveVariant: string;
-    trainedAt: string | null;
-    lastAttemptAt: string | null;
-    nextScheduledTrainingAt: string | null;
-    trainingConfigFingerprint: string | null;
-    isStale: boolean | null;
-    lastOutcome: string | null;
-    fallbackReason: string | null;
-    usableDays: number;
-    droppedDays: { date: string; reason: string }[];
-    omittedSlotCount: number;
-    invalidatedSlotCount: number;
-    factorSummary: { min: number | null; max: number | null; median: number | null };
-    errorReason: string | null;
-}
-
 export type NodeDetailPayload = Api.InverterDetailPayload | Api.InverterTemperatureSectionPayload
     | Api.InverterModesSectionPayload | Api.GridDetailPayload | Api.GridVoltageSectionPayload
     | Api.BatteryDetailPayload | Api.BatteryChargeSectionPayload | Api.FlowsSectionPayload
@@ -192,7 +171,6 @@ export interface HelmanCommands {
     "helman/preview_energy_import": { req: { config: object }; res: Api.EnergyImportPreview };
     "helman/solar_bias/day_aggregates": { req: { start_date: string; end_date: string; bucket?: "day" | "month"; house_breakdown?: boolean; house_forecast?: boolean }; res: DayAggregatesPayload };
     "helman/solar_bias/inspector": { req: { date: string }; res: Api.InspectorPayload };
-    "helman/solar_bias/status": { req: Record<string, never>; res: SolarBiasStatus };
     "helman/training/status": { req: Record<string, never>; res: TrainingStatus };
     "helman/training/train_now": { req: { job?: string }; res: { outcomes: Record<string, string>; status: TrainingStatus } };
 }
