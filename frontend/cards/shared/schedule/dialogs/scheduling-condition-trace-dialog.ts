@@ -1,5 +1,6 @@
 import type { ConditionTracePayload } from "../../data/helman-commands";
 import { callHelman } from "../../data/helman-commands";
+import { describeError } from "../../describe-error";
 import { LitElement, css, html } from "lit-element";
 import { customElement, property, state } from "lit/decorators.js";
 import { nothing } from "lit-html";
@@ -390,14 +391,6 @@ export class SchedulingConditionTraceDialog extends LitElement {
     private _text(suffix: string): string {
         return this.localize(`${KEY_PREFIX}.${suffix}`);
     }
-}
-
-function describeError(error: unknown): string {
-    if (typeof error === "object" && error !== null && "message" in error) {
-        return String((error as { message: unknown }).message);
-    }
-
-    return String(error);
 }
 
 declare global {

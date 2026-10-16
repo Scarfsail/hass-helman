@@ -40,6 +40,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
 }
 
 
+def config_revision(config: dict[str, Any]) -> str:
+    """Stable revision for the exact stored document."""
+    encoded = json.dumps(config, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha1(encoded).hexdigest()
+
+
 class HelmanStorage:
     def __init__(self, hass: HomeAssistant) -> None:
         self._hass = hass

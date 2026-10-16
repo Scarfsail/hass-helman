@@ -1,4 +1,5 @@
 import type { ConfigDocument, ForecastPayload, InspectorPayload, SchedulePayload, TreeItemDTO, TreePayload, ValueType } from "../../cards/helman-api";
+import type { ConfigSnapshot } from "../../cards/shared/config/types";
 
 type InspectorDayOverrides = Omit<Partial<InspectorPayload>, "range" | "series" | "totals" | "availability"> & {
     range?: Partial<InspectorPayload["range"]>;
@@ -27,6 +28,15 @@ export function configDoc(overrides: Partial<ConfigDocument> = {}): ConfigDocume
         config_version: 29,
         ...overrides,
     };
+}
+
+export function configSnapshot(config: ConfigDocument): ConfigSnapshot {
+    const canonical = (value: unknown): unknown => Array.isArray(value)
+        ? value.map(canonical)
+        : value && typeof value === "object"
+            ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([key, child]) => [key, canonical(child)]))
+            : value;
+    return { config, revision: JSON.stringify(canonical(config)) };
 }
 
 /** Backend-shaped payloads shared by the WebSocket mock and individual specs. */

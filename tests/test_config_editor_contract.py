@@ -7,6 +7,7 @@ from _fakes import FakeHass as SharedFakeHass
 from _fakes import FakeBus, FakeConnection as SharedFakeConnection
 
 import unittest
+import asyncio
 import importlib
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -16,6 +17,7 @@ from custom_components.helman.automation import config as automation_config_modu
 from custom_components.helman.const import CONFIG_DOCUMENT_VERSION, DOMAIN
 from custom_components.helman.config_defaults import CONFIG_FIELD_DEFAULTS
 from custom_components.helman.solar_bias_correction.models import read_bias_config
+from custom_components.helman.storage import config_revision
 from custom_components.helman.websockets import (
     ws_get_config,
     ws_get_config_defaults,
@@ -168,17 +170,40 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(connection.results, [])
 
+    def test_get_config_preserves_legacy_response_by_default(self) -> None:
+        config = {"history_buckets": 60}
+        for capability in ({}, {"include_revision": False}):
+            connection = FakeConnection(is_admin=True)
+            ws_get_config(
+                FakeHass(FakeStorage(config)),
+                connection,
+                {"id": 1, "type": "helman/get_config", **capability},
+            )
+            self.assertEqual(connection.errors, [])
+            self.assertEqual(connection.results, [(1, config)])
+
     def test_get_config_returns_config_for_admin(self) -> None:
         connection = FakeConnection(is_admin=True)
 
         ws_get_config(
             FakeHass(FakeStorage({"history_buckets": 60})),
             connection,
-            {"id": 1, "type": "helman/get_config"},
+            {"id": 1, "type": "helman/get_config", "include_revision": True},
         )
 
         self.assertEqual(connection.errors, [])
-        self.assertEqual(connection.results, [(1, {"history_buckets": 60})])
+        self.assertEqual(
+            connection.results,
+            [
+                (
+                    1,
+                    {
+                        "config": {"history_buckets": 60},
+                        "revision": config_revision({"history_buckets": 60}),
+                    },
+                )
+            ],
+        )
 
     def test_get_config_returns_automation_block_unchanged(self) -> None:
         connection = FakeConnection(is_admin=True)
@@ -193,11 +218,20 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         ws_get_config(
             FakeHass(FakeStorage(config)),
             connection,
-            {"id": 1, "type": "helman/get_config"},
+            {"id": 1, "type": "helman/get_config", "include_revision": True},
         )
 
         self.assertEqual(connection.errors, [])
-        self.assertEqual(connection.results, [(1, config)])
+        self.assertEqual(
+            connection.results,
+            [(1, {"config": config, "revision": config_revision(config)})],
+        )
+
+    def test_revision_is_stable_for_equal_documents(self) -> None:
+        self.assertEqual(
+            config_revision({"b": 2, "a": {"y": 1, "x": 0}}),
+            config_revision({"a": {"x": 0, "y": 1}, "b": 2}),
+        )
 
     def test_get_config_defaults_requires_admin(self) -> None:
         connection = FakeConnection(is_admin=False)
@@ -421,8 +455,52 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(connection.results[0][1]["reloadStarted"])
         self.assertTrue(connection.results[0][1]["reloadSucceeded"])
         self.assertIsNone(connection.results[0][1]["reloadError"])
+        self.assertEqual(connection.results[0][1]["config"], storage.config)
+        self.assertEqual(
+            connection.results[0][1]["revision"], config_revision(storage.config)
+        )
         # This fake reload does not run async_setup_entry, the sole config emitter.
         self.assertEqual(hass.bus.fired, [])
+
+    async def test_second_save_with_same_revision_conflicts(self) -> None:
+        storage = FakeStorage()
+        hass = FakeHass(storage)
+        expected = config_revision(storage.config)
+        first = FakeConnection(is_admin=True)
+        second = FakeConnection(is_admin=True)
+        await asyncio.gather(
+            _save_config_handler(
+                hass,
+                first,
+                {"id": 1, "type": "helman/save_config", "config": {"forecast_days": 3}, "expected_revision": expected},
+            ),
+            _save_config_handler(
+                hass,
+                second,
+                {"id": 2, "type": "helman/save_config", "config": {"forecast_days": 5}, "expected_revision": expected},
+            ),
+        )
+        self.assertEqual(len(storage.saved_payloads), 1)
+        self.assertEqual(
+            second.results[0][1],
+            {"success": False, "conflict": True, "config": storage.config, "revision": config_revision(storage.config)},
+        )
+
+    async def test_failed_reload_returns_landed_document_and_revision(self) -> None:
+        storage = FakeStorage()
+        hass = FakeHass(
+            storage, config_entries=FakeConfigEntries(reload_result=False)
+        )
+        connection = FakeConnection(is_admin=True)
+        await _save_config_handler(
+            hass,
+            connection,
+            {"id": 1, "type": "helman/save_config", "config": {"forecast_days": 3}},
+        )
+        result = connection.results[0][1]
+        self.assertFalse(result["success"])
+        self.assertEqual(result["config"], storage.config)
+        self.assertEqual(result["revision"], config_revision(storage.config))
 
     async def test_save_config_reloaded_entry_announces_config_once(self) -> None:
         helman_init = importlib.import_module("custom_components.helman")
@@ -438,6 +516,7 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
             return True
 
         hass.config_entries.async_reload = reload_entry
+        connection = FakeConnection(is_admin=True)
         with (
             patch.object(helman_init, "HelmanCoordinator", return_value=coordinator),
             patch.object(helman_init, "async_update_group_service_schemas"),
@@ -446,11 +525,13 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         ):
             await _save_config_handler(
                 hass,
-                FakeConnection(is_admin=True),
+                connection,
                 {"id": 1, "type": "helman/save_config", "config": {}},
             )
 
-        self.assertEqual(hass.bus.fired, [("helman_data_changed", {"kind": "config"})])
+        self.assertEqual(hass.bus.fired, [("helman_data_changed", {"kind": "config", "revision": config_revision(storage.config)})])
+        ws_get_config(hass, connection, {"id": 2, "type": "helman/get_config", "include_revision": True})
+        self.assertEqual(connection.results[0][1]["revision"], connection.results[1][1]["revision"])
 
     async def test_save_config_does_not_announce_a_failed_reload(self) -> None:
         # A save whose reload blew up left the running config untouched; waking

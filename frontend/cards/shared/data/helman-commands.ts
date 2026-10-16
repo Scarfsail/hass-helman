@@ -1,6 +1,6 @@
 import type { HomeAssistant } from "../../../types/ha";
 import type * as Api from "../../helman-api";
-import type { ConfigDocument, JsonObject, SaveConfigResponse, ValidationReport, VendorsResponse } from "../config/types";
+import type { ConfigSnapshot, JsonObject, SaveConfigResponse, ValidationReport, VendorsResponse } from "../config/types";
 import type { ConfigDefaults } from "../config/config-defaults";
 import type { EntityInspectionResult } from "../config/entity-group";
 import type { OptimizerSchemaDocument } from "../optimizer/optimizer-schema";
@@ -125,9 +125,9 @@ export type NodeDetailPayload = Api.InverterDetailPayload | Api.InverterTemperat
 
 /** All request/response commands; subscribe_updates belongs to the shared feed. */
 export interface HelmanCommands {
-    "helman/get_config": { req: Record<string, never>; res: ConfigDocument };
+    "helman/get_config": { req: { include_revision: true }; res: ConfigSnapshot };
     "helman/validate_config": { req: { config: JsonObject }; res: ValidationReport };
-    "helman/save_config": { req: { config: JsonObject }; res: SaveConfigResponse };
+    "helman/save_config": { req: { config: JsonObject; expected_revision?: string }; res: SaveConfigResponse };
     "helman/get_config_defaults": { req: Record<string, never>; res: ConfigDefaults };
     "helman/get_optimizer_schema": { req: Record<string, never>; res: OptimizerSchemaDocument };
     "helman/get_vendors": { req: { config: JsonObject }; res: VendorsResponse };

@@ -1,4 +1,3 @@
-import { callHelman } from "../data/helman-commands";
 import type { HomeAssistant } from "../../../types/ha";
 import { LitElement, css, html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
@@ -8,8 +7,6 @@ import { defineOnce } from "../define-once";
 import { loadHaForm, loadHaSortable } from "../load-ha-elements";
 import { DataChangedController } from "../../helman/data-changed";
 import {
-    asJsonObject,
-    canonicalJson,
     cloneJson,
     setValueAtPath,
     unsetValueAtPath,
@@ -19,6 +16,7 @@ import { EntityInspectionController } from "../config/entity-inspection-controll
 import { formatError, stringValue } from "../config/form-fields";
 import { configFormStyles } from "../config/form-styles";
 import { resolvedDraft } from "../config/resolved-draft";
+import { ConfigSession } from "../config/config-session";
 import type {
     JsonObject,
     ValidationReport,
@@ -124,6 +122,8 @@ export class HelmanDeviceEditDialog extends LitElement {
 
     @state() private _saving = false;
 
+    private _configRevisionDuringSave: string | undefined;
+
     @state() private _message: SaveMessage | null = null;
 
     /** The last save's report, handed to the card so it can show its issues. */
@@ -132,8 +132,7 @@ export class HelmanDeviceEditDialog extends LitElement {
     /** The config changed under us -- see `helman-optimizer-edit-dialog`. */
     @state() private _stale = false;
 
-    /** The document exactly as it was read: what a re-read is compared to. */
-    private _baseline: string | null = null;
+    private _session = new ConfigSession(() => this.hass);
 
     /** The stored document itself, for the entity groups' saved readings and reverts. */
     private _saved: JsonObject | null = null;
@@ -141,8 +140,6 @@ export class HelmanDeviceEditDialog extends LitElement {
     /** The key the current view was loaded for; a new key reloads. */
     private _loadedKey: string | null = null;
 
-    /** A staleness check in flight, so a burst does not fan out into reads. */
-    private _stalenessCheck: Promise<void> | null = null;
 
     /** The close is settled -- see `_close`. */
     private _closing = false;
@@ -168,7 +165,13 @@ export class HelmanDeviceEditDialog extends LitElement {
 
     constructor() {
         super();
-        new DataChangedController(this, () => this.hass, {}, () => void this._refreshStale());
+        new DataChangedController(this, () => this.hass, {}, (_kinds, { configRevision }) => {
+            if (this._saving) {
+                if (configRevision !== undefined) this._configRevisionDuringSave = configRevision;
+            } else if (this._session.isStale(configRevision)) {
+                this._stale = true;
+            }
+        });
     }
 
     connectedCallback(): void {
@@ -294,12 +297,11 @@ export class HelmanDeviceEditDialog extends LitElement {
         this._validation = null;
         this._loadedKey = this.deviceKey;
         try {
-            const document = asJsonObject(await callHelman(hass, "helman/get_config", {}));
+            const document = (await this._session.load()).doc;
             if (!document) {
                 this._view = { kind: "not_found" };
                 return;
             }
-            this._baseline = canonicalJson(document);
             this._saved = cloneJson(document);
             // The tree keys a device by the meter it runs on, which a hardware
             // profile fills in: a meter key no stored device has is looked up
@@ -356,29 +358,25 @@ export class HelmanDeviceEditDialog extends LitElement {
         this._saving = true;
         this._message = null;
         try {
-            if (await this._configChangedElsewhere()) {
-                this._stale = true;
-                this._message = {
-                    kind: "error",
-                    text: this._translate("editor.status.changed_elsewhere"),
-                };
-                return;
-            }
             // As the config editor does: a phase no device can carry is not saved.
             const config = cloneJson(view.config);
             pruneUnassignablePhases(config);
-            const response = await callHelman(this.hass, "helman/save_config", { config });
-            this._validation = response.validation ?? null;
-            if (response.validation?.valid !== false) {
-                // What was written is the draft from here on.
-                this._view = { ...view, config };
-                // The write landed, so the stored document is the new baseline
-                // -- see `helman-optimizer-edit-dialog._handleSave`.
-                await this._rebaseline();
+            const outcome = await this._session.save(config);
+            if (outcome.kind === "conflict") {
+                this._stale = true;
+                this._message = { kind: "error", text: this._translate("editor.status.changed_elsewhere") };
+                return;
+            }
+            if (outcome.kind === "error" && outcome.error) throw outcome.error;
+            const response = outcome.response;
+            this._validation = response?.validation ?? null;
+            if (outcome.kind === "saved") {
+                this._view = { ...view, config: cloneJson(outcome.doc) };
+                this._saved = cloneJson(outcome.doc);
                 this._stale = false;
                 this._dirty = false;
             }
-            if (response.success) {
+            if (response?.success) {
                 this._notify(this._translate(
                     response.reloadStarted
                         ? "editor.messages.config_saved_reload_started"
@@ -390,9 +388,9 @@ export class HelmanDeviceEditDialog extends LitElement {
             this._message = {
                 kind: "error",
                 text:
-                    response.reloadError ??
+                    response?.reloadError ??
                     this._translate(
-                        response.validation?.valid
+                        response?.validation?.valid
                             ? "editor.messages.config_saved_reload_failed"
                             : "editor.messages.save_rejected",
                     ),
@@ -404,61 +402,10 @@ export class HelmanDeviceEditDialog extends LitElement {
             };
         } finally {
             this._saving = false;
+            if (!this._closing && this._session.isStale(this._configRevisionDuringSave)) this._stale = true;
+            this._configRevisionDuringSave = undefined;
         }
     };
-
-    /** Whether the stored config moved since this dialog read it; see the optimizer dialog. */
-    private async _compareToBaseline(): Promise<"same" | "changed" | "unknown"> {
-        if (!this.hass || this._baseline === null) {
-            return "same";
-        }
-        try {
-            const current = asJsonObject(await callHelman(this.hass, "helman/get_config", {}));
-            if (current === undefined) {
-                return "unknown";
-            }
-            return canonicalJson(current) === this._baseline ? "same" : "changed";
-        } catch {
-            return "unknown";
-        }
-    }
-
-    private async _configChangedElsewhere(): Promise<boolean> {
-        return (await this._compareToBaseline()) !== "same";
-    }
-
-    private async _refreshStale(): Promise<void> {
-        if (this._saving || this._stalenessCheck !== null) {
-            return this._stalenessCheck ?? undefined;
-        }
-        this._stalenessCheck = (async () => {
-            try {
-                const verdict = await this._compareToBaseline();
-                if (verdict !== "unknown") {
-                    this._stale = verdict === "changed";
-                }
-            } finally {
-                this._stalenessCheck = null;
-            }
-        })();
-        return this._stalenessCheck;
-    }
-
-    /** Adopt the stored config as the baseline, without touching the draft. */
-    private async _rebaseline(): Promise<void> {
-        if (!this.hass) {
-            return;
-        }
-        try {
-            const current = asJsonObject(await callHelman(this.hass, "helman/get_config", {}));
-            if (current !== undefined) {
-                this._baseline = canonicalJson(current);
-                this._saved = cloneJson(current);
-            }
-        } catch {
-            // The next save re-reads anyway and will refuse rather than clobber.
-        }
-    }
 
     /** Home Assistant's own toast, for something the dialog closed before it could show. */
     private _notify(message: string): void {

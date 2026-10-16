@@ -75,7 +75,7 @@ async function mountDetail(page: Page, options: MountOptions = {}): Promise<void
 
     await page.evaluate(
         ({ config, key, save, hang, strings, vendors }) => {
-            const calls: { type: string; config?: unknown; targets?: { key: string }[] }[] = [];
+            const calls: { type: string; config?: unknown; expected_revision?: string; targets?: { key: string }[] }[] = [];
             (window as any).__calls = calls;
             const content = document.createElement("node-detail-device-content") as any;
             content.localize = (k: string) => strings[k] ?? k;
@@ -110,7 +110,7 @@ async function mountDetail(page: Page, options: MountOptions = {}): Promise<void
                         };
                     }
                 }, (request: any) => {
-                    calls.push({ type: request.type, config: request.config, targets: request.targets });
+                    calls.push({ type: request.type, config: request.config, expected_revision: request.expected_revision, targets: request.targets });
                 }).callWS,
             };
             content.params = {
@@ -156,7 +156,7 @@ function nameInput(page: Page) {
     return dialog(page).locator("details.device-card .field-grid .field input").first();
 }
 
-async function calls(page: Page): Promise<{ type: string; config?: any; targets?: { key: string }[] }[]> {
+async function calls(page: Page): Promise<{ type: string; config?: any; expected_revision?: string; targets?: { key: string }[] }[]> {
     return page.evaluate(() => (window as any).__calls);
 }
 
@@ -191,9 +191,29 @@ test.describe("editing a device from its detail", () => {
             ...CONFIG,
             devices: { consumers: [{ ...BOILER, name: "Hot water" }] },
         });
+        expect(saved.expected_revision).toBeTruthy();
+        expect((await calls(page)).filter((call) => call.type === "helman/get_config")).toHaveLength(1);
         // A successful save closes the edit dialog and returns to the detail.
         await expect(dialog(page)).toHaveCount(0);
         await expect(editButton(page)).toHaveCount(1);
+    });
+
+    test("a stale save reports a conflict without closing", async ({ page }) => {
+        await mountDetail(page, { saveResponse: {
+            success: false, conflict: true, config: CONFIG, revision: "newer-revision",
+        } });
+        await openEdit(page);
+        await dialog(page).getByText("Save and reload").click();
+        await expect(dialog(page).locator(".message.stale")).toHaveCount(1);
+        expect((await calls(page)).filter((call) => call.type === "helman/get_config")).toHaveLength(1);
+    });
+
+    test("a config event raises the stale banner without a config fetch", async ({ page }) => {
+        await mountDetail(page);
+        await openEdit(page);
+        await page.evaluate(() => window.__fireDataChanged("config", "newer-revision"));
+        await expect(dialog(page).locator(".message.stale")).toHaveCount(1);
+        expect((await calls(page)).filter((call) => call.type === "helman/get_config")).toHaveLength(1);
     });
 
     test("changing a group saves it on the device only", async ({ page }) => {
@@ -397,3 +417,30 @@ test.describe("editing a device on a hardware profile", () => {
         await expect(dialog(page).locator('details.device-card > summary .device-badge[data-badge="energy"]')).toHaveCount(1);
     });
 });
+
+for (const external of [false, true]) {
+    test(`a revision during a failed reload save ${external ? "shows a stale banner for another write" : "does not flag its own write"}`, async ({ page }) => {
+        await mountDetail(page);
+        await openEdit(page);
+        await page.evaluate(() => {
+            const host = document.querySelector("node-detail-device-content")!.shadowRoot!.querySelector("helman-device-edit-dialog") as any;
+            const callWS = host.hass.callWS;
+            host.hass = { ...host.hass, callWS: async (request: any) => {
+                if (request.type !== "helman/save_config") return callWS(request);
+                const config = { ...request.config, config_version: 29 };
+                (window as any).__savedRevision = window.__configRevision(config);
+                await new Promise<void>((resolve) => { (window as any).__releaseSave = resolve; });
+                return { success: false, config, revision: window.__configRevision(config), validation: { valid: true, errors: [], warnings: [] } };
+            } };
+        });
+        await dialog(page).getByText("Save and reload").click();
+        await expect.poll(() => page.evaluate(() => !!(window as any).__savedRevision)).toBe(true);
+        await page.evaluate((external) => window.__fireDataChanged("config", external ? "newer-revision" : (window as any).__savedRevision), external);
+        await page.waitForTimeout(600);
+        await expect(dialog(page).locator(".message.stale")).toHaveCount(0);
+        await page.evaluate(() => (window as any).__releaseSave());
+        await expect(dialog(page).locator(".message.error:not(.stale)")).toHaveCount(1);
+        await expect(dialog(page).locator(".message.stale")).toHaveCount(external ? 1 : 0);
+        expect((await calls(page)).filter((call) => call.type === "helman/get_config")).toHaveLength(1);
+    });
+}

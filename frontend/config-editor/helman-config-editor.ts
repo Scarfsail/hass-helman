@@ -1,5 +1,6 @@
 import { LatestRequest } from "../cards/shared/data/latest-request";
 import { callHelman } from "../cards/shared/data/helman-commands";
+import { ConfigSession } from "../cards/shared/config/config-session";
 import { type EnergyImportPreview } from "../cards/helman-api";
 import { LitElement, css, html, nothing } from "lit";
 import type { PropertyValues, TemplateResult } from "lit";
@@ -963,6 +964,7 @@ export class HelmanConfigEditorPanel
   private _dirty = false;
   private _loading = false;
   private _saving = false;
+  private _configRevisionDuringSave: string | undefined;
   private _validating = false;
   private _validation: ValidationReport | null = null;
   /**
@@ -981,28 +983,8 @@ export class HelmanConfigEditorPanel
    * this whole feature could easily create, so the refusal has to be visible.
    */
   private _staleConfigNotice = false;
-  /**
-   * Swallow the announcement our own save caused.
-   *
-   * A successful save reloads the config entry, which fires the event — so the
-   * machine that just saved hears about its own write. It has already refreshed
-   * everything that write touched, and re-reading would be pure noise.
-   */
-  /**
-   * The stored document as it was when this editor last agreed with it, as one
-   * canonical string.
-   *
-   * `helman_data_changed` says something moved; it never says what or who. One
-   * `save_config` fires several of them -- the entry reload it starts re-plans,
-   * and those announcements land well after the feed's collapse window closes
-   * on the first -- so a flag that skipped "the next one" recognised its own
-   * write once and read the rest as somebody else's. This is what the question
-   * actually needs: the document itself, to compare against.
-   */
-  private _configBaseline: string | null = null;
-
-  /** A comparison in flight, so an announcement burst costs one read. */
-  private _baselineCheck: Promise<void> | null = null;
+  /** The stored document revision agreed with by this editor. */
+  private _configSession = new ConfigSession(() => this.hass);
   private _hasLoadedOnce = false;
   private _scopeModes: Partial<Record<ScopeId, EditorMode>> = {};
   private _scopeYamlValues: Partial<Record<ScopeId, JsonValue>> = {};
@@ -1134,11 +1116,12 @@ export class HelmanConfigEditorPanel
 
   constructor() {
     super();
-    new DataChangedController(this, () => this.hass, {}, () => this._handleDataChanged());
+    new DataChangedController(this, () => this.hass, {}, (_kinds, { configRevision }) => this._handleDataChanged(configRevision));
   }
 
   connectedCallback(): void {
     super.connectedCallback();
+    window.addEventListener("beforeunload", this._guardCloseWhileSaving);
     this._trainingStatusTimer = setInterval(
       () => void this._pollTrainingStatus(),
       TRAINING_STATUS_INTERVAL_MS,
@@ -1165,6 +1148,7 @@ export class HelmanConfigEditorPanel
 
   disconnectedCallback(): void {
     super.disconnectedCallback();
+    window.removeEventListener("beforeunload", this._guardCloseWhileSaving);
 
     if (this._trainingStatusTimer !== undefined) {
       clearInterval(this._trainingStatusTimer);
@@ -1229,56 +1213,22 @@ export class HelmanConfigEditorPanel
    * (see `_handleReloadClick`). This has no user gesture to hang a confirm on,
    * so it is strictly more conservative: it never prompts and never discards.
    */
-  private _handleDataChanged(): void {
-    void this._reactToDataChanged();
+  private _handleDataChanged(configRevision?: string): void {
+    if (this._saving) {
+      if (configRevision !== undefined) this._configRevisionDuringSave = configRevision;
+      return;
+    }
+    void this._reactToDataChanged(configRevision);
   }
 
-  /**
-   * Look before acting: an announcement is a hint, the document is the answer.
-   *
-   * A re-read that comes back equal to the baseline means nothing this editor
-   * cares about moved -- our own save, or a re-plan, or a retrained bias
-   * profile -- and the right response is to do nothing at all rather than
-   * reload the page under the user or accuse them of a collision with
-   * themselves. A failed re-read is also nothing: a dropped frame is not
-   * evidence that anybody wrote.
-   */
-  private async _reactToDataChanged(): Promise<void> {
-    if (this._saving || this._loading || this._baselineCheck !== null) {
-      return this._baselineCheck ?? undefined;
+  /** Reload a clean draft on a newer config revision; warn over a dirty one. */
+  private async _reactToDataChanged(configRevision?: string): Promise<void> {
+    if (this._saving || this._loading || !this._configSession.isStale(configRevision)) return;
+    if (this._dirty || this._hasBlockingYamlErrors()) {
+      this._staleConfigNotice = true;
+      return;
     }
-
-    this._baselineCheck = (async () => {
-      try {
-        if (!(await this._configMovedFromBaseline())) {
-          return;
-        }
-        if (this._dirty || this._hasBlockingYamlErrors()) {
-          this._staleConfigNotice = true;
-          return;
-        }
-        await this._loadConfig({ showMessage: false });
-      } finally {
-        this._baselineCheck = null;
-      }
-    })();
-
-    return this._baselineCheck;
-  }
-
-  /** Whether the stored document differs from the one this editor agreed with. */
-  private async _configMovedFromBaseline(): Promise<boolean> {
-    if (!this.hass || this._configBaseline === null) {
-      return false;
-    }
-    try {
-      const current = asJsonObject(
-        await callHelman(this.hass, "helman/get_config", {}),
-      );
-      return current !== undefined && canonicalJson(current) !== this._configBaseline;
-    } catch {
-      return false;
-    }
+    await this._loadConfig({ showMessage: false });
   }
 
   render(): TemplateResult {
@@ -2418,7 +2368,7 @@ export class HelmanConfigEditorPanel
           <helman-solar-bias-diagnostics
             .hass=${this.hass}
             .job=${this._trainingJob("solar_bias")}
-            .configRevision=${this._configBaseline}
+            .configRevision=${this._configSession.revision}
           ></helman-solar-bias-diagnostics>
           ${this._renderInspectorCard("solar")}
         `,
@@ -4798,25 +4748,6 @@ export class HelmanConfigEditorPanel
     return TAB_SECTIONS[issue.section] ?? "energy_nodes";
   }
 
-  /** Adopt the stored document as the baseline, without touching the draft. */
-  private async _rebaselineConfig(): Promise<void> {
-    if (!this.hass) {
-      return;
-    }
-    try {
-      const current = asJsonObject(
-        await callHelman(this.hass, "helman/get_config", {}),
-      );
-      if (current !== undefined) {
-        this._configBaseline = canonicalJson(current);
-        this._savedConfig = cloneJson(current);
-      }
-    } catch {
-      // Leaving the old baseline costs at most one spurious notice, which the
-      // reload button clears. Failing the save over it would cost the write.
-    }
-  }
-
   private async _loadConfig(options: { showMessage: boolean }): Promise<void> {
     if (!this.hass) {
       return;
@@ -4829,7 +4760,7 @@ export class HelmanConfigEditorPanel
         schemaResult,
         defaultsResult,
       ] = await Promise.allSettled([
-        callHelman(this.hass, "helman/get_config", {}),
+        this._configSession.load(),
         this._loadLiveApplianceMetadata(),
         fetchOptimizerSchema(this.hass),
         fetchConfigDefaults(this.hass),
@@ -4837,13 +4768,9 @@ export class HelmanConfigEditorPanel
       if (loadedResult.status !== "fulfilled") {
         throw loadedResult.reason;
       }
-      const loadedConfig = asJsonObject(loadedResult.value);
+      const loadedConfig = loadedResult.value.doc;
       this._config = loadedConfig ? cloneJson(loadedConfig) : {};
-      // What was read is what this editor now agrees with, so it is what a
-      // later announcement has to be compared against.
-      this._configBaseline = canonicalJson(loadedConfig ?? {});
-      // The same document the baseline is taken from, kept whole: it is what a
-      // group's revert restores, and what the backend compares a draft against.
+      // Reverts and entity inspections use the stored document.
       this._savedConfig = loadedConfig ? cloneJson(loadedConfig) : {};
       // The tree is the saved config's too: a reload, an announced change or
       // a save from the device detail's own editor re-reads it.
@@ -4934,35 +4861,36 @@ export class HelmanConfigEditorPanel
       };
       return;
     }
-    const { config, pruned } = this._prunedConfig();
+    const { config } = this._prunedConfig();
     const draftAtSave = canonicalJson(this._config);
-    const submittedConfig = canonicalJson(config);
     this._saving = true;
     try {
-      const response = await callHelman(this.hass, "helman/save_config", { config });
-      this._validation = response.validation;
-      if (pruned && response.validation.valid && canonicalJson(this._config) === draftAtSave) {
-        // Written, so what was written is the draft from here on. The YAML
-        // editors would otherwise keep showing, and re-apply, the pruned phases.
-        this._config = config;
-        this._scopeYamlValues = {};
-        this._deviceYamlValues = {};
+      const outcome = await this._configSession.save(config);
+      if (outcome.kind === "conflict") {
+        this._staleConfigNotice = true;
+        this._message = { kind: "error", text: this._t("editor.status.changed_elsewhere") };
+        return;
       }
-      if (response.validation?.valid !== false) {
-        await this._rebaselineConfig();
+      if (outcome.kind === "error" && outcome.error) throw outcome.error;
+      const response = outcome.response;
+      this._validation = response?.validation ?? null;
+      if (outcome.kind === "saved") {
+        this._savedConfig = cloneJson(outcome.doc);
+        if (canonicalJson(this._config) === draftAtSave) {
+          this._config = cloneJson(outcome.doc);
+          this._scopeYamlValues = {};
+          this._deviceYamlValues = {};
+        }
         this._staleConfigNotice = false;
         // A failed entry reload does not undo the write. Keep edits made while
         // the save was in flight dirty, even though the saved draft is clean.
         const normalized = this._config
           ? this._normalizeApplianceOptimizerTargets(this._config)
           : false;
-        this._dirty = normalized || canonicalJson(this._config) !== submittedConfig;
+        this._dirty = normalized || canonicalJson(this._config) !== canonicalJson(outcome.doc);
       }
-      if (response.success) {
-        // The document this save wrote is what the editor now agrees with, so
-        // the reload's own announcements compare equal and say nothing. Re-read
-        // rather than reuse the draft: the backend stamps `config_version` on
-        // write, and the baseline has to be what a later read will return.
+      if (response?.success) {
+        // Refresh live metadata after the entry reload.
         this._liveApplianceMetadata = await this._loadLiveApplianceMetadata();
         // The tree is built from the saved config, so a device just added or
         // re-metered only becomes clickable once it is re-read.
@@ -4983,8 +4911,8 @@ export class HelmanConfigEditorPanel
       this._message = {
         kind: "error",
         text:
-          response.reloadError ??
-          (response.validation.valid
+          response?.reloadError ??
+          (response?.validation?.valid
             ? this._t("editor.messages.config_saved_reload_failed")
             : this._t("editor.messages.save_rejected")),
       };
@@ -4995,10 +4923,14 @@ export class HelmanConfigEditorPanel
       };
     } finally {
       this._saving = false;
+      const revision = this._configRevisionDuringSave;
+      this._configRevisionDuringSave = undefined;
+      if (revision !== undefined) void this._reactToDataChanged(revision);
     }
   }
 
   private _handleReloadClick = async (): Promise<void> => {
+    if (this._saving) return;
     if (
       (this._dirty || this._hasBlockingYamlErrors()) &&
       !window.confirm(this._t("editor.confirm.discard_changes"))
@@ -5006,6 +4938,12 @@ export class HelmanConfigEditorPanel
       return;
     }
     await this._loadConfig({ showMessage: true });
+  };
+
+  private _guardCloseWhileSaving = (event: BeforeUnloadEvent): void => {
+    if (!this._saving) return;
+    event.preventDefault();
+    event.returnValue = "";
   };
 
   private _handleValidateClick = async (): Promise<void> => {

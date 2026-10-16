@@ -20,7 +20,7 @@ from .group_services import (
 )
 from .panel import async_register_panel
 from .coordinator import HelmanCoordinator
-from .storage import HelmanStorage
+from .storage import HelmanStorage, config_revision
 from .websockets import async_register_websocket_commands
 
 PLATFORMS = ["sensor", "select", "switch"]
@@ -206,7 +206,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         domain_data.pop("coordinator", None)
         raise
     if hass.is_running:
-        hass.bus.async_fire(EVENT_DATA_CHANGED, {"kind": DATA_CHANGED_KIND_CONFIG})
+        hass.bus.async_fire(EVENT_DATA_CHANGED, {"kind": DATA_CHANGED_KIND_CONFIG, "revision": config_revision(stor.config)})
     return True
 
 

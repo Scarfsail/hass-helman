@@ -29,7 +29,7 @@ from .solar_bias_correction.websocket import (
 )
 from .scheduling.schedule import ScheduleError, slot_from_dict
 from .training.websocket import ws_get_training_status, ws_train_now
-from .storage import HelmanStorage
+from .storage import HelmanStorage, config_revision
 from .vendors import describe_vendors, resolve_vendor_config
 
 if TYPE_CHECKING:
@@ -248,6 +248,7 @@ def ws_get_condition_trace(
 
 @websocket_api.websocket_command({
     vol.Required("type"): "helman/get_config",
+    vol.Optional("include_revision", default=False): bool,
 })
 @websocket_api.require_admin
 @callback
@@ -260,7 +261,12 @@ def ws_get_config(
     if not stor:
         connection.send_error(msg["id"], "not_loaded", "Helman storage not available")
         return
-    connection.send_result(msg["id"], stor.config)
+    result = (
+        {"config": stor.config, "revision": config_revision(stor.config)}
+        if msg.get("include_revision", False)
+        else stor.config
+    )
+    connection.send_result(msg["id"], result)
 
 
 @websocket_api.websocket_command({
@@ -404,6 +410,7 @@ def ws_get_vendors(
 @websocket_api.websocket_command({
     vol.Required("type"): "helman/save_config",
     vol.Required("config"): dict,
+    vol.Optional("expected_revision"): str,
 })
 @websocket_api.require_admin
 @websocket_api.async_response
@@ -416,6 +423,15 @@ async def ws_save_config(
     stor: HelmanStorage | None = domain_data.get("storage")
     if not stor:
         connection.send_error(msg["id"], "not_loaded", "Helman storage not available")
+        return
+
+    if "expected_revision" in msg and msg["expected_revision"] != config_revision(stor.config):
+        connection.send_result(msg["id"], {
+            "success": False,
+            "conflict": True,
+            "config": stor.config,
+            "revision": config_revision(stor.config),
+        })
         return
 
     # Stamp the version before validating, so a YAML round-trip through the
@@ -437,10 +453,15 @@ async def ws_save_config(
         return
 
     await stor.async_save(config)
+    stored = {"config": stor.config, "revision": config_revision(stor.config)}
 
     entries = hass.config_entries.async_entries(DOMAIN)
     if not entries:
-        connection.send_error(msg["id"], "not_loaded", "Helman entry not available")
+        connection.send_result(msg["id"], {
+            "success": False, "validation": validation.to_dict(),
+            "reloadStarted": False, "reloadSucceeded": False,
+            "reloadError": "Helman entry not available", **stored,
+        })
         return
 
     reload_started = True
@@ -459,6 +480,7 @@ async def ws_save_config(
             "reloadStarted": reload_started,
             "reloadSucceeded": reload_succeeded,
             "reloadError": reload_error,
+            **stored,
         },
     )
 
@@ -819,9 +841,10 @@ def ws_subscribe_updates(
 
     So the subscription is a command of our own instead, where the permission
     rule is ours to make, and there is no admin check here. What it discloses is
-    one word per rewrite: a non-admin learns that *something* moved, including a
+    one kind per rewrite: a non-admin learns that *something* moved, including a
     ``config`` whose contents ``helman/get_config`` would still refuse them. The
-    payload is the event's data unchanged -- one ``kind``, no config, no plan --
+    payload is the event's data unchanged -- one ``kind`` and, for ``config``,
+    a content hash; no config or plan is disclosed --
     and the client does its own batching.
     """
 
