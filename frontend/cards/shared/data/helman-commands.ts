@@ -125,7 +125,7 @@ export type NodeDetailPayload = Api.InverterDetailPayload | Api.InverterTemperat
 
 /** All request/response commands; subscribe_updates belongs to the shared feed. */
 export interface HelmanCommands {
-    "helman/get_config": { req: Record<string, never>; res: ConfigSnapshot };
+    "helman/get_config": { req: { include_revision: true }; res: ConfigSnapshot };
     "helman/validate_config": { req: { config: JsonObject }; res: ValidationReport };
     "helman/save_config": { req: { config: JsonObject; expected_revision?: string }; res: SaveConfigResponse };
     "helman/get_config_defaults": { req: Record<string, never>; res: ConfigDefaults };

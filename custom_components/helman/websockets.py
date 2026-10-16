@@ -248,6 +248,7 @@ def ws_get_condition_trace(
 
 @websocket_api.websocket_command({
     vol.Required("type"): "helman/get_config",
+    vol.Optional("include_revision", default=False): bool,
 })
 @websocket_api.require_admin
 @callback
@@ -260,7 +261,12 @@ def ws_get_config(
     if not stor:
         connection.send_error(msg["id"], "not_loaded", "Helman storage not available")
         return
-    connection.send_result(msg["id"], {"config": stor.config, "revision": config_revision(stor.config)})
+    result = (
+        {"config": stor.config, "revision": config_revision(stor.config)}
+        if msg.get("include_revision", False)
+        else stor.config
+    )
+    connection.send_result(msg["id"], result)
 
 
 @websocket_api.websocket_command({

@@ -268,7 +268,7 @@ class AutomationCoverageSourceImpl implements AutomationCoverageSource {
         this._pending = (async () => {
             try {
                 this._schema ??= await fetchOptimizerSchema(this._hass);
-                const config = asJsonObject((await callHelman(this._hass, "helman/get_config", {})).config);
+                const config = asJsonObject((await callHelman(this._hass, "helman/get_config", { include_revision: true })).config);
                 if (!config) {
                     return;
                 }

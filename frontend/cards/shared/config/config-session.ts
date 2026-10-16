@@ -20,7 +20,10 @@ export class ConfigSession {
     async load(): Promise<{ doc: JsonObject | undefined; revision: string }> {
         const hass = this._hass();
         if (!hass) throw new Error("Home Assistant unavailable");
-        const response = await callHelman(hass, "helman/get_config", {});
+        const response = await callHelman(hass, "helman/get_config", { include_revision: true });
+        if (typeof response?.revision !== "string") {
+            throw new Error("Configuration revision unavailable; reload after updating Helman");
+        }
         this._revision = response.revision;
         return { doc: asJsonObject(response.config), revision: response.revision };
     }

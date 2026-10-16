@@ -50,11 +50,11 @@ declare global {
     }
 }
 
-async function mountEditor(page: Page): Promise<Locator> {
+async function mountEditor(page: Page, legacyBackend = false): Promise<Locator> {
     await loadBundle(page, "helman-config-editor-panel", EDITOR_BUNDLE);
 
     await page.evaluate(
-        ({ schema, config }) => {
+        ({ schema, config, legacyBackend }) => {
             let stored: unknown = JSON.parse(config);
             let getConfigCalls = 0;
             window.__setStoredConfig = (next: unknown) => {
@@ -140,9 +140,20 @@ async function mountEditor(page: Page): Promise<Locator> {
                     }
                 }).callWS,
             };
+            if (legacyBackend) {
+                const hass = element.hass as { callWS: (request: { type: string }) => Promise<unknown> };
+                const callWS = hass.callWS;
+                hass.callWS = async (request) => {
+                    if (request.type === "helman/get_config") {
+                        getConfigCalls += 1;
+                        return JSON.parse(JSON.stringify(stored));
+                    }
+                    return callWS(request);
+                };
+            }
             document.body.appendChild(element);
         },
-        { schema: SCHEMA, config: JSON.stringify(STORED_CONFIG) },
+        { schema: SCHEMA, config: JSON.stringify(STORED_CONFIG), legacyBackend },
     );
 
     const panel = page.locator("helman-config-editor-panel");
@@ -347,3 +358,12 @@ for (const reloadSucceeds of [true, false]) for (const editDuringSave of [true, 
         }
     });
 }
+
+test("a legacy backend response fails loading safely and cannot be saved", async ({ page }) => {
+    const panel = await mountEditor(page, true);
+    await expect(panel).toContainText("Configuration revision unavailable");
+    const save = panel.getByRole("button", { name: "Save and reload" });
+    await expect(save).toBeDisabled();
+    await save.evaluate((button: HTMLButtonElement) => button.click());
+    expect(await page.evaluate(() => window.__saveCalls())).toBe(0);
+});

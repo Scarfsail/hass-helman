@@ -170,13 +170,25 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(connection.results, [])
 
+    def test_get_config_preserves_legacy_response_by_default(self) -> None:
+        config = {"history_buckets": 60}
+        for capability in ({}, {"include_revision": False}):
+            connection = FakeConnection(is_admin=True)
+            ws_get_config(
+                FakeHass(FakeStorage(config)),
+                connection,
+                {"id": 1, "type": "helman/get_config", **capability},
+            )
+            self.assertEqual(connection.errors, [])
+            self.assertEqual(connection.results, [(1, config)])
+
     def test_get_config_returns_config_for_admin(self) -> None:
         connection = FakeConnection(is_admin=True)
 
         ws_get_config(
             FakeHass(FakeStorage({"history_buckets": 60})),
             connection,
-            {"id": 1, "type": "helman/get_config"},
+            {"id": 1, "type": "helman/get_config", "include_revision": True},
         )
 
         self.assertEqual(connection.errors, [])
@@ -206,7 +218,7 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         ws_get_config(
             FakeHass(FakeStorage(config)),
             connection,
-            {"id": 1, "type": "helman/get_config"},
+            {"id": 1, "type": "helman/get_config", "include_revision": True},
         )
 
         self.assertEqual(connection.errors, [])
@@ -518,7 +530,7 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(hass.bus.fired, [("helman_data_changed", {"kind": "config", "revision": config_revision(storage.config)})])
-        ws_get_config(hass, connection, {"id": 2, "type": "helman/get_config"})
+        ws_get_config(hass, connection, {"id": 2, "type": "helman/get_config", "include_revision": True})
         self.assertEqual(connection.results[0][1]["revision"], connection.results[1][1]["revision"])
 
     async def test_save_config_does_not_announce_a_failed_reload(self) -> None:
