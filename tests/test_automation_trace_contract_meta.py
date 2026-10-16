@@ -51,7 +51,7 @@ def _payload(
         "notes": [],
     }
     if explanation is not None:
-        step[EXPLANATION_KEY] = explanation.to_dict(SLOT_IDS)
+        step[EXPLANATION_KEY] = explanation.to_rows()
     return {"slotIds": list(SLOT_IDS), "steps": [step]}
 
 

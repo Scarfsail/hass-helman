@@ -38,29 +38,20 @@ from custom_components.helman.scheduling.schedule import (  # noqa: E402
     inverter_action,
 )
 from custom_components.helman.appliances.state import AppliancesRuntimeRegistry  # noqa: E402
-from custom_components.helman.automation.explain import (  # noqa: E402
-    OptimizerExplanation,
-)
 from automation_config_builders import make_optimizer_config  # noqa: E402
 from automation_trace_contract import (  # noqa: E402
     assert_trace_contract,
+    explanation_rows,
     run_optimizer_with_trace,
 )
 
 
-def _explanation(trace) -> OptimizerExplanation:
-    payload = trace.to_dict()
-    return OptimizerExplanation.from_dict(
-        payload["steps"][0]["explanation"], payload["slotIds"]
-    )
-
-
 def _slots_by_id(trace) -> dict:
-    return {slot.slot_id: slot for slot in _explanation(trace).slots}
+    return {slot["slotId"]: slot for slot in explanation_rows(trace)["slots"]}
 
 
 def _gate(slot, key: str):
-    return next((gate for gate in slot.gates if gate.key == key), None)
+    return next((gate for gate in slot["gates"] if gate["key"] == key), None)
 
 
 def _slot_id(hour: int, minute: int) -> str:
@@ -477,8 +468,8 @@ class ChargeHoldOptimizerTests(unittest.TestCase):
             reference_time=REFERENCE_TIME,
         )
         gate = _gate(_slots_by_id(trace)[_slot_id(10, 30)], "hold_room")
-        self.assertEqual(gate.params["startSocPct"], 30.0)
-        self.assertEqual(gate.params["neededKwh"], 7.0)
+        self.assertEqual(gate["params"]["startSocPct"], 30.0)
+        self.assertEqual(gate["params"]["neededKwh"], 7.0)
 
     def test_leaves_user_owned_inverter_untouched(self) -> None:
         schedule_document = ScheduleDocument(
@@ -526,26 +517,26 @@ class ChargeHoldTraceContractTests(unittest.TestCase):
 
         slots = _slots_by_id(trace)
         held = slots[_slot_id(10, 0)]
-        self.assertEqual(held.verdict, "execute")
-        self.assertEqual(_gate(held, "day_context").state, "true")
+        self.assertEqual(held["verdict"], "execute")
+        self.assertEqual(_gate(held, "day_context")["state"], "true")
         matched = _gate(held, "day_group_matched")
-        self.assertEqual(matched.state, "true")
-        self.assertEqual(matched.params["solarToConsumptionRatio"], 2.0)
+        self.assertEqual(matched["state"], "true")
+        self.assertEqual(matched["params"]["solarToConsumptionRatio"], 2.0)
         self.assertEqual(
-            matched.params["denominatorOptimizerId"], DENOMINATOR_OPTIMIZER_ID
+            matched["params"]["denominatorOptimizerId"], DENOMINATOR_OPTIMIZER_ID
         )
-        self.assertEqual(_gate(held, "hold_window").state, "true")
-        self.assertEqual(_gate(held, "hold_room").state, "true")
+        self.assertEqual(_gate(held, "hold_window")["state"], "true")
+        self.assertEqual(_gate(held, "hold_room")["state"], "true")
         rank = _gate(held, "cheapest_rank")
         # 10:00 opens the dearest hour of the day, so it ranks below every
         # cheaper slot and lost to a marginal price of 2.0.
-        self.assertEqual(rank.state, "true")
-        self.assertEqual(rank.params["rank"], 13)
-        self.assertEqual(rank.params["rankOf"], 16)
-        self.assertEqual(rank.params["price"], 4.0)
-        self.assertEqual(rank.params["marginalPrice"], 2.0)
+        self.assertEqual(rank["state"], "true")
+        self.assertEqual(rank["params"]["rank"], 13)
+        self.assertEqual(rank["params"]["rankOf"], 16)
+        self.assertEqual(rank["params"]["price"], 4.0)
+        self.assertEqual(rank["params"]["marginalPrice"], 2.0)
         # It supplies none of the need, so it is quoted no running total.
-        self.assertIsNone(rank.params["cumulativeKwh"])
+        self.assertIsNone(rank["params"]["cumulativeKwh"])
 
     def test_the_ranking_is_recorded_as_a_gate_on_both_sides_of_the_cut(self) -> None:
         """The cheapness ranking is the one thing no condition can express."""
@@ -558,25 +549,25 @@ class ChargeHoldTraceContractTests(unittest.TestCase):
         assert_trace_contract(self, trace)
         slots = _slots_by_id(trace)
         released = slots[_slot_id(13, 0)]
-        self.assertEqual(released.verdict, "skip")
-        self.assertEqual(_gate(released, "hold_window").state, "true")
-        self.assertEqual(_gate(released, "hold_room").state, "true")
+        self.assertEqual(released["verdict"], "skip")
+        self.assertEqual(_gate(released, "hold_window")["state"], "true")
+        self.assertEqual(_gate(released, "hold_room")["state"], "true")
         rank = _gate(released, "cheapest_rank")
-        self.assertEqual(rank.state, "false")
-        self.assertEqual(rank.params["rank"], 1)  # cheapest slot of the day
-        self.assertEqual(rank.params["cumulativeKwh"], 0.5)
-        self.assertEqual(rank.params["thresholdKwh"], 4.0)
+        self.assertEqual(rank["state"], "false")
+        self.assertEqual(rank["params"]["rank"], 1)  # cheapest slot of the day
+        self.assertEqual(rank["params"]["cumulativeKwh"], 0.5)
+        self.assertEqual(rank["params"]["thresholdKwh"], 4.0)
 
         # A window slot with no surplus takes no rank at all — it is held for
         # want of anywhere to charge, not for losing a comparison.
         dark = slots[_slot_id(7, 0)]
-        self.assertEqual(dark.verdict, "execute")
-        self.assertEqual(_gate(dark, "cheapest_rank").state, "true")
-        self.assertIsNone(_gate(dark, "cheapest_rank").params["rank"])
+        self.assertEqual(dark["verdict"], "execute")
+        self.assertEqual(_gate(dark, "cheapest_rank")["state"], "true")
+        self.assertIsNone(_gate(dark, "cheapest_rank")["params"]["rank"])
 
         # Outside the window the ranking never applies: absent, not false.
         outside = slots[_slot_id(5, 30)]
-        self.assertEqual(_gate(outside, "hold_window").state, "false")
+        self.assertEqual(_gate(outside, "hold_window")["state"], "false")
         self.assertIsNone(_gate(outside, "hold_room"))
         self.assertIsNone(_gate(outside, "cheapest_rank"))
 
@@ -590,10 +581,10 @@ class ChargeHoldTraceContractTests(unittest.TestCase):
 
         assert_trace_contract(self, trace)
         in_window = _slots_by_id(trace)[_slot_id(7, 0)]
-        self.assertEqual(in_window.verdict, "skip")
+        self.assertEqual(in_window["verdict"], "skip")
         room = _gate(in_window, "hold_room")
-        self.assertEqual(room.state, "false")
-        self.assertGreater(room.params["neededKwh"], room.params["surplusAtWindowStart"])
+        self.assertEqual(room["state"], "false")
+        self.assertGreater(room["params"]["neededKwh"], room["params"]["surplusAtWindowStart"])
         # The ranking is never consulted for a day with no room.
         self.assertIsNone(_gate(in_window, "cheapest_rank"))
 
@@ -607,21 +598,21 @@ class ChargeHoldTraceContractTests(unittest.TestCase):
         assert_trace_contract(self, trace)
 
         slot = _slots_by_id(trace)[_slot_id(7, 0)]
-        self.assertEqual(slot.verdict, "skip")
-        self.assertEqual(_gate(slot, "day_context").state, "true")
+        self.assertEqual(slot["verdict"], "skip")
+        self.assertEqual(_gate(slot, "day_context")["state"], "true")
         matched = _gate(slot, "day_group_matched")
-        self.assertEqual(matched.state, "false")
-        self.assertEqual(matched.params["classification"], "deficit")
+        self.assertEqual(matched["state"], "false")
+        self.assertEqual(matched["params"]["classification"], "deficit")
         # The reading behind the band, not just its name: the band is resolved
         # per optimizer now, so the trace has to name the denominator (#264).
-        self.assertEqual(matched.params["solarToConsumptionRatio"], 2.0)
+        self.assertEqual(matched["params"]["solarToConsumptionRatio"], 2.0)
         self.assertEqual(
-            matched.params["denominatorOptimizerId"], DENOMINATOR_OPTIMIZER_ID
+            matched["params"]["denominatorOptimizerId"], DENOMINATOR_OPTIMIZER_ID
         )
-        self.assertEqual(matched.params["failingCondition"], "run_when")
+        self.assertEqual(matched["params"]["failingCondition"], "run_when")
         # Keyed `conditionValue`, like appliance_runtime's equivalent gate, and
         # carrying the classifications the group does allow.
-        self.assertEqual(matched.params["conditionValue"], ["surplus"])
+        self.assertEqual(matched["params"]["conditionValue"], ["surplus"])
         # The window is never reached once the day itself is out.
         self.assertIsNone(_gate(slot, "hold_window"))
 
@@ -640,10 +631,10 @@ class ChargeHoldTraceContractTests(unittest.TestCase):
 
         # Nothing was evaluated at all; only the status keeps that apart from a
         # horizon where every slot genuinely failed.
-        explanation = _explanation(trace)
-        self.assertEqual(explanation.status, "skipped")
-        self.assertEqual(explanation.status_reason, "battery_params_missing")
-        self.assertEqual({slot.verdict for slot in explanation.slots}, {"skip"})
+        explanation = explanation_rows(trace)
+        self.assertEqual(explanation["status"], "skipped")
+        self.assertEqual(explanation.get("statusReason"), "battery_params_missing")
+        self.assertEqual({slot["verdict"] for slot in explanation["slots"]}, {"skip"})
 
 
 if __name__ == "__main__":

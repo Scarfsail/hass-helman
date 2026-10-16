@@ -35,6 +35,11 @@ Design notes:
   first-appearance order across slots, and slots in horizon order. A round trip
   is lossless for records built that way (every builder in this package is).
 - Frontend-facing keys are camelCase, matching the trace payload.
+- Two serializations exist. ``to_rows`` is the plain one: one row per explained
+  slot, built straight from the DTOs, with facts about a condition column (as
+  opposed to its per-slot result) listed once per optimizer under
+  ``conditions``. ``to_dict`` is the pivoted, run-length encoded one that
+  :mod:`.trace` still embeds in the ``helman/run_automation`` payload.
 """
 
 from __future__ import annotations
@@ -192,6 +197,11 @@ def decode_sparse(mapping: Any, length: int) -> list[Any]:
     return values
 
 
+def _without_none(payload: dict[str, Any]) -> dict[str, Any]:
+    """Drop ``None`` values: an absent reading has no key in a plain row."""
+    return {key: value for key, value in payload.items() if value is not None}
+
+
 # --- per-slot DTOs -----------------------------------------------------------
 
 
@@ -220,6 +230,20 @@ class ConditionNode:
         _warn_unknown("node state", self.state, NODE_STATES)
         _warn_unknown("node scope", self.scope, NODE_SCOPES)
 
+    def to_row(self) -> dict[str, Any]:
+        # Scope stays per slot: an optimizer may re-scope a resolved node
+        # (``reserve_floor_soc`` resolves per band) while unresolved slots keep
+        # the scope the condition type declared.
+        return _without_none(
+            {
+                "key": self.key,
+                "scope": self.scope,
+                "state": self.state,
+                "value": self.value,
+                "actual": self.actual,
+            }
+        )
+
 
 @dataclass(frozen=True)
 class GateNode:
@@ -239,6 +263,9 @@ class GateNode:
     def __post_init__(self) -> None:
         _warn_unknown("gate state", self.state, NODE_STATES)
 
+    def to_row(self) -> dict[str, Any]:
+        return {"key": self.key, "state": self.state, "params": dict(self.params)}
+
 
 @dataclass(frozen=True)
 class GroupExplanation:
@@ -254,6 +281,16 @@ class GroupExplanation:
     def __post_init__(self) -> None:
         _warn_unknown("params source", self.params_source, PARAMS_SOURCES)
 
+    def to_row(self) -> dict[str, Any]:
+        return {
+            "index": self.index,
+            "label": self.label,
+            "paramsSource": self.params_source,
+            "params": dict(self.params),
+            "customResults": list(self.custom_results),
+            "conditions": [node.to_row() for node in self.conditions],
+        }
+
 
 @dataclass(frozen=True)
 class SlotExplanation:
@@ -267,6 +304,17 @@ class SlotExplanation:
 
     def __post_init__(self) -> None:
         _warn_unknown("verdict", self.verdict, VERDICTS)
+
+    def to_row(self) -> dict[str, Any]:
+        return _without_none(
+            {
+                "slotId": self.slot_id,
+                "verdict": self.verdict,
+                "winningOptimizer": self.winning_optimizer,
+                "groups": [group.to_row() for group in self.groups],
+                "gates": [gate.to_row() for gate in self.gates],
+            }
+        )
 
 
 # --- record DTOs (own the pivot) ---------------------------------------------
@@ -516,6 +564,32 @@ class OptimizerExplanation:
             aligned[index] = slot
         return aligned
 
+    def to_rows(self) -> dict[str, Any]:
+        """Serialize as plain rows: one per explained slot, in record order.
+
+        A slot this optimizer said nothing about has no row. ``conditions``
+        lists every condition column once, in first-appearance order across
+        slots and groups, so column-level facts are not repeated per slot.
+        """
+        keys: list[str] = []
+        for slot in self.slots:
+            for group in slot.groups:
+                for node in group.conditions:
+                    if node.key not in keys:
+                        keys.append(node.key)
+        return _without_none(
+            {
+                "optimizerId": self.optimizer_id,
+                "kind": self.kind,
+                "controllableId": self.controllable_id or None,
+                "phase": self.phase,
+                "status": self.status,
+                "statusReason": self.status_reason,
+                "conditions": [{"key": key} for key in keys],
+                "slots": [slot.to_row() for slot in self.slots],
+            }
+        )
+
     def to_dict(self, slot_ids: Sequence[str]) -> dict[str, Any]:
         """Serialize, pivoted against the record's ``slotIds`` array."""
         aligned = self._aligned_slots(slot_ids)
@@ -657,6 +731,20 @@ class _OptimizerRecord:
         default_factory=dict
     )
 
+    def explanation(self, slot_ids: Sequence[str]) -> OptimizerExplanation:
+        """The accumulated rows as one record, in ``slot_ids`` order."""
+        return OptimizerExplanation(
+            optimizer_id=self.optimizer_id,
+            kind=self.kind,
+            controllable_id=self.controllable_id,
+            phase=self.phase,
+            status=self.status,
+            status_reason=self.status_reason,
+            slots=tuple(
+                self.slots[slot_id][1] for slot_id in slot_ids if slot_id in self.slots
+            ),
+        )
+
 
 def _slot_start(slot_id: str) -> datetime | None:
     try:
@@ -759,6 +847,37 @@ class ExplanationBook:
 
     # --- reading -------------------------------------------------------------
 
+    def _lane(
+        self, controllable_id: str, date: str
+    ) -> tuple[list[str], list[_OptimizerRecord]] | None:
+        """The lane's slot ids (horizon order) and records (pipeline order)."""
+        records = self._by_date.get(date, {}).get(controllable_id)
+        if not records:
+            return None
+        slot_ids = sorted(
+            {slot_id for record in records.values() for slot_id in record.slots},
+            key=lambda slot_id: (_slot_start(slot_id), slot_id),
+        )
+        return slot_ids, list(records.values())
+
+    @staticmethod
+    def _envelope(
+        controllable_id: str,
+        date: str,
+        slot_ids: list[str],
+        records: list[_OptimizerRecord],
+        optimizers: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        return {
+            "controllableId": controllable_id,
+            "date": date,
+            "slotIds": slot_ids,
+            # The newest run contributing to this lane/date; per-row provenance
+            # lives on each optimizer's rows.
+            "runAt": max(record.run_at for record in records).isoformat(),
+            "optimizers": optimizers,
+        }
+
     def get(self, *, controllable_id: str, date: str) -> dict[str, Any] | None:
         """The serialized record for one lane on one date, or ``None``.
 
@@ -766,30 +885,13 @@ class ExplanationBook:
         the inverter lane is written by three optimizer kinds, so a lane click
         has no single optimizer to ask.
         """
-        records = self._by_date.get(date, {}).get(controllable_id)
-        if not records:
+        lane = self._lane(controllable_id, date)
+        if lane is None:
             return None
-
-        slot_ids = sorted(
-            {slot_id for record in records.values() for slot_id in record.slots},
-            key=lambda slot_id: (_slot_start(slot_id), slot_id),
-        )
+        slot_ids, records = lane
         optimizers: list[dict[str, Any]] = []
-        newest: datetime | None = None
-        for record in records.values():
-            payload = OptimizerExplanation(
-                optimizer_id=record.optimizer_id,
-                kind=record.kind,
-                controllable_id=record.controllable_id,
-                phase=record.phase,
-                status=record.status,
-                status_reason=record.status_reason,
-                slots=tuple(
-                    record.slots[slot_id][1]
-                    for slot_id in slot_ids
-                    if slot_id in record.slots
-                ),
-            ).to_dict(slot_ids)
+        for record in records:
+            payload = record.explanation(slot_ids).to_dict(slot_ids)
             # Index-aligned, run-length encoded: which run produced each row.
             # Rows do not all come from the same run — that is the whole point
             # of accumulating.
@@ -802,15 +904,21 @@ class ExplanationBook:
                 ]
             )
             optimizers.append(payload)
-            if newest is None or record.run_at > newest:
-                newest = record.run_at
+        return self._envelope(controllable_id, date, slot_ids, records, optimizers)
 
-        return {
-            "controllableId": controllable_id,
-            "date": date,
-            "slotIds": slot_ids,
-            # The newest run contributing to this lane/date; per-row provenance
-            # lives in each optimizer's `runAt` column.
-            "runAt": None if newest is None else newest.isoformat(),
-            "optimizers": optimizers,
-        }
+    def get_rows(self, *, controllable_id: str, date: str) -> dict[str, Any] | None:
+        """:meth:`get` as plain rows (:meth:`OptimizerExplanation.to_rows`).
+
+        Each row carries the ``runAt`` of the run that produced it.
+        """
+        lane = self._lane(controllable_id, date)
+        if lane is None:
+            return None
+        slot_ids, records = lane
+        optimizers: list[dict[str, Any]] = []
+        for record in records:
+            payload = record.explanation(slot_ids).to_rows()
+            for row in payload["slots"]:
+                row["runAt"] = record.slots[row["slotId"]][0].isoformat()
+            optimizers.append(payload)
+        return self._envelope(controllable_id, date, slot_ids, records, optimizers)

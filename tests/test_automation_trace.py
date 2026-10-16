@@ -603,12 +603,12 @@ class TraceExplanationPayloadTests(unittest.TestCase):
         self.assertEqual({key: step[key] for key in baseline}, baseline)
         self.assertEqual(set(step) - set(baseline), {"explanation"})
 
-        from custom_components.helman.automation.explain import OptimizerExplanation
-
-        decoded = OptimizerExplanation.from_dict(step["explanation"], slots)
-        self.assertEqual(decoded, trace.optimizer_explanations()[0])
-        self.assertEqual([slot.slot_id for slot in decoded.slots], slots)
-        self.assertEqual(decoded.slots[1].gates[0].params, {"windowEnd": "22:00"})
+        # The embedded payload is exactly the recorded explanation, encoded.
+        recorded = trace.optimizer_explanations()[0]
+        self.assertEqual(step["explanation"], recorded.to_dict(slots))
+        rows = recorded.to_rows()["slots"]
+        self.assertEqual([row["slotId"] for row in rows], slots)
+        self.assertEqual(rows[1]["gates"][0]["params"], {"windowEnd": "22:00"})
 
     def test_status_reason_survives_serialization(self) -> None:
         slots = _slot_ids(1)
