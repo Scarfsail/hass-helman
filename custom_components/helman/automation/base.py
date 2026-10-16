@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 from ..appliances.climate_appliance import ClimateApplianceRuntime
 from ..appliances.generic_appliance import GenericApplianceRuntime
 from ..controllables.config import CONTROLLABLE_ID_INVERTER
+from ..controllables.spec import CONTROLLABLE_KIND_CLIMATE, CONTROLLABLE_KIND_GENERIC
 from ..scheduling.schedule import (
     ScheduleAction,
     ScheduleDocument,
@@ -80,7 +81,7 @@ def resolve_appliance_target(
         )
 
     climate_mode = config.target.get("climate_mode")
-    if isinstance(appliance, GenericApplianceRuntime):
+    if appliance.kind == CONTROLLABLE_KIND_GENERIC:
         if climate_mode is not None:
             raise OptimizerConfigError(
                 path=f"{path}.target.climate_mode",
@@ -91,7 +92,7 @@ def resolve_appliance_target(
                 ),
             )
         return ApplianceTarget(appliance=appliance, authored_action={"on": True})
-    if isinstance(appliance, ClimateApplianceRuntime):
+    if appliance.kind == CONTROLLABLE_KIND_CLIMATE:
         if climate_mode is None:
             raise OptimizerConfigError(
                 path=f"{path}.target.climate_mode",

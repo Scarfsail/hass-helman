@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import NotRequired, TypedDict
+from typing import Any, NotRequired, TypedDict
 
 from .ev_schedule import ApplianceScheduleNormalizationMode
 from .generic_appliance import GenericApplianceRuntime
@@ -49,3 +49,8 @@ def normalize_generic_appliance_schedule_action(
     if value.get("conditionMet") is False:
         payload["conditionMet"] = False
     return payload
+
+
+def is_generic_action_running(action: Mapping[str, Any]) -> bool:
+    """A generic appliance runs while its normalized action switches it on."""
+    return action.get("on") is True

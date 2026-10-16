@@ -12,17 +12,15 @@ from ..controllables.config import (
     read_name_cleaner_regex,
     resolve_device_name,
 )
-from .climate_appliance import read_climate_appliance
+from ..controllables.spec import (
+    CONTROLLABLE_KIND_GENERIC,
+    appliance_controllable_kinds,
+    spec_for,
+)
 from .errors import ApplianceConfigError
-from .ev_charger import read_ev_charger_appliance
-from .generic_appliance import GenericApplianceConfigError, read_generic_appliance
 from .state import AppliancesRuntimeRegistry
 
 _LOGGER = logging.getLogger(__name__)
-
-_CLIMATE_APPLIANCE_KIND = "climate"
-_EV_CHARGER_KIND = "ev_charger"
-_GENERIC_APPLIANCE_KIND = "generic"
 
 
 def build_appliances_runtime_registry(
@@ -119,7 +117,7 @@ def read_device_appliance(
     parent's meter. These derived fields are never written to the document.
     """
     view = dict(device)
-    view.setdefault("kind", _GENERIC_APPLIANCE_KIND)
+    view.setdefault("kind", CONTROLLABLE_KIND_GENERIC)
     view["name"] = resolve_device_name(
         device,
         friendly_name=friendly_name or (lambda _entity_id: None),
@@ -158,21 +156,14 @@ def _read_appliance_runtime(
     path: str,
 ):
     if not isinstance(value, Mapping):
-        raise GenericApplianceConfigError(path, "must be an object")
+        raise ApplianceConfigError(path, "must be an object")
 
     kind = _peek_appliance_kind(value)
-    if kind == _CLIMATE_APPLIANCE_KIND:
-        return read_climate_appliance(value, path=path)
-    if kind == _EV_CHARGER_KIND:
-        return read_ev_charger_appliance(value, path=path)
-    if kind == _GENERIC_APPLIANCE_KIND:
-        return read_generic_appliance(value, path=path)
-
-    raise GenericApplianceConfigError(
-        f"{path}.kind",
-        f"must be one of {_CLIMATE_APPLIANCE_KIND!r}, "
-        f"{_EV_CHARGER_KIND!r}, {_GENERIC_APPLIANCE_KIND!r}",
-    )
+    appliance_kinds = appliance_controllable_kinds()
+    if kind not in appliance_kinds:
+        allowed = ", ".join(repr(kind) for kind in sorted(appliance_kinds))
+        raise ApplianceConfigError(f"{path}.kind", f"must be one of {allowed}")
+    return spec_for(kind).read(value, path=path)
 
 
 def _log_invalid_appliance(

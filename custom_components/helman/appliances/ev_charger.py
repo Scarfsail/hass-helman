@@ -1,21 +1,30 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Literal, NotRequired, TypedDict
+from functools import partial
+from typing import Literal, NotRequired, TypedDict
 
+from ..controllables.kinds import CONTROLLABLE_KIND_EV_CHARGER
+from ._read import (
+    read_entity_id,
+    read_kind,
+    read_mapping,
+    read_optional_icon,
+    read_positive_float,
+    read_required_string,
+)
 from .errors import ApplianceConfigError
-from .icon import read_optional_appliance_icon, resolve_appliance_icon
+from .icon import resolve_appliance_icon
 from .roster import ControllableRosterFieldsDict, EntityReferenceDict
 
-_EV_CHARGER_KIND = "ev_charger"
 _FIXED_MAX_POWER_BEHAVIOR = "fixed_max_power"
 _SURPLUS_AWARE_BEHAVIOR = "surplus_aware"
 EvChargerUseModeBehavior = Literal["fixed_max_power", "surplus_aware"]
 
-
-class EvChargerConfigError(ApplianceConfigError):
-    """Raised when one EV charger appliance config entry is invalid."""
+#: The charger's findings have always called a non-positive figure this.
+_read_positive_float = partial(
+    read_positive_float, not_positive_detail="must be a positive number"
+)
 
 
 @dataclass(frozen=True)
@@ -55,7 +64,7 @@ class EvChargerApplianceRuntime:
 
     @property
     def kind(self) -> str:
-        return _EV_CHARGER_KIND
+        return CONTROLLABLE_KIND_EV_CHARGER
 
     @property
     def use_modes(self) -> tuple[str, ...]:
@@ -135,14 +144,11 @@ def read_ev_charger_appliance(
     *,
     path: str,
 ) -> EvChargerApplianceRuntime:
-    appliance = _require_mapping(value, path)
-
-    kind = _require_non_empty_string(appliance.get("kind"), f"{path}.kind")
-    if kind != _EV_CHARGER_KIND:
-        raise EvChargerConfigError(f"{path}.kind", f"must be {_EV_CHARGER_KIND!r}")
+    appliance = read_mapping(value, path=path)
+    read_kind(appliance, path=path, kind=CONTROLLABLE_KIND_EV_CHARGER)
 
     vehicles = _read_vehicles(appliance.get("vehicles"), path=f"{path}.vehicles")
-    controls = _require_mapping(appliance.get("controls"), f"{path}.controls")
+    controls = read_mapping(appliance.get("controls"), path=f"{path}.controls")
     use_mode_entity_id, use_mode_configs = _read_use_mode_control(
         controls.get("use_mode"),
         path=f"{path}.controls.use_mode",
@@ -153,15 +159,15 @@ def read_ev_charger_appliance(
     )
 
     return EvChargerApplianceRuntime(
-        id=_require_non_empty_string(appliance.get("id"), f"{path}.id"),
-        name=_require_non_empty_string(appliance.get("name"), f"{path}.name"),
+        id=read_required_string(appliance.get("id"), path=f"{path}.id"),
+        name=read_required_string(appliance.get("name"), path=f"{path}.name"),
         max_charging_power_kw=_read_limits(
             appliance.get("limits"),
             path=f"{path}.limits",
         ),
         charge_entity_id=_read_control_entity_id(
             controls.get("charge"),
-            expected_domain="switch",
+            allowed_domains=("switch",),
             path=f"{path}.controls.charge",
         ),
         use_mode_entity_id=use_mode_entity_id,
@@ -169,11 +175,7 @@ def read_ev_charger_appliance(
         use_mode_configs=use_mode_configs,
         eco_gear_configs=eco_gear_configs,
         vehicles=vehicles,
-        icon=read_optional_appliance_icon(
-            appliance.get("icon"),
-            path=f"{path}.icon",
-            error_type=EvChargerConfigError,
-        ),
+        icon=read_optional_icon(appliance.get("icon"), path=f"{path}.icon"),
     )
 
 
@@ -227,33 +229,44 @@ def _build_vehicle_metadata_dict(vehicle: EvVehicleRuntime) -> EvVehicleResponse
 
 
 def _read_limits(value: object, *, path: str) -> float:
-    limits = _require_mapping(value, path)
-    return _require_positive_float(
+    limits = read_mapping(value, path=path)
+    return _read_positive_float(
         limits.get("max_charging_power_kw"),
-        f"{path}.max_charging_power_kw",
+        path=f"{path}.max_charging_power_kw",
     )
 
 
 def _read_control_entity_id(
     value: object,
     *,
-    expected_domain: str | None = None,
-    expected_domains: tuple[str, ...] | None = None,
+    allowed_domains: tuple[str, ...],
     path: str,
 ) -> str:
-    control = _require_mapping(value, path)
-    if expected_domains is not None:
-        return _require_entity_id_in_domains(
-            control.get("entity_id"),
-            expected_domains=expected_domains,
-            path=f"{path}.entity_id",
-        )
-    if expected_domain is None:
-        raise ValueError("expected_domain or expected_domains must be provided")
-    return _require_entity_id(
+    control = read_mapping(value, path=path)
+    return _read_entity_id(
         control.get("entity_id"),
-        expected_domain=expected_domain,
+        allowed_domains=allowed_domains,
         path=f"{path}.entity_id",
+    )
+
+
+def _read_entity_id(
+    value: object,
+    *,
+    allowed_domains: tuple[str, ...],
+    path: str,
+) -> str:
+    """The charger's findings quote the domains, as they always have."""
+    domains = ", ".join(repr(domain) for domain in allowed_domains)
+    return read_entity_id(
+        value,
+        path=path,
+        allowed_domains=allowed_domains,
+        detail=(
+            f"must use {domains} domain"
+            if len(allowed_domains) == 1
+            else f"must use one of {domains} domains"
+        ),
     )
 
 
@@ -262,19 +275,19 @@ def _read_use_mode_control(
     *,
     path: str,
 ) -> tuple[str, tuple[EvChargerUseModeRuntime, ...]]:
-    control = _require_mapping(value, path)
-    values = _require_mapping(control.get("values"), f"{path}.values")
+    control = read_mapping(value, path=path)
+    values = read_mapping(control.get("values"), path=f"{path}.values")
     if not values:
-        raise EvChargerConfigError(f"{path}.values", "must not be empty")
+        raise ApplianceConfigError(f"{path}.values", "must not be empty")
 
     use_modes: list[EvChargerUseModeRuntime] = []
     for raw_mode_id, raw_mode_config in values.items():
         if not isinstance(raw_mode_id, str) or not raw_mode_id.strip():
-            raise EvChargerConfigError(
+            raise ApplianceConfigError(
                 f"{path}.values", "keys must be a non-empty string"
             )
         mode_id = raw_mode_id.strip()
-        mode_config = _require_mapping(raw_mode_config, f"{path}.values.{mode_id}")
+        mode_config = read_mapping(raw_mode_config, path=f"{path}.values.{mode_id}")
         use_modes.append(
             EvChargerUseModeRuntime(
                 id=mode_id,
@@ -288,7 +301,7 @@ def _read_use_mode_control(
     return (
         _read_control_entity_id(
             control,
-            expected_domains=("input_select", "select"),
+            allowed_domains=("input_select", "select"),
             path=path,
         ),
         tuple(use_modes),
@@ -300,9 +313,9 @@ def _read_use_mode_behavior(
     *,
     path: str,
 ) -> EvChargerUseModeBehavior:
-    behavior = _require_non_empty_string(value, path)
+    behavior = read_required_string(value, path=path)
     if behavior not in {_FIXED_MAX_POWER_BEHAVIOR, _SURPLUS_AWARE_BEHAVIOR}:
-        raise EvChargerConfigError(
+        raise ApplianceConfigError(
             path,
             f"must be one of {_FIXED_MAX_POWER_BEHAVIOR!r}, "
             f"{_SURPLUS_AWARE_BEHAVIOR!r}",
@@ -315,25 +328,25 @@ def _read_eco_gear_control(
     *,
     path: str,
 ) -> tuple[str, tuple[EvChargerEcoGearRuntime, ...]]:
-    control = _require_mapping(value, path)
-    values = _require_mapping(control.get("values"), f"{path}.values")
+    control = read_mapping(value, path=path)
+    values = read_mapping(control.get("values"), path=f"{path}.values")
     if not values:
-        raise EvChargerConfigError(f"{path}.values", "must not be empty")
+        raise ApplianceConfigError(f"{path}.values", "must not be empty")
 
     eco_gears: list[EvChargerEcoGearRuntime] = []
     for raw_gear_id, raw_gear_config in values.items():
         if not isinstance(raw_gear_id, str) or not raw_gear_id.strip():
-            raise EvChargerConfigError(
+            raise ApplianceConfigError(
                 f"{path}.values", "keys must be a non-empty string"
             )
         gear_id = raw_gear_id.strip()
-        gear_config = _require_mapping(raw_gear_config, f"{path}.values.{gear_id}")
+        gear_config = read_mapping(raw_gear_config, path=f"{path}.values.{gear_id}")
         eco_gears.append(
             EvChargerEcoGearRuntime(
                 id=gear_id,
-                min_power_kw=_require_positive_float(
+                min_power_kw=_read_positive_float(
                     gear_config.get("min_power_kw"),
-                    f"{path}.values.{gear_id}.min_power_kw",
+                    path=f"{path}.values.{gear_id}.min_power_kw",
                 ),
             )
         )
@@ -341,7 +354,7 @@ def _read_eco_gear_control(
     return (
         _read_control_entity_id(
             control,
-            expected_domains=("input_select", "select"),
+            allowed_domains=("input_select", "select"),
             path=path,
         ),
         tuple(eco_gears),
@@ -350,7 +363,7 @@ def _read_eco_gear_control(
 
 def _read_vehicles(value: object, *, path: str) -> tuple[EvVehicleRuntime, ...]:
     if not isinstance(value, list) or not value:
-        raise EvChargerConfigError(path, "must be a non-empty list")
+        raise ApplianceConfigError(path, "must be a non-empty list")
 
     vehicles: list[EvVehicleRuntime] = []
     seen_vehicle_ids: set[str] = set()
@@ -358,7 +371,7 @@ def _read_vehicles(value: object, *, path: str) -> tuple[EvVehicleRuntime, ...]:
         vehicle_path = f"{path}[{index}]"
         vehicle = _read_vehicle(raw_vehicle, path=vehicle_path)
         if vehicle.id in seen_vehicle_ids:
-            raise EvChargerConfigError(
+            raise ApplianceConfigError(
                 f"{vehicle_path}.id",
                 f"duplicates vehicle id {vehicle.id!r}",
             )
@@ -369,78 +382,34 @@ def _read_vehicles(value: object, *, path: str) -> tuple[EvVehicleRuntime, ...]:
 
 
 def _read_vehicle(value: object, *, path: str) -> EvVehicleRuntime:
-    vehicle = _require_mapping(value, path)
-    telemetry = _require_mapping(vehicle.get("telemetry"), f"{path}.telemetry")
-    limits = _require_mapping(vehicle.get("limits"), f"{path}.limits")
+    vehicle = read_mapping(value, path=path)
+    telemetry = read_mapping(vehicle.get("telemetry"), path=f"{path}.telemetry")
+    limits = read_mapping(vehicle.get("limits"), path=f"{path}.limits")
 
     charge_limit_entity_id = telemetry.get("charge_limit_entity_id")
     return EvVehicleRuntime(
-        id=_require_non_empty_string(vehicle.get("id"), f"{path}.id"),
-        name=_require_non_empty_string(vehicle.get("name"), f"{path}.name"),
-        soc_entity_id=_require_entity_id(
+        id=read_required_string(vehicle.get("id"), path=f"{path}.id"),
+        name=read_required_string(vehicle.get("name"), path=f"{path}.name"),
+        soc_entity_id=_read_entity_id(
             telemetry.get("soc_entity_id"),
-            expected_domain="sensor",
+            allowed_domains=("sensor",),
             path=f"{path}.telemetry.soc_entity_id",
         ),
         charge_limit_entity_id=(
             None
             if charge_limit_entity_id is None
-            else _require_entity_id(
+            else _read_entity_id(
                 charge_limit_entity_id,
-                expected_domain="number",
+                allowed_domains=("number",),
                 path=f"{path}.telemetry.charge_limit_entity_id",
             )
         ),
-        battery_capacity_kwh=_require_positive_float(
+        battery_capacity_kwh=_read_positive_float(
             limits.get("battery_capacity_kwh"),
-            f"{path}.limits.battery_capacity_kwh",
+            path=f"{path}.limits.battery_capacity_kwh",
         ),
-        max_charging_power_kw=_require_positive_float(
+        max_charging_power_kw=_read_positive_float(
             limits.get("max_charging_power_kw"),
-            f"{path}.limits.max_charging_power_kw",
+            path=f"{path}.limits.max_charging_power_kw",
         ),
     )
-
-
-def _require_mapping(value: object, path: str) -> Mapping[str, Any]:
-    if not isinstance(value, Mapping):
-        raise EvChargerConfigError(path, "must be an object")
-    return value
-
-
-def _require_non_empty_string(value: object, path: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise EvChargerConfigError(path, "must be a non-empty string")
-    return value.strip()
-
-
-def _require_positive_float(value: object, path: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        raise EvChargerConfigError(path, "must be a positive number")
-
-    number = float(value)
-    if number <= 0:
-        raise EvChargerConfigError(path, "must be a positive number")
-    return number
-
-
-def _require_entity_id(value: object, *, expected_domain: str, path: str) -> str:
-    entity_id = _require_non_empty_string(value, path)
-    if not entity_id.startswith(f"{expected_domain}."):
-        raise EvChargerConfigError(path, f"must use {expected_domain!r} domain")
-    return entity_id
-
-
-def _require_entity_id_in_domains(
-    value: object,
-    *,
-    expected_domains: tuple[str, ...],
-    path: str,
-) -> str:
-    entity_id = _require_non_empty_string(value, path)
-    for domain in expected_domains:
-        if entity_id.startswith(f"{domain}."):
-            return entity_id
-
-    formatted_domains = ", ".join(repr(domain) for domain in expected_domains)
-    raise EvChargerConfigError(path, f"must use one of {formatted_domains} domains")

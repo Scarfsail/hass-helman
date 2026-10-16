@@ -15,9 +15,11 @@ its executor.
 
 **What lives here and what does not.** The registry describes a kind: where to
 find its control entity on a runtime object, what counts as at rest, and what it
-affects. It deliberately does *not* own config reading — the per-kind readers
-stay where they are and the ``controllables:`` config shape is a later phase —
-nor the decision logic of the executors. It is the vocabulary, not the machinery.
+affects. For an appliance kind it also names the kind's behaviour — its config
+reader, action normalizer, running predicate, roster metadata, projection config
+and driver — so a caller asks :func:`spec_for` instead of forking on the runtime
+type. The implementations stay in the kind's own modules, which import nothing
+from here; the decision logic of the executors stays in the executors.
 
 ``affects_consumption``
     Only the appliance kinds appear in
@@ -39,9 +41,40 @@ nor the decision logic of the executors. It is the vocabulary, not the machinery
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+from ..appliances.climate_appliance import (
+    build_climate_appliance_metadata_dict,
+    read_climate_appliance,
+)
+from ..appliances.climate_schedule import (
+    is_climate_action_running,
+    normalize_climate_appliance_schedule_action,
+)
+from ..appliances.drivers import (
+    ApplianceDriverOptions,
+    ClimateApplianceDriver,
+    EvChargerDriver,
+    GenericApplianceDriver,
+)
+from ..appliances.ev_charger import (
+    build_ev_charger_metadata_dict,
+    read_ev_charger_appliance,
+)
+from ..appliances.ev_schedule import (
+    is_ev_charger_action_running,
+    normalize_ev_charger_schedule_action,
+)
+from ..appliances.generic_appliance import (
+    build_generic_appliance_metadata_dict,
+    read_generic_appliance,
+)
+from ..appliances.generic_schedule import (
+    is_generic_action_running,
+    normalize_generic_appliance_schedule_action,
+)
 from ..const import (
     SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
     SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
@@ -50,23 +83,39 @@ from ..const import (
     SCHEDULE_ACTION_STOP_DISCHARGING,
     SCHEDULE_ACTION_STOP_EXPORT,
 )
+from .config import RUNNING_ACTIVITY_BY_CONTROL
+from .kinds import (
+    CONTROLLABLE_KIND_CLIMATE,
+    CONTROLLABLE_KIND_EV_CHARGER,
+    CONTROLLABLE_KIND_GENERIC,
+    CONTROLLABLE_KIND_INVERTER,
+)
 
-CONTROLLABLE_KIND_INVERTER = "inverter"
-CONTROLLABLE_KIND_CLIMATE = "climate"
-CONTROLLABLE_KIND_EV_CHARGER = "ev_charger"
-CONTROLLABLE_KIND_GENERIC = "generic"
+if TYPE_CHECKING:
+    from ..appliances._read import ProjectionConfig
+    from ..appliances.drivers import ApplianceActionDriver
+
+
+def _no_projection(runtime: Any) -> None:
+    return None
+
+
+def _projection_config(runtime: Any) -> ProjectionConfig:
+    return runtime.projection
 
 
 @dataclass(frozen=True)
 class ControllableSpec:
     """One kind of thing Helman can drive.
 
-    The attribute names are read off whichever object carries this kind's
-    runtime state: :class:`..scheduling.schedule.ScheduleControlConfig` for the
-    inverter, and the per-kind appliance runtime dataclass otherwise. Naming
-    attributes rather than holding accessor callables keeps the registry a plain
-    data declaration that a test can read and a reviewer can check against the
-    dataclasses in one pass.
+    Two halves. The declarative half names attributes read off whichever
+    object carries this kind's runtime state:
+    :class:`..scheduling.schedule.ScheduleControlConfig` for the inverter, and
+    the per-kind appliance runtime dataclass otherwise. The behavioural half,
+    set only for appliance kinds, points at callables in the kind's own modules
+    — its config reader, action normalizer, running predicate, roster
+    metadata, projection config and driver factory — so a caller asks the spec
+    instead of forking on the runtime type.
     """
 
     kind: str
@@ -94,6 +143,41 @@ class ControllableSpec:
     #: guesses about which kind feels more like an appliance.
     affects_consumption: bool = False
     optimizer_kinds: tuple[str, ...] = ()
+    #: The device ``controls`` key whose entity says this kind is running —
+    #: the key :func:`.config.running_signal` reads, whose activity comes from
+    #: :data:`.config.RUNNING_ACTIVITY_BY_CONTROL`.
+    running_control: str | None = None
+
+    # An appliance kind's behaviour; the inverter has its own reader and
+    # executor and declares none of it.
+
+    #: ``read(config, *, path)``: the kind's runtime from its config entry.
+    read: Callable[..., Any] | None = None
+    #: ``normalize_action(value, *, appliance, context, mode)``: one slot
+    #: action, validated against the appliance it is for.
+    normalize_action: Callable[..., Any] | None = None
+    #: Whether a normalized action means "this appliance is running" — the one
+    #: definition the snapshot readers, the driver, the projection builder and
+    #: the projected-history filter all ask.
+    is_running: Callable[[Mapping[str, Any]], bool] | None = None
+    #: ``metadata(runtime, roster)``: the kind's ``helman/get_appliances`` entry.
+    metadata: Callable[..., Any] | None = None
+    #: The runtime's projection config, or ``None`` for a kind not projected
+    #: at a constant hourly rate: the EV charger follows the solar surplus.
+    projection: Callable[[Any], ProjectionConfig | None] = _no_projection
+    #: Builds the kind's executor driver.
+    driver: Callable[[ApplianceDriverOptions], ApplianceActionDriver] | None = None
+
+    def running_signal(self, runtime: Any) -> tuple[str, str] | None:
+        """``(entity id, running activity)`` telling when ``runtime`` runs.
+
+        The runtime counterpart of :func:`.config.running_signal`, which reads
+        the same pair off a raw device.
+        """
+        entity_id = self.control_entity_id(runtime)
+        if entity_id is None or self.running_control is None:
+            return None
+        return entity_id, RUNNING_ACTIVITY_BY_CONTROL[self.running_control]
 
     def control_entity_id(self, source: Any) -> str | None:
         """The entity that decides whether this controllable is running."""
@@ -159,6 +243,13 @@ CONTROLLABLE_SPECS: dict[str, ControllableSpec] = {
             resting_state_default="off",
             affects_consumption=True,
             optimizer_kinds=("appliance_runtime",),
+            running_control="climate",
+            read=read_climate_appliance,
+            normalize_action=normalize_climate_appliance_schedule_action,
+            is_running=is_climate_action_running,
+            metadata=build_climate_appliance_metadata_dict,
+            projection=_projection_config,
+            driver=lambda options: ClimateApplianceDriver(),
         ),
         ControllableSpec(
             kind=CONTROLLABLE_KIND_EV_CHARGER,
@@ -167,6 +258,16 @@ CONTROLLABLE_SPECS: dict[str, ControllableSpec] = {
             control_entity_attr="charge_entity_id",
             resting_state_default="off",
             affects_consumption=True,
+            running_control="charge",
+            read=read_ev_charger_appliance,
+            normalize_action=normalize_ev_charger_schedule_action,
+            is_running=is_ev_charger_action_running,
+            metadata=build_ev_charger_metadata_dict,
+            driver=lambda options: EvChargerDriver(
+                charge_on_wait_seconds=options.charge_on_wait_seconds,
+                poll_interval_seconds=options.poll_interval_seconds,
+                sleep=options.sleep,
+            ),
         ),
         ControllableSpec(
             kind=CONTROLLABLE_KIND_GENERIC,
@@ -174,11 +275,23 @@ CONTROLLABLE_SPECS: dict[str, ControllableSpec] = {
             resting_state_default="off",
             affects_consumption=True,
             optimizer_kinds=("appliance_runtime",),
+            running_control="switch",
+            read=read_generic_appliance,
+            normalize_action=normalize_generic_appliance_schedule_action,
+            is_running=is_generic_action_running,
+            metadata=build_generic_appliance_metadata_dict,
+            projection=_projection_config,
+            driver=lambda options: GenericApplianceDriver(),
         ),
     )
 }
 
 KNOWN_CONTROLLABLE_KINDS: frozenset[str] = frozenset(CONTROLLABLE_SPECS)
+
+
+def spec_for(kind: str) -> ControllableSpec:
+    """The declaration of ``kind`` — what every per-kind fork asks instead."""
+    return CONTROLLABLE_SPECS[kind]
 
 
 def appliance_controllable_kinds() -> frozenset[str]:

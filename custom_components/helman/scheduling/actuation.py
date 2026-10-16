@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.core import HomeAssistant
 
-from .schedule import ScheduleError, ScheduleExecutionUnavailableError
+from .slots import ScheduleError, ScheduleExecutionUnavailableError
 
 if TYPE_CHECKING:
     from homeassistant.core import Context

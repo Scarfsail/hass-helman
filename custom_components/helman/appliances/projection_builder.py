@@ -9,22 +9,22 @@ from homeassistant.util import dt as dt_util
 
 from ..config_read import parse_timestamp, read_float
 from ..const import FORECAST_CANONICAL_GRANULARITY_MINUTES
-from ..recorder_hourly_series import get_local_current_slot_start
-from ..scheduling.schedule import (
-    SCHEDULE_SLOT_DURATION,
-    ScheduleDocument,
-    format_slot_id,
-    parse_slot_id,
+from ..controllables.spec import (
+    CONTROLLABLE_KIND_CLIMATE,
+    CONTROLLABLE_KIND_EV_CHARGER,
+    spec_for,
 )
+from ..recorder_hourly_series import get_local_current_slot_start
+from ..scheduling.schedule import ScheduleDocument
+from ..scheduling.slots import SCHEDULE_SLOT_DURATION, format_slot_id, parse_slot_id
 from ..slot_grid import SLOT, advance
 from ..slot_grid import floor_to_slot as _canonical_slot_start
-from .climate_appliance import ClimateApplianceRuntime
+from ._read import ProjectionConfig
 from .ev_charger import (
     EvChargerApplianceRuntime,
     EvChargerUseModeRuntime,
     EvVehicleRuntime,
 )
-from .generic_appliance import GenericApplianceRuntime
 from .state import AppliancesRuntimeRegistry
 
 _CANONICAL_SLOT_HOURS = FORECAST_CANONICAL_GRANULARITY_MINUTES / 60
@@ -163,39 +163,35 @@ def build_appliance_projection_plan(
     deferred_ev_appliances: list[EvChargerApplianceRuntime] = []
 
     for appliance in registry.appliances:
-        if isinstance(appliance, EvChargerApplianceRuntime):
+        if appliance.kind == CONTROLLABLE_KIND_EV_CHARGER:
             deferred_ev_appliances.append(appliance)
             continue
-        elif isinstance(appliance, ClimateApplianceRuntime):
-            if active_reference_time is None:
-                raise ValueError(
-                    "reference_time is required when projecting climate appliances "
-                    "without forecast inputs"
-                )
-            result = _build_climate_appliance_projection_series(
-                appliance=appliance,
-                schedule_document=schedule_document,
-                reference_time=active_reference_time,
+        spec = spec_for(appliance.kind)
+        is_running = spec.is_running
+        if appliance.kind == CONTROLLABLE_KIND_CLIMATE:
+            # A mode the entity no longer offers projects nothing, even on a
+            # schedule not yet re-pruned against it.
+            is_running = lambda action, appliance=appliance: (
+                spec.is_running(action)
+                and action.get("mode") in appliance.authorable_modes
+            )
+        if active_reference_time is None:
+            raise ValueError(
+                f"reference_time is required when projecting {appliance.kind} "
+                "appliances without forecast inputs"
+            )
+        result = _build_constant_hourly_projection_series(
+            appliance_id=appliance.id,
+            schedule_document=schedule_document,
+            reference_time=active_reference_time,
+            demand_profile=get_when_active_demand_profile(
+                projection=spec.projection(appliance),
                 historical_hourly_energy_kwh=historical_hourly_energy_by_appliance_id.get(
                     appliance.id
                 ),
-            )
-        elif isinstance(appliance, GenericApplianceRuntime):
-            if active_reference_time is None:
-                raise ValueError(
-                    "reference_time is required when projecting generic appliances "
-                    "without forecast inputs"
-                )
-            result = _build_generic_appliance_projection_series(
-                appliance=appliance,
-                schedule_document=schedule_document,
-                reference_time=active_reference_time,
-                historical_hourly_energy_kwh=historical_hourly_energy_by_appliance_id.get(
-                    appliance.id
-                ),
-            )
-        else:
-            continue
+            ),
+            is_running=is_running,
+        )
         series = result.series
         if not series.points:
             continue
@@ -277,7 +273,7 @@ def _build_ev_charger_projection_series(
 
     for slot_id, actions in sorted(schedule_document.slots.items()):
         action = actions.get(appliance.id)
-        if not action or action.get("charge") is not True:
+        if not action or not spec_for(appliance.kind).is_running(action):
             continue
 
         vehicle_id = action.get("vehicleId")
@@ -400,49 +396,6 @@ def _build_ev_charger_projection_series(
     )
 
 
-def _build_generic_appliance_projection_series(
-    *,
-    appliance: GenericApplianceRuntime,
-    schedule_document: ScheduleDocument,
-    reference_time: datetime,
-    historical_hourly_energy_kwh: float | None,
-) -> _ApplianceProjectionBuildResult:
-    demand_profile = get_when_active_demand_profile(
-        appliance=appliance,
-        historical_hourly_energy_kwh=historical_hourly_energy_kwh,
-    )
-    return _build_constant_hourly_projection_series(
-        appliance_id=appliance.id,
-        schedule_document=schedule_document,
-        reference_time=reference_time,
-        demand_profile=demand_profile,
-        resolve_action_projection=_resolve_generic_action_projection,
-    )
-
-
-def _build_climate_appliance_projection_series(
-    *,
-    appliance: ClimateApplianceRuntime,
-    schedule_document: ScheduleDocument,
-    reference_time: datetime,
-    historical_hourly_energy_kwh: float | None,
-) -> _ApplianceProjectionBuildResult:
-    demand_profile = get_when_active_demand_profile(
-        appliance=appliance,
-        historical_hourly_energy_kwh=historical_hourly_energy_kwh,
-    )
-    return _build_constant_hourly_projection_series(
-        appliance_id=appliance.id,
-        schedule_document=schedule_document,
-        reference_time=reference_time,
-        demand_profile=demand_profile,
-        resolve_action_projection=lambda action: _resolve_climate_action_projection(
-            action,
-            appliance=appliance,
-        ),
-    )
-
-
 def _resolve_projected_hourly_energy_kwh(
     *,
     projection_strategy: str,
@@ -461,7 +414,7 @@ def _resolve_projected_hourly_energy_kwh(
 
 def get_when_active_demand_profile(
     *,
-    appliance: GenericApplianceRuntime | ClimateApplianceRuntime,
+    projection: ProjectionConfig,
     historical_hourly_energy_kwh: float | None = None,
     resolved_hourly_energy_kwh: float | None = None,
 ) -> WhenActiveDemandProfile | None:
@@ -475,8 +428,8 @@ def get_when_active_demand_profile(
 
     resolved_hourly_energy_kwh, projection_method = (
         _resolve_projected_hourly_energy_kwh(
-            projection_strategy=appliance.projection_strategy,
-            hourly_energy_kwh=appliance.hourly_energy_kwh,
+            projection_strategy=projection.strategy,
+            hourly_energy_kwh=projection.hourly_energy_kwh,
             historical_hourly_energy_kwh=historical_hourly_energy_kwh,
         )
     )
@@ -516,9 +469,7 @@ def _build_constant_hourly_projection_series(
     schedule_document: ScheduleDocument,
     reference_time: datetime,
     demand_profile: WhenActiveDemandProfile | None,
-    resolve_action_projection: Callable[
-        [Mapping[str, object]], tuple[bool, str | None]
-    ],
+    is_running: Callable[[Mapping[str, Any]], bool],
 ) -> _ApplianceProjectionBuildResult:
     points: list[ApplianceProjectionPlanPoint] = []
     demand_points: list[ApplianceDemandPoint] = []
@@ -528,8 +479,7 @@ def _build_constant_hourly_projection_series(
         if not isinstance(action, Mapping):
             continue
 
-        is_active, mode = resolve_action_projection(action)
-        if not is_active:
+        if not is_running(action):
             continue
 
         if demand_profile is None:
@@ -564,7 +514,8 @@ def _build_constant_hourly_projection_series(
             ApplianceProjectionPlanPoint(
                 slot_id=slot_id,
                 energy_kwh=round(energy_kwh, 4),
-                mode=mode,
+                # A climate action carries the mode it runs in; a switch none.
+                mode=action.get("mode"),
                 projection_method=demand_profile.projection_method,
             )
         )
@@ -587,27 +538,6 @@ def _build_constant_hourly_projection_series(
         ),
         demand_points=tuple(demand_points),
     )
-
-
-def _resolve_generic_action_projection(
-    action: Mapping[str, object],
-) -> tuple[bool, str | None]:
-    return action.get("on") is True, None
-
-
-def _resolve_climate_action_projection(
-    action: Mapping[str, object],
-    *,
-    appliance: ClimateApplianceRuntime,
-) -> tuple[bool, str | None]:
-    mode = action.get("mode")
-    if not isinstance(mode, str):
-        return False, None
-    if mode == appliance.stop_hvac_mode:
-        return False, None
-    if mode in appliance.authorable_modes:
-        return True, mode
-    return False, None
 
 
 def _build_schedule_slot_slices(
@@ -797,7 +727,7 @@ def read_vehicle_remaining_capacity_kwh_by_vehicle_id(
     """
     remaining_by_vehicle_id: dict[str, float | None] = {}
     for appliance in registry.appliances:
-        if not isinstance(appliance, EvChargerApplianceRuntime):
+        if appliance.kind != CONTROLLABLE_KIND_EV_CHARGER:
             continue
         for vehicle in appliance.vehicles:
             remaining_by_vehicle_id[vehicle.id] = _read_vehicle_remaining_capacity_kwh(

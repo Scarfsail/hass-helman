@@ -1,23 +1,21 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal, TypedDict
+from typing import TypedDict
 
-from ..const import DEFAULT_HISTORY_LOOKBACK_DAYS
 from ..controllables.config import SWITCH_CONTROL_DOMAINS
-from .errors import ApplianceConfigError
-from .icon import read_optional_appliance_icon, resolve_appliance_icon
+from ..controllables.kinds import CONTROLLABLE_KIND_GENERIC
+from ._read import (
+    ProjectionConfig,
+    read_entity_id,
+    read_kind,
+    read_mapping,
+    read_optional_icon,
+    read_projection_config,
+    read_required_string,
+)
+from .icon import resolve_appliance_icon
 from .roster import ControllableRosterFieldsDict, EntityReferenceDict
-
-_GENERIC_APPLIANCE_KIND = "generic"
-_GENERIC_PROJECTION_STRATEGIES = {"fixed", "history_average"}
-
-GenericProjectionStrategy = Literal["fixed", "history_average"]
-
-
-class GenericApplianceConfigError(ApplianceConfigError):
-    """Raised when a generic appliance config is invalid."""
 
 
 @dataclass(frozen=True)
@@ -25,22 +23,12 @@ class GenericApplianceRuntime:
     id: str
     name: str
     switch_entity_id: str
-    projection_strategy: GenericProjectionStrategy
-    hourly_energy_kwh: float
-    history_energy_entity_id: str | None
-    history_lookback_days: int = DEFAULT_HISTORY_LOOKBACK_DAYS
+    projection: ProjectionConfig
     icon: str | None = None
 
     @property
     def kind(self) -> str:
-        return _GENERIC_APPLIANCE_KIND
-
-    @property
-    def uses_history_average(self) -> bool:
-        return (
-            self.projection_strategy == "history_average"
-            and self.history_energy_entity_id is not None
-        )
+        return CONTROLLABLE_KIND_GENERIC
 
 
 class GenericApplianceScheduleCapabilitiesDict(TypedDict):
@@ -92,118 +80,23 @@ def read_generic_appliance(
     *,
     path: str,
 ) -> GenericApplianceRuntime:
-    if not isinstance(value, Mapping):
-        raise GenericApplianceConfigError(path, "must be an object")
+    value = read_mapping(value, path=path)
+    read_kind(value, path=path, kind=CONTROLLABLE_KIND_GENERIC)
+    appliance_id = read_required_string(value.get("id"), path=f"{path}.id")
+    name = read_required_string(value.get("name"), path=f"{path}.name")
 
-    kind = _read_required_string(value.get("kind"), path=f"{path}.kind")
-    if kind != _GENERIC_APPLIANCE_KIND:
-        raise GenericApplianceConfigError(
-            f"{path}.kind",
-            f"must be {_GENERIC_APPLIANCE_KIND!r}",
-        )
-
-    appliance_id = _read_required_string(value.get("id"), path=f"{path}.id")
-    name = _read_required_string(value.get("name"), path=f"{path}.name")
-
-    controls = _read_mapping(value.get("controls"), path=f"{path}.controls")
-    switch = _read_mapping(controls.get("switch"), path=f"{path}.controls.switch")
-    switch_entity_id = _read_entity_id(
+    controls = read_mapping(value.get("controls"), path=f"{path}.controls")
+    switch = read_mapping(controls.get("switch"), path=f"{path}.controls.switch")
+    switch_entity_id = read_entity_id(
         switch.get("entity_id"),
         path=f"{path}.controls.switch.entity_id",
         allowed_domains=SWITCH_CONTROL_DOMAINS,
     )
 
-    consumption = _read_mapping(value.get("consumption"), path=f"{path}.consumption")
-    projection = _read_mapping(
-        consumption.get("projection"), path=f"{path}.consumption.projection"
-    )
-    projection_strategy = _read_projection_strategy(
-        projection.get("strategy"),
-        path=f"{path}.consumption.projection.strategy",
-    )
-    hourly_energy_kwh = _read_positive_float(
-        projection.get("hourly_energy_kwh"),
-        path=f"{path}.consumption.projection.hourly_energy_kwh",
-    )
-
-    history_energy_entity_id = None
-    history_lookback_days = DEFAULT_HISTORY_LOOKBACK_DAYS
-    if projection_strategy == "history_average":
-        history_energy_entity_id = _read_entity_id(
-            consumption.get("energy_entity_id"),
-            path=f"{path}.consumption.energy_entity_id",
-            allowed_domains=("sensor",),
-        )
-        history_lookback_days = _read_positive_int(
-            projection.get("lookback_days", DEFAULT_HISTORY_LOOKBACK_DAYS),
-            path=f"{path}.consumption.projection.lookback_days",
-        )
-
     return GenericApplianceRuntime(
         id=appliance_id,
         name=name,
         switch_entity_id=switch_entity_id,
-        projection_strategy=projection_strategy,
-        hourly_energy_kwh=hourly_energy_kwh,
-        history_energy_entity_id=history_energy_entity_id,
-        history_lookback_days=history_lookback_days,
-        icon=read_optional_appliance_icon(
-            value.get("icon"),
-            path=f"{path}.icon",
-            error_type=GenericApplianceConfigError,
-        ),
+        projection=read_projection_config(value, path=path),
+        icon=read_optional_icon(value.get("icon"), path=f"{path}.icon"),
     )
-
-
-def _read_mapping(value: object, *, path: str) -> Mapping[str, object]:
-    if not isinstance(value, Mapping):
-        raise GenericApplianceConfigError(path, "must be an object")
-    return {str(key): item for key, item in value.items()}
-
-
-def _read_required_string(value: object, *, path: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise GenericApplianceConfigError(path, "must be a non-empty string")
-    return value.strip()
-
-
-def _read_entity_id(
-    value: object,
-    *,
-    path: str,
-    allowed_domains: tuple[str, ...],
-) -> str:
-    entity_id = _read_required_string(value, path=path)
-    domain, separator, object_id = entity_id.partition(".")
-    if not separator or not object_id or domain not in allowed_domains:
-        allowed = ", ".join(sorted(allowed_domains))
-        raise GenericApplianceConfigError(
-            path,
-            f"must use one of the supported domains: {allowed}",
-        )
-    return entity_id
-
-
-def _read_projection_strategy(value: object, *, path: str) -> GenericProjectionStrategy:
-    strategy = _read_required_string(value, path=path)
-    if strategy not in _GENERIC_PROJECTION_STRATEGIES:
-        allowed = ", ".join(sorted(_GENERIC_PROJECTION_STRATEGIES))
-        raise GenericApplianceConfigError(path, f"must be one of {allowed}")
-    return strategy
-
-
-def _read_positive_float(value: object, *, path: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise GenericApplianceConfigError(path, "must be a positive number")
-    parsed = float(value)
-    if parsed <= 0:
-        raise GenericApplianceConfigError(path, "must be greater than zero")
-    return parsed
-
-
-def _read_positive_int(value: object, *, path: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int):
-        raise GenericApplianceConfigError(path, "must be a positive integer")
-    if value <= 0:
-        raise GenericApplianceConfigError(path, "must be greater than zero")
-    return value

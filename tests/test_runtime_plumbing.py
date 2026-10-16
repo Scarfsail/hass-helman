@@ -158,6 +158,7 @@ def test_schedule_rejects_compact_date_with_invalid_date():
 
 def test_registry_holder_refresh_is_visible_to_executor_and_retains_unchanged_registry():
     from tests._fakes import FakeHass, FakeState, make_coordinator
+    from custom_components.helman.appliances._read import ProjectionConfig
     from custom_components.helman.appliances.climate_appliance import (
         ClimateApplianceRuntime,
     )
@@ -169,7 +170,14 @@ def test_registry_holder_refresh_is_visible_to_executor_and_retains_unchanged_re
     coordinator = make_coordinator(_hass=hass)
     holder = coordinator._appliances_registry
     holder.current = AppliancesRuntimeRegistry.from_appliances(
-        [ClimateApplianceRuntime("room", "Room", "climate.room", "fixed", 1.0, None)]
+        [
+            ClimateApplianceRuntime(
+                "room",
+                "Room",
+                "climate.room",
+                ProjectionConfig(strategy="fixed", hourly_energy_kwh=1.0),
+            )
+        ]
     )
     original = holder.current
     read_registry = (

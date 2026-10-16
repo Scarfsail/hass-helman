@@ -23,6 +23,7 @@ def _install_import_stubs() -> None:
 
 _install_import_stubs()
 
+from custom_components.helman.appliances._read import ProjectionConfig  # noqa: E402
 from custom_components.helman.appliances.climate_appliance import (  # noqa: E402
     ClimateApplianceRuntime,
 )
@@ -36,12 +37,14 @@ from custom_components.helman.appliances.ev_charger import (  # noqa: E402
 from custom_components.helman.appliances.generic_appliance import (  # noqa: E402
     GenericApplianceRuntime,
 )
-from custom_components.helman.appliances.execution import (  # noqa: E402
-    ApplianceExecutionMemory,
-    ApplianceExecutor,
+from custom_components.helman.appliances.drivers import (  # noqa: E402
     ClimateApplianceDriver,
     EvChargerDriver,
     GenericApplianceDriver,
+)
+from custom_components.helman.appliances.execution import (  # noqa: E402
+    ApplianceExecutionMemory,
+    ApplianceExecutor,
 )
 from custom_components.helman.scheduling.actuation import (  # noqa: E402
     ScheduleActuator,
@@ -237,9 +240,7 @@ def _build_generic_appliance() -> GenericApplianceRuntime:
         id="dishwasher",
         name="Dishwasher",
         switch_entity_id="switch.dishwasher",
-        projection_strategy="fixed",
-        hourly_energy_kwh=1.1,
-        history_energy_entity_id=None,
+        projection=ProjectionConfig(strategy="fixed", hourly_energy_kwh=1.1),
     )
 
 
@@ -248,9 +249,7 @@ def _build_climate_appliance() -> ClimateApplianceRuntime:
         id="living-room-hvac",
         name="Living Room HVAC",
         climate_entity_id="climate.living_room",
-        projection_strategy="fixed",
-        hourly_energy_kwh=1.5,
-        history_energy_entity_id=None,
+        projection=ProjectionConfig(strategy="fixed", hourly_energy_kwh=1.5),
     )
 
 

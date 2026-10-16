@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import NotRequired, TypedDict
+from typing import Any, NotRequired, TypedDict
 
 from .climate_appliance import (
+    SUPPORTED_CLIMATE_MODES,
     ClimateApplianceMode,
     ClimateApplianceRuntime,
 )
@@ -81,3 +82,14 @@ def normalize_climate_appliance_schedule_action(
     if condition_not_met:
         payload["conditionMet"] = False
     return payload
+
+
+def is_climate_action_running(action: Mapping[str, Any]) -> bool:
+    """A climate appliance runs while its normalized action heats or cools.
+
+    The normalizer above accepts only an authorable mode — always one of
+    :data:`SUPPORTED_CLIMATE_MODES` — or the appliance's own stop mode, so
+    "one of the supported modes" and "not the stop mode" are the same answer on
+    a normalized action, and this one needs no appliance to give it.
+    """
+    return action.get("mode") in SUPPORTED_CLIMATE_MODES

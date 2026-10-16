@@ -10,21 +10,9 @@ from ..scheduling.normal_state import (
     iter_controllable_sources,
 )
 from ..scheduling.schedule import ScheduleControlConfig
-from .climate_appliance import (
-    ClimateApplianceResponseDict,
-    ClimateApplianceRuntime,
-    build_climate_appliance_metadata_dict,
-)
-from .ev_charger import (
-    EvChargerApplianceResponseDict,
-    EvChargerApplianceRuntime,
-    build_ev_charger_metadata_dict,
-)
-from .generic_appliance import (
-    GenericApplianceResponseDict,
-    GenericApplianceRuntime,
-    build_generic_appliance_metadata_dict,
-)
+from .climate_appliance import ClimateApplianceResponseDict
+from .ev_charger import EvChargerApplianceResponseDict
+from .generic_appliance import GenericApplianceResponseDict
 from .roster import ControllableRosterFieldsDict
 from .state import AppliancesRuntimeRegistry
 
@@ -78,7 +66,7 @@ def build_appliances_response(
                 "supportsAuthoring": True,
             })
         else:
-            appliances.append(_build_appliance_metadata(source, roster))
+            appliances.append(spec.metadata(source, roster))
     return {"appliances": appliances}
 
 
@@ -91,14 +79,3 @@ def _roster_fields(entity: ControllableEntityDict) -> ControllableRosterFieldsDi
         roster["actionOptions"] = entity["actionOptions"]
     return roster
 
-
-def _build_appliance_metadata(
-    appliance, roster: ControllableRosterFieldsDict
-) -> ApplianceResponseDict:
-    if isinstance(appliance, ClimateApplianceRuntime):
-        return build_climate_appliance_metadata_dict(appliance, roster)
-    if isinstance(appliance, EvChargerApplianceRuntime):
-        return build_ev_charger_metadata_dict(appliance, roster)
-    if isinstance(appliance, GenericApplianceRuntime):
-        return build_generic_appliance_metadata_dict(appliance, roster)
-    raise TypeError(f"Unsupported appliance runtime {type(appliance)!r}")

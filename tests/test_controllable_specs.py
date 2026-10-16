@@ -197,6 +197,17 @@ class ControllableSpecRegistryTests(unittest.TestCase):
             {"climate", "ev_charger", "generic"},
         )
 
+    def test_every_appliance_kind_declares_its_behaviour(self) -> None:
+        """A kind missing a driver used to fail at import; now this fails instead."""
+        behaviour = ("read", "normalize_action", "is_running", "metadata", "driver")
+        for kind, spec in CONTROLLABLE_SPECS.items():
+            declared = {name for name in behaviour if getattr(spec, name) is not None}
+            with self.subTest(kind=kind):
+                self.assertEqual(
+                    declared,
+                    set(behaviour) if spec.affects_consumption else set(),
+                )
+
     def test_only_the_inverter_maps_schedule_actions_to_options(self) -> None:
         """An appliance's state follows from its action shape, not an option map."""
         self.assertEqual(

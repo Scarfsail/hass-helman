@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from typing import NotRequired, TypedDict
 
-from .climate_appliance import ClimateApplianceRuntime
+from ..controllables.spec import CONTROLLABLE_KIND_EV_CHARGER
 from .ev_charger import EvChargerApplianceRuntime
-from .generic_appliance import GenericApplianceRuntime
 from .projection_builder import ApplianceProjectionPlan, ApplianceProjectionSeries
 from .state import AppliancesRuntimeRegistry
 
@@ -50,18 +49,14 @@ def build_appliance_projections_response(
         if appliance is None:
             continue
 
-        if isinstance(appliance, ClimateApplianceRuntime):
-            response_points = _build_climate_projection_points(series=series)
-        elif isinstance(appliance, EvChargerApplianceRuntime):
+        if appliance.kind == CONTROLLABLE_KIND_EV_CHARGER:
             response_points = _build_ev_projection_points(
                 series=series,
                 appliance=appliance,
                 hass=hass,
             )
-        elif isinstance(appliance, GenericApplianceRuntime):
-            response_points = _build_generic_projection_points(series=series)
         else:
-            continue
+            response_points = _build_constant_rate_projection_points(series=series)
 
         if response_points:
             appliances[appliance_id] = {"series": response_points}
@@ -121,25 +116,7 @@ def _build_ev_projection_points(
     return response_points
 
 
-def _build_generic_projection_points(
-    *,
-    series: ApplianceProjectionSeries,
-) -> list[ApplianceProjectionPointDict]:
-    response_points: list[ApplianceProjectionPointDict] = []
-
-    for point in series.points:
-        response_point: ApplianceProjectionPointDict = {
-            "slotId": point.slot_id,
-            "energyKwh": point.energy_kwh,
-        }
-        if point.projection_method is not None:
-            response_point["projectionMethod"] = point.projection_method
-        response_points.append(response_point)
-
-    return response_points
-
-
-def _build_climate_projection_points(
+def _build_constant_rate_projection_points(
     *,
     series: ApplianceProjectionSeries,
 ) -> list[ApplianceProjectionPointDict]:
