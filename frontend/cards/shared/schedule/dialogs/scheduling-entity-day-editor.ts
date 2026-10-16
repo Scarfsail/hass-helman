@@ -53,7 +53,7 @@ import {
     type ScheduleApplianceProjectionIndex,
 } from "../model/schedule-appliance-projection";
 import { getScheduleApplianceActionPresentation } from "../model/schedule-appliance-action-presentation";
-import type { ScheduleApplianceMetadata } from "../model/schedule-appliance-metadata";
+import { describeScheduleAppliance, type ScheduleApplianceMetadata } from "../model/schedule-appliance-metadata";
 import { formatScheduleTime } from "../model/schedule-time";
 import type { SlotForecastPoint } from "../model/slot-forecast-model";
 import type {
@@ -931,12 +931,9 @@ export class SchedulingEntityDayEditor extends LitElement {
         const applianceAction = action === null || isEntityInverterAction(action)
             ? null
             : action as ScheduleApplianceAction;
-        const appliance = lane.appliance ?? {
-            id: "unknown",
-            name: lane.name,
-            kind: "generic",
-            icon: lane.icon,
-        };
+        const appliance = lane.appliance === null
+            ? { id: "unknown", name: lane.name, kind: "generic", icon: lane.icon }
+            : describeScheduleAppliance(lane.appliance);
         return html`
             <scheduling-appliance-chip
                 .appliance=${appliance}
@@ -972,7 +969,7 @@ export class SchedulingEntityDayEditor extends LitElement {
             // nothing to resolve, so the lane's label keeps its static icon.
             entityId: "",
             name: this.entityName,
-            icon: this.appliance?.icon ?? this.entityIcon,
+            icon: this.appliance?.metadata.icon ?? this.entityIcon,
             appliance: this.appliance,
             isAvailable: true,
             actualSlots: [],
@@ -1741,7 +1738,7 @@ export class SchedulingEntityDayEditor extends LitElement {
             return { charge: true };
         }
         if (appliance !== null && appliance.supportsAuthoring && appliance.kind === "climate") {
-            const modes: readonly string[] = appliance.scheduleCapabilities.modes;
+            const modes: readonly string[] = appliance.metadata.scheduleCapabilities.modes;
             const mode = modes.find((candidate) => candidate !== "off");
             return mode === undefined ? null : { mode };
         }

@@ -107,7 +107,10 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
             name: "Boiler",
             icon: "mdi:water-boiler",
             target: "boiler",
-            appliance: { id: "boiler", kind: "generic", name: "Boiler", icon: "mdi:water-boiler" },
+            appliance: {
+                id: "boiler", kind: "generic", name: "Boiler", primaryEntityId: "switch.boiler", supportsAuthoring: true, normalState: "off",
+                metadata: { icon: "mdi:water-boiler", scheduleCapabilities: { onOffToggle: true } }, controls: { switch: { entityId: "switch.boiler" } },
+            },
             isAvailable: true,
             // 08:00-10:00 behind the now-line, 12:00-14:00 ahead of it.
             actualSegments: [{

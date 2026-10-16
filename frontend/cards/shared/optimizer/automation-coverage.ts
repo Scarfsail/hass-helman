@@ -1,21 +1,7 @@
 import { callHelman } from "../data/helman-commands";
 import type { HomeAssistant } from "../../../types/ha";
-import { asJsonArray, asJsonObject } from "../config/config-document";
-import { booleanValue, stringValue } from "../config/form-fields";
-import type { JsonObject } from "../config/types";
+import type { AutomationCoverageStateDTO } from "../../helman-api";
 import { getSharedDataChangedFeed } from "../../helman/data-changed";
-import { fetchOptimizerSchema, type OptimizerSchemaDocument } from "./optimizer-schema";
-
-/**
- * The backend's "you are not an admin", which `helman/get_config` answers a
- * non-admin viewer with. Matched on the code the handler sends, not on the
- * message, which is prose.
- */
-function _isUnauthorized(error: unknown): boolean {
-    return typeof error === "object"
-        && error !== null
-        && (error as { code?: unknown }).code === "unauthorized";
-}
 
 /**
  * Which automations drive one controllable, and whether any of them is live.
@@ -24,13 +10,18 @@ function _isUnauthorized(error: unknown): boolean {
  * enabled or not: the badge that opens them is the one place a person goes to
  * switch a disabled automation back on, so hiding the disabled ones would hide
  * the only thing they came for.
+ *
+ * The backend resolves it from the parsed automation config -- both target
+ * shapes, the schema's default target, `enabled` and the master switch -- so the
+ * badge and the pipeline read one answer. A lane it says nothing about is
+ * `none`: no optimizer targets it.
  */
 export interface LaneAutomationCoverage {
     state: LaneAutomationCoverageState;
     optimizerIds: readonly string[];
 }
 
-export type LaneAutomationCoverageState = "active" | "disabled_only" | "none";
+export type LaneAutomationCoverageState = AutomationCoverageStateDTO | "none";
 
 /** Coverage by controllable id -- the lane's own key. */
 export type AutomationCoverageIndex = ReadonlyMap<string, LaneAutomationCoverage>;
@@ -46,111 +37,11 @@ export function getLaneAutomationCoverage(
 }
 
 /**
- * The config's optimizer pipeline, read as "what drives which lane".
- *
- * Every optimizer kind names its lanes by controllable id -- `target.controllable_id`,
- * with `"inverter"` for the inverter, or one per member of an
- * `appliance_runtime` group's `target.controllables` -- which is exactly the
- * string a band lane
- * carries as its `target`. That shared spelling is the whole mapping; nothing
- * here has to know what an appliance is.
- *
- * The field is optional on the kinds that have a reserved default for it, and
- * the reader resolves those from the schema rather than from the document. So
- * does this: a hand-authored `charge_hold` with no target still drives the
- * inverter, and a badge that called that lane manual would be wrong in exactly
- * the way the badge exists to prevent. The default is read from the served
- * schema rather than from a list spelled out here, because a list here would be
- * a second answer to "which kinds mean the inverter" and would go stale the day
- * a fourth one arrives.
- *
- * `enabled` defaults to true when absent, the same reading
- * `helman-optimizer-editor` uses to style its card, so the badge and the card
- * can never disagree about whether an automation is on.
- *
- * The automation's master switch overrides every optimizer: with `automation`
- * off nothing in the pipeline runs, so a lane whose optimizers are all enabled
- * is still not being driven. Calling that `active` would be a lie the user
- * could act on.
- */
-export function buildAutomationCoverageIndex(
-    config: JsonObject,
-    schema: OptimizerSchemaDocument | null = null,
-): AutomationCoverageIndex {
-    const automation = asJsonObject(config.automation);
-    const masterEnabled = booleanValue(automation?.enabled, true);
-    const index = new Map<string, { optimizerIds: string[]; anyEnabled: boolean }>();
-
-    // Both buckets, in document order within each: coverage answers "which
-    // lane does this optimizer drive", a question the bucket split does not
-    // change. Appliance first is arbitrary -- a lane driven from both buckets
-    // does not exist today (the inverter is system-only, appliances are
-    // appliance-only), so no ordering question actually arises here.
-    const optimizerEntries = [
-        ...(asJsonArray(automation?.appliance_optimizers) ?? []),
-        ...(asJsonArray(automation?.system_optimizers) ?? []),
-    ];
-
-    for (const entry of optimizerEntries) {
-        const optimizer = asJsonObject(entry);
-        if (!optimizer) {
-            continue;
-        }
-        // An optimizer id counts once per lane it drives, so a group lists its
-        // id under every member.
-        const optimizerId = stringValue(optimizer.id);
-        for (const controllableId of _targetControllableIds(optimizer, schema)) {
-            const existing = index.get(controllableId) ?? { optimizerIds: [], anyEnabled: false };
-            // An optimizer with no id cannot be opened in the edit dialog, which
-            // resolves by id -- but it still counts towards the lane's state, so
-            // the badge does not call an automated lane manual.
-            if (optimizerId.length > 0) {
-                existing.optimizerIds.push(optimizerId);
-            }
-            existing.anyEnabled ||= masterEnabled && booleanValue(optimizer.enabled, true);
-            index.set(controllableId, existing);
-        }
-    }
-
-    return new Map(
-        [...index].map(([controllableId, { optimizerIds, anyEnabled }]): [string, LaneAutomationCoverage] => [
-            controllableId,
-            { state: anyEnabled ? "active" : "disabled_only", optimizerIds },
-        ]),
-    );
-}
-
-/**
- * Every lane an optimizer drives: each member of a `target.controllables` group,
- * or the flat `target.controllable_id`, falling back to the schema's default.
- */
-function _targetControllableIds(
-    optimizer: JsonObject,
-    schema: OptimizerSchemaDocument | null,
-): string[] {
-    const target = asJsonObject(optimizer.target);
-    const members = asJsonArray(target?.controllables);
-    const ids = members
-        ? members.map((member) => stringValue(asJsonObject(member)?.controllable_id))
-        : [
-              stringValue(target?.controllable_id) ||
-                  _schemaTargetDefault(schema, stringValue(optimizer.kind)),
-          ];
-    return ids.filter((id) => id.length > 0);
-}
-
-/** The lane a kind drives when its document does not say -- the schema's own default. */
-function _schemaTargetDefault(schema: OptimizerSchemaDocument | null, kind: string): string {
-    const target = schema?.kinds.find((entry) => entry.kind === kind)?.target;
-    return stringValue(target?.find((field) => field.key === "controllable_id")?.default);
-}
-
-/**
  * The coverage index, read once per connection and kept current.
  *
  * Every lane of every band asks the same question of the same document, so the
  * read is shared the way `getSharedHelmanStore` shares its own: one
- * `helman/get_config` per connection rather than one per element. `get()`
+ * `helman/get_automation_coverage` per connection rather than one per element. `get()`
  * answers `null` until the first read lands, which callers draw as "no badge
  * yet" rather than guessing at "no automation".
  *
@@ -200,21 +91,6 @@ class AutomationCoverageSourceImpl implements AutomationCoverageSource {
      * until some later, unrelated event happened to shake it loose.
      */
     private _rereadRequested = false;
-    /**
-     * The optimizer schema, which needs reading once.
-     *
-     * It is compiled into the integration, so it changes only when Home
-     * Assistant restarts -- and a restart drops this connection and with it
-     * this whole source.
-     */
-    private _schema: OptimizerSchemaDocument | null = null;
-    /**
-     * `helman/get_config` is admin-gated, and a non-admin's refusal is not a
-     * transient failure -- it is the answer. Retrying it on every announcement
-     * for the life of the page would be a rejected round trip per re-plan, for
-     * a badge that can never appear.
-     */
-    private _refused = false;
 
     constructor(hass: HomeAssistant) {
         this._hass = hass;
@@ -257,9 +133,6 @@ class AutomationCoverageSourceImpl implements AutomationCoverageSource {
     }
 
     private async _read(): Promise<void> {
-        if (this._refused) {
-            return;
-        }
         if (this._pending !== null) {
             this._rereadRequested = true;
             return this._pending;
@@ -267,21 +140,15 @@ class AutomationCoverageSourceImpl implements AutomationCoverageSource {
 
         this._pending = (async () => {
             try {
-                this._schema ??= await fetchOptimizerSchema(this._hass);
-                const config = asJsonObject((await callHelman(this._hass, "helman/get_config", { include_revision: true })).config);
-                if (!config) {
-                    return;
-                }
-                this._index = buildAutomationCoverageIndex(config, this._schema);
+                const coverage = await callHelman(this._hass, "helman/get_automation_coverage", {});
+                this._index = new Map(Object.entries(coverage.controllables));
                 for (const listener of this._listeners) {
                     listener(this._index);
                 }
-            } catch (error) {
+            } catch {
                 // A failed read leaves the last good index in place, and the
                 // badge stays dark until the first one lands. Coverage is
                 // decoration on a band that has to keep drawing regardless.
-                // A refusal, though, is a final answer -- see `_refused`.
-                this._refused = _isUnauthorized(error);
             } finally {
                 this._pending = null;
                 if (this._rereadRequested) {

@@ -1769,8 +1769,11 @@ export class SchedulingEntityDayBand extends LitElement {
      * across a stack of lanes. The `title` carries the same answer in words, so
      * the distinction is never colour alone.
      *
-     * Nothing at all until the config has been read: a lane whose coverage is
+     * Nothing at all until the coverage has been read: a lane whose coverage is
      * simply not known yet must not be drawn as a lane nothing automates.
+     *
+     * Every viewer sees it, but only an admin can press it: the optimizer
+     * dialog it opens reads and saves the admin-only config.
      *
      * `disabled_only` says the automation is not running and offers to show it,
      * rather than offering to switch it on: the state is also what the
@@ -1786,9 +1789,10 @@ export class SchedulingEntityDayBand extends LitElement {
         const coverage = getLaneAutomationCoverage(this._automationCoverage, lane.target);
         const title = this.localize(`scheduling.automation_coverage.${coverage.state}`);
         const icon = html`<ha-icon icon="mdi:robot"></ha-icon>`;
-        if (coverage.optimizerIds.length === 0) {
-            // Nothing to open. An inert span rather than a disabled button:
-            // there is no action here to be temporarily unavailable.
+        if (coverage.optimizerIds.length === 0 || this.hass?.user?.is_admin !== true) {
+            // Nothing to open, or nothing this viewer may open. An inert span
+            // rather than a disabled button: there is no action here to be
+            // temporarily unavailable.
             return html`
                 <span class=${`automation-badge ${coverage.state}`} title=${title}>${icon}</span>
             `;

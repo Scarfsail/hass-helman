@@ -63,9 +63,11 @@ from .automation.condition_trace import (
 )
 from .automation.config import (
     AutomationConfig,
+    AutomationConfigError,
     ConditionGroup,
     read_automation_config,
 )
+from .automation.coverage import AutomationCoverageDict, build_automation_coverage
 from .automation.day_context import DayContext
 from .automation.day_context_store import DayContextStore
 from .automation.explain import ExplanationBook, RunExplanation
@@ -186,7 +188,6 @@ from .scheduling.runtime_status import (
 from .scheduling.action_resolution import resolve_executed_schedule_action
 from .scheduling.actual_history import ActualHistorySlot, build_entity_actual_histories
 from .scheduling.normal_state import (
-    ControllableEntityDict,
     build_controllable_entities,
 )
 from .scheduling.schedule_executor import (
@@ -2564,18 +2565,6 @@ class HelmanCoordinator:
             self._last_schedule_control_config_issue = issue
         return None
 
-    def get_controllable_entities(self) -> list[ControllableEntityDict]:
-        """List what Helman can drive, plus each entity's resting state.
-
-        The card filters this against live entity state, so it reacts to state
-        changes without asking the backend again.
-        """
-        self._appliances_registry.refresh()
-        return build_controllable_entities(
-            control_config=self._read_schedule_control_config(),
-            registry=self._appliances_registry.current,
-        )
-
     async def async_get_entity_actual_history(
         self,
     ) -> dict[str, list[ActualHistorySlot]]:
@@ -2586,7 +2575,10 @@ class HelmanCoordinator:
         Asking per entity would queue one round-trip per controllable entity on
         the recorder's single DB thread for no gain.
         """
-        entities = self.get_controllable_entities()
+        control_config, registry = self._controllable_sources()
+        entities = build_controllable_entities(
+            control_config=control_config, registry=registry
+        )
         history = await build_entity_actual_histories(
             self._hass,
             normal_states={
@@ -2782,9 +2774,32 @@ class HelmanCoordinator:
             reference_time=reference_time or dt_util.now()
         )
 
-    async def get_appliances(self) -> ApplianceMetadataResponseDict:
+    def _controllable_sources(self):
+        """The refreshed registry and control config everything drivable is read from."""
         self._appliances_registry.refresh()
-        return build_appliances_response(self._appliances_registry.current)
+        return (
+            self._read_schedule_control_config(),
+            self._appliances_registry.current,
+        )
+
+    async def get_appliances(self) -> ApplianceMetadataResponseDict:
+        control_config, registry = self._controllable_sources()
+        return build_appliances_response(registry, control_config=control_config)
+
+    def get_automation_coverage(self) -> AutomationCoverageDict:
+        """Which automations drive each controllable.
+
+        A stored automation section that does not parse runs nothing, so it
+        covers nothing. Setup and the automation run let that error propagate;
+        this read answers with an empty index instead of failing the card.
+        """
+        try:
+            automation_config = read_automation_config(self._active_config)
+        except AutomationConfigError:
+            automation_config = None
+        return build_automation_coverage(
+            automation_config or AutomationConfig(enabled=False)
+        )
 
     def get_raw_solar_forecast_points(self) -> list[dict[str, Any]]:
         snapshot = self._cached_solar_forecast or {}

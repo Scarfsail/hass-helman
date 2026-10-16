@@ -2,6 +2,14 @@ from __future__ import annotations
 
 from typing import TypedDict
 
+from ..controllables.config import CONTROLLABLE_ID_INVERTER
+from ..controllables.spec import CONTROLLABLE_KIND_INVERTER
+from ..scheduling.normal_state import (
+    ControllableEntityDict,
+    build_controllable_entity,
+    iter_controllable_sources,
+)
+from ..scheduling.schedule import ScheduleControlConfig
 from .climate_appliance import (
     ClimateApplianceResponseDict,
     ClimateApplianceRuntime,
@@ -17,10 +25,22 @@ from .generic_appliance import (
     GenericApplianceRuntime,
     build_generic_appliance_metadata_dict,
 )
+from .roster import ControllableRosterFieldsDict
 from .state import AppliancesRuntimeRegistry
 
+
+class InverterResponseDict(ControllableRosterFieldsDict):
+    """The inverter's entry: the roster fields alone, under its reserved id."""
+
+    id: str
+    name: str
+    kind: str
+    supportsAuthoring: bool
+
+
 ApplianceResponseDict = (
-    ClimateApplianceResponseDict
+    InverterResponseDict
+    | ClimateApplianceResponseDict
     | EvChargerApplianceResponseDict
     | GenericApplianceResponseDict
 )
@@ -32,17 +52,53 @@ class ApplianceMetadataResponseDict(TypedDict):
 
 def build_appliances_response(
     registry: AppliancesRuntimeRegistry,
+    *,
+    control_config: ScheduleControlConfig | None = None,
 ) -> ApplianceMetadataResponseDict:
-    return {
-        "appliances": [_build_appliance_metadata(appliance) for appliance in registry.appliances]
-    }
+    """Everything Helman can drive, in configuration order, the inverter first.
+
+    One list serves both questions the card asks of it: each kind's own payload
+    (the EV node detail reads the charger's controls and vehicles), and the
+    resting state the schedule surfaces compare live state against.
+    """
+    appliances: list[ApplianceResponseDict] = []
+    for spec, source in iter_controllable_sources(
+        control_config=control_config, registry=registry
+    ):
+        entity = build_controllable_entity(spec, source)
+        if entity is None:
+            continue
+        roster = _roster_fields(entity)
+        if spec.kind == CONTROLLABLE_KIND_INVERTER:
+            appliances.append({
+                "id": CONTROLLABLE_ID_INVERTER,
+                "name": entity["name"],
+                "kind": spec.kind,
+                **roster,
+                "supportsAuthoring": True,
+            })
+        else:
+            appliances.append(_build_appliance_metadata(source, roster))
+    return {"appliances": appliances}
 
 
-def _build_appliance_metadata(appliance) -> ApplianceResponseDict:
+def _roster_fields(entity: ControllableEntityDict) -> ControllableRosterFieldsDict:
+    roster = ControllableRosterFieldsDict(
+        primaryEntityId=entity["entityId"],
+        normalState=entity["normalState"],
+    )
+    if "actionOptions" in entity:
+        roster["actionOptions"] = entity["actionOptions"]
+    return roster
+
+
+def _build_appliance_metadata(
+    appliance, roster: ControllableRosterFieldsDict
+) -> ApplianceResponseDict:
     if isinstance(appliance, ClimateApplianceRuntime):
-        return build_climate_appliance_metadata_dict(appliance)
+        return build_climate_appliance_metadata_dict(appliance, roster)
     if isinstance(appliance, EvChargerApplianceRuntime):
-        return build_ev_charger_metadata_dict(appliance)
+        return build_ev_charger_metadata_dict(appliance, roster)
     if isinstance(appliance, GenericApplianceRuntime):
-        return build_generic_appliance_metadata_dict(appliance)
+        return build_generic_appliance_metadata_dict(appliance, roster)
     raise TypeError(f"Unsupported appliance runtime {type(appliance)!r}")

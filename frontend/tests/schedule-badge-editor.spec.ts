@@ -46,6 +46,9 @@ async function installFakeBackend(page: Page): Promise<void> {
             id,
             name,
             kind: "generic",
+            primaryEntityId: `switch.${id}`,
+            supportsAuthoring: true,
+            normalState: "off",
             metadata: { icon: "mdi:flash", scheduleCapabilities: { onOffToggle: true } },
             controls: { switch: { entityId: `switch.${id}` } },
         });
@@ -90,16 +93,6 @@ async function installFakeBackend(page: Page): Promise<void> {
                         appliances: [
                             appliance("dishwasher", "Dishwasher"),
                             appliance("boiler", "Boiler"),
-                        ],
-                    };
-                },
-                "helman/get_controllable_entities": async (msg: {
-                    type: string;
-                }) => {
-                    return {
-                        entities: [
-                            { kind: "generic", name: "Dishwasher", entityId: "switch.dishwasher", normalState: "off" },
-                            { kind: "generic", name: "Boiler", entityId: "switch.boiler", normalState: "off" },
                         ],
                     };
                 },
@@ -157,12 +150,31 @@ async function mount(page: Page, nodes: FakeNode[]): Promise<void> {
         await boxes.updateComplete;
     }, nodes);
 
-    // The host needs its schedule and both rosters before it has lanes to open
+    // The host needs its schedule and the roster before it has lanes to open
     // on; until then a press is correctly a no-op.
     await page.waitForFunction(() => {
         const host = document.querySelector("scheduling-day-editor-host") as any;
         return (host?.lanes?.length ?? 0) >= 2;
     });
+}
+
+/** The badge on the row with this label, as the colour its authorship tints it. */
+async function badgeColor(page: Page, label: string): Promise<string> {
+    return page.evaluate(async (wanted) => {
+        const boxes = document.querySelector("helman-tree-item-list") as any;
+        for (const row of [...boxes.shadowRoot.querySelectorAll("helman-tree-item")] as any[]) {
+            await row.updateComplete;
+            const content = row.shadowRoot.querySelector(".deviceContent");
+            const name = (content.querySelector(".deviceName")?.textContent ?? "").trim();
+            if (!name.startsWith(wanted)) continue;
+            const info = content.querySelector("helman-tree-item-info");
+            await info.updateComplete;
+            const badge = info.shadowRoot.querySelector("helman-schedule-badge") as any;
+            await badge.updateComplete;
+            return (badge.shadowRoot.querySelector("ha-icon") as HTMLElement).style.color;
+        }
+        throw new Error(`no row labelled "${wanted}"`);
+    }, label);
 }
 
 /** Press the badge on the row with this label. */
@@ -393,6 +405,27 @@ test.describe("opening the day editor from a scheduling badge", () => {
 
         await page.evaluate(() => (window as any).__releaseWrite());
         await expect.poll(types).toEqual(["helman/set_schedule", "helman/get_schedule"]);
+    });
+
+    /**
+     * The roster carries each controllable's resting state, so the badges and
+     * the editor need nothing but `helman/get_appliances` to tell a scheduled
+     * run from a scheduled stop.
+     */
+    test("the badges and the editor draw from the appliance roster alone", async ({ page }) => {
+        await mount(page, [
+            { id: "s1", name: "Dishwasher", deferrable: true, controllableIds: ["dishwasher"] },
+            { id: "s2", name: "Boiler", deferrable: true, controllableIds: ["boiler"] },
+        ]);
+
+        await expect.poll(() => badgeColor(page, "Boiler")).toContain("--schedule-authorship-user-color");
+        expect(await badgeColor(page, "Dishwasher")).toContain("--schedule-authorship-automation-color");
+
+        const types = (await mockRequests(page)).map((request) => request.type);
+        expect(types).not.toContain("helman/get_controllable_entities");
+        // The host and the badge source ask together, and the shared store
+        // answers both with one read.
+        expect(types.filter((type) => type === "helman/get_appliances")).toHaveLength(1);
     });
 
     test("nothing is open until a badge is pressed", async ({ page }) => {

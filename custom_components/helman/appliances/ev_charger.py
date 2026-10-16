@@ -6,6 +6,7 @@ from typing import Any, Literal, NotRequired, TypedDict
 
 from .errors import ApplianceConfigError
 from .icon import read_optional_appliance_icon, resolve_appliance_icon
+from .roster import ControllableRosterFieldsDict, EntityReferenceDict
 
 _EV_CHARGER_KIND = "ev_charger"
 _FIXED_MAX_POWER_BEHAVIOR = "fixed_max_power"
@@ -83,10 +84,6 @@ class EvChargerApplianceRuntime:
         return self.vehicles_by_id.get(vehicle_id)
 
 
-class EntityReferenceDict(TypedDict):
-    entityId: str
-
-
 class ApplianceScheduleCapabilitiesDict(TypedDict):
     chargeToggle: bool
     useModes: list[str]
@@ -123,10 +120,11 @@ class EvChargerMetadataDict(TypedDict):
     scheduleCapabilities: ApplianceScheduleCapabilitiesDict
 
 
-class EvChargerApplianceResponseDict(TypedDict):
+class EvChargerApplianceResponseDict(ControllableRosterFieldsDict):
     id: str
     name: str
     kind: str
+    supportsAuthoring: bool
     metadata: EvChargerMetadataDict
     controls: ApplianceControlsDict
     vehicles: list[EvVehicleResponseDict]
@@ -181,11 +179,14 @@ def read_ev_charger_appliance(
 
 def build_ev_charger_metadata_dict(
     appliance: EvChargerApplianceRuntime,
+    roster: ControllableRosterFieldsDict,
 ) -> EvChargerApplianceResponseDict:
     return {
         "id": appliance.id,
         "name": appliance.name,
         "kind": appliance.kind,
+        **roster,
+        "supportsAuthoring": True,
         "metadata": {
             "icon": resolve_appliance_icon(appliance.icon),
             "maxChargingPowerKw": appliance.max_charging_power_kw,

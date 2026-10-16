@@ -178,20 +178,11 @@ test.describe("the schedule host's clock", () => {
                                     id: "boiler",
                                     name: "Boiler",
                                     kind: "generic",
+                                    primaryEntityId: "switch.boiler",
+                                    supportsAuthoring: true,
+                                    normalState: "off",
                                     metadata: { icon: "mdi:flash", scheduleCapabilities: { onOffToggle: true } },
                                     controls: { switch: { entityId: "switch.boiler" } },
-                                }],
-                        };
-                    },
-                    "helman/get_controllable_entities": async (msg: {
-                        type: string;
-                    }) => {
-                        return {
-                            entities: [{
-                                    kind: "generic",
-                                    name: "Boiler",
-                                    entityId: "switch.boiler",
-                                    normalState: "off",
                                 }],
                         };
                     },

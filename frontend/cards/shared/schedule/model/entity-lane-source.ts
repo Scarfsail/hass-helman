@@ -1,5 +1,5 @@
 import type { LocalizeFunction } from "../../../localize/localize";
-import type { ControllableEntityDTO, EntityActualHistorySlotDTO, ForecastPayload } from "../../../helman-api";
+import type { EntityActualHistorySlotDTO, ForecastPayload } from "../../../helman-api";
 import { isScheduleEvChargerAction } from "../schedule-types";
 import type { ScheduleDisplaySlot, ScheduleSlot } from "../schedule-types";
 import {
@@ -23,7 +23,12 @@ import {
     type EntityScheduleLane,
     type EntityScheduleTarget,
 } from "./entity-day-schedule-model";
-import { getScheduleApplianceById, type ScheduleApplianceMetadata } from "./schedule-appliance-metadata";
+import {
+    asScheduleAppliance,
+    describeScheduleAppliance,
+    type ScheduleApplianceMetadata,
+    type ScheduleControllable,
+} from "./schedule-appliance-metadata";
 import {
     buildScheduleVehicleSocSlots,
     EMPTY_SCHEDULE_APPLIANCE_PROJECTION_INDEX,
@@ -72,44 +77,40 @@ import {
  */
 export function buildEntityScheduleLanes({
     statuses,
-    controllableEntities,
-    appliances,
+    controllables,
     actualHistory,
     slotDurationMs,
 }: {
     statuses: readonly ControllableEntityStatus[];
-    controllableEntities: readonly ControllableEntityDTO[];
-    appliances: readonly ScheduleApplianceMetadata[];
+    controllables: readonly ScheduleControllable[];
     actualHistory: Readonly<Record<string, EntityActualHistorySlotDTO[]>>;
     /** Null while no schedule has said how long a slot is; the lanes then carry no elapsed runs. */
     slotDurationMs: number | null;
 }): EntityScheduleLane[] {
     const configOrder = new Map<string, number>(
-        controllableEntities.map((entity, index): [string, number] => [entity.entityId, index]),
+        controllables.map((entity, index): [string, number] => [entity.primaryEntityId, index]),
     );
     return statuses
         .flatMap((status) => {
             const target = status.scheduleTarget;
-            if (target === null) {
+            const controllable = controllables.find((candidate) => candidate.id === target);
+            if (target === null || controllable === undefined) {
                 return [];
             }
 
-            const appliance = isInverterScheduleTarget(target)
-                ? null
-                : getScheduleApplianceById(appliances, target);
+            const appliance = asScheduleAppliance(controllable);
             return [{
                 key: target,
                 target,
                 entityId: status.entityId,
                 name: status.name,
                 icon: (status.stateObj.attributes.icon as string | undefined)
-                    ?? appliance?.icon
+                    ?? appliance?.metadata.icon
                     ?? "mdi:flash-outline",
                 appliance,
                 isAvailable: status.isAvailable,
                 actualSlots: slotDurationMs === null ? [] : buildEntityLaneActualSlots({
-                    entityId: status.entityId,
-                    controllableEntities,
+                    entity: controllable,
                     actualHistory,
                     slotDurationMs,
                 }),
@@ -127,19 +128,16 @@ export function buildEntityScheduleLanes({
  * own definition of its states is still at hand.
  */
 export function buildEntityLaneActualSlots({
-    entityId,
-    controllableEntities,
+    entity,
     actualHistory,
     slotDurationMs,
 }: {
-    entityId: string;
-    controllableEntities: readonly ControllableEntityDTO[];
+    entity: ScheduleControllable;
     actualHistory: Readonly<Record<string, EntityActualHistorySlotDTO[]>>;
     slotDurationMs: number;
 }): EntityActualSlot[] {
-    const history = actualHistory[entityId];
-    const entity = controllableEntities.find((candidate) => candidate.entityId === entityId);
-    if (history === undefined || entity === undefined) {
+    const history = actualHistory[entity.primaryEntityId];
+    if (history === undefined) {
         return [];
     }
 
@@ -209,7 +207,7 @@ export function resolveLaneRunPresentation(
     }
 
     return getScheduleApplianceActionPresentation({
-        appliance: lane.appliance ?? { kind: "generic", icon: lane.icon },
+        appliance: lane.appliance === null ? { kind: "generic", icon: lane.icon } : describeScheduleAppliance(lane.appliance),
         action: run.action === null || isEntityInverterAction(run.action) ? null : run.action,
         localize,
     });
@@ -431,12 +429,12 @@ function _resolveVehicleCapacityKwh(
     appliance: ScheduleApplianceMetadata,
     vehicleId: string | null,
 ): number {
-    const vehicles = "vehicles" in appliance ? appliance.vehicles : [];
+    const vehicles = appliance.kind === "ev_charger" ? appliance.vehicles : [];
     if (vehicleId === null) {
-        return vehicles.length === 1 ? vehicles[0].batteryCapacityKwh : 0;
+        return vehicles.length === 1 ? vehicles[0].metadata.batteryCapacityKwh : 0;
     }
 
-    return vehicles.find((vehicle) => vehicle.id === vehicleId)?.batteryCapacityKwh ?? 0;
+    return vehicles.find((vehicle) => vehicle.id === vehicleId)?.metadata.batteryCapacityKwh ?? 0;
 }
 
 function _isNonEmptyVehicleId(value: string | undefined): value is string {

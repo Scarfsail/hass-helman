@@ -1,6 +1,6 @@
 import type { ScheduleActionTone } from "../action-tones";
 import type { LocalizeFunction } from "../../../localize/localize";
-import type { ScheduleApplianceMetadata } from "./schedule-appliance-metadata";
+import type { ScheduleApplianceDescriptor } from "./schedule-appliance-metadata";
 import type { ScheduleApplianceAction } from "../schedule-types";
 import {
     isScheduleClimateApplianceAction,
@@ -22,7 +22,7 @@ export interface ScheduleApplianceActionPresentation {
 }
 
 export function getScheduleApplianceActionPresentation(args: {
-    appliance: Pick<ScheduleApplianceMetadata, "kind" | "icon">;
+    appliance: Pick<ScheduleApplianceDescriptor, "kind" | "icon">;
     action: ScheduleApplianceAction | null;
     localize: LocalizeFunction;
 }): ScheduleApplianceActionPresentation {
@@ -39,7 +39,7 @@ function _getBaseApplianceActionPresentation({
     action,
     localize,
 }: {
-    appliance: Pick<ScheduleApplianceMetadata, "kind" | "icon">;
+    appliance: Pick<ScheduleApplianceDescriptor, "kind" | "icon">;
     action: ScheduleApplianceAction | null;
     localize: LocalizeFunction;
 }): Omit<ScheduleApplianceActionPresentation, "isCandidate" | "toneClass"> {

@@ -5,9 +5,9 @@ it could quietly become a lie: a kind whose declared attributes no longer exist
 on the runtime dataclass it describes, and a capability flag that no longer
 matches how the rest of the integration actually branches.
 
-The last test is the one that guards the refactor itself:
-``helman/get_controllable_entities`` must serialise byte for byte as it did
-before the roster became spec-driven.
+The roster tests guard the refactor itself: the controllable roster must
+serialise byte for byte as it did before it became spec-driven, and every
+``helman/get_appliances`` entry must carry the same roster fields.
 """
 
 from __future__ import annotations
@@ -24,6 +24,9 @@ from custom_components.helman.appliances.climate_appliance import (  # noqa: E40
 )
 from custom_components.helman.appliances.config import (  # noqa: E402
     build_appliances_runtime_registry,
+)
+from custom_components.helman.appliances.dto import (  # noqa: E402
+    build_appliances_response,
 )
 from custom_components.helman.appliances.ev_charger import (  # noqa: E402
     EvChargerApplianceRuntime,
@@ -319,6 +322,96 @@ class ControllableEntitiesPayloadTests(unittest.TestCase):
         self.assertEqual(
             [entity["kind"] for entity in payload],
             ["inverter", "generic", "ev_charger", "climate"],
+        )
+
+
+class ApplianceRosterTests(unittest.TestCase):
+    """``helman/get_appliances`` carries the roster fields on every entry."""
+
+    def _appliances(self, config: dict | None = None) -> list[dict]:
+        config = config or _config()
+        return build_appliances_response(
+            build_appliances_runtime_registry(config),
+            control_config=read_schedule_control_config(config),
+        )["appliances"]
+
+    def test_the_inverter_is_an_entry_of_its_own_kind(self) -> None:
+        self.assertEqual(
+            self._appliances()[0],
+            {
+                "id": "inverter",
+                "name": "Inverter",
+                "kind": "inverter",
+                "primaryEntityId": "select.solax_charger_use_mode",
+                "normalState": "Self Use",
+                "actionOptions": {
+                    "normal": "Self Use",
+                    "stop_charging": "Manual",
+                    "stop_discharging": "Manual",
+                    "charge_to_target_soc": "Manual",
+                    "discharge_to_target_soc": "Manual",
+                    "stop_export": "Feedin Priority",
+                },
+                "supportsAuthoring": True,
+            },
+        )
+
+    def test_every_kind_carries_the_roster_fields(self) -> None:
+        self.assertEqual(
+            [
+                (
+                    entry["id"],
+                    entry["kind"],
+                    entry["primaryEntityId"],
+                    entry["normalState"],
+                    entry["supportsAuthoring"],
+                    "actionOptions" in entry,
+                )
+                for entry in self._appliances()
+            ],
+            [
+                ("inverter", "inverter", "select.solax_charger_use_mode", "Self Use", True, True),
+                ("living-room-hvac", "climate", "climate.living_room", "off", True, False),
+                ("garage-ev", "ev_charger", "switch.ev_nabijeni", "off", True, False),
+                ("dishwasher", "generic", "switch.dishwasher", "off", True, False),
+            ],
+        )
+
+    def test_the_roster_fields_match_the_controllable_entities(self) -> None:
+        """The history reads the same resting states the card compares against."""
+        config = _config()
+        entities = build_controllable_entities(
+            control_config=read_schedule_control_config(config),
+            registry=build_appliances_runtime_registry(config),
+        )
+
+        self.assertEqual(
+            [
+                (entry["name"], entry["primaryEntityId"], entry["normalState"], entry.get("actionOptions"))
+                for entry in self._appliances(config)
+            ],
+            [
+                (entity["name"], entity["entityId"], entity["normalState"], entity.get("actionOptions"))
+                for entity in entities
+            ],
+        )
+
+    def test_the_ev_entry_keeps_the_payload_the_node_detail_reads(self) -> None:
+        charger = self._appliances()[2]
+
+        self.assertEqual(
+            set(charger["controls"]), {"charge", "useMode", "ecoGear"}
+        )
+        self.assertEqual(charger["metadata"]["maxChargingPowerKw"], 11.0)
+        self.assertEqual([vehicle["id"] for vehicle in charger["vehicles"]], ["kona"])
+
+    def test_no_inverter_entry_without_an_inverter(self) -> None:
+        config = _config()
+        del config["energy_nodes"]
+
+        self.assertEqual(
+            [entry["kind"] for entry in self._appliances(config)],
+            ["climate", "ev_charger", "generic"],
         )
 
 

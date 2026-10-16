@@ -115,6 +115,9 @@ class ApplianceStateTests(unittest.TestCase):
                         "id": "garage-ev",
                         "name": "Garage EV",
                         "kind": "ev_charger",
+                        "primaryEntityId": "switch.ev_nabijeni",
+                        "normalState": "off",
+                        "supportsAuthoring": True,
                         "metadata": {
                             "icon": "mdi:lightning-bolt",
                             "maxChargingPowerKw": 11.0,
@@ -219,6 +222,9 @@ class ApplianceStateTests(unittest.TestCase):
                 "id": "dishwasher",
                 "name": "Dishwasher",
                 "kind": "generic",
+                "primaryEntityId": "switch.dishwasher",
+                "normalState": "off",
+                "supportsAuthoring": True,
                 "metadata": {
                     "icon": "mdi:lightning-bolt",
                     "scheduleCapabilities": {
@@ -243,6 +249,9 @@ class ApplianceStateTests(unittest.TestCase):
                 "id": "living-room-hvac",
                 "name": "Living Room HVAC",
                 "kind": "climate",
+                "primaryEntityId": "climate.living_room",
+                "normalState": "off",
+                "supportsAuthoring": True,
                 "metadata": {
                     "icon": "mdi:lightning-bolt",
                     "scheduleCapabilities": {
@@ -276,6 +285,26 @@ class ApplianceStateTests(unittest.TestCase):
                 "scheduleCapabilities"
             ]["modes"],
             ["heat"],
+        )
+
+    def test_climate_without_authorable_modes_does_not_support_authoring(self) -> None:
+        registry = AppliancesRuntimeRegistry.from_appliances(
+            [
+                ClimateApplianceRuntime(
+                    id="living-room-hvac",
+                    name="Living Room HVAC",
+                    climate_entity_id="climate.living_room",
+                    projection_strategy="fixed",
+                    hourly_energy_kwh=1.5,
+                    history_energy_entity_id=None,
+                    supported_modes=(),
+                    stop_hvac_mode="off",
+                )
+            ]
+        )
+
+        self.assertFalse(
+            build_appliances_response(registry)["appliances"][0]["supportsAuthoring"]
         )
 
     def test_configured_icons_are_preserved_in_metadata(self) -> None:

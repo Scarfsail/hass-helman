@@ -95,7 +95,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     async_register_command(hass, ws_get_schedule)
     async_register_command(hass, ws_set_schedule)
     async_register_command(hass, ws_set_schedule_execution)
-    async_register_command(hass, ws_get_controllable_entities)
+    async_register_command(hass, ws_get_automation_coverage)
     async_register_command(hass, ws_get_entity_actual_history)
     async_register_command(hass, ws_get_appliances)
     async_register_command(hass, ws_get_appliance_projections)
@@ -586,22 +586,24 @@ async def ws_set_schedule_execution(
 
 
 @websocket_api.websocket_command({
-    vol.Required("type"): "helman/get_controllable_entities",
+    vol.Required("type"): "helman/get_automation_coverage",
 })
 @callback
-def ws_get_controllable_entities(
+def ws_get_automation_coverage(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
-    """List what Helman can drive, plus each entity's resting state."""
+    """Which automations drive each controllable, for the schedule badges.
+
+    Not admin-gated, unlike the config it is read from: it names optimizer ids
+    and whether they run, which every viewer of the schedule band may see.
+    """
     coordinator = get_coordinator(hass, connection, msg)
     if coordinator is None:
         return
 
-    connection.send_result(
-        msg["id"], {"entities": coordinator.get_controllable_entities()}
-    )
+    connection.send_result(msg["id"], coordinator.get_automation_coverage())
 
 
 @websocket_api.websocket_command({
@@ -758,7 +760,7 @@ async def ws_get_node_detail(
     The node registry (:mod:`.node_details`) validates the node, the device and
     the section; a refused request is a websocket error with its code. Not
     admin-gated: it carries entity ids and numbers the card already shows, the
-    same exposure as ``helman/get_controllable_entities``.
+    same exposure as ``helman/get_appliances``.
     """
     coordinator = get_coordinator(hass, connection, msg)
     if coordinator is None:

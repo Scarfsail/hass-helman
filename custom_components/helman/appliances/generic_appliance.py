@@ -8,6 +8,7 @@ from ..const import DEFAULT_HISTORY_LOOKBACK_DAYS
 from ..controllables.config import SWITCH_CONTROL_DOMAINS
 from .errors import ApplianceConfigError
 from .icon import read_optional_appliance_icon, resolve_appliance_icon
+from .roster import ControllableRosterFieldsDict, EntityReferenceDict
 
 _GENERIC_APPLIANCE_KIND = "generic"
 _GENERIC_PROJECTION_STRATEGIES = {"fixed", "history_average"}
@@ -42,10 +43,6 @@ class GenericApplianceRuntime:
         )
 
 
-class EntityReferenceDict(TypedDict):
-    entityId: str
-
-
 class GenericApplianceScheduleCapabilitiesDict(TypedDict):
     onOffToggle: bool
 
@@ -59,21 +56,25 @@ class GenericApplianceControlsDict(TypedDict):
     switch: EntityReferenceDict
 
 
-class GenericApplianceResponseDict(TypedDict):
+class GenericApplianceResponseDict(ControllableRosterFieldsDict):
     id: str
     name: str
     kind: str
+    supportsAuthoring: bool
     metadata: GenericApplianceMetadataDict
     controls: GenericApplianceControlsDict
 
 
 def build_generic_appliance_metadata_dict(
     appliance: GenericApplianceRuntime,
+    roster: ControllableRosterFieldsDict,
 ) -> GenericApplianceResponseDict:
     return {
         "id": appliance.id,
         "name": appliance.name,
         "kind": appliance.kind,
+        **roster,
+        "supportsAuthoring": True,
         "metadata": {
             "icon": resolve_appliance_icon(appliance.icon),
             "scheduleCapabilities": {

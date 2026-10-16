@@ -164,11 +164,6 @@ async function installFixture(page: Page, bucketSeconds: number): Promise<void> 
                         resolve: () => resolve(historyPayload), reject: () => reject(new Error("history unavailable")),
                     }));
                 },
-                "helman/get_controllable_entities": async (msg: {
-                    type: string;
-                }) => {
-                    return { entities: [] };
-                },
                 "helman/get_node_detail": async (msg: {
                     type: string;
                     node: string;
