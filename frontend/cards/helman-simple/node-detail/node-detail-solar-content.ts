@@ -1,3 +1,4 @@
+import { SLOT_MS } from "../../shared/time/slot-time";
 import { css, html, nothing, svg } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { fillTemplate } from "../../localize/localize";
@@ -47,9 +48,6 @@ type SectionPayload = SolarProductionSectionPayload | SolarStringsSectionPayload
 
 /** The history sections, in the order they are requested. */
 const SECTIONS: SectionName[] = ["production", "strings", "destinations"];
-
-/** The forecast's canonical slot. */
-const SLOT_MS = 15 * 60_000;
 
 /** How many calendar days the outlook shows, today first. */
 const OUTLOOK_DAYS = 7;

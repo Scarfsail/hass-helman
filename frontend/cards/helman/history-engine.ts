@@ -1,6 +1,6 @@
-import { readPowerW } from "../shared/power-reading";
+import { applyValueType, readPowerW } from "../shared/power-reading";
 import type { HomeAssistant } from "../../types/ha";
-import { HistoryPayload, applyValueType } from "../helman-api";
+import { HistoryPayload } from "../helman-api";
 import { TreeItem } from "./tree-item";
 import { nodeAccentColor } from "../color-utils";
 
@@ -34,10 +34,7 @@ export class HistoryEngine {
             if (!item.powerSensorId) continue;
             const rawHistory = entity_history[item.powerSensorId];
             if (rawHistory) {
-                let h = [...rawHistory];
-                if (item.valueType === 'positive') h = h.map(v => Math.max(0, v));
-                else if (item.valueType === 'negative') h = h.map(v => Math.abs(Math.min(0, v)));
-                item.powerHistory = h;
+                item.powerHistory = rawHistory.map(value => applyValueType(value, item.valueType));
                 item.historyBuckets = this._maxBuckets;
             }
             if (item.isSource) continue;

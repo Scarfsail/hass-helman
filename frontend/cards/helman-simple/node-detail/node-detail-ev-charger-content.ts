@@ -1,3 +1,4 @@
+import { SLOT_MS } from "../../shared/time/slot-time";
 import { css, html, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { fillTemplate } from "../../localize/localize";
@@ -38,7 +39,6 @@ import type { DeviceDetailParams } from "./node-detail-types";
 type QuestionId = "progress" | "plan" | "waiting" | "today" | "trust";
 
 /** The schedule's canonical slot: the plan's slot in progress moves on at each. */
-const SLOT_MS = 15 * 60_000;
 
 /**
  * A session duration counter beyond a week is not read as a duration: it is

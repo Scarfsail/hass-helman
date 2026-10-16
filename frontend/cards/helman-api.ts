@@ -14,18 +14,6 @@ export type { InspectorPayload } from "./helman-solar-inspector/helman-solar-ins
 
 export type ValueType = "default" | "positive" | "negative";
 
-/**
- * Applies a ValueType transformation to a raw sensor reading.
- * - "positive": clamps to ≥ 0  (e.g. solar production)
- * - "negative": returns absolute value of the negative part (e.g. battery discharge)
- * - "default":  returns the raw value unchanged
- */
-export function applyValueType(raw: number, vt: ValueType): number {
-    if (vt === "positive") return Math.max(0, raw);
-    if (vt === "negative") return Math.abs(Math.min(0, raw));
-    return raw;
-}
-
 // ── Device node DTOs ──────────────────────────────────────────────────────────
 
 /** Fields present on every device node returned by helman/get_device_tree. */

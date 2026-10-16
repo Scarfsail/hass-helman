@@ -1,9 +1,10 @@
+import { applyValueType } from "../shared/power-reading";
 import { LitElement, css, html, svg } from "lit-element";
 import { customElement, state } from "lit/decorators.js";
 import type { HomeAssistant, LovelaceCard } from "../../types/ha";
 import { HelmanSimpleCardConfig } from "./HelmanSimpleCardConfig";
 import { getLocalizeFunction, LocalizeFunction } from "../localize/localize";
-import { ValueType, TreeItemDTO, TreePayload, HelmanUiConfig, InverterDetailPayload, applyValueType } from "../helman-api";
+import { ValueType, TreeItemDTO, TreePayload, HelmanUiConfig, InverterDetailPayload } from "../helman-api";
 import { HistoryEngine } from "../helman/history-engine";
 import { getSharedHelmanStore } from "../helman/store";
 import { getSharedDataChangedFeed } from "../helman/data-changed";

@@ -1,3 +1,4 @@
+import { slotMinutes, formatClock } from "../shared/time/slot-time";
 import { LitElement, css, html, svg, type TemplateResult } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { nothing } from "lit-html";
@@ -193,7 +194,7 @@ export class HelmanSolarMoneyStrip extends LitElement {
         const cells = new Map<number, MoneyCell>();
         const add = (points: readonly MoneyPoint[], wantElapsed: boolean) => {
             for (const point of points ?? []) {
-                const minutes = this._slotToMinutes(point.slot);
+                const minutes = slotMinutes(point.slot);
                 if (minutes === null) continue;
                 // Each slot is claimed by exactly one vintage, so the two can
                 // never both contribute and double the day's money.
@@ -219,15 +220,6 @@ export class HelmanSolarMoneyStrip extends LitElement {
     }
 
     /** Turn an `HH:MM` slot label into its minute-of-day, or null if malformed. */
-    private _slotToMinutes(slot: unknown): number | null {
-        if (typeof slot !== "string") return null;
-        const [hourText, minuteText] = slot.split(":");
-        const hour = Number(hourText);
-        const minute = Number(minuteText);
-        if (!Number.isInteger(hour) || !Number.isInteger(minute)) return null;
-        if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
-        return hour * 60 + minute;
-    }
 
     /**
      * Minute-of-day the day turns from measured into upcoming — the same rule
@@ -567,7 +559,7 @@ export class HelmanSolarMoneyStrip extends LitElement {
         this._emitTooltip({
             x: event.clientX,
             y: event.clientY,
-            title: `${this._formatMinutes(cell.startMinutes)} – ${this._formatMinutes(cell.endMinutes)}`,
+            title: `${formatClock(cell.startMinutes)} – ${formatClock(cell.endMinutes)}`,
             hasActual: measured,
             rows: [
                 this._moneyRow("import_cost", cell.cost, measured, "var(--helman-grid-import)"),
@@ -592,11 +584,6 @@ export class HelmanSolarMoneyStrip extends LitElement {
         return `${amount.toFixed(2)} ${this.currency}`.trim();
     }
 
-    private _formatMinutes(minutes: number): string {
-        const clamped = Math.max(0, Math.min(MINUTES_PER_DAY, Math.round(minutes)));
-        const hour = Math.floor(clamped / 60) % 24;
-        return `${String(hour).padStart(2, "0")}:${String(clamped % 60).padStart(2, "0")}`;
-    }
 
     private _emitHover(minutes: number | null): void {
         this.dispatchEvent(

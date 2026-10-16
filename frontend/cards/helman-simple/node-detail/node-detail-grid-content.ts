@@ -1,3 +1,4 @@
+import { phaseSign } from "../../shared/power-reading";
 import { css, html, nothing, svg } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { fillTemplate } from "../../localize/localize";
@@ -15,7 +16,7 @@ import { helmanColorVars } from "../../color-vars";
 import { getSharedHelmanStore } from "../../helman/store";
 import { formatPower } from "../../power-format";
 import { formatGridEnergy, formatPriceValue } from "../../shared/forecast-value-format";
-import { todayIso } from "../../shared/today-iso";
+import { todayKey } from "../../shared/time/day-key";
 import { pylonGlyph } from "../../shared/node-glyphs";
 import { scheduleActionToneStyles } from "../../shared/schedule/action-tones";
 import "../../shared/day-line-chart";
@@ -242,7 +243,7 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         // Today's statistics grow while the dialog is open: re-read them on a new
         // day, and otherwise at most every few minutes, only while the page is
         // visible. The now-clock brings an idle or returning dialog back here.
-        if (this._started && !document.hidden && (this._moneyDate !== todayIso(this._timeZone) || Date.now() - this._moneyRequestedAt > TODAY_REFRESH_MS)) {
+        if (this._started && !document.hidden && (this._moneyDate !== todayKey(this._timeZone) || Date.now() - this._moneyRequestedAt > TODAY_REFRESH_MS)) {
             void this._loadMoney();
         }
         // Today's voltages, which the picture's ranges draw, follow the day the same way.
@@ -289,7 +290,7 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
     private async _loadMoney(): Promise<void> {
         const request = ++this._moneyRequest;
         if (this._money?.status !== "ready") this._money = { status: "loading" };
-        const date = todayIso(this._timeZone);
+        const date = todayKey(this._timeZone);
         this._moneyDate = date;
         this._moneyRequestedAt = Date.now();
         try {
@@ -797,7 +798,7 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
     // Phases ------------------------------------------------------------------
 
     private _phaseReadings(overview: GridDetailPayload): PhaseReading[] {
-        const sign = overview.phasePowerPolarity === "positive_is_export" ? -1 : 1;
+        const sign = phaseSign(overview.phasePowerPolarity);
         return PHASES.map((phase) => {
             const raw = this._number(overview, `grid_power_l${phase}`);
             const voltage = this._number(overview, `ac_voltage_l${phase}`);

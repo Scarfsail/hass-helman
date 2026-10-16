@@ -22,7 +22,7 @@ import {
     type TooltipRow,
 } from "../shared/hover-tooltip";
 import { startNowClock } from "../shared/now-clock";
-import { todayIso } from "../shared/today-iso";
+import { todayKey } from "../shared/time/day-key";
 import { DEVICE_REPORTS, type DeviceReportEntry } from "./report-registry";
 import {
     DEFAULT_PERIOD_PRESET,
@@ -258,7 +258,7 @@ export class HelmanDeviceReportShell extends LitElement {
      * tick without writing state.
      */
     private _tick = (): void => {
-        const today = todayIso(this._timeZone());
+        const today = todayKey(this._timeZone());
         if (today !== this._today) {
             this._today = today;
             return;
@@ -276,7 +276,7 @@ export class HelmanDeviceReportShell extends LitElement {
                 this._localizeLanguage = language;
                 this._localize = this.hass ? getLocalizeFunction(this.hass) : (key: string) => key;
             }
-            this._today = todayIso(this._timeZone());
+            this._today = todayKey(this._timeZone());
             this._syncContext();
             this._syncDataChangedSubscription();
         }
