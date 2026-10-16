@@ -7,6 +7,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 from custom_components.helman.const import DATA_CHANGED_KIND_CONFIG, EVENT_DATA_CHANGED
+from custom_components.helman.storage import config_revision
 
 
 class _FakeStorage:
@@ -14,6 +15,7 @@ class _FakeStorage:
 
     def __init__(self, _hass) -> None:
         self.loaded = False
+        self.config = {}
 
     async def async_load(self) -> None:
         self.loaded = True
@@ -122,7 +124,7 @@ class InitRecoveryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(
             [data for event, data in hass.bus.fired if event == EVENT_DATA_CHANGED],
-            [{"kind": DATA_CHANGED_KIND_CONFIG}],
+            [{"kind": DATA_CHANGED_KIND_CONFIG, "revision": config_revision({})}],
         )
 
     async def test_setup_entry_failure_keeps_storage_available_for_recovery(self) -> None:

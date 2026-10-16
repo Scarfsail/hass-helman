@@ -1,7 +1,7 @@
 import type { Page } from "@playwright/test";
 
 import { FIXED_TODAY, installFixedClock } from "./fixed-clock";
-import { configDoc, forecastPayload, inspectorDay, scheduleSlots, treePayload } from "./payload-builders";
+import { configDoc, configSnapshot, forecastPayload, inspectorDay, scheduleSlots, treePayload } from "./payload-builders";
 import type { ConfigDocument, InspectorPayload } from "../../cards/helman-api";
 
 export type MockRequest = { type: string; [key: string]: unknown };
@@ -13,6 +13,7 @@ declare global {
         __inspectorDayBase: InspectorPayload;
         __inspectorDay: typeof inspectorDay;
         __configDocBase: ConfigDocument;
+        __configRevision: (config: unknown) => string;
         __mockRequests: MockRequest[];
         __setMockReply: (hass: { callWS: (request: MockRequest) => Promise<unknown> }, command: string, response: MockReply) => void;
         __clearMockReply: (hass: { callWS: (request: MockRequest) => Promise<unknown> }, command: string) => void;
@@ -33,7 +34,7 @@ export async function installMockHass(page: Page): Promise<void> {
         schedule: scheduleSlots({ slotMinutes: 15 }),
         tree: treePayload(),
         forecast: forecastPayload(),
-        config: JSON.stringify(configDoc()),
+        config: JSON.stringify(configSnapshot(configDoc())),
         inspector: JSON.stringify(inspectorDay()),
     };
     await page.evaluate(({ schedule, tree, forecast, config, inspector }) => {
@@ -48,7 +49,17 @@ export async function installMockHass(page: Page): Promise<void> {
             totals: { ...window.__inspectorDayBase.totals, ...totals },
             availability: { ...window.__inspectorDayBase.availability, ...availability },
         });
-        window.__configDocBase = JSON.parse(config) as ConfigDocument;
+        window.__configDocBase = (JSON.parse(config) as { config: ConfigDocument }).config;
+        window.__configRevision = (value: unknown): string => {
+            const canonical = (item: unknown): unknown => {
+                if (Array.isArray(item)) return item.map(canonical);
+                if (item && typeof item === "object") return Object.fromEntries(
+                    Object.entries(item).sort(([a], [b]) => a.localeCompare(b)).map(([key, child]) => [key, canonical(child)]),
+                );
+                return item;
+            };
+            return JSON.stringify(canonical(value));
+        };
         const listeners: Array<(message: unknown) => void> = [];
         const controls = new WeakMap<Function, { set: (command: string, response: MockReply) => void; clear: (command: string) => void }>();
         window.__setMockReply = (hass, command, response) => {
@@ -61,19 +72,50 @@ export async function installMockHass(page: Page): Promise<void> {
             if (!control) throw new Error("Home Assistant mock does not use the shared router");
             control.clear(command);
         };
-        window.__fireDataChanged = (kind: string) => {
-            for (const listener of [...listeners]) listener({ kind });
+        window.__fireDataChanged = (kind: string, revision?: string) => {
+            for (const listener of [...listeners]) listener({ kind, revision });
         };
         window.__mockHass = (overrides = {}, onRequest) => {
+            let storedConfig = structuredClone(window.__configDocBase);
             const reply = async (request: MockRequest): Promise<unknown> => {
                 window.__mockRequests.push(structuredClone(request));
                 onRequest?.(request);
                 const command = request.type;
+                if (!Object.prototype.hasOwnProperty.call(overrides, command)) {
+                    if (command === "helman/get_config") return {
+                        config: storedConfig, revision: window.__configRevision(storedConfig),
+                    };
+                    if (command === "helman/save_config") {
+                        if (request.expected_revision !== undefined && request.expected_revision !== window.__configRevision(storedConfig)) {
+                            return { success: false, conflict: true, config: storedConfig, revision: window.__configRevision(storedConfig) };
+                        }
+                        storedConfig = { ...(request.config as ConfigDocument), config_version: 29 };
+                        return { success: true, validation: { valid: true, errors: [], warnings: [] },
+                            reloadStarted: true, config: storedConfig, revision: window.__configRevision(storedConfig) };
+                    }
+                }
                 const response = Object.prototype.hasOwnProperty.call(overrides, command)
                     ? overrides[command]
                     : Object.prototype.hasOwnProperty.call(defaults, command) ? defaults[command] : {};
                 if (response instanceof Error) throw response;
-                return typeof response === "function" ? response(request) : response;
+                const result = await (typeof response === "function" ? response(request) : response);
+                if (command === "helman/get_config" && result && typeof result === "object" && !("revision" in result)) {
+                    storedConfig = result as ConfigDocument;
+                    return { config: result, revision: window.__configRevision(result) };
+                }
+                if (command === "helman/get_config" && result && typeof result === "object" && "config" in result) {
+                    storedConfig = (result as { config: ConfigDocument }).config;
+                }
+                if (command === "helman/save_config" && result && typeof result === "object" && !("config" in result)) {
+                    if ("conflict" in result || ("validation" in result && (result as { validation?: { valid?: boolean } }).validation?.valid === false)) return result;
+                    const stored = { ...(request.config as object), config_version: 29 };
+                    storedConfig = stored as ConfigDocument;
+                    return { ...result, config: stored, revision: window.__configRevision(stored) };
+                }
+                if (command === "helman/save_config" && result && typeof result === "object" && "config" in result && !("conflict" in result)) {
+                    storedConfig = (result as { config: ConfigDocument }).config;
+                }
+                return result;
             };
             controls.set(reply, {
                 set: (command, response) => { overrides[command] = response; },
@@ -97,9 +139,7 @@ export async function installMockHass(page: Page): Promise<void> {
         };
         const defaults: Record<string, unknown> = {
             "helman/get_appliances": { appliances: [] },
-            "helman/get_config": window.__configDocBase,
             "helman/get_optimizer_schema": { version: 29, kinds: [], applianceKinds: ["climate", "ev_charger", "generic"] },
-            "helman/save_config": { success: true, validation: { valid: true, errors: [], warnings: [] }, reloadStarted: true },
             "helman/get_node_detail": (request: MockRequest) => {
                 const node = request.node;
                 const asOf = new Date().toISOString();
@@ -200,7 +240,7 @@ declare global {
         __pendingInspector: () => number;
         /** Change the solar total the next payload carries. */
         __setActualWh: (value: number) => void;
-        __fireDataChanged: (kind: string) => void;
+        __fireDataChanged: (kind: string, revision?: string) => void;
     }
 }
 

@@ -10,10 +10,11 @@ import { DataChangedController } from "../../helman/data-changed";
 import {
     asJsonArray,
     asJsonObject,
-    canonicalJson,
     cloneJson,
     setValueAtPath,
 } from "../config/config-document";
+import { ConfigSession } from "../config/config-session";
+import { describeError } from "../describe-error";
 import type {
     ApplianceMetadataResponse,
     JsonObject,
@@ -174,16 +175,11 @@ export class HelmanOptimizerEditDialog extends LitElement {
 
     @state() private _saving = false;
 
+    private _configRevisionDuringSave: string | undefined;
+
     @state() private _message: SaveMessage | null = null;
 
-    /**
-     * The config changed under us, and the draft must not be written over it.
-     *
-     * Every `helman_data_changed` sends the dialog to look -- the event says
-     * something moved, never who moved it -- and the re-read at save time is
-     * the backstop for a page that missed the announcement entirely. See
-     * `_refreshStale` and `_handleSave`.
-     */
+    /** A config event or compare-and-set conflict found a newer document. */
     @state() private _stale = false;
 
     /**
@@ -194,7 +190,7 @@ export class HelmanOptimizerEditDialog extends LitElement {
      * purpose, so comparing the re-read to it would call every own edit a
      * collision.
      */
-    private _baseline: string | null = null;
+    private _session = new ConfigSession(() => this.hass);
 
     /**
      * The ids the current view was loaded for.
@@ -210,14 +206,19 @@ export class HelmanOptimizerEditDialog extends LitElement {
     /**
      * A staleness check in flight, so a burst does not fan out into reads.
      */
-    private _stalenessCheck: Promise<void> | null = null;
 
     /** The close is settled -- see `_close`. */
     private _closing = false;
 
     constructor() {
         super();
-        new DataChangedController(this, () => this.hass, {}, () => void this._refreshStale());
+        new DataChangedController(this, () => this.hass, {}, (_kinds, { configRevision }) => {
+            if (this._saving) {
+                if (configRevision !== undefined) this._configRevisionDuringSave = configRevision;
+            } else if (this._session.isStale(configRevision)) {
+                this._stale = true;
+            }
+        });
     }
 
     connectedCallback(): void {
@@ -315,6 +316,7 @@ export class HelmanOptimizerEditDialog extends LitElement {
                 return html`
                     ${view.indices.map((location) => html`
                         <helman-optimizer-editor
+                            ?inert=${this._saving}
                             .config=${view.config}
                             .bucket=${location.bucket}
                             .index=${location.index}
@@ -409,17 +411,16 @@ export class HelmanOptimizerEditDialog extends LitElement {
         this._loadedIds = _optimizerIdKey(this.optimizerIds);
         try {
             const [config, schema, appliances] = await Promise.all([
-                callHelman(hass, "helman/get_config", {}),
+                this._session.load(),
                 fetchOptimizerSchema(hass),
                 callHelman(hass, "helman/get_appliances", {})
                     .catch(() => null),
             ]);
-            const document = asJsonObject(config);
+            const document = config.doc;
             if (!document) {
                 this._view = { kind: "not_found" };
                 return;
             }
-            this._baseline = canonicalJson(document);
             const indices = findOptimizerLocations(document, this.optimizerIds);
             this._view =
                 indices.length === 0
@@ -437,6 +438,7 @@ export class HelmanOptimizerEditDialog extends LitElement {
     }
 
     private _handleConfigChanged = (event: Event): void => {
+        if (this._saving) return;
         const detail = (event as CustomEvent<OptimizerConfigChangedDetail>).detail;
         if (!detail?.config || this._view.kind !== "ready") {
             return;
@@ -449,11 +451,7 @@ export class HelmanOptimizerEditDialog extends LitElement {
     /**
      * Save the whole document, as the config editor does.
      *
-     * `helman/save_config` takes a document and replaces the stored one; there
-     * is no partial write. The draft carries the edited optimizer and nothing
-     * else changed, so sending it whole is sending exactly the edit -- provided
-     * nobody wrote the config in between, which is the next phase's problem and
-     * is called out as an accepted gap until then.
+     * The server compares the revision before replacing the whole document.
      */
     private _handleSave = async (): Promise<void> => {
         const view = this._view;
@@ -463,39 +461,20 @@ export class HelmanOptimizerEditDialog extends LitElement {
         this._saving = true;
         this._message = null;
         try {
-            // Re-read and compare before writing. The event feed above catches
-            // this in the common case, but a page that was backgrounded, or a
-            // connection that dropped and came back, may never have seen it --
-            // and the cost of missing it is one silent whole-document clobber.
-            if (await this._configChangedElsewhere()) {
+            const outcome = await this._session.save(view.config);
+            if (outcome.kind === "conflict") {
                 this._stale = true;
-                this._message = {
-                    kind: "error",
-                    text: this._translate("editor.status.changed_elsewhere"),
-                };
+                this._message = { kind: "error", text: this._translate("editor.status.changed_elsewhere") };
                 return;
             }
-            const response = await callHelman(this.hass, "helman/save_config", { config: view.config });
-            if (response.validation?.valid !== false) {
-                // The document we just wrote is the new baseline. Without this
-                // a retry would compare against the pre-save read, find our own
-                // write, and refuse. Re-read rather than reuse the draft: the
-                // backend stamps `config_version` on write, and the baseline
-                // has to be what a later read will actually return.
-                //
-                // Done whenever the *write* landed, which is not the same as
-                // the save succeeding: `save_config` stores the document before
-                // it attempts the entry reload, so a reload that then failed
-                // still leaves the stored document ours. That is exactly the
-                // case where the dialog stays open and the user tries again.
-                await this._rebaseline();
-                // The stored document *is* the baseline again, so whatever the
-                // reload's own announcements arrive to say, they are not news
-                // that somebody else wrote.
+            if (outcome.kind === "error" && outcome.error) throw outcome.error;
+            const response = outcome.response;
+            if (outcome.kind === "saved") {
+                this._view = { ...view, config: cloneJson(outcome.doc) };
                 this._stale = false;
                 this._dirty = false;
             }
-            if (response.success) {
+            if (response?.success) {
                 // Say what happened on the way out. The restart this started
                 // makes the integration's entities briefly unavailable, which
                 // is worth knowing about, and the dialog is no longer there to
@@ -514,9 +493,9 @@ export class HelmanOptimizerEditDialog extends LitElement {
             this._message = {
                 kind: "error",
                 text:
-                    response.reloadError ??
+                    response?.reloadError ??
                     this._translate(
-                        response.validation?.valid
+                        response?.validation?.valid
                             ? "editor.messages.config_saved_reload_failed"
                             : "editor.messages.save_rejected",
                     ),
@@ -528,92 +507,10 @@ export class HelmanOptimizerEditDialog extends LitElement {
             };
         } finally {
             this._saving = false;
+            if (!this._closing && this._session.isStale(this._configRevisionDuringSave)) this._stale = true;
+            this._configRevisionDuringSave = undefined;
         }
     };
-
-    /**
-     * Whether the stored config moved since this dialog read it.
-     *
-     * Compares the *whole* document, not just the edited optimizer: a
-     * whole-document save is exactly what destroys an unrelated change, so an
-     * unrelated change is exactly what has to stop it. Both sides are reads of
-     * the same endpoint, so `save_config`'s `config_version` stamping cannot
-     * show up here as a difference on its own.
-     *
-     * A failed re-read answers `"unknown"`, and the two callers want opposite
-     * things from that: the save must refuse (a retry costs the user a click,
-     * saving over someone else costs them their work), while the banner must
-     * stay quiet (a dropped frame is not evidence that anybody wrote anything).
-     */
-    private async _compareToBaseline(): Promise<"same" | "changed" | "unknown"> {
-        if (!this.hass || this._baseline === null) {
-            return "same";
-        }
-        try {
-            const current = asJsonObject(await callHelman(this.hass, "helman/get_config", {}));
-            if (current === undefined) {
-                return "unknown";
-            }
-            return canonicalJson(current) === this._baseline ? "same" : "changed";
-        } catch {
-            return "unknown";
-        }
-    }
-
-    private async _configChangedElsewhere(): Promise<boolean> {
-        return (await this._compareToBaseline()) !== "same";
-    }
-
-    /**
-     * Whether to raise the "changed elsewhere" banner, checked rather than
-     * inferred from the announcement.
-     *
-     * `helman_data_changed` cannot tell us who wrote: one `save_config` fires
-     * several of them -- the entry reload it starts re-plans, and the plan and
-     * schedule announcements land well after the feed's collapse window closes
-     * on the first. A dialog that treated "one event is mine, the rest are
-     * someone else's" therefore accused itself, showing the banner beside its
-     * own success message. Reading the document and comparing it is the only
-     * thing that actually answers the question the banner asks.
-     *
-     * Skipped while our own write is in flight: the document is legitimately in
-     * motion then, and `_handleSave` adopts the result as the new baseline the
-     * moment it settles.
-     */
-    private async _refreshStale(): Promise<void> {
-        if (this._saving || this._stalenessCheck !== null) {
-            return this._stalenessCheck ?? undefined;
-        }
-
-        this._stalenessCheck = (async () => {
-            try {
-                const verdict = await this._compareToBaseline();
-                if (verdict !== "unknown") {
-                    this._stale = verdict === "changed";
-                }
-            } finally {
-                this._stalenessCheck = null;
-            }
-        })();
-
-        return this._stalenessCheck;
-    }
-
-    /** Adopt the stored config as the baseline, without touching the draft. */
-    private async _rebaseline(): Promise<void> {
-        if (!this.hass) {
-            return;
-        }
-        try {
-            const current = asJsonObject(await callHelman(this.hass, "helman/get_config", {}));
-            if (current !== undefined) {
-                this._baseline = canonicalJson(current);
-            }
-        } catch {
-            // Leaving the old baseline in place is the safe failure: the next
-            // save re-reads anyway and will refuse rather than clobber.
-        }
-    }
 
     /**
      * Home Assistant's own toast, for something the dialog closed before it
@@ -765,13 +662,6 @@ const preventSummaryToggle = (event: Event): void => {
 const stopSummaryToggle = (event: Event): void => {
     event.stopPropagation();
 };
-
-function describeError(error: unknown): string {
-    if (typeof error === "object" && error !== null && "message" in error) {
-        return String((error as { message: unknown }).message);
-    }
-    return String(error);
-}
 
 defineOnce("helman-optimizer-edit-dialog", HelmanOptimizerEditDialog);
 

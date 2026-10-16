@@ -2,13 +2,14 @@ export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonObject | JsonArray;
 export type JsonArray = JsonValue[];
 export type JsonObject = { [key: string]: JsonValue | undefined };
-/** The versioned document returned by `helman/get_config`. */
+/** The versioned document stored by Helman. */
 export type ConfigDocument = JsonObject & {
   config_version: number;
   energy_nodes?: JsonObject;
   devices?: JsonObject;
   automation?: JsonObject;
 };
+export interface ConfigSnapshot { config: ConfigDocument; revision: string }
 export type PathSegment = string | number;
 
 export interface ValidationIssue {
@@ -26,8 +27,11 @@ export interface ValidationReport {
 
 export interface SaveConfigResponse {
   success: boolean;
-  validation: ValidationReport;
-  reloadStarted: boolean;
+  conflict?: boolean;
+  config?: ConfigDocument;
+  revision?: string;
+  validation?: ValidationReport;
+  reloadStarted?: boolean;
   reloadSucceeded?: boolean;
   reloadError?: string | null;
 }

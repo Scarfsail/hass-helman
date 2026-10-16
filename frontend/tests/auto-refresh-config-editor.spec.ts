@@ -40,10 +40,13 @@ declare global {
         __setStoredConfig: (config: unknown) => void;
         __getConfigCalls: () => number;
         __saveCalls: () => number;
-        __fireDataChanged: (kind: string) => void;
+        __fireDataChanged: (kind: string, revision?: string) => void;
         /** Whether `helman/save_config` should report a successful reload. */
         __saveSucceeds: boolean;
         __saveValid: boolean;
+        __saveConflicts: boolean;
+        __holdSave: boolean;
+        __releaseSave: () => void;
     }
 }
 
@@ -62,11 +65,15 @@ async function mountEditor(page: Page): Promise<Locator> {
             window.__saveCalls = () => saveCalls;
             window.__saveSucceeds = true;
             window.__saveValid = true;
+            window.__saveConflicts = false;
+            window.__holdSave = false;
+            let releaseSave: (() => void) | undefined;
+            window.__releaseSave = () => releaseSave?.();
 
             const listeners: Array<(event: unknown) => void> = [];
-            window.__fireDataChanged = (kind: string) => {
+            window.__fireDataChanged = (kind: string, revision?: string) => {
                 for (const listener of listeners) {
-                    listener({ kind });
+                    listener({ kind, revision });
                 }
             };
 
@@ -110,12 +117,17 @@ async function mountEditor(page: Page): Promise<Locator> {
                         config?: unknown;
                     }) => {
                         saveCalls += 1;
+                        if (window.__holdSave) await new Promise<void>((resolve) => { releaseSave = resolve; });
+                        if (window.__saveConflicts) return {
+                            success: false, conflict: true, config: stored,
+                            revision: window.__configRevision(stored),
+                        };
                         const succeeded = window.__saveSucceeds;
                         const valid = window.__saveValid;
                         if (valid) {
-                            stored = { ...(request.config as Record<string, unknown>), config_version: 30 };
+                            stored = { ...(request.config as Record<string, unknown>), config_version: 29 };
                             queueMicrotask(() => {
-                                window.__fireDataChanged("config");
+                                window.__fireDataChanged("config", JSON.stringify(stored));
                             });
                         }
                         return {
@@ -172,11 +184,9 @@ test("a clean editor picks up a config saved elsewhere", async ({ page }) => {
     expect(await readBadges(page)).toContain("Stored config loaded");
 
     await page.evaluate((config) => window.__setStoredConfig(JSON.parse(config)), JSON.stringify(CHANGED_CONFIG));
-    await page.evaluate(() => window.__fireDataChanged("config"));
+    await page.evaluate((config) => window.__fireDataChanged("config", config), JSON.stringify(CHANGED_CONFIG));
 
-    // Three reads: the first load, the comparison that found the change, and
-    // the reload it triggered.
-    await expect.poll(() => page.evaluate(() => window.__getConfigCalls())).toBe(3);
+    await expect.poll(() => page.evaluate(() => window.__getConfigCalls())).toBe(2);
     expect(await readBadges(page)).not.toContain(
         "The stored config changed elsewhere — reload to see it",
     );
@@ -190,8 +200,7 @@ test("an announcement that moved nothing is not acted on at all", async ({ page 
 
     await page.evaluate(() => window.__fireDataChanged("plan"));
 
-    // One comparison read, and no reload behind it.
-    await expect.poll(() => page.evaluate(() => window.__getConfigCalls())).toBe(2);
+    await expect.poll(() => page.evaluate(() => window.__getConfigCalls())).toBe(1);
     expect(await readBadges(page)).toContain("Stored config loaded");
     expect(await readBadges(page)).not.toContain(
         "The stored config changed elsewhere — reload to see it",
@@ -203,15 +212,13 @@ test("a dirty editor keeps its draft and says the config moved", async ({ page }
     await makeDirty(page);
 
     await page.evaluate((config) => window.__setStoredConfig(JSON.parse(config)), JSON.stringify(CHANGED_CONFIG));
-    await page.evaluate(() => window.__fireDataChanged("config"));
+    await page.evaluate((config) => window.__fireDataChanged("config", config), JSON.stringify(CHANGED_CONFIG));
 
     await expect
         .poll(() => readBadges(page))
         .toContain("The stored config changed elsewhere — reload to see it");
 
-    // Two reads: the first load and the comparison. The comparison never
-    // touches the draft -- only a reload would, and there was none.
-    expect(await page.evaluate(() => window.__getConfigCalls())).toBe(2);
+    expect(await page.evaluate(() => window.__getConfigCalls())).toBe(1);
     expect(await readBadges(page)).toContain("Unsaved changes");
 });
 
@@ -236,11 +243,7 @@ test("the machine that saved hears its own write and ignores it", async ({ page 
     // delivered rather than merely fired.
     await page.waitForTimeout(600);
 
-    // The save's own announcements caused neither a reload nor a warning.
-    // Three reads: the first load, the re-baseline the save took of what it
-    // wrote, and the comparison that announcement then triggered -- which
-    // found the document exactly as the save left it, and so did nothing.
-    expect(await page.evaluate(() => window.__getConfigCalls())).toBe(3);
+    expect(await page.evaluate(() => window.__getConfigCalls())).toBe(1);
     expect(await readBadges(page)).not.toContain(
         "The stored config changed elsewhere — reload to see it",
     );
@@ -266,7 +269,7 @@ test("a landed save whose reload failed does not report its own write as an exte
         void dialog.dismiss();
     });
     await page.locator("helman-config-editor-panel").getByRole("button", { name: "Reload stored config" }).click();
-    await expect.poll(() => page.evaluate(() => window.__getConfigCalls())).toBe(4);
+    await expect.poll(() => page.evaluate(() => window.__getConfigCalls())).toBe(2);
     expect(prompts).toEqual([]);
 });
 
@@ -280,5 +283,67 @@ test("a rejected save keeps the unsaved draft dirty", async ({ page }) => {
         (button as HTMLButtonElement | undefined)?.click();
     });
     await expect.poll(() => page.evaluate(() => window.__saveCalls())).toBe(1);
-    expect(await readBadges(page)).toContain("Unsaved changes");
+    await expect.poll(() => readBadges(page)).toContain("Unsaved changes");
 });
+
+test("the editor reports an atomic save conflict and keeps the draft", async ({ page }) => {
+    await mountEditor(page);
+    await makeDirty(page);
+    await page.evaluate(() => { window.__saveConflicts = true; });
+    await page.locator("helman-config-editor-panel").getByRole("button", { name: "Save and reload" }).click();
+    await expect.poll(() => readBadges(page)).toContain("The stored config changed elsewhere — reload to see it");
+    expect(await readBadges(page)).toContain("Unsaved changes");
+    expect(await page.evaluate(() => window.__getConfigCalls())).toBe(1);
+});
+
+test("the editor refuses tab close while a save is pending", async ({ page }) => {
+    await mountEditor(page);
+    await page.evaluate(() => { window.__holdSave = true; });
+    await page.locator("helman-config-editor-panel").getByRole("button", { name: "Save and reload" }).click();
+    await expect.poll(() => page.evaluate(() => window.__saveCalls())).toBe(1);
+    const blocked = await page.evaluate(() => {
+        const event = new Event("beforeunload", { cancelable: true });
+        window.dispatchEvent(event);
+        return event.defaultPrevented;
+    });
+    expect(blocked).toBe(true);
+    await page.evaluate(() => window.__releaseSave());
+});
+
+for (const reloadSucceeds of [true, false]) for (const editDuringSave of [true, false]) {
+    test(`a newer revision during a ${reloadSucceeds ? "successful" : "failed reload"} save ${editDuringSave ? "warns over a new draft" : "reloads the clean editor"}`, async ({ page }) => {
+        await mountEditor(page);
+        await makeDirty(page);
+        await page.evaluate(({ newer, success }) => {
+            const host = document.querySelector("helman-config-editor-panel") as any;
+            const callWS = host.hass.callWS;
+            host.hass = { ...host.hass, callWS: async (request: any) => {
+                if (request.type !== "helman/save_config") return callWS(request);
+                const config = { ...request.config, config_version: 29 };
+                const response = { success, config, revision: window.__configRevision(config), validation: { valid: true, errors: [], warnings: [] } };
+                await new Promise<void>((resolve) => { window.__releaseSave = resolve; });
+                return response;
+            } };
+            window.__setStoredConfig(JSON.parse(newer));
+        }, { newer: JSON.stringify(CHANGED_CONFIG), success: reloadSucceeds });
+        await page.locator("helman-config-editor-panel").getByRole("button", { name: "Save and reload" }).click();
+        if (editDuringSave) await page.evaluate(() => {
+            const host = document.querySelector("helman-config-editor-panel") as any;
+            host._config = { ...host._config, forecast_days: 99 };
+            host._dirty = true;
+            host.requestUpdate();
+        });
+        await page.evaluate(() => window.__fireDataChanged("config", "newer-revision"));
+        await page.waitForTimeout(600);
+        expect(await page.evaluate(() => window.__getConfigCalls())).toBe(1);
+        await page.evaluate(() => window.__releaseSave());
+        if (editDuringSave) {
+            await expect.poll(() => readBadges(page)).toContain("The stored config changed elsewhere — reload to see it");
+            expect(await readBadges(page)).toContain("Unsaved changes");
+            expect(await page.evaluate(() => window.__getConfigCalls())).toBe(1);
+        } else {
+            await expect.poll(() => page.evaluate(() => window.__getConfigCalls())).toBe(2);
+            expect(await readBadges(page)).not.toContain("Unsaved changes");
+        }
+    });
+}

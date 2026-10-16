@@ -185,9 +185,11 @@ async function mountPanel(page: Page, options: MountOptions = {}): Promise<void>
             // The shared data-changed feed subscribes through `connection`;
             // holding the listener lets a test play the backend's announcement.
             const listeners: ((event: unknown) => void)[] = [];
-            globals.__fireDataChanged = (kind: string) => {
+            let eventConfig = configs[1] ?? configs[0];
+            let currentConfig = eventConfig;
+            globals.__fireDataChanged = (kind: string, revision?: string) => {
                 for (const listener of listeners) {
-                    listener({ kind });
+                    listener({ kind, revision: kind === "config" ? revision ?? window.__configRevision(eventConfig) : undefined });
                 }
             };
 
@@ -229,8 +231,14 @@ async function mountPanel(page: Page, options: MountOptions = {}): Promise<void>
                     "helman/save_config": async (request: {
                         type: string;
                         config?: unknown;
+                        expected_revision?: string;
                     }) => {
                         if (holdSave) await new Promise<void>((resolve) => { releaseSave = resolve; });
+                        if (request.expected_revision !== window.__configRevision(currentConfig)) {
+                            return { success: false, conflict: true, config: currentConfig, revision: window.__configRevision(currentConfig) };
+                        }
+                        eventConfig = { ...(request.config as object), config_version: 29 };
+                        currentConfig = eventConfig;
                         return save;
                     }
                 }, (request: {
@@ -1000,9 +1008,10 @@ test.describe("the dialog refuses to overwrite a config that moved under it", ()
         await dialog(page).getByText("Save and reload").click();
 
         await expect(dialog(page).locator(".message.stale")).toHaveCount(1);
-        // Not "saved and then complained" — never sent at all.
+        expect((await calls(page)).filter((call) => call.type === "helman/get_config")).toHaveLength(1);
+        // The atomic compare-and-set refused the stale write.
         expect((await calls(page)).filter((call) => call.type === "helman/save_config"))
-            .toHaveLength(0);
+            .toHaveLength(1);
     });
 
     test("an unchanged config lets the save through, so the guard is not always-on", async ({ page }) => {
@@ -1044,6 +1053,7 @@ test.describe("the dialog refuses to overwrite a config that moved under it", ()
 
         // Learned before typing another twenty seconds of edits.
         await expect(dialog(page).locator(".message.stale")).toHaveCount(1);
+        expect((await calls(page)).filter((call) => call.type === "helman/get_config")).toHaveLength(1);
     });
 
     test("an announcement that moved nothing raises no notice", async ({ page }) => {
@@ -1241,4 +1251,50 @@ test.describe("editing an optimizer as YAML from the dialog", () => {
         await modeButton(page, "Visual").click();
         await expect(card(page).locator(".yaml-surface")).toHaveCount(1);
     });
+});
+
+for (const external of [false, true]) {
+    test(`a revision during a failed reload save ${external ? "shows a stale banner for another write" : "does not flag its own write"}`, async ({ page }) => {
+        await mountPanel(page);
+        await openDialog(page);
+        await page.evaluate(() => {
+            const host = document.querySelector("scheduling-explanation-panel")!.shadowRoot!.querySelector("helman-optimizer-edit-dialog") as any;
+            const callWS = host.hass.callWS;
+            host.hass = { ...host.hass, callWS: async (request: any) => {
+                if (request.type !== "helman/save_config") return callWS(request);
+                const config = { ...request.config, config_version: 29 };
+                (window as any).__savedRevision = window.__configRevision(config);
+                await new Promise<void>((resolve) => { (window as any).__releaseSave = resolve; });
+                return { success: false, config, revision: window.__configRevision(config), validation: { valid: true, errors: [], warnings: [] } };
+            } };
+        });
+        await dialog(page).getByText("Save and reload").click();
+        await expect.poll(() => page.evaluate(() => !!(window as any).__savedRevision)).toBe(true);
+        await page.evaluate((external) => window.__fireDataChanged("config", external ? "newer-revision" : (window as any).__savedRevision), external);
+        await page.waitForTimeout(600);
+        await expect(dialog(page).locator(".message.stale")).toHaveCount(0);
+        await page.evaluate(() => (window as any).__releaseSave());
+        await expect(dialog(page).locator(".message.error:not(.stale)")).toHaveCount(1);
+        await expect(dialog(page).locator(".message.stale")).toHaveCount(external ? 1 : 0);
+        expect((await calls(page)).filter((call) => call.type === "helman/get_config")).toHaveLength(1);
+    });
+}
+
+test("optimizer editing is frozen while a save is pending", async ({ page }) => {
+    await mountPanel(page, { holdSave: true });
+    await openDialog(page);
+    await editThreshold(page, "0.5");
+    await dialog(page).getByText("Save and reload").click();
+    await expect(dialog(page).locator("helman-optimizer-editor")).toHaveAttribute("inert", "");
+    expect(await page.evaluate(() => {
+        const host = document.querySelector("scheduling-explanation-panel")!.shadowRoot!
+            .querySelector("helman-optimizer-edit-dialog") as any;
+        const before = host._view.config;
+        host.shadowRoot.querySelector("helman-optimizer-editor").dispatchEvent(new CustomEvent("optimizer-config-changed", {
+            detail: { config: { ...before, forecast_days: 99 } }, bubbles: true, composed: true,
+        }));
+        return host._view.config === before;
+    })).toBe(true);
+    await page.evaluate(() => (window as any).__releaseSave());
+    await expect(dialog(page)).toHaveCount(0);
 });

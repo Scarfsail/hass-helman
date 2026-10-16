@@ -43,7 +43,7 @@ export type DataChangedKind = "schedule" | "plan" | "config" | "solar_bias";
  * Reload everything unless you provably depend on one kind. Most cards draw
  * across kind boundaries: a plan announcement can also move a forecast.
  */
-export type DataChangedListener = (kinds: ReadonlySet<DataChangedKind>) => void;
+export type DataChangedListener = (kinds: ReadonlySet<DataChangedKind>, metadata: { configRevision?: string }) => void;
 
 export interface DataChangedFeed {
     subscribe(listener: DataChangedListener): () => void;
@@ -95,6 +95,7 @@ class DataChangedFeedImpl implements DataChangedFeed {
     private readonly _connection: HelmanConnection;
     private readonly _listeners = new Set<DataChangedListener>();
     private _pendingKinds = new Set<DataChangedKind>();
+    private _pendingConfigRevision: string | undefined;
     private _flushTimer: number | null = null;
     private _unsubscribeRequest: Promise<() => void> | null = null;
     private _visibilityListener: (() => void) | null = null;
@@ -134,8 +135,8 @@ class DataChangedFeedImpl implements DataChangedFeed {
             return;
         }
 
-        this._unsubscribeRequest = subscribeMessage<{ kind?: string }>(
-            (message) => this._onEvent(message?.kind),
+        this._unsubscribeRequest = subscribeMessage<{ kind?: string; revision?: string }>(
+            (message) => this._onEvent(message?.kind, message?.revision),
             SUBSCRIBE_UPDATES,
         );
         // A failed subscription must not surface as an unhandled rejection; the
@@ -145,8 +146,9 @@ class DataChangedFeedImpl implements DataChangedFeed {
         this._ensureVisibilityListener();
     }
 
-    private _onEvent(kind: string | undefined): void {
+    private _onEvent(kind: string | undefined, revision?: string): void {
         this._pendingKinds.add((kind ?? "schedule") as DataChangedKind);
+        if (kind === "config") this._pendingConfigRevision = revision;
 
         if (this._isHidden()) {
             // Reloading a background tab on every re-plan is a round-trip
@@ -177,9 +179,11 @@ class DataChangedFeedImpl implements DataChangedFeed {
         }
 
         const kinds = this._pendingKinds;
+        const metadata = { configRevision: this._pendingConfigRevision };
         this._pendingKinds = new Set();
+        this._pendingConfigRevision = undefined;
         for (const listener of this._listeners) {
-            listener(kinds);
+            listener(kinds, metadata);
         }
     }
 
@@ -211,6 +215,7 @@ class DataChangedFeedImpl implements DataChangedFeed {
     private _dispose(): void {
         this._clearFlushTimer();
         this._pendingKinds = new Set();
+        this._pendingConfigRevision = undefined;
 
         if (this._visibilityListener !== null && typeof document !== "undefined") {
             document.removeEventListener("visibilitychange", this._visibilityListener);
@@ -261,9 +266,9 @@ export class DataChangedController implements ReactiveController {
         if (connection === this._connection) return;
         this._unsubscribe?.();
         this._connection = connection;
-        this._unsubscribe = hass ? getSharedDataChangedFeed(hass).subscribe((kinds) => {
+        this._unsubscribe = hass ? getSharedDataChangedFeed(hass).subscribe((kinds, metadata) => {
             if (!this._options.kinds || this._options.kinds.some((kind) => kinds.has(kind))) {
-                this._onChange(kinds);
+                this._onChange(kinds, metadata);
             }
         }) : undefined;
     }
