@@ -1,14 +1,15 @@
 """The hardware Helman can drive, and the state that counts as at rest for each.
 
 "Normal" is uniformly the resting state: the configured normal mode for the
-inverter, and off for every appliance regardless of kind. The inspector reads
-this list to name its lanes and to tell a running entity from an idle one.
+inverter, and off for every appliance regardless of kind. The card reads it
+off every ``helman/get_appliances`` entry (:mod:`..appliances.dto`) to tell a
+running entity from an idle one, and the recorder history reads it here.
 
 The uniformity is not asserted here any more — it is read off
 :data:`..controllables.spec.CONTROLLABLE_SPECS`, which declares per kind where
 the control entity lives and what its rest looks like. What is left in this
-module is the roster's *shape*: which entities exist, in what order, and how they
-are serialised for the card.
+module is the roster's *shape*: which entities exist, in what order, and what
+each one's resting state is.
 """
 
 from __future__ import annotations
@@ -55,16 +56,30 @@ def build_controllable_entities(
     control_config: ScheduleControlConfig | None,
     registry: "AppliancesRuntimeRegistry",
 ) -> list[ControllableEntityDict]:
-    """List everything Helman can drive, with the state that counts as at rest.
+    """List everything Helman can drive, with the state that counts as at rest."""
+    entities: list[ControllableEntityDict] = []
+    for spec, source in iter_controllable_sources(
+        control_config=control_config, registry=registry
+    ):
+        entity = build_controllable_entity(spec, source)
+        if entity is not None:
+            entities.append(entity)
+    return entities
 
-    The two arguments are two config readers, not two species: the inverter is
-    emitted by exactly the same walk as every appliance, from its own spec.
-    Pairing each source with its spec is all that is left of the split, and it
-    disappears once the inverter is configured in the same list as the rest.
 
-    Appliances are emitted in registry order rather than grouped by kind,
-    because that is the order the user wrote them in and the order the card's
-    lanes appear in.
+def iter_controllable_sources(
+    *,
+    control_config: ScheduleControlConfig | None,
+    registry: "AppliancesRuntimeRegistry",
+) -> list[tuple[ControllableSpec, Any]]:
+    """List everything Helman can drive, each paired with the spec that reads it.
+
+    The inverter is walked exactly like every appliance, from its own spec; it
+    is present only when ``control_config`` is.
+
+    Appliances follow the inverter in registry order rather than grouped by
+    kind, because that is the order the user wrote them in and the order the
+    card's lanes appear in.
     """
     sources: list[tuple[ControllableSpec, Any]] = []
     if control_config is not None:
@@ -78,16 +93,10 @@ def build_controllable_entities(
         # unknown kinds, so this is a guard, not a path.
         if spec is not None:
             sources.append((spec, appliance))
-
-    entities: list[ControllableEntityDict] = []
-    for spec, source in sources:
-        entity = _build_controllable_entity(spec, source)
-        if entity is not None:
-            entities.append(entity)
-    return entities
+    return sources
 
 
-def _build_controllable_entity(
+def build_controllable_entity(
     spec: ControllableSpec,
     source: Any,
 ) -> ControllableEntityDict | None:

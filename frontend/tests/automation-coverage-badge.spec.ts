@@ -4,17 +4,19 @@ import { loadBundle } from "./support/card-page";
 /**
  * Whether a lane is on autopilot, said on the lane itself.
  *
- * The answer is derived from the config and from nothing else -- which optimizer
- * targets which controllable, and whether it is switched on -- so these tests
- * hand the band documents rather than plans. What is worth pinning:
+ * The backend resolves it from the parsed automation config and serves it as
+ * `helman/get_automation_coverage` -- which optimizer targets which
+ * controllable, and whether it runs (the derivation is pinned in
+ * `tests/test_automation_coverage.py`). What is worth pinning here:
  *
- * - **The three states, and where each comes from.** Enabled, disabled-only and
- *   untouched are three different answers, and the automation's master switch
- *   overrides every optimizer under it.
+ * - **The three states.** Active, disabled-only and untouched are three
+ *   different answers, the last one being a lane the payload does not name.
  * - **That the badge opens what it names.** A lane driven by three optimizers
  *   opens three cards, not one of them.
  * - **That it is a control of its own.** Pressing it must not also select the
  *   lane underneath, which is the other thing a press on that row does.
+ * - **That every viewer sees it**, and only an admin can press it: the dialog
+ *   it opens edits the admin-only config.
  */
 
 const DAY = "2026-07-24";
@@ -23,7 +25,8 @@ const HOUR_MS = 3_600_000;
 
 /**
  * Two lanes and four optimizers: the inverter has three (one of them off) and
- * the boiler has one that is off. The pump has none at all.
+ * the boiler has one that is off. The pump has none at all. Only the edit
+ * dialog reads this; the badge reads {@link COVERAGE}.
  */
 const CONFIG = {
     config_version: 4,
@@ -40,28 +43,33 @@ const CONFIG = {
     },
 };
 
+/** What the backend resolves {@link CONFIG} to. */
+const COVERAGE = {
+    masterEnabled: true,
+    controllables: {
+        boiler: { state: "disabled_only", optimizerIds: ["boiler_surplus"] },
+        inverter: { state: "active", optimizerIds: ["charge_hold", "export_price", "night_charge"] },
+    },
+};
+
 interface MountOptions {
-    config?: unknown;
-    /** Labels in their own column, as the scheduling card draws them. */
-    /** What `helman/get_optimizer_schema` answers; the default names no kinds. */
-    schema?: unknown;
-    /** Refuse `helman/get_config` the way the backend refuses a non-admin. */
-    unauthorized?: boolean;
-    /** Hold every config read open until a test releases it. */
+    coverage?: unknown;
+    /** Mount for a viewer without admin rights. */
+    nonAdmin?: boolean;
+    /** Hold every coverage read open until a test releases it. */
     stallReads?: boolean;
 }
 
 async function mountBand(page: Page, options: MountOptions = {}): Promise<void> {
     const {
-        config = CONFIG,
-        schema = { version: 2, kinds: [] },
-        unauthorized = false,
+        coverage = COVERAGE,
+        nonAdmin = false,
         stallReads = false,
     } = options;
 
     await loadBundle(page, "scheduling-entity-day-band");
 
-    await page.evaluate(({ dayStartMs, hourMs, config, schema, unauthorized, stallReads }) => {
+    await page.evaluate(({ dayStartMs, hourMs, config, coverage, nonAdmin, stallReads }) => {
         const calls: { type: string; config?: unknown }[] = [];
         const globals = window as unknown as Record<string, unknown>;
         globals.__calls = calls;
@@ -74,10 +82,10 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
                 listener({ kind: "config" });
             }
         };
-        // Let a test move the stored config under a mounted band.
-        let current = config;
-        globals.__setConfig = (next: unknown) => { current = next; };
-        // Config reads parked mid-flight, for the coalescing tests.
+        // Let a test move the served coverage under a mounted band.
+        let current = coverage;
+        globals.__setCoverage = (next: unknown) => { current = next; };
+        // Coverage reads parked mid-flight, for the coalescing tests.
         const held: (() => void)[] = [];
         globals.__releaseReads = () => {
             const waiting = held.splice(0, held.length);
@@ -139,6 +147,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
         band.hass = {
             language: "en",
             locale: { language: "en" },
+            user: { is_admin: !nonAdmin },
             states: {},
             connection: {
                 subscribeMessage: async (callback: (message: unknown) => void) => {
@@ -149,26 +158,14 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
                 },
             },
             callWS: window.__mockHass({
-                "helman/get_config": async (request: {
-                    type: string;
-                    config?: unknown;
-                }) => {
-                    if (unauthorized) {
-                        // The shape the HA websocket client throws; the source
-                        // reads the code and nothing else.
-                        throw Object.assign(new Error("Admin access required"), { code: "unauthorized" });
-                    }
+                "helman/get_automation_coverage": async () => {
                     if (stallReads) {
                         await new Promise<void>((release) => { held.push(release); });
                     }
                     return current;
                 },
-                "helman/get_optimizer_schema": async (request: {
-                    type: string;
-                    config?: unknown;
-                }) => {
-                    return schema;
-                },
+                "helman/get_config": async () => config,
+                "helman/get_optimizer_schema": async () => ({ version: 2, kinds: [] }),
                 "helman/save_config": async (request: {
                     type: string;
                     config?: unknown;
@@ -195,13 +192,13 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
             band.addEventListener(type, () => events.push(type));
         }
         document.body.appendChild(band);
-    }, { dayStartMs: DAY_START_MS, hourMs: HOUR_MS, config, schema, unauthorized, stallReads });
+    }, { dayStartMs: DAY_START_MS, hourMs: HOUR_MS, config: CONFIG, coverage, nonAdmin, stallReads });
 
-    if (unauthorized || stallReads) {
+    if (stallReads) {
         // No read will land, so there is no badge to wait for.
         return;
     }
-    // The first badge only exists once the config read has landed.
+    // The first badge only exists once the coverage read has landed.
     await expect(badge(page, "inverter")).toHaveCount(1);
 }
 
@@ -255,14 +252,6 @@ test.describe("automation coverage on the schedule band", () => {
         expect(await badgeState(page, "pump")).toBe("none");
     });
 
-    test("the automation's master switch overrides every optimizer under it", async ({ page }) => {
-        await mountBand(page, {
-            config: { ...CONFIG, automation: { ...CONFIG.automation, enabled: false } },
-        });
-        // Its optimizers are still enabled; the pipeline they are in is not.
-        expect(await badgeState(page, "inverter")).toBe("disabled_only");
-    });
-
     test("a manual lane's badge is inert -- there is nothing to open", async ({ page }) => {
         await mountBand(page);
         expect(await badge(page, "pump").evaluate((element) => element.tagName)).toBe("SPAN");
@@ -313,17 +302,9 @@ test.describe("automation coverage on the schedule band", () => {
 
         await page.evaluate(() => {
             const globals = window as unknown as Record<string, (next: unknown) => void>;
-            globals.__setConfig({
-                config_version: 5,
-                automation: {
-                    enabled: true,
-                    appliance_optimizers: [{
-                        id: "boiler_surplus",
-                        kind: "appliance_runtime",
-                        target: { controllables: [{ controllable_id: "boiler" }] },
-                        enabled: true,
-                    }],
-                },
+            globals.__setCoverage({
+                masterEnabled: true,
+                controllables: { boiler: { state: "active", optimizerIds: ["boiler_surplus"] } },
             });
         });
         await fireDataChanged(page);
@@ -332,94 +313,37 @@ test.describe("automation coverage on the schedule band", () => {
         expect(await badgeState(page, "inverter")).toBe("none");
     });
 
-    test("a group counts on the lane of every member, not just the first", async ({ page }) => {
-        await mountBand(page, {
-            config: {
-                config_version: 17,
-                automation: {
-                    enabled: true,
-                    appliance_optimizers: [{
-                        id: "heaters",
-                        kind: "appliance_runtime",
-                        target: {
-                            controllables: [
-                                { controllable_id: "boiler" },
-                                { controllable_id: "pump" },
-                            ],
-                        },
-                        enabled: true,
-                    }],
-                },
-            },
-        });
-
-        expect(await badgeState(page, "boiler")).toBe("active");
-        expect(await badgeState(page, "pump")).toBe("active");
-        expect(await badgeState(page, "inverter")).toBe("none");
-    });
-
-    /**
-     * The inverter kinds declare `controllable_id` with a reserved default, so
-     * a document may legitimately omit it and still drive the inverter. The
-     * default is read from the served schema rather than from a list of kinds
-     * kept here, which would be a second answer to the same question.
-     */
-    test("an optimizer that leans on the schema's default target still counts", async ({ page }) => {
-        await mountBand(page, {
-            config: {
-                config_version: 4,
-                automation: {
-                    enabled: true,
-                    system_optimizers: [{ id: "charge_hold", kind: "charge_hold", enabled: true }],
-                },
-            },
-            schema: {
-                version: 2,
-                kinds: [{
-                    kind: "charge_hold",
-                    target: [{ key: "controllable_id", type: "string", default: "inverter" }],
-                    params: [],
-                    conditionTypes: [],
-                    newDraft: {},
-                }],
-            },
-        });
+    test("a viewer without admin rights sees the badge, but cannot open it", async ({ page }) => {
+        await mountBand(page, { nonAdmin: true });
 
         expect(await badgeState(page, "inverter")).toBe("active");
-    });
+        expect(await badgeState(page, "boiler")).toBe("disabled_only");
+        // Inert, like a lane with nothing to open: the dialog is admin-only.
+        expect(await badge(page, "inverter").evaluate((element) => element.tagName)).toBe("SPAN");
+        // The tooltip must not promise an action this viewer cannot take.
+        for (const lane of ["inverter", "boiler"]) {
+            const title = (await badge(page, lane).getAttribute("title")) ?? "";
+            expect(title).not.toBe("");
+            expect(title).not.toContain("kliknutím");
+        }
+        await badge(page, "inverter").dispatchEvent("click");
+        await expect(page.locator("helman-optimizer-edit-dialog")).toHaveCount(0);
 
-    test("a viewer the backend refuses gets no badge, and is not asked again", async ({ page }) => {
-        // `helman/get_config` is admin-gated. A refusal is the answer, not a
-        // transient failure, so re-announcing a change must not re-ask.
-        await mountBand(page, { unauthorized: true });
-        await expect(badge(page, "inverter")).toHaveCount(0);
-        await fireDataChanged(page);
-
-        const reads = await page.evaluate(
-            () => (window as unknown as Record<string, { type: string }[]>).__calls
-                .filter((call) => call.type === "helman/get_config").length,
+        const types = await page.evaluate(
+            () => (window as unknown as Record<string, { type: string }[]>).__calls.map((call) => call.type),
         );
-        expect(reads).toBe(1);
-        await expect(badge(page, "inverter")).toHaveCount(0);
+        expect(types).not.toContain("helman/get_config");
     });
 
     test("a change arriving mid-read is not swallowed by the coalescing", async ({ page }) => {
         await mountBand(page, { stallReads: true });
 
-        // The first read is parked. Move the config and announce it while it
+        // The first read is parked. Move the coverage and announce it while it
         // is still in flight: without a trailing edge this is dropped.
         await page.evaluate(() => {
-            (window as unknown as Record<string, (next: unknown) => void>).__setConfig({
-                config_version: 5,
-                automation: {
-                    enabled: true,
-                    appliance_optimizers: [{
-                        id: "pump_surplus",
-                        kind: "appliance_runtime",
-                        target: { controllables: [{ controllable_id: "pump" }] },
-                        enabled: true,
-                    }],
-                },
+            (window as unknown as Record<string, (next: unknown) => void>).__setCoverage({
+                masterEnabled: true,
+                controllables: { pump: { state: "active", optimizerIds: ["pump_surplus"] } },
             });
         });
         await fireDataChanged(page);
@@ -435,13 +359,15 @@ test.describe("automation coverage on the schedule band", () => {
         await expect.poll(() => badgeState(page, "pump")).toBe("active");
     });
 
-    test("the config is read once however many lanes ask", async ({ page }) => {
+    test("the coverage is read once however many lanes ask", async ({ page }) => {
         await mountBand(page);
 
         const calls = await page.evaluate(
             () => (window as unknown as Record<string, { type: string }[]>).__calls,
         );
-        expect(calls.filter((call) => call.type === "helman/get_config")).toHaveLength(1);
+        expect(calls.filter((call) => call.type === "helman/get_automation_coverage")).toHaveLength(1);
+        // The config is the dialog's business, read only once a badge is pressed.
+        expect(calls.filter((call) => call.type === "helman/get_config")).toHaveLength(0);
     });
 });
 

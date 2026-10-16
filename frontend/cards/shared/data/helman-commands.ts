@@ -181,7 +181,7 @@ export interface HelmanCommands {
     "helman/get_schedule": { req: Record<string, never>; res: Api.SchedulePayload };
     "helman/set_schedule": { req: { slots: Api.ScheduleSlotDTO[] }; res: Api.SchedulePayload };
     "helman/set_schedule_execution": { req: { enabled: boolean }; res: Api.SchedulePayload };
-    "helman/get_controllable_entities": { req: Record<string, never>; res: Api.ControllableEntitiesPayload };
+    "helman/get_automation_coverage": { req: Record<string, never>; res: Api.AutomationCoveragePayload };
     "helman/get_entity_actual_history": { req: Record<string, never>; res: Api.EntityActualHistoryPayload };
     "helman/get_appliances": { req: Record<string, never>; res: Api.AppliancesPayload };
     "helman/get_appliance_projections": { req: Record<string, never>; res: Api.ApplianceProjectionsPayload };

@@ -3,11 +3,9 @@ import { customElement, property } from "lit/decorators.js";
 import { nothing } from "lit-html";
 import type { LocalizeFunction } from "../../../localize/localize";
 import { getScheduleApplianceActionPresentation } from "../model/schedule-appliance-action-presentation";
-import type { ScheduleApplianceMetadata } from "../model/schedule-appliance-metadata";
+import type { ScheduleApplianceDescriptor } from "../model/schedule-appliance-metadata";
 import type { ScheduleActionAuthorshipSummary, ScheduleApplianceAction } from "../schedule-types";
 import { schedulingSharedStyles } from "../styles/scheduling-shared-styles";
-
-type SchedulingApplianceChipMetadata = Pick<ScheduleApplianceMetadata, "id" | "name" | "kind" | "icon">;
 
 @customElement("scheduling-appliance-chip")
 export class SchedulingApplianceChip extends LitElement {
@@ -53,7 +51,7 @@ export class SchedulingApplianceChip extends LitElement {
         `,
     ];
 
-    @property({ attribute: false }) public appliance?: SchedulingApplianceChipMetadata;
+    @property({ attribute: false }) public appliance?: ScheduleApplianceDescriptor;
     @property({ attribute: false }) public action: ScheduleApplianceAction | null = null;
     @property({ attribute: false }) public localize?: LocalizeFunction;
     @property({ type: String }) public size: "compact" | "regular" = "regular";

@@ -157,15 +157,15 @@ export class SchedulingEvChargerEditor extends LitElement {
         if (action === null || !isScheduleEvChargerAction(action)) {
             this._mode = "none";
             this._vehicleId = this.appliance.vehicles[0]?.id ?? "";
-            this._useMode = this.appliance.scheduleCapabilities.useModes[0] ?? "Fast";
-            this._ecoGear = this.appliance.scheduleCapabilities.ecoGears[0] ?? "";
+            this._useMode = this.appliance.metadata.scheduleCapabilities.useModes[0] ?? "Fast";
+            this._ecoGear = this.appliance.metadata.scheduleCapabilities.ecoGears[0] ?? "";
             return;
         }
 
         this._mode = action.charge ? "charge" : "off";
         this._vehicleId = action.vehicleId ?? this.appliance.vehicles[0]?.id ?? "";
-        this._useMode = action.useMode ?? this.appliance.scheduleCapabilities.useModes[0] ?? "Fast";
-        this._ecoGear = action.ecoGear ?? this.appliance.scheduleCapabilities.ecoGears[0] ?? "";
+        this._useMode = action.useMode ?? this.appliance.metadata.scheduleCapabilities.useModes[0] ?? "Fast";
+        this._ecoGear = action.ecoGear ?? this.appliance.metadata.scheduleCapabilities.ecoGears[0] ?? "";
     }
 
     private _handleModeChange(mode: EvChargerEditorMode): void {
@@ -179,10 +179,10 @@ export class SchedulingEvChargerEditor extends LitElement {
                 this._vehicleId = this.appliance.vehicles[0]?.id ?? "";
             }
             if (!this._useMode) {
-                this._useMode = this.appliance.scheduleCapabilities.useModes[0] ?? "Fast";
+                this._useMode = this.appliance.metadata.scheduleCapabilities.useModes[0] ?? "Fast";
             }
             if (!this._ecoGear) {
-                this._ecoGear = this.appliance.scheduleCapabilities.ecoGears[0] ?? "";
+                this._ecoGear = this.appliance.metadata.scheduleCapabilities.ecoGears[0] ?? "";
             }
         }
         this._emitChange();
@@ -196,7 +196,7 @@ export class SchedulingEvChargerEditor extends LitElement {
     private _handleUseModeChange(event: Event): void {
         this._useMode = (event.currentTarget as HTMLSelectElement).value;
         if (this._useMode === "ECO" && !this._ecoGear) {
-            this._ecoGear = this.appliance?.scheduleCapabilities.ecoGears[0] ?? "";
+            this._ecoGear = this.appliance?.metadata.scheduleCapabilities.ecoGears[0] ?? "";
         }
         this._emitChange();
     }
@@ -236,14 +236,14 @@ export class SchedulingEvChargerEditor extends LitElement {
             };
         }
 
-        const validVehicle = this.appliance.scheduleCapabilities.requiresVehicleSelection
+        const validVehicle = this.appliance.metadata.scheduleCapabilities.requiresVehicleSelection
             ? this.appliance.vehicles.some((vehicle) => vehicle.id === this._vehicleId)
             : true;
-        const validUseMode = this.appliance.scheduleCapabilities.useModes.includes(
+        const validUseMode = this.appliance.metadata.scheduleCapabilities.useModes.includes(
             this._useMode as "Fast" | "ECO",
         );
         const validEcoGear = this._useMode !== "ECO"
-            || this.appliance.scheduleCapabilities.ecoGears.includes(this._ecoGear);
+            || this.appliance.metadata.scheduleCapabilities.ecoGears.includes(this._ecoGear);
         const valid = validVehicle && validUseMode && validEcoGear;
 
         return {
@@ -308,7 +308,7 @@ export class SchedulingEvChargerEditor extends LitElement {
                 <div class="field">
                     <div class="field-label">${this.localize("scheduling.dialog.appliance.mode")}</div>
                     <select class="select-input" .value=${this._useMode} @change=${this._handleUseModeChange}>
-                        ${this.appliance.scheduleCapabilities.useModes.map((mode) => html`
+                        ${this.appliance.metadata.scheduleCapabilities.useModes.map((mode) => html`
                             <option value=${mode} ?selected=${this._useMode === mode}>${this._formatUseMode(mode)}</option>
                         `)}
                     </select>
@@ -318,7 +318,7 @@ export class SchedulingEvChargerEditor extends LitElement {
                     <div class="field">
                         <div class="field-label">${this.localize("scheduling.dialog.appliance.eco_gear")}</div>
                         <select class="select-input" .value=${this._ecoGear} @change=${this._handleEcoGearChange}>
-                            ${this.appliance.scheduleCapabilities.ecoGears.map((gear) => html`
+                            ${this.appliance.metadata.scheduleCapabilities.ecoGears.map((gear) => html`
                                 <option value=${gear} ?selected=${this._ecoGear === gear}>${gear}</option>
                             `)}
                         </select>

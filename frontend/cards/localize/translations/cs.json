@@ -1405,6 +1405,8 @@
     "automation_coverage": {
       "active": "Řídí automatizace — kliknutím ji upravíte",
       "disabled_only": "Automatizace existuje, ale neběží — kliknutím ji zobrazíte",
+      "active_readonly": "Řídí automatizace",
+      "disabled_only_readonly": "Automatizace existuje, ale neběží",
       "none": "Bez automatizace — pouze ruční plánování"
     },
     "why": {

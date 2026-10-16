@@ -1,9 +1,13 @@
 import { isReadableState } from "../../power-reading";
 import type { HassEntity } from "home-assistant-js-websocket";
 import type { HomeAssistant } from "../../../../types/ha";
-import type { ControllableEntityDTO } from "../../../helman-api";
 import type { EntityScheduleTarget } from "./entity-day-schedule-model";
-import type { ScheduleApplianceMetadata } from "./schedule-appliance-metadata";
+import {
+    describeScheduleAppliance,
+    type ScheduleApplianceDescriptor,
+    type ScheduleApplianceMetadata,
+    type ScheduleControllable,
+} from "./schedule-appliance-metadata";
 import type {
     ScheduleApplianceAction,
     ScheduleActionKind,
@@ -12,20 +16,11 @@ import type {
     ScheduleSlot,
 } from "../schedule-types";
 import {
-    INVERTER_CONTROLLABLE_ID,
     isScheduleClimateApplianceAction,
     isScheduleEvChargerAction,
     isScheduleGenericApplianceAction,
     isScheduleInverterAction,
 } from "../schedule-types";
-
-const FALLBACK_APPLIANCE_ICON = "mdi:flash-outline";
-
-/** The appliance facts the schedule chips need to render an action. */
-export type ControllableApplianceDescriptor = Pick<
-    ScheduleApplianceMetadata,
-    "id" | "name" | "kind" | "icon"
->;
 
 /**
  * One state of one controllable entity, expressed the way the slot editor
@@ -39,7 +34,7 @@ export type ControllableEntityStateView =
     | { domain: "inverter"; action: ScheduleInverterAction; setBy: ScheduleSetBy | null }
     | {
         domain: "appliance";
-        appliance: ControllableApplianceDescriptor;
+        appliance: ScheduleApplianceDescriptor;
         action: ScheduleApplianceAction | null;
         /**
          * Who put this state in the schedule, or null when the schedule has no
@@ -87,8 +82,8 @@ export interface ControllableEntityStatus {
     next: ControllableEntityTransition | null;
     /**
      * The entity's lane in the schedule, or null when it has none the card can
-     * author -- an appliance whose metadata is missing or that does not support
-     * authoring is still worth listing, but not worth offering an editor for.
+     * author -- an appliance that does not support authoring is still worth
+     * listing, but not worth offering an editor for.
      */
     scheduleTarget: EntityScheduleTarget | null;
 }
@@ -107,15 +102,13 @@ export interface ControllableEntityStatus {
  * know at all is left out, because there is nothing to render it from.
  */
 export function buildControllableEntityStatuses({
-    controllableEntities,
-    appliances,
+    controllables,
     states,
     slots,
     nowMs,
     executionEnabled,
 }: {
-    controllableEntities: readonly ControllableEntityDTO[];
-    appliances: readonly ScheduleApplianceMetadata[];
+    controllables: readonly ScheduleControllable[];
     states: HomeAssistant["states"] | undefined;
     slots: readonly ScheduleSlot[];
     nowMs: number;
@@ -125,23 +118,15 @@ export function buildControllableEntityStatuses({
         return [];
     }
 
-    const appliancesByEntityId = new Map(
-        appliances.flatMap((appliance) => appliance.controlEntityIds === null
-            ? []
-            : [[appliance.controlEntityIds.primary, appliance] as const]),
-    );
     const activeSlot = slots.find((slot) => slot.isCurrent) ?? null;
 
     const statuses: ControllableEntityStatus[] = [];
-    for (const entity of controllableEntities) {
-        const stateObj = states[entity.entityId];
+    for (const entity of controllables) {
+        const stateObj = states[entity.primaryEntityId];
         if (!stateObj) {
             continue;
         }
 
-        const appliance = entity.kind === "inverter"
-            ? null
-            : appliancesByEntityId.get(entity.entityId) ?? null;
         const isAvailable = isReadableState(stateObj.state);
         // An entity nobody can read is not "running", so it counts as at rest
         // rather than as doing something.
@@ -149,29 +134,24 @@ export function buildControllableEntityStatuses({
         const current = isAvailable
             ? _buildLiveStateView({
                 entity,
-                appliance,
                 state: stateObj.state,
                 states,
                 activeSlot,
-                setBy: _readAssignmentSetBy({
-                    entity,
-                    applianceId: appliance?.id ?? null,
-                    slot: activeSlot,
-                }),
+                setBy: _readAssignmentSetBy(entity, activeSlot),
                 unscheduled: executionEnabled
                     && isNormal
-                    && _readCommittedApplianceAction(activeSlot, appliance?.id ?? null) === null,
+                    && _readCommittedApplianceAction(activeSlot, entity.id) === null,
             })
             : null;
 
         statuses.push({
-            entityId: entity.entityId,
+            entityId: entity.primaryEntityId,
             // The Helman-configured name is what the user named the appliance
             // in this integration, so it is the more meaningful label here;
             // the entity's own friendly name is the fallback.
             name: entity.name
                 || (stateObj.attributes.friendly_name as string | undefined)
-                || entity.entityId,
+                || entity.primaryEntityId,
             stateObj,
             isAvailable,
             isNormal,
@@ -182,8 +162,6 @@ export function buildControllableEntityStatuses({
             next: executionEnabled
                 ? _resolveNextTransition({
                     entity,
-                    appliance,
-                    applianceId: appliance?.id ?? null,
                     // An unreadable entity is assumed to be at rest, so "next"
                     // answers "when will the schedule next do something with
                     // it?" rather than treating unavailability as a state the
@@ -193,7 +171,9 @@ export function buildControllableEntityStatuses({
                     nowMs,
                 })
                 : null,
-            scheduleTarget: _resolveScheduleTarget(entity, appliance),
+            // The inverter's entry carries its reserved id, so every lane is
+            // keyed by the roster's own id.
+            scheduleTarget: entity.supportsAuthoring ? entity.id : null,
         });
     }
 
@@ -204,28 +184,15 @@ export function buildControllableEntityStatuses({
     return statuses;
 }
 
-function _resolveScheduleTarget(
-    entity: ControllableEntityDTO,
-    appliance: ScheduleApplianceMetadata | null,
-): EntityScheduleTarget | null {
-    if (entity.kind === "inverter") {
-        return INVERTER_CONTROLLABLE_ID;
-    }
-
-    return appliance !== null && appliance.supportsAuthoring ? appliance.id : null;
-}
-
 function _buildLiveStateView({
     entity,
-    appliance,
     state,
     states,
     activeSlot,
     setBy,
     unscheduled,
 }: {
-    entity: ControllableEntityDTO;
-    appliance: ScheduleApplianceMetadata | null;
+    entity: ScheduleControllable;
     state: string;
     states: HomeAssistant["states"];
     activeSlot: ScheduleSlot | null;
@@ -242,7 +209,7 @@ function _buildLiveStateView({
 
     return {
         domain: "appliance",
-        appliance: appliance ?? _buildFallbackApplianceDescriptor(entity),
+        appliance: describeScheduleAppliance(entity),
         // Nothing scheduled means nobody authored what the entity is doing, so
         // the chip is left undecorated rather than credited to the schedule.
         setBy: unscheduled ? null : setBy,
@@ -252,7 +219,7 @@ function _buildLiveStateView({
         // the resting state as if it were a decision.
         action: unscheduled
             ? null
-            : _buildLiveApplianceAction({ entity, appliance, state, states }),
+            : _buildLiveApplianceAction({ entity, state, states }),
     };
 }
 
@@ -289,7 +256,7 @@ function _buildLiveInverterAction({
     state,
     activeSlot,
 }: {
-    entity: ControllableEntityDTO;
+    entity: ScheduleControllable;
     state: string;
     activeSlot: ScheduleSlot | null;
 }): ScheduleInverterAction {
@@ -298,7 +265,7 @@ function _buildLiveInverterAction({
         return { kind: "empty" };
     }
 
-    const scheduled = activeSlot?.assignments[INVERTER_CONTROLLABLE_ID]?.action ?? null;
+    const scheduled = activeSlot?.assignments[entity.id]?.action ?? null;
     const scheduledAction =
         scheduled !== null && isScheduleInverterAction(scheduled) ? scheduled : null;
     if (scheduledAction !== null && scheduledAction.kind === kind && scheduledAction.targetSoc !== undefined) {
@@ -309,7 +276,7 @@ function _buildLiveInverterAction({
 }
 
 function _resolveInverterActionKind(
-    entity: ControllableEntityDTO,
+    entity: ScheduleControllable,
     state: string,
 ): ScheduleActionKind | null {
     for (const [kind, option] of Object.entries(entity.actionOptions ?? {})) {
@@ -330,12 +297,10 @@ function _resolveInverterActionKind(
  */
 function _buildLiveApplianceAction({
     entity,
-    appliance,
     state,
     states,
 }: {
-    entity: ControllableEntityDTO;
-    appliance: ScheduleApplianceMetadata | null;
+    entity: ScheduleApplianceMetadata;
     state: string;
     states: HomeAssistant["states"];
 }): ScheduleApplianceAction | null {
@@ -351,9 +316,8 @@ function _buildLiveApplianceAction({
 
         // Only the live view can say which mode a running charger is in: it
         // reads the charger's own selects, which the recorder is not asked for.
-        const controls = appliance?.controlEntityIds ?? null;
-        const useMode = _readOptionalState(states, controls?.useMode);
-        const ecoGear = _readOptionalState(states, controls?.ecoGear);
+        const useMode = _readOptionalState(states, entity.controls.useMode.entityId);
+        const ecoGear = _readOptionalState(states, entity.controls.ecoGear.entityId);
         return {
             charge,
             ...(useMode === "ECO" || useMode === "Fast" ? { useMode } : {}),
@@ -373,29 +337,21 @@ function _buildLiveApplianceAction({
  */
 function _resolveNextTransition({
     entity,
-    appliance,
-    applianceId,
     currentState,
     slots,
     nowMs,
 }: {
-    entity: ControllableEntityDTO;
-    appliance: ScheduleApplianceMetadata | null;
-    applianceId: string | null;
+    entity: ScheduleControllable;
     currentState: string;
     slots: readonly ScheduleSlot[];
     nowMs: number;
 }): ControllableEntityTransition | null {
-    if (entity.kind !== "inverter" && applianceId === null) {
-        return null;
-    }
-
     const futureSlots = slots
         .filter((slot) => slot.startMs > nowMs)
         .sort((left, right) => left.startMs - right.startMs);
 
     for (const slot of futureSlots) {
-        const action = _readScheduledAction({ entity, applianceId, slot });
+        const action = slot.assignments[entity.id]?.action ?? null;
         const projectedState = _projectEntityState({ entity, action });
         if (projectedState === currentState) {
             continue;
@@ -405,10 +361,9 @@ function _resolveNextTransition({
             atMs: slot.startMs,
             view: _buildScheduledStateView({
                 entity,
-                appliance,
                 action,
                 projectedState,
-                setBy: _readAssignmentSetBy({ entity, applianceId, slot }),
+                setBy: _readAssignmentSetBy(entity, slot),
             }),
         };
     }
@@ -426,13 +381,11 @@ function _resolveNextTransition({
  */
 function _buildScheduledStateView({
     entity,
-    appliance,
     action,
     projectedState,
     setBy,
 }: {
-    entity: ControllableEntityDTO;
-    appliance: ScheduleApplianceMetadata | null;
+    entity: ScheduleControllable;
     action: ScheduleInverterAction | ScheduleApplianceAction | null;
     projectedState: string;
     setBy: ScheduleSetBy | null;
@@ -452,51 +405,18 @@ function _buildScheduledStateView({
     const projectedAction = _projectedApplianceAction(action as ScheduleApplianceAction | null);
     return {
         domain: "appliance",
-        appliance: appliance ?? _buildFallbackApplianceDescriptor(entity),
+        appliance: describeScheduleAppliance(entity),
         action: projectedAction,
         setBy: projectedAction === null ? null : setBy,
     };
 }
 
 /** Who authored this entity's action in a slot, if anyone did. */
-function _readAssignmentSetBy({
-    entity,
-    applianceId,
-    slot,
-}: {
-    entity: ControllableEntityDTO;
-    applianceId: string | null;
-    slot: ScheduleSlot | null;
-}): ScheduleSetBy | null {
-    if (slot === null) {
-        return null;
-    }
-
-    if (entity.kind === "inverter") {
-        return slot.assignments[INVERTER_CONTROLLABLE_ID]?.setBy ?? null;
-    }
-
-    return applianceId === null
-        ? null
-        : slot.assignments[applianceId]?.setBy ?? null;
-}
-
-function _readScheduledAction({
-    entity,
-    applianceId,
-    slot,
-}: {
-    entity: ControllableEntityDTO;
-    applianceId: string | null;
-    slot: ScheduleSlot;
-}): ScheduleInverterAction | ScheduleApplianceAction | null {
-    if (entity.kind === "inverter") {
-        return slot.assignments[INVERTER_CONTROLLABLE_ID]?.action ?? null;
-    }
-
-    return applianceId === null
-        ? null
-        : slot.assignments[applianceId]?.action ?? null;
+function _readAssignmentSetBy(
+    entity: ScheduleControllable,
+    slot: ScheduleSlot | null,
+): ScheduleSetBy | null {
+    return slot?.assignments[entity.id]?.setBy ?? null;
 }
 
 /**
@@ -510,7 +430,7 @@ export function _projectEntityState({
     entity,
     action,
 }: {
-    entity: ControllableEntityDTO;
+    entity: ScheduleControllable;
     action: ScheduleInverterAction | ScheduleApplianceAction | null;
 }): string {
     if (action === null || action.conditionMet === false) {
@@ -568,7 +488,7 @@ export function resolveScheduleActionFromEntityState({
     entity,
     state,
 }: {
-    entity: ControllableEntityDTO;
+    entity: ScheduleControllable;
     state: string;
 }): ScheduleInverterAction | ScheduleApplianceAction | null {
     if (entity.kind === "inverter") {
@@ -587,25 +507,10 @@ export function resolveScheduleActionFromEntityState({
     return { on: state === "on" };
 }
 
-function _buildFallbackApplianceDescriptor(
-    entity: ControllableEntityDTO,
-): ControllableApplianceDescriptor {
-    return {
-        id: entity.entityId,
-        name: entity.name,
-        kind: entity.kind,
-        icon: FALLBACK_APPLIANCE_ICON,
-    };
-}
-
 function _readOptionalState(
     states: HomeAssistant["states"],
-    entityId: string | undefined,
+    entityId: string,
 ): string | null {
-    if (entityId === undefined) {
-        return null;
-    }
-
     const state = states[entityId]?.state;
     return isReadableState(state) ? state : null;
 }

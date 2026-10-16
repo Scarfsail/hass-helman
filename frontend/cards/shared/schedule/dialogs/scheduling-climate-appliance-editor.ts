@@ -105,7 +105,7 @@ export class SchedulingClimateApplianceEditor extends LitElement {
                     <div class="action-options compact-action-options">
                         ${this._renderModeOption("none")}
                         ${this._renderModeOption(CLIMATE_OFF_EDITOR_MODE)}
-                        ${this.appliance.scheduleCapabilities.modes.map((mode) => this._renderModeOption(mode))}
+                        ${this.appliance.metadata.scheduleCapabilities.modes.map((mode) => this._renderModeOption(mode))}
                     </div>
                 ` : nothing}
             </div>
@@ -145,7 +145,7 @@ export class SchedulingClimateApplianceEditor extends LitElement {
             return;
         }
 
-        this._mode = this.appliance.scheduleCapabilities.modes.includes(action.mode)
+        this._mode = this.appliance.metadata.scheduleCapabilities.modes.includes(action.mode)
             ? action.mode
             : "none";
     }
@@ -188,7 +188,7 @@ export class SchedulingClimateApplianceEditor extends LitElement {
             };
         }
 
-        const valid = this.appliance.scheduleCapabilities.modes.includes(this._mode);
+        const valid = this.appliance.metadata.scheduleCapabilities.modes.includes(this._mode);
         return {
             applianceId: this.appliance.id,
             action: valid ? { mode: this._mode } : null,
@@ -199,7 +199,7 @@ export class SchedulingClimateApplianceEditor extends LitElement {
     private _buildModePresentation(mode: ClimateApplianceEditorMode): ClimateApplianceOptionPresentation {
         if (!this.appliance || mode === "none") {
             return {
-                icon: this.appliance?.icon ?? "mdi:circle-outline",
+                icon: this.appliance?.metadata.icon ?? "mdi:circle-outline",
                 label: this.localize("scheduling.dialog.appliance.no_action"),
                 toneClass: "action-tone-neutral",
             };
@@ -207,14 +207,14 @@ export class SchedulingClimateApplianceEditor extends LitElement {
 
         if (mode === CLIMATE_OFF_EDITOR_MODE) {
             return {
-                icon: this.appliance.icon,
+                icon: this.appliance.metadata.icon,
                 label: formatScheduleClimateModeLabel(CLIMATE_OFF_ACTION_MODE, this.localize),
                 toneClass: "action-tone-stop",
             };
         }
 
         return {
-            icon: this.appliance.icon,
+            icon: this.appliance.metadata.icon,
             label: formatScheduleClimateModeLabel(mode, this.localize),
             toneClass: "action-tone-charge",
         };

@@ -3,7 +3,6 @@ import { customElement, property, state } from "lit/decorators.js";
 import { nothing } from "lit-html";
 import type { HomeAssistant } from "../../../../types/ha";
 import type {
-    ControllableEntityDTO,
     EntityActualHistorySlotDTO,
     ForecastPayload,
 } from "../../../helman-api";
@@ -30,10 +29,7 @@ import {
     buildEntityScheduleLanes,
     type EntityScheduleDayView,
 } from "../model/entity-lane-source";
-import {
-    normalizeScheduleApplianceMetadata,
-    type ScheduleApplianceMetadata,
-} from "../model/schedule-appliance-metadata";
+import type { ScheduleControllable } from "../model/schedule-appliance-metadata";
 import {
     buildScheduleApplianceProjectionIndex,
     EMPTY_SCHEDULE_APPLIANCE_PROJECTION_INDEX,
@@ -85,9 +81,9 @@ const EMPTY_DAY_VIEW: EntityScheduleDayView = { slots: [], forecastPoints: new M
 /**
  * The shared day editor, and everything it needs to be opened from anywhere.
  *
- * The schedule, the appliance roster, the controllable entities, the recorder's
- * morning, the forecast and the projections are one pipeline, and the dialog is
- * only readable when all six agree about which day it is. That pipeline used to
+ * The schedule, the controllable roster, the recorder's morning, the forecast
+ * and the projections are one pipeline, and the dialog is only readable when
+ * all five agree about which day it is. That pipeline used to
  * live inside the inspector's schedule band, which is the only place that could
  * open an editor; this element is that pipeline with the band lifted off it, so
  * the power card can open the very same dialog rather than grow a second copy
@@ -117,8 +113,7 @@ export class SchedulingDayEditorHost extends LitElement {
      */
     @property({ type: Boolean }) public preload = false;
     @state() private _ownerSnapshot: ScheduleOwnerSnapshot = EMPTY_OWNER_SNAPSHOT;
-    @state() private _appliances: ScheduleApplianceMetadata[] = [];
-    @state() private _controllableEntities: ControllableEntityDTO[] = [];
+    @state() private _controllables: ScheduleControllable[] = [];
     @state() private _actualHistory: Record<string, EntityActualHistorySlotDTO[]> = {};
     @state() private _projectionIndex: ScheduleApplianceProjectionIndex = EMPTY_SCHEDULE_APPLIANCE_PROJECTION_INDEX;
     @state() private _forecast: ForecastPayload | null = null;
@@ -158,8 +153,7 @@ export class SchedulingDayEditorHost extends LitElement {
     private _scheduleOwner?: SharedScheduleOwner;
     private _unsubscribeOwner?: () => void;
     private _loadedConnection: unknown = null;
-    private _appliancesRequested = false;
-    private _entitiesRequested = false;
+    private _controllablesRequested = false;
     private _forecastLoader: ForecastLoader | null = null;
     private _projectionLoadGeneration = 0;
     /** An editor has been asked for, so the day is worth keeping complete. */
@@ -192,8 +186,7 @@ export class SchedulingDayEditorHost extends LitElement {
     private _forecastMap: SlotForecastMap = EMPTY_SLOT_FORECAST_MAP;
     private _derivedFor: {
         normalized: unknown;
-        appliances: unknown;
-        entities: unknown;
+        controllables: unknown;
         history: unknown;
         forecast: unknown;
         projections: unknown;
@@ -266,14 +259,12 @@ export class SchedulingDayEditorHost extends LitElement {
             this._localizeFn = getLocalizeFunction(this.hass);
             if (this._loadedConnection !== this.hass.connection) {
                 this._loadedConnection = this.hass.connection;
-                this._appliancesRequested = false;
-                this._entitiesRequested = false;
+                this._controllablesRequested = false;
                 this._actualHistory = {};
                 this._projectionLoadGeneration += 1;
                 this._projectionIndex = EMPTY_SCHEDULE_APPLIANCE_PROJECTION_INDEX;
                 this._syncOwner();
-                void this._loadAppliances();
-                void this._loadControllableEntities();
+                void this._loadControllables();
             } else {
                 this._syncOwner();
             }
@@ -479,78 +470,45 @@ export class SchedulingDayEditorHost extends LitElement {
     /**
      * Every entity id this host resolves out of `hass.states`, bubbled up so
      * the card at the top can filter `hass` without repeating the fetch that
-     * found them (`getControllableEntities` does not cache, so a card-level call
-     * would be an extra round trip per dashboard load).
-     *
-     * Always the whole set, never a delta: the two loads that contribute land
-     * independently — the EV `useMode`/`ecoGear` selects come from the appliance
-     * metadata, the rest from the controllable entities — and either may be the
-     * one that arrives second. `controlEntityIds.primary` is already a
-     * controllable entity id, so including it costs nothing and stops the set
-     * depending on that invariant holding.
+     * found them: each controllable's primary entity, plus the EV charger's
+     * `useMode`/`ecoGear` selects, which describe a running charger.
      */
     private _emitWatchedEntities(): void {
         const ids = new Set<string>();
-        for (const entity of this._controllableEntities) {
-            ids.add(entity.entityId);
-        }
-        for (const appliance of this._appliances) {
-            const controls = appliance.controlEntityIds;
-            if (!controls) continue;
-            if (controls.primary) ids.add(controls.primary);
-            if (controls.useMode) ids.add(controls.useMode);
-            if (controls.ecoGear) ids.add(controls.ecoGear);
+        for (const controllable of this._controllables) {
+            ids.add(controllable.primaryEntityId);
+            if (controllable.kind === "ev_charger") {
+                ids.add(controllable.controls.useMode.entityId);
+                ids.add(controllable.controls.ecoGear.entityId);
+            }
         }
         dispatchWatchedEntities(this, [...ids]);
     }
 
-    private async _loadAppliances(): Promise<void> {
+    private async _loadControllables(): Promise<void> {
         const hass = this.hass;
-        if (!hass || this._appliancesRequested) {
+        if (!hass || this._controllablesRequested) {
             return;
         }
 
-        this._appliancesRequested = true;
+        this._controllablesRequested = true;
         try {
             const payload = await getSharedHelmanStore(hass).getAppliances();
             if (this.hass?.connection !== hass.connection) {
                 return;
             }
-            this._appliances = normalizeScheduleApplianceMetadata(payload);
-            this._emitWatchedEntities();
-        } catch (error) {
-            if (this.hass?.connection !== hass.connection) {
-                return;
-            }
-            this._appliancesRequested = false;
-            this._appliances = [];
-            console.error("scheduling: failed to load appliance metadata", error);
-        }
-    }
-
-    private async _loadControllableEntities(): Promise<void> {
-        const hass = this.hass;
-        if (!hass || this._entitiesRequested) {
-            return;
-        }
-
-        this._entitiesRequested = true;
-        try {
-            const payload = await getSharedHelmanStore(hass).getControllableEntities();
-            if (this.hass?.connection !== hass.connection) {
-                return;
-            }
-            this._controllableEntities = payload.entities;
+            this._controllables = payload.appliances;
             this._emitWatchedEntities();
             if (this.preload || this._opened) {
                 void this._loadActualHistory();
             }
-        } catch {
+        } catch (error) {
             if (this.hass?.connection !== hass.connection) {
                 return;
             }
-            this._entitiesRequested = false;
-            this._controllableEntities = [];
+            this._controllablesRequested = false;
+            this._controllables = [];
+            console.error("scheduling: failed to load the controllable roster", error);
         }
     }
 
@@ -562,7 +520,7 @@ export class SchedulingDayEditorHost extends LitElement {
      */
     private async _loadActualHistory(): Promise<void> {
         const hass = this.hass;
-        if (!hass || this._controllableEntities.length === 0) {
+        if (!hass || this._controllables.length === 0) {
             return;
         }
 
@@ -626,13 +584,12 @@ export class SchedulingDayEditorHost extends LitElement {
 
     /** `hass.states`, or null while no roster has named anything to read in it. */
     private get _watchedStates(): unknown {
-        return this._controllableEntities.length === 0 ? null : this.hass?.states;
+        return this._controllables.length === 0 ? null : this.hass?.states;
     }
 
     private get _controllableEntityStatuses(): ControllableEntityStatus[] {
         return buildControllableEntityStatuses({
-            controllableEntities: this._controllableEntities,
-            appliances: this._appliances,
+            controllables: this._controllables,
             states: this.hass?.states,
             slots: this._normalized.slots,
             nowMs: this._nowMs,
@@ -655,8 +612,7 @@ export class SchedulingDayEditorHost extends LitElement {
         if (
             previous !== null
             && previous.normalized === this._normalized
-            && previous.appliances === this._appliances
-            && previous.entities === this._controllableEntities
+            && previous.controllables === this._controllables
             && previous.history === this._actualHistory
             && previous.forecast === this._forecast
             // A band drawn off this host reads the projections through a getter,
@@ -680,8 +636,7 @@ export class SchedulingDayEditorHost extends LitElement {
 
         this._derivedFor = {
             normalized: this._normalized,
-            appliances: this._appliances,
-            entities: this._controllableEntities,
+            controllables: this._controllables,
             history: this._actualHistory,
             forecast: this._forecast,
             projections: this._projectionIndex,
@@ -695,8 +650,7 @@ export class SchedulingDayEditorHost extends LitElement {
         // schedule; only their elapsed runs need its slot length.
         this._lanes = buildEntityScheduleLanes({
             statuses: this._controllableEntityStatuses,
-            controllableEntities: this._controllableEntities,
-            appliances: this._appliances,
+            controllables: this._controllables,
             actualHistory: this._actualHistory,
             slotDurationMs: slotMinutes === null ? null : slotMinutes * 60_000,
         });

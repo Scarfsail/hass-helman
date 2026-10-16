@@ -7,6 +7,7 @@ from typing import Literal, TypedDict
 from ..const import DEFAULT_HISTORY_LOOKBACK_DAYS
 from .errors import ApplianceConfigError
 from .icon import read_optional_appliance_icon, resolve_appliance_icon
+from .roster import ControllableRosterFieldsDict, EntityReferenceDict
 
 _CLIMATE_APPLIANCE_KIND = "climate"
 _CLIMATE_PROJECTION_STRATEGIES = {"fixed", "history_average"}
@@ -52,10 +53,6 @@ class ClimateApplianceRuntime:
         return self.supported_modes
 
 
-class EntityReferenceDict(TypedDict):
-    entityId: str
-
-
 class ClimateApplianceScheduleCapabilitiesDict(TypedDict):
     modes: list[ClimateApplianceMode]
 
@@ -69,21 +66,26 @@ class ClimateApplianceControlsDict(TypedDict):
     climate: EntityReferenceDict
 
 
-class ClimateApplianceResponseDict(TypedDict):
+class ClimateApplianceResponseDict(ControllableRosterFieldsDict):
     id: str
     name: str
     kind: str
+    supportsAuthoring: bool
     metadata: ClimateApplianceMetadataDict
     controls: ClimateApplianceControlsDict
 
 
 def build_climate_appliance_metadata_dict(
     appliance: ClimateApplianceRuntime,
+    roster: ControllableRosterFieldsDict,
 ) -> ClimateApplianceResponseDict:
     return {
         "id": appliance.id,
         "name": appliance.name,
         "kind": appliance.kind,
+        **roster,
+        # Without a mode to switch it into there is nothing to author.
+        "supportsAuthoring": bool(appliance.authorable_modes),
         "metadata": {
             "icon": resolve_appliance_icon(appliance.icon),
             "scheduleCapabilities": {

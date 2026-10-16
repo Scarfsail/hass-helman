@@ -1,14 +1,10 @@
 import type { HomeAssistant } from "../../../types/ha";
-import type { ControllableEntityDTO } from "../../helman-api";
 import { getSharedHelmanStore } from "../../helman/store";
 import {
     _projectEntityState,
     _readCommittedApplianceAction,
 } from "./model/controllable-entity-status";
-import {
-    normalizeScheduleApplianceMetadata,
-    type ScheduleApplianceMetadata,
-} from "./model/schedule-appliance-metadata";
+import type { ScheduleControllable } from "./model/schedule-appliance-metadata";
 import { NormalizedScheduleCache } from "./model/schedule-normalizer";
 import { getSharedScheduleOwner, type SharedScheduleOwner } from "./schedule-owner";
 import type { ScheduleOwnerSnapshot, ScheduleSetBy, ScheduleSlot } from "./schedule-types";
@@ -61,9 +57,8 @@ class ScheduleBadgeSourceImpl implements SharedScheduleBadgeSource {
     private _owner: SharedScheduleOwner | null = null;
     private _unsubscribeOwner: (() => void) | null = null;
     private _snapshot: ScheduleOwnerSnapshot | null = null;
-    private _appliances: readonly ScheduleApplianceMetadata[] = [];
-    private _controllableEntities: readonly ControllableEntityDTO[] = [];
-    private _rostersRequested = false;
+    private _controllables: readonly ScheduleControllable[] = [];
+    private _rosterRequested = false;
     private _nowMs = Date.now();
     private _nowTimer: number | null = null;
     private readonly _normalizedCache = new NormalizedScheduleCache();
@@ -131,11 +126,11 @@ class ScheduleBadgeSourceImpl implements SharedScheduleBadgeSource {
             return null;
         }
 
-        // Without the rosters there is no `normalState` to compare against, so
+        // Without the roster there is no `normalState` to compare against, so
         // the badge stays grey rather than colouring a scheduled stop. The
-        // rosters land once, early, and every listener is notified when they do.
-        const entity = this._resolveEntity(controllableId);
-        if (entity === null) {
+        // roster lands once, early, and every listener is notified when it does.
+        const entity = this._controllables.find((candidate) => candidate.id === controllableId);
+        if (entity === undefined) {
             return null;
         }
 
@@ -144,16 +139,6 @@ class ScheduleBadgeSourceImpl implements SharedScheduleBadgeSource {
         }
 
         return activeSlot?.assignments[controllableId]?.setBy ?? null;
-    }
-
-    private _resolveEntity(controllableId: string): ControllableEntityDTO | null {
-        const appliance = this._appliances.find((candidate) => candidate.id === controllableId) ?? null;
-        const entityId = appliance?.controlEntityIds?.primary ?? null;
-        if (entityId === null) {
-            return null;
-        }
-
-        return this._controllableEntities.find((entity) => entity.entityId === entityId) ?? null;
     }
 
     private get _timeZone(): string {
@@ -175,7 +160,7 @@ class ScheduleBadgeSourceImpl implements SharedScheduleBadgeSource {
 
         this._syncOwner();
         this._ensureNowTimer();
-        void this._loadRosters();
+        void this._loadRoster();
     }
 
     private _syncOwner(): void {
@@ -190,53 +175,47 @@ class ScheduleBadgeSourceImpl implements SharedScheduleBadgeSource {
             const scheduleChanged = snapshot.schedule !== this._snapshot?.schedule;
             this._snapshot = snapshot;
             if (scheduleChanged) {
-                // The rosters are the other half of an answer, and a load that
+                // The roster is the other half of an answer, and a load that
                 // failed while Home Assistant was still starting would otherwise
                 // never be tried again — leaving every badge grey for the life of
                 // the page while the schedule beside it refreshes happily. The
                 // owner's own refresh is the retry.
-                void this._loadRosters();
+                void this._loadRoster();
                 this._emit();
             }
         });
     }
 
     /**
-     * The appliance roster and the controllable entities, fetched once.
+     * The controllable roster, fetched once.
      *
-     * Neither call caches (see the band strip's `_loadControllableEntities`), and
-     * both describe configuration rather than state, so one round trip per
+     * It describes configuration rather than state, so one round trip per
      * connection serves every badge for the life of the page. A failed load is
      * silent and retriable: the badges simply stay grey, which is what they show
      * for an appliance with nothing scheduled anyway.
      */
-    private async _loadRosters(): Promise<void> {
-        if (this._rostersRequested) {
+    private async _loadRoster(): Promise<void> {
+        if (this._rosterRequested) {
             return;
         }
 
-        this._rostersRequested = true;
+        this._rosterRequested = true;
         const hass = this._hass;
-        const store = getSharedHelmanStore(hass);
         try {
-            const [appliances, entities] = await Promise.all([
-                store.getAppliances(),
-                store.getControllableEntities(),
-            ]);
+            const payload = await getSharedHelmanStore(hass).getAppliances();
             if (this._hass.connection !== hass.connection) {
                 return;
             }
 
-            this._appliances = normalizeScheduleApplianceMetadata(appliances);
-            this._controllableEntities = entities.entities;
+            this._controllables = payload.appliances;
             this._emit();
         } catch (error) {
             if (this._hass.connection !== hass.connection) {
                 return;
             }
 
-            this._rostersRequested = false;
-            console.warn("schedule: failed to load the controllable rosters for badges", error);
+            this._rosterRequested = false;
+            console.warn("schedule: failed to load the controllable roster for badges", error);
         }
     }
 
@@ -264,7 +243,7 @@ class ScheduleBadgeSourceImpl implements SharedScheduleBadgeSource {
      * The last badge unmounting is routine, not the end of the page: collapsing
      * the house node takes every badge with it and expanding it again brings
      * them straight back. The subscription and the timer are what cost
-     * something while nobody is looking, so those are dropped; the rosters and
+     * something while nobody is looking, so those are dropped; the roster and
      * the last snapshot stay, and the source keeps its place in
      * `badgeSources` — re-subscribing then costs no round trip at all.
      */

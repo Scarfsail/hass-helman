@@ -152,6 +152,7 @@ export async function installMockHass(page: Page): Promise<void> {
         };
         const defaults: Record<string, unknown> = {
             "helman/get_appliances": { appliances: [] },
+            "helman/get_automation_coverage": { masterEnabled: true, controllables: {} },
             "helman/get_optimizer_schema": { version: 29, kinds: [], applianceKinds: ["climate", "ev_charger", "generic"] },
             "helman/get_node_detail": (request: MockRequest) => {
                 const node = request.node;

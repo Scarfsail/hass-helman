@@ -41,7 +41,7 @@ export interface StatusMessage {
   text: string;
 }
 
-export type ApplianceMetadataEntry = Pick<import("../../helman-api").ApplianceMetadataDTO, "id" | "name" | "kind" | "metadata">;
+export type ApplianceMetadataEntry = Pick<import("../../helman-api").ApplianceDTO, "id" | "name" | "kind" | "metadata">;
 export type ApplianceMetadataResponse = Pick<import("../../helman-api").AppliancesPayload, "appliances">;
 
 /** One hardware profile, as `helman/get_vendors` serves it. */

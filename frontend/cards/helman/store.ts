@@ -2,7 +2,6 @@ import type { HomeAssistant } from "../../types/ha";
 import type {
     ApplianceProjectionsPayload,
     AppliancesPayload,
-    ControllableEntitiesPayload,
     EntityActualHistoryPayload,
     GetNodeDetailRequest,
     HistoryPayload,
@@ -23,7 +22,6 @@ export interface HelmanStore {
     getSchedule(): Promise<SchedulePayload>;
     applySchedulePatches(patches: readonly HelmanSchedulePatch[]): Promise<SchedulePayload>;
     setScheduleExecution(enabled: boolean): Promise<SchedulePayload>;
-    getControllableEntities(): Promise<ControllableEntitiesPayload>;
     getEntityActualHistory(): Promise<EntityActualHistoryPayload>;
     getAppliances(): Promise<AppliancesPayload>;
     getApplianceProjections(): Promise<ApplianceProjectionsPayload>;
@@ -115,10 +113,6 @@ class HelmanStoreImpl implements HelmanStore {
 
     public setScheduleExecution(enabled: boolean): Promise<SchedulePayload> {
         return this._afterMutation(callHelman(this._hass, "helman/set_schedule_execution", { enabled }));
-    }
-
-    public getControllableEntities(): Promise<ControllableEntitiesPayload> {
-        return this._dedupe("get_controllable_entities", () => callHelman(this._hass, "helman/get_controllable_entities", {}));
     }
 
     public getEntityActualHistory(): Promise<EntityActualHistoryPayload> {

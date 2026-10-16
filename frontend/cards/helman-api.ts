@@ -595,32 +595,6 @@ export type SetScheduleRequest = HelmanCommands["helman/set_schedule"]["req"];
 
 export type SetScheduleExecutionRequest = HelmanCommands["helman/set_schedule_execution"]["req"];
 
-/**
- * An entity Helman can drive, plus the state that counts as "at rest".
- *
- * The card filters these against live `hass.states`, so it reacts to entity
- * state changes without asking the backend again: an entity is non-normal
- * exactly when its state differs from `normalState`.
- *
- * `actionOptions` maps schedule action kinds to the inverter mode option each
- * one selects; only the inverter carries it. It is what lets the card label the
- * live inverter mode with the slot editor's chip, and project a scheduled
- * action onto the entity state it will produce.
- */
-export interface ControllableEntityDTO {
-    kind: string;
-    name: string;
-    entityId: string;
-    normalState: string;
-    actionOptions?: Record<string, string>;
-}
-
-export type GetControllableEntitiesRequest = HelmanCommands["helman/get_controllable_entities"]["req"];
-
-export interface ControllableEntitiesPayload {
-    entities: ControllableEntityDTO[];
-}
-
 export type GetEntityActualHistoryRequest = HelmanCommands["helman/get_entity_actual_history"]["req"];
 
 /** One elapsed slot an entity spent away from its resting state. */
@@ -703,10 +677,35 @@ export interface ClimateApplianceControlsDTO {
     climate: EntityReferenceDTO;
 }
 
+/**
+ * What every `helman/get_appliances` entry carries, whatever its kind.
+ *
+ * `primaryEntityId` is the entity whose state decides whether the controllable
+ * is running. The card filters the roster against live `hass.states`, so it
+ * reacts to state changes without asking the backend again: an entity is
+ * non-normal exactly when its state differs from `normalState`.
+ *
+ * `actionOptions` maps schedule action kinds to the inverter mode option each
+ * one selects; only the inverter carries it. It is what lets the card label the
+ * live inverter mode with the slot editor's chip, and project a scheduled
+ * action onto the entity state it will produce.
+ *
+ * `supportsAuthoring` says whether the schedule editor can author a lane for
+ * it -- a climate entity with no mode to switch into cannot.
+ */
 export interface ApplianceMetadataDTOBase {
     id: string;
     name: string;
     kind: string;
+    primaryEntityId: string;
+    supportsAuthoring: boolean;
+    normalState: string;
+    actionOptions?: Record<string, string>;
+}
+
+/** The inverter, under its reserved controllable id; the roster fields alone. */
+export interface InverterRosterEntryDTO extends ApplianceMetadataDTOBase {
+    kind: "inverter";
 }
 
 export interface EvChargerApplianceMetadataDTO extends ApplianceMetadataDTOBase {
@@ -728,21 +727,38 @@ export interface ClimateApplianceMetadataRecordDTO extends ApplianceMetadataDTOB
     controls: ClimateApplianceControlsDTO;
 }
 
-export interface UnknownApplianceMetadataDTO extends ApplianceMetadataDTOBase {
-    [key: string]: unknown;
-}
-
-export type ApplianceMetadataDTO =
+/** An appliance's entry: everything on the roster but the inverter. */
+export type ApplianceDTO =
     | EvChargerApplianceMetadataDTO
     | GenericApplianceMetadataRecordDTO
-    | ClimateApplianceMetadataRecordDTO
-    | UnknownApplianceMetadataDTO;
+    | ClimateApplianceMetadataRecordDTO;
 
+export type ApplianceMetadataDTO = InverterRosterEntryDTO | ApplianceDTO;
+
+/** Everything Helman can drive, in configuration order, the inverter first. */
 export interface AppliancesPayload {
     appliances: ApplianceMetadataDTO[];
 }
 
 export type GetAppliancesRequest = HelmanCommands["helman/get_appliances"]["req"];
+
+/**
+ * `active`: an enabled optimizer drives it under an enabled master switch.
+ * `disabled_only`: optimizers target it, but none of them runs.
+ */
+export type AutomationCoverageStateDTO = "active" | "disabled_only";
+
+export interface ControllableAutomationCoverageDTO {
+    state: AutomationCoverageStateDTO;
+    /** Every optimizer targeting it, enabled or not, in pipeline order. */
+    optimizerIds: string[];
+}
+
+/** Which automations drive each controllable; one no optimizer targets is absent. */
+export interface AutomationCoveragePayload {
+    masterEnabled: boolean;
+    controllables: Record<string, ControllableAutomationCoverageDTO>;
+}
 
 export type ApplianceProjectionMethod =
     | "fixed"

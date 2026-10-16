@@ -79,6 +79,9 @@ async function installFakeBackend(page: Page): Promise<void> {
             id,
             name: id,
             kind: "generic",
+            primaryEntityId: entityId,
+            supportsAuthoring: true,
+            normalState: "off",
             metadata: { icon: "mdi:flash", scheduleCapabilities: { onOffToggle: true } },
             controls: { switch: { entityId } },
         });
@@ -106,18 +109,6 @@ async function installFakeBackend(page: Page): Promise<void> {
                             appliance("fan", "switch.fan"),
                         ],
                     };
-                },
-                "helman/get_controllable_entities": async (msg: {
-                    type: string;
-                }) => {
-                    return {
-                        entities: ["dishwasher", "boiler", "pump", "fan"].map((id) => ({
-                            kind: "generic",
-                            name: id,
-                            entityId: `switch.${id}`,
-                            normalState: "off",
-                        })),
-                    };
                 }
             }, (msg: {
                 type: string;
@@ -131,10 +122,10 @@ async function installFakeBackend(page: Page): Promise<void> {
 /** Mount the house consumers, then read back each box's tint and markers. */
 async function renderedRows(page: Page, nodes: FakeNode[]): Promise<RenderedRow[]> {
     await mountRows(page, nodes);
-    // The schedule and the two rosters land over three round trips, and until
-    // all three are in every badge is honestly grey — so reading before then
-    // would race a genuine intermediate state rather than catch a bug.
-    await page.waitForFunction(() => window.__wsSeen.length >= 3);
+    // The schedule and the roster land over two round trips, and until both
+    // are in every badge is honestly grey — so reading before then would race
+    // a genuine intermediate state rather than catch a bug.
+    await page.waitForFunction(() => window.__wsSeen.length >= 2);
     return readRows(page);
 }
 
@@ -310,7 +301,7 @@ test.describe("deferrable house consumers on the power card", () => {
                 ],
             },
         ]);
-        await page.waitForFunction(() => window.__wsSeen.length >= 3);
+        await page.waitForFunction(() => window.__wsSeen.length >= 2);
 
         const children = await page.evaluate(async () => {
             const el = document.querySelector("helman-tree-item-list") as any;

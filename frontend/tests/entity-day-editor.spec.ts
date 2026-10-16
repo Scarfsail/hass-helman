@@ -131,13 +131,20 @@ async function mountEditor(
             id: "boiler",
             name: "Boiler",
             kind: "generic",
-            icon: "mdi:water-boiler",
-            order: 0,
+            primaryEntityId: "switch.boiler",
             supportsAuthoring: true,
-            controlEntityIds: { primary: "switch.boiler" },
-            scheduleCapabilities: { onOffToggle: true },
+            normalState: "off",
+            metadata: { icon: "mdi:water-boiler", scheduleCapabilities: { onOffToggle: true } },
+            controls: { switch: { entityId: "switch.boiler" } },
         };
-        const pump = { ...boiler, id: "pump", name: "Pump", icon: "mdi:pump", order: 1 };
+        const pump = {
+            ...boiler,
+            id: "pump",
+            name: "Pump",
+            primaryEntityId: "switch.pump",
+            metadata: { ...boiler.metadata, icon: "mdi:pump" },
+            controls: { switch: { entityId: "switch.pump" } },
+        };
 
         const el = document.createElement("scheduling-entity-day-editor") as any;
         el.localize = (key: string) => key;

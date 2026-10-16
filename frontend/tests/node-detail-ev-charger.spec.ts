@@ -211,15 +211,22 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             telemetry: { socEntityId: `sensor.${id}_soc`, ...(limit ? { chargeLimitEntityId: `number.${id}_limit` } : {}) },
             metadata: { batteryCapacityKwh: 64, maxChargingPowerKw: 11 },
         });
+        // The whole roster, as `helman/get_appliances` serves it: the inverter
+        // first, every entry carrying the roster fields beside its own payload.
         const appliances = {
             appliances: [
                 {
+                    id: "inverter", name: "Inverter", kind: "inverter", primaryEntityId: "select.inverter_mode",
+                    supportsAuthoring: true, normalState: "Self Use", actionOptions: { normal: "Self Use" },
+                },
+                {
                     id: "garage-ev", name: "Garage EV", kind: "ev_charger",
+                    primaryEntityId: "switch.ev_charge", supportsAuthoring: true, normalState: "off",
                     metadata: { icon: "mdi:car", maxChargingPowerKw: 11, scheduleCapabilities: { chargeToggle: true, useModes: ["Fast", "ECO"], ecoGears: ["6A"], requiresVehicleSelection: true } },
                     controls: { charge: { entityId: "switch.ev_charge" }, useMode: { entityId: "select.ev_use_mode" }, ecoGear: { entityId: "select.ev_eco_gear" } },
                     vehicles: [vehicle("kona", "Kona", v.limit !== null), ...(v.twoCars ? [vehicle("ioniq", "Ioniq", true)] : [])],
                 },
-                { id: "boiler", name: "Boiler", kind: "generic", metadata: { icon: "mdi:water-boiler", scheduleCapabilities: { onOffToggle: true } }, controls: { switch: { entityId: "switch.boiler" } } },
+                { id: "boiler", name: "Boiler", kind: "generic", primaryEntityId: "switch.boiler", supportsAuthoring: true, normalState: "off", metadata: { icon: "mdi:water-boiler", scheduleCapabilities: { onOffToggle: true } }, controls: { switch: { entityId: "switch.boiler" } } },
             ],
         };
         // 15-minute slots from 11:45 for a day and a half; by default a Fast

@@ -208,6 +208,8 @@ function _isApplianceMetadataEntry(value: unknown): value is ApplianceMetadataEn
       typeof value === "object" &&
       typeof (value as ApplianceMetadataEntry).id === "string" &&
       typeof (value as ApplianceMetadataEntry).name === "string" &&
-      typeof (value as ApplianceMetadataEntry).kind === "string",
+      typeof (value as ApplianceMetadataEntry).kind === "string" &&
+      // The roster's inverter entry carries no metadata.
+      (value as { kind: string }).kind !== "inverter",
   );
 }

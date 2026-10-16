@@ -181,7 +181,10 @@ async function mountBand(page: Page, date: string): Promise<void> {
         band.lanes = [{
             key: "boiler", entityId: "switch.boiler", name: "Boiler", icon: "mdi:water-boiler",
             target: "boiler",
-            appliance: { id: "boiler", kind: "generic", name: "Boiler", icon: "mdi:water-boiler" },
+            appliance: {
+                id: "boiler", kind: "generic", name: "Boiler", primaryEntityId: "switch.boiler", supportsAuthoring: true, normalState: "off",
+                metadata: { icon: "mdi:water-boiler", scheduleCapabilities: { onOffToggle: true } }, controls: { switch: { entityId: "switch.boiler" } },
+            },
             isAvailable: true, actualSegments: [], blocks: [],
             blockProjections: new Map(), blockVehicleSoc: new Map(),
         }];
