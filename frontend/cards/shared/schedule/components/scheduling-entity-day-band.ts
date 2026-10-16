@@ -1787,17 +1787,19 @@ export class SchedulingEntityDayBand extends LitElement {
         }
 
         const coverage = getLaneAutomationCoverage(this._automationCoverage, lane.target);
-        const title = this.localize(`scheduling.automation_coverage.${coverage.state}`);
         const icon = html`<ha-icon icon="mdi:robot"></ha-icon>`;
         if (coverage.optimizerIds.length === 0 || this.hass?.user?.is_admin !== true) {
+            const readonlyKey = coverage.state === "none" ? "none" : `${coverage.state}_readonly`;
+            const readonlyTitle = this.localize(`scheduling.automation_coverage.${readonlyKey}`);
             // Nothing to open, or nothing this viewer may open. An inert span
             // rather than a disabled button: there is no action here to be
             // temporarily unavailable.
             return html`
-                <span class=${`automation-badge ${coverage.state}`} title=${title}>${icon}</span>
+                <span class=${`automation-badge ${coverage.state}`} title=${readonlyTitle}>${icon}</span>
             `;
         }
 
+        const title = this.localize(`scheduling.automation_coverage.${coverage.state}`);
         return html`
             <button
                 class=${`automation-badge ${coverage.state}`}

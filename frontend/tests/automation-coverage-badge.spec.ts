@@ -320,6 +320,12 @@ test.describe("automation coverage on the schedule band", () => {
         expect(await badgeState(page, "boiler")).toBe("disabled_only");
         // Inert, like a lane with nothing to open: the dialog is admin-only.
         expect(await badge(page, "inverter").evaluate((element) => element.tagName)).toBe("SPAN");
+        // The tooltip must not promise an action this viewer cannot take.
+        for (const lane of ["inverter", "boiler"]) {
+            const title = (await badge(page, lane).getAttribute("title")) ?? "";
+            expect(title).not.toBe("");
+            expect(title).not.toContain("kliknutím");
+        }
         await badge(page, "inverter").dispatchEvent("click");
         await expect(page.locator("helman-optimizer-edit-dialog")).toHaveCount(0);
 
