@@ -1,3 +1,5 @@
+import { LatestRequest } from "../shared/data/latest-request";
+import { callHelman } from "../shared/data/helman-commands";
 import { slotMinutes, formatClock } from "../shared/time/slot-time";
 import { LitElement, css, html, svg, unsafeCSS, type PropertyValues, type TemplateResult } from "lit";
 import { property, query, state } from "lit/decorators.js";
@@ -70,7 +72,6 @@ import {
   buildHistoryDaysFromAggregates,
   calendarWindow,
   resolveFirstWeekdayIndex,
-  type SolarInspectorDayAggregateRow,
   type SolarInspectorHistoryDay,
 } from "./day-pill-model";
 import "./helman-solar-price-strip";
@@ -153,7 +154,7 @@ import {
 import { nowMinutesOnDay, renderNowMarker } from "./now-marker.js";
 import { helmanColorVars } from "../color-vars";
 import { schedulingSharedStyles } from "../shared/schedule/styles/scheduling-shared-styles";
-import { getSharedDataChangedFeed } from "../helman/data-changed";
+import { DataChangedController } from "../helman/data-changed";
 import { startNowClock } from "../shared/now-clock";
 import { getSharedScheduleOwner, type SharedScheduleOwner } from "../shared/schedule/schedule-owner";
 import type { ScheduleOwnerSnapshot } from "../shared/schedule/schedule-types";
@@ -668,7 +669,7 @@ export class HelmanSolarInspector extends LitElement {
    * "no connection yet" leaves it null, because that has decided nothing and
    * the fetch must still happen when `hass` arrives.
    */
-  private _historyDaysFor: string | null = null;
+  private readonly _historyRequest = new LatestRequest<string>();
   /**
    * Today, and the window the pill row is showing, derived once per update
    * cycle in `willUpdate`. `render()` reads them; it never computes them, and
@@ -684,18 +685,8 @@ export class HelmanSolarInspector extends LitElement {
    * the key wins nothing, so a fast click through three months cannot let the
    * first answer land last.
    */
-  private _spanRequestKey: string | null = null;
-  /** Which span answer is the current one; see `_loadSpan`. */
-  private _spanRequestId = 0;
+  private readonly _spanRequest = new LatestRequest<string>();
   @state() private _loading = false;
-  /**
-   * A reload the user did not ask for, running under the drawn day.
-   *
-   * Kept apart from `_loading` because the two want opposite things from the
-   * card: a navigation should blank and say so, a background refresh must leave
-   * the day exactly as it is until the new payload is in hand.
-   */
-  @state() private _refreshing = false;
   @state() private _error = "";
   /**
    * The forecast payload the day pills fetched. It backs the health banner —
@@ -735,7 +726,6 @@ export class HelmanSolarInspector extends LitElement {
   @state() private _calendarReveal = 0;
   private _calendarSelection = "";
   private _calendarWasOpen = false;
-  private _historyRequestId = 0;
   /** The span the aggregate views draw, or null before the first load. */
   @state() private _span: SpanAggregatePayload | null = null;
   @state() private _spanLoading = false;
@@ -889,8 +879,7 @@ export class HelmanSolarInspector extends LitElement {
    * how the chart above happens to be drawn.
    */
   private _partialSeries = new Map<SeriesKey, { missing: number; expected: number }>();
-  private _activeRequestId = 0;
-  private _activeRequestDate: string | null = null;
+  private readonly _dayRequest = new LatestRequest<string>();
   private _loadedConnection: unknown = null;
   private _stopNowClock?: () => void;
   /**
@@ -941,7 +930,6 @@ export class HelmanSolarInspector extends LitElement {
   private _observedChartWrap: HTMLElement | null = null;
   private _scheduleOwner?: SharedScheduleOwner;
   private _unsubscribeScheduleOwner?: () => void;
-  private _unsubscribeDataChanged?: () => void;
 
   static styles = [helmanColorVars, schedulingSharedStyles, hoverTooltipStyles, css`
     :host {
@@ -1659,6 +1647,11 @@ export class HelmanSolarInspector extends LitElement {
     }
   `];
 
+  constructor() {
+    super();
+    new DataChangedController(this, () => this.hass, {}, () => this._refreshActiveView(true));
+  }
+
   connectedCallback() {
     super.connectedCallback();
     // The wall clock owns a timer, because `hass` churn is not a clock. The card
@@ -1692,8 +1685,6 @@ export class HelmanSolarInspector extends LitElement {
     this._unsubscribeScheduleOwner?.();
     this._unsubscribeScheduleOwner = undefined;
     this._scheduleOwner = undefined;
-    this._unsubscribeDataChanged?.();
-    this._unsubscribeDataChanged = undefined;
   }
 
   /**
@@ -1843,7 +1834,7 @@ export class HelmanSolarInspector extends LitElement {
         this._loadedConnection = this.hass.connection;
         this._load();
       }
-      this._syncDataChangedSubscription();
+
     }
     // A hidden schedule strip holds no schedule subscription. Keyed on the flag
     // as well as on `hass`, because the flag can flip on its own -- the card
@@ -2499,7 +2490,8 @@ export class HelmanSolarInspector extends LitElement {
     const start = this._spanStart(this._selectedDate);
     const end = this._spanEnd(this._selectedDate);
     const key = `${bucket}:${start}..${end}`;
-    if (this._spanRequestKey === key) {
+    const request = this._spanRequest.begin(key);
+    if (request === null) {
       // The span already on screen is the right one, but the selection may not
       // be: a stop change carries a focus bucket in, and one that this span has
       // no column for -- a future day the backend clamped away -- would light a
@@ -2510,11 +2502,6 @@ export class HelmanSolarInspector extends LitElement {
       );
       return;
     }
-    this._spanRequestKey = key;
-    // The key answers "is this the window we asked for", which stays true when
-    // a re-plan asks for the same window again; only this counter can say which
-    // of two live requests for one window is the current one.
-    const requestId = ++this._spanRequestId;
     // An announced change must not flash an overlay over the span the reader is
     // studying, exactly as it must not disturb the day view.
     if (!silent) this._spanLoading = true;
@@ -2523,18 +2510,14 @@ export class HelmanSolarInspector extends LitElement {
     // and is overwritten below on success or left in place under the error
     // note on failure.
     try {
-      const result = await this.hass.callWS<SpanAggregatePayload>({
-        type: "helman/solar_bias/day_aggregates",
-        start_date: start,
-        end_date: end,
-        bucket,
-        // The composition panel is this view's alone. The day pills call the
-        // same command for six scalars a bucket, and asking there would widen a
-        // month-wide read by a meter per configured consumer for a field they
-        // never read.
+      const result = await callHelman(this.hass, "helman/solar_bias/day_aggregates", {
+          start_date: start,
+          end_date: end,
+          bucket,
+          // Only this composition panel needs the per-consumer statistics read.
         house_breakdown: true,
       });
-      if (requestId !== this._spanRequestId) return;
+      if (!this._spanRequest.isCurrent(request)) return;
       this._span = { bucket, currency: result?.currency ?? null, days: result?.days ?? [] };
       // Drop anything the new span has no column for, exactly as the day load
       // re-grids its slot selection: a selection the chart cannot draw is a
@@ -2544,10 +2527,10 @@ export class HelmanSolarInspector extends LitElement {
       // the card, so this is where the floor arrives when no day was ever loaded.
       if (result?.range) this._spanRange = result.range;
     } catch (err: any) {
-      if (requestId !== this._spanRequestId) return;
+      if (!this._spanRequest.isCurrent(request)) return;
       this._spanError = err?.message || this._t("bias_correction.inspector.load_failed");
     } finally {
-      if (requestId === this._spanRequestId) this._spanLoading = false;
+      if (this._spanRequest.isCurrent(request)) this._spanLoading = false;
       this.requestUpdate();
     }
   }
@@ -3612,28 +3595,6 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   /**
-   * Reload whatever is drawn whenever the backend says its data moved.
-   *
-   * The card's own payload comes from `helman/solar_bias/inspector`, which the
-   * schedule owner knows nothing about — so watching the shared schedule is not
-   * enough, even though the day pills already do.
-   *
-   * Through the shared feed rather than a private subscription, so an
-   * inspector and a scheduling card on one dashboard still cost one
-   * subscription between them.
-   */
-  private _syncDataChangedSubscription(): void {
-    const hass = this.hass;
-    if (!hass || this._unsubscribeDataChanged) {
-      return;
-    }
-
-    this._unsubscribeDataChanged = getSharedDataChangedFeed(hass).subscribe(() => {
-      this._refreshActiveView(true);
-    });
-  }
-
-  /**
    * Whichever view is on screen, asked for again -- and whatever is not, marked.
    *
    * Both ways in land here: the refresh button, which is a navigation and shows
@@ -3653,8 +3614,8 @@ export class HelmanSolarInspector extends LitElement {
    * only where they are drawn: `willUpdate` asks that question already.
    */
   private _refreshActiveView(silent: boolean): void {
-    this._spanRequestKey = null;
-    this._historyDaysFor = null;
+    this._spanRequest.reset();
+    this._historyRequest.reset();
     if (this._viewMode === "day") {
       void this._load({ silent });
       return;
@@ -5942,28 +5903,17 @@ export class HelmanSolarInspector extends LitElement {
     }
     const silent = options.silent === true;
     const requestedDate = this._selectedDate;
-    if (
-      (this._loading || this._refreshing) &&
-      this._activeRequestDate === requestedDate
-    ) {
-      return;
-    }
-    const requestId = ++this._activeRequestId;
-    this._activeRequestDate = requestedDate;
+    const request = this._dayRequest.begin(requestedDate);
+    if (request === null) return;
     this._error = "";
-    if (silent) {
-      this._refreshing = true;
-    } else {
+    if (!silent) {
       // The previous payload is kept rather than nulled: `_renderBody` still
       // draws it, dimmed, under the loading overlay, instead of the card
       // collapsing and re-expanding around the request.
       this._loading = true;
     }
     try {
-      const payload = await this.hass.callWS<InspectorPayload>({
-        type: "helman/solar_bias/inspector",
-        date: requestedDate,
-      });
+      const payload = await callHelman(this.hass, "helman/solar_bias/inspector", { date: requestedDate });
       payload.series.houseForecast ??= [];
       payload.series.houseActual ??= [];
       payload.series.houseActualBreakdown ??= [];
@@ -5993,7 +5943,7 @@ export class HelmanSolarInspector extends LitElement {
       payload.availability.hasBatteryForecast ??= false;
       payload.availability.hasBatteryActual ??= false;
       payload.batterySocBounds ??= [];
-      if (requestId === this._activeRequestId && requestedDate === this._selectedDate) {
+      if (this._dayRequest.isCurrent(request) && requestedDate === this._selectedDate) {
         // Cleared here rather than on the way out: a request dropped as a
         // duplicate or one that fails leaves the day owed, so returning to it
         // asks again instead of drawing what the announcement superseded.
@@ -6022,14 +5972,13 @@ export class HelmanSolarInspector extends LitElement {
         );
       }
     } catch (err: any) {
-      if (requestId === this._activeRequestId && requestedDate === this._selectedDate) {
+      if (this._dayRequest.isCurrent(request) && requestedDate === this._selectedDate) {
         this._error = err?.message || this._t("bias_correction.inspector.load_failed");
       }
     } finally {
-      if (requestId === this._activeRequestId && requestedDate === this._selectedDate) {
+      if (this._dayRequest.isCurrent(request) && requestedDate === this._selectedDate) {
         this._loading = false;
-        this._refreshing = false;
-        this._activeRequestDate = null;
+        this._dayRequest.reset();
       }
       this.requestUpdate();
     }
@@ -6111,11 +6060,8 @@ export class HelmanSolarInspector extends LitElement {
     // The house focus asks for a field the plain pills do not, so it is part of
     // what the answer is for.
     const key = `${start}..${measuredEnd}${this.houseFocus ? ":house" : ""}`;
-    if (this._historyDaysFor === key) {
-      return;
-    }
-    this._historyDaysFor = key;
-    const requestId = ++this._historyRequestId;
+    const request = this._historyRequest.begin(key);
+    if (request === null) return;
     this._historyDays = this._historyDays.filter((day) => day.dayKey >= start && day.dayKey <= end);
     if (start > measuredEnd) {
       // A window that begins after today has no measured days. Clearing keeps a
@@ -6131,13 +6077,12 @@ export class HelmanSolarInspector extends LitElement {
       return;
     }
     try {
-      const result = await this.hass.callWS<{ days: SolarInspectorDayAggregateRow[] }>({
-        type: "helman/solar_bias/day_aggregates",
-        start_date: start,
-        end_date: measuredEnd,
-        ...(this.houseFocus ? { house_forecast: true } : {}),
+      const result = await callHelman(this.hass, "helman/solar_bias/day_aggregates", {
+          start_date: start,
+          end_date: measuredEnd,
+          ...(this.houseFocus ? { house_forecast: true } : {}),
       });
-      if (this._historyDaysFor !== key || requestId !== this._historyRequestId) {
+      if (!this._historyRequest.isCurrent(request)) {
         return;
       }
       this._historyDays = buildHistoryDaysFromAggregates((result?.days ?? []).filter((day) => day.date >= start && day.date <= measuredEnd));

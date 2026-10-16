@@ -1,3 +1,5 @@
+import { callHelman } from "../../data/helman-commands";
+import { DialogHistoryController } from "../../dialog-history-controller";
 import { LitElement, css, html } from "lit-element";
 import { customElement, property, state } from "lit/decorators.js";
 import { nothing } from "lit-html";
@@ -7,7 +9,7 @@ import "../components/scheduling-action-chip";
 import "../components/scheduling-appliance-chip";
 import "../components/scheduling-entity-day-band";
 import "../components/scheduling-explanation-panel";
-import { getSharedDataChangedFeed } from "../../../helman/data-changed";
+import { DataChangedController } from "../../../helman/data-changed";
 import "./scheduling-entity-action-editor";
 import type {
     EntityDayBandBlockSelectDetail,
@@ -63,9 +65,7 @@ import type {
 import { schedulingSharedStyles } from "../styles/scheduling-shared-styles";
 import type { EntityScheduleActionChangeDetail } from "./scheduling-entity-action-editor";
 
-const DIALOG_HISTORY_STATE_KEY = "__helmanEntityScheduleDialogId";
 const DEFAULT_NEW_BLOCK_DURATION_MS = 60 * 60 * 1000;
-let nextDialogHistoryEntryId = 0;
 
 /** What the dialog is for right now: authoring the day, or accounting for it. */
 type EntityDayEditorMode = "edit" | "explain";
@@ -456,67 +456,25 @@ export class SchedulingEntityDayEditor extends LitElement {
      * Reset per opening along with the records themselves.
      */
     private _explanationsRequested = new Set<string>();
-    private _unsubscribeDataChanged?: () => void;
-
     private _draftBeforeEdit: EntityScheduleDraft = {};
     /** Bumped per edit session, so the action editor knows a new one began. */
     private _editSessionId = 0;
-    private _historyEntryActive = false;
-    private _historyEntryId: number | null = null;
-    private _ignoreNextPopstate = false;
-    private readonly _handlePopState = (event: PopStateEvent): void => {
-        if (!this._historyEntryActive) {
-            return;
-        }
+    private readonly _history = new DialogHistoryController(this, "__helmanEntityScheduleDialogId", { close: () => this._close() });
 
-        if (this._ignoreNextPopstate) {
-            this._ignoreNextPopstate = false;
-            return;
-        }
-
-        if (this._isCurrentHistoryEntry(event.state)) {
-            return;
-        }
-
-        this._clearHistoryEntry();
-        this._close();
-    };
-
-    connectedCallback(): void {
-        super.connectedCallback();
-        if (typeof window !== "undefined") {
-            window.addEventListener("popstate", this._handlePopState);
-        }
-    }
-
-    disconnectedCallback(): void {
-        super.disconnectedCallback();
-        if (typeof window !== "undefined") {
-            window.removeEventListener("popstate", this._handlePopState);
-        }
-        this._unsubscribeDataChanged?.();
-        this._unsubscribeDataChanged = undefined;
-        this._clearHistoryEntry();
-        this._ignoreNextPopstate = false;
-    }
-
-    /**
-     * Drop the cached explanations whenever the backend says something changed.
-     *
-     * They are fetched once per (lane, day) and kept for the life of an opening
-     * -- which was right while the only thing that could invalidate them was
-     * closing and reopening the dialog. Editing an optimizer from the diagram
-     * broke that: the save reloads the entry, re-runs the automation, and fires
-     * `helman_data_changed`, and a cache that survived it would leave the
-     * reader looking at the rule they just changed, unchanged. Clearing is
-     * enough -- the panel refetches whatever it is still showing.
-     */
-    private _ensureDataChangedSubscription(): void {
-        const hass = this.hass;
-        if (!hass || this._unsubscribeDataChanged) {
-            return;
-        }
-        this._unsubscribeDataChanged = getSharedDataChangedFeed(hass).subscribe(() => {
+    constructor() {
+        super();
+        /**
+         * Drop the cached explanations whenever the backend says something changed.
+         *
+         * They are fetched once per (lane, day) and kept for the life of an opening
+         * -- which was right while the only thing that could invalidate them was
+         * closing and reopening the dialog. Editing an optimizer from the diagram
+         * broke that: the save reloads the entry, re-runs the automation, and fires
+         * `helman_data_changed`, and a cache that survived it would leave the
+         * reader looking at the rule they just changed, unchanged. Clearing is
+         * enough -- the panel refetches whatever it is still showing.
+         */
+        new DataChangedController(this, () => this.hass, {}, () => {
             this._explanations = new Map();
             this._explanationFailures = new Set();
             this._explanationsRequested = new Set();
@@ -525,7 +483,7 @@ export class SchedulingEntityDayEditor extends LitElement {
 
     willUpdate(changedProperties: Map<string, unknown>): void {
         super.willUpdate(changedProperties);
-        this._ensureDataChangedSubscription();
+
         // Seed once per opening: later slot updates are the refresh case, which
         // the stale banner reports instead of applying.
         if (this.open && (changedProperties.has("open") || changedProperties.has("target"))) {
@@ -546,8 +504,8 @@ export class SchedulingEntityDayEditor extends LitElement {
 
     updated(changedProperties: Map<string, unknown>): void {
         super.updated(changedProperties);
-        if (this.open && !this._historyEntryActive && changedProperties.has("open")) {
-            this._pushHistoryEntry();
+        if (this.open && !this._history.active && changedProperties.has("open")) {
+            this._history.push();
         }
 
         // The banner sits at the end of the scrolling body while Save sits in
@@ -1329,8 +1287,7 @@ export class SchedulingEntityDayEditor extends LitElement {
 
         this._explanationsRequested.add(key);
         try {
-            const payload = await hass.callWS<unknown>({
-                type: "helman/get_schedule_explanation",
+            const payload = await callHelman(hass, "helman/get_schedule_explanation", {
                 controllable_id: laneKey,
                 date: dayKey,
             });
@@ -1883,61 +1840,8 @@ export class SchedulingEntityDayEditor extends LitElement {
     };
 
     private _onClosed(): void {
-        if (this._canConsumeCurrentHistoryEntry()) {
-            this._ignoreNextPopstate = true;
-            this._clearHistoryEntry();
-            window.history.back();
-        } else {
-            this._clearHistoryEntry();
-        }
+        this._history.closed();
 
         this.dispatchEvent(new CustomEvent("closed", { bubbles: true, composed: true }));
-    }
-
-    private _pushHistoryEntry(): void {
-        if (typeof window === "undefined" || typeof window.history.pushState !== "function") {
-            return;
-        }
-
-        const nextEntryId = ++nextDialogHistoryEntryId;
-        const nextState = this._getHistoryStateRecord(window.history.state);
-        nextState[DIALOG_HISTORY_STATE_KEY] = nextEntryId;
-        window.history.pushState(nextState, "");
-        this._historyEntryId = nextEntryId;
-        this._historyEntryActive = true;
-        this._ignoreNextPopstate = false;
-    }
-
-    private _canConsumeCurrentHistoryEntry(): boolean {
-        return typeof window !== "undefined"
-            && typeof window.history.back === "function"
-            && this._historyEntryActive
-            && this._isCurrentHistoryEntry(window.history.state);
-    }
-
-    private _isCurrentHistoryEntry(state: unknown): boolean {
-        return this._historyEntryId !== null && this._readHistoryEntryId(state) === this._historyEntryId;
-    }
-
-    private _readHistoryEntryId(state: unknown): number | null {
-        if (state === null || typeof state !== "object") {
-            return null;
-        }
-
-        const entryId = (state as Record<string, unknown>)[DIALOG_HISTORY_STATE_KEY];
-        return typeof entryId === "number" ? entryId : null;
-    }
-
-    private _getHistoryStateRecord(state: unknown): Record<string, unknown> {
-        if (state === null || typeof state !== "object") {
-            return {};
-        }
-
-        return { ...(state as Record<string, unknown>) };
-    }
-
-    private _clearHistoryEntry(): void {
-        this._historyEntryActive = false;
-        this._historyEntryId = null;
     }
 }

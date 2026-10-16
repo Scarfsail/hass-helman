@@ -192,12 +192,9 @@ async function mountInspector(
             language: "en",
             locale: { language: "en", first_weekday: firstWeekday },
             config: { time_zone: "UTC" },
-            connection: {
-                sendMessagePromise: async (msg: { type: string }) =>
-                    msg.type === "helman/get_forecast" ? forecast : {},
-            },
             states: {},
-            callWS: window.__mockHass({
+            ...window.__mockHass({
+                "helman/get_forecast": forecast,
                 "helman/get_schedule": async (msg: {
                     type: string;
                     date?: string;
@@ -254,7 +251,7 @@ async function mountInspector(
                     }
                     return { days };
                 }
-            }).callWS,
+            }),
         };
         document.body.appendChild(el);
     }, {

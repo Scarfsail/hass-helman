@@ -1,10 +1,10 @@
+import { callHelman } from "../../shared/data/helman-commands";
 import { SLOT_MS } from "../../shared/time/slot-time";
 import { phaseSign } from "../../shared/power-reading";
 import { css, html, nothing, unsafeCSS } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { fillTemplate } from "../../localize/localize";
 import {
-    fetchDeviceReport,
     isDeviceReportUnavailable,
     type DevicePhase,
     type HouseDetailPayload,
@@ -443,7 +443,10 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         const today = todayKey(this._timeZone);
         this._rankingRequestedAt = Date.now();
         try {
-            const payload = await fetchDeviceReport(this.hass, "ranking", { start_date: today, end_date: today });
+            const payload = await callHelman(this.hass, "helman/device_report", {
+                report: "ranking",
+                ...{ start_date: today, end_date: today },
+            });
             if (request !== this._rankingRequest) return;
             this._rankingDate = today;
             this._ranking = { status: "ready", payload: isDeviceReportUnavailable(payload) ? null : payload as RankingReportPayload };

@@ -1,3 +1,4 @@
+import { callHelman } from "../data/helman-commands";
 import type { HomeAssistant } from "../../../types/ha";
 import { LitElement, css, html, nothing } from "lit-element";
 import { property, state } from "lit/decorators.js";
@@ -5,7 +6,7 @@ import { property, state } from "lit/decorators.js";
 import type { LocalizeFunction } from "../../localize/localize";
 import { defineOnce } from "../define-once";
 import { loadHaForm, loadHaSortable } from "../load-ha-elements";
-import { getSharedDataChangedFeed } from "../../helman/data-changed";
+import { DataChangedController } from "../../helman/data-changed";
 import {
     asJsonArray,
     asJsonObject,
@@ -21,7 +22,6 @@ import type {
     ApplianceMetadataResponse,
     JsonObject,
     PathSegment,
-    SaveConfigResponse,
 } from "../config/types";
 import {
     fetchOptimizerSchema,
@@ -200,7 +200,6 @@ export class HelmanOptimizerEditDialog extends LitElement {
      */
     private _baseline: string | null = null;
 
-    private _unsubscribeDataChanged?: () => void;
 
     /**
      * The ids the current view was loaded for.
@@ -231,23 +230,16 @@ export class HelmanOptimizerEditDialog extends LitElement {
      */
     private _editorLocalize: EditorLocalizeFunction | null = null;
 
+    constructor() {
+        super();
+        new DataChangedController(this, () => this.hass, {}, () => void this._refreshStale());
+    }
+
     connectedCallback(): void {
         super.connectedCallback();
         void loadHaForm().then(() => this.requestUpdate());
         void loadHaSortable().then(() => this.requestUpdate());
         void this._load();
-        const hass = this.hass;
-        if (hass) {
-            this._unsubscribeDataChanged = getSharedDataChangedFeed(hass).subscribe(() => {
-                void this._refreshStale();
-            });
-        }
-    }
-
-    disconnectedCallback(): void {
-        super.disconnectedCallback();
-        this._unsubscribeDataChanged?.();
-        this._unsubscribeDataChanged = undefined;
     }
 
     protected willUpdate(): void {
@@ -430,10 +422,9 @@ export class HelmanOptimizerEditDialog extends LitElement {
         this._editorLocalize = getLocalizeFunction(hass);
         try {
             const [config, schema, appliances] = await Promise.all([
-                hass.callWS<unknown>({ type: "helman/get_config" }),
+                callHelman(hass, "helman/get_config", {}),
                 fetchOptimizerSchema(hass),
-                hass
-                    .callWS<ApplianceMetadataResponse>({ type: "helman/get_appliances" })
+                callHelman(hass, "helman/get_appliances", {})
                     .catch(() => null),
             ]);
             const document = asJsonObject(config);
@@ -497,10 +488,7 @@ export class HelmanOptimizerEditDialog extends LitElement {
                 };
                 return;
             }
-            const response = await this.hass.callWS<SaveConfigResponse>({
-                type: "helman/save_config",
-                config: view.config,
-            });
+            const response = await callHelman(this.hass, "helman/save_config", { config: view.config });
             if (response.validation?.valid !== false) {
                 // The document we just wrote is the new baseline. Without this
                 // a retry would compare against the pre-save read, find our own
@@ -575,7 +563,7 @@ export class HelmanOptimizerEditDialog extends LitElement {
             return "same";
         }
         try {
-            const current = asJsonObject(await this.hass.callWS<unknown>({ type: "helman/get_config" }));
+            const current = asJsonObject(await callHelman(this.hass, "helman/get_config", {}));
             if (current === undefined) {
                 return "unknown";
             }
@@ -630,7 +618,7 @@ export class HelmanOptimizerEditDialog extends LitElement {
             return;
         }
         try {
-            const current = asJsonObject(await this.hass.callWS<unknown>({ type: "helman/get_config" }));
+            const current = asJsonObject(await callHelman(this.hass, "helman/get_config", {}));
             if (current !== undefined) {
                 this._baseline = canonicalJson(current);
             }

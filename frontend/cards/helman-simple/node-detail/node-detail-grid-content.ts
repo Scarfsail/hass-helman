@@ -1,9 +1,9 @@
+import { callHelman } from "../../shared/data/helman-commands";
 import { phaseSign } from "../../shared/power-reading";
 import { css, html, nothing, svg } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { fillTemplate } from "../../localize/localize";
 import {
-    fetchGridDayAggregates,
     type DayStatsDTO,
     type GridDayAggregatesPayload,
     type GridDetailPayload,
@@ -294,7 +294,10 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         this._moneyDate = date;
         this._moneyRequestedAt = Date.now();
         try {
-            const payload = await fetchGridDayAggregates(this.hass, date);
+            const payload = await callHelman(this.hass, "helman/solar_bias/day_aggregates", {
+                start_date: date,
+                end_date: date,
+            });
             if (request !== this._moneyRequest) return;
             this._money = { status: "ready", payload };
         } catch (error) {

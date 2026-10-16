@@ -1,3 +1,4 @@
+import { callHelman } from "../data/helman-commands";
 import type { HomeAssistant } from "../../../types/ha";
 import { asJsonArray, asJsonObject } from "../config/config-document";
 import { booleanValue, stringValue } from "../config/form-fields";
@@ -250,8 +251,8 @@ class AutomationCoverageSourceImpl implements AutomationCoverageSource {
         if (this._unsubscribeDataChanged !== null) {
             return;
         }
-        this._unsubscribeDataChanged = getSharedDataChangedFeed(this._hass).subscribe(() => {
-            void this._read();
+        this._unsubscribeDataChanged = getSharedDataChangedFeed(this._hass).subscribe((kinds) => {
+            if (kinds.has("config")) void this._read();
         });
     }
 
@@ -267,7 +268,7 @@ class AutomationCoverageSourceImpl implements AutomationCoverageSource {
         this._pending = (async () => {
             try {
                 this._schema ??= await fetchOptimizerSchema(this._hass);
-                const config = asJsonObject(await this._hass.callWS<unknown>({ type: "helman/get_config" }));
+                const config = asJsonObject(await callHelman(this._hass, "helman/get_config", {}));
                 if (!config) {
                     return;
                 }

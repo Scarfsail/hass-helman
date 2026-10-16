@@ -5,7 +5,7 @@ import { fillTemplate, type LocalizeFunction } from "../../localize/localize";
 import type { FlowsSectionPayload, ForecastPayload, GetNodeDetailRequest, NodeDetailNode, ScheduleActionDTO } from "../../helman-api";
 import { getScheduleActionLabel } from "../../shared/schedule/model/schedule-labels";
 import type { HelmanSolarInspectorCardConfig } from "../../helman-solar-inspector/HelmanSolarInspectorCardConfig";
-import { getSharedDataChangedFeed } from "../../helman/data-changed";
+import { DataChangedController } from "../../helman/data-changed";
 import { ForecastLoader } from "../../helman/forecast-loader";
 import { startNowClock } from "../../shared/now-clock";
 import { isoDateInTimeZone, todayKey } from "../../shared/time/day-key";
@@ -117,7 +117,6 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
     private _overviewRequest = 0;
     /** The signature of the states the current overview was computed from. */
     private _overviewStates = "";
-    private _unsubscribeDataChanged?: () => void;
     private readonly _inspectors = new Map<string, InspectorCardElement>();
     private readonly _forecastLoader = new ForecastLoader();
     private _forecastRequest = 0;
@@ -127,6 +126,11 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
     private _stopClock?: () => void;
     private _todayFlowsRequest = 0;
     private _todayFlowsRequestedAt = 0;
+
+    constructor() {
+        super();
+        new DataChangedController(this, () => this.hass, {}, () => this._onDataChanged());
+    }
 
     connectedCallback(): void {
         super.connectedCallback();
@@ -142,8 +146,7 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
         this.removeEventListener(EVIDENCE_TOGGLE_EVENT, this._onEvidenceToggle as EventListener);
         this.removeEventListener(FLOW_SCOPE_EVENT, this._onFlowScope as EventListener);
         this._started = false;
-        this._unsubscribeDataChanged?.();
-        this._unsubscribeDataChanged = undefined;
+
         this._stopClock?.();
         this._stopClock = undefined;
         // Whatever is still in flight answers nobody.
@@ -179,7 +182,6 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
         });
         // A new plan or config (an optimizer run, another client) can change
         // everything shown: the feed's contract is to reload it all.
-        this._unsubscribeDataChanged = getSharedDataChangedFeed(this.hass).subscribe(() => this._onDataChanged());
         void this._loadOverview();
         if (this._flowScope === "today" && this._todayStale()) void this._loadTodayFlows();
     }
@@ -264,7 +266,7 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
     }
 
     /** The `helman/get_node_detail` request for the overview, or for `section`. */
-    protected _detailRequest(section?: string): Omit<GetNodeDetailRequest, "type"> {
+    protected _detailRequest(section?: string): GetNodeDetailRequest {
         return section ? { node: this._node, section } : { node: this._node };
     }
 

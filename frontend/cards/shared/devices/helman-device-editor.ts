@@ -1,9 +1,10 @@
+import { callHelman } from "../data/helman-commands";
 import type { HomeAssistant } from "../../../types/ha";
 import { LitElement, css, html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import { live } from "lit/directives/live.js";
 
-import { fetchDeviceSuggestions, type DeviceSuggestions } from "../../helman-api";
+import { type DeviceSuggestions } from "../../helman-api";
 import {
     appendListItem,
     asJsonArray,
@@ -878,7 +879,10 @@ export class HelmanDeviceEditor extends LitElement implements HardwareProfileHos
         const hass = this.hass;
         const request = ++this._suggestionRequest;
         try {
-            const suggestions = await fetchDeviceSuggestions(hass, anchors, draft);
+            const suggestions = await callHelman(hass, "helman/suggest_device_entities", {
+                anchor_entity_ids: anchors,
+                config: draft,
+            });
             if (this.config !== draft || request !== this._suggestionRequest) return;
             // A profile device's meter counts, though the draft stores none.
             const resolved = resolvedDraft(draft, this.vendors);

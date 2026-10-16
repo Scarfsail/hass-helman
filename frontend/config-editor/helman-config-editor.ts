@@ -1,4 +1,6 @@
-import { fetchEnergyImportPreview, type EnergyImportPreview } from "../cards/helman-api";
+import { LatestRequest } from "../cards/shared/data/latest-request";
+import { callHelman } from "../cards/shared/data/helman-commands";
+import { type EnergyImportPreview } from "../cards/helman-api";
 import { LitElement, css, html, nothing } from "lit";
 import type { PropertyValues, TemplateResult } from "lit";
 import { cache } from "lit/directives/cache.js";
@@ -94,7 +96,7 @@ import {
   type ScopeId,
   type TabId,
 } from "./config-editor-scopes";
-import { getSharedDataChangedFeed } from "../cards/helman/data-changed";
+import { DataChangedController } from "../cards/helman/data-changed";
 import { getLocalizeFunction, type LocalizeFunction } from "../cards/shared/config/localize/localize";
 import { mdiAlertOutline, mdiDragVertical } from "@mdi/js";
 import {
@@ -148,7 +150,7 @@ import {
   type SolarInspectorCardElement,
 } from "./solar-inspector-embed";
 import type { HomeAssistant } from "../types/ha";
-import { HelmanClient } from "../cards/helman/client";
+import { getSharedHelmanStore } from "../cards/helman/store";
 import type { TreeItem } from "../cards/helman/tree-item";
 import { hydrateItem } from "../cards/helman/tree-item-hydrator";
 import {
@@ -204,7 +206,6 @@ import type {
   JsonValue,
   PathSegment,
   ApplianceMetadataResponse,
-  SaveConfigResponse,
   StatusMessage,
   ValidationIssue,
   ValidationReport,
@@ -984,7 +985,6 @@ export class HelmanConfigEditorPanel
    * this whole feature could easily create, so the refusal has to be visible.
    */
   private _staleConfigNotice = false;
-  private _unsubscribeDataChanged?: () => void;
   /**
    * Swallow the announcement our own save caused.
    *
@@ -1020,7 +1020,7 @@ export class HelmanConfigEditorPanel
   private _energyImport: { preview: EnergyImportPreview; draft: JsonObject } | null = null;
   private _deviceActionMessage = "";
   private _importLoading = false;
-  private _energyImportRequest = 0;
+  private readonly _energyImportRequest = new LatestRequest<object>();
 
   /** The path key of the device list whose "Add device" picker is open. */
   private _addDeviceTarget: string | null = null;
@@ -1102,7 +1102,7 @@ export class HelmanConfigEditorPanel
    */
   private _deviceTreeItems: Map<string, TreeItem> | null = null;
   private _deviceTreeRequested = false;
-  private _deviceTreeSequence = 0;
+  private readonly _deviceTreeRequest = new LatestRequest<object>();
   /** One loader for the dialog, so concurrent clicks share its import. */
   private _deviceDetailLoad?: () => Promise<void>;
   /** The device whose detail dialog is open. */
@@ -1138,6 +1138,11 @@ export class HelmanConfigEditorPanel
     this.requestUpdate("hass", oldValue);
   }
 
+  constructor() {
+    super();
+    new DataChangedController(this, () => this.hass, {}, () => this._handleDataChanged());
+  }
+
   connectedCallback(): void {
     super.connectedCallback();
     this._trainingStatusTimer = setInterval(
@@ -1166,8 +1171,7 @@ export class HelmanConfigEditorPanel
 
   disconnectedCallback(): void {
     super.disconnectedCallback();
-    this._unsubscribeDataChanged?.();
-    this._unsubscribeDataChanged = undefined;
+
     if (this._trainingStatusTimer !== undefined) {
       clearInterval(this._trainingStatusTimer);
       this._trainingStatusTimer = undefined;
@@ -1197,11 +1201,6 @@ export class HelmanConfigEditorPanel
       this._hasLoadedOnce = true;
       void this._loadConfig({ showMessage: false });
       void this._pollTrainingStatus();
-    }
-    if (this.hass && !this._unsubscribeDataChanged) {
-      this._unsubscribeDataChanged = getSharedDataChangedFeed(this.hass).subscribe(
-        () => this._handleDataChanged(),
-      );
     }
     // Every update while the toggle is on, and once more on the update that
     // turns it off -- see `_applyEntitiesOnlyOpenState` for why "every".
@@ -1280,7 +1279,7 @@ export class HelmanConfigEditorPanel
     }
     try {
       const current = asJsonObject(
-        await this.hass.callWS<unknown>({ type: "helman/get_config" }),
+        await callHelman(this.hass, "helman/get_config", {}),
       );
       return current !== undefined && canonicalJson(current) !== this._configBaseline;
     } catch {
@@ -1454,7 +1453,7 @@ export class HelmanConfigEditorPanel
     const sequence = ++this._trainingStatusSequence;
     try {
       const status = asTrainingStatus(
-        await this.hass.callWS<unknown>({ type: "helman/training/status" }),
+        await callHelman(this.hass, "helman/training/status", {}),
       );
       // A slower earlier answer must not repaint over a newer one.
       if (sequence < this._trainingStatusApplied) return;
@@ -3187,11 +3186,12 @@ export class HelmanConfigEditorPanel
       this._deviceTreeRequested = false;
       return;
     }
-    const sequence = ++this._deviceTreeSequence;
+    const request = this._deviceTreeRequest.begin({ hass: this.hass });
+    if (request === null) return;
     try {
-      const payload = await new HelmanClient(this.hass).getDeviceTree();
+      const payload = await getSharedHelmanStore(this.hass).getDeviceTree();
       // A later fetch has been asked for; its tree is the newer one.
-      if (sequence !== this._deviceTreeSequence) return;
+      if (!this._deviceTreeRequest.isCurrent(request)) return;
       const items = new Map<string, TreeItem>();
       const walk = (item: TreeItem): void => {
         if (item.deviceKey) items.set(this._treeItemKey(item), item);
@@ -3208,7 +3208,7 @@ export class HelmanConfigEditorPanel
       }
     } catch (error) {
       console.error("Helman: failed to load the device tree", error);
-      if (sequence !== this._deviceTreeSequence) return;
+      if (!this._deviceTreeRequest.isCurrent(request)) return;
       // The previous tree may no longer match the saved config, so no name
       // opens it; the table's next render asks again.
       this._deviceTreeItems = null;
@@ -3608,7 +3608,8 @@ export class HelmanConfigEditorPanel
     if (!this.hass || !this._config) return;
     const draft = this._config;
     const hass = this.hass;
-    const request = ++this._energyImportRequest;
+    const request = this._energyImportRequest.begin({ draft, hass });
+    if (request === null) return;
     this._energyImport = null;
     this._deviceActionMessage = "";
     // The backend reads a devices value that is not an object as no devices,
@@ -3619,14 +3620,14 @@ export class HelmanConfigEditorPanel
     }
     this._importLoading = true;
     try {
-      const preview = await fetchEnergyImportPreview(hass, draft);
-      if (this._config === draft && request === this._energyImportRequest)
+      const preview = await callHelman(hass, "helman/preview_energy_import", { config: draft });
+      if (this._config === draft && this._energyImportRequest.isCurrent(request))
         this._energyImport = { preview, draft };
     } catch (error) {
-      if (this._config === draft && request === this._energyImportRequest)
+      if (this._config === draft && this._energyImportRequest.isCurrent(request))
         this._deviceActionMessage = this._formatError(error, this._t("editor.messages.import_energy_failed"));
     } finally {
-      if (request === this._energyImportRequest) this._importLoading = false;
+      if (this._energyImportRequest.isCurrent(request)) this._importLoading = false;
     }
   }
 
@@ -4811,7 +4812,7 @@ export class HelmanConfigEditorPanel
     }
     try {
       const current = asJsonObject(
-        await this.hass.callWS<unknown>({ type: "helman/get_config" }),
+        await callHelman(this.hass, "helman/get_config", {}),
       );
       if (current !== undefined) {
         this._configBaseline = canonicalJson(current);
@@ -4835,7 +4836,7 @@ export class HelmanConfigEditorPanel
         schemaResult,
         defaultsResult,
       ] = await Promise.allSettled([
-        this.hass.callWS<unknown>({ type: "helman/get_config" }),
+        callHelman(this.hass, "helman/get_config", {}),
         this._loadLiveApplianceMetadata(),
         fetchOptimizerSchema(this.hass),
         fetchConfigDefaults(this.hass),
@@ -4911,10 +4912,7 @@ export class HelmanConfigEditorPanel
     }
     this._validating = true;
     try {
-      const validation = await this.hass.callWS<ValidationReport>({
-        type: "helman/validate_config",
-        config: this._prunedConfig().config,
-      });
+      const validation = await callHelman(this.hass, "helman/validate_config", { config: this._prunedConfig().config });
       this._validation = validation;
       this._message = validation.valid
         ? { kind: "success", text: this._t("editor.messages.validation_passed") }
@@ -4948,10 +4946,7 @@ export class HelmanConfigEditorPanel
     const submittedConfig = canonicalJson(config);
     this._saving = true;
     try {
-      const response = await this.hass.callWS<SaveConfigResponse>({
-        type: "helman/save_config",
-        config,
-      });
+      const response = await callHelman(this.hass, "helman/save_config", { config });
       this._validation = response.validation;
       if (pruned && response.validation.valid && canonicalJson(this._config) === draftAtSave) {
         // Written, so what was written is the draft from here on. The YAML
@@ -5611,9 +5606,7 @@ export class HelmanConfigEditorPanel
       return null;
     }
     try {
-      const response = await this.hass.callWS<ApplianceMetadataResponse>({
-        type: "helman/get_appliances",
-      });
+      const response = await callHelman(this.hass, "helman/get_appliances", {});
       return Array.isArray(response?.appliances) ? response : { appliances: [] };
     } catch {
       return null;

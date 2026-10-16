@@ -1,5 +1,6 @@
+import { callHelman } from "../shared/data/helman-commands";
 import type { HomeAssistant } from "../../types/ha";
-import type { ForecastPayload, GetForecastRequest } from "../helman-api";
+import type { ForecastPayload } from "../helman-api";
 
 /**
  * A burst-coalescing fuse, not a polling policy. Nothing calls `load()` on a
@@ -47,11 +48,8 @@ export class ForecastLoader {
             return this._inFlight;
         }
 
-        const requestMessage: GetForecastRequest = {
-            type: "helman/get_forecast",
-        };
         const generation = this._generation;
-        const request = hass.connection.sendMessagePromise<ForecastPayload>(requestMessage).then((payload) => {
+        const request = callHelman(hass, "helman/get_forecast", {}).then((payload) => {
             if (generation !== this._generation) return payload;
             this._payload = payload;
             this._payloadHourKey = requestHourKey;

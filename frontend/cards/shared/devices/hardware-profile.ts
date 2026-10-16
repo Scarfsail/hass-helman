@@ -1,3 +1,4 @@
+import { callHelman } from "../data/helman-commands";
 import type { HomeAssistant } from "../../../types/ha";
 import {
     css,
@@ -147,7 +148,7 @@ export class VendorsController implements ReactiveController {
         const sequence = ++this._sequence;
         let vendors: VendorsResponse | null = null;
         try {
-            vendors = await hass.callWS<VendorsResponse>({ type: "helman/get_vendors", config });
+            vendors = await callHelman(hass, "helman/get_vendors", { config });
         } catch {
             // Without an answer nothing is owned.
         }
