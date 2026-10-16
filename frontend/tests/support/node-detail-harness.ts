@@ -36,7 +36,7 @@ export function inverterOverview(overrides: Record<string, unknown> = {}) {
 export function flowsSection(node: string, overrides: Record<string, unknown> = {}) {
     return { node, section: "flows", asOf: "2026-10-21T12:00:00+00:00",
         period: { start: "2026-10-21T00:00:00+00:00", end: "2026-10-22T00:00:00+00:00" },
-        currency: "CZK/kWh", complete: false, unavailable: null,
+        priceUnit: "CZK/kWh", complete: false, unavailable: null,
         flows: { solarToHouse: 5.1, solarToBattery: 4.2, solarToGrid: 5.8, solarUnresolved: 0.4,
             gridToBattery: 1.5, unknownToBattery: 0.3, gridToBatteryCost: 4.0,
             batteryToHouse: 3.6, gridToHouse: 1.2, unknownToHouse: 0.1, batteryToGrid: 0 }, ...overrides };

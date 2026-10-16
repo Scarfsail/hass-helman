@@ -933,8 +933,8 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
                 <div class="section-title">${this._t("destinations.value")}</div>
                 ${this._row(this._t("destinations.forgone"), charge.forgoneValue === null
                     ? this._t("unknown")
-                    : this._formatMoney(charge.forgoneValue, currencyFromPriceUnit(payload!.currency)), "forgone", this._t("destinations.forgone_scope"))}
-                ${charge.forgoneRate !== null ? this._row(this._t("destinations.forgone_rate"), formatMoney(charge.forgoneRate, payload!.currency), "forgone-rate") : nothing}
+                    : this._formatMoney(charge.forgoneValue, currencyFromPriceUnit(payload!.priceUnit)), "forgone", this._t("destinations.forgone_scope"))}
+                ${charge.forgoneRate !== null ? this._row(this._t("destinations.forgone_rate"), formatMoney(charge.forgoneRate, payload!.priceUnit), "forgone-rate") : nothing}
                 ${charge.solarUnpricedKwh > 0 ? this._row(this._t("destinations.solar_unpriced"), (formatKwh(Math.abs(charge.solarUnpricedKwh)) + " kWh"), "solar-unpriced") : nothing}
             ` : nothing}
             <p class="note">${this._t("destinations.value_note")}</p>

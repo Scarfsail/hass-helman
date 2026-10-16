@@ -1064,21 +1064,21 @@ def test_only_an_explicit_bms_report_is_promoted_before_the_run_mode():
 
 def origin(charged, **fractions):
     base = {
-        "charged_kwh": charged,
+        "chargedKwh": charged,
         "grid": 0.0,
-        "grid_recorded": 0.0,
-        "grid_tariff": 0.0,
-        "grid_unpriced": 0.0,
+        "gridRecorded": 0.0,
+        "gridTariff": 0.0,
+        "gridUnpriced": 0.0,
         "solar": 0.0,
-        "solar_priced": 0.0,
-        "solar_unpriced": 0.0,
+        "solarPriced": 0.0,
+        "solarUnpriced": 0.0,
         "unknown": 1.0,
-        "paid_rate": None,
-        "forgone_rate": None,
+        "paidRate": None,
+        "forgoneRate": None,
     }
     base.update(fractions)
-    base["grid"] = base["grid_recorded"] + base["grid_tariff"] + base["grid_unpriced"]
-    base["solar"] = base["solar_priced"] + base["solar_unpriced"]
+    base["grid"] = base["gridRecorded"] + base["gridTariff"] + base["gridUnpriced"]
+    base["solar"] = base["solarPriced"] + base["solarUnpriced"]
     return base
 
 
@@ -1088,13 +1088,13 @@ def test_charge_fractions_become_kwh_keeping_unknown_and_unpriced_shares():
     charge = charge_origin_kwh(
         origin(
             10.0,
-            grid_recorded=0.2,
-            grid_unpriced=0.1,
-            solar_priced=0.4,
-            solar_unpriced=0.2,
+            gridRecorded=0.2,
+            gridUnpriced=0.1,
+            solarPriced=0.4,
+            solarUnpriced=0.2,
             unknown=0.1,
-            paid_rate=4.0,
-            forgone_rate=1.5,
+            paidRate=4.0,
+            forgoneRate=1.5,
         )
     )
 
@@ -1116,11 +1116,11 @@ def test_charge_fractions_become_kwh_keeping_unknown_and_unpriced_shares():
 def test_a_side_without_kwh_costs_zero_and_one_without_a_rate_is_unknown():
     from custom_components.helman.node_details.battery import charge_origin_kwh
 
-    solar_only = charge_origin_kwh(origin(4.0, solar_unpriced=1.0, unknown=0.0))
+    solar_only = charge_origin_kwh(origin(4.0, solarUnpriced=1.0, unknown=0.0))
     assert solar_only["paidCost"] == 0.0
     assert solar_only["forgoneValue"] is None
 
-    unrated_grid = charge_origin_kwh(origin(4.0, grid_unpriced=1.0, unknown=0.0))
+    unrated_grid = charge_origin_kwh(origin(4.0, gridUnpriced=1.0, unknown=0.0))
     assert unrated_grid["paidCost"] is None
 
 
@@ -1137,7 +1137,7 @@ def test_a_period_without_charge_is_no_charge_not_unknown_storage():
 
 
 def test_the_charge_section_reuses_todays_ranking_report():
-    report = {"currency": "CZK/kWh", "complete": False, "charge_origin": origin(5.0, solar_priced=1.0, unknown=0.0, forgone_rate=1.2)}
+    report = {"priceUnit": "CZK/kWh", "complete": False, "asOf": "2026-10-10T13:55:00+02:00", "chargeOrigin": origin(5.0, solarPriced=1.0, unknown=0.0, forgoneRate=1.2)}
 
     payload, reports = battery_detail(section="charge", report=report)
 
@@ -1145,7 +1145,7 @@ def test_the_charge_section_reuses_todays_ranking_report():
     name, query = reports[0]
     assert name == "ranking"
     assert query.start_date == query.end_date == NOW.date()
-    assert payload["currency"] == "CZK/kWh"
+    assert payload["priceUnit"] == "CZK/kWh"
     assert payload["charge"]["solarKwh"] == pytest.approx(5.0)
     assert payload["period"]["start"].startswith("2026-10-10T00:00:00")
     assert payload["unavailable"] is None
@@ -1406,24 +1406,25 @@ def test_the_strings_section_reads_each_string_in_watts():
 
 def ranking(*, attributed=10.0, unattributed=0.0, house=3.0, battery=3.0, export=4.0, measured_export=None, charged=5.0, solar_fraction=0.6, **origin_fractions):
     return {
-        "currency": "CZK/kWh",
+        "priceUnit": "CZK/kWh",
         "complete": False,
+        "asOf": "2026-10-10T13:55:00+02:00",
         "meters": {"grid": True, "solar": True, "battery": True, "house": True},
         "nodes": [{"id": "house", "sources": {"solar": house, "battery": 1.0, "grid": 2.0, "unattributed": 0.0}}],
-        "charge_origin": origin(
+        "chargeOrigin": origin(
             charged,
-            solar_priced=solar_fraction,
+            solarPriced=solar_fraction,
             unknown=1.0 - solar_fraction,
-            forgone_rate=1.2,
+            forgoneRate=1.2,
             **origin_fractions,
         ),
-        "solar_totals": {
-            "attributed_kwh": attributed,
-            "unattributed_kwh": unattributed,
-            "house_kwh": house,
-            "battery_kwh": battery,
-            "export_kwh": export,
-            "measured_export_kwh": export if measured_export is None else measured_export,
+        "solarTotals": {
+            "attributedKwh": attributed,
+            "unattributedKwh": unattributed,
+            "houseKwh": house,
+            "batteryKwh": battery,
+            "exportKwh": export,
+            "measuredExportKwh": export if measured_export is None else measured_export,
         },
     }
 
@@ -1488,7 +1489,7 @@ def test_the_destinations_section_reuses_todays_ranking_report():
     assert name == "ranking"
     assert query.start_date == query.end_date == NOW.date()
     assert payload["unavailable"] is None
-    assert payload["currency"] == "CZK/kWh"
+    assert payload["priceUnit"] == "CZK/kWh"
     assert payload["destinations"]["batteryKwh"] == pytest.approx(3.0)
     # The solar charge's forgone export value, from the same charge origin.
     assert payload["charge"]["solarKwh"] == pytest.approx(3.0)
@@ -1517,7 +1518,7 @@ def flows_report(**changes):
     """A day's ranking report with grid charge priced at 4.0 and some battery export."""
     report = ranking(measured_export=4.5)
     report["complete"] = True
-    report["charge_origin"] = origin(5.0, solar_priced=0.6, grid_recorded=0.3, unknown=0.1, paid_rate=4.0)
+    report["chargeOrigin"] = origin(5.0, solarPriced=0.6, gridRecorded=0.3, unknown=0.1, paidRate=4.0)
     report.update(changes)
     return report
 
@@ -1587,13 +1588,13 @@ def test_today_flows_keep_unresolved_solar_out_of_every_destination():
 
     # 10 kWh attributed and 2 kWh in hours without a mix; only 1.5 kWh exported.
     flows = today_flows(flows_report(**{
-        "solar_totals": {
-            "attributed_kwh": 10.0,
-            "unattributed_kwh": 2.0,
-            "house_kwh": 3.0,
-            "battery_kwh": 3.0,
-            "export_kwh": 1.5,
-            "measured_export_kwh": 1.5,
+        "solarTotals": {
+            "attributedKwh": 10.0,
+            "unattributedKwh": 2.0,
+            "houseKwh": 3.0,
+            "batteryKwh": 3.0,
+            "exportKwh": 1.5,
+            "measuredExportKwh": 1.5,
         },
     }))
 
@@ -1611,13 +1612,13 @@ def test_today_flows_do_not_put_unresolved_export_on_the_battery():
     # 1.5 kWh of attributed solar is unresolved, and 2.5 kWh of export is not
     # solar's: only the 1.0 kWh beyond the unresolved solar is the battery's.
     flows = today_flows(flows_report(**{
-        "solar_totals": {
-            "attributed_kwh": 8.0,
-            "unattributed_kwh": 0.0,
-            "house_kwh": 3.0,
-            "battery_kwh": 2.0,
-            "export_kwh": 1.5,
-            "measured_export_kwh": 4.0,
+        "solarTotals": {
+            "attributedKwh": 8.0,
+            "unattributedKwh": 0.0,
+            "houseKwh": 3.0,
+            "batteryKwh": 2.0,
+            "exportKwh": 1.5,
+            "measuredExportKwh": 4.0,
         },
     }))
 
@@ -1634,7 +1635,7 @@ def test_every_energy_node_answers_the_flows_section_from_todays_report(node):
     assert query.start_date == query.end_date == NOW.date()
     assert payload["node"] == node
     assert payload["section"] == "flows"
-    assert payload["currency"] == "CZK/kWh"
+    assert payload["priceUnit"] == "CZK/kWh"
     assert payload["complete"] is False
     assert payload["unavailable"] is None
     assert payload["period"]["start"].startswith("2026-10-10T00:00:00")
@@ -1804,7 +1805,7 @@ def ranking_node(node_id, kwh, *, children=(), parent=None, unmeasured=False, la
     return {
         "id": node_id,
         "label": label if label is not None else node_id.title(),
-        "parent_id": parent,
+        "parentId": parent,
         "estimated": False,
         "unmeasured": unmeasured,
         "kwh": kwh,
@@ -1812,10 +1813,10 @@ def ranking_node(node_id, kwh, *, children=(), parent=None, unmeasured=False, la
         "children": list(children),
         "sources": {"solar": kwh / 2, "battery": 0.0, "grid": kwh / 2, "unattributed": 0.0},
         "money": {
-            "paid": {"amount": paid, "priced_kwh": kwh if paid is not None else 0.0, "unpriced_kwh": 0.0, "tariff_kwh": 0.0},
-            "forgone": {"amount": None, "priced_kwh": 0.0, "unpriced_kwh": kwh},
+            "paid": {"amount": paid, "pricedKwh": kwh if paid is not None else 0.0, "unpricedKwh": 0.0, "tariffKwh": 0.0},
+            "forgone": {"amount": None, "pricedKwh": 0.0, "unpricedKwh": kwh},
         },
-        "overallocated_kwh": 0.0,
+        "overallocatedKwh": 0.0,
     }
 
 
@@ -1871,9 +1872,9 @@ def test_the_today_section_reuses_todays_ranking_report():
     report = {
         **ranking(),
         "nodes": [house, *HOUSE_NODES[1:]],
-        "ambiguous_kwh": 0.2,
-        "mismatch_kwh": 0.0,
-        "as_of": "2026-10-10T13:55:00+02:00",
+        "ambiguousKwh": 0.2,
+        "mismatchKwh": 0.0,
+        "asOf": "2026-10-10T13:55:00+02:00",
     }
     payload, calls = house_detail(section="today", report=report)
 
@@ -2389,9 +2390,9 @@ def test_a_custom_charger_has_no_charging_stretches_to_read():
 
 def ev_ranking():
     return {
-        "currency": "CZK/kWh",
+        "priceUnit": "CZK/kWh",
         "complete": False,
-        "as_of": "2026-10-10T13:55:00+02:00",
+        "asOf": "2026-10-10T13:55:00+02:00",
         "nodes": [
             {"id": "house", "kwh": 20.0},
             {
@@ -2401,8 +2402,8 @@ def ev_ranking():
                 "estimated": False,
                 "sources": {"solar": 4.0, "battery": 0.4, "grid": 1.8, "unattributed": 0.2},
                 "money": {
-                    "paid": {"amount": 7.2, "priced_kwh": 1.8, "unpriced_kwh": 0.0},
-                    "forgone": {"amount": 4.8, "priced_kwh": 4.0, "unpriced_kwh": 0.0},
+                    "paid": {"amount": 7.2, "pricedKwh": 1.8, "unpricedKwh": 0.0},
+                    "forgone": {"amount": 4.8, "pricedKwh": 4.0, "unpricedKwh": 0.0},
                 },
             },
         ],
@@ -2426,7 +2427,7 @@ def test_todays_attribution_is_the_chargers_ranking_node_over_the_local_day():
     assert charger["sources"]["grid"] == 1.8
     assert charger["money"]["paid"] == 7.2
     assert charger["money"]["forgone"] == 4.8
-    assert payload["currency"] == "CZK/kWh"
+    assert payload["priceUnit"] == "CZK/kWh"
     assert payload["unavailable"] is None
 
 
@@ -2442,7 +2443,10 @@ def test_a_meterless_charger_is_found_by_its_id_in_the_ranking():
     ("report", "reason"),
     [
         ({"unavailable": "no_house_meter"}, "no_house_meter"),
-        ({"currency": None, "nodes": [{"id": "house", "kwh": 1.0}]}, "no_charger_node"),
+        (
+            {"priceUnit": None, "asOf": "2026-10-10T13:55:00+02:00", "nodes": [{"id": "house", "kwh": 1.0}]},
+            "no_charger_node",
+        ),
     ],
 )
 def test_today_without_this_chargers_node_is_unavailable(report, reason):
@@ -2456,3 +2460,24 @@ def test_the_charger_refuses_a_section_it_does_not_answer():
     with pytest.raises(NodeDetailError) as raised:
         ev_detail(section="voltage")
     assert raised.value.code == "unknown_section"
+
+
+@pytest.mark.parametrize(
+    "build",
+    [
+        lambda: battery_detail(section="charge", report=ranking())[0],
+        lambda: solar_detail(section="destinations", report=ranking())[0],
+        lambda: flows_detail("battery", ranking())[0],
+        lambda: house_detail(section="today", report=ranking())[0],
+        lambda: ev_detail(section="today", report=ev_ranking())[0],
+    ],
+    ids=["battery", "solar", "flows", "house", "ev_charger"],
+)
+def test_every_section_built_on_a_report_names_its_price_unit_and_stamp(build):
+    payload = build()
+
+    assert payload["unavailable"] is None
+    assert payload["priceUnit"] == "CZK/kWh"
+    assert "currency" not in payload
+    # The report's own clock, as the dataset can be older than the request.
+    assert payload["asOf"] == "2026-10-10T13:55:00+02:00"

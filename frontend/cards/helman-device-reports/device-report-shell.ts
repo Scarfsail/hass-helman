@@ -57,7 +57,7 @@ interface MemoEntry {
  * Whether the period is in the past is deliberately not the test: a report
  * fetched at 23:58 is incomplete however closed its period is by 00:05.
  *
- * Timed by the browser's clock, not the payload's server-side `as_of`: a
+ * Timed by the browser's clock, not the payload's server-side `asOf`: a
  * browser clock running ahead of the server would otherwise see every fresh
  * payload as already expired and refetch it in a loop.
  */
@@ -447,9 +447,9 @@ export class HelmanDeviceReportShell extends LitElement {
     private _renderQuality(payload: DeviceReportCommon) {
         const t = this._localize;
         const missing = SOURCE_METERS.filter((meter) => !payload.meters[meter]);
-        const house = payload.house_kwh;
+        const house = payload.houseKwh;
         const quality = (["ambiguous", "unattributed", "mismatch"] as const)
-            .map((kind) => ({ kind, kwh: payload[(kind + "_kwh") as "ambiguous_kwh"] }))
+            .map((kind) => ({ kind, kwh: payload[(kind + "Kwh") as "ambiguousKwh"] }))
             .filter(({ kwh }) => house > 0 && kwh > QUALITY_NOTE_SHARE * house);
         if (missing.length === 0 && quality.length === 0) return nothing;
         const rows: TooltipRow[] = missing.length > 0
@@ -494,7 +494,7 @@ export class HelmanDeviceReportShell extends LitElement {
             ${entry.usesGranularity ? this._renderGranularity() : nothing}
             <div class="status">
                 ${payload && !isDeviceReportUnavailable(payload)
-                    ? html`<span class="as-of">${fillTemplate(t("device_reports.as_of"), { time: this._formatAsOf(payload.as_of) })}</span>${this._renderQuality(payload)}`
+                    ? html`<span class="as-of">${fillTemplate(t("device_reports.as_of"), { time: this._formatAsOf(payload.asOf) })}</span>${this._renderQuality(payload)}`
                     : nothing}
                 ${loading ? html`<span class="loading">${t("device_reports.loading")}</span>` : nothing}
             </div>

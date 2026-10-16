@@ -597,7 +597,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         if (status) notes.push(status);
         if (house) {
             if (house.sources.unattributed > 0) notes.push(fillTemplate(this._t("flow.unattributed"), { kwh: (formatKwh(Math.abs(house.sources.unattributed)) + " kWh") }));
-            if (house.money.paid !== null) notes.push(fillTemplate(this._t("flow.paid"), { value: this._money(house.money.paid, today!.currency) }));
+            if (house.money.paid !== null) notes.push(fillTemplate(this._t("flow.paid"), { value: this._money(house.money.paid, today!.priceUnit) }));
         }
         const { sumIn, sumOut, ...totals } = this._flowTotals(inputs, outputs, energy, house?.sources.unattributed ?? 0);
         return {
@@ -791,12 +791,12 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         const destinations = today.selfConsumption?.destinations ?? null;
         return html`
             <div class="section-title">${this._t("sources.valuation")}</div>
-            ${this._row(this._t("sources.paid"), money.paid === null ? this._t("unknown") : this._money(money.paid, today.currency), "paid", this._t("sources.paid_scope"))}
+            ${this._row(this._t("sources.paid"), money.paid === null ? this._t("unknown") : this._money(money.paid, today.priceUnit), "paid", this._t("sources.paid_scope"))}
             ${this._row(this._t("sources.priced"), fillTemplate(this._t("sources.priced_value"), {
                 kwh: (formatKwh(Math.abs(money.paidPricedKwh)) + " kWh"),
                 share: house.kwh > 0 ? this._share(money.paidPricedKwh / house.kwh) : "–",
             }), "priced")}
-            ${this._row(this._t("sources.forgone"), money.forgone === null ? this._t("unknown") : this._money(money.forgone, today.currency), "forgone", this._t("sources.forgone_scope"))}
+            ${this._row(this._t("sources.forgone"), money.forgone === null ? this._t("unknown") : this._money(money.forgone, today.priceUnit), "forgone", this._t("sources.forgone_scope"))}
             <div class="section-title">${this._t("sources.unresolved_title")}</div>
             ${this._row(this._t("sources.unattributed"), (formatKwh(Math.abs(house.sources.unattributed)) + " kWh"), "unresolved")}
             ${house.ambiguousKwh > 0 ? this._row(this._t("sources.ambiguous"), (formatKwh(Math.abs(house.ambiguousKwh)) + " kWh"), "ambiguous", this._t("sources.ambiguous_scope")) : nothing}
@@ -831,7 +831,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
             ${period}
             ${consumers.top.map((load, index) => this._row(
                 this._loadName(load),
-                this._loadValue(load, today.currency),
+                this._loadValue(load, today.priceUnit),
                 `top-${index + 1}`,
             ))}
             ${consumers.others.count > 0 ? this._row(
@@ -868,7 +868,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
                     this._loadName(load),
                     fillTemplate(this._t("consumers.money_value"), {
                         priced: load.kwh > 0 ? this._share(load.money.paidPricedKwh / load.kwh) : "–",
-                        forgone: load.money.forgone === null ? this._t("unknown") : this._money(load.money.forgone, today!.currency),
+                        forgone: load.money.forgone === null ? this._t("unknown") : this._money(load.money.forgone, today!.priceUnit),
                     }),
                     `money-${index + 1}`,
                 ))}

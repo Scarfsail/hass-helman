@@ -144,16 +144,16 @@ export interface DeviceReportQuery {
 }
 
 /**
- * One money figure of a device report. `priced_kwh + unpriced_kwh` is the
+ * One money figure of a device report. `pricedKwh + unpricedKwh` is the
  * row's kWh; a known zero counts as priced. `amount` is null only when nothing
  * was priced.
  */
 export interface DeviceReportMoneySide {
     amount: number | null;
-    priced_kwh: number;
-    unpriced_kwh: number;
+    pricedKwh: number;
+    unpricedKwh: number;
     /** `paid` only: the priced kWh valued at today's configured tariff. */
-    tariff_kwh?: number;
+    tariffKwh?: number;
 }
 
 export interface DeviceReportSources {
@@ -166,30 +166,31 @@ export interface DeviceReportSources {
 /** What every report payload carries, whatever the report. */
 export interface DeviceReportCommon {
     report: string;
-    start_date: string;
-    end_date: string;
-    currency: string | null;
+    startDate: string;
+    endDate: string;
+    /** The import price unit, e.g. `CZK/kWh`. */
+    priceUnit: string | null;
     /** Fractions of the period's battery charge, by what charged it. */
-    charge_origin: {
-        charged_kwh: number;
+    chargeOrigin: {
+        chargedKwh: number;
         grid: number;
-        grid_recorded: number;
-        grid_tariff: number;
-        grid_unpriced: number;
+        gridRecorded: number;
+        gridTariff: number;
+        gridUnpriced: number;
         solar: number;
-        solar_priced: number;
-        solar_unpriced: number;
+        solarPriced: number;
+        solarUnpriced: number;
         unknown: number;
-        paid_rate: number | null;
-        forgone_rate: number | null;
+        paidRate: number | null;
+        forgoneRate: number | null;
     };
-    house_kwh: number;
-    ambiguous_kwh: number;
-    unattributed_kwh: number;
-    mismatch_kwh: number;
+    houseKwh: number;
+    ambiguousKwh: number;
+    unattributedKwh: number;
+    mismatchKwh: number;
     meters: { grid: boolean; solar: boolean; battery: boolean; house: boolean };
     /** The backend's clock when it built the payload, ISO. */
-    as_of: string;
+    asOf: string;
     /** The recorder had compiled the whole period: the figures no longer change. */
     complete: boolean;
     range: { minDate: string; maxDate: string };
@@ -211,7 +212,7 @@ export function isDeviceReportUnavailable(
 /** One row of the Ranking report. A parent's figures include its children. */
 export interface RankingNode {
     id: string;
-    parent_id: string | null;
+    parentId: string | null;
     depth: number;
     label: string;
     icon: string | null;
@@ -223,8 +224,8 @@ export interface RankingNode {
     money: { paid: DeviceReportMoneySide; forgone: DeviceReportMoneySide };
     /** Covered hours over the period's elapsed hours, 0..1. */
     coverage: number;
-    first_hour: string | null;
-    overallocated_kwh: number;
+    firstHour: string | null;
+    overallocatedKwh: number;
 }
 
 export interface RankingReportPayload extends DeviceReportCommon {
@@ -258,7 +259,7 @@ export interface OverTimeSeries {
     label: string;
     icon: string | null;
     estimated: boolean;
-    first_hour: string | null;
+    firstHour: string | null;
 }
 
 export interface OverTimeReportPayload extends DeviceReportCommon {
@@ -278,7 +279,7 @@ export interface DailyProfileRow {
     kwh: number;
     /** Covered hours over the period's elapsed hours, 0..1. */
     coverage: number;
-    first_hour: string | null;
+    firstHour: string | null;
     /** Mean W per local hour of day, 0..23, over the hours the row was observed; null where it never was. */
     watts: Array<number | null>;
 }
@@ -287,8 +288,8 @@ export interface DailyProfileReportPayload extends DeviceReportCommon {
     /** In period-kWh order. */
     rows: DailyProfileRow[];
     /** Mean rate per local hour of day over the elapsed hours that had one. */
-    import_rate: Array<number | null>;
-    export_rate: Array<number | null>;
+    importRate: Array<number | null>;
+    exportRate: Array<number | null>;
 }
 
 export type ForecastStatus =
@@ -952,7 +953,7 @@ export interface BatteryDetailPayload {
 
 /**
  * Today's battery charge by what charged it, from the device reports'
- * `charge_origin` in kWh. What charged the battery in the period, not what is
+ * `chargeOrigin` in kWh. What charged the battery in the period, not what is
  * stored in it now. A money side is `0` without kWh and `null` with kWh but no rate.
  */
 export interface BatteryChargeDTO {
@@ -979,7 +980,7 @@ export interface BatteryChargeSectionPayload {
     asOf: string;
     period: { start: string; end: string };
     /** The price unit the money is in, such as `CZK/kWh`. */
-    currency: string | null;
+    priceUnit: string | null;
     complete: boolean;
     /** Why there is no charge origin: the reports cannot be built. */
     unavailable: string | null;
@@ -1016,7 +1017,7 @@ export interface FlowsSectionPayload {
     asOf: string;
     period: { start: string; end: string };
     /** The price unit the money is in, such as `CZK/kWh`. */
-    currency: string | null;
+    priceUnit: string | null;
     complete: boolean;
     unavailable: string | null;
     flows: TodayFlowsDTO | null;
@@ -1096,7 +1097,7 @@ export interface SolarDestinationsSectionPayload {
     section: "destinations";
     asOf: string;
     period: { start: string; end: string };
-    currency: string | null;
+    priceUnit: string | null;
     complete: boolean;
     /** Why there are no destinations: the reports cannot be built, or there is no solar meter. */
     unavailable: string | null;
@@ -1151,7 +1152,7 @@ export interface HouseTodaySectionPayload {
     section: "today";
     asOf: string;
     period: { start: string; end: string };
-    currency: string | null;
+    priceUnit: string | null;
     complete: boolean;
     unavailable: string | null;
     house: {
@@ -1250,7 +1251,7 @@ export interface EvChargerTodaySectionPayload {
     deviceId: string;
     asOf: string;
     period: { start: string; end: string };
-    currency: string | null;
+    priceUnit: string | null;
     complete: boolean;
     unavailable: string | null;
     charger: {

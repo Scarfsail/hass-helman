@@ -345,7 +345,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
             {
                 ...this._flowItem("grid", flows?.gridToBattery ?? null, energy),
                 note: cost != null && (flows?.gridToBattery ?? 0) > 0
-                    ? fillTemplate(this.localize("node_detail.flow.paid_estimate"), { value: this._formatMoney(cost, currencyFromPriceUnit(payload!.currency)) })
+                    ? fillTemplate(this.localize("node_detail.flow.paid_estimate"), { value: this._formatMoney(cost, currencyFromPriceUnit(payload!.priceUnit)) })
                     : null,
             },
         ];
@@ -717,7 +717,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
             if (charge.chargedKwh <= 0) return this._t("charge.none_today");
             const parts = [fillTemplate(this._t("charge.charged_short"), { kwh: (formatKwh(Math.abs(charge.chargedKwh)) + " kWh") })];
             const cost = charge.paidCost;
-            if (cost !== null) parts.push(fillTemplate(this._t("charge.paid_short"), { value: this._formatMoney(cost, currencyFromPriceUnit(section!.currency)) }));
+            if (cost !== null) parts.push(fillTemplate(this._t("charge.paid_short"), { value: this._formatMoney(cost, currencyFromPriceUnit(section!.priceUnit)) }));
             return parts.join(" · ");
         }
         // Before the answer opens: today's charge from the battery's own meter.
@@ -761,7 +761,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
             ${this._row(this._t("charge.from_solar"), share(charge.solarKwh), "solar")}
             ${this._row(this._t("charge.from_grid"), share(charge.gridKwh), "grid")}
             ${charge.unknownKwh > 0 ? this._row(this._t("charge.from_unknown"), share(charge.unknownKwh), "unknown") : nothing}
-            ${this._row(this._t("charge.paid"), charge.paidCost === null ? this._t("unknown") : this._formatMoney(charge.paidCost, currencyFromPriceUnit(payload.currency)), "paid", this._t("charge.paid_scope"))}
+            ${this._row(this._t("charge.paid"), charge.paidCost === null ? this._t("unknown") : this._formatMoney(charge.paidCost, currencyFromPriceUnit(payload.priceUnit)), "paid", this._t("charge.paid_scope"))}
             ${this._row(this._t("charge.coverage"), this._coverageText(charge), "coverage")}
             <p class="note">${this._t("charge.explain")}</p>
         `;
@@ -781,7 +781,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
         const charge = payload?.charge;
         const input = readEnergyKWh(this.hass, overview.entities.today_charge);
         const output = readEnergyKWh(this.hass, overview.entities.today_discharge);
-        const unit = payload?.currency ?? null;
+        const unit = payload?.priceUnit ?? null;
         return html`
             ${charge && charge.chargedKwh > 0 ? html`
                 ${this._row(this._t("charge.paid_rate"), charge.paidRate === null ? this._t("unknown") : formatMoney(charge.paidRate, unit), "paid-rate")}

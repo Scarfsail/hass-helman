@@ -220,7 +220,7 @@ class TestValidation(DeviceReportTestCase):
         connection = await self.request(self.NOW, "2025-01-01", "2026-01-02")
         self.assertEqual(connection.errors[0][1], "invalid_date")
         payload = await self.report(self.NOW, "2025-01-01", "2026-01-01")
-        self.assertEqual(payload["start_date"], "2025-01-01")
+        self.assertEqual(payload["startDate"], "2025-01-01")
 
     async def test_start_after_end_is_rejected(self):
         connection = await self.request(self.NOW, "2026-09-10", "2026-09-01")
@@ -259,7 +259,7 @@ class TestValidation(DeviceReportTestCase):
 
     async def test_a_future_end_date_is_clamped_to_today(self):
         payload = await self.report(self.NOW, "2026-09-10", "2026-12-31")
-        self.assertEqual(payload["end_date"], "2026-09-15")
+        self.assertEqual(payload["endDate"], "2026-09-15")
 
 
 class TestPayload(DeviceReportTestCase):
@@ -273,9 +273,9 @@ class TestPayload(DeviceReportTestCase):
         self.assertEqual(
             payload["meters"], {"grid": True, "solar": True, "battery": True, "house": True}
         )
-        self.assertEqual(payload["as_of"], now.isoformat())
+        self.assertEqual(payload["asOf"], now.isoformat())
         self.assertEqual(payload["range"], {"minDate": "2026-01-01", "maxDate": "2026-09-15"})
-        self.assertEqual(payload["currency"], "CZK")
+        self.assertEqual(payload["priceUnit"], "CZK")
         self.assertTrue(payload["complete"])
         rows = {row["id"]: row for row in payload["nodes"]}
         self.assertEqual(payload["nodes"][0]["id"], "house")
@@ -306,7 +306,7 @@ class TestPayload(DeviceReportTestCase):
                     "label": "Washer",
                     "icon": None,
                     "estimated": False,
-                    "first_hour": _local(2026, 9, 7).isoformat(),
+                    "firstHour": _local(2026, 9, 7).isoformat(),
                 }
             ],
         )
@@ -349,14 +349,14 @@ class TestPayload(DeviceReportTestCase):
                 "unmeasured": False,
                 "kwh": 48.0,
                 "coverage": 1.0,
-                "first_hour": _local(2026, 9, 7).isoformat(),
+                "firstHour": _local(2026, 9, 7).isoformat(),
                 "watts": [1000.0] * 24,
             },
         )
         self.assertEqual(payload["rows"][1]["id"], "house_unmeasured")
         self.assertEqual(payload["rows"][1]["watts"], [0.0] * 24)
-        self.assertEqual(payload["import_rate"], [None] * 24)
-        self.assertEqual(payload["export_rate"], [None] * 24)
+        self.assertEqual(payload["importRate"], [None] * 24)
+        self.assertEqual(payload["exportRate"], [None] * 24)
 
     async def test_complete_follows_the_recorder_not_the_clock(self):
         now = _local(2026, 9, 16, 0, 20)

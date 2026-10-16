@@ -133,7 +133,7 @@ class OverTimeTestCase(unittest.TestCase):
             "over_time",
             dataset,
             reports_mod.ReportQuery(start_date=start, end_date=end, granularity=granularity),
-            currency="CZK",
+            price_unit="CZK",
             navigation_range={"minDate": "2026-01-01", "maxDate": "2026-09-20"},
         )
         for bucket in payload["buckets"] if house_measured_throughout else []:
@@ -164,7 +164,7 @@ class TestOverTime(OverTimeTestCase):
                 "label": "Breaker",
                 "icon": "mdi:power-plug",
                 "estimated": False,
-                "first_hour": START.isoformat(),
+                "firstHour": START.isoformat(),
             },
         )
 
@@ -225,7 +225,7 @@ class TestOverTime(OverTimeTestCase):
         payload = self.over_time(default_energy(), "month")
         (bucket,) = payload["buckets"]
         self.assertEqual(bucket["house"], 7 * 48.0)
-        self.assertEqual(bucket["house"], payload["house_kwh"])
+        self.assertEqual(bucket["house"], payload["houseKwh"])
         self.assertTrue(bucket["partial"])
 
     def test_todays_bucket_is_partial(self):
@@ -243,12 +243,51 @@ class TestOverTime(OverTimeTestCase):
             reports_mod.ReportQuery(
                 start_date=date(2026, 9, 1), end_date=date(2026, 9, 7), granularity="week"
             ),
-            currency=None,
+            price_unit=None,
             navigation_range={},
         )
         self.assertNotIn("granularity", payload)
         self.assertFalse(reports_mod.REPORTS["ranking"].uses_granularity)
         self.assertTrue(reports_mod.REPORTS["over_time"].uses_granularity)
+
+
+def snake_case_keys(value, path: str = "") -> list[str]:
+    """Every snake_case key in a payload, by path. ``values`` is keyed by node
+    id, so its keys are data, not field names."""
+    if isinstance(value, list):
+        return [key for item in value for key in snake_case_keys(item, path + "[]")]
+    if not isinstance(value, dict):
+        return []
+    found: list[str] = []
+    for key, item in value.items():
+        if "_" in key:
+            found.append(path + "." + key)
+        if key != "values":
+            found.extend(snake_case_keys(item, path + "." + key))
+    return found
+
+
+class TestPayloadCasing(unittest.TestCase):
+    def test_every_report_is_camel_case_and_names_its_price_unit(self):
+        dataset = dataset_mod.build_device_dataset(
+            TREE, span(default_energy()), local_tz=PRAGUE, now=AFTER
+        )
+        for report in reports_mod.REPORTS:
+            with self.subTest(report=report):
+                payload = reports_mod.build_report(
+                    report,
+                    dataset,
+                    reports_mod.ReportQuery(
+                        start_date=date(2026, 9, 1), end_date=date(2026, 9, 7)
+                    ),
+                    price_unit="CZK/kWh",
+                    navigation_range={"minDate": "2026-01-01", "maxDate": "2026-09-20"},
+                )
+
+                self.assertEqual(snake_case_keys(payload), [])
+                self.assertEqual(payload["priceUnit"], "CZK/kWh")
+                self.assertNotIn("currency", payload)
+                self.assertEqual(payload["asOf"], AFTER.isoformat())
 
 
 SHARE = "sensor.lamp_share"
@@ -286,13 +325,13 @@ class TestDailyProfile(unittest.TestCase):
             "daily_profile",
             dataset,
             reports_mod.ReportQuery(start_date=start, end_date=end, granularity="week"),
-            currency="CZK",
+            price_unit="CZK",
             navigation_range={},
         )
         for row in payload["rows"]:
             self.assertEqual(len(row["watts"]), 24)
-        self.assertEqual(len(payload["import_rate"]), 24)
-        self.assertEqual(len(payload["export_rate"]), 24)
+        self.assertEqual(len(payload["importRate"]), 24)
+        self.assertEqual(len(payload["exportRate"]), 24)
         return payload
 
     @staticmethod
@@ -341,7 +380,7 @@ class TestDailyProfile(unittest.TestCase):
         # 600 W for the 7 days it has data for, not a quarter of it over 30.
         self.assertEqual(lamp["watts"], [600.0] * 24)
         self.assertAlmostEqual(lamp["coverage"], 7 / 30, places=4)
-        self.assertEqual(lamp["first_hour"], "2026-09-24T00:00:00+02:00")
+        self.assertEqual(lamp["firstHour"], "2026-09-24T00:00:00+02:00")
 
     def test_a_gap_is_none_and_a_measured_zero_is_zero(self):
         energy = default_energy()
@@ -406,18 +445,18 @@ class TestDailyProfile(unittest.TestCase):
             span(default_energy(), import_rate=rates, export_rate={hour(0, 18): -0.5})
         )
         # (4 + 5 × 1) ÷ 6 rated hours, not ÷ 7.
-        self.assertAlmostEqual(payload["import_rate"][18], 1.5, places=6)
-        self.assertEqual(payload["import_rate"][17], 1.0)
-        self.assertIsNone(payload["import_rate"][5])
-        self.assertEqual(payload["export_rate"][18], -0.5)
-        self.assertIsNone(payload["export_rate"][17])
+        self.assertAlmostEqual(payload["importRate"][18], 1.5, places=6)
+        self.assertEqual(payload["importRate"][17], 1.0)
+        self.assertIsNone(payload["importRate"][5])
+        self.assertEqual(payload["exportRate"][18], -0.5)
+        self.assertIsNone(payload["exportRate"][17])
 
     def test_a_rate_for_an_hour_still_ahead_is_left_out(self):
         now = datetime(2026, 9, 4, 0, 0, tzinfo=PRAGUE)
         # Today's tariff fills the hours ahead too; they have not happened.
         rates = {key: (1.0 if key < now else 9.0) for key in local_hours(START, END)}
         payload = self.daily_profile(span(default_energy(), import_rate=rates), now=now)
-        self.assertEqual(payload["import_rate"], [1.0] * 24)
+        self.assertEqual(payload["importRate"], [1.0] * 24)
 
 
 if __name__ == "__main__":

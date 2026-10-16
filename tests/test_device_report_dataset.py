@@ -378,9 +378,9 @@ class TestNodes(DatasetTestCase):
         )
         rows = {row["id"]: row for row in payload["nodes"]}
         self.assertEqual(rows[WASHER]["coverage"], 0.5)
-        self.assertEqual(rows[WASHER]["first_hour"], "2026-09-01T12:00:00+02:00")
+        self.assertEqual(rows[WASHER]["firstHour"], "2026-09-01T12:00:00+02:00")
         self.assertEqual(rows[FRIDGE]["coverage"], round(23 / 24, 4))
-        self.assertEqual(rows[FRIDGE]["first_hour"], "2026-09-01T00:00:00+02:00")
+        self.assertEqual(rows[FRIDGE]["firstHour"], "2026-09-01T00:00:00+02:00")
         self.assertEqual(rows["house_unmeasured"]["coverage"], 1.0)
         self.assertEqual(rows["house"]["coverage"], 1.0)
 
@@ -424,18 +424,18 @@ class TestSolarTotals(DatasetTestCase):
             "ranking",
             dataset,
             reports_mod.ReportQuery(START.date(), START.date()),
-            currency=None,
+            price_unit=None,
             navigation_range={"minDate": "2026-01-01", "maxDate": "2026-09-10"},
         )
         self.assertEqual(
-            payload["solar_totals"],
+            payload["solarTotals"],
             {
-                "attributed_kwh": 5.0,
-                "unattributed_kwh": 3.0,
-                "house_kwh": 1.0,
-                "battery_kwh": 2.0,
-                "export_kwh": 2.0,
-                "measured_export_kwh": 2.0,
+                "attributedKwh": 5.0,
+                "unattributedKwh": 3.0,
+                "houseKwh": 1.0,
+                "batteryKwh": 2.0,
+                "exportKwh": 2.0,
+                "measuredExportKwh": 2.0,
             },
         )
 
@@ -544,21 +544,21 @@ class TestRankingPayload(DatasetTestCase):
             "ranking",
             dataset,
             reports_mod.ReportQuery(START.date(), START.date()),
-            currency="CZK",
+            price_unit="CZK",
             navigation_range={"minDate": "2026-01-01", "maxDate": "2026-09-10"},
         )
         self.assertTrue(payload["complete"])
-        self.assertEqual(payload["currency"], "CZK")
+        self.assertEqual(payload["priceUnit"], "CZK")
         self.assertEqual(
             payload["meters"], {"grid": True, "solar": True, "battery": True, "house": True}
         )
-        self.assertEqual(payload["as_of"], AFTER.isoformat())
+        self.assertEqual(payload["asOf"], AFTER.isoformat())
         washer = next(row for row in payload["nodes"] if row["id"] == WASHER)
         self.assertEqual(washer["label"], "Washer")
         self.assertEqual(washer["depth"], 1)
         self.assertEqual(washer["sources"]["grid"], 0.5)
         self.assertEqual(
-            set(washer["money"]["paid"]), {"amount", "priced_kwh", "unpriced_kwh", "tariff_kwh"}
+            set(washer["money"]["paid"]), {"amount", "pricedKwh", "unpricedKwh", "tariffKwh"}
         )
 
         dataset = self.build(tree(), history({0: {"H": 1}}))

@@ -259,11 +259,11 @@ const INVERTER_ACTION_OPTIONS = [
 ] as const;
 
 /**
- * How often the editor asks `helman/training/status`, for the Training tab's
- * panels and its tab-bar badge alike. Slower than the entity poll: a training
- * run takes minutes, and the answer is read from memory on every tick.
+ * How often the editor re-asks `helman/training/status` while a run is in
+ * progress, so the Training tab shows it advancing. Otherwise it never polls:
+ * the status loads on mount and reloads on a `training` or `config` event.
  */
-const TRAINING_STATUS_INTERVAL_MS = 5000;
+const TRAINING_RUN_POLL_MS = 15_000;
 
 /** One row of a training tab depth table -- see `_renderTrainingDepthTable`. */
 interface TrainingDepthRow {
@@ -1086,7 +1086,7 @@ export class HelmanConfigEditorPanel
   /** The device whose detail dialog is open. */
   private _deviceDetail: TreeItem | null = null;
   /** The card's own localize: the device detail dialog reads `node_detail.*` keys. */
-  private _trainingStatusTimer?: ReturnType<typeof setInterval>;
+  private _trainingRunPoll?: ReturnType<typeof setInterval>;
   private _trainingStatusSequence = 0;
   private _trainingStatusApplied = 0;
 
@@ -1116,16 +1116,16 @@ export class HelmanConfigEditorPanel
 
   constructor() {
     super();
-    new DataChangedController(this, () => this.hass, {}, (_kinds, { configRevision }) => this._handleDataChanged(configRevision));
+    new DataChangedController(this, () => this.hass, {}, (kinds, { configRevision }) => {
+      if (kinds.has("training") || kinds.has("config")) void this._loadTrainingStatus();
+      this._handleDataChanged(configRevision);
+    });
   }
 
   connectedCallback(): void {
     super.connectedCallback();
     window.addEventListener("beforeunload", this._guardCloseWhileSaving);
-    this._trainingStatusTimer = setInterval(
-      () => void this._pollTrainingStatus(),
-      TRAINING_STATUS_INTERVAL_MS,
-    );
+    this._syncTrainingRunPoll();
     // Not awaited with the form elements: a list that cannot be dragged is a
     // far smaller loss than a panel whose every form stays unrendered.
     void loadHaSortable().then(() => {
@@ -1149,11 +1149,7 @@ export class HelmanConfigEditorPanel
   disconnectedCallback(): void {
     super.disconnectedCallback();
     window.removeEventListener("beforeunload", this._guardCloseWhileSaving);
-
-    if (this._trainingStatusTimer !== undefined) {
-      clearInterval(this._trainingStatusTimer);
-      this._trainingStatusTimer = undefined;
-    }
+    this._syncTrainingRunPoll();
   }
 
   protected willUpdate(changedProperties: PropertyValues): void {
@@ -1178,8 +1174,9 @@ export class HelmanConfigEditorPanel
     if (!this._hasLoadedOnce && this.hass) {
       this._hasLoadedOnce = true;
       void this._loadConfig({ showMessage: false });
-      void this._pollTrainingStatus();
+      void this._loadTrainingStatus();
     }
+    if (changedProperties.has("_trainingStatus")) this._syncTrainingRunPoll();
     // Every update while the toggle is on, and once more on the update that
     // turns it off -- see `_applyEntitiesOnlyOpenState` for why "every".
     if (this._entitiesOnly || changedProperties.has("_entitiesOnly")) {
@@ -1350,6 +1347,9 @@ export class HelmanConfigEditorPanel
               class=${this._activeTab === tab.id ? "active" : ""}
               @click=${() => {
                 this._activeTab = tab.id;
+                // No event announces a run starting elsewhere, so the tab
+                // asks once on opening rather than showing a stale state.
+                if (tab.id === "training") void this._loadTrainingStatus();
                 // The training tab's depth table and the devices tab's
                 // name and icon placeholders ask about paths no mounted
                 // `helman-entity-group` announces -- nothing else triggers a
@@ -1392,7 +1392,18 @@ export class HelmanConfigEditorPanel
     ></span>`;
   }
 
-  private async _pollTrainingStatus(): Promise<void> {
+  /** Poll while a run is in progress and the editor is mounted; stop otherwise. */
+  private _syncTrainingRunPoll(): void {
+    const running = this.isConnected && this._trainingStatus?.isRunning === true;
+    if (running && this._trainingRunPoll === undefined) {
+      this._trainingRunPoll = setInterval(() => void this._loadTrainingStatus(), TRAINING_RUN_POLL_MS);
+    } else if (!running && this._trainingRunPoll !== undefined) {
+      clearInterval(this._trainingRunPoll);
+      this._trainingRunPoll = undefined;
+    }
+  }
+
+  private async _loadTrainingStatus(): Promise<void> {
     if (!this.hass) return;
     const sequence = ++this._trainingStatusSequence;
     try {
@@ -1404,20 +1415,28 @@ export class HelmanConfigEditorPanel
       this._trainingStatusApplied = sequence;
       if (status) this._trainingStatus = status;
     } catch {
-      // Polled: a dropped tick keeps the last status on screen.
+      // A dropped answer keeps the last status on screen.
     }
   }
 
-  /** A Train now finished: take the status it returned, or ask for one. */
+  /**
+   * A Train now went out: show it running, which starts the run poll. Once
+   * it finished: take the status it returned, or ask for one.
+   */
   private _handleTrainingStatusChanged = (
     event: CustomEvent<TrainingStatusChangedDetail>,
   ): void => {
-    const status = event.detail.status;
-    if (status) {
+    const { status, started } = event.detail;
+    if (started) {
+      if (!this._trainingStatus) return;
+      // An answer already in flight predates the run: drop it.
+      this._trainingStatusApplied = ++this._trainingStatusSequence;
+      this._trainingStatus = { ...this._trainingStatus, isRunning: true };
+    } else if (status) {
       this._trainingStatusApplied = ++this._trainingStatusSequence;
       this._trainingStatus = status;
     } else {
-      void this._pollTrainingStatus();
+      void this._loadTrainingStatus();
     }
   };
 
@@ -2368,7 +2387,6 @@ export class HelmanConfigEditorPanel
           <helman-solar-bias-diagnostics
             .hass=${this.hass}
             .job=${this._trainingJob("solar_bias")}
-            .configRevision=${this._configSession.revision}
           ></helman-solar-bias-diagnostics>
           ${this._renderInspectorCard("solar")}
         `,

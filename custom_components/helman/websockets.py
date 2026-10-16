@@ -1,3 +1,8 @@
+"""Helman's websocket commands.
+
+Casing: a stored document -- the config, a device's stored usage record -- passes through verbatim, in the snake_case it is stored in; a computed response is camelCase. Known exceptions still in snake_case: `helman/get_history`'s `entity_history` and the inspector's house consumers (`energy_entity_id`, `switch_entity_id`, `metered_children`).
+"""
+
 from __future__ import annotations
 from datetime import date
 import logging
@@ -25,7 +30,6 @@ from .ws_common import get_coordinator, map_errors, validate_dates
 from .solar_bias_correction.websocket import (
     ws_get_solar_bias_day_aggregates,
     ws_get_solar_bias_inspector,
-    ws_get_solar_bias_status,
 )
 from .scheduling.schedule import ScheduleError, slot_from_dict
 from .training.websocket import ws_get_training_status, ws_train_now
@@ -104,7 +108,6 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     async_register_command(hass, ws_get_device_stats)
     async_register_command(hass, ws_get_device_report)
     async_register_command(hass, ws_get_node_detail)
-    async_register_command(hass, ws_get_solar_bias_status)
     async_register_command(hass, ws_get_solar_bias_inspector)
     async_register_command(hass, ws_get_solar_bias_day_aggregates)
     async_register_command(hass, ws_get_training_status)

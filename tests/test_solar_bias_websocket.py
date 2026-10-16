@@ -10,7 +10,7 @@ import types
 import unittest
 from datetime import datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock
 
 from _ha_stubs import stub_module
 
@@ -42,39 +42,9 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.solar_bias_ws, self.websockets_mod = _load_websocket_modules()
 
-    def test_status_returns_service_payload(self) -> None:
-        payload = {"status": "applied", "enabled": True}
-        service = SimpleNamespace(get_status_payload=Mock(return_value=payload))
-        coordinator = SimpleNamespace(solar_bias_service=service)
-        connection = FakeConnection()
-
-        self.solar_bias_ws.ws_get_solar_bias_status(
-            FakeHass(coordinator),
-            connection,
-            {"id": 1, "type": "helman/solar_bias/status"},
-        )
-
-        service.get_status_payload.assert_called_once_with()
-        self.assertEqual(connection.results, [(1, payload)])
-        self.assertEqual(connection.errors, [])
-
-    def test_status_allows_non_admin(self) -> None:
-        payload = {"status": "applied", "enabled": True}
-        service = SimpleNamespace(get_status_payload=Mock(return_value=payload))
-        coordinator = SimpleNamespace(solar_bias_service=service)
-        connection = FakeConnection(is_admin=False)
-
-        self.solar_bias_ws.ws_get_solar_bias_status(
-            FakeHass(coordinator),
-            connection,
-            {"id": 1, "type": "helman/solar_bias/status"},
-        )
-
-        service.get_status_payload.assert_called_once_with()
-        self.assertEqual(connection.results, [(1, payload)])
-        self.assertEqual(connection.errors, [])
-
-    def test_status_returns_not_loaded_when_service_or_coordinator_missing(self) -> None:
+    async def test_inspector_returns_not_loaded_when_service_or_coordinator_missing(
+        self,
+    ) -> None:
         cases = (
             (
                 None,
@@ -96,10 +66,10 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(coordinator=coordinator):
                 connection = FakeConnection()
 
-                self.solar_bias_ws.ws_get_solar_bias_status(
+                await self.solar_bias_ws.ws_get_solar_bias_inspector.__wrapped__(
                     FakeHass(coordinator),
                     connection,
-                    {"id": 1, "type": "helman/solar_bias/status"},
+                    {"id": 1, "type": "helman/solar_bias/inspector", "date": "2026-04-25"},
                 )
 
                 self.assertEqual(connection.results, [])
@@ -315,8 +285,12 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
 
         self.websockets_mod.async_register_websocket_commands(object())
 
-        self.assertIn(self.solar_bias_ws.ws_get_solar_bias_status, registered)
         self.assertIn(self.solar_bias_ws.ws_get_solar_bias_inspector, registered)
+        # Its diagnostics ride the solar job of the admin-only training status.
+        self.assertNotIn(
+            "helman/solar_bias/status",
+            [command._ws_command for command in registered],
+        )
 
 
 if __name__ == "__main__":

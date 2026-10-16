@@ -56,11 +56,11 @@ def _round_rate(value: float | None) -> float | None:
 def _money_side(side: MoneySide, *, tariff: bool) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "amount": _round_money(side.known_amount),
-        "priced_kwh": _round_kwh(side.priced_kwh),
-        "unpriced_kwh": _round_kwh(side.unpriced_kwh),
+        "pricedKwh": _round_kwh(side.priced_kwh),
+        "unpricedKwh": _round_kwh(side.unpriced_kwh),
     }
     if tariff:
-        payload["tariff_kwh"] = _round_kwh(side.tariff_kwh)
+        payload["tariffKwh"] = _round_kwh(side.tariff_kwh)
     return payload
 
 
@@ -94,7 +94,7 @@ def _node_fields(dataset: DeviceDataset, node: DatasetNode) -> dict[str, Any]:
         "unmeasured": node.unmeasured,
         "kwh": _round_kwh(node.total_kwh),
         "coverage": _coverage(dataset, node),
-        "first_hour": _local_iso(dataset, node.first_hour),
+        "firstHour": _local_iso(dataset, node.first_hour),
     }
 
 
@@ -102,7 +102,7 @@ def _ranking_node(dataset: DeviceDataset, node: DatasetNode) -> dict[str, Any]:
     attribution = attribute_energy(dataset, node.kwh)
     return {
         **_node_fields(dataset, node),
-        "parent_id": node.parent_id,
+        "parentId": node.parent_id,
         "depth": node.depth,
         "children": list(node.children),
         "sources": _sources(attribution),
@@ -110,7 +110,7 @@ def _ranking_node(dataset: DeviceDataset, node: DatasetNode) -> dict[str, Any]:
             "paid": _money_side(attribution.paid, tariff=True),
             "forgone": _money_side(attribution.forgone, tariff=False),
         },
-        "overallocated_kwh": _round_kwh(node.overallocated_kwh),
+        "overallocatedKwh": _round_kwh(node.overallocated_kwh),
     }
 
 
@@ -183,7 +183,7 @@ def _build_over_time(dataset: DeviceDataset, query: ReportQuery) -> dict[str, An
                 "label": node.label,
                 "icon": node.icon,
                 "estimated": node.estimated,
-                "first_hour": _local_iso(dataset, node.first_hour),
+                "firstHour": _local_iso(dataset, node.first_hour),
             }
             for node in devices
         ],
@@ -245,8 +245,8 @@ def _build_daily_profile(dataset: DeviceDataset, query: ReportQuery) -> dict[str
             }
             for node in rows
         ],
-        "import_rate": rate_means(dataset.import_rate),
-        "export_rate": rate_means(dataset.export_rate),
+        "importRate": rate_means(dataset.import_rate),
+        "exportRate": rate_means(dataset.export_rate),
     }
 
 
@@ -262,7 +262,7 @@ def build_report(
     dataset: DeviceDataset,
     query: ReportQuery,
     *,
-    currency: str | None,
+    price_unit: str | None,
     navigation_range: dict[str, str],
 ) -> dict[str, Any]:
     """One report's payload, with the fields every report carries."""
@@ -272,37 +272,37 @@ def build_report(
     return {
         **spec.build(dataset, query),
         "report": report,
-        "start_date": query.start_date.isoformat(),
-        "end_date": query.end_date.isoformat(),
+        "startDate": query.start_date.isoformat(),
+        "endDate": query.end_date.isoformat(),
         **({"granularity": query.granularity} if spec.uses_granularity else {}),
-        "currency": currency,
-        "charge_origin": {
-            "charged_kwh": _round_kwh(origin.charged_kwh),
+        "priceUnit": price_unit,
+        "chargeOrigin": {
+            "chargedKwh": _round_kwh(origin.charged_kwh),
             "grid": round(origin.grid, 4),
-            "grid_recorded": round(origin.grid_recorded, 4),
-            "grid_tariff": round(origin.grid_tariff, 4),
-            "grid_unpriced": round(origin.grid_unpriced, 4),
+            "gridRecorded": round(origin.grid_recorded, 4),
+            "gridTariff": round(origin.grid_tariff, 4),
+            "gridUnpriced": round(origin.grid_unpriced, 4),
             "solar": round(origin.solar, 4),
-            "solar_priced": round(origin.solar_priced, 4),
-            "solar_unpriced": round(origin.solar_unpriced, 4),
+            "solarPriced": round(origin.solar_priced, 4),
+            "solarUnpriced": round(origin.solar_unpriced, 4),
             "unknown": round(origin.unknown, 4),
-            "paid_rate": _round_rate(origin.paid_rate),
-            "forgone_rate": _round_rate(origin.forgone_rate),
+            "paidRate": _round_rate(origin.paid_rate),
+            "forgoneRate": _round_rate(origin.forgone_rate),
         },
-        "solar_totals": {
-            "attributed_kwh": _round_kwh(dataset.solar_totals.attributed_kwh),
-            "unattributed_kwh": _round_kwh(dataset.solar_totals.unattributed_kwh),
-            "house_kwh": _round_kwh(dataset.solar_totals.house_kwh),
-            "battery_kwh": _round_kwh(dataset.solar_totals.battery_kwh),
-            "export_kwh": _round_kwh(dataset.solar_totals.export_kwh),
-            "measured_export_kwh": _round_kwh(dataset.solar_totals.measured_export_kwh),
+        "solarTotals": {
+            "attributedKwh": _round_kwh(dataset.solar_totals.attributed_kwh),
+            "unattributedKwh": _round_kwh(dataset.solar_totals.unattributed_kwh),
+            "houseKwh": _round_kwh(dataset.solar_totals.house_kwh),
+            "batteryKwh": _round_kwh(dataset.solar_totals.battery_kwh),
+            "exportKwh": _round_kwh(dataset.solar_totals.export_kwh),
+            "measuredExportKwh": _round_kwh(dataset.solar_totals.measured_export_kwh),
         },
-        "house_kwh": _round_kwh(dataset.house.total_kwh),
-        "ambiguous_kwh": _round_kwh(dataset.ambiguous_kwh),
-        "unattributed_kwh": _round_kwh(house.unattributed),
-        "mismatch_kwh": _round_kwh(dataset.mismatch_kwh),
+        "houseKwh": _round_kwh(dataset.house.total_kwh),
+        "ambiguousKwh": _round_kwh(dataset.ambiguous_kwh),
+        "unattributedKwh": _round_kwh(house.unattributed),
+        "mismatchKwh": _round_kwh(dataset.mismatch_kwh),
         "meters": dict(dataset.meters),
-        "as_of": dataset.now.isoformat(),
+        "asOf": dataset.now.isoformat(),
         "complete": dataset.complete,
         "range": navigation_range,
     }

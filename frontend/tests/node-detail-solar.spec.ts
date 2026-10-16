@@ -221,14 +221,14 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             };
         const destinations = {
             node: "solar", section: "destinations", asOf: "2026-10-21T12:00:00+00:00", period,
-            currency: "CZK/kWh", complete: false,
+            priceUnit: "CZK/kWh", complete: false,
             unavailable: v.destinations === "unavailable" ? "no_house_meter" : null,
             destinations: v.destinations === "unavailable" ? null : destinationsDTO,
             charge: v.destinations === "unavailable" ? null : charge,
         };
         const flows = {
             node: "solar", section: "flows", asOf: "2026-10-21T12:00:00+00:00", period,
-            currency: "CZK/kWh", complete: false, unavailable: v.flowsUnavailable ?? null,
+            priceUnit: "CZK/kWh", complete: false, unavailable: v.flowsUnavailable ?? null,
             flows: v.flowsUnavailable ? null : {
                 solarToHouse: 5.1, solarToBattery: 4.2, solarToGrid: 5.8, solarUnresolved: 0.4,
                 gridToBattery: 1.5, unknownToBattery: 0.3, gridToBatteryCost: 4.0,

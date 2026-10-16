@@ -19,7 +19,8 @@ DAY_CLASSIFICATION_TIGHT = "tight"
 DAY_CLASSIFICATION_DEFICIT = "deficit"
 
 # Fired whenever something a helman card draws has been rewritten: the schedule
-# document, the plan, the config, or the solar bias model. Deliberately coarse —
+# document, the plan, the config, the solar bias model, or a training job's
+# result (once per finished job, never on start). Deliberately coarse —
 # the payload's ``kind`` is advisory, and a subscriber is expected to reload
 # everything it renders regardless of which kind arrived. One event type means a
 # new write path cannot be added that forgets to announce itself.
@@ -28,6 +29,7 @@ DATA_CHANGED_KIND_SCHEDULE = "schedule"
 DATA_CHANGED_KIND_PLAN = "plan"
 DATA_CHANGED_KIND_CONFIG = "config"
 DATA_CHANGED_KIND_SOLAR_BIAS = "solar_bias"
+DATA_CHANGED_KIND_TRAINING = "training"
 
 # Version of the stored config document. Bumped when a stored shape changes in
 # a way that needs migrating on load; absent means version 1 (pre-unification).

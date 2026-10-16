@@ -699,7 +699,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         const paid = charger?.money.paid ?? null;
         const inputs = (["solar", "battery", "grid"] as const).map((node) => this._flowItem(node, charger ? charger.sources[node] : null, energy));
         if (paid !== null && (charger?.sources.grid ?? 0) > 0) {
-            inputs[2] = { ...inputs[2], note: fillTemplate(this.localize("node_detail.flow.paid_estimate"), { value: this._formatMoney(paid, currencyFromPriceUnit(payload!.currency)) }) };
+            inputs[2] = { ...inputs[2], note: fillTemplate(this.localize("node_detail.flow.paid_estimate"), { value: this._formatMoney(paid, currencyFromPriceUnit(payload!.priceUnit)) }) };
         }
         const notes: string[] = [];
         const status = this._todayStatus();
@@ -1155,7 +1155,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         if (!charger) return null;
         const parts = [fillTemplate(this._t("today.kwh_short"), { kwh: (formatKwh(Math.abs(charger.kwh)) + " kWh") })];
         if (charger.money.paid !== null) {
-            parts.push(fillTemplate(this._t("today.paid_short"), { value: this._formatMoney(charger.money.paid, currencyFromPriceUnit(payload!.currency)) }));
+            parts.push(fillTemplate(this._t("today.paid_short"), { value: this._formatMoney(charger.money.paid, currencyFromPriceUnit(payload!.priceUnit)) }));
         }
         return parts.join(" · ");
     }
@@ -1177,7 +1177,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
                 ? `today.unavailable_${payload.unavailable}` : "today.unavailable_not_loaded";
             return html`${period}<p class="note" data-today-unavailable>${this._t(reason)}</p>`;
         }
-        const currency = currencyFromPriceUnit(payload.currency);
+        const currency = currencyFromPriceUnit(payload.priceUnit);
         const share = (kwh: number) => charger.kwh > 0
             ? fillTemplate(this._t("today.share"), { kwh: (formatKwh(Math.abs(kwh)) + " kWh"), share: this._share(kwh / charger.kwh) })
             : (formatKwh(Math.abs(kwh)) + " kWh");
@@ -1199,7 +1199,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         const payload = this._today?.status === "ready" ? this._today.payload : null;
         if (!payload) return html`<p class="note">${this._t("today.attribution_note")}</p>`;
         const charger = payload.charger;
-        const currency = currencyFromPriceUnit(payload.currency);
+        const currency = currencyFromPriceUnit(payload.priceUnit);
         return html`
             ${this._row(this._t("today.period_bounds"), this._time(Date.parse(payload.period.start)) + " – " + this._time(Math.min(Date.parse(payload.asOf), Date.parse(payload.period.end))), "period-bounds")}
             ${charger ? html`

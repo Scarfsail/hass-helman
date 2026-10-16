@@ -56,15 +56,15 @@ async function mountCard(page: Page, options: FakeOptions = {}): Promise<void> {
 
     await page.evaluate((opts: FakeOptions) => {
         const node = (fields: Record<string, unknown>) => ({
-            parent_id: "house",
+            parentId: "house",
             depth: 1,
             icon: null,
             estimated: false,
             unmeasured: false,
             children: [],
             coverage: 1,
-            first_hour: "2026-09-01T00:00:00+00:00",
-            overallocated_kwh: 0,
+            firstHour: "2026-09-01T00:00:00+00:00",
+            overallocatedKwh: 0,
             sources: { solar: 0, battery: 0, grid: 0, unattributed: 0 },
             ...fields,
         });
@@ -75,25 +75,25 @@ async function mountCard(page: Page, options: FakeOptions = {}): Promise<void> {
             unpriced = 0,
             tariff = 0,
         ) => ({
-            paid: { amount: paid, priced_kwh: kwh - unpriced, unpriced_kwh: unpriced, tariff_kwh: tariff },
-            forgone: { amount: forgone, priced_kwh: kwh, unpriced_kwh: 0 },
+            paid: { amount: paid, pricedKwh: kwh - unpriced, unpricedKwh: unpriced, tariffKwh: tariff },
+            forgone: { amount: forgone, pricedKwh: kwh, unpricedKwh: 0 },
         });
         const common = (start: string, end: string) => ({
-            start_date: start,
-            end_date: end,
-            // The backend's currency is the price unit, as the inspector's is.
-            currency: "CZK/kWh",
-            charge_origin: {
-                charged_kwh: 10, grid: 0.5, grid_recorded: 0.5, grid_tariff: 0, grid_unpriced: 0,
-                solar: 0.5, solar_priced: 0.5, solar_unpriced: 0, unknown: 0,
-                paid_rate: 3, forgone_rate: 1,
+            startDate: start,
+            endDate: end,
+            // The import price unit, as the inspector's is.
+            priceUnit: "CZK/kWh",
+            chargeOrigin: {
+                chargedKwh: 10, grid: 0.5, gridRecorded: 0.5, gridTariff: 0, gridUnpriced: 0,
+                solar: 0.5, solarPriced: 0.5, solarUnpriced: 0, unknown: 0,
+                paidRate: 3, forgoneRate: 1,
             },
-            house_kwh: 100,
-            ambiguous_kwh: opts.ambiguousKwh ?? 0,
-            unattributed_kwh: 0,
-            mismatch_kwh: 0,
+            houseKwh: 100,
+            ambiguousKwh: opts.ambiguousKwh ?? 0,
+            unattributedKwh: 0,
+            mismatchKwh: 0,
             meters: opts.meters ?? { grid: true, solar: true, battery: true, house: true },
-            as_of: new Date(Date.now() - (opts.serverLagMs ?? 0)).toISOString(),
+            asOf: new Date(Date.now() - (opts.serverLagMs ?? 0)).toISOString(),
             complete: opts.complete ?? false,
             range: { minDate: "2026-01-01", maxDate: end },
         });
@@ -101,7 +101,7 @@ async function mountCard(page: Page, options: FakeOptions = {}): Promise<void> {
         // b outdoes a, and the devices measure 5 kWh more than the house meter.
         const series = ["a", "b", "c", "d", "e", "f", "g"].map((letter) => ({
             id: "sensor." + letter, label: "Device " + letter.toUpperCase(), icon: null,
-            estimated: false, first_hour: null,
+            estimated: false, firstHour: null,
         }));
         const values = (...kwh: number[]) => Object.fromEntries(
             series.map((item, index) => [item.id, kwh[index]]),
@@ -132,7 +132,7 @@ async function mountCard(page: Page, options: FakeOptions = {}): Promise<void> {
             Array.from({ length: 24 }, (_, hour) => at(hour));
         const profileRow = (fields: Record<string, unknown>) => ({
             icon: null, estimated: false, unmeasured: false, coverage: 1,
-            first_hour: "2026-09-22T00:00:00+02:00", ...fields,
+            firstHour: "2026-09-22T00:00:00+02:00", ...fields,
         });
         const dailyProfile = (start: string, end: string) => ({
             ...common(start, end),
@@ -148,19 +148,19 @@ async function mountCard(page: Page, options: FakeOptions = {}): Promise<void> {
                 }),
                 profileRow({
                     id: "sensor.b", label: "Device B", kwh: 1, coverage: 0.5,
-                    first_hour: "2026-10-07T00:00:00+02:00",
+                    firstHour: "2026-10-07T00:00:00+02:00",
                     watts: hourly((hour) => (hour === 3 ? null : hour === 4 ? 0 : hour === 12 ? 50 : 25)),
                 }),
             ],
-            import_rate: hourly((hour) => (hour === 5 ? null : hour >= 17 && hour < 21 ? 6 : 3)),
-            export_rate: hourly((hour) => (hour === 13 ? -0.5 : 1)),
+            importRate: hourly((hour) => (hour === 5 ? null : hour >= 17 && hour < 21 ? 6 : 3)),
+            exportRate: hourly((hour) => (hour === 13 ? -0.5 : 1)),
         });
         const ranking = (start: string, end: string) => ({
             ...common(start, end),
             report: "ranking",
             nodes: [
                 node({
-                    id: "house", parent_id: null, depth: 0, label: "", kwh: 100,
+                    id: "house", parentId: null, depth: 0, label: "", kwh: 100,
                     children: ["sensor.washer", "sensor.breaker", "sensor.fridge", "house_unmeasured"],
                     sources: { solar: 40, battery: 20, grid: 35, unattributed: 5 },
                     money: money(30, 8, 100),
@@ -171,22 +171,22 @@ async function mountCard(page: Page, options: FakeOptions = {}): Promise<void> {
                     money: money(12, 3, 30),
                 }),
                 node({
-                    id: "sensor.breaker", label: "Breaker", kwh: 20, overallocated_kwh: 2,
+                    id: "sensor.breaker", label: "Breaker", kwh: 20, overallocatedKwh: 2,
                     children: ["heater", "sensor_breaker_unmeasured"],
                     sources: { solar: 10, battery: 0, grid: 10, unattributed: 0 },
                     money: money(2, -1.5, 20),
                 }),
                 node({
-                    id: "heater", parent_id: "sensor.breaker", depth: 2, label: "Heater",
+                    id: "heater", parentId: "sensor.breaker", depth: 2, label: "Heater",
                     estimated: true, kwh: 5, money: money(1, 0, 5),
                 }),
                 node({
-                    id: "sensor_breaker_unmeasured", parent_id: "sensor.breaker", depth: 2,
+                    id: "sensor_breaker_unmeasured", parentId: "sensor.breaker", depth: 2,
                     label: "", unmeasured: true, kwh: 17, money: money(1, 0, 17),
                 }),
                 node({
                     id: "sensor.fridge", label: "Fridge", kwh: 10, coverage: 0.5,
-                    first_hour: "2026-10-07T00:00:00+00:00",
+                    firstHour: "2026-10-07T00:00:00+00:00",
                     sources: { solar: 0, battery: 0, grid: 10, unattributed: 0 },
                     money: money(15, 0, 10, 2, 1),
                 }),
