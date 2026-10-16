@@ -23,7 +23,7 @@ import re
 from collections.abc import Callable, Collection, Iterator, Mapping
 from typing import TYPE_CHECKING, Any
 
-from .spec import (
+from .kinds import (
     CONTROLLABLE_KIND_CLIMATE,
     CONTROLLABLE_KIND_EV_CHARGER,
     CONTROLLABLE_KIND_GENERIC,
@@ -295,17 +295,27 @@ def running_signal(device: Device) -> tuple[str, str] | None:
     controls = device.get("controls")
     if not isinstance(controls, Mapping):
         return None
-    signals = [("switch", "switch"), (CONTROLLABLE_KIND_CLIMATE, CONTROLLABLE_KIND_CLIMATE)]
+    keys = ["switch", CONTROLLABLE_KIND_CLIMATE]
     if peek_controllable_kind(device) == CONTROLLABLE_KIND_EV_CHARGER:
-        signals.insert(1, ("charge", "switch"))
-    for key, activity in signals:
+        keys.insert(1, "charge")
+    for key in keys:
         control = controls.get(key)
         if not isinstance(control, Mapping):
             continue
         entity_id = control.get("entity_id")
         if isinstance(entity_id, str) and entity_id.strip():
-            return entity_id.strip(), activity
+            return entity_id.strip(), RUNNING_ACTIVITY_BY_CONTROL[key]
     return None
+
+
+#: The running activity each running-signal control reports: ``switch`` and an
+#: EV charger's ``charge`` are switches, ``climate`` is a climate entity. The
+#: one definition — :attr:`.spec.ControllableSpec.running_control` reads it too.
+RUNNING_ACTIVITY_BY_CONTROL: dict[str, str] = {
+    "switch": "switch",
+    "charge": "switch",
+    CONTROLLABLE_KIND_CLIMATE: CONTROLLABLE_KIND_CLIMATE,
+}
 
 
 #: What "running" means for each running signal: a switch is on, a climate

@@ -155,7 +155,7 @@ class ApplianceConfigTests(unittest.TestCase):
 
         (appliance,) = registry.appliances
         self.assertEqual(appliance.id, "living-room-hvac")
-        self.assertEqual(appliance.history_energy_entity_id, "sensor.breaker_energy")
+        self.assertEqual(appliance.projection.history_energy_entity_id, "sensor.breaker_energy")
 
     def test_missing_appliances_key_returns_empty_registry(self) -> None:
         registry = build_appliances_runtime_registry({})
@@ -264,12 +264,12 @@ class ApplianceConfigTests(unittest.TestCase):
         self.assertEqual(appliance.kind, "generic")
         self.assertIsNone(appliance.icon)
         self.assertEqual(appliance.switch_entity_id, "switch.dishwasher")
-        self.assertEqual(appliance.projection_strategy, "history_average")
+        self.assertEqual(appliance.projection.strategy, "history_average")
         self.assertEqual(
-            appliance.history_energy_entity_id,
+            appliance.projection.history_energy_entity_id,
             "sensor.dishwasher_energy_total",
         )
-        self.assertEqual(appliance.history_lookback_days, 21)
+        self.assertEqual(appliance.projection.history_lookback_days, 21)
 
     def test_generic_switch_control_accepts_a_light(self) -> None:
         light = copy.deepcopy(_generic_appliance())
@@ -300,12 +300,12 @@ class ApplianceConfigTests(unittest.TestCase):
         self.assertEqual(appliance.id, "living-room-hvac")
         self.assertEqual(appliance.kind, "climate")
         self.assertEqual(appliance.climate_entity_id, "climate.living_room")
-        self.assertEqual(appliance.projection_strategy, "history_average")
+        self.assertEqual(appliance.projection.strategy, "history_average")
         self.assertEqual(
-            appliance.history_energy_entity_id,
+            appliance.projection.history_energy_entity_id,
             "sensor.living_room_hvac_energy_total",
         )
-        self.assertEqual(appliance.history_lookback_days, 14)
+        self.assertEqual(appliance.projection.history_lookback_days, 14)
 
     def test_ev_icon_is_preserved(self) -> None:
         config = _valid_config()

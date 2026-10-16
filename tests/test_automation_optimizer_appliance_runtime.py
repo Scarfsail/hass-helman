@@ -10,6 +10,7 @@ TZ = timezone(timedelta(hours=2))
 REFERENCE_TIME = datetime(2026, 7, 10, 5, 0, tzinfo=TZ)
 DAY = date(2026, 7, 10)
 
+from custom_components.helman.appliances._read import ProjectionConfig  # noqa: E402
 from custom_components.helman.const import SCHEDULE_SLOT_MINUTES  # noqa: E402
 from custom_components.helman.appliances.climate_appliance import ClimateApplianceRuntime  # noqa: E402
 from custom_components.helman.appliances.generic_appliance import GenericApplianceRuntime  # noqa: E402
@@ -95,9 +96,7 @@ def _generic(appliance_id: str = "pool-pump"):
         id=appliance_id,
         name=appliance_id.title(),
         switch_entity_id=f"switch.{appliance_id}",
-        projection_strategy="fixed",
-        hourly_energy_kwh=0.4,
-        history_energy_entity_id=None,
+        projection=ProjectionConfig(strategy="fixed", hourly_energy_kwh=0.4),
     )
 
 
@@ -106,9 +105,7 @@ def _climate(appliance_id: str = "living-room-hvac"):
         id=appliance_id,
         name=appliance_id.title(),
         climate_entity_id=f"climate.{appliance_id}",
-        projection_strategy="fixed",
-        hourly_energy_kwh=0.4,
-        history_energy_entity_id=None,
+        projection=ProjectionConfig(strategy="fixed", hourly_energy_kwh=0.4),
     )
 
 

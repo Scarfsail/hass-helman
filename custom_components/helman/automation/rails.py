@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 from homeassistant.util import dt as dt_util
 
 from ..const import FORECAST_CANONICAL_GRANULARITY_MINUTES, SCHEDULE_SLOT_MINUTES
+from ..controllables.spec import spec_for
 from ..scheduling.schedule import (
     format_slot_id,
     iter_horizon_slot_ids,
@@ -261,8 +262,6 @@ def read_when_active_hourly_energy_kwh(
     Not a forecast series, but the same shape of question: one value an
     optimizer or a condition mask reads off the snapshot rather than deriving.
     """
-    from ..appliances.climate_appliance import ClimateApplianceRuntime
-    from ..appliances.generic_appliance import GenericApplianceRuntime
     from ..appliances.projection_builder import get_when_active_demand_profile
 
     resolved = snapshot.context.when_active_hourly_energy_kwh_by_appliance_id.get(
@@ -271,12 +270,13 @@ def read_when_active_hourly_energy_kwh(
     if resolved is None:
         return None
     appliance = snapshot.context.appliance_registry.get_appliance(appliance_id)
-    if not isinstance(
-        appliance, (GenericApplianceRuntime, ClimateApplianceRuntime)
-    ):
+    if appliance is None:
+        return None
+    projection = spec_for(appliance.kind).projection(appliance)
+    if projection is None:
         return None
     profile = get_when_active_demand_profile(
-        appliance=appliance,
+        projection=projection,
         resolved_hourly_energy_kwh=resolved,
     )
     return None if profile is None else profile.hourly_energy_kwh

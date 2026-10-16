@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Literal, NotRequired, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
 from ..schedule_action_metadata import (
     ScheduleActionSetBy,
@@ -137,6 +137,11 @@ def normalize_ev_charger_schedule_action(
     if condition_not_met:
         payload["conditionMet"] = False
     return payload
+
+
+def is_ev_charger_action_running(action: Mapping[str, Any]) -> bool:
+    """A charger runs while its normalized action charges."""
+    return action.get("charge") is True
 
 
 def _read_optional_non_empty_string(value: object, *, path: str) -> str | None:

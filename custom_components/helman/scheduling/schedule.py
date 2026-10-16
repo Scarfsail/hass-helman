@@ -36,6 +36,15 @@ from ..const import (
     SCHEDULE_SLOT_MINUTES,
 )
 
+from .slots import (  # noqa: F401 -- re-exported for existing importers
+    SCHEDULE_SLOT_DURATION,
+    ScheduleError,
+    ScheduleExecutionUnavailableError,
+    ScheduleSlotsError,
+    format_slot_id,
+    parse_slot_id,
+)
+
 if TYPE_CHECKING:
     from ..battery_state import BatterySocBounds
     from .runtime_status import ScheduleRuntimeDict
@@ -60,8 +69,6 @@ LEGACY_SCHEDULE_DOMAIN_KEYS = {"inverter", "appliances"}
 #: How the inverter's control block is named when reporting a config problem.
 _INVERTER_CONTROL_PATH = "energy_nodes.inverter.controls.mode"
 SCHEDULE_SLOT_KEYS = {"id", "controllables"}
-
-SCHEDULE_SLOT_DURATION = timedelta(minutes=SCHEDULE_SLOT_MINUTES)
 
 
 class ScheduleActionDict(TypedDict):
@@ -232,17 +239,6 @@ class ScheduleControlConfig:
     stop_export_option: str | None = None
 
 
-class ScheduleError(Exception):
-    def __init__(self, code: str, message: str) -> None:
-        super().__init__(message)
-        self.code = code
-
-
-class ScheduleSlotsError(ScheduleError):
-    def __init__(self, message: str) -> None:
-        super().__init__("invalid_slots", message)
-
-
 class ScheduleStorageCompatibilityError(ScheduleSlotsError):
     """Persisted schedule data does not match the active slot configuration."""
 
@@ -255,11 +251,6 @@ class ScheduleActionError(ScheduleError):
 class ScheduleNotConfiguredError(ScheduleError):
     def __init__(self, message: str) -> None:
         super().__init__("not_configured", message)
-
-
-class ScheduleExecutionUnavailableError(ScheduleError):
-    def __init__(self, message: str) -> None:
-        super().__init__("execution_unavailable", message)
 
 
 def action_from_dict(data: Mapping[str, Any]) -> ScheduleAction:
@@ -620,19 +611,6 @@ def build_horizon_start(reference_time: datetime) -> datetime:
 
 def build_horizon_end(reference_time: datetime) -> datetime:
     return build_horizon_start(reference_time) + timedelta(hours=SCHEDULE_HORIZON_HOURS)
-
-
-def parse_slot_id(slot_id: str) -> datetime:
-    parsed = dt_util.parse_datetime(slot_id)
-    if parsed is None or parsed.tzinfo is None:
-        raise ScheduleSlotsError(
-            "Schedule slot ids must be timezone-aware ISO timestamps"
-        )
-    return dt_util.as_local(parsed)
-
-
-def format_slot_id(slot_start: datetime) -> str:
-    return dt_util.as_local(slot_start).isoformat(timespec="seconds")
 
 
 def iter_horizon_slot_ids(reference_time: datetime) -> list[str]:

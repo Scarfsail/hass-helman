@@ -17,6 +17,7 @@ def _install_import_stubs() -> None:
 
 _install_import_stubs()
 
+from custom_components.helman.appliances._read import ProjectionConfig
 from custom_components.helman.appliances.state import AppliancesRuntimeRegistry
 from custom_components.helman.appliances.climate_appliance import ClimateApplianceRuntime
 from custom_components.helman.appliances.config import build_appliances_runtime_registry
@@ -447,9 +448,7 @@ class ScheduleApplianceTests(unittest.TestCase):
                     id="living-room-hvac",
                     name="Living Room HVAC",
                     climate_entity_id="climate.living_room",
-                    projection_strategy="fixed",
-                    hourly_energy_kwh=1.5,
-                    history_energy_entity_id=None,
+                    projection=ProjectionConfig(strategy="fixed", hourly_energy_kwh=1.5),
                     supported_modes=("heat",),
                     stop_hvac_mode="off",
                 )
