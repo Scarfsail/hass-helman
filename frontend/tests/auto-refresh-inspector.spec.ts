@@ -246,10 +246,10 @@ test("an announced span refresh is silent, the refresh button is not", async ({ 
             () => new Promise(() => { /* never lands */ }));
         // The key answers "same window", which is exactly the case here; the
         // refresh path clears it, so do that rather than fake a navigation.
-        card._spanRequestKey = null;
+        card._spanRequest.reset();
         void card._loadSpan(true);
         const silent = card._spanLoading;
-        card._spanRequestKey = null;
+        card._spanRequest.reset();
         void card._loadSpan(false);
         const loud = card._spanLoading;
         window.__clearMockReply(hass, "helman/solar_bias/day_aggregates");
@@ -264,7 +264,7 @@ test("an announced span refresh is silent, the refresh button is not", async ({ 
  *
  * An announcement asks for the window already on screen, so the request key
  * cannot tell the two apart -- both carry `bucket:start..end`. Without a
- * monotonic id the older answer passes the guard and paints the data the
+ * request token the older answer passes the guard and paints the data the
  * announcement was about to replace.
  */
 test("a slow span answer cannot land on top of a newer one", async ({ page }) => {
@@ -280,13 +280,13 @@ test("a slow span answer cannot land on top of a newer one", async ({ page }) =>
         let releaseStale: ((value: unknown) => void) | null = null;
         window.__setMockReply(hass, "helman/solar_bias/day_aggregates",
             () => new Promise((resolve) => { releaseStale = resolve; }));
-        card._spanRequestKey = null;
+        card._spanRequest.reset();
         const stale = card._loadSpan(true);
 
         // The same window again, and this answer is the current one.
         window.__setMockReply(hass, "helman/solar_bias/day_aggregates",
             { currency: "CZK", days: [sample, { ...sample }] });
-        card._spanRequestKey = null;
+        card._spanRequest.reset();
         await card._loadSpan(true);
         const afterFresh = card._span.days.length;
 

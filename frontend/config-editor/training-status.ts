@@ -1,3 +1,4 @@
+import { callHelman, type SolarBiasStatus } from "../cards/shared/data/helman-commands";
 import { LitElement, css, html, nothing } from "lit";
 import type { PropertyValues, TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
@@ -251,10 +252,7 @@ class TrainingStatusBase extends LitElement {
     this._message = "";
     let status: TrainingStatus | null = null;
     try {
-      const result = await this.hass.callWS({
-        type: "helman/training/train_now",
-        ...(job ? { job } : {}),
-      });
+      const result = await callHelman(this.hass, "helman/training/train_now", { ...(job ? { job } : {}) });
       status = asTrainingStatus(result?.status);
       const outcomes = Object.entries(result?.outcomes ?? {});
       const failed = outcomes.filter(
@@ -562,7 +560,7 @@ export class HelmanSolarBiasDiagnostics extends TrainingStatusBase {
   /** Canonical saved-config revision; diagnostics are computed from that config. */
   @property({ attribute: false }) configRevision: string | null = null;
 
-  @state() private _diagnostics: any = null;
+  @state() private _diagnostics: SolarBiasStatus | null = null;
   private _loadedFor: string | null = null;
   private _loadingFor: string | null = null;
 
@@ -590,7 +588,7 @@ export class HelmanSolarBiasDiagnostics extends TrainingStatusBase {
 
   private async _load(key: string): Promise<void> {
     try {
-      const diagnostics = await this.hass.callWS({ type: "helman/solar_bias/status" });
+      const diagnostics = await callHelman(this.hass, "helman/solar_bias/status", {});
       if (this._loadingFor === key) {
         this._diagnostics = diagnostics;
         this._loadedFor = key;
@@ -605,10 +603,8 @@ export class HelmanSolarBiasDiagnostics extends TrainingStatusBase {
   render(): TemplateResult | typeof nothing {
     const diagnostics = this._diagnostics;
     if (!diagnostics || typeof diagnostics !== "object") return nothing;
-    const factors = diagnostics.factorSummary ?? {};
-    const hasFactors = [factors.min, factors.median, factors.max].every(
-      (value) => typeof value === "number",
-    );
+    const { min, median, max } = diagnostics.factorSummary ?? {};
+    const hasFactors = typeof min === "number" && typeof median === "number" && typeof max === "number";
     return html`
       <div class="container">
         <div class="section-title">${this._t("training.diagnostics.title")}</div>
@@ -629,9 +625,9 @@ export class HelmanSolarBiasDiagnostics extends TrainingStatusBase {
             ? this._renderRow(
                 this._t("training.diagnostics.factor_summary"),
                 this._tFormat("training.diagnostics.factor_summary_value", {
-                  min: factors.min.toFixed(2),
-                  median: factors.median.toFixed(2),
-                  max: factors.max.toFixed(2),
+                  min: min.toFixed(2),
+                  median: median.toFixed(2),
+                  max: max.toFixed(2),
                 }),
               )
             : nothing}

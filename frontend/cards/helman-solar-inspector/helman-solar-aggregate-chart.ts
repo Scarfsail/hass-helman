@@ -1,3 +1,4 @@
+import type { DayAggregateRow, DayAggregatesPayload } from "../shared/data/helman-commands";
 import { LitElement, css, html, svg } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { nothing } from "lit-html";
@@ -8,38 +9,12 @@ import { ACTUAL_FILL_OPACITY, CHART_COLORS } from "./chart-colors";
 import { slotSelectionModeForEvent, type SlotSelectionMode } from "./slot-selection";
 import { selectLabelledColumns, stripValueLabel } from "../shared/strip-value-labels";
 import { symmetricEnergyAxis } from "./chart-axis";
-import type { ApplianceComponent } from "./solar-inspector-model.js";
 import { accumulateBands, clampToSign, stackSlots, type StackBand, type StackLayer, type StackSet } from "./chart-stack";
 
-/** One bucket of the span read: a local day, or a local month. */
-export interface SpanAggregateRow {
-    /** `YYYY-MM-DD` for a day bucket, `YYYY-MM-01` for a month one. */
-    date: string;
-    solarWh: number | null;
-    gridImportKwh: number | null;
-    gridExportKwh: number | null;
-    batteryMinSocPct: number | null;
-    batteryMaxSocPct: number | null;
-    houseWh: number | null;
-    batteryChargeWh: number | null;
-    batteryDischargeWh: number | null;
-    moneyCost: number | null;
-    moneyGain: number | null;
-    /**
-     * What the house was doing this bucket: every metered consumer's energy plus
-     * the remainder no individual meter accounted for.
-     *
-     * The appliance shape is the day slot's, field for field, so the panel and
-     * the chart parse a bucket's composition with the types they already have.
-     * Null where there is nothing to split by -- no consumers configured -- or
-     * nothing to split, the house meter having reported no energy for the
-     * bucket.
-     */
-    houseBreakdown?: {
-        unmeasuredWh: number;
-        appliances: ApplianceComponent[];
-    } | null;
-}
+/** The chart reads the measured composition and totals from each bucket. */
+export type SpanAggregateRow = Pick<DayAggregateRow,
+    "date" | "solarWh" | "gridImportKwh" | "gridExportKwh" | "batteryMinSocPct" | "batteryMaxSocPct"
+    | "houseWh" | "batteryChargeWh" | "batteryDischargeWh" | "moneyCost" | "moneyGain" | "houseBreakdown">;
 
 /**
  * How far the inspector may be navigated, in either direction.
@@ -53,12 +28,9 @@ export interface NavigationRange {
 }
 
 /** What `helman/solar_bias/day_aggregates` answers with. */
-export interface SpanAggregatePayload {
-    bucket: "day" | "month";
-    currency: string | null;
+export type SpanAggregatePayload = Pick<DayAggregatesPayload, "bucket" | "currency" | "range"> & {
     days: SpanAggregateRow[];
-    range?: NavigationRange;
-}
+};
 
 /**
  * A column was clicked; the inspector holds the selection.

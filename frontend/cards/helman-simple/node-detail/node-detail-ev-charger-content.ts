@@ -273,7 +273,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         return entityId ? this.hass.states[entityId]?.state ?? "" : "";
     }
 
-    protected _detailRequest(section?: string): Omit<GetNodeDetailRequest, "type"> {
+    protected _detailRequest(section?: string): GetNodeDetailRequest {
         return { ...super._detailRequest(section), device_id: this.deviceId };
     }
 

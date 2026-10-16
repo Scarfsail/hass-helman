@@ -10,7 +10,7 @@ import { InverterDetailPayload, TreePayload } from "../helman-api";
 import { hydrateItem } from "./tree-item-hydrator";
 import { HistoryEngine } from "./history-engine";
 import { getSharedHelmanStore } from "./store";
-import { getSharedDataChangedFeed } from "./data-changed";
+import { DataChangedController } from "./data-changed";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import {
     buildNodeDetailParams,
@@ -71,7 +71,6 @@ export class HelmanCard extends LitElement implements LovelaceCard {
     private _inverterGeneration = 0;
     private _localize?: LocalizeFunction;
     private _localizeLanguage?: string;
-    private _unsubscribeDataChanged?: () => void;
     private _sourceNodes: TreeItem[] = [];
     private _watchedEntityIds: Set<string> = new Set();
     /** Entity ids the schedule editor host resolved, folded into the filter. */
@@ -161,6 +160,11 @@ export class HelmanCard extends LitElement implements LovelaceCard {
     }
 
     // 9. Lifecycle methods
+    constructor() {
+        super();
+        new DataChangedController(this, () => this._latestHass, { kinds: ["config"] }, () => void this._loadBackendData(true));
+    }
+
     async connectedCallback() {
         super.connectedCallback();
         // On the card itself rather than on `ha-card`: the node detail dialog is
@@ -172,9 +176,6 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         this.addEventListener("show-node-detail", this._handleShowNodeDetail);
         this.addEventListener("show-device-detail", this._handleShowDeviceDetail);
         if (this._latestHass) {
-            this._unsubscribeDataChanged = getSharedDataChangedFeed(this._latestHass).subscribe((kinds) => {
-                if (kinds.has("config")) void this._loadBackendData(true);
-            });
             await this._loadBackendData();
         }
     }
@@ -185,8 +186,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         this.removeEventListener(WATCHED_ENTITIES_EVENT, this._handleWatchedEntities);
         this.removeEventListener("show-node-detail", this._handleShowNodeDetail);
         this.removeEventListener("show-device-detail", this._handleShowDeviceDetail);
-        this._unsubscribeDataChanged?.();
-        this._unsubscribeDataChanged = undefined;
+
         this._loadGeneration += 1;
         this._inverterGeneration += 1;
         this._historyEngine?.stop();
@@ -566,7 +566,6 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         collect(items);
         return sourceNodes;
     }
-
 }
 
 // Register the custom card in Home Assistant

@@ -1,3 +1,4 @@
+import { DialogHistoryController } from "../shared/dialog-history-controller";
 import { LitElement, html } from "lit-element";
 import { customElement, property, state } from "lit/decorators.js";
 import { nothing, TemplateResult } from "lit-html";
@@ -15,38 +16,12 @@ import "./node-detail/node-detail-ev-charger-content";
 import type { NodeDetailDeviceContent } from "./node-detail/node-detail-device-content";
 import "./node-detail/node-detail-device-content";
 
-const DIALOG_HISTORY_STATE_KEY = "__helmanNodeDetailDialogId";
-let nextDialogHistoryEntryId = 0;
-
 @customElement("node-detail-dialog")
 export class NodeDetailDialog extends LitElement {
-    private _historyEntryActive = false;
-    private _historyEntryId: number | null = null;
-    private _ignoreNextPopstate = false;
-    private readonly _handlePopState = (event: PopStateEvent): void => {
-        if (!this._historyEntryActive) {
-            return;
-        }
-
-        if (this._ignoreNextPopstate) {
-            this._ignoreNextPopstate = false;
-            return;
-        }
-
-        if (this._isCurrentHistoryEntry(event.state)) {
-            return;
-        }
-
-        this._clearHistoryEntry();
-        // A device's edit dialog on top takes the Back for itself: the detail
-        // stays open and gets its history entry back.
-        const device = this.shadowRoot?.querySelector<NodeDetailDeviceContent>("node-detail-device-content");
-        if (device?.handleBack()) {
-            this._pushHistoryEntry();
-            return;
-        }
-        this._closeDialogElement();
-    };
+    private readonly _history = new DialogHistoryController(this, "__helmanNodeDetailDialogId", {
+        onBack: () => this.shadowRoot?.querySelector<NodeDetailDeviceContent>("node-detail-device-content")?.handleBack() ?? false,
+        close: () => this._closeDialogElement(),
+    });
 
     // Public properties
     @property({ attribute: false }) public hass!: HomeAssistant;
@@ -64,22 +39,6 @@ export class NodeDetailDialog extends LitElement {
     private _applianceKindsRequested = false;
 
     // Lifecycle methods
-    connectedCallback(): void {
-        super.connectedCallback();
-        if (typeof window !== "undefined") {
-            window.addEventListener("popstate", this._handlePopState);
-        }
-    }
-
-    disconnectedCallback(): void {
-        super.disconnectedCallback();
-        if (typeof window !== "undefined") {
-            window.removeEventListener("popstate", this._handlePopState);
-        }
-        this._clearHistoryEntry();
-        this._ignoreNextPopstate = false;
-    }
-
     willUpdate(changedProperties: Map<string, unknown>): void {
         // A config change between openings can change what a device is.
         if (changedProperties.has("open") && this.open) {
@@ -91,12 +50,12 @@ export class NodeDetailDialog extends LitElement {
 
     updated(changedProperties: Map<string, unknown>): void {
         super.updated(changedProperties);
-        if (!this.open || !this.params || this._historyEntryActive) {
+        if (!this.open || !this.params || this._history.active) {
             return;
         }
 
         if (changedProperties.has("open") || changedProperties.has("params")) {
-            this._pushHistoryEntry();
+            this._history.push();
         }
     }
 
@@ -233,61 +192,8 @@ export class NodeDetailDialog extends LitElement {
     }
 
     private _onClosed(): void {
-        if (this._canConsumeCurrentHistoryEntry()) {
-            this._ignoreNextPopstate = true;
-            this._clearHistoryEntry();
-            window.history.back();
-        } else {
-            this._clearHistoryEntry();
-        }
+        this._history.closed();
 
         this.dispatchEvent(new CustomEvent("closed", { bubbles: true, composed: true }));
-    }
-
-    private _pushHistoryEntry(): void {
-        if (typeof window === "undefined" || typeof window.history.pushState !== "function") {
-            return;
-        }
-
-        const nextEntryId = ++nextDialogHistoryEntryId;
-        const nextState = this._getHistoryStateRecord(window.history.state);
-        nextState[DIALOG_HISTORY_STATE_KEY] = nextEntryId;
-        window.history.pushState(nextState, "");
-        this._historyEntryId = nextEntryId;
-        this._historyEntryActive = true;
-        this._ignoreNextPopstate = false;
-    }
-
-    private _canConsumeCurrentHistoryEntry(): boolean {
-        return typeof window !== "undefined"
-            && typeof window.history.back === "function"
-            && this._historyEntryActive
-            && this._isCurrentHistoryEntry(window.history.state);
-    }
-
-    private _isCurrentHistoryEntry(state: unknown): boolean {
-        return this._historyEntryId !== null && this._readHistoryEntryId(state) === this._historyEntryId;
-    }
-
-    private _readHistoryEntryId(state: unknown): number | null {
-        if (state === null || typeof state !== "object") {
-            return null;
-        }
-
-        const entryId = (state as Record<string, unknown>)[DIALOG_HISTORY_STATE_KEY];
-        return typeof entryId === "number" ? entryId : null;
-    }
-
-    private _getHistoryStateRecord(state: unknown): Record<string, unknown> {
-        if (state === null || typeof state !== "object") {
-            return {};
-        }
-
-        return { ...(state as Record<string, unknown>) };
-    }
-
-    private _clearHistoryEntry(): void {
-        this._historyEntryActive = false;
-        this._historyEntryId = null;
     }
 }

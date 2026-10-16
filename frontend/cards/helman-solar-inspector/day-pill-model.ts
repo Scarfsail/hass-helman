@@ -1,3 +1,4 @@
+import type { DayAggregateRow } from "../shared/data/helman-commands";
 import { addDays, parseDayKey } from "../shared/time/day-key";
 import { getScheduleGridScaleMagnitude } from "../shared/schedule/model/grid-surplus-display";
 import { aggregateScheduleDayForecast, buildScheduleTableForecastMeta } from "../shared/schedule/model/schedule-table-forecast";
@@ -344,17 +345,9 @@ export function buildSolarInspectorDayPills({
 }
 
 /** One day of `helman/solar_bias/day_aggregates`. */
-export interface SolarInspectorDayAggregateRow {
-    date: string;
-    solarWh: number | null;
-    gridImportKwh: number | null;
-    gridExportKwh: number | null;
-    batteryMinSocPct: number | null;
-    batteryMaxSocPct: number | null;
-    houseWh?: number | null;
-    /** Only when the request asked for `house_forecast`. */
-    houseForecastWh?: number | null;
-}
+export type SolarInspectorDayAggregateRow = Pick<DayAggregateRow,
+    "date" | "solarWh" | "gridImportKwh" | "gridExportKwh" | "batteryMinSocPct" | "batteryMaxSocPct" | "houseForecastWh">
+    & Partial<Pick<DayAggregateRow, "houseWh">>;
 
 /**
  * The measured days the backend read in one go, as pills can carry them.

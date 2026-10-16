@@ -1,3 +1,4 @@
+import { callHelman } from "../data/helman-commands";
 import type { TemplateResult } from "lit";
 import type { JsonObject, JsonValue, PathSegment } from "../config/types";
 import { MISSING_TRANSLATION_PREFIX } from "../config/localize/localize";
@@ -110,9 +111,7 @@ export async function fetchOptimizerSchema(
 ): Promise<OptimizerSchemaDocument | null> {
     if (!hass) return null;
     try {
-        return await hass.callWS<OptimizerSchemaDocument>({
-            type: "helman/get_optimizer_schema",
-        });
+        return await callHelman(hass, "helman/get_optimizer_schema", {});
     } catch {
         return null;
     }

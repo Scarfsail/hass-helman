@@ -1,3 +1,4 @@
+import { callHelman } from "../data/helman-commands";
 import type { HomeAssistant } from "../../../types/ha";
 import type { ReactiveController, ReactiveElement } from "lit";
 
@@ -335,14 +336,10 @@ export class EntityInspectionController implements ReactiveController {
         this._restartTimer();
         this._inFlight += 1;
         try {
-            const response = await hass.callWS<{ results?: EntityInspectionResult[] }>({
-                type: "helman/inspect_entities",
+            const response = await callHelman(hass, "helman/inspect_entities", {
                 config,
                 ...(saved ? { saved_config: saved } : {}),
-                // ``always`` is the collector's own bookkeeping about which rows
-                // survive the "is the picker set" filter. The request carries
-                // paths and nothing else, so it is dropped here rather than sent
-                // and ignored.
+                // The collector's `always` bookkeeping stays local; send paths only.
                 targets: targets.map(({ key, path }) => ({ key, path })),
             });
             // A slower earlier request must never repaint over a newer answer:

@@ -1,3 +1,4 @@
+import { callHelman } from "../data/helman-commands";
 import type { HomeAssistant } from "../../../types/ha";
 import { LitElement, css, html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
@@ -5,7 +6,7 @@ import { property, state } from "lit/decorators.js";
 import type { LocalizeFunction } from "../../localize/localize";
 import { defineOnce } from "../define-once";
 import { loadHaForm, loadHaSortable } from "../load-ha-elements";
-import { getSharedDataChangedFeed } from "../../helman/data-changed";
+import { DataChangedController } from "../../helman/data-changed";
 import {
     asJsonObject,
     canonicalJson,
@@ -24,7 +25,6 @@ import {
 } from "../config/localize/localize";
 import type {
     JsonObject,
-    SaveConfigResponse,
     ValidationReport,
 } from "../config/types";
 import {
@@ -142,7 +142,6 @@ export class HelmanDeviceEditDialog extends LitElement {
     /** The stored document itself, for the entity groups' saved readings and reverts. */
     private _saved: JsonObject | null = null;
 
-    private _unsubscribeDataChanged?: () => void;
 
     /** The key the current view was loaded for; a new key reloads. */
     private _loadedKey: string | null = null;
@@ -174,23 +173,16 @@ export class HelmanDeviceEditDialog extends LitElement {
         config: () => (this._view.kind === "ready" ? this._view.config : null),
     });
 
+    constructor() {
+        super();
+        new DataChangedController(this, () => this.hass, {}, () => void this._refreshStale());
+    }
+
     connectedCallback(): void {
         super.connectedCallback();
         void loadHaForm().then(() => this.requestUpdate());
         void loadHaSortable().then(() => this.requestUpdate());
         void this._load();
-        const hass = this.hass;
-        if (hass) {
-            this._unsubscribeDataChanged = getSharedDataChangedFeed(hass).subscribe(() => {
-                void this._refreshStale();
-            });
-        }
-    }
-
-    disconnectedCallback(): void {
-        super.disconnectedCallback();
-        this._unsubscribeDataChanged?.();
-        this._unsubscribeDataChanged = undefined;
     }
 
     protected willUpdate(): void {
@@ -307,7 +299,7 @@ export class HelmanDeviceEditDialog extends LitElement {
         this._loadedKey = this.deviceKey;
         this._editorLocalize = getLocalizeFunction(hass);
         try {
-            const document = asJsonObject(await hass.callWS<unknown>({ type: "helman/get_config" }));
+            const document = asJsonObject(await callHelman(hass, "helman/get_config", {}));
             if (!document) {
                 this._view = { kind: "not_found" };
                 return;
@@ -380,10 +372,7 @@ export class HelmanDeviceEditDialog extends LitElement {
             // As the config editor does: a phase no device can carry is not saved.
             const config = cloneJson(view.config);
             pruneUnassignablePhases(config);
-            const response = await this.hass.callWS<SaveConfigResponse>({
-                type: "helman/save_config",
-                config,
-            });
+            const response = await callHelman(this.hass, "helman/save_config", { config });
             this._validation = response.validation ?? null;
             if (response.validation?.valid !== false) {
                 // What was written is the draft from here on.
@@ -429,7 +418,7 @@ export class HelmanDeviceEditDialog extends LitElement {
             return "same";
         }
         try {
-            const current = asJsonObject(await this.hass.callWS<unknown>({ type: "helman/get_config" }));
+            const current = asJsonObject(await callHelman(this.hass, "helman/get_config", {}));
             if (current === undefined) {
                 return "unknown";
             }
@@ -466,7 +455,7 @@ export class HelmanDeviceEditDialog extends LitElement {
             return;
         }
         try {
-            const current = asJsonObject(await this.hass.callWS<unknown>({ type: "helman/get_config" }));
+            const current = asJsonObject(await callHelman(this.hass, "helman/get_config", {}));
             if (current !== undefined) {
                 this._baseline = canonicalJson(current);
                 this._saved = cloneJson(current);

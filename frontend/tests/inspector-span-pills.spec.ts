@@ -609,7 +609,7 @@ test.describe("the expanded picker in the day view", () => {
         await toggleMore(page);
 
         const from = await selectedDayPill(page);
-        const requests = await page.evaluate(() => (document.querySelector("helman-solar-inspector") as any)._activeRequestId);
+        const requests = await page.evaluate(() => ((window as any).__dayRequests as string[]).length);
         const target = `${THIS_YEAR - 1}-03-01`;
         await clickSpanPill(page, "years", `${THIS_YEAR - 1}-01-01`);
         await clickSpanPill(page, "months", target);
@@ -620,7 +620,7 @@ test.describe("the expanded picker in the day view", () => {
         expect(await activeStops(page)).not.toEqual(["D"]);
         // The same day of the month, in the month that was picked.
         expect(await page.evaluate(() => (document.querySelector("helman-solar-inspector") as any)._selectedDate)).toBe(from);
-        expect(await page.evaluate(() => (document.querySelector("helman-solar-inspector") as any)._activeRequestId)).toBe(requests);
+        expect(await page.evaluate(() => ((window as any).__dayRequests as string[]).length)).toBe(requests);
         // And the calendar moved with it.
         expect(await dayPillDates(page)).toContain(`${THIS_YEAR - 1}-03-01`);
     });
