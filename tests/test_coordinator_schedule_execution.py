@@ -463,7 +463,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             reference_time=REFERENCE_TIME,
         )
 
-        self.assertTrue(enabled)
+        self.assertTrue(enabled["executionEnabled"])
         self.assertEqual(
             storage.schedule_document,
             {
@@ -474,7 +474,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 },
             },
         )
-        self.assertEqual(executor.events[:2], ["reconcile:enable_request"])
+        self.assertEqual(executor.events[:2], ["reconcile:enable_request", "get_execution_status"])
 
     async def test_enable_moves_the_battery_forecast_schedule_signature(self) -> None:
         # Enabling execution does not blow the cache away; it changes the
@@ -596,7 +596,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             reference_time=REFERENCE_TIME,
         )
 
-        self.assertFalse(enabled)
+        self.assertFalse(enabled["executionEnabled"])
         self.assertEqual(
             storage.schedule_document,
             {
@@ -654,7 +654,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             reference_time=REFERENCE_TIME,
         )
 
-        self.assertFalse(enabled)
+        self.assertFalse(enabled["executionEnabled"])
         self.assertEqual(
             storage.schedule_document,
             {
@@ -706,13 +706,13 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             timeout=1,
         )
 
-        self.assertFalse(enabled)
+        self.assertFalse(enabled["executionEnabled"])
         self.assertFalse(storage.schedule_document["executionEnabled"])
 
         release_reconcile.set()
         # The disable superseded the enable: its failure is moot, and it reports
         # the flag as persisted rather than an error.
-        self.assertFalse(await asyncio.wait_for(enable, timeout=1))
+        self.assertFalse((await asyncio.wait_for(enable, timeout=1))["executionEnabled"])
         self.assertFalse(storage.schedule_document["executionEnabled"])
         # The old enable's rollback was fenced off: only the disable touched it.
         self.assertEqual(executor.events.count("reset_runtime"), 1)
@@ -855,7 +855,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         # The first enable fails and rolls back; the double click is then
         # superseded by that rollback and reports the persisted flag.
         self.assertIsInstance(results[0], ScheduleExecutionUnavailableError)
-        self.assertIs(results[1], False)
+        self.assertFalse(results[1]["executionEnabled"])
         self.assertFalse(storage.schedule_document["executionEnabled"])
 
     async def test_overlapping_enable_reports_disabled_after_first_rolls_back(
@@ -911,7 +911,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
                 await first
         first_done.set()
 
-        self.assertFalse(await asyncio.wait_for(second, timeout=1))
+        self.assertFalse((await asyncio.wait_for(second, timeout=1))["executionEnabled"])
         self.assertFalse(storage.schedule_document["executionEnabled"])
         coordinator._automation_triggers.request_immediate.assert_not_awaited()
 
@@ -946,7 +946,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
 
         release_reconcile.set()
-        self.assertFalse(await asyncio.wait_for(enable, timeout=1))
+        self.assertFalse((await asyncio.wait_for(enable, timeout=1))["executionEnabled"])
         self.assertFalse(storage.schedule_document["executionEnabled"])
         coordinator._automation_triggers.request_immediate.assert_not_awaited()
 
@@ -1038,7 +1038,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             executor.events,
-            ["request_reconcile:schedule_updated"],
+            ["get_execution_status", "request_reconcile:schedule_updated"],
         )
 
     async def test_set_schedule_moves_the_battery_forecast_schedule_signature(
@@ -1504,7 +1504,9 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
-    async def test_set_schedule_preserves_explicit_set_by_when_default_is_user(self) -> None:
+    async def test_user_set_schedule_stamps_user_over_echoed_set_by(self) -> None:
+        # A user write is authoritative for every controllable it patches: an
+        # echoed automation attribution must not survive the edit.
         coordinator, storage, _executor = self._build_coordinator(
             schedule_document={"executionEnabled": False, "slots": {}}
         )
@@ -1512,7 +1514,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             _valid_appliances_config()
         )
 
-        await coordinator.set_schedule(
+        schedule = await coordinator.set_schedule(
             slots=[
                 ScheduleSlot(
                     id=CURRENT_SLOT_ID,
@@ -1533,43 +1535,91 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             set_by="user",
         )
 
+        expected_controllables = {
+            "inverter": {"kind": "normal", "setBy": "user"},
+            "garage-ev": {
+                "charge": True,
+                "vehicleId": "kona",
+                "useMode": "Fast",
+                "setBy": "user",
+            },
+        }
         self.assertEqual(
             storage.schedule_document,
             {
                 "executionEnabled": False,
                 "slotMinutes": SCHEDULE_SLOT_MINUTES,
-                "slots": {
-                    CURRENT_SLOT_ID: {
-                        "inverter": {"kind": "normal", "setBy": "automation"},
-                        "garage-ev": {
-                                "charge": True,
-                                "vehicleId": "kona",
-                                "useMode": "Fast",
-                                "setBy": "automation",
-                            },
-                    }
-                },
+                "slots": {CURRENT_SLOT_ID: expected_controllables},
             },
         )
-
-        schedule = await coordinator.get_schedule(reference_time=REFERENCE_TIME)
         current_slot = next(
             slot for slot in schedule["slots"] if slot["id"] == CURRENT_SLOT_ID
         )
+        self.assertEqual(current_slot["controllables"], expected_controllables)
 
-        self.assertEqual(
-            current_slot["controllables"],
-            {
-                "inverter": {"kind": "normal", "setBy": "automation"},
-                "garage-ev": {
-                        "charge": True,
-                        "vehicleId": "kona",
-                        "useMode": "Fast",
-                        "setBy": "automation",
-                    },
-            },
+    async def test_set_schedule_returns_the_post_write_document(self) -> None:
+        coordinator, _storage, _executor = self._build_coordinator(
+            schedule_document={"executionEnabled": False, "slots": {}}
         )
 
+        schedule = await coordinator.set_schedule(
+            slots=[
+                ScheduleSlot(
+                    id=CURRENT_SLOT_ID,
+                    action=ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING),
+                )
+            ],
+            reference_time=REFERENCE_TIME,
+            set_by="user",
+        )
+
+        self.assertEqual(
+            schedule,
+            await coordinator.get_schedule(reference_time=REFERENCE_TIME),
+        )
+        self.assertEqual(schedule["slotMinutes"], SCHEDULE_SLOT_MINUTES)
+        self.assertEqual(schedule["slots"][0]["id"], CURRENT_SLOT_ID)
+        self.assertEqual(
+            schedule["slots"][0]["controllables"],
+            {"inverter": {"kind": SCHEDULE_ACTION_STOP_CHARGING, "setBy": "user"}},
+        )
+
+    async def test_set_schedule_execution_returns_the_post_write_document(
+        self,
+    ) -> None:
+        coordinator, _storage, _executor = self._build_coordinator(
+            schedule_document={
+                "executionEnabled": True,
+                "slots": {
+                    CURRENT_SLOT_ID: _domains_payload(SCHEDULE_ACTION_STOP_CHARGING),
+                },
+            }
+        )
+
+        schedule = await coordinator.set_schedule_execution(
+            enabled=False,
+            reference_time=REFERENCE_TIME,
+        )
+
+        self.assertEqual(
+            schedule,
+            await coordinator.get_schedule(reference_time=REFERENCE_TIME),
+        )
+        self.assertFalse(schedule["executionEnabled"])
+        self.assertEqual(schedule["slotMinutes"], SCHEDULE_SLOT_MINUTES)
+        self.assertEqual(
+            schedule["slots"][0]["controllables"],
+            _domains_payload(SCHEDULE_ACTION_STOP_CHARGING),
+        )
+
+    async def test_get_schedule_includes_slot_minutes(self) -> None:
+        coordinator, _storage, _executor = self._build_coordinator(
+            schedule_document={"executionEnabled": False, "slots": {}}
+        )
+
+        schedule = await coordinator.get_schedule(reference_time=REFERENCE_TIME)
+
+        self.assertEqual(schedule["slotMinutes"], SCHEDULE_SLOT_MINUTES)
 
 
 class OptimizerCustomConditionEvaluationTests(unittest.IsolatedAsyncioTestCase):
@@ -1979,7 +2029,7 @@ class ScheduleExecutionResponsivenessTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertTrue(schedule["executionEnabled"])
-        self.assertFalse(enabled)
+        self.assertFalse(enabled["executionEnabled"])
         self.assertFalse(self.storage.schedule_document["executionEnabled"])
         # The save merged into the single pending follow-up.
         self.assertIsNotNone(self.executor._pending_request)

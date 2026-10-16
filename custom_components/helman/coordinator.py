@@ -181,7 +181,6 @@ from .scheduling.schedule import (
 from .schedule_action_metadata import ScheduleActionSetBy
 from .appliances.generic_appliance import GenericApplianceRuntime
 from .scheduling.runtime_status import (
-    ScheduleExecutionStatus,
     schedule_execution_status_to_dict,
 )
 from .scheduling.action_resolution import resolve_executed_schedule_action
@@ -2740,10 +2739,10 @@ class HelmanCoordinator:
         *,
         schedule_document: ScheduleDocument,
         reference_time: datetime,
-        execution_status: ScheduleExecutionStatus | None = None,
     ) -> ScheduleResponseDict:
         response: ScheduleResponseDict = {
             "executionEnabled": schedule_document.execution_enabled,
+            "slotMinutes": SCHEDULE_SLOT_MINUTES,
             "slots": [
                 slot_to_dict(slot)
                 for slot in materialize_schedule_slots(
@@ -2752,36 +2751,36 @@ class HelmanCoordinator:
                 )
             ],
         }
-        runtime = (
-            None
-            if execution_status is None
-            else schedule_execution_status_to_dict(execution_status)
-        )
-        if runtime is not None:
-            response["runtime"] = runtime
+        if schedule_document.execution_enabled:
+            current_slot_id = format_slot_id(build_horizon_start(reference_time))
+            execution_status = self._schedule_executor.get_execution_status()
+            if execution_status.active_slot_id == current_slot_id:
+                runtime = schedule_execution_status_to_dict(execution_status)
+                if runtime is not None:
+                    response["runtime"] = runtime
         return response
+
+    async def _build_current_schedule_response(
+        self,
+        *,
+        reference_time: datetime,
+    ) -> ScheduleResponseDict:
+        async with self._schedule_lock:
+            return self._build_schedule_response(
+                schedule_document=await self._load_pruned_schedule_document_locked(
+                    reference_time=reference_time
+                ),
+                reference_time=reference_time,
+            )
 
     async def get_schedule(
         self,
         *,
         reference_time: datetime | None = None,
     ) -> ScheduleResponseDict:
-        request_now = reference_time or dt_util.now()
-        async with self._schedule_lock:
-            schedule_document = await self._load_pruned_schedule_document_locked(
-                reference_time=request_now
-            )
-            execution_status = None
-            if schedule_document.execution_enabled:
-                current_slot_id = format_slot_id(build_horizon_start(request_now))
-                latest_execution_status = self._schedule_executor.get_execution_status()
-                if latest_execution_status.active_slot_id == current_slot_id:
-                    execution_status = latest_execution_status
-            return self._build_schedule_response(
-                schedule_document=schedule_document,
-                reference_time=request_now,
-                execution_status=execution_status,
-            )
+        return await self._build_current_schedule_response(
+            reference_time=reference_time or dt_util.now()
+        )
 
     async def get_appliances(self) -> ApplianceMetadataResponseDict:
         self._appliances_registry.refresh()
@@ -3234,7 +3233,7 @@ class HelmanCoordinator:
         slots: Sequence[ScheduleSlot],
         reference_time: datetime | None = None,
         set_by: ScheduleActionSetBy | None = None,
-    ) -> None:
+    ) -> ScheduleResponseDict:
         request_now = reference_time or dt_util.now()
         document_changed = False
         async with self._schedule_lock:
@@ -3260,6 +3259,10 @@ class HelmanCoordinator:
             if updated_document != schedule_document:
                 await self._save_schedule_document(updated_document)
                 document_changed = True
+            response = self._build_schedule_response(
+                schedule_document=updated_document,
+                reference_time=request_now,
+            )
 
         if document_changed:
             await self._async_run_post_schedule_write_side_effects(
@@ -3270,6 +3273,7 @@ class HelmanCoordinator:
                     reason="user_edit",
                     reference_time=request_now,
                 )
+        return response
 
     async def _async_run_post_schedule_write_side_effects(
         self,
@@ -3321,7 +3325,7 @@ class HelmanCoordinator:
         *,
         enabled: bool,
         reference_time: datetime | None = None,
-    ) -> bool:
+    ) -> ScheduleResponseDict:
         request_now = reference_time or dt_util.now()
 
         # Only the flag transition is serialized. The enable reconcile below is
@@ -3340,7 +3344,10 @@ class HelmanCoordinator:
                     # touching storage; an already-enabled flag is applied by
                     # the startup reconcile anyway.
                     if was_enabled:
-                        return True
+                        return self._build_schedule_response(
+                            schedule_document=current_document,
+                            reference_time=request_now,
+                        )
                     raise ScheduleExecutionUnavailableError(
                         "Schedule execution is not running yet; try again once "
                         "Home Assistant has started"
@@ -3373,12 +3380,17 @@ class HelmanCoordinator:
                 self._schedule_executor.reset_runtime()
 
                 if not was_enabled:
-                    return False
+                    return self._build_schedule_response(
+                        schedule_document=current_document,
+                        reference_time=request_now,
+                    )
 
                 await self._async_persist_execution_disabled_locked(
                     reference_time=request_now
                 )
-                return False
+                return await self._build_current_schedule_response(
+                    reference_time=request_now
+                )
 
         try:
             await self._schedule_executor.async_reconcile_and_wait(
@@ -3394,7 +3406,9 @@ class HelmanCoordinator:
                     err,
                     err.code,
                 )
-                return self._load_schedule_document().execution_enabled
+                return await self._build_current_schedule_response(
+                    reference_time=reference_time or dt_util.now()
+                )
             if not was_enabled:
                 _LOGGER.warning(
                     "Failed to enable schedule execution: %s (%s); rolling back persisted execution flag",
@@ -3414,11 +3428,15 @@ class HelmanCoordinator:
             raise
         # Report the flag as persisted, not as requested: a disable or another
         # enable's rollback may have landed while this one waited on hardware.
-        enabled_now = self._load_schedule_document().execution_enabled
+        # A fresh clock, not `request_now`: the reconcile above may have run
+        # across a slot edge.
+        response = await self._build_current_schedule_response(
+            reference_time=reference_time or dt_util.now()
+        )
         # Announce only the enable that made the transition, and only if no
         # newer transition has superseded it.
         if (
-            enabled_now
+            response["executionEnabled"]
             and not was_enabled
             and generation == self._schedule_execution_generation
         ):
@@ -3426,7 +3444,7 @@ class HelmanCoordinator:
                 reason="execution_enabled",
                 reference_time=request_now,
             )
-        return enabled_now
+        return response
 
     async def _async_persist_execution_disabled_locked(
         self,

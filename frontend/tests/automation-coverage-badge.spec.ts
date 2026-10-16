@@ -126,6 +126,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
             startMs: dayStartMs,
             endMs: dayStartMs + 24 * hourMs,
             editableFromMs: dayStartMs,
+            slotMinutes: 60,
         };
         band.lanes = [
             lane("inverter", "Inverter", "inverter"),

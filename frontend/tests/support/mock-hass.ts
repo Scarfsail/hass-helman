@@ -94,11 +94,24 @@ export async function installMockHass(page: Page): Promise<void> {
                             reloadStarted: true, config: storedConfig, revision: window.__configRevision(storedConfig) };
                     }
                 }
-                const response = Object.prototype.hasOwnProperty.call(overrides, command)
-                    ? overrides[command]
-                    : Object.prototype.hasOwnProperty.call(defaults, command) ? defaults[command] : {};
-                if (response instanceof Error) throw response;
-                const result = await (typeof response === "function" ? response(request) : response);
+                const served = async (name: string, message: MockRequest): Promise<unknown> => {
+                    const response = Object.prototype.hasOwnProperty.call(overrides, name)
+                        ? overrides[name]
+                        : Object.prototype.hasOwnProperty.call(defaults, name) ? defaults[name] : {};
+                    if (response instanceof Error) throw response;
+                    return typeof response === "function" ? response(message) : response;
+                };
+                // A schedule write answers with the document it produced: the
+                // schedule this mock serves, which no write changes. Read
+                // without logging, so a spec sees only the requests the card made.
+                if (!Object.prototype.hasOwnProperty.call(overrides, command)
+                    && (command === "helman/set_schedule" || command === "helman/set_schedule_execution")) {
+                    const schedule = await served("helman/get_schedule", { type: "helman/get_schedule" }) as object;
+                    return command === "helman/set_schedule_execution"
+                        ? { ...schedule, executionEnabled: request.enabled }
+                        : schedule;
+                }
+                const result = await served(command, request);
                 if (command === "helman/get_config" && result && typeof result === "object" && !("revision" in result)) {
                     storedConfig = result as ConfigDocument;
                     return { config: result, revision: window.__configRevision(result) };

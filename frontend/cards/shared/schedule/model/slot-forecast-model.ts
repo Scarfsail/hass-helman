@@ -234,15 +234,9 @@ function _buildGridProjection(
     maxAbsKwh: number;
 } {
     const points = new Map<string, Pick<SlotForecastPoint, "gridNetKwh" | "gridImportKwh" | "gridExportKwh" | "availableSurplusKwh">>();
-    const defaultSlotDurationMs = _getDefaultSlotDurationMs(slots);
     let maxAbsKwh = 0;
 
     for (const slot of slots) {
-        const slotEndMs = slot.endMs ?? (defaultSlotDurationMs > 0 ? slot.startMs + defaultSlotDurationMs : null);
-        if (slotEndMs === null || slotEndMs <= slot.startMs) {
-            continue;
-        }
-
         let importedKwh = 0;
         let exportedKwh = 0;
         let availableSurplusKwh = 0;
@@ -257,7 +251,7 @@ function _buildGridProjection(
             }
 
             const entryEndMs = entryStartMs + entryDurationMs;
-            const overlapMs = Math.min(slotEndMs, entryEndMs) - Math.max(slot.startMs, entryStartMs);
+            const overlapMs = Math.min(slot.endMs, entryEndMs) - Math.max(slot.startMs, entryStartMs);
             if (overlapMs <= 0) {
                 continue;
             }
@@ -349,15 +343,4 @@ function _buildForecastPointTimeline(points: readonly ForecastPointDTO[]): Map<n
     }
 
     return timeline;
-}
-
-function _getDefaultSlotDurationMs(slots: readonly ScheduleDisplaySlot[]): number {
-    for (let index = 1; index < slots.length; index += 1) {
-        const durationMs = slots[index].startMs - slots[index - 1].startMs;
-        if (durationMs > 0) {
-            return durationMs;
-        }
-    }
-
-    return 0;
 }

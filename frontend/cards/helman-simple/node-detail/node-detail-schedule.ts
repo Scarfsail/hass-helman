@@ -26,19 +26,21 @@ export interface ScheduleRun {
 
 /** The inverter's actions from the slot in progress at `now` on, merged into runs. */
 export function scheduleRuns(schedule: SchedulePayload | null, now: number): ScheduleRun[] {
-    const slots = schedule?.slots ?? [];
-    if (!slots.length) return [];
+    if (!schedule?.slots?.length) return [];
+    const { slots } = schedule;
     const byId = new Map(slots.map((slot) => [slot.id, slot]));
+    const slotDurationMs = schedule.slotMinutes * 60_000;
     const runs: ScheduleRun[] = [];
-    for (const boundary of resolveScheduleSlotBoundaries(slots.map((slot) => slot.id))) {
-        if (boundary.endMs !== null && boundary.endMs <= now) continue;
-        const action = (byId.get(boundary.id)?.controllables[INVERTER_CONTROLLABLE_ID] as ScheduleActionDTO | undefined)
+    for (const { id, startMs } of resolveScheduleSlotBoundaries(slots.map((slot) => slot.id))) {
+        const endMs = startMs + slotDurationMs;
+        if (endMs <= now) continue;
+        const action = (byId.get(id)?.controllables[INVERTER_CONTROLLABLE_ID] as ScheduleActionDTO | undefined)
             ?? { kind: "empty" as const };
         const last = runs[runs.length - 1];
-        if (last && last.endMs === boundary.startMs && sameAction(last.action, action)) {
-            last.endMs = boundary.endMs;
+        if (last && last.endMs === startMs && sameAction(last.action, action)) {
+            last.endMs = endMs;
         } else {
-            runs.push({ startMs: boundary.startMs, endMs: boundary.endMs, action });
+            runs.push({ startMs, endMs, action });
         }
     }
     return runs;
@@ -53,9 +55,10 @@ export function currentRun(runs: ScheduleRun[], now: number): ScheduleRun | null
 /** The executor's record, only when it is for the slot in progress at `now`. */
 export function currentRuntime(schedule: SchedulePayload | null, now: number): InverterRuntimeDTO | null {
     const runtime = schedule?.runtime;
-    if (!runtime) return null;
-    const slots = resolveScheduleSlotBoundaries((schedule?.slots ?? []).map((slot) => slot.id));
-    const current = slots.find((slot) => slot.startMs <= now && (slot.endMs === null || now < slot.endMs));
+    if (!schedule || !runtime) return null;
+    const slotDurationMs = schedule.slotMinutes * 60_000;
+    const slots = resolveScheduleSlotBoundaries((schedule.slots ?? []).map((slot) => slot.id));
+    const current = slots.find((slot) => slot.startMs <= now && now < slot.startMs + slotDurationMs);
     if (!current || current.id !== runtime.activeSlotId) return null;
     return (runtime.controllables[INVERTER_CONTROLLABLE_ID] as InverterRuntimeDTO | undefined) ?? null;
 }

@@ -184,6 +184,8 @@ export class SchedulingDayEditorHost extends LitElement {
      */
     public clockSlotMs = 0;
 
+    /** The slot length of the last schedule seen, kept across a gap with none. */
+    private _lastSlotMinutes: number | null = null;
     private _dayView: EntityScheduleDayView = EMPTY_DAY_VIEW;
     private _lanes: EntityScheduleLane[] = [];
     private _days: EntityScheduleDay[] = [];
@@ -308,7 +310,11 @@ export class SchedulingDayEditorHost extends LitElement {
     }
 
     render() {
-        if (!this.hass || !this._editorMounted) {
+        // The last known slot length, not the current one: a reconnect drops
+        // the schedule to null until it is read again, and unmounting the
+        // dialog over that gap would throw away the draft on screen.
+        const slotMinutes = this._lastSlotMinutes;
+        if (!this.hass || !this._editorMounted || slotMinutes === null) {
             return nothing;
         }
 
@@ -322,6 +328,7 @@ export class SchedulingDayEditorHost extends LitElement {
                 .appliance=${lane?.appliance}
                 .lanes=${this._lanes}
                 .slots=${this._dayView.slots}
+                .slotMinutes=${slotMinutes}
                 .forecastPoints=${this._dayView.forecastPoints}
                 .projectionIndex=${this._projectionIndex}
                 .priceUnit=${this._forecastMap.priceDisplayUnit}
@@ -382,8 +389,9 @@ export class SchedulingDayEditorHost extends LitElement {
                 // closes, nothing is written, and the reason reaches only the
                 // console.
                 //
-                // The write's own error, not the owner's: the reload that runs
-                // after a successful write sets that one too, and reporting it
+                // The write's own error, not the owner's: the owner's error is
+                // shared by every view of the schedule and may come from a
+                // read that has nothing to do with this save, and reporting it
                 // here would tell the user their save failed over a day that
                 // was written.
                 this._editorSaveError = writeError;
@@ -682,29 +690,41 @@ export class SchedulingDayEditorHost extends LitElement {
             timeZone: this.timeZone,
         };
         this._forecastMap = this._buildForecastMap();
-        this._dayView = buildEntityScheduleDayView({
-            scheduleSlots: this._normalized.slots,
-            timeZone: this.timeZone,
-            locale: this._locale,
-            forecast: this._forecast,
-            baseForecastPoints: this._forecastMap.points,
-        });
+        const { slotMinutes } = this._normalized;
+        // Lanes come from the roster, so they are listed with or without a
+        // schedule; only their elapsed runs need its slot length.
         this._lanes = buildEntityScheduleLanes({
             statuses: this._controllableEntityStatuses,
             controllableEntities: this._controllableEntities,
             appliances: this._appliances,
             actualHistory: this._actualHistory,
-            slotDurationMs: (this._normalized.granularityMinutes ?? 60) * 60_000,
+            slotDurationMs: slotMinutes === null ? null : slotMinutes * 60_000,
         });
-        this._days = buildEntityScheduleDays({
-            slots: this._dayView.slots,
-            timeZone: this.timeZone,
-            locale: this._locale,
-            currentDayKey: this._normalized.currentDayKey,
-            todayLabel: this._localize("scheduling.day.today"),
-            tomorrowLabel: this._localize("scheduling.day.tomorrow"),
-            nowMs: this._nowMs,
-        });
+        if (slotMinutes === null) {
+            // No schedule yet, so no grid to lay a day on.
+            this._dayView = EMPTY_DAY_VIEW;
+            this._days = [];
+        } else {
+            this._lastSlotMinutes = slotMinutes;
+            this._dayView = buildEntityScheduleDayView({
+                scheduleSlots: this._normalized.slots,
+                slotMinutes,
+                timeZone: this.timeZone,
+                locale: this._locale,
+                forecast: this._forecast,
+                baseForecastPoints: this._forecastMap.points,
+            });
+            this._days = buildEntityScheduleDays({
+                slots: this._dayView.slots,
+                slotMinutes,
+                timeZone: this.timeZone,
+                locale: this._locale,
+                currentDayKey: this._normalized.currentDayKey,
+                todayLabel: this._localize("scheduling.day.today"),
+                tomorrowLabel: this._localize("scheduling.day.tomorrow"),
+                nowMs: this._nowMs,
+            });
+        }
         // The band beside the dialog renders off the getters above, and nothing
         // it owns changed -- so without this it would keep drawing the day it
         // derived before the schedule, the roster or the clock moved.
@@ -755,7 +775,7 @@ function _resolveClockSlotMs(slots: readonly ScheduleSlot[], nowMs: number): num
         if (slot.startMs <= nowMs && slot.startMs > boundary) {
             boundary = slot.startMs;
         }
-        if (slot.endMs !== null && slot.endMs <= nowMs && slot.endMs > boundary) {
+        if (slot.endMs <= nowMs && slot.endMs > boundary) {
             boundary = slot.endMs;
         }
     }

@@ -89,6 +89,7 @@ class ScheduleSlotDict(TypedDict):
 
 class ScheduleResponseDict(TypedDict):
     executionEnabled: bool
+    slotMinutes: int
     slots: list[ScheduleSlotDict]
     runtime: NotRequired["ScheduleRuntimeDict"]
 
@@ -401,7 +402,7 @@ def with_slot_set_by(
             inverter=ScheduleAction(
                 kind=current_inverter.kind,
                 target_soc=current_inverter.target_soc,
-                set_by=current_inverter.set_by or set_by,
+                set_by=set_by,
                 condition_met=current_inverter.condition_met,
             ),
             appliances=with_appliance_schedule_actions_set_by(

@@ -1008,8 +1008,10 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
     }
 
     private _readPlannedRuns(): PlannedRun[] {
-        const slots = this._schedule?.slots ?? [];
-        if (!slots.length) return [];
+        const schedule = this._schedule;
+        const slots = schedule?.slots ?? [];
+        if (!schedule || !slots.length) return [];
+        const slotDurationMs = schedule.slotMinutes * 60_000;
         const now = Date.now();
         const days = todayAndTomorrow(now, this._timeZone);
         const names = this._applianceNames();
@@ -1030,14 +1032,14 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
                 if (isScheduleApplianceActionEnabled(action) !== true) continue;
                 const run = open.get(id);
                 if (run) {
-                    run.endMs = boundary.endMs;
+                    run.endMs = boundary.startMs + slotDurationMs;
                     continue;
                 }
                 const next: PlannedRun = {
                     id,
                     name: names.get(id) ?? id,
                     startMs: boundary.startMs,
-                    endMs: boundary.endMs,
+                    endMs: boundary.startMs + slotDurationMs,
                     candidate: action.conditionMet === false,
                     setBy: action.setBy ?? null,
                     action,

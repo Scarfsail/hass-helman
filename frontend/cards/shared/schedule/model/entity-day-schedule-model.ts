@@ -23,7 +23,6 @@ import {
 } from "./schedule-time";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const FALLBACK_SLOT_DURATION_MS = 60 * 60 * 1000;
 
 /**
  * Which single entity's lane of the schedule a view or edit is about: the
@@ -116,6 +115,8 @@ export interface EntityScheduleDay {
     endMs: number;
     /** The first slot the user may still change; later than `startMs` for today. */
     editableFromMs: number;
+    /** The schedule's slot length, as the backend ships it: the grid every edit snaps to. */
+    slotMinutes: number;
 }
 
 export type EntityScheduleBlockAuthorship = "user" | "automation" | "mixed";
@@ -242,10 +243,12 @@ export function readEntityScheduleDraftAction(
  */
 export function buildElapsedScheduleSlots({
     slots,
+    slotMinutes,
     timeZone,
     locale,
 }: {
     slots: readonly ScheduleSlot[];
+    slotMinutes: number;
     timeZone: string;
     locale: string;
 }): ScheduleSlot[] {
@@ -254,7 +257,7 @@ export function buildElapsedScheduleSlots({
         return [];
     }
 
-    const durationMs = _resolveSlotDurationMs(slots);
+    const durationMs = slotMinutes * 60_000;
     const dayStartMs = getScheduleLocalDayStartMs(firstSlot.startMs, timeZone);
     const elapsed: ScheduleSlot[] = [];
     for (let startMs = dayStartMs; startMs < firstSlot.startMs; startMs += durationMs) {
@@ -289,6 +292,7 @@ export function buildElapsedScheduleSlots({
  */
 export function buildEntityScheduleDays({
     slots,
+    slotMinutes,
     timeZone,
     locale,
     currentDayKey,
@@ -297,6 +301,7 @@ export function buildEntityScheduleDays({
     nowMs,
 }: {
     slots: readonly ScheduleSlot[];
+    slotMinutes: number;
     timeZone: string;
     locale: string;
     currentDayKey: string | null;
@@ -338,6 +343,7 @@ export function buildEntityScheduleDays({
             startMs,
             endMs,
             editableFromMs: _resolveEditableFromMs(daySlots, nowMs),
+            slotMinutes,
         };
     });
 }
@@ -368,7 +374,6 @@ export function buildEntityScheduleBlocks({
     splitAtMs?: ReadonlySet<number>;
 }): EntityScheduleBlock[] {
     const orderedSlots = [...slots].sort((left, right) => left.startMs - right.startMs);
-    const fallbackDurationMs = _resolveSlotDurationMs(orderedSlots);
     const blocks: EntityScheduleBlock[] = [];
 
     for (const slot of orderedSlots) {
@@ -377,8 +382,7 @@ export function buildEntityScheduleBlocks({
             continue;
         }
 
-        const startMs = slot.startMs;
-        const endMs = slot.endMs ?? slot.startMs + fallbackDurationMs;
+        const { startMs, endMs } = slot;
         const setBy = readEntityScheduleSetBy(slot, target);
         const isDirty = _isSlotDirty(slot, target, draft);
         // A drafted action is the user's by definition, whoever owned the slot
@@ -499,16 +503,14 @@ export function buildEntityScheduleBoundaryOptions({
     day: EntityScheduleDay;
     includeMs?: readonly number[];
 }): number[] {
-    const fallbackDurationMs = _resolveSlotDurationMs(day.slots);
     const boundaries = new Set<number>(includeMs ?? []);
     for (const slot of day.slots) {
         if (slot.startMs >= day.editableFromMs) {
             boundaries.add(slot.startMs);
         }
 
-        const endMs = slot.endMs ?? slot.startMs + fallbackDurationMs;
-        if (endMs > day.editableFromMs) {
-            boundaries.add(Math.min(endMs, day.endMs));
+        if (slot.endMs > day.editableFromMs) {
+            boundaries.add(Math.min(slot.endMs, day.endMs));
         }
     }
 
@@ -557,11 +559,7 @@ export function selectEntityScheduleSlotsInRange({
     startMs: number;
     endMs: number;
 }): ScheduleSlot[] {
-    const fallbackDurationMs = _resolveSlotDurationMs(day.slots);
-    return day.slots.filter((slot) => {
-        const slotEndMs = slot.endMs ?? slot.startMs + fallbackDurationMs;
-        return slot.startMs < endMs && slotEndMs > startMs;
-    });
+    return day.slots.filter((slot) => slot.startMs < endMs && slot.endMs > startMs);
 }
 
 /**
@@ -706,8 +704,7 @@ function _resolveEditableFromMs(slots: readonly ScheduleSlot[], nowMs: number): 
     let currentStartMs: number | null = null;
     let nextStartMs = Number.POSITIVE_INFINITY;
     for (const slot of slots) {
-        const endMs = slot.endMs ?? Number.POSITIVE_INFINITY;
-        if (slot.startMs <= nowMs && endMs > nowMs) {
+        if (slot.startMs <= nowMs && slot.endMs > nowMs) {
             currentStartMs = Math.max(currentStartMs ?? slot.startMs, slot.startMs);
             continue;
         }
@@ -722,14 +719,4 @@ function _resolveEditableFromMs(slots: readonly ScheduleSlot[], nowMs: number): 
     }
 
     return Number.isFinite(nextStartMs) ? nextStartMs : nowMs;
-}
-
-function _resolveSlotDurationMs(slots: readonly ScheduleSlot[]): number {
-    for (const slot of slots) {
-        if (slot.endMs !== null && slot.endMs > slot.startMs) {
-            return slot.endMs - slot.startMs;
-        }
-    }
-
-    return FALLBACK_SLOT_DURATION_MS;
 }

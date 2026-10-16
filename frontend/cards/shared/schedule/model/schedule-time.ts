@@ -22,11 +22,6 @@ const MAX_DAY_LABEL_CACHE_SIZE = 512;
  * function of the pair.
  */
 let DAY_STEP_MEMO: { dayKey: string; next: string; previous: string } | null = null;
-/** Slot spacings the planner knows how to lay out rows for. */
-export type ScheduleGranularityMinutes = 15 | 30 | 60;
-
-const VALID_SCHEDULE_GRANULARITIES = new Set<number>([15, 30, 60]);
-
 export interface ScheduleSlotLabels {
     timeLabel: string;
     endLabel: string | null;
@@ -67,30 +62,6 @@ export function getScheduleDayKey(value: Date | string, timeZone: string): strin
     return getCachedLocalDateTimeDescriptor(value, timeZone)?.dayKey ?? null;
 }
 
-
-export function deriveScheduleGranularityMinutes(
-    slotIds: readonly string[],
-): ScheduleGranularityMinutes | null {
-    const sortedStarts = [...new Set(
-        slotIds
-            .map((slotId) => getScheduleSlotStartMs(slotId))
-            .filter((startMs): startMs is number => startMs !== null),
-    )].sort((left, right) => left - right);
-
-    let granularityMinutes: number | null = null;
-    for (let index = 1; index < sortedStarts.length; index += 1) {
-        const durationMinutes = (sortedStarts[index] - sortedStarts[index - 1]) / 60_000;
-        if (!(durationMinutes > 0) || !VALID_SCHEDULE_GRANULARITIES.has(durationMinutes)) {
-            continue;
-        }
-
-        granularityMinutes = granularityMinutes === null
-            ? durationMinutes
-            : Math.min(granularityMinutes, durationMinutes);
-    }
-
-    return granularityMinutes === null ? null : granularityMinutes as ScheduleGranularityMinutes;
-}
 
 export function resolveScheduleSlotBoundaries(slotIds: readonly string[]): ScheduleSlotBoundary[] {
     const sorted = slotIds
@@ -155,14 +126,19 @@ export function getScheduleTimeRangeLabels({
     };
 }
 
-export function getNextScheduleBoundaryDelayMs(slotIds: readonly string[], now: Date = new Date()): number | null {
+export function getNextScheduleBoundaryDelayMs(
+    slotIds: readonly string[],
+    slotMinutes: number,
+    now: Date = new Date(),
+): number | null {
     const boundaries = resolveScheduleSlotBoundaries(slotIds);
     if (boundaries.length === 0) {
         return null;
     }
 
     const nowMs = now.getTime();
-    const boundaryMs = [...new Set(boundaries.flatMap((slot) => slot.endMs === null ? [slot.startMs] : [slot.startMs, slot.endMs]))]
+    const slotDurationMs = slotMinutes * 60_000;
+    const boundaryMs = [...new Set(boundaries.flatMap((slot) => [slot.startMs, slot.startMs + slotDurationMs]))]
         .sort((left, right) => left - right);
 
     const nextBoundaryMs = boundaryMs.find((value) => value > nowMs);

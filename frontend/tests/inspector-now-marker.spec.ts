@@ -176,7 +176,7 @@ async function mountBand(page: Page, date: string): Promise<void> {
         band.localize = (key: string) => key;
         band.day = {
             dayKey: day, label: "today", slots,
-            startMs: dayStartMs, endMs: dayStartMs + 24 * hourMs, editableFromMs: dayStartMs,
+            startMs: dayStartMs, endMs: dayStartMs + 24 * hourMs, editableFromMs: dayStartMs, slotMinutes: 60,
         };
         band.lanes = [{
             key: "boiler", entityId: "switch.boiler", name: "Boiler", icon: "mdi:water-boiler",

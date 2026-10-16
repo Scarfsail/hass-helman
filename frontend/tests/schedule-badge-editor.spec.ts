@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { scheduleSlots } from "./support/payload-builders";
 import { loadBundle } from "./support/card-page";
+import { mockRequests } from "./support/mock-hass";
 
 /**
  * Pressing a scheduling badge opens the shared day editor.
@@ -340,39 +341,58 @@ test.describe("opening the day editor from a scheduling badge", () => {
     });
 
     /**
-     * The reload after a write can fail on its own -- and sets the same shared
-     * error the write would. Reporting that one here would tell the user their
-     * save failed over a day that was written, and leave them holding a draft
-     * whose only exit reads as throwing the edit away.
+     * A write answers with the schedule it produced, so the card commits that
+     * answer instead of asking again -- a second read would only race it.
      */
-    test("a write that lands is not reported as failed when the reload after it fails", async ({ page }) => {
+    test("a save commits the write's answer without re-reading the schedule", async ({ page }) => {
         await mount(page, [
             { id: "s1", name: "Dishwasher", deferrable: true, controllableIds: ["dishwasher"] },
             { id: "s2", name: "Boiler", deferrable: true, controllableIds: ["boiler"] },
         ]);
         await pressBadge(page, "Boiler");
-
-        await page.evaluate((emptySchedule) => {
-            const hass = window.__fakeHass as any;
-            let written = false;
-            window.__setMockReply(hass, "helman/set_schedule", () => {
-                    written = true;
-                    return { success: true };
-            });
-                // The connection drops right after the write lands.
-            window.__setMockReply(hass, "helman/get_schedule", () => {
-                if (written) {
-                    throw { code: "timeout", message: "connection lost" };
-                }
-                return emptySchedule;
-            });
-        }, scheduleSlots({ slotMinutes: 15 }));
+        const before = (await mockRequests(page)).length;
 
         await page.locator(".block-row").first().locator("button").nth(1).click();
         await page.locator("ha-button[slot=primaryAction]").click();
+        await expect.poll(async () => (await editorState(page)).open).toBe(false);
 
-        expect(await page.locator(".save-error").count()).toBe(0);
-        expect((await editorState(page)).open).toBe(false);
+        const types = (await mockRequests(page)).slice(before).map((request) => request.type);
+        expect(types).toContain("helman/set_schedule");
+        expect(types).not.toContain("helman/get_schedule");
+    });
+
+    /**
+     * A refresh asked for while the write is in flight -- a data-changed event
+     * from some other writer -- is owed once the write's answer lands, since
+     * that answer may predate whatever the event announced.
+     */
+    test("a refresh during a save re-reads the schedule once the write commits", async ({ page }) => {
+        await mount(page, [
+            { id: "s1", name: "Dishwasher", deferrable: true, controllableIds: ["dishwasher"] },
+            { id: "s2", name: "Boiler", deferrable: true, controllableIds: ["boiler"] },
+        ]);
+        await pressBadge(page, "Boiler");
+        await page.evaluate(() => {
+            const hass = window.__fakeHass as any;
+            const host = document.querySelector("scheduling-day-editor-host") as any;
+            window.__setMockReply(hass, "helman/set_schedule", () => new Promise((resolve) => {
+                (window as any).__releaseWrite = () => resolve(host._scheduleOwner.getSnapshot().schedule);
+            }));
+        });
+        const before = (await mockRequests(page)).length;
+
+        await page.locator(".block-row").first().locator("button").nth(1).click();
+        await page.locator("ha-button[slot=primaryAction]").click();
+        await page.waitForFunction(() => typeof (window as any).__releaseWrite === "function");
+        await page.evaluate(() => {
+            const host = document.querySelector("scheduling-day-editor-host") as any;
+            void host._scheduleOwner.refresh();
+        });
+        const types = async () => (await mockRequests(page)).slice(before).map((request) => request.type);
+        expect(await types()).not.toContain("helman/get_schedule");
+
+        await page.evaluate(() => (window as any).__releaseWrite());
+        await expect.poll(types).toEqual(["helman/set_schedule", "helman/get_schedule"]);
     });
 
     test("nothing is open until a badge is pressed", async ({ page }) => {

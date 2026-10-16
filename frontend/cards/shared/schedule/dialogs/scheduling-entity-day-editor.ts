@@ -363,6 +363,8 @@ export class SchedulingEntityDayEditor extends LitElement {
     /** Every controllable entity with an authorable lane, in display order. */
     @property({ attribute: false }) public lanes: readonly EntityScheduleLane[] = [];
     @property({ attribute: false }) public slots: readonly ScheduleSlot[] = [];
+    /** The schedule's slot length, from the payload: the grid the days are cut on. */
+    @property({ type: Number }) public slotMinutes!: number;
     @property({ attribute: false }) public forecastPoints: ReadonlyMap<string, SlotForecastPoint> = new Map();
     /** Projected consumption and vehicle SoC, for the band's own figures. */
     @property({ attribute: false }) public projectionIndex: ScheduleApplianceProjectionIndex =
@@ -1116,6 +1118,7 @@ export class SchedulingEntityDayEditor extends LitElement {
     private _days(): EntityScheduleDay[] {
         return buildEntityScheduleDays({
             slots: this._baselineSlots,
+            slotMinutes: this.slotMinutes,
             timeZone: this.timeZone,
             locale: this.locale,
             currentDayKey: this.currentDayKey,
