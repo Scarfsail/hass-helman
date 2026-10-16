@@ -142,7 +142,7 @@ def with_appliance_schedule_actions_set_by(
         return normalized_actions
 
     for action in normalized_actions.values():
-        action.setdefault("setBy", set_by)
+        action["setBy"] = set_by
     return normalized_actions
 
 

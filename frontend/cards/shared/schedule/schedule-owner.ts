@@ -35,14 +35,7 @@ export interface SharedScheduleOwner {
     getSnapshot(): ScheduleOwnerSnapshot;
     subscribe(listener: ScheduleOwnerListener): () => void;
     refresh(): Promise<void>;
-    /**
-     * Write the batch, then reload. Resolves with the *write's* error, or null.
-     *
-     * The reload afterwards can fail on its own -- and does set the shared
-     * `error` on the snapshot when it does -- but that is a stale view of a
-     * schedule that was written, not a write that was refused. A caller
-     * reporting "your save failed" has to be able to tell the two apart.
-     */
+    /** Write the batch and commit the schedule it returns. Resolves with the write's error, or null. */
     applySchedulePatches(
         patches: readonly ScheduleSlotPatch[],
     ): Promise<ScheduleOwnerError | null>;
@@ -75,6 +68,8 @@ class ScheduleOwnerImpl implements SharedScheduleOwner {
     private _snapshot: ScheduleOwnerSnapshot = EMPTY_SCHEDULE_OWNER_SNAPSHOT;
     private _request: Promise<void> | null = null;
     private _mutationRequest: Promise<void> | null = null;
+    /** A refresh was asked for while a mutation was in flight. */
+    private _refreshAfterMutation = false;
     private _boundaryTimer: number | null = null;
     private _unsubscribeDataChanged: (() => void) | null = null;
     private readonly _listeners = new Set<ScheduleOwnerListener>();
@@ -130,6 +125,9 @@ class ScheduleOwnerImpl implements SharedScheduleOwner {
 
     public async refresh(): Promise<void> {
         if (this._mutationRequest !== null) {
+            // The write's answer may predate whatever asked for this read, so
+            // the read is owed once that answer is committed, not absorbed by it.
+            this._refreshAfterMutation = true;
             await this._mutationRequest;
             return;
         }
@@ -144,62 +142,34 @@ class ScheduleOwnerImpl implements SharedScheduleOwner {
             return null;
         }
 
-        if (this._mutationRequest !== null) {
-            await this._mutationRequest;
-        }
-
-        if (this._request !== null) {
-            await this._request;
-        }
-
-        const hass = this._hass;
-        const connection = hass.connection;
-
-        this._writing = true;
-        this._error = null;
-        this._emit();
-
-        // A holder rather than a plain local: it is written inside the closure
-        // below and read after it, which narrowing does not follow.
-        const outcome: { writeError: ScheduleOwnerError | null } = { writeError: null };
-        const mutation = (async () => {
-            try {
-                await this._helmanStore.applySchedulePatches(patches);
-                if (this._hass.connection !== connection) {
-                    return;
-                }
-
-                // Only the write above reaches `outcome`. `_refreshSchedule`
-                // handles its own failure and does not rethrow, so a reload
-                // that fails after a write that did not leaves this null --
-                // which is the whole point of reporting the two apart.
-                await this._refreshSchedule();
-            } catch (error) {
-                if (this._hass.connection === connection) {
-                    outcome.writeError = _normalizeOwnerError(error);
-                    this._error = outcome.writeError;
-                    console.error("schedule: failed to update schedule", error);
-                }
-            } finally {
-                if (this._hass.connection === connection) {
-                    this._writing = false;
-                    this._emit();
-                }
-            }
-        })();
-
-        const trackedMutation = mutation.finally(() => {
-            if (this._mutationRequest === trackedMutation) {
-                this._mutationRequest = null;
-            }
-        });
-        this._mutationRequest = trackedMutation;
-
-        await trackedMutation;
-        return outcome.writeError;
+        return this._mutate(
+            "_writing",
+            () => this._helmanStore.applySchedulePatches(patches),
+            "schedule: failed to update schedule",
+        );
     }
 
     public async setExecutionEnabled(enabled: boolean): Promise<void> {
+        await this._mutate(
+            "_togglingExecution",
+            () => this._helmanStore.setScheduleExecution(enabled),
+            "schedule: failed to update schedule execution",
+        );
+    }
+
+    /**
+     * Run one write and commit the schedule it answers with.
+     *
+     * The backend returns the document the write produced, so there is no
+     * reload afterwards. A later re-read is still legitimate -- a user write
+     * triggers an automation run -- and arrives through the data-changed feed;
+     * one that lands while the write is in flight is run once it commits.
+     */
+    private async _mutate(
+        flag: "_writing" | "_togglingExecution",
+        write: () => Promise<SchedulePayload>,
+        failureMessage: string,
+    ): Promise<ScheduleOwnerError | null> {
         if (this._mutationRequest !== null) {
             await this._mutationRequest;
         }
@@ -208,29 +178,29 @@ class ScheduleOwnerImpl implements SharedScheduleOwner {
             await this._request;
         }
 
-        const hass = this._hass;
-        const connection = hass.connection;
+        const connection = this._hass.connection;
 
-        this._togglingExecution = true;
+        this[flag] = true;
         this._error = null;
         this._emit();
 
+        let writeError: ScheduleOwnerError | null = null;
         const mutation = (async () => {
             try {
-                await this._helmanStore.setScheduleExecution(enabled);
-                if (this._hass.connection !== connection) {
-                    return;
+                const schedule = await write();
+                if (this._hass.connection === connection) {
+                    this._commitSchedule(schedule);
                 }
-
-                await this._refreshSchedule();
             } catch (error) {
                 if (this._hass.connection === connection) {
-                    this._error = _normalizeOwnerError(error);
-                    console.error("schedule: failed to update schedule execution", error);
+                    writeError = _normalizeOwnerError(error);
+                    this._error = writeError;
+                    console.error(failureMessage, error);
                 }
             } finally {
                 if (this._hass.connection === connection) {
-                    this._togglingExecution = false;
+                    this[flag] = false;
+                    this._scheduleNextBoundaryRefresh();
                     this._emit();
                 }
             }
@@ -240,10 +210,15 @@ class ScheduleOwnerImpl implements SharedScheduleOwner {
             if (this._mutationRequest === trackedMutation) {
                 this._mutationRequest = null;
             }
+            if (this._refreshAfterMutation) {
+                this._refreshAfterMutation = false;
+                void this._refreshSchedule();
+            }
         });
         this._mutationRequest = trackedMutation;
 
         await trackedMutation;
+        return writeError;
     }
 
     private _ensureLifecycle(): void {
@@ -263,8 +238,8 @@ class ScheduleOwnerImpl implements SharedScheduleOwner {
      *
      * `refresh()` is the right entry point rather than `_refreshSchedule()`
      * directly: it already stands down while a mutation this client started is
-     * in flight, so the event caused by our own write does not race the reload
-     * that write is about to do anyway.
+     * in flight, so the event caused by our own write does not race the write's
+     * own committed answer.
      */
     private _ensureDataChangedSubscription(): void {
         if (this._unsubscribeDataChanged !== null) {
@@ -328,10 +303,7 @@ class ScheduleOwnerImpl implements SharedScheduleOwner {
                     return;
                 }
 
-                this._schedule = schedule;
-                this._error = null;
-                this._updatedAt = Date.now();
-                this._stale = false;
+                this._commitSchedule(schedule);
             } catch (error) {
                 if (this._hass.connection === connection) {
                     this._error = _normalizeOwnerError(error);
@@ -358,19 +330,30 @@ class ScheduleOwnerImpl implements SharedScheduleOwner {
         await trackedRequest;
     }
 
+    private _commitSchedule(schedule: SchedulePayload): void {
+        this._schedule = schedule;
+        this._error = null;
+        this._updatedAt = Date.now();
+        this._stale = false;
+    }
+
     private _scheduleNextBoundaryRefresh(): void {
         this._clearBoundaryTimer();
         if (this._listeners.size === 0 || typeof window === "undefined") {
             return;
         }
 
-        const delay = getNextScheduleBoundaryDelayMs(
-            // `slots` is optional and not only `_schedule`: this runs inside a
-            // subscriber's `willUpdate`, so a payload that arrives without one
-            // throws there and leaves that element unrendered for good.
-            this._schedule?.slots?.map((slot) => slot.id) ?? [],
-            new Date(),
-        );
+        // `slots` is optional and not only `_schedule`: this runs inside a
+        // subscriber's `willUpdate`, so a payload that arrives without one
+        // throws there and leaves that element unrendered for good.
+        const schedule = this._schedule;
+        const delay = schedule?.slots
+            ? getNextScheduleBoundaryDelayMs(
+                schedule.slots.map((slot) => slot.id),
+                schedule.slotMinutes,
+                new Date(),
+            )
+            : null;
         if (delay === null) {
             return;
         }

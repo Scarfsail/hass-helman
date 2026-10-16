@@ -382,7 +382,7 @@ class CoordinatorAutomationTriggerTests(unittest.IsolatedAsyncioTestCase):
             reference_time=REFERENCE_TIME,
         )
 
-        self.assertTrue(enabled)
+        self.assertTrue(enabled["executionEnabled"])
         coordinator._automation_triggers.request_immediate.assert_awaited_once_with(
             reason="execution_enabled",
             reference_time=REFERENCE_TIME,
@@ -398,7 +398,7 @@ class CoordinatorAutomationTriggerTests(unittest.IsolatedAsyncioTestCase):
             reference_time=REFERENCE_TIME,
         )
 
-        self.assertTrue(enabled)
+        self.assertTrue(enabled["executionEnabled"])
         coordinator._automation_triggers.request_immediate.assert_not_awaited()
 
     async def test_disable_transition_keeps_automation_owned_actions(self) -> None:
@@ -425,7 +425,7 @@ class CoordinatorAutomationTriggerTests(unittest.IsolatedAsyncioTestCase):
 
         # Automation keeps planning while execution is off, so its actions stay
         # in the document for the card and the inspectors to display.
-        self.assertFalse(enabled)
+        self.assertFalse(enabled["executionEnabled"])
         self.assertEqual(
             storage.schedule_document,
             {

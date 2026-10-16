@@ -42,39 +42,19 @@ export function buildScheduleTimelineStructure({
     locale: string;
     timeZone: string;
 }): ScheduleTimelineModel {
-    const scheduleSlots = normalizedSchedule.slots;
-    if (scheduleSlots.length === 0) {
+    const { slots: scheduleSlots, slotMinutes } = normalizedSchedule;
+    if (scheduleSlots.length === 0 || slotMinutes === null) {
         return {
             slots: [],
             currentSlotId: null,
         };
     }
 
-    const granularityMinutes = normalizedSchedule.granularityMinutes;
-    if (granularityMinutes === null) {
-        const slots = scheduleSlots.map<ScheduleDisplaySlot>((slot) => ({
-            source: "schedule",
-            id: slot.id,
-            startMs: slot.startMs,
-            endMs: slot.endMs,
-            dayKey: slot.dayKey,
-                timeLabel: slot.timeLabel,
-                endLabel: slot.endLabel,
-                rangeLabel: slot.rangeLabel,
-                isCurrent: false,
-                scheduleSlot: slot,
-            }));
-        return {
-            slots,
-            currentSlotId: null,
-        };
-    }
-
-    const slotDurationMs = granularityMinutes * 60_000;
+    const slotDurationMs = slotMinutes * 60_000;
     const scheduleSlotsByStart = new Map(scheduleSlots.map((slot) => [slot.startMs, slot]));
     const firstStartMs = scheduleSlots[0].startMs;
     const lastScheduleEndMs = scheduleSlots.reduce(
-        (latest, slot) => Math.max(latest, slot.endMs ?? (slot.startMs + slotDurationMs)),
+        (latest, slot) => Math.max(latest, slot.endMs),
         firstStartMs + slotDurationMs,
     );
     const forecastEndMs = _resolveForecastTimelineEndMs(forecast, slotDurationMs);
@@ -202,6 +182,6 @@ function _parseTimestamp(value: string | null | undefined, durationMs = 0): numb
     return startMs + durationMs;
 }
 
-function _isCurrentSlot(startMs: number, endMs: number | null, nowMs: number): boolean {
-    return startMs <= nowMs && (endMs === null || nowMs < endMs);
+function _isCurrentSlot(startMs: number, endMs: number, nowMs: number): boolean {
+    return startMs <= nowMs && nowMs < endMs;
 }

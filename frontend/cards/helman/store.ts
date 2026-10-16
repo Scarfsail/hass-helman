@@ -7,15 +7,10 @@ import type {
     GetNodeDetailRequest,
     HistoryPayload,
     SchedulePayload,
-    SetScheduleExecutionResponse,
-    SetScheduleResponse,
     TreePayload,
 } from "../helman-api";
 import { callHelman } from "../shared/data/helman-commands";
-import {
-    buildScheduleSlotDTO,
-    type HelmanSchedulePatch,
-} from "./models";
+import type { HelmanSchedulePatch } from "./models";
 
 type HelmanConnection = HomeAssistant["connection"];
 
@@ -26,8 +21,8 @@ const SCHEDULE_DERIVED_KEYS = ["get_schedule"] as const;
 
 export interface HelmanStore {
     getSchedule(): Promise<SchedulePayload>;
-    applySchedulePatches(patches: readonly HelmanSchedulePatch[]): Promise<SetScheduleResponse>;
-    setScheduleExecution(enabled: boolean): Promise<SetScheduleExecutionResponse>;
+    applySchedulePatches(patches: readonly HelmanSchedulePatch[]): Promise<SchedulePayload>;
+    setScheduleExecution(enabled: boolean): Promise<SchedulePayload>;
     getControllableEntities(): Promise<ControllableEntitiesPayload>;
     getEntityActualHistory(): Promise<EntityActualHistoryPayload>;
     getAppliances(): Promise<AppliancesPayload>;
@@ -114,11 +109,11 @@ class HelmanStoreImpl implements HelmanStore {
 
     public applySchedulePatches(
         patches: readonly HelmanSchedulePatch[],
-    ): Promise<SetScheduleResponse> {
-        return this._afterMutation(callHelman(this._hass, "helman/set_schedule", { slots: patches.map((patch) => buildScheduleSlotDTO(patch)) }));
+    ): Promise<SchedulePayload> {
+        return this._afterMutation(callHelman(this._hass, "helman/set_schedule", { slots: [...patches] }));
     }
 
-    public setScheduleExecution(enabled: boolean): Promise<SetScheduleExecutionResponse> {
+    public setScheduleExecution(enabled: boolean): Promise<SchedulePayload> {
         return this._afterMutation(callHelman(this._hass, "helman/set_schedule_execution", { enabled }));
     }
 

@@ -27,6 +27,7 @@ SET_SCHEDULE_REQUEST_SCHEMA = websockets_module.SET_SCHEDULE_REQUEST_SCHEMA
 ws_get_appliance_projections = websockets_module.ws_get_appliance_projections.__wrapped__
 ws_get_appliances = websockets_module.ws_get_appliances.__wrapped__
 ws_set_schedule = websockets_module.ws_set_schedule.__wrapped__
+ws_set_schedule_execution = websockets_module.ws_set_schedule_execution.__wrapped__
 from custom_components.helman.scheduling.schedule import (  # noqa: E402
     ScheduleActionError,
     appliance_actions,
@@ -35,9 +36,17 @@ from custom_components.helman.scheduling.schedule import (  # noqa: E402
 )
 
 
+SCHEDULE_RESPONSE = {
+    "executionEnabled": True,
+    "slotMinutes": 15,
+    "slots": [{"id": CURRENT_SLOT_ID, "controllables": {}}],
+}
+
+
 class FakeCoordinator:
     def __init__(self) -> None:
         self.schedule_calls = []
+        self.execution_calls = []
         self.schedule_error = None
         self.appliances_response = {"appliances": []}
         self.projections_response = {
@@ -55,10 +64,15 @@ class FakeCoordinator:
                 },
         }
 
-    async def set_schedule(self, *, slots, set_by=None) -> None:
+    async def set_schedule(self, *, slots, set_by=None) -> dict:
         if self.schedule_error is not None:
             raise self.schedule_error
         self.schedule_calls.append({"slots": list(slots), "set_by": set_by})
+        return SCHEDULE_RESPONSE
+
+    async def set_schedule_execution(self, *, enabled) -> dict:
+        self.execution_calls.append(enabled)
+        return SCHEDULE_RESPONSE
 
     async def get_appliances(self) -> dict:
         return self.appliances_response
@@ -183,7 +197,7 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inverter_action(slot.controllables).kind, "charge_to_target_soc")
         self.assertEqual(inverter_action(slot.controllables).target_soc, 80)
         self.assertEqual(appliance_actions(slot.controllables), {})
-        self.assertEqual(connection.results, [(1, {"success": True})])
+        self.assertEqual(connection.results, [(1, SCHEDULE_RESPONSE)])
         self.assertEqual(connection.errors, [])
 
     async def test_set_schedule_rejects_legacy_action_payload_with_clear_error(
@@ -258,7 +272,7 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertEqual(coordinator.schedule_calls[0]["set_by"], "user")
-        self.assertEqual(connection.results, [(1, {"success": True})])
+        self.assertEqual(connection.results, [(1, SCHEDULE_RESPONSE)])
         self.assertEqual(connection.errors, [])
 
     async def test_set_schedule_forwards_climate_appliance_action(self) -> None:
@@ -295,7 +309,7 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertEqual(coordinator.schedule_calls[0]["set_by"], "user")
-        self.assertEqual(connection.results, [(1, {"success": True})])
+        self.assertEqual(connection.results, [(1, SCHEDULE_RESPONSE)])
         self.assertEqual(connection.errors, [])
 
     async def test_set_schedule_forwards_climate_off_action(self) -> None:
@@ -332,10 +346,10 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertEqual(coordinator.schedule_calls[0]["set_by"], "user")
-        self.assertEqual(connection.results, [(1, {"success": True})])
+        self.assertEqual(connection.results, [(1, SCHEDULE_RESPONSE)])
         self.assertEqual(connection.errors, [])
 
-    async def test_set_schedule_websocket_defaults_user_without_overwriting_explicit_set_by(
+    async def test_set_schedule_websocket_writes_as_user(
         self,
     ) -> None:
         coordinator = FakeCoordinator()
@@ -372,7 +386,23 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(coordinator.schedule_calls[0]["set_by"], "user")
         self.assertEqual(inverter_action(slot.controllables).set_by, "automation")
         self.assertEqual(appliance_actions(slot.controllables)["garage-ev"]["setBy"], "automation")
-        self.assertEqual(connection.results, [(1, {"success": True})])
+        self.assertEqual(connection.results, [(1, SCHEDULE_RESPONSE)])
+        self.assertEqual(connection.errors, [])
+
+    async def test_set_schedule_execution_returns_the_post_write_document(
+        self,
+    ) -> None:
+        coordinator = FakeCoordinator()
+        connection = FakeConnection()
+
+        await ws_set_schedule_execution(
+            FakeHass(coordinator),
+            connection,
+            {"id": 1, "type": "helman/set_schedule_execution", "enabled": True},
+        )
+
+        self.assertEqual(coordinator.execution_calls, [True])
+        self.assertEqual(connection.results, [(1, SCHEDULE_RESPONSE)])
         self.assertEqual(connection.errors, [])
 
     async def test_set_schedule_surfaces_coordinator_validation_error(self) -> None:

@@ -81,7 +81,8 @@ export function buildEntityScheduleLanes({
     controllableEntities: readonly ControllableEntityDTO[];
     appliances: readonly ScheduleApplianceMetadata[];
     actualHistory: Readonly<Record<string, EntityActualHistorySlotDTO[]>>;
-    slotDurationMs: number;
+    /** Null while no schedule has said how long a slot is; the lanes then carry no elapsed runs. */
+    slotDurationMs: number | null;
 }): EntityScheduleLane[] {
     const configOrder = new Map<string, number>(
         controllableEntities.map((entity, index): [string, number] => [entity.entityId, index]),
@@ -106,7 +107,7 @@ export function buildEntityScheduleLanes({
                     ?? "mdi:flash-outline",
                 appliance,
                 isAvailable: status.isAvailable,
-                actualSlots: buildEntityLaneActualSlots({
+                actualSlots: slotDurationMs === null ? [] : buildEntityLaneActualSlots({
                     entityId: status.entityId,
                     controllableEntities,
                     actualHistory,
@@ -462,18 +463,20 @@ export interface EntityScheduleDayView {
  */
 export function buildEntityScheduleDayView({
     scheduleSlots,
+    slotMinutes,
     timeZone,
     locale,
     forecast,
     baseForecastPoints,
 }: {
     scheduleSlots: readonly ScheduleSlot[];
+    slotMinutes: number;
     timeZone: string;
     locale: string;
     forecast: ForecastPayload | null;
     baseForecastPoints: ReadonlyMap<string, SlotForecastPoint>;
 }): EntityScheduleDayView {
-    const elapsedSlots = buildElapsedScheduleSlots({ slots: scheduleSlots, timeZone, locale });
+    const elapsedSlots = buildElapsedScheduleSlots({ slots: scheduleSlots, slotMinutes, timeZone, locale });
     if (elapsedSlots.length === 0) {
         return { slots: [...scheduleSlots], forecastPoints: baseForecastPoints };
     }

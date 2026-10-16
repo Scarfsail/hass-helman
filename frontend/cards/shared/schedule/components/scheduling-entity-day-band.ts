@@ -1291,12 +1291,10 @@ export class SchedulingEntityDayBand extends LitElement {
             return [];
         }
 
-        const first = slots[0];
-        const slotMinutes = Math.round(((first.endMs ?? first.startMs) - first.startMs) / MINUTE_MS);
         return slotGridTicks({
             startMinutes: (this._windowStartMs - this.day.startMs) / MINUTE_MS,
             endMinutes: (this._windowEndMs - this.day.startMs) / MINUTE_MS,
-            slotMinutes,
+            slotMinutes: this.day.slotMinutes,
             plotWidth: this._trackWidthPx,
         });
     }
@@ -1679,7 +1677,7 @@ export class SchedulingEntityDayBand extends LitElement {
 
     private _resolveSlotIdAt(atMs: number): string | null {
         for (const slot of this.day.slots) {
-            if (atMs >= slot.startMs && atMs < (slot.endMs ?? slot.startMs)) {
+            if (atMs >= slot.startMs && atMs < slot.endMs) {
                 return slot.id;
             }
         }
@@ -1900,7 +1898,7 @@ export class SchedulingEntityDayBand extends LitElement {
         gap: { startMs: number; endMs: number },
     ): void {
         const trackRect = this._readTrackRect(laneKey);
-        const stepMs = this._resolveStepMs();
+        const stepMs = this.day.slotMinutes * MINUTE_MS;
         const startMs = trackRect === null
             ? gap.startMs
             : Math.min(
@@ -2265,7 +2263,7 @@ export class SchedulingEntityDayBand extends LitElement {
      */
     private _buildSlotValueText(
         kind: "battery" | "solar" | "price",
-        slot: { id: string; startMs: number; endMs: number | null },
+        slot: { id: string; startMs: number; endMs: number },
     ): string | null {
         const point = this.forecastPoints.get(slot.id);
         if (point === undefined) {
@@ -2297,21 +2295,20 @@ export class SchedulingEntityDayBand extends LitElement {
      * the hour makes every reading the same reading, and it is the rate the
      * bars already draw.
      */
-    private _formatSolarRate(slot: { id: string; startMs: number; endMs: number | null }): string | null {
+    private _formatSolarRate(slot: { id: string; startMs: number; endMs: number }): string | null {
         const solarWh = this.forecastPoints.get(slot.id)?.solarWh;
         if (solarWh === null || solarWh === undefined) {
             return null;
         }
 
-        const durationMs = (slot.endMs ?? slot.startMs) - slot.startMs;
-        const perHour = durationMs <= 0 ? solarWh : solarWh * (3_600_000 / durationMs);
+        const perHour = solarWh * (3_600_000 / (slot.endMs - slot.startMs));
         const kwh = perHour / 1000;
         return kwh >= 10 ? `${Math.round(kwh)}` : kwh.toFixed(1);
     }
 
     private _buildSlotHitTitle(
         kind: "battery" | "solar" | "price",
-        slot: { id: string; startMs: number; endMs: number | null },
+        slot: { id: string; startMs: number; endMs: number },
     ): string | null {
         const point = this.forecastPoints.get(slot.id);
         if (point === undefined) {
@@ -2319,7 +2316,7 @@ export class SchedulingEntityDayBand extends LitElement {
         }
 
         const range = `${formatScheduleTime(slot.startMs, this.locale, this.timeZone)}–${
-            formatScheduleTime(slot.endMs ?? slot.startMs, this.locale, this.timeZone)}`;
+            formatScheduleTime(slot.endMs, this.locale, this.timeZone)}`;
         if (kind === "battery") {
             return point.socPct === null || point.socPct === undefined
                 ? null
@@ -2533,7 +2530,7 @@ export class SchedulingEntityDayBand extends LitElement {
     };
 
     private _resolveDragRange(drag: DragSession, pointerMs: number): EntityDayBandRangeChangeDetail {
-        const stepMs = this._resolveStepMs();
+        const stepMs = this.day.slotMinutes * MINUTE_MS;
         if (drag.mode === "start") {
             const startMs = Math.min(
                 Math.max(pointerMs, drag.minMs),
@@ -2586,22 +2583,12 @@ export class SchedulingEntityDayBand extends LitElement {
 
     /** The nearest slot boundary: a block never starts mid-slot. */
     private _snapMs(atMs: number): number {
-        const stepMs = this._resolveStepMs();
+        const stepMs = this.day.slotMinutes * MINUTE_MS;
         const steps = Math.round((atMs - this.day.startMs) / stepMs);
         return Math.min(
             Math.max(this.day.startMs + steps * stepMs, this.day.startMs),
             this.day.endMs,
         );
-    }
-
-    private _resolveStepMs(): number {
-        for (const slot of this.day.slots) {
-            if (slot.endMs !== null && slot.endMs > slot.startMs) {
-                return slot.endMs - slot.startMs;
-            }
-        }
-
-        return 60 * 60 * 1000;
     }
 
     private _isWideEnoughToResize(widthPct: number): boolean {
@@ -2671,9 +2658,8 @@ export class SchedulingEntityDayBand extends LitElement {
         return Math.max(0, this._toPercent(endMs) - this._toPercent(startMs));
     }
 
-    private _toSlotWidthPercent(slot: { startMs: number; endMs: number | null }): number {
-        const endMs = slot.endMs ?? slot.startMs;
-        return endMs <= slot.startMs ? 0 : this._toWidthPercent(slot.startMs, endMs);
+    private _toSlotWidthPercent(slot: { startMs: number; endMs: number }): number {
+        return this._toWidthPercent(slot.startMs, slot.endMs);
     }
 
     private _emitBlockSelect(laneKey: string, block: EntityScheduleBlock): void {

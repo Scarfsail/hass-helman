@@ -4,7 +4,6 @@ import type {
     SchedulePayload,
     ScheduleSetBy as ScheduleSetByDTO,
 } from "../../helman-api";
-import type { ScheduleGranularityMinutes } from "./model/schedule-time";
 
 type WithoutSetBy<TValue> = TValue extends unknown ? Omit<TValue, "setBy"> : never;
 
@@ -66,7 +65,7 @@ export interface ScheduleSlot {
     id: string;
     index: number;
     startMs: number;
-    endMs: number | null;
+    endMs: number;
     dayKey: string;
     timeLabel: string;
     endLabel: string | null;
@@ -78,7 +77,7 @@ export interface ScheduleSlot {
 export interface ScheduleDisplaySlotBase {
     id: string;
     startMs: number;
-    endMs: number | null;
+    endMs: number;
     dayKey: string;
     timeLabel: string;
     endLabel: string | null;
@@ -133,7 +132,8 @@ export interface NormalizedScheduleModel {
     activeSlotId: string | null;
     currentSlotId: string | null;
     currentDayKey: string | null;
-    granularityMinutes: ScheduleGranularityMinutes | null;
+    /** The backend's slot length, as the schedule payload ships it; null until a schedule has loaded. */
+    slotMinutes: number | null;
 }
 
 export interface ScheduleSlotPatch {

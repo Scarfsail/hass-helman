@@ -1406,7 +1406,11 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
     }
 
     private _boundaries(): ScheduleSlotBoundary[] {
-        return this._boundariesCache ??= resolveScheduleSlotBoundaries((this._schedule?.slots ?? []).map((slot) => slot.id));
+        if (this._boundariesCache) return this._boundariesCache;
+        const schedule = this._schedule;
+        const slotDurationMs = (schedule?.slotMinutes ?? 0) * 60_000;
+        return this._boundariesCache = resolveScheduleSlotBoundaries((schedule?.slots ?? []).map((slot) => slot.id))
+            .map((slot) => ({ ...slot, endMs: slot.startMs + slotDurationMs }));
     }
 
     /** The executor's record for this charger, only when it is for the slot in progress. */

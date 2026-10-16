@@ -109,13 +109,14 @@ export interface ScheduleSlotsOptions {
     slotMinutes: number;
     start?: string;
     count?: number;
-    overrides?: Partial<SchedulePayload>;
+    overrides?: Partial<Omit<SchedulePayload, "slotMinutes">>;
 }
 
 export function scheduleSlots({ slotMinutes, start = "2026-01-01T00:00:00.000Z", count = 0, overrides = {} }: ScheduleSlotsOptions): SchedulePayload {
     if (!Number.isInteger(slotMinutes) || slotMinutes <= 0) throw new RangeError("slotMinutes must be a positive integer");
     return {
         executionEnabled: true,
+        slotMinutes,
         slots: Array.from({ length: count }, (_, index) => ({
             id: new Date(Date.parse(start) + index * slotMinutes * 60_000).toISOString(),
             controllables: {},

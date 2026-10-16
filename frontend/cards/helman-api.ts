@@ -584,6 +584,7 @@ export interface ScheduleSlotDTO {
 
 export interface SchedulePayload {
     executionEnabled: boolean;
+    slotMinutes: number;
     slots: ScheduleSlotDTO[];
     runtime?: ScheduleRuntimeDTO;
 }
@@ -592,16 +593,7 @@ export type GetScheduleRequest = HelmanCommands["helman/get_schedule"]["req"];
 
 export type SetScheduleRequest = HelmanCommands["helman/set_schedule"]["req"];
 
-export interface SetScheduleResponse {
-    success: true;
-}
-
 export type SetScheduleExecutionRequest = HelmanCommands["helman/set_schedule_execution"]["req"];
-
-export interface SetScheduleExecutionResponse {
-    success: true;
-    executionEnabled: boolean;
-}
 
 /**
  * An entity Helman can drive, plus the state that counts as "at rest".

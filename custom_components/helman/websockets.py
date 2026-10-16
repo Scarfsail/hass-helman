@@ -519,7 +519,7 @@ async def ws_set_schedule(
         return
 
     try:
-        await coordinator.set_schedule(
+        schedule = await coordinator.set_schedule(
             slots=[slot_from_dict(slot) for slot in msg["slots"]],
             set_by="user",
         )
@@ -527,7 +527,7 @@ async def ws_set_schedule(
         map_errors(connection, msg, err)
         return
 
-    connection.send_result(msg["id"], {"success": True})
+    connection.send_result(msg["id"], schedule)
 
 
 @websocket_api.websocket_command({
@@ -577,12 +577,12 @@ async def ws_set_schedule_execution(
         return
 
     try:
-        enabled = await coordinator.set_schedule_execution(enabled=msg["enabled"])
+        schedule = await coordinator.set_schedule_execution(enabled=msg["enabled"])
     except ScheduleError as err:
         map_errors(connection, msg, err)
         return
 
-    connection.send_result(msg["id"], {"success": True, "executionEnabled": enabled})
+    connection.send_result(msg["id"], schedule)
 
 
 @websocket_api.websocket_command({

@@ -138,8 +138,8 @@ export interface HelmanCommands {
     "helman/device_report": { req: Api.DeviceReportQuery & { report: string }; res: Api.RankingReportPayload | Api.OverTimeReportPayload | Api.DailyProfileReportPayload | Api.DeviceReportUnavailable };
     "helman/get_forecast": { req: Record<string, never>; res: Api.ForecastPayload };
     "helman/get_schedule": { req: Record<string, never>; res: Api.SchedulePayload };
-    "helman/set_schedule": { req: { slots: Api.ScheduleSlotDTO[] }; res: Api.SetScheduleResponse };
-    "helman/set_schedule_execution": { req: { enabled: boolean }; res: Api.SetScheduleExecutionResponse };
+    "helman/set_schedule": { req: { slots: Api.ScheduleSlotDTO[] }; res: Api.SchedulePayload };
+    "helman/set_schedule_execution": { req: { enabled: boolean }; res: Api.SchedulePayload };
     "helman/get_controllable_entities": { req: Record<string, never>; res: Api.ControllableEntitiesPayload };
     "helman/get_entity_actual_history": { req: Record<string, never>; res: Api.EntityActualHistoryPayload };
     "helman/get_appliances": { req: Record<string, never>; res: Api.AppliancesPayload };

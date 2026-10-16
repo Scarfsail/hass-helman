@@ -263,6 +263,7 @@ async function mountEditor(
         }
 
         el.slots = slots;
+        el.slotMinutes = stepMs / 60_000;
         el.entityName = "Boiler";
         el.currentDayKey = dayOne;
         el.locale = "cs";

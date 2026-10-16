@@ -49,6 +49,8 @@ interface MountOptions {
      * on an hourly day the two are the same number.
      */
     halfHourly?: boolean;
+    /** The slot length the schedule ships, for a day on another grid than the hour. */
+    slotMinutes?: number;
     /** The band's own hour axis, which the editing hosts keep and a stacked host drops. */
     axis?: boolean;
     /** How much room the tracks get, which is what decides how dense the grid can be. */
@@ -58,10 +60,10 @@ interface MountOptions {
 async function mountBand(page: Page, options: MountOptions = {}): Promise<void> {
     await loadBundle(page, "scheduling-entity-day-band");
 
-    await page.evaluate(({ dayStartMs, nowMs, hourMs, windowStartMs, windowEndMs, windowed, highlight, live, slotGrid, slotPicks, twoLanes, selectedSlot, halfHourly, gridTicks, axis, widthPx }) => {
+    await page.evaluate(({ dayStartMs, nowMs, hourMs, windowStartMs, windowEndMs, windowed, highlight, live, slotGrid, slotPicks, twoLanes, selectedSlot, halfHourly, slotMinutes, gridTicks, axis, widthPx }) => {
         const at = (hour: number) => dayStartMs + hour * hourMs;
-        const stepMs = halfHourly ? hourMs / 2 : hourMs;
-        const slots = Array.from({ length: halfHourly ? 48 : 24 }, (_, index) => ({
+        const stepMs = slotMinutes * 60_000;
+        const slots = Array.from({ length: (24 * hourMs) / stepMs }, (_, index) => ({
             id: new Date(dayStartMs + index * stepMs).toISOString(),
             index,
             startMs: dayStartMs + index * stepMs,
@@ -85,6 +87,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
             startMs: dayStartMs,
             endMs: at(24),
             editableFromMs: nowMs,
+            slotMinutes,
         };
         if (live) {
             band.hass = {
@@ -196,6 +199,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
         twoLanes: options.twoLanes ?? false,
         selectedSlot: options.selectedSlot,
         halfHourly: options.halfHourly ?? false,
+        slotMinutes: options.slotMinutes ?? (options.halfHourly ? 30 : 60),
         gridTicks: options.gridTicks ?? [],
         axis: options.axis ?? false,
         widthPx: options.widthPx ?? 1000,
@@ -421,17 +425,20 @@ test.describe("entity day band, slot grid", () => {
         await expect(page.locator("scheduling-entity-day-band").locator(".slot-pick")).toHaveCount(0);
     });
 
-    test("one target per slot of the day", async ({ page }) => {
-        await mountBand(page, { slotGrid: true });
+    for (const slotMinutes of [60, 15]) {
+        test(`one target per ${slotMinutes}-minute slot of the day`, async ({ page }) => {
+            await mountBand(page, { slotGrid: true, slotMinutes });
 
-        // 24 slots in the fixture: the grid comes from the day, not from a
-        // fixed half hour -- a band showing hourly slots draws 24 hairlines.
-        const picks = page.locator("scheduling-entity-day-band").locator(".slot-pick");
-        await expect(picks).toHaveCount(24);
-        const geometry = await readGeometry(page, '.slot-pick[data-slot="' + new Date(DAY_START_MS + 12 * HOUR_MS).toISOString() + '"]');
-        expect(geometry.left).toBeCloseTo(50, 1);
-        expect(geometry.width).toBeCloseTo(100 / 24, 1);
-    });
+            // The grid comes from the slot length the schedule ships, not from
+            // a fixed hour -- a band showing quarter-hour slots draws 96.
+            const slotsPerDay = (24 * 60) / slotMinutes;
+            const picks = page.locator("scheduling-entity-day-band").locator(".slot-pick");
+            await expect(picks).toHaveCount(slotsPerDay);
+            const geometry = await readGeometry(page, '.slot-pick[data-slot="' + new Date(DAY_START_MS + 12 * HOUR_MS).toISOString() + '"]');
+            expect(geometry.left).toBeCloseTo(50, 1);
+            expect(geometry.width).toBeCloseTo(100 / slotsPerDay, 1);
+        });
+    }
 
     test("hovering marks that hour in every lane, and the pointed one hardest", async ({ page }) => {
         await mountBand(page, { slotGrid: true, twoLanes: true });

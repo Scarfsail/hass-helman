@@ -7,11 +7,9 @@ import {
     extractScheduleSlotAssignments,
 } from "./schedule-authorship";
 import {
-    deriveScheduleGranularityMinutes,
     getScheduleDayKey,
     getScheduleSlotStartMs,
     getScheduleTimeRangeLabels,
-    resolveScheduleSlotBoundaries,
 } from "./schedule-time";
 
 export const EMPTY_NORMALIZED_SCHEDULE: NormalizedScheduleModel = {
@@ -19,7 +17,7 @@ export const EMPTY_NORMALIZED_SCHEDULE: NormalizedScheduleModel = {
     activeSlotId: null,
     currentSlotId: null,
     currentDayKey: null,
-    granularityMinutes: null,
+    slotMinutes: null,
 };
 
 /**
@@ -88,14 +86,12 @@ export function buildNormalizedScheduleStructure({
             activeSlotId: null,
             currentSlotId: null,
             currentDayKey: null,
-            granularityMinutes: null,
+            slotMinutes: null,
         };
     }
 
-    const granularityMinutes = deriveScheduleGranularityMinutes(schedule.slots.map((slot) => slot.id));
-    const slotDurationMs = granularityMinutes !== null ? granularityMinutes * 60_000 : null;
-    const slotBoundaries = resolveScheduleSlotBoundaries(schedule.slots.map((slot) => slot.id));
-    const slotBoundariesByMs = new Map(slotBoundaries.map((slot) => [slot.startMs, slot]));
+    const { slotMinutes } = schedule;
+    const slotDurationMs = slotMinutes * 60_000;
     const seenMs = new Set<number>();
     const activeSlotId = schedule.runtime?.activeSlotId ?? null;
     const normalizedSlots = schedule.slots
@@ -110,14 +106,9 @@ export function buildNormalizedScheduleStructure({
             }
             seenMs.add(startMs);
 
-            const boundary = slotBoundariesByMs.get(startMs);
-            if (boundary === undefined) {
-                return [];
-            }
-
             return [_normalizeSlot({
                 slot,
-                boundary,
+                startMs,
                 slotDurationMs,
                 timeZone,
                 locale,
@@ -135,7 +126,7 @@ export function buildNormalizedScheduleStructure({
         activeSlotId,
         currentSlotId: activeSlotId,
         currentDayKey: null,
-        granularityMinutes,
+        slotMinutes,
     };
 }
 
@@ -157,7 +148,7 @@ export function applyNormalizedScheduleCurrentState(
     const nowMs = now.getTime();
     const runtimeSlotId = model.slots.find((slot) => slot.id === model.activeSlotId)?.id ?? null;
     const currentSlotId = model.slots.find((slot) =>
-        slot.startMs <= nowMs && (slot.endMs === null || nowMs < slot.endMs)
+        slot.startMs <= nowMs && nowMs < slot.endMs
     )?.id
         ?? runtimeSlotId
         ?? null;
@@ -185,14 +176,14 @@ export function applyNormalizedScheduleCurrentState(
 
 function _normalizeSlot({
     slot,
-    boundary,
+    startMs,
     slotDurationMs,
     timeZone,
     locale,
 }: {
     slot: SchedulePayload["slots"][number];
-    boundary: { startMs: number; endMs: number | null };
-    slotDurationMs: number | null;
+    startMs: number;
+    slotDurationMs: number;
     timeZone: string;
     locale: string;
 }): Omit<ScheduleSlot, "index" | "isCurrent"> {
@@ -201,16 +192,17 @@ function _normalizeSlot({
         throw new Error(`schedule: failed to derive day key for slot "${slot.id}"`);
     }
 
+    const endMs = startMs + slotDurationMs;
     const labels = getScheduleTimeRangeLabels({
-        startMs: boundary.startMs,
-        endMs: slotDurationMs !== null ? boundary.startMs + slotDurationMs : boundary.endMs,
+        startMs,
+        endMs,
         locale,
         timeZone,
     });
     return {
         id: slot.id,
-        startMs: boundary.startMs,
-        endMs: slotDurationMs !== null ? boundary.startMs + slotDurationMs : boundary.endMs,
+        startMs,
+        endMs,
         dayKey,
         timeLabel: labels.timeLabel,
         endLabel: labels.endLabel,
