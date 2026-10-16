@@ -1,3 +1,7 @@
+import { formatEnergyWh, formatMoney, orNa } from "../shared/format";
+import { LatestRequest } from "../shared/data/latest-request";
+import { callHelman } from "../shared/data/helman-commands";
+import { pad2, slotMinutes, formatClock } from "../shared/time/slot-time";
 import { LitElement, css, html, svg, unsafeCSS, type PropertyValues, type TemplateResult } from "lit";
 import { property, query, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../types/ha";
@@ -31,7 +35,7 @@ import {
   nodeAccentColor,
 } from "../color-utils";
 import { ACTUAL_FILL_OPACITY, CHART_COLORS } from "./chart-colors";
-import { formatEnergy } from "../power-format";
+
 import {
   hoverTooltipStyles,
   renderHoverTooltip,
@@ -42,7 +46,7 @@ import {
 } from "../shared/hover-tooltip";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import { dispatchWatchedEntities } from "../shared/hass-change";
-import { formatIsoDate, todayIso } from "../shared/today-iso";
+import { formatIsoDate, todayKey, addDays, daysBetween, parseDayKey } from "../shared/time/day-key";
 import "./helman-solar-schedule-band-strip";
 import "../shared/schedule/dialogs/scheduling-day-editor-host";
 import type {
@@ -69,7 +73,6 @@ import {
   buildHistoryDaysFromAggregates,
   calendarWindow,
   resolveFirstWeekdayIndex,
-  type SolarInspectorDayAggregateRow,
   type SolarInspectorHistoryDay,
 } from "./day-pill-model";
 import "./helman-solar-price-strip";
@@ -152,7 +155,7 @@ import {
 import { nowMinutesOnDay, renderNowMarker } from "./now-marker.js";
 import { helmanColorVars } from "../color-vars";
 import { schedulingSharedStyles } from "../shared/schedule/styles/scheduling-shared-styles";
-import { getSharedDataChangedFeed } from "../helman/data-changed";
+import { DataChangedController } from "../helman/data-changed";
 import { startNowClock } from "../shared/now-clock";
 import { getSharedScheduleOwner, type SharedScheduleOwner } from "../shared/schedule/schedule-owner";
 import type { ScheduleOwnerSnapshot } from "../shared/schedule/schedule-types";
@@ -667,7 +670,7 @@ export class HelmanSolarInspector extends LitElement {
    * "no connection yet" leaves it null, because that has decided nothing and
    * the fetch must still happen when `hass` arrives.
    */
-  private _historyDaysFor: string | null = null;
+  private readonly _historyRequest = new LatestRequest<string>();
   /**
    * Today, and the window the pill row is showing, derived once per update
    * cycle in `willUpdate`. `render()` reads them; it never computes them, and
@@ -683,18 +686,8 @@ export class HelmanSolarInspector extends LitElement {
    * the key wins nothing, so a fast click through three months cannot let the
    * first answer land last.
    */
-  private _spanRequestKey: string | null = null;
-  /** Which span answer is the current one; see `_loadSpan`. */
-  private _spanRequestId = 0;
+  private readonly _spanRequest = new LatestRequest<string>();
   @state() private _loading = false;
-  /**
-   * A reload the user did not ask for, running under the drawn day.
-   *
-   * Kept apart from `_loading` because the two want opposite things from the
-   * card: a navigation should blank and say so, a background refresh must leave
-   * the day exactly as it is until the new payload is in hand.
-   */
-  @state() private _refreshing = false;
   @state() private _error = "";
   /**
    * The forecast payload the day pills fetched. It backs the health banner —
@@ -734,7 +727,6 @@ export class HelmanSolarInspector extends LitElement {
   @state() private _calendarReveal = 0;
   private _calendarSelection = "";
   private _calendarWasOpen = false;
-  private _historyRequestId = 0;
   /** The span the aggregate views draw, or null before the first load. */
   @state() private _span: SpanAggregatePayload | null = null;
   @state() private _spanLoading = false;
@@ -888,8 +880,7 @@ export class HelmanSolarInspector extends LitElement {
    * how the chart above happens to be drawn.
    */
   private _partialSeries = new Map<SeriesKey, { missing: number; expected: number }>();
-  private _activeRequestId = 0;
-  private _activeRequestDate: string | null = null;
+  private readonly _dayRequest = new LatestRequest<string>();
   private _loadedConnection: unknown = null;
   private _stopNowClock?: () => void;
   /**
@@ -940,7 +931,6 @@ export class HelmanSolarInspector extends LitElement {
   private _observedChartWrap: HTMLElement | null = null;
   private _scheduleOwner?: SharedScheduleOwner;
   private _unsubscribeScheduleOwner?: () => void;
-  private _unsubscribeDataChanged?: () => void;
 
   static styles = [helmanColorVars, schedulingSharedStyles, hoverTooltipStyles, css`
     :host {
@@ -1658,6 +1648,11 @@ export class HelmanSolarInspector extends LitElement {
     }
   `];
 
+  constructor() {
+    super();
+    new DataChangedController(this, () => this.hass, {}, () => this._refreshActiveView(true));
+  }
+
   connectedCallback() {
     super.connectedCallback();
     // The wall clock owns a timer, because `hass` churn is not a clock. The card
@@ -1691,8 +1686,6 @@ export class HelmanSolarInspector extends LitElement {
     this._unsubscribeScheduleOwner?.();
     this._unsubscribeScheduleOwner = undefined;
     this._scheduleOwner = undefined;
-    this._unsubscribeDataChanged?.();
-    this._unsubscribeDataChanged = undefined;
   }
 
   /**
@@ -1842,7 +1835,7 @@ export class HelmanSolarInspector extends LitElement {
         this._loadedConnection = this.hass.connection;
         this._load();
       }
-      this._syncDataChangedSubscription();
+
     }
     // A hidden schedule strip holds no schedule subscription. Keyed on the flag
     // as well as on `hass`, because the flag can flip on its own -- the card
@@ -2165,7 +2158,7 @@ export class HelmanSolarInspector extends LitElement {
             ${this._renderSelectedSlotDetails(view)}
             ${this._renderTotals(view)}
           `
-        : html`<div class="note">${this._tFormat("bias_correction.inspector.no_data", { date: this._formatDay(view.date) })}</div>`}
+        : html`<div class="note">${this._t("bias_correction.inspector.no_data", { date: this._formatDay(view.date) })}</div>`}
     `;
   }
 
@@ -2498,7 +2491,8 @@ export class HelmanSolarInspector extends LitElement {
     const start = this._spanStart(this._selectedDate);
     const end = this._spanEnd(this._selectedDate);
     const key = `${bucket}:${start}..${end}`;
-    if (this._spanRequestKey === key) {
+    const request = this._spanRequest.begin(key);
+    if (request === null) {
       // The span already on screen is the right one, but the selection may not
       // be: a stop change carries a focus bucket in, and one that this span has
       // no column for -- a future day the backend clamped away -- would light a
@@ -2509,11 +2503,6 @@ export class HelmanSolarInspector extends LitElement {
       );
       return;
     }
-    this._spanRequestKey = key;
-    // The key answers "is this the window we asked for", which stays true when
-    // a re-plan asks for the same window again; only this counter can say which
-    // of two live requests for one window is the current one.
-    const requestId = ++this._spanRequestId;
     // An announced change must not flash an overlay over the span the reader is
     // studying, exactly as it must not disturb the day view.
     if (!silent) this._spanLoading = true;
@@ -2522,18 +2511,14 @@ export class HelmanSolarInspector extends LitElement {
     // and is overwritten below on success or left in place under the error
     // note on failure.
     try {
-      const result = await this.hass.callWS<SpanAggregatePayload>({
-        type: "helman/solar_bias/day_aggregates",
-        start_date: start,
-        end_date: end,
-        bucket,
-        // The composition panel is this view's alone. The day pills call the
-        // same command for six scalars a bucket, and asking there would widen a
-        // month-wide read by a meter per configured consumer for a field they
-        // never read.
+      const result = await callHelman(this.hass, "helman/solar_bias/day_aggregates", {
+          start_date: start,
+          end_date: end,
+          bucket,
+          // Only this composition panel needs the per-consumer statistics read.
         house_breakdown: true,
       });
-      if (requestId !== this._spanRequestId) return;
+      if (!this._spanRequest.isCurrent(request)) return;
       this._span = { bucket, currency: result?.currency ?? null, days: result?.days ?? [] };
       // Drop anything the new span has no column for, exactly as the day load
       // re-grids its slot selection: a selection the chart cannot draw is a
@@ -2543,10 +2528,10 @@ export class HelmanSolarInspector extends LitElement {
       // the card, so this is where the floor arrives when no day was ever loaded.
       if (result?.range) this._spanRange = result.range;
     } catch (err: any) {
-      if (requestId !== this._spanRequestId) return;
+      if (!this._spanRequest.isCurrent(request)) return;
       this._spanError = err?.message || this._t("bias_correction.inspector.load_failed");
     } finally {
-      if (requestId === this._spanRequestId) this._spanLoading = false;
+      if (this._spanRequest.isCurrent(request)) this._spanLoading = false;
       this.requestUpdate();
     }
   }
@@ -2574,7 +2559,7 @@ export class HelmanSolarInspector extends LitElement {
       // request that would explain an empty span either way has finished.
       return this._spanLoading || this._spanError
         ? ""
-        : html`<div class="note">${this._tFormat("bias_correction.inspector.no_span_data", { span: this._spanLabel() })}</div>`;
+        : html`<div class="note">${this._t("bias_correction.inspector.no_span_data", { span: this._spanLabel() })}</div>`;
     }
     return html`
       ${this._renderTooltip()}
@@ -3580,7 +3565,7 @@ export class HelmanSolarInspector extends LitElement {
       const left = (layout.xForMinutes(tick.minutes) / layout.width) * 100;
       return html`
         <span class="schedule-header-hour" aria-hidden="true" style=${`left: ${left}%`}>
-          ${String(tick.hour).padStart(2, "0")}
+          ${pad2(tick.hour)}
         </span>
       `;
     });
@@ -3611,28 +3596,6 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   /**
-   * Reload whatever is drawn whenever the backend says its data moved.
-   *
-   * The card's own payload comes from `helman/solar_bias/inspector`, which the
-   * schedule owner knows nothing about — so watching the shared schedule is not
-   * enough, even though the day pills already do.
-   *
-   * Through the shared feed rather than a private subscription, so an
-   * inspector and a scheduling card on one dashboard still cost one
-   * subscription between them.
-   */
-  private _syncDataChangedSubscription(): void {
-    const hass = this.hass;
-    if (!hass || this._unsubscribeDataChanged) {
-      return;
-    }
-
-    this._unsubscribeDataChanged = getSharedDataChangedFeed(hass).subscribe(() => {
-      this._refreshActiveView(true);
-    });
-  }
-
-  /**
    * Whichever view is on screen, asked for again -- and whatever is not, marked.
    *
    * Both ways in land here: the refresh button, which is a navigation and shows
@@ -3652,8 +3615,8 @@ export class HelmanSolarInspector extends LitElement {
    * only where they are drawn: `willUpdate` asks that question already.
    */
   private _refreshActiveView(silent: boolean): void {
-    this._spanRequestKey = null;
-    this._historyDaysFor = null;
+    this._spanRequest.reset();
+    this._historyRequest.reset();
     if (this._viewMode === "day") {
       void this._load({ silent });
       return;
@@ -3683,7 +3646,6 @@ export class HelmanSolarInspector extends LitElement {
       ></helman-solar-schedule-band-strip>
     `;
   }
-
 
   /** Minute-of-day of every selected slot, for the strips' bands. */
   private _selectedMinutes(payload: InspectorPayload): number[] {
@@ -4788,9 +4750,8 @@ export class HelmanSolarInspector extends LitElement {
         <g clip-path="url(#plot-clip-impact)">
         ${payload.series.impact.map((point) => {
           if (point.impactWh === null || !Number.isFinite(point.impactWh)) return "";
-          const m = /^(\d{2}):(\d{2})$/.exec(point.slot);
-          if (!m) return "";
-          const minutes = Number(m[1]) * 60 + Number(m[2]);
+          const minutes = slotMinutes(point.slot);
+          if (minutes === null) return "";
           const x = layout.xForMinutes(minutes);
           const w = Math.max(3, layout.slotWidth);
           const h = Math.max(2, (Math.abs(point.impactWh) / maxImpact) * (stripHeight - 4));
@@ -4863,9 +4824,7 @@ export class HelmanSolarInspector extends LitElement {
     if (!(width > 0)) return [];
     const slots: string[] = [];
     for (let minutes = 0; minutes < 24 * 60; minutes += width) {
-      const hh = String(Math.floor(minutes / 60)).padStart(2, "0");
-      const mm = String(minutes % 60).padStart(2, "0");
-      slots.push(`${hh}:${mm}`);
+      slots.push(minutesToSlot(minutes));
     }
     return slots;
   }
@@ -4997,7 +4956,7 @@ export class HelmanSolarInspector extends LitElement {
     }
     if (runs.length === 0) return slots.join(", ");
     return runs
-      .map(([start, end]) => `${minutesToSlot(start)} – ${end >= 24 * 60 ? "24:00" : minutesToSlot(end)}`)
+      .map(([start, end]) => `${formatClock(start)} – ${formatClock(end)}`)
       .join(", ");
   }
 
@@ -5064,12 +5023,12 @@ export class HelmanSolarInspector extends LitElement {
     return html`
       <div class="metrics-section">
         <strong>
-          ${this._tFormat("bias_correction.inspector.selected_slot", {
+          ${this._t("bias_correction.inspector.selected_slot", {
             slot: this._formatSelectionRange(slots),
           })}
           ${interpolated && showDiagnostics
             ? html`<span class="interpolation-note" title=${this._t("bias_correction.inspector.interpolated_explanation")}>
-                ${this._tFormat("bias_correction.inspector.interpolated_from", {
+                ${this._t("bias_correction.inspector.interpolated_from", {
                   left: anchors?.left ?? this._t("bias_correction.inspector.interpolated_anchor_zero"),
                   right: anchors?.right ?? this._t("bias_correction.inspector.interpolated_anchor_zero"),
                 })}
@@ -5830,7 +5789,7 @@ export class HelmanSolarInspector extends LitElement {
       return html`<div class="note">${this._t("bias_correction.inspector.no_explainability")}</div>`;
     }
     if (!trainingSlot) {
-      return html`<div class="note">${this._tFormat("bias_correction.inspector.no_slot_explainability", { slot: selectedSlot })}</div>`;
+      return html`<div class="note">${this._t("bias_correction.inspector.no_slot_explainability", { slot: selectedSlot })}</div>`;
     }
     const selectedTrainingDate = this._resolveSelectedTrainingDate(selectedSlot);
     const interpolated = trainingSlot.interpolated === true;
@@ -5850,14 +5809,14 @@ export class HelmanSolarInspector extends LitElement {
       ${this._trainingTableCollapsed ? "" : html`
         <div class="contribution-summary">
           <div class="day-state">
-            ${this._tFormat("bias_correction.inspector.training_contribution_meta", {
+            ${this._t("bias_correction.inspector.training_contribution_meta", {
               ratio: this._formatFactor(trainingSlot.rawRatio),
               factor: this._formatFactor(trainingSlot.factor),
             })}
           </div>
           ${interpolated
             ? html`<div class="day-state">
-                ${this._tFormat("bias_correction.inspector.interpolated_meta", {
+                ${this._t("bias_correction.inspector.interpolated_meta", {
                   left: anchors?.left ?? this._t("bias_correction.inspector.interpolated_anchor_zero"),
                   right: anchors?.right ?? this._t("bias_correction.inspector.interpolated_anchor_zero"),
                 })}
@@ -5945,28 +5904,17 @@ export class HelmanSolarInspector extends LitElement {
     }
     const silent = options.silent === true;
     const requestedDate = this._selectedDate;
-    if (
-      (this._loading || this._refreshing) &&
-      this._activeRequestDate === requestedDate
-    ) {
-      return;
-    }
-    const requestId = ++this._activeRequestId;
-    this._activeRequestDate = requestedDate;
+    const request = this._dayRequest.begin(requestedDate);
+    if (request === null) return;
     this._error = "";
-    if (silent) {
-      this._refreshing = true;
-    } else {
+    if (!silent) {
       // The previous payload is kept rather than nulled: `_renderBody` still
       // draws it, dimmed, under the loading overlay, instead of the card
       // collapsing and re-expanding around the request.
       this._loading = true;
     }
     try {
-      const payload = await this.hass.callWS<InspectorPayload>({
-        type: "helman/solar_bias/inspector",
-        date: requestedDate,
-      });
+      const payload = await callHelman(this.hass, "helman/solar_bias/inspector", { date: requestedDate });
       payload.series.houseForecast ??= [];
       payload.series.houseActual ??= [];
       payload.series.houseActualBreakdown ??= [];
@@ -5996,7 +5944,7 @@ export class HelmanSolarInspector extends LitElement {
       payload.availability.hasBatteryForecast ??= false;
       payload.availability.hasBatteryActual ??= false;
       payload.batterySocBounds ??= [];
-      if (requestId === this._activeRequestId && requestedDate === this._selectedDate) {
+      if (this._dayRequest.isCurrent(request) && requestedDate === this._selectedDate) {
         // Cleared here rather than on the way out: a request dropped as a
         // duplicate or one that fails leaves the day owed, so returning to it
         // asks again instead of drawing what the announcement superseded.
@@ -6025,14 +5973,13 @@ export class HelmanSolarInspector extends LitElement {
         );
       }
     } catch (err: any) {
-      if (requestId === this._activeRequestId && requestedDate === this._selectedDate) {
+      if (this._dayRequest.isCurrent(request) && requestedDate === this._selectedDate) {
         this._error = err?.message || this._t("bias_correction.inspector.load_failed");
       }
     } finally {
-      if (requestId === this._activeRequestId && requestedDate === this._selectedDate) {
+      if (this._dayRequest.isCurrent(request) && requestedDate === this._selectedDate) {
         this._loading = false;
-        this._refreshing = false;
-        this._activeRequestDate = null;
+        this._dayRequest.reset();
       }
       this.requestUpdate();
     }
@@ -6070,32 +6017,18 @@ export class HelmanSolarInspector extends LitElement {
       // House pills only carry elapsed days, so the row is a seven-day block
       // ending today rather than one starting there -- otherwise the panel
       // opens on a row of unavailable gauges.
-      const daysBack = Math.max(0, Math.round(
-        (Date.parse(`${today}T00:00:00Z`) - Date.parse(`${selected}T00:00:00Z`)) / 86_400_000,
-      ));
-      const end = this._addDays(today, -7 * Math.floor(daysBack / 7));
-      return { start: this._addDays(end, -6), end };
+      const daysBack = Math.max(0, daysBetween(selected, today));
+      const end = addDays(today, -7 * Math.floor(daysBack / 7));
+      return { start: addDays(end, -6), end };
     }
     if (selected >= today) {
       return { start: today, end: this._dayRange?.maxDate ?? today };
     }
 
-    const daysBack = Math.round(
-      (Date.parse(`${today}T00:00:00Z`) - Date.parse(`${selected}T00:00:00Z`)) / 86_400_000,
-    );
+    const daysBack = daysBetween(selected, today);
     const weeksBack = Math.ceil(daysBack / 7);
-    const start = this._addDays(today, -7 * weeksBack);
-    return { start, end: this._addDays(start, 6) };
-  }
-
-  private _addDays(dayKey: string, delta: number): string {
-    const current = this._parseIsoDate(dayKey);
-    const moved = new Date(Date.UTC(current.year, current.month - 1, current.day + delta));
-    return formatIsoDate(
-      moved.getUTCFullYear(),
-      moved.getUTCMonth() + 1,
-      moved.getUTCDate(),
-    );
+    const start = addDays(today, -7 * weeksBack);
+    return { start, end: addDays(start, 6) };
   }
 
   /**
@@ -6128,11 +6061,8 @@ export class HelmanSolarInspector extends LitElement {
     // The house focus asks for a field the plain pills do not, so it is part of
     // what the answer is for.
     const key = `${start}..${measuredEnd}${this.houseFocus ? ":house" : ""}`;
-    if (this._historyDaysFor === key) {
-      return;
-    }
-    this._historyDaysFor = key;
-    const requestId = ++this._historyRequestId;
+    const request = this._historyRequest.begin(key);
+    if (request === null) return;
     this._historyDays = this._historyDays.filter((day) => day.dayKey >= start && day.dayKey <= end);
     if (start > measuredEnd) {
       // A window that begins after today has no measured days. Clearing keeps a
@@ -6148,13 +6078,12 @@ export class HelmanSolarInspector extends LitElement {
       return;
     }
     try {
-      const result = await this.hass.callWS<{ days: SolarInspectorDayAggregateRow[] }>({
-        type: "helman/solar_bias/day_aggregates",
-        start_date: start,
-        end_date: measuredEnd,
-        ...(this.houseFocus ? { house_forecast: true } : {}),
+      const result = await callHelman(this.hass, "helman/solar_bias/day_aggregates", {
+          start_date: start,
+          end_date: measuredEnd,
+          ...(this.houseFocus ? { house_forecast: true } : {}),
       });
-      if (this._historyDaysFor !== key || requestId !== this._historyRequestId) {
+      if (!this._historyRequest.isCurrent(request)) {
         return;
       }
       this._historyDays = buildHistoryDaysFromAggregates((result?.days ?? []).filter((day) => day.date >= start && day.date <= measuredEnd));
@@ -6256,22 +6185,13 @@ export class HelmanSolarInspector extends LitElement {
     );
   }
 
-  /** Today's day key in the time zone this card reads dates in. See `shared/today-iso`. */
+  /** Today's day key in the time zone this card reads dates in. See `shared/time/day-key`. */
   private _todayIso() {
-    return todayIso(this._haTimeZone());
+    return todayKey(this._haTimeZone());
   }
 
   private _parseIsoDate(value: string): { year: number; month: number; day: number } {
-    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-    if (!match) {
-      const today = this._todayIso();
-      return this._parseIsoDate(today);
-    }
-    return {
-      year: Number(match[1]),
-      month: Number(match[2]),
-      day: Number(match[3]),
-    };
+    return parseDayKey(value) ?? parseDayKey(this._todayIso())!;
   }
 
   private _formatDay(value: string) {
@@ -6291,46 +6211,24 @@ export class HelmanSolarInspector extends LitElement {
     return this._payload?.timezone ?? this.hass?.config?.time_zone;
   }
 
-  /**
-   * Energy for display. Every figure on this card — summary metrics, the
-   * contribution table, the composition boxes — goes through `formatEnergy`, so a
-   * quantity reads the same wherever it appears and small values stay legible
-   * instead of rounding away to "0.0 kWh".
-   *
-   * These wrappers own only what `formatEnergy` deliberately does not: what a
-   * missing reading looks like, and whether a gain is written with its sign.
-   */
   private _formatWh(value: number | null) {
-    if (value === null || !Number.isFinite(value)) {
-      return this._t("bias_correction.inspector.actual_not_available");
-    }
-    return formatEnergy(value).display;
+    return orNa(value, v => formatEnergyWh(v).display, this._t("bias_correction.inspector.actual_not_available"));
   }
 
   private _formatSignedWh(value: number | null) {
-    if (value === null || !Number.isFinite(value)) return this._t("bias_correction.inspector.actual_not_available");
-    // formatEnergy carries a minus of its own; only a gain needs marking.
-    const sign = value > 0 ? "+" : "";
-    return `${sign}${formatEnergy(value).display}`;
+    return orNa(value, v => formatEnergyWh(v, { signed: true }).display, this._t("bias_correction.inspector.actual_not_available"));
   }
 
   private _formatFactor(value: number | null) {
-    if (value === null || !Number.isFinite(value)) return "-";
-    return value.toFixed(3);
+    return orNa(value, v => v.toFixed(3), "-");
   }
 
   private _formatPct(value: number | null): string {
-    if (value === null || !Number.isFinite(value)) {
-      return this._t("bias_correction.inspector.actual_not_available");
-    }
-    return `${value.toFixed(1)} %`;
+    return orNa(value, v => `${v.toFixed(1)} %`, this._t("bias_correction.inspector.actual_not_available"));
   }
 
   private _formatPrice(value: number | null): string {
-    if (value === null || !Number.isFinite(value)) {
-      return this._t("bias_correction.inspector.actual_not_available");
-    }
-    return `${value.toFixed(2)} ${this._priceUnit}`.trim();
+    return orNa(value, v => formatMoney(v, this._priceUnit), this._t("bias_correction.inspector.actual_not_available"));
   }
 
   /**
@@ -6382,9 +6280,7 @@ export class HelmanSolarInspector extends LitElement {
   private _slotLabelForMinutes(minutes: number): string {
     const width = this._slotMinutes > 0 ? this._slotMinutes : 15;
     const start = Math.floor(minutes / width) * width;
-    const hh = String(Math.floor(start / 60)).padStart(2, "0");
-    const mm = String(start % 60).padStart(2, "0");
-    return `${hh}:${mm}`;
+    return formatClock(start);
   }
 
   private _handleChartClick(event: MouseEvent, payload: InspectorPayload) {
@@ -6441,9 +6337,8 @@ export class HelmanSolarInspector extends LitElement {
     selectedSlot: string | null,
   ) {
     if (!selectedSlot) return "";
-    const m = /^(\d{2}):(\d{2})$/.exec(selectedSlot);
-    if (!m) return "";
-    const minutes = Number(m[1]) * 60 + Number(m[2]);
+    const minutes = slotMinutes(selectedSlot);
+    if (minutes === null) return "";
     // A slot cropped out of the daylight window has no place on the axis.
     if (minutes < layout.dayStartMinutes || minutes >= layout.dayEndMinutes) return "";
     const x = layout.xForMinutes(minutes);
@@ -6579,7 +6474,7 @@ export class HelmanSolarInspector extends LitElement {
    */
   private _formatIncompleteNote(key: string, missing: number, expected: number): string {
     const share = expected > 0 ? (missing / expected) * 100 : 0;
-    return this._tFormat(key, {
+    return this._t(key, {
       count: missing,
       total: expected,
       percent: share > 0 && share < 1 ? "<1" : String(Math.round(share)),
@@ -6638,19 +6533,12 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   /** `_t` as a stable function reference, for components taking a localizer. */
-  private _localize: LocalizeFunction = (key: string) => this._t(key);
+  private _localize: LocalizeFunction = (key: string, values?: Record<string, string | number>) => this._t(key, values);
 
-  private _t(key: string): string {
-    return this.hass ? getLocalizeFunction(this.hass)(key) : this._fallbackLocalize(key);
+  private _t(key: string, values?: Record<string, string | number>): string {
+    return (this.hass ? getLocalizeFunction(this.hass) : this._fallbackLocalize)(key, values);
   }
 
-  private _tFormat(key: string, values: Record<string, string | number>): string {
-    let text = this._t(key);
-    for (const [name, value] of Object.entries(values)) {
-      text = text.replaceAll(`{${name}}`, String(value));
-    }
-    return text;
-  }
 }
 
 declare global {

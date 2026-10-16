@@ -1,11 +1,12 @@
+import { callHelman } from "../data/helman-commands";
 import type { HomeAssistant } from "../../../types/ha";
 import { LitElement, css, html, nothing } from "lit-element";
 import { property, state } from "lit/decorators.js";
 
-import type { LocalizeFunction } from "../../localize/localize";
+import { getLocalizeFunction, type LocalizeFunction } from "../../localize/localize";
 import { defineOnce } from "../define-once";
 import { loadHaForm, loadHaSortable } from "../load-ha-elements";
-import { getSharedDataChangedFeed } from "../../helman/data-changed";
+import { DataChangedController } from "../../helman/data-changed";
 import {
     asJsonArray,
     asJsonObject,
@@ -13,15 +14,10 @@ import {
     cloneJson,
     setValueAtPath,
 } from "../config/config-document";
-import {
-    getLocalizeFunction,
-    type LocalizeFunction as EditorLocalizeFunction,
-} from "../config/localize/localize";
 import type {
     ApplianceMetadataResponse,
     JsonObject,
     PathSegment,
-    SaveConfigResponse,
 } from "../config/types";
 import {
     fetchOptimizerSchema,
@@ -200,8 +196,6 @@ export class HelmanOptimizerEditDialog extends LitElement {
      */
     private _baseline: string | null = null;
 
-    private _unsubscribeDataChanged?: () => void;
-
     /**
      * The ids the current view was loaded for.
      *
@@ -221,33 +215,16 @@ export class HelmanOptimizerEditDialog extends LitElement {
     /** The close is settled -- see `_close`. */
     private _closing = false;
 
-    /**
-     * The `editor.*` strings, which live in the config editor's own table.
-     *
-     * Built from `hass` rather than taken as a property: those keys are not in
-     * the card bundle's translations, and the field labels inside the card are
-     * all of them. Loudly missing rather than silently raw -- see
-     * `MISSING_TRANSLATION_PREFIX`.
-     */
-    private _editorLocalize: EditorLocalizeFunction | null = null;
+    constructor() {
+        super();
+        new DataChangedController(this, () => this.hass, {}, () => void this._refreshStale());
+    }
 
     connectedCallback(): void {
         super.connectedCallback();
         void loadHaForm().then(() => this.requestUpdate());
         void loadHaSortable().then(() => this.requestUpdate());
         void this._load();
-        const hass = this.hass;
-        if (hass) {
-            this._unsubscribeDataChanged = getSharedDataChangedFeed(hass).subscribe(() => {
-                void this._refreshStale();
-            });
-        }
-    }
-
-    disconnectedCallback(): void {
-        super.disconnectedCallback();
-        this._unsubscribeDataChanged?.();
-        this._unsubscribeDataChanged = undefined;
     }
 
     protected willUpdate(): void {
@@ -271,9 +248,9 @@ export class HelmanOptimizerEditDialog extends LitElement {
                     ${this._stale
                         ? html`
                               <div class="message error stale">
-                                  <span>${this._editorText("editor.status.changed_elsewhere")}</span>
+                                  <span>${this._translate("editor.status.changed_elsewhere")}</span>
                                   <button type="button" @click=${this._handleReload}>
-                                      ${this._editorText("editor.actions.reload_config")}
+                                      ${this._translate("editor.actions.reload_config")}
                                   </button>
                               </div>
                           `
@@ -291,7 +268,7 @@ export class HelmanOptimizerEditDialog extends LitElement {
                                   .disabled=${this._stale || this._saving}
                                   @click=${this._handleSave}
                               >
-                                  ${this._editorText(
+                                  ${this._translate(
                                       this._saving
                                           ? "editor.actions.saving"
                                           : "editor.actions.save_and_reload",
@@ -321,7 +298,7 @@ export class HelmanOptimizerEditDialog extends LitElement {
             case "not_found":
                 return html`
                     <div class="placeholder error">
-                        ${this._format("not_found", { id: this.optimizerIds.join(", ") })}
+                        ${this._text("not_found", { id: this.optimizerIds.join(", ") })}
                     </div>
                 `;
             case "ready": {
@@ -345,7 +322,7 @@ export class HelmanOptimizerEditDialog extends LitElement {
                             .applianceMetadata=${view.applianceMetadata}
                             .expanded=${expanded}
                             .hass=${this.hass}
-                            .localize=${(key: string) => this._editorText(key)}
+                            .localize=${this._translate}
                             .listActions=${(basePath: PathSegment[], enabled: boolean) =>
                                 this._renderEnabledToggle(basePath, enabled)}
                             @optimizer-config-changed=${this._handleConfigChanged}
@@ -374,7 +351,7 @@ export class HelmanOptimizerEditDialog extends LitElement {
         return html`
             <div class="list-actions" @click=${preventSummaryToggle}>
                 <div class="summary-toggle" @click=${stopSummaryToggle}>
-                    <span>${this._editorText("editor.fields.optimizer_enabled")}</span>
+                    <span>${this._translate("editor.fields.optimizer_enabled")}</span>
                     <ha-switch
                         .checked=${enabled}
                         @change=${(event: Event) =>
@@ -418,22 +395,23 @@ export class HelmanOptimizerEditDialog extends LitElement {
      * `null` on failure, and a missing registry only costs the picker its
      * labels, so only the config itself is fatal.
      */
+    private _translate = getLocalizeFunction();
+
     private async _load(): Promise<void> {
         const hass = this.hass;
         if (!hass) {
             return;
         }
+        this._translate = getLocalizeFunction(hass, this.localize);
         this._view = { kind: "loading" };
         this._dirty = false;
         this._stale = false;
         this._loadedIds = _optimizerIdKey(this.optimizerIds);
-        this._editorLocalize = getLocalizeFunction(hass);
         try {
             const [config, schema, appliances] = await Promise.all([
-                hass.callWS<unknown>({ type: "helman/get_config" }),
+                callHelman(hass, "helman/get_config", {}),
                 fetchOptimizerSchema(hass),
-                hass
-                    .callWS<ApplianceMetadataResponse>({ type: "helman/get_appliances" })
+                callHelman(hass, "helman/get_appliances", {})
                     .catch(() => null),
             ]);
             const document = asJsonObject(config);
@@ -493,14 +471,11 @@ export class HelmanOptimizerEditDialog extends LitElement {
                 this._stale = true;
                 this._message = {
                     kind: "error",
-                    text: this._editorText("editor.status.changed_elsewhere"),
+                    text: this._translate("editor.status.changed_elsewhere"),
                 };
                 return;
             }
-            const response = await this.hass.callWS<SaveConfigResponse>({
-                type: "helman/save_config",
-                config: view.config,
-            });
+            const response = await callHelman(this.hass, "helman/save_config", { config: view.config });
             if (response.validation?.valid !== false) {
                 // The document we just wrote is the new baseline. Without this
                 // a retry would compare against the pre-save read, find our own
@@ -525,7 +500,7 @@ export class HelmanOptimizerEditDialog extends LitElement {
                 // makes the integration's entities briefly unavailable, which
                 // is worth knowing about, and the dialog is no longer there to
                 // say it -- so it goes to Home Assistant's own toast.
-                this._notify(this._editorText(
+                this._notify(this._translate(
                     response.reloadStarted
                         ? "editor.messages.config_saved_reload_started"
                         : "editor.messages.config_saved",
@@ -540,7 +515,7 @@ export class HelmanOptimizerEditDialog extends LitElement {
                 kind: "error",
                 text:
                     response.reloadError ??
-                    this._editorText(
+                    this._translate(
                         response.validation?.valid
                             ? "editor.messages.config_saved_reload_failed"
                             : "editor.messages.save_rejected",
@@ -549,7 +524,7 @@ export class HelmanOptimizerEditDialog extends LitElement {
         } catch (error) {
             this._message = {
                 kind: "error",
-                text: `${this._editorText("editor.messages.save_failed")} ${describeError(error)}`,
+                text: `${this._translate("editor.messages.save_failed")} ${describeError(error)}`,
             };
         } finally {
             this._saving = false;
@@ -575,7 +550,7 @@ export class HelmanOptimizerEditDialog extends LitElement {
             return "same";
         }
         try {
-            const current = asJsonObject(await this.hass.callWS<unknown>({ type: "helman/get_config" }));
+            const current = asJsonObject(await callHelman(this.hass, "helman/get_config", {}));
             if (current === undefined) {
                 return "unknown";
             }
@@ -630,7 +605,7 @@ export class HelmanOptimizerEditDialog extends LitElement {
             return;
         }
         try {
-            const current = asJsonObject(await this.hass.callWS<unknown>({ type: "helman/get_config" }));
+            const current = asJsonObject(await callHelman(this.hass, "helman/get_config", {}));
             if (current !== undefined) {
                 this._baseline = canonicalJson(current);
             }
@@ -656,7 +631,7 @@ export class HelmanOptimizerEditDialog extends LitElement {
 
     /** Throw the draft away and read the config again. */
     private _handleReload = (): void => {
-        if (this._dirty && !window.confirm(this._editorText("editor.confirm.discard_changes"))) {
+        if (this._dirty && !window.confirm(this._translate("editor.confirm.discard_changes"))) {
             return;
         }
         this._message = null;
@@ -737,21 +712,10 @@ export class HelmanOptimizerEditDialog extends LitElement {
         this.dispatchEvent(new CustomEvent("closed"));
     }
 
-    private _text(suffix: string): string {
-        return this.localize(`${KEY_PREFIX}.${suffix}`);
+    private _text(suffix: string, values?: Record<string, string | number>): string {
+        return this._translate(`${KEY_PREFIX}.${suffix}`, values);
     }
 
-    private _format(suffix: string, values: Record<string, string>): string {
-        let text = this._text(suffix);
-        for (const [name, value] of Object.entries(values)) {
-            text = text.replaceAll(`{${name}}`, value);
-        }
-        return text;
-    }
-
-    private _editorText(key: string): string {
-        return this._editorLocalize?.(key) ?? key;
-    }
 }
 
 /**

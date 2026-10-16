@@ -1,9 +1,11 @@
+import { formatPower } from "../format";
+import { callHelman } from "../data/helman-commands";
 import type { HomeAssistant } from "../../../types/ha";
 import { LitElement, css, html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import { live } from "lit/directives/live.js";
 
-import { fetchDeviceSuggestions, type DeviceSuggestions } from "../../helman-api";
+import { type DeviceSuggestions } from "../../helman-api";
 import {
     appendListItem,
     asJsonArray,
@@ -76,7 +78,7 @@ import { resolvedDraft } from "../config/resolved-draft";
 import { defineOnce } from "../define-once";
 import type { HaEntityPickerEntityFilterFunc } from "../../../types/ha";
 import { haDeviceEntityFilter, sharedHaDevice, suggestionAnchors } from "./device-scope";
-import { formatPower } from "../../power-format";
+
 import {
     deviceEnergyFigure,
     deviceEnergyLabel,
@@ -293,7 +295,7 @@ export function renderIssueCountBadge(
     const hasError = issues.some((issue) => validation?.errors.includes(issue));
     return html`
         <span class="device-badge ${hasError ? "error" : "warning"}" data-badge="issues">
-            ${host.t("editor.device_badges.issues").replaceAll("{count}", String(issues.length))}
+            ${host.t("editor.device_badges.issues", { count: issues.length })}
         </span>
     `;
 }
@@ -463,7 +465,7 @@ export class HelmanDeviceEditor extends LitElement implements HardwareProfileHos
     /** Start with the card open. */
     @property({ type: Boolean }) expanded = false;
 
-    @property({ attribute: false }) localize: (key: string) => string = (key) => key;
+    @property({ attribute: false }) localize: (key: string, values?: Record<string, string | number>) => string = (key) => key;
 
     /**
      * The hardware profiles, and what each draft device's profile owns: the
@@ -593,7 +595,7 @@ export class HelmanDeviceEditor extends LitElement implements HardwareProfileHos
     /** A count chip, or none for an empty list. */
     private _countChips(count: number): { key: string; text: string }[] {
         return count > 0
-            ? [{ key: "count", text: this._tFormat("editor.section_badges.count", { count }) }]
+            ? [{ key: "count", text: this.t("editor.section_badges.count", { count }) }]
             : [];
     }
 
@@ -878,7 +880,10 @@ export class HelmanDeviceEditor extends LitElement implements HardwareProfileHos
         const hass = this.hass;
         const request = ++this._suggestionRequest;
         try {
-            const suggestions = await fetchDeviceSuggestions(hass, anchors, draft);
+            const suggestions = await callHelman(hass, "helman/suggest_device_entities", {
+                anchor_entity_ids: anchors,
+                config: draft,
+            });
             if (this.config !== draft || request !== this._suggestionRequest) return;
             // A profile device's meter counts, though the draft stores none.
             const resolved = resolvedDraft(draft, this.vendors);
@@ -957,7 +962,7 @@ export class HelmanDeviceEditor extends LitElement implements HardwareProfileHos
                               }}
                           >
                               <option value="">${this.t("editor.suggestions.choose")}</option>
-                              ${suggestions[field].map((candidate) => html`<option value=${candidate.entityId}>${candidate.name} (${candidate.entityId}) — ${candidate.reasons.map((reason) => this._tFormat(`editor.suggestions.reasons.${reason.code}`, { value: reason.value ?? "" })).join(", ")}</option>`)}
+                              ${suggestions[field].map((candidate) => html`<option value=${candidate.entityId}>${candidate.name} (${candidate.entityId}) — ${candidate.reasons.map((reason) => this.t(`editor.suggestions.reasons.${reason.code}`, { value: reason.value ?? "" })).join(", ")}</option>`)}
                           </select>
                       </div>`;
                   })
@@ -1082,7 +1087,7 @@ export class HelmanDeviceEditor extends LitElement implements HardwareProfileHos
                 <label>${this.t("editor.fields.device_phase")}</label>
                 <input
                     class="device-phase-inherited"
-                    .value=${this._tFormat("editor.values.device_phase_inherited", {
+                    .value=${this.t("editor.values.device_phase_inherited", {
                         parent: deviceName(this, this.inspections, entry.device, entry.path),
                         phase: phase ? this._phaseLabel(phase) : this.t("editor.device_phases.unassigned"),
                     })}
@@ -1213,7 +1218,7 @@ export class HelmanDeviceEditor extends LitElement implements HardwareProfileHos
         const note = hasChildren
             ? this.t("editor.helpers.schedulable_has_children")
             : siblings > 1
-              ? this._tFormat("editor.helpers.schedulable_siblings", { count: siblings })
+              ? this.t("editor.helpers.schedulable_siblings", { count: siblings })
               : "";
         return html`
             <div class="field toggle-field schedulable-field">
@@ -1477,7 +1482,7 @@ export class HelmanDeviceEditor extends LitElement implements HardwareProfileHos
             [
                 { key: "strategy", text: strategyLabel ? this.t(strategyLabel) : strategy },
                 ...(typeof hourly === "number" && Number.isFinite(hourly)
-                    ? [{ key: "hourly_energy_kwh", text: this._tFormat("editor.section_badges.hourly_energy", { value: formatPower(hourly * 1000).display }) }]
+                    ? [{ key: "hourly_energy_kwh", text: this.t("editor.section_badges.hourly_energy", { value: formatPower(hourly * 1000).display }) }]
                     : []),
             ],
         );
@@ -1655,7 +1660,7 @@ export class HelmanDeviceEditor extends LitElement implements HardwareProfileHos
                     <div class="appliance-summary-left">
                         ${renderDragHandle(this)}
                         <div class="card-title">
-                            <strong>${stringValue(vehicleObject.name) || this._tFormat("editor.dynamic.vehicle", { index: index + 1 })}</strong>
+                            <strong>${stringValue(vehicleObject.name) || this.t("editor.dynamic.vehicle", { index: index + 1 })}</strong>
                             <span class="card-subtitle">${stringValue(vehicleObject.id) || this.t("editor.values.missing_id")}</span>
                         </div>
                     </div>
@@ -1719,7 +1724,7 @@ export class HelmanDeviceEditor extends LitElement implements HardwareProfileHos
                 vehiclePath,
                 createVehicleDraft(
                     existingIds,
-                    this._tFormat("editor.dynamic.vehicle", { index: existingIds.length + 1 }),
+                    this.t("editor.dynamic.vehicle", { index: existingIds.length + 1 }),
                 ),
             );
         });
@@ -1781,8 +1786,8 @@ export class HelmanDeviceEditor extends LitElement implements HardwareProfileHos
 
     // --- HardwareProfileHost -------------------------------------------------
 
-    t(key: string): string {
-        return this.localize(key);
+    t(key: string, values?: Record<string, string | number>): string {
+        return this.localize(key, values);
     }
 
     /**
@@ -1791,14 +1796,6 @@ export class HelmanDeviceEditor extends LitElement implements HardwareProfileHos
      */
     mutateDraft(mutator: (draft: JsonObject) => void): void {
         this._mutate(this.path, mutator);
-    }
-
-    private _tFormat(key: string, values: Record<string, string | number>): string {
-        let text = this.t(key);
-        for (const [name, value] of Object.entries(values)) {
-            text = text.replaceAll(`{${name}}`, String(value));
-        }
-        return text;
     }
 
     getValue(path: PathSegment[]): unknown {

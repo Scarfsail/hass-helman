@@ -2,7 +2,7 @@ import { LitElement, css, html, nothing } from "lit";
 import type { TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import { mdiInformationOutline } from "@mdi/js";
-import { getLocalizeFunction } from "../cards/shared/config/localize/localize";
+import { getLocalizeFunction } from "../cards/localize/localize";
 import { renderSvgIcon } from "../cards/shared/config/form-fields";
 
 /**

@@ -1,3 +1,4 @@
+import { pad2 } from "./time/slot-time";
 import { svg } from "lit";
 
 /**
@@ -111,8 +112,8 @@ export function renderSlotGridlines(options: {
       <line x1=${x} y1=${top} x2=${x} y2=${bottom}
             stroke="var(--divider-color)" stroke-width="1"
             opacity=${isLabelled ? SLOT_GRID_LINE_OPACITY.major : SLOT_GRID_LINE_OPACITY.minor}></line>
-      ${isLabelled && labelY !== undefined
-        ? svg`<text x=${x} y=${labelY} text-anchor="middle" fill="var(--secondary-text-color)" font-size="11">${String(tick.hour).padStart(2, "0")}</text>`
+      ${tick.hour !== null && labelY !== undefined
+        ? svg`<text x=${x} y=${labelY} text-anchor="middle" fill="var(--secondary-text-color)" font-size="11">${pad2(tick.hour)}</text>`
         : ""}
     `;
   });

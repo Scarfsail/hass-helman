@@ -251,7 +251,7 @@ async function mountPanel(page: Page, payload: unknown, slotIndex: number | null
     await page.evaluate(({ fixture, slotId }) => {
         const panel = document.createElement("scheduling-explanation-panel") as unknown as HTMLElement
             & Record<string, unknown>;
-        panel.localize = (key: string) => key;
+        panel.localize = Object.assign((key: string) => key, { has: () => false });
         panel.payload = fixture;
         panel.slotId = slotId;
         panel.locale = "cs";

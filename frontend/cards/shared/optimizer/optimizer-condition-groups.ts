@@ -256,7 +256,7 @@ function renderGroupName(
 }
 
 function defaultGroupName(host: OptimizerEditorHost, groupIndex: number): string {
-    return host.tFormat("editor.dynamic.condition_group", { index: groupIndex + 1 });
+    return host.t("editor.dynamic.condition_group", { index: groupIndex + 1 });
 }
 
 function renderConditionWidget(

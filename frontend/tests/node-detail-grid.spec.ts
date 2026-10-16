@@ -237,7 +237,7 @@ test.describe("the grid overview", () => {
         await mount(page);
         await openDetail(page);
         await expect(tile(page, "next").locator(".value")).toHaveText("14:00");
-        await expect(tile(page, "next").locator(".detail")).toHaveText("import 5.1 CZK/kWh");
+        await expect(tile(page, "next").locator(".detail")).toHaveText("import 5.10 CZK/kWh");
         await expect(tile(page, "next").locator("button")).toHaveAttribute("style", /--node-tile-accent: var\(--helman-grid-import\)/);
         await expect(tile(page, "next").locator("button")).not.toHaveClass(/action-tone/);
         await expect(tile(page, "outage").locator(".value")).toHaveText("On grid");
@@ -358,7 +358,7 @@ test.describe("the flow", () => {
             await expect(flowLabel(page, "out", id)).toHaveClass(/none/);
         }
         await expect(flow(page).locator("[data-side='out'] [data-ribbon]")).toHaveCount(0);
-        await expect(flow(page).locator("[data-flow-note]")).toHaveText("Price now: import 4.2 CZK/kWh · export 1.5 CZK/kWh");
+        await expect(flow(page).locator("[data-flow-note]")).toHaveText("Price now: import 4.20 CZK/kWh · export 1.50 CZK/kWh");
     });
 
     test("an unreadable solar meter leaves the split unknown, never 0", async ({ page }) => {
@@ -586,9 +586,9 @@ test.describe("money and what comes next", () => {
         await openDetail(page);
         await open(page, "next");
         const next = question(page, "next");
-        await expect(next.locator(".preview")).toHaveText("import 4.2 CZK/kWh · export 1.5 CZK/kWh");
-        await expect(next.locator("[data-row='import-now']")).toContainText("4.2 CZK/kWh");
-        await expect(next.locator("[data-row='import-next']")).toContainText("5.1 CZK/kWh from 14:00");
+        await expect(next.locator(".preview")).toHaveText("import 4.20 CZK/kWh · export 1.50 CZK/kWh");
+        await expect(next.locator("[data-row='import-now']")).toContainText("4.20 CZK/kWh");
+        await expect(next.locator("[data-row='import-next']")).toContainText("5.10 CZK/kWh from 14:00");
         await expect(next.locator("[data-row='export-next']")).toContainText("no change known");
         await expect(next.locator("[data-row='planned-now']")).toContainText("exporting 0.30 kWh");
         await expect(next.locator("[data-row='planned-change']")).toContainText("from 15:00: importing");
@@ -602,8 +602,8 @@ test("next: a rate whose boundary has passed is the rate now, from the price poi
     await expect(tile(page, "next").locator(".value")).toHaveText("14:00");
     await open(page, "next");
     const next = question(page, "next");
-    await expect(next.locator("[data-row='import-now']")).toContainText("4.2 CZK/kWh");
-    await expect(next.locator("[data-row='import-next']")).toContainText("5.1 CZK/kWh from 14:00");
+    await expect(next.locator("[data-row='import-now']")).toContainText("4.20 CZK/kWh");
+    await expect(next.locator("[data-row='import-next']")).toContainText("5.10 CZK/kWh from 14:00");
 });
 
 test.describe("disclosure and live data", () => {

@@ -1,3 +1,4 @@
+import { pad2 } from "../shared/time/slot-time";
 /**
  * The two rows of pills the aggregate views pick a span with: years, then
  * months.
@@ -78,7 +79,7 @@ function parseIsoDate(value: string): DateParts | null {
 }
 
 function isoFirstOfMonth(year: number, month: number): string {
-    return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-01`;
+    return `${String(year).padStart(4, "0")}-${pad2(month)}-01`;
 }
 
 /** Months since year zero, so a range spanning a new year is one subtraction. */

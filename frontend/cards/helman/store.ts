@@ -11,7 +11,7 @@ import type {
     SetScheduleResponse,
     TreePayload,
 } from "../helman-api";
-import { HelmanClient } from "./client";
+import { callHelman } from "../shared/data/helman-commands";
 import {
     buildScheduleSlotDTO,
     type HelmanSchedulePatch,
@@ -34,7 +34,7 @@ export interface HelmanStore {
     getApplianceProjections(): Promise<ApplianceProjectionsPayload>;
     getDeviceTree(options?: { fresh?: boolean }): Promise<TreePayload>;
     getHistory(options?: { fresh?: boolean }): Promise<HistoryPayload>;
-    getNodeDetail<T>(request: Omit<GetNodeDetailRequest, "type">, options?: { fresh?: boolean }): Promise<T>;
+    getNodeDetail<T>(request: GetNodeDetailRequest, options?: { fresh?: boolean }): Promise<T>;
 }
 
 export function getSharedHelmanStore(hass: HomeAssistant): HelmanStore {
@@ -50,7 +50,7 @@ export function getSharedHelmanStore(hass: HomeAssistant): HelmanStore {
 }
 
 class HelmanStoreImpl implements HelmanStore {
-    private readonly _client: HelmanClient;
+    private _hass: HomeAssistant;
     /**
      * Read requests currently awaiting a response, keyed by command.
      *
@@ -66,11 +66,11 @@ class HelmanStoreImpl implements HelmanStore {
     private readonly _inFlight = new Map<string, Promise<unknown>>();
 
     constructor(hass: HomeAssistant) {
-        this._client = new HelmanClient(hass);
+        this._hass = hass;
     }
 
     public updateHass(hass: HomeAssistant): void {
-        this._client.updateHass(hass);
+        this._hass = hass;
     }
 
     private _dedupe<T>(key: string, request: () => Promise<T>): Promise<T> {
@@ -109,31 +109,29 @@ class HelmanStoreImpl implements HelmanStore {
     }
 
     public getSchedule(): Promise<SchedulePayload> {
-        return this._dedupe("get_schedule", () => this._client.getSchedule());
+        return this._dedupe("get_schedule", () => callHelman(this._hass, "helman/get_schedule", {}));
     }
 
     public applySchedulePatches(
         patches: readonly HelmanSchedulePatch[],
     ): Promise<SetScheduleResponse> {
-        return this._afterMutation(this._client.setSchedule(
-            patches.map((patch) => buildScheduleSlotDTO(patch)),
-        ));
+        return this._afterMutation(callHelman(this._hass, "helman/set_schedule", { slots: patches.map((patch) => buildScheduleSlotDTO(patch)) }));
     }
 
     public setScheduleExecution(enabled: boolean): Promise<SetScheduleExecutionResponse> {
-        return this._afterMutation(this._client.setScheduleExecution(enabled));
+        return this._afterMutation(callHelman(this._hass, "helman/set_schedule_execution", { enabled }));
     }
 
     public getControllableEntities(): Promise<ControllableEntitiesPayload> {
-        return this._dedupe("get_controllable_entities", () => this._client.getControllableEntities());
+        return this._dedupe("get_controllable_entities", () => callHelman(this._hass, "helman/get_controllable_entities", {}));
     }
 
     public getEntityActualHistory(): Promise<EntityActualHistoryPayload> {
-        return this._dedupe("get_entity_actual_history", () => this._client.getEntityActualHistory());
+        return this._dedupe("get_entity_actual_history", () => callHelman(this._hass, "helman/get_entity_actual_history", {}));
     }
 
     public getAppliances(): Promise<AppliancesPayload> {
-        return this._dedupe("get_appliances", () => this._client.getAppliances());
+        return this._dedupe("get_appliances", () => callHelman(this._hass, "helman/get_appliances", {}));
     }
 
     /**
@@ -144,29 +142,29 @@ class HelmanStoreImpl implements HelmanStore {
      * bumped before the join, so the stale answer looks current and is kept.
      */
     public getApplianceProjections(): Promise<ApplianceProjectionsPayload> {
-        return this._client.getApplianceProjections();
+        return callHelman(this._hass, "helman/get_appliance_projections", {});
     }
 
     public getDeviceTree(options?: { fresh?: boolean }): Promise<TreePayload> {
         if (options?.fresh) this._inFlight.delete("get_device_tree");
-        return this._dedupe("get_device_tree", () => this._client.getDeviceTree());
+        return this._dedupe("get_device_tree", () => callHelman(this._hass, "helman/get_device_tree", {}));
     }
 
     public getHistory(options?: { fresh?: boolean }): Promise<HistoryPayload> {
         if (options?.fresh) this._inFlight.delete("get_history");
-        return this._dedupe("get_history", () => this._client.getHistory());
+        return this._dedupe("get_history", () => callHelman(this._hass, "helman/get_history", {}));
     }
 
     /**
      * De-duplicated per node, device and section: the card's cell and its dialog
      * ask together. `fresh` skips joining a request sent before a state changed.
      */
-    public getNodeDetail<T>(request: Omit<GetNodeDetailRequest, "type">, options?: { fresh?: boolean }): Promise<T> {
+    public getNodeDetail<T>(request: GetNodeDetailRequest, options?: { fresh?: boolean }): Promise<T> {
         const key = `get_node_detail:${request.node}:${request.device_id ?? ""}:${request.section ?? ""}`;
         // A config refresh replaces the inverter overview for every card sharing
         // this connection, including one mounted while the new read is pending.
         if (options?.fresh && request.node === "inverter" && !request.section) this._inFlight.delete(key);
-        else if (options?.fresh) return this._client.getNodeDetail<T>(request);
-        return this._dedupe(key, () => this._client.getNodeDetail<T>(request));
+        else if (options?.fresh) return callHelman(this._hass, "helman/get_node_detail", request) as Promise<T>;
+        return this._dedupe(key, () => callHelman(this._hass, "helman/get_node_detail", request) as Promise<T>);
     }
 }

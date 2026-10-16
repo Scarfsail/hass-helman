@@ -3,7 +3,6 @@
     "title": "Editor konfigurace Helman",
     "description": "Upravte uloženou konfiguraci integrace Helman, validujte ji v backendu a uložte ji bez ztráty nepodporovaných klíčů nebo budoucích konfiguračních větví.",
     "tabs": {
-      "general": "Obecné",
       "energy_nodes": "Energetické uzly",
       "training": "Trénování",
       "automation": "Automatizace",
@@ -123,8 +122,6 @@
       "grouping": "Seskupení",
       "phases": "Fáze",
       "house_phases": "Fáze domu",
-      "daily_energy_entity": "Entita denní energie",
-      "import_window": "Importní okno",
       "local_time_window": "Lokální časové okno",
       "optimizer": "Optimalizátor",
       "use_mode_mapping": "Mapování režimu použití",
@@ -347,7 +344,6 @@
       "optimizer_targets": "První spotřebič bere přebytek jako první; každý další plánuje s tím, co mu ty nad ním nechaly.",
       "day_context_deficit_ratio": "Dny s poměrem výroby/spotřeby na této hodnotě nebo pod ní se kloní k deficitu.",
       "day_context_surplus_ratio": "Dny s poměrem výroby/spotřeby na této hodnotě nebo nad ní se kloní k přebytku.",
-      "appliance_runtime_max_consecutive_skips": "Kolik dní po sobě lze spotřebič vynechat, než je vynucen jeho běh.",
       "appliance_runtime_climate_mode": "Vyberte jeden z režimů, které zvolený klimatický spotřebič právě podporuje.",
       "appliance_runtime_climate_mode_unavailable": "Živé režimy klimatizace pro tento rozpracovaný spotřebič zatím nejsou dostupné. Uložte a znovu načtěte konfiguraci, aby se načetly režimy podporované za běhu.",
       "appliance_runtime_climate_mode_single": "Tento klimatický spotřebič aktuálně nabízí jen jeden zapisovatelný režim, proto je pole jen pro čtení.",
@@ -403,7 +399,6 @@
       "load_ha_yaml_editor_failed": "Nepodařilo se načíst YAML editor Home Assistantu.",
       "fix_yaml_errors_first": "Před validací nebo uložením opravte chyby v YAML.",
       "fix_descendant_yaml_errors": "Před přepnutím této úrovně do YAML opravte chyby v YAML v podřízených částech.",
-      "enter_yaml_failed": "Nepodařilo se otevřít YAML editor pro tuto část.",
       "load_inspector_card_failed": "Načtení karty solárního inspektoru selhalo. Zkuste to znovu po obnovení stránky.",
       "load_device_detail_failed": "Načtení podrobností zařízení selhalo. Zkuste to znovu po obnovení stránky.",
       "card_module_url_missing": "Graf solárního inspektoru zde není dostupný: potřebuje prostředek karty, který tato integrace registruje do Lovelace a který se na této instalaci nepoužívá."
@@ -664,7 +659,6 @@
     }
   },
   "common": {
-    "yes": "Ano",
     "no": "Ne",
     "unknown": "Neznámé",
     "not_available": "Není k dispozici"

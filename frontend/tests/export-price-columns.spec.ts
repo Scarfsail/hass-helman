@@ -397,9 +397,9 @@ test.describe("price columns", () => {
         // Every hour's export rate is written, and the flat import rate is
         // written beside each of them -- the column moved, so it is a reading.
         for (const hour of hours) {
-            expect(labels, `hour ${hour}`).toContain((1 + (hour % 7) * 0.4).toFixed(1));
+            expect(labels, `hour ${hour}`).toContain((1 + (hour % 7) * 0.4).toFixed(2));
         }
-        expect(labels.filter((label) => label === "6.0").length).toBe(24);
+        expect(labels.filter((label) => label === "6.00").length).toBe(24);
     });
 
     test("a cell with only one rate still draws its column", async ({ page }) => {

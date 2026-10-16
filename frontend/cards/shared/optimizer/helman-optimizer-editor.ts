@@ -186,7 +186,7 @@ export class HelmanOptimizerEditor
     /** Start with the card open. See `OptimizerCardOptions.open`. */
     @property({ type: Boolean }) expanded = false;
 
-    @property({ attribute: false }) localize: (key: string) => string = (key) => key;
+    @property({ attribute: false }) localize: (key: string, values?: Record<string, string | number>) => string = (key) => key;
 
     /**
      * A validation warning against this optimizer, or none.
@@ -309,7 +309,7 @@ export class HelmanOptimizerEditor
         const enabled = booleanValue(this.getValue([...this._basePath, "enabled"]), true);
         const title =
             stringValue(optimizer.id) ||
-            this._tFormat("editor.dynamic.optimizer", { index: this.index + 1 });
+            this.t("editor.dynamic.optimizer", { index: this.index + 1 });
         return html`
             <details
                 class=${`list-card optimizer-card optimizer-card--${enabled ? "enabled" : "disabled"}`}
@@ -380,8 +380,8 @@ export class HelmanOptimizerEditor
         const enabled = booleanValue(this.getValue([...this._basePath, "enabled"]), true);
         const title =
             stringValue(optimizer.id) ||
-            this._tFormat("editor.dynamic.optimizer", { index: this.index + 1 });
-        const subtitle = this._tFormat("editor.dynamic.unsupported_optimizer_kind", {
+            this.t("editor.dynamic.optimizer", { index: this.index + 1 });
+        const subtitle = this.t("editor.dynamic.unsupported_optimizer_kind", {
             kind: kind || this.t("editor.values.unknown"),
         });
         return html`
@@ -429,7 +429,7 @@ export class HelmanOptimizerEditor
     private _cardTitle(schema: OptimizerSchema, optimizer: JsonObject): string {
         const fallback =
             stringValue(optimizer.id) ||
-            this._tFormat("editor.dynamic.optimizer", { index: this.index + 1 });
+            this.t("editor.dynamic.optimizer", { index: this.index + 1 });
         if (!this._targetsControllable(schema)) {
             return fallback;
         }
@@ -444,7 +444,7 @@ export class HelmanOptimizerEditor
         }
         if (selected.length > 0) {
             // A group is titled by every member it names, in priority order.
-            return this._tFormat("editor.dynamic.appliance_option", {
+            return this.t("editor.dynamic.appliance_option", {
                 name: selected.map((option) => option.name).join(", "),
                 id: fallback,
             });
@@ -453,7 +453,7 @@ export class HelmanOptimizerEditor
             (state) => state.selectedMissingFromDraft && state.selectedId.length > 0,
         );
         if (stale) {
-            return this._tFormat("editor.dynamic.stale_appliance", { id: stale.selectedId });
+            return this.t("editor.dynamic.stale_appliance", { id: stale.selectedId });
         }
         return fallback;
     }
@@ -498,20 +498,8 @@ export class HelmanOptimizerEditor
 
     // --- FormFieldHost / OptimizerEditorHost --------------------------------
 
-    t(key: string): string {
-        return this.localize(key);
-    }
-
-    tFormat(key: string, values: Record<string, string | number>): string {
-        return this._tFormat(key, values);
-    }
-
-    private _tFormat(key: string, values: Record<string, string | number>): string {
-        let text = this.t(key);
-        for (const [name, value] of Object.entries(values)) {
-            text = text.replaceAll(`{${name}}`, String(value));
-        }
-        return text;
+    t(key: string, values?: Record<string, string | number>): string {
+        return this.localize(key, values);
     }
 
     getValue(path: PathSegment[]): unknown {
@@ -679,7 +667,7 @@ export class HelmanOptimizerEditor
                         <div class="controllable-target-row">
                             ${renderDragHandle(this)}
                             <strong class="controllable-target-position">
-                                ${this._tFormat("editor.dynamic.priority_position", {
+                                ${this.t("editor.dynamic.priority_position", {
                                     position: memberIndex + 1,
                                 })}
                             </strong>
@@ -741,7 +729,7 @@ export class HelmanOptimizerEditor
                 ${selectionState.selectedMissingFromDraft && selectionState.selectedId.length > 0
                     ? html`
                           <option value=${selectionState.selectedId} ?selected=${true}>
-                              ${this._tFormat("editor.dynamic.stale_appliance", {
+                              ${this.t("editor.dynamic.stale_appliance", {
                                   id: selectionState.selectedId,
                               })}
                           </option>
@@ -836,7 +824,7 @@ export class HelmanOptimizerEditor
         if (stored.length > 0 && !options.some((option) => option.value === stored)) {
             options.unshift({
                 value: stored,
-                label: this._tFormat(
+                label: this.t(
                     ownTargetIds.has(stored)
                         ? "editor.dynamic.self_dependency"
                         : "editor.dynamic.stale_appliance",
@@ -1133,7 +1121,7 @@ export class HelmanOptimizerEditor
         const name = option.kind === "inverter" ? this.t("editor.dynamic.inverter") : option.name;
         return name === option.id
             ? option.id
-            : this._tFormat("editor.dynamic.appliance_option", {
+            : this.t("editor.dynamic.appliance_option", {
                   name,
                   id: option.id,
               });
@@ -1144,14 +1132,14 @@ export class HelmanOptimizerEditor
         if (!option.selectionDisabled) {
             return baseLabel;
         }
-        return this._tFormat("editor.dynamic.appliance_option_pending_reload", {
+        return this.t("editor.dynamic.appliance_option_pending_reload", {
             label: baseLabel,
         });
     }
 
     private _climateModeLabel(mode: string, isUnknown: boolean): string {
         if (isUnknown) {
-            return this._tFormat("editor.dynamic.stale_climate_mode", { mode });
+            return this.t("editor.dynamic.stale_climate_mode", { mode });
         }
         return this.t(`editor.values.${mode}`);
     }

@@ -1,9 +1,11 @@
+import type { DayAggregateRow } from "../shared/data/helman-commands";
+import { addDays, parseDayKey } from "../shared/time/day-key";
 import { getScheduleGridScaleMagnitude } from "../shared/schedule/model/grid-surplus-display";
-import { aggregateScheduleDayForecast, buildScheduleTableForecastMeta } from "../shared/schedule/model/schedule-table-forecast";
 import { formatScheduleDayLabel } from "../shared/schedule/model/schedule-time";
 import type { SlotForecastMap } from "../shared/schedule/model/slot-forecast-model";
 import type {
     ScheduleTableDayAggregateModel,
+    ScheduleTableForecastMeta,
     ScheduleTableDayAggregateScale,
     ScheduleTableSectionModel,
 } from "../shared/schedule/schedule-table-types";
@@ -132,7 +134,7 @@ export function buildDayPillKeys(startDayKey: string, endDayKey: string, maximum
     let cursor = startDayKey;
     while (cursor <= endDayKey && keys.length < Math.min(MAX_CALENDAR_DAYS, maximum)) {
         keys.push(cursor);
-        cursor = _addDay(cursor);
+        cursor = addDays(cursor, 1);
     }
 
     return keys;
@@ -280,10 +282,6 @@ export function buildSolarInspectorDayPills({
         house: null,
     }));
 
-    // The schedule and the forecast only reach forward, so a past day's pill
-    // can only come from what was measured. A day inside the row takes its
-    // measurements in place; one that sits before the row — the single past day
-    // shown while the row still looks forward — leads it instead.
     // The schedule and the forecast only reach forward, so a past day's pill can
     // only say what was measured. Those days take their measurements in place;
     // a measured day the row does not offer is simply not drawn.
@@ -343,17 +341,9 @@ export function buildSolarInspectorDayPills({
 }
 
 /** One day of `helman/solar_bias/day_aggregates`. */
-export interface SolarInspectorDayAggregateRow {
-    date: string;
-    solarWh: number | null;
-    gridImportKwh: number | null;
-    gridExportKwh: number | null;
-    batteryMinSocPct: number | null;
-    batteryMaxSocPct: number | null;
-    houseWh?: number | null;
-    /** Only when the request asked for `house_forecast`. */
-    houseForecastWh?: number | null;
-}
+export type SolarInspectorDayAggregateRow = Pick<DayAggregateRow,
+    "date" | "solarWh" | "gridImportKwh" | "gridExportKwh" | "batteryMinSocPct" | "batteryMaxSocPct" | "houseForecastWh">
+    & Partial<Pick<DayAggregateRow, "houseWh">>;
 
 /**
  * The measured days the backend read in one go, as pills can carry them.
@@ -415,22 +405,51 @@ export function buildHistoryDaysFromAggregates(
  * prices are forecast properties -- nothing measures a plan's headroom after
  * the fact -- so they come from the forecast half alone.
  */
+/** Energy stays in Wh while the two halves are combined. */
+interface DayEnergyWh {
+    solarWh: number | null;
+    gridImportWh: number | null;
+    gridExportWh: number | null;
+    availableSurplusWh: number | null;
+}
+
+function _energyWh(row: ScheduleTableDayAggregateModel): DayEnergyWh {
+    return {
+        solarWh: row.solarWh,
+        gridImportWh: row.gridImportKwh === null ? null : row.gridImportKwh * 1000,
+        gridExportWh: row.gridExportKwh === null ? null : row.gridExportKwh * 1000,
+        availableSurplusWh: row.availableSurplusKwh === null ? null : row.availableSurplusKwh * 1000,
+    };
+}
+
+/** The shared gauge model is the presentation boundary, which still uses kWh. */
+function _energyForGauge(row: DayEnergyWh): Pick<ScheduleTableDayAggregateModel,
+    "solarWh" | "gridImportKwh" | "gridExportKwh" | "availableSurplusKwh"> {
+    return {
+        solarWh: row.solarWh,
+        gridImportKwh: row.gridImportWh === null ? null : row.gridImportWh / 1000,
+        gridExportKwh: row.gridExportWh === null ? null : row.gridExportWh / 1000,
+        availableSurplusKwh: row.availableSurplusWh === null ? null : row.availableSurplusWh / 1000,
+    };
+}
+
 function _mergeMeasuredWithForecast(
     measured: ScheduleTableDayAggregateModel,
     forecast: ScheduleTableDayAggregateModel,
 ): ScheduleTableDayAggregateModel {
+    const actual = _energyWh(measured);
+    const expected = _energyWh(forecast);
+    const sum = (a: number, b: number) => a + b;
     return {
+        ...forecast,
+        ..._energyForGauge({
+            solarWh: _combine(actual.solarWh, expected.solarWh, sum),
+            gridImportWh: _combine(actual.gridImportWh, expected.gridImportWh, sum),
+            gridExportWh: _combine(actual.gridExportWh, expected.gridExportWh, sum),
+            availableSurplusWh: expected.availableSurplusWh,
+        }),
         batteryMinSocPct: _combine(measured.batteryMinSocPct, forecast.batteryMinSocPct, Math.min),
         batteryMaxSocPct: _combine(measured.batteryMaxSocPct, forecast.batteryMaxSocPct, Math.max),
-        solarWh: _combine(measured.solarWh, forecast.solarWh, (a, b) => a + b),
-        gridImportKwh: _combine(measured.gridImportKwh, forecast.gridImportKwh, (a, b) => a + b),
-        gridExportKwh: _combine(measured.gridExportKwh, forecast.gridExportKwh, (a, b) => a + b),
-        availableSurplusKwh: forecast.availableSurplusKwh,
-        priceHasData: forecast.priceHasData,
-        pricePositiveMin: forecast.pricePositiveMin,
-        pricePositiveMax: forecast.pricePositiveMax,
-        priceNegativeMin: forecast.priceNegativeMin,
-        priceNegativeMax: forecast.priceNegativeMax,
     };
 }
 
@@ -511,11 +530,198 @@ function _finiteOrNull(value: number | null | undefined): number | null {
 }
 
 function _isDayKey(value: string): boolean {
-    return /^\d{4}-\d{2}-\d{2}$/.test(value);
+    return parseDayKey(value) !== null;
 }
 
-function _addDay(dayKey: string): string {
-    const date = new Date(`${dayKey}T00:00:00Z`);
-    date.setUTCDate(date.getUTCDate() + 1);
-    return date.toISOString().slice(0, 10);
+const ZERO_PRICE_RANGE_THRESHOLD = 0.05;
+
+function aggregateScheduleDayForecast({
+    slots,
+    slotForecastMap,
+}: {
+    slots: readonly ScheduleDisplaySlot[];
+    slotForecastMap: SlotForecastMap;
+}): ScheduleTableDayAggregateModel | null {
+    const energy = _aggregateScheduleForecast({ slots, slotForecastMap });
+    const aggregate = energy === null ? null : _energyForGauge(energy);
+    const batteryRange = _aggregateScheduleDayBatteryRange({ slots, slotForecastMap });
+    const priceRange = _aggregateScheduleDayPriceRange({ slots, slotForecastMap });
+    if (aggregate === null && batteryRange.hasData === false && priceRange.priceHasData === false) {
+        return null;
+    }
+
+    return batteryRange.hasData === false
+        && (aggregate?.solarWh ?? null) === null
+        && (aggregate?.gridImportKwh ?? null) === null
+        && (aggregate?.gridExportKwh ?? null) === null
+        && (aggregate?.availableSurplusKwh ?? null) === null
+        && priceRange.priceHasData === false
+        ? null
+        : {
+            batteryMinSocPct: batteryRange.minSocPct,
+            batteryMaxSocPct: batteryRange.maxSocPct,
+            solarWh: aggregate?.solarWh ?? null,
+            gridImportKwh: aggregate?.gridImportKwh ?? null,
+            gridExportKwh: aggregate?.gridExportKwh ?? null,
+            availableSurplusKwh: aggregate?.availableSurplusKwh ?? null,
+            priceHasData: priceRange.priceHasData,
+            pricePositiveMin: priceRange.pricePositiveMin,
+            pricePositiveMax: priceRange.pricePositiveMax,
+            priceNegativeMin: priceRange.priceNegativeMin,
+            priceNegativeMax: priceRange.priceNegativeMax,
+        };
+}
+
+function _aggregateScheduleDayBatteryRange({
+    slots,
+    slotForecastMap,
+}: {
+    slots: readonly ScheduleDisplaySlot[];
+    slotForecastMap: SlotForecastMap;
+}): { hasData: boolean; minSocPct: number | null; maxSocPct: number | null } {
+    let minSocPct: number | null = null;
+    let maxSocPct: number | null = null;
+
+    for (const slot of slots) {
+        const socPct = slotForecastMap.points.get(slot.id)?.socPct;
+        if (socPct === null || socPct === undefined) {
+            continue;
+        }
+
+        minSocPct = minSocPct === null ? socPct : Math.min(minSocPct, socPct);
+        maxSocPct = maxSocPct === null ? socPct : Math.max(maxSocPct, socPct);
+    }
+
+    return {
+        hasData: minSocPct !== null && maxSocPct !== null,
+        minSocPct,
+        maxSocPct,
+    };
+}
+
+function buildScheduleTableForecastMeta({
+    slotForecastMap,
+    sections,
+}: {
+    slotForecastMap: SlotForecastMap;
+    sections: readonly ScheduleTableSectionModel[];
+}): ScheduleTableForecastMeta {
+    let dayAggregateScale: ScheduleTableDayAggregateScale = { solarMaxWh: 0, gridMaxKwh: 0, priceMaxAbs: 0 };
+    for (const section of sections) {
+        const aggregate = section.dayAggregate;
+        dayAggregateScale = _extendScaleWithAggregate(dayAggregateScale, aggregate);
+        if (aggregate) dayAggregateScale.priceMaxAbs = Math.max(
+            dayAggregateScale.priceMaxAbs,
+            ...[aggregate.pricePositiveMin, aggregate.pricePositiveMax, aggregate.priceNegativeMin, aggregate.priceNegativeMax].map(value => Math.abs(value ?? 0)),
+        );
+    }
+
+    return {
+        batteryAvailable: slotForecastMap.batteryAvailable,
+        solarAvailable: slotForecastMap.solarAvailable,
+        gridAvailable: slotForecastMap.gridAvailable,
+        priceAvailable: slotForecastMap.priceAvailable,
+        priceDisplayUnit: slotForecastMap.priceDisplayUnit,
+        dayAggregateScale,
+    };
+}
+
+function _aggregateScheduleDayPriceRange({
+    slots,
+    slotForecastMap,
+}: {
+    slots: readonly ScheduleDisplaySlot[];
+    slotForecastMap: SlotForecastMap;
+}): Pick<
+    ScheduleTableDayAggregateModel,
+    "priceHasData" | "pricePositiveMin" | "pricePositiveMax" | "priceNegativeMin" | "priceNegativeMax"
+> {
+    let priceHasData = false;
+    let pricePositiveMin: number | null = null;
+    let pricePositiveMax: number | null = null;
+    let priceNegativeMin: number | null = null;
+    let priceNegativeMax: number | null = null;
+
+    for (const slot of slots) {
+        const price = slotForecastMap.points.get(slot.id)?.price;
+        if (price === null || price === undefined) {
+            continue;
+        }
+
+        priceHasData = true;
+
+        if (price > ZERO_PRICE_RANGE_THRESHOLD) {
+            pricePositiveMin = pricePositiveMin === null ? price : Math.min(pricePositiveMin, price);
+            pricePositiveMax = pricePositiveMax === null ? price : Math.max(pricePositiveMax, price);
+            continue;
+        }
+
+        if (price < -ZERO_PRICE_RANGE_THRESHOLD) {
+            priceNegativeMin = priceNegativeMin === null ? price : Math.min(priceNegativeMin, price);
+            priceNegativeMax = priceNegativeMax === null ? price : Math.max(priceNegativeMax, price);
+        }
+    }
+
+    return {
+        priceHasData,
+        pricePositiveMin,
+        pricePositiveMax,
+        priceNegativeMin,
+        priceNegativeMax,
+    };
+}
+
+function _aggregateScheduleForecast({
+    slots,
+    slotForecastMap,
+}: {
+    slots: readonly ScheduleDisplaySlot[];
+    slotForecastMap: SlotForecastMap;
+}): DayEnergyWh | null {
+    if (slots.length === 0) {
+        return null;
+    }
+
+    let solarTotal = 0;
+    let hasSolar = false;
+    let gridImportTotal = 0;
+    let gridExportTotal = 0;
+    let availableSurplusTotal = 0;
+    let hasGrid = false;
+    let hasAvailableSurplus = false;
+
+    for (const slot of slots) {
+        const point = slotForecastMap.points.get(slot.id);
+        if (!point) {
+            continue;
+        }
+
+        if (point.solarWh !== null) {
+            solarTotal += point.solarWh;
+            hasSolar = true;
+        }
+
+        if (
+            point.gridImportKwh !== null
+            || point.gridExportKwh !== null
+            || point.availableSurplusKwh !== null
+        ) {
+            gridImportTotal += (point.gridImportKwh ?? 0) * 1000;
+            gridExportTotal += (point.gridExportKwh ?? 0) * 1000;
+            hasGrid = true;
+        }
+
+        if (point.availableSurplusKwh !== null) {
+            availableSurplusTotal += point.availableSurplusKwh * 1000;
+            hasAvailableSurplus = true;
+        }
+
+    }
+
+    return {
+        solarWh: hasSolar ? solarTotal : null,
+        gridImportWh: hasGrid ? gridImportTotal : null,
+        gridExportWh: hasGrid ? gridExportTotal : null,
+        availableSurplusWh: hasAvailableSurplus ? availableSurplusTotal : null,
+    };
 }

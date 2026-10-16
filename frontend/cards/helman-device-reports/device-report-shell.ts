@@ -1,19 +1,20 @@
+import { formatKwh } from "../shared/format";
+import { callHelman } from "../shared/data/helman-commands";
 import { LitElement, css, html, nothing, type PropertyValues } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { html as staticHtml, unsafeStatic } from "lit/static-html.js";
 import type { HomeAssistant } from "../../types/ha";
 import {
     DEVICE_REPORT_GRANULARITIES,
-    fetchDeviceReport,
     isDeviceReportUnavailable,
     type DeviceReportCommon,
     type DeviceReportGranularity,
     type DeviceReportPayload,
     type DeviceReportQuery,
 } from "../helman-api";
-import { getSharedDataChangedFeed } from "../helman/data-changed";
+import { DataChangedController } from "../helman/data-changed";
 import { fillTemplate, getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
-import { formatKwhValue } from "../shared/forecast-value-format";
+
 import {
     HoverTooltipController,
     hoverTooltipStyles,
@@ -22,7 +23,7 @@ import {
     type TooltipRow,
 } from "../shared/hover-tooltip";
 import { startNowClock } from "../shared/now-clock";
-import { todayIso } from "../shared/today-iso";
+import { todayKey } from "../shared/time/day-key";
 import { DEVICE_REPORTS, type DeviceReportEntry } from "./report-registry";
 import {
     DEFAULT_PERIOD_PRESET,
@@ -121,7 +122,6 @@ export class HelmanDeviceReportShell extends LitElement {
      */
     private _generation = 0;
     private _stopClock?: () => void;
-    private _unsubscribeDataChanged?: () => void;
     /** The connection and time zone the memo and the subscription belong to. */
     private _context: { connection: unknown; timeZone: string | undefined } | null = null;
     private _debounceTimer?: number;
@@ -187,33 +187,22 @@ export class HelmanDeviceReportShell extends LitElement {
         }
     `];
 
+    constructor() {
+        super();
+        new DataChangedController(this, () => this.hass, { kinds: ["config"] }, () => this._invalidate());
+    }
+
     connectedCallback(): void {
         super.connectedCallback();
         this._stopClock = startNowClock(this._tick);
-        this._syncDataChangedSubscription();
     }
 
     disconnectedCallback(): void {
         super.disconnectedCallback();
         this._stopClock?.();
         this._stopClock = undefined;
-        this._unsubscribeDataChanged?.();
-        this._unsubscribeDataChanged = undefined;
-        window.clearTimeout(this._debounceTimer);
-    }
 
-    /**
-     * Through the shared feed, like the inspector. Only `config` is acted on,
-     * deliberately against the feed's reload-everything advice: a report reads
-     * the device tree, the meters and the tariff, and nothing a schedule or
-     * plan announcement rewrites, while every refetch is a statistics read
-     * over the whole period.
-     */
-    private _syncDataChangedSubscription(): void {
-        if (!this.hass || !this.isConnected || this._unsubscribeDataChanged) return;
-        this._unsubscribeDataChanged = getSharedDataChangedFeed(this.hass).subscribe((kinds) => {
-            if (kinds.has("config")) this._invalidate();
-        });
+        window.clearTimeout(this._debounceTimer);
     }
 
     /** Drop every memoised report and the request in flight, and refetch. */
@@ -243,8 +232,7 @@ export class HelmanDeviceReportShell extends LitElement {
         ) {
             return;
         }
-        this._unsubscribeDataChanged?.();
-        this._unsubscribeDataChanged = undefined;
+
         this._invalidate();
     }
 
@@ -258,7 +246,7 @@ export class HelmanDeviceReportShell extends LitElement {
      * tick without writing state.
      */
     private _tick = (): void => {
-        const today = todayIso(this._timeZone());
+        const today = todayKey(this._timeZone());
         if (today !== this._today) {
             this._today = today;
             return;
@@ -276,9 +264,8 @@ export class HelmanDeviceReportShell extends LitElement {
                 this._localizeLanguage = language;
                 this._localize = this.hass ? getLocalizeFunction(this.hass) : (key: string) => key;
             }
-            this._today = todayIso(this._timeZone());
+            this._today = todayKey(this._timeZone());
             this._syncContext();
-            this._syncDataChangedSubscription();
         }
         const dates = this._preset === "custom"
             ? (this._customStart && this._customEnd
@@ -322,7 +309,10 @@ export class HelmanDeviceReportShell extends LitElement {
         const generation = this._generation;
         this._inflightKey = key;
         this._error = null;
-        fetchDeviceReport(this.hass!, report, query).then(
+        callHelman(this.hass!, "helman/device_report", {
+            report: report,
+            ...query,
+        }).then(
             (payload) => {
                 if (generation !== this._generation) return;
                 // Kept even when a newer request was made meanwhile: it is still
@@ -470,7 +460,7 @@ export class HelmanDeviceReportShell extends LitElement {
         for (const { kind, kwh } of quality) {
             rows.push({
                 ...tooltipRow("", fillTemplate(t("device_reports.quality." + kind), {
-                    kwh: formatKwhValue(kwh),
+                    kwh: formatKwh(Math.abs(kwh)),
                     pct: String(Math.round((kwh / house) * 100)),
                 })),
                 quality: kind,

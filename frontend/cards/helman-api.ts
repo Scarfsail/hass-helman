@@ -1,4 +1,4 @@
-import type { HomeAssistant } from "../types/ha";
+import type { DayAggregateRow, DayAggregatesPayload, HelmanCommands } from "./shared/data/helman-commands";
 import type { JsonObject, ValidationReport } from "./shared/config/types";
 export type { ConfigDocument } from "./shared/config/types";
 export type { InspectorPayload } from "./helman-solar-inspector/helman-solar-inspector";
@@ -13,18 +13,6 @@ export type { InspectorPayload } from "./helman-solar-inspector/helman-solar-ins
 // ── Value type ────────────────────────────────────────────────────────────────
 
 export type ValueType = "default" | "positive" | "negative";
-
-/**
- * Applies a ValueType transformation to a raw sensor reading.
- * - "positive": clamps to ≥ 0  (e.g. solar production)
- * - "negative": returns absolute value of the negative part (e.g. battery discharge)
- * - "default":  returns the raw value unchanged
- */
-export function applyValueType(raw: number, vt: ValueType): number {
-    if (vt === "positive") return Math.max(0, raw);
-    if (vt === "negative") return Math.abs(Math.min(0, raw));
-    return raw;
-}
 
 // ── Device node DTOs ──────────────────────────────────────────────────────────
 
@@ -97,9 +85,7 @@ export interface HelmanUiConfig {
 // ── WebSocket message payloads ────────────────────────────────────────────────
 
 /** Request type for the "helman/get_device_tree" WebSocket command. */
-export interface GetDeviceTreeRequest {
-    type: "helman/get_device_tree";
-}
+export type GetDeviceTreeRequest = HelmanCommands["helman/get_device_tree"]["req"];
 
 /** Response type for the "helman/get_device_tree" WebSocket command. */
 export interface TreePayload {
@@ -111,9 +97,7 @@ export interface TreePayload {
 }
 
 /** Request type for the "helman/get_history" WebSocket command. */
-export interface GetHistoryRequest {
-    type: "helman/get_history";
-}
+export type GetHistoryRequest = HelmanCommands["helman/get_history"]["req"];
 
 /** Response type for the "helman/get_history" WebSocket command. */
 export interface HistoryPayload {
@@ -142,14 +126,6 @@ export interface DeviceStats {
     running_kw?: number;
     /** Energy per hour its running signal is on, idle on-time included. */
     on_kwh_per_hour?: number;
-}
-
-/** A device's usage record by its `deviceKey`, or `null` when it has none. */
-export function fetchDeviceStats(
-    hass: HomeAssistant,
-    deviceKey: string,
-): Promise<DeviceStats | null> {
-    return hass.callWS({ type: "helman/get_device_stats", device_key: deviceKey });
 }
 
 /** The bucket size of a report that is bucketed by it. */
@@ -313,15 +289,6 @@ export interface DailyProfileReportPayload extends DeviceReportCommon {
     /** Mean rate per local hour of day over the elapsed hours that had one. */
     import_rate: Array<number | null>;
     export_rate: Array<number | null>;
-}
-
-/** One device report over `query`'s period. */
-export function fetchDeviceReport(
-    hass: Pick<HomeAssistant, "callWS">,
-    report: string,
-    query: DeviceReportQuery,
-): Promise<DeviceReportPayload> {
-    return hass.callWS({ type: "helman/device_report", report, ...query });
 }
 
 export type ForecastStatus =
@@ -518,9 +485,7 @@ export interface ForecastPayload {
     battery_capacity: BatteryCapacityForecastDTO;
 }
 
-export interface GetForecastRequest {
-    type: "helman/get_forecast";
-}
+export type GetForecastRequest = HelmanCommands["helman/get_forecast"]["req"];
 
 export type ScheduleActionKind =
     | "empty"
@@ -623,23 +588,15 @@ export interface SchedulePayload {
     runtime?: ScheduleRuntimeDTO;
 }
 
-export interface GetScheduleRequest {
-    type: "helman/get_schedule";
-}
+export type GetScheduleRequest = HelmanCommands["helman/get_schedule"]["req"];
 
-export interface SetScheduleRequest {
-    type: "helman/set_schedule";
-    slots: ScheduleSlotDTO[];
-}
+export type SetScheduleRequest = HelmanCommands["helman/set_schedule"]["req"];
 
 export interface SetScheduleResponse {
     success: true;
 }
 
-export interface SetScheduleExecutionRequest {
-    type: "helman/set_schedule_execution";
-    enabled: boolean;
-}
+export type SetScheduleExecutionRequest = HelmanCommands["helman/set_schedule_execution"]["req"];
 
 export interface SetScheduleExecutionResponse {
     success: true;
@@ -666,17 +623,13 @@ export interface ControllableEntityDTO {
     actionOptions?: Record<string, string>;
 }
 
-export interface GetControllableEntitiesRequest {
-    type: "helman/get_controllable_entities";
-}
+export type GetControllableEntitiesRequest = HelmanCommands["helman/get_controllable_entities"]["req"];
 
 export interface ControllableEntitiesPayload {
     entities: ControllableEntityDTO[];
 }
 
-export interface GetEntityActualHistoryRequest {
-    type: "helman/get_entity_actual_history";
-}
+export type GetEntityActualHistoryRequest = HelmanCommands["helman/get_entity_actual_history"]["req"];
 
 /** One elapsed slot an entity spent away from its resting state. */
 export interface EntityActualHistorySlotDTO {
@@ -797,9 +750,7 @@ export interface AppliancesPayload {
     appliances: ApplianceMetadataDTO[];
 }
 
-export interface GetAppliancesRequest {
-    type: "helman/get_appliances";
-}
+export type GetAppliancesRequest = HelmanCommands["helman/get_appliances"]["req"];
 
 export type ApplianceProjectionMethod =
     | "fixed"
@@ -826,9 +777,7 @@ export interface ApplianceProjectionsPayload {
     appliances: Record<string, ApplianceProjectionDTO>;
 }
 
-export interface GetApplianceProjectionsRequest {
-    type: "helman/get_appliance_projections";
-}
+export type GetApplianceProjectionsRequest = HelmanCommands["helman/get_appliance_projections"]["req"];
 
 // --- Node details (helman/get_node_detail) ----------------------------------
 
@@ -836,12 +785,7 @@ export interface GetApplianceProjectionsRequest {
 export type NodeDetailNode = "inverter" | "grid" | "battery" | "solar" | "house" | "ev_charger";
 
 /** Without `section`: the node's overview. With one: only that section's history. */
-export interface GetNodeDetailRequest {
-    type: "helman/get_node_detail";
-    node: NodeDetailNode;
-    device_id?: string;
-    section?: string;
-}
+export type GetNodeDetailRequest = HelmanCommands["helman/get_node_detail"]["req"];
 
 /**
  * One reading over a local day, in five-minute buckets. A missing bucket is a
@@ -1315,26 +1259,12 @@ export interface EvChargerTodaySectionPayload {
  * detail reads it. Money is priced hour by hour; each side is `null` where
  * nothing was priced, and `moneyCostKwh`/`moneyGainKwh` are the kWh it priced.
  */
-export interface GridDayAggregateDTO {
-    date: string;
-    gridImportKwh: number | null;
-    gridExportKwh: number | null;
-    moneyCost: number | null;
-    moneyGain: number | null;
-    moneyCostKwh: number | null;
-    moneyGainKwh: number | null;
-}
+export type GridDayAggregateDTO = Pick<DayAggregateRow,
+    "date" | "gridImportKwh" | "gridExportKwh" | "moneyCost" | "moneyGain" | "moneyCostKwh" | "moneyGainKwh">;
 
-export interface GridDayAggregatesPayload {
-    /** The price unit the money is in, such as `CZK/kWh`. */
-    currency: string | null;
+export type GridDayAggregatesPayload = Pick<DayAggregatesPayload, "currency"> & {
     days: GridDayAggregateDTO[];
-}
-
-/** One local day's measured grid figures and their money, from the inspector's span read. */
-export function fetchGridDayAggregates(hass: Pick<HomeAssistant, "callWS">, date: string): Promise<GridDayAggregatesPayload> {
-    return hass.callWS({ type: "helman/solar_bias/day_aggregates", start_date: date, end_date: date });
-}
+};
 
 /** Explicit device suggestions preserve every candidate, including ambiguity. */
 export interface DeviceEntityCandidate {
@@ -1373,22 +1303,4 @@ export interface EnergyImportPreview {
     reason: string;
   }[];
   validation: ValidationReport;
-}
-export function fetchDeviceSuggestions(
-  hass: HomeAssistant,
-  /** Tried in order; the first with an HA device is used. */
-  anchorEntityIds: string[],
-  config: object,
-): Promise<DeviceSuggestions> {
-  return hass.callWS({
-    type: "helman/suggest_device_entities",
-    anchor_entity_ids: anchorEntityIds,
-    config,
-  });
-}
-export function fetchEnergyImportPreview(
-  hass: HomeAssistant,
-  config: object,
-): Promise<EnergyImportPreview> {
-  return hass.callWS({ type: "helman/preview_energy_import", config });
 }

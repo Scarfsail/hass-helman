@@ -1,3 +1,5 @@
+import { timestampMinutes, minutesToSlot, slotKey } from "../shared/time/slot-time";
+export { timestampMinutes, minutesToSlot, slotKey } from "../shared/time/slot-time";
 import { SLOT_MINUTES } from "./chart-stack";
 import { slotToMinutes, type SocBar, type SocBoundsPoint } from "./chart-soc";
 import { nodeAccentColor } from "../color-utils";
@@ -20,11 +22,7 @@ import type {
  */
 
 /** Minute-of-day from an ISO-ish "…THH:MM…" timestamp; null if unparseable. */
-export function timestampMinutes(timestamp: string): number | null {
-  const match = /T(\d{2}):(\d{2})/.exec(timestamp);
-  if (!match) return null;
-  return Number(match[1]) * 60 + Number(match[2]);
-}
+
 
 /** The wider bucket a minute-of-day falls in, as its start minute. */
 function bucketStart(minutes: number, slotMinutes: number): number {
@@ -124,24 +122,6 @@ export function missingMinutesByBucket(
 }
 
 /**
- * The "HH:MM" slot key a timestamped sample belongs to.
- *
- * Series are keyed by timestamp and slots by time-of-day, so this is the one
- * rule that joins them; every lookup across the two must agree on it.
- */
-export function slotKey(timestamp: string): string {
-  return timestamp.slice(11, 16);
-}
-
-/** "HH:MM" for a minute-of-day. */
-export function minutesToSlot(minutes: number): string {
-  const clamped = Math.max(0, Math.floor(minutes));
-  const hh = String(Math.floor(clamped / 60)).padStart(2, "0");
-  const mm = String(clamped % 60).padStart(2, "0");
-  return `${hh}:${mm}`;
-}
-
-/**
  * The sample timestamp with its time-of-day rewritten to the bucket start,
  * keeping the date, seconds and zone offset so the rest of the card parses it
  * unchanged. A series may start off the wider grid — actuals often begin
@@ -150,9 +130,7 @@ export function minutesToSlot(minutes: number): string {
  * band but the first.
  */
 function bucketTimestamp(sampleTimestamp: string, bucketStartMinutes: number): string {
-  const hh = String(Math.floor(bucketStartMinutes / 60)).padStart(2, "0");
-  const mm = String(bucketStartMinutes % 60).padStart(2, "0");
-  return sampleTimestamp.replace(/T\d{2}:\d{2}/, `T${hh}:${mm}`);
+  return sampleTimestamp.replace(/T\d{2}:\d{2}/, `T${minutesToSlot(bucketStartMinutes)}`);
 }
 
 /**

@@ -1,3 +1,4 @@
+import { pad2 } from "./time/slot-time";
 import { LitElement, css, html, nothing, svg } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { formatScheduleTime, getScheduleLocalTimeParts } from "./schedule/model/schedule-time";
@@ -288,7 +289,7 @@ export class HelmanDayLineChart extends LitElement {
         for (let t = Math.ceil(this.start / hourMs) * hourMs; t <= this.end; t += hourMs) {
             const parts = getScheduleLocalTimeParts(t, this.timeZone);
             if (parts && parts.minute === 0 && parts.hour % 6 === 0) {
-                ticks.push({ t, label: String(parts.hour).padStart(2, "0") });
+                ticks.push({ t, label: pad2(parts.hour) });
             }
         }
         return ticks;

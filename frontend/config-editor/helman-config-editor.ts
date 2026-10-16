@@ -1,4 +1,6 @@
-import { fetchEnergyImportPreview, type EnergyImportPreview } from "../cards/helman-api";
+import { LatestRequest } from "../cards/shared/data/latest-request";
+import { callHelman } from "../cards/shared/data/helman-commands";
+import { type EnergyImportPreview } from "../cards/helman-api";
 import { LitElement, css, html, nothing } from "lit";
 import type { PropertyValues, TemplateResult } from "lit";
 import { cache } from "lit/directives/cache.js";
@@ -94,8 +96,8 @@ import {
   type ScopeId,
   type TabId,
 } from "./config-editor-scopes";
-import { getSharedDataChangedFeed } from "../cards/helman/data-changed";
-import { getLocalizeFunction, type LocalizeFunction } from "../cards/shared/config/localize/localize";
+import { DataChangedController } from "../cards/helman/data-changed";
+import { getLocalizeFunction, type LocalizeFunction } from "../cards/localize/localize";
 import { mdiAlertOutline, mdiDragVertical } from "@mdi/js";
 import {
   fetchOptimizerSchema,
@@ -148,13 +150,9 @@ import {
   type SolarInspectorCardElement,
 } from "./solar-inspector-embed";
 import type { HomeAssistant } from "../types/ha";
-import { HelmanClient } from "../cards/helman/client";
+import { getSharedHelmanStore } from "../cards/helman/store";
 import type { TreeItem } from "../cards/helman/tree-item";
 import { hydrateItem } from "../cards/helman/tree-item-hydrator";
-import {
-  getLocalizeFunction as getCardLocalizeFunction,
-  type LocalizeFunction as CardLocalizeFunction,
-} from "../cards/localize/localize";
 import "./info-callout";
 import "../cards/shared/config/entity-group";
 import {
@@ -204,7 +202,6 @@ import type {
   JsonValue,
   PathSegment,
   ApplianceMetadataResponse,
-  SaveConfigResponse,
   StatusMessage,
   ValidationIssue,
   ValidationReport,
@@ -984,7 +981,6 @@ export class HelmanConfigEditorPanel
    * this whole feature could easily create, so the refusal has to be visible.
    */
   private _staleConfigNotice = false;
-  private _unsubscribeDataChanged?: () => void;
   /**
    * Swallow the announcement our own save caused.
    *
@@ -1020,7 +1016,7 @@ export class HelmanConfigEditorPanel
   private _energyImport: { preview: EnergyImportPreview; draft: JsonObject } | null = null;
   private _deviceActionMessage = "";
   private _importLoading = false;
-  private _energyImportRequest = 0;
+  private readonly _energyImportRequest = new LatestRequest<object>();
 
   /** The path key of the device list whose "Add device" picker is open. */
   private _addDeviceTarget: string | null = null;
@@ -1102,13 +1098,12 @@ export class HelmanConfigEditorPanel
    */
   private _deviceTreeItems: Map<string, TreeItem> | null = null;
   private _deviceTreeRequested = false;
-  private _deviceTreeSequence = 0;
+  private readonly _deviceTreeRequest = new LatestRequest<object>();
   /** One loader for the dialog, so concurrent clicks share its import. */
   private _deviceDetailLoad?: () => Promise<void>;
   /** The device whose detail dialog is open. */
   private _deviceDetail: TreeItem | null = null;
   /** The card's own localize: the device detail dialog reads `node_detail.*` keys. */
-  private _cardLocalize?: CardLocalizeFunction;
   private _trainingStatusTimer?: ReturnType<typeof setInterval>;
   private _trainingStatusSequence = 0;
   private _trainingStatusApplied = 0;
@@ -1122,7 +1117,6 @@ export class HelmanConfigEditorPanel
     this._hass = hass;
     if (hass && !this._localize) {
       this._localize = getLocalizeFunction(hass);
-      this._cardLocalize = getCardLocalizeFunction(hass);
     }
     // Reused HA components (e.g. the condition builder) localize via
     // hass.localize, but the "config" fragment is only lazy-loaded on the
@@ -1136,6 +1130,11 @@ export class HelmanConfigEditorPanel
       void hass.loadFragmentTranslation("config").then(() => this.requestUpdate());
     }
     this.requestUpdate("hass", oldValue);
+  }
+
+  constructor() {
+    super();
+    new DataChangedController(this, () => this.hass, {}, () => this._handleDataChanged());
   }
 
   connectedCallback(): void {
@@ -1166,8 +1165,7 @@ export class HelmanConfigEditorPanel
 
   disconnectedCallback(): void {
     super.disconnectedCallback();
-    this._unsubscribeDataChanged?.();
-    this._unsubscribeDataChanged = undefined;
+
     if (this._trainingStatusTimer !== undefined) {
       clearInterval(this._trainingStatusTimer);
       this._trainingStatusTimer = undefined;
@@ -1197,11 +1195,6 @@ export class HelmanConfigEditorPanel
       this._hasLoadedOnce = true;
       void this._loadConfig({ showMessage: false });
       void this._pollTrainingStatus();
-    }
-    if (this.hass && !this._unsubscribeDataChanged) {
-      this._unsubscribeDataChanged = getSharedDataChangedFeed(this.hass).subscribe(
-        () => this._handleDataChanged(),
-      );
     }
     // Every update while the toggle is on, and once more on the update that
     // turns it off -- see `_applyEntitiesOnlyOpenState` for why "every".
@@ -1280,7 +1273,7 @@ export class HelmanConfigEditorPanel
     }
     try {
       const current = asJsonObject(
-        await this.hass.callWS<unknown>({ type: "helman/get_config" }),
+        await callHelman(this.hass, "helman/get_config", {}),
       );
       return current !== undefined && canonicalJson(current) !== this._configBaseline;
     } catch {
@@ -1378,7 +1371,7 @@ export class HelmanConfigEditorPanel
         ? html`
             <node-detail-dialog
               .hass=${this.hass}
-              .localize=${this._cardLocalize}
+              .localize=${this._localize}
               .open=${true}
               .params=${{ nodeType: "device", item: this._deviceDetail }}
               @closed=${() => {
@@ -1445,7 +1438,7 @@ export class HelmanConfigEditorPanel
     return html`<span
       class="tab-warning-dot"
       role="img"
-      aria-label=${this._tFormat("training.badge_failed", { count: failed })}
+      aria-label=${this._t("training.badge_failed", { count: failed })}
     ></span>`;
   }
 
@@ -1454,7 +1447,7 @@ export class HelmanConfigEditorPanel
     const sequence = ++this._trainingStatusSequence;
     try {
       const status = asTrainingStatus(
-        await this.hass.callWS<unknown>({ type: "helman/training/status" }),
+        await callHelman(this.hass, "helman/training/status", {}),
       );
       // A slower earlier answer must not repaint over a newer one.
       if (sequence < this._trainingStatusApplied) return;
@@ -1900,7 +1893,7 @@ export class HelmanConfigEditorPanel
             .hass=${this.hass}
             .defaultValue=${editorValue}
             .showErrors=${false}
-            aria-label=${this._tFormat("editor.yaml.aria_label", { scope: scopeLabel })}
+            aria-label=${this._t("editor.yaml.aria_label", { scope: scopeLabel })}
             aria-describedby=${describedBy}
             dir="ltr"
             @value-changed=${(event: CustomEvent<YamlEditorValueChangedDetail>) =>
@@ -2888,7 +2881,7 @@ export class HelmanConfigEditorPanel
           ? hourly
           : undefined,
       note: issue
-        ? this._tFormat("device_energy.failed", { reason: issue.reason })
+        ? this._t("device_energy.failed", { reason: issue.reason })
         : stored || adopted
           ? undefined
           : this._t("device_energy.not_trained"),
@@ -3102,7 +3095,7 @@ export class HelmanConfigEditorPanel
             ? html`<button
                 type="button"
                 class="training-depth-entity-button"
-                aria-label=${this._tFormat("editor.training_depth.device_detail_aria", {
+                aria-label=${this._t("editor.training_depth.device_detail_aria", {
                   device: device.name,
                 })}
                 @click=${() => void this._showDeviceDetail(item)}
@@ -3114,7 +3107,7 @@ export class HelmanConfigEditorPanel
         </td>
         <td class="training-depth-role">${this._renderApplianceEnergyValue(device)}</td>
         <td class="training-depth-number">
-          ${this._tFormat("editor.training_depth.days", { days: device.lookbackDays })}
+          ${this._t("editor.training_depth.days", { days: device.lookbackDays })}
         </td>
         <td class="training-depth-number">
           <div>${known ? this._trainingDepthDays(Math.min(...(depths as number[]))) : "—"}</div>
@@ -3182,23 +3175,24 @@ export class HelmanConfigEditorPanel
    * dialog could not be loaded anyway; a failed fetch leaves the names plain.
    */
   private async _loadDeviceTree(): Promise<void> {
-    if (!this.hass || !this._cardLocalize || !this.panel?.config?.card_module_url) {
+    if (!this.hass || !this._localize || !this.panel?.config?.card_module_url) {
       // Not ready yet: let the table's next render ask again.
       this._deviceTreeRequested = false;
       return;
     }
-    const sequence = ++this._deviceTreeSequence;
+    const request = this._deviceTreeRequest.begin({ hass: this.hass });
+    if (request === null) return;
     try {
-      const payload = await new HelmanClient(this.hass).getDeviceTree();
+      const payload = await getSharedHelmanStore(this.hass).getDeviceTree();
       // A later fetch has been asked for; its tree is the newer one.
-      if (sequence !== this._deviceTreeSequence) return;
+      if (!this._deviceTreeRequest.isCurrent(request)) return;
       const items = new Map<string, TreeItem>();
       const walk = (item: TreeItem): void => {
         if (item.deviceKey) items.set(this._treeItemKey(item), item);
         item.children.forEach(walk);
       };
       for (const dto of [...payload.sources, ...payload.consumers]) {
-        walk(hydrateItem(dto, payload.uiConfig.history_buckets, this._cardLocalize));
+        walk(hydrateItem(dto, payload.uiConfig.history_buckets, this._localize));
       }
       this._deviceTreeItems = items;
       // An open detail follows the re-read tree, so a rename or re-wiring
@@ -3208,7 +3202,7 @@ export class HelmanConfigEditorPanel
       }
     } catch (error) {
       console.error("Helman: failed to load the device tree", error);
-      if (sequence !== this._deviceTreeSequence) return;
+      if (!this._deviceTreeRequest.isCurrent(request)) return;
       // The previous tree may no longer match the saved config, so no name
       // opens it; the table's next render asks again.
       this._deviceTreeItems = null;
@@ -3247,7 +3241,7 @@ export class HelmanConfigEditorPanel
   /** A depth in days, or a dash while it is unknown. */
   private _trainingDepthDays(value: unknown): string {
     return typeof value === "number" && Number.isFinite(value)
-      ? this._tFormat("editor.training_depth.days", { days: value })
+      ? this._t("editor.training_depth.days", { days: value })
       : "—";
   }
 
@@ -3273,7 +3267,7 @@ export class HelmanConfigEditorPanel
   private _moreInfoLabel(entityId: string): string {
     const template = this._t("editor.entity_group.more_info_aria");
     return template.includes("{entity}")
-      ? template.replace("{entity}", entityId)
+      ? this._t("editor.entity_group.more_info_aria", { entity: entityId })
       : `${template} ${entityId}`;
   }
 
@@ -3422,7 +3416,7 @@ export class HelmanConfigEditorPanel
         .applianceMetadata=${this._liveApplianceMetadata}
         .hass=${this.hass}
         .narrow=${this.narrow ?? false}
-        .localize=${(key: string) => this._t(key)}
+        .localize=${(key: string, values?: Record<string, string | number>) => this._t(key, values)}
         .warning=${this._optimizerOrderingWarning(bucket, index)}
         .listActions=${(basePath: PathSegment[], enabled: boolean) =>
           this._renderOptimizerListActions(bucket, basePath, index, enabled)}
@@ -3608,7 +3602,8 @@ export class HelmanConfigEditorPanel
     if (!this.hass || !this._config) return;
     const draft = this._config;
     const hass = this.hass;
-    const request = ++this._energyImportRequest;
+    const request = this._energyImportRequest.begin({ draft, hass });
+    if (request === null) return;
     this._energyImport = null;
     this._deviceActionMessage = "";
     // The backend reads a devices value that is not an object as no devices,
@@ -3619,14 +3614,14 @@ export class HelmanConfigEditorPanel
     }
     this._importLoading = true;
     try {
-      const preview = await fetchEnergyImportPreview(hass, draft);
-      if (this._config === draft && request === this._energyImportRequest)
+      const preview = await callHelman(hass, "helman/preview_energy_import", { config: draft });
+      if (this._config === draft && this._energyImportRequest.isCurrent(request))
         this._energyImport = { preview, draft };
     } catch (error) {
-      if (this._config === draft && request === this._energyImportRequest)
+      if (this._config === draft && this._energyImportRequest.isCurrent(request))
         this._deviceActionMessage = this._formatError(error, this._t("editor.messages.import_energy_failed"));
     } finally {
-      if (request === this._energyImportRequest) this._importLoading = false;
+      if (this._energyImportRequest.isCurrent(request)) this._importLoading = false;
     }
   }
 
@@ -3645,8 +3640,8 @@ export class HelmanConfigEditorPanel
         ${preview.additions.map((item) => html`<li>${this._t("editor.import.add")}: ${item.deviceId} — ${item.energyEntityId}${item.powerEntityId ? html`, ${item.powerEntityId}` : nothing}${item.parentId ? html` → ${item.parentId}` : nothing}</li>`)}
         ${preview.powerEntities.map((item) => html`<li>${this._t("editor.import.power")}: ${item.deviceId} → ${item.entityId}</li>`)}
         ${preview.nestingChanges.map((item) => html`<li>${this._t("editor.import.move")}: ${item.deviceId} → ${item.parentId}</li>`)}
-        ${preview.skippedRows.map((item) => html`<li>${this._t("editor.import.skipped")}: ${item.energy_entity_id} — ${this._tFormat(`editor.import.skip_reasons.${item.reason}`, { device: item.device_id ?? "" })}</li>`)}
-        ${preview.warnings.map((item) => html`<li class="message info">${this._tFormat(`editor.import.warnings.${item.reason}`, { meter: item.energy_entity_id, device: item.device_id ?? "" })}</li>`)}
+        ${preview.skippedRows.map((item) => html`<li>${this._t("editor.import.skipped")}: ${item.energy_entity_id} — ${this._t(`editor.import.skip_reasons.${item.reason}`, { device: item.device_id ?? "" })}</li>`)}
+        ${preview.warnings.map((item) => html`<li class="message info">${this._t(`editor.import.warnings.${item.reason}`, { meter: item.energy_entity_id, device: item.device_id ?? "" })}</li>`)}
         ${preview.validation.errors.length ? html`<li>${this._t("editor.import.blocked")}</li>` : nothing}
         ${preview.validation.errors.map((item) => html`<li class="message error">${item.path}: ${item.message}</li>`)}
       </ul>
@@ -3839,7 +3834,7 @@ export class HelmanConfigEditorPanel
     if (candidates.length === 0) {
       return html`
         <div class="vendor-provided-entity unresolved" data-field="vendor-no-devices">
-          ${this._tFormat("editor.dynamic.vendor_no_devices", { profile: profile.label })}
+          ${this._t("editor.dynamic.vendor_no_devices", { profile: profile.label })}
         </div>
       `;
     }
@@ -4226,7 +4221,7 @@ export class HelmanConfigEditorPanel
           <div class="appliance-summary-left">
             ${renderDragHandle(this)}
             <div class="card-title">
-              <strong>${this._tFormat("editor.dynamic.daily_energy_entity", { index: index + 1 })}</strong>
+              <strong>${this._t("editor.dynamic.daily_energy_entity", { index: index + 1 })}</strong>
             </div>
           </div>
           <div class="list-actions">
@@ -4268,7 +4263,7 @@ export class HelmanConfigEditorPanel
           <div class="appliance-summary-left">
             ${renderDragHandle(this)}
             <div class="card-title">
-              <strong>${this._tFormat("editor.dynamic.import_window", { index: index + 1 })}</strong>
+              <strong>${this._t("editor.dynamic.import_window", { index: index + 1 })}</strong>
               <span class="card-subtitle">${this._t("editor.card.local_time_window")}</span>
             </div>
           </div>
@@ -4387,7 +4382,7 @@ export class HelmanConfigEditorPanel
                 ? [
                     {
                       key: "count",
-                      text: this._tFormat("editor.section_badges.count", { count: optionCount }),
+                      text: this._t("editor.section_badges.count", { count: optionCount }),
                     },
                   ]
                 : [],
@@ -4414,7 +4409,7 @@ export class HelmanConfigEditorPanel
 
   private _renderUnsupportedDevice(device: JsonObject, path: PathSegment[]): TemplateResult {
     const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
-    const subtitle = this._tFormat("editor.dynamic.unsupported_appliance_kind", {
+    const subtitle = this._t("editor.dynamic.unsupported_appliance_kind", {
       kind: this._stringValue(device.kind) || this._t("editor.values.unknown"),
     });
     return html`
@@ -4467,7 +4462,7 @@ export class HelmanConfigEditorPanel
         .parent=${parent}
         .hass=${this.hass}
         .narrow=${this.narrow ?? false}
-        .localize=${(key: string) => this._t(key)}
+        .localize=${(key: string, values?: Record<string, string | number>) => this._t(key, values)}
         .validation=${this._validation}
         .inspections=${this._inspections.results}
         .vendors=${this._vendors.vendors}
@@ -4621,12 +4616,11 @@ export class HelmanConfigEditorPanel
    * integration's *backend* strings, which carry no editor keys at all, so a
    * label looked up that way is the English fallback in every locale --
    * however carefully the editor's own locale files were translated. A missing
-   * key comes back as the key itself, which is why the fallback is compared
-   * rather than ``||``-ed.
+   * key uses the shared localizer's availability check before choosing the fallback.
    */
   private _optionLabel(key: string, fallback: string): string {
-    const translated = this._t(key);
-    return translated === key ? fallback : translated;
+    const t = getLocalizeFunction(this.hass);
+    return t.has(key) ? t(key) : fallback;
   }
 
   private _renderBooleanField(
@@ -4811,7 +4805,7 @@ export class HelmanConfigEditorPanel
     }
     try {
       const current = asJsonObject(
-        await this.hass.callWS<unknown>({ type: "helman/get_config" }),
+        await callHelman(this.hass, "helman/get_config", {}),
       );
       if (current !== undefined) {
         this._configBaseline = canonicalJson(current);
@@ -4835,7 +4829,7 @@ export class HelmanConfigEditorPanel
         schemaResult,
         defaultsResult,
       ] = await Promise.allSettled([
-        this.hass.callWS<unknown>({ type: "helman/get_config" }),
+        callHelman(this.hass, "helman/get_config", {}),
         this._loadLiveApplianceMetadata(),
         fetchOptimizerSchema(this.hass),
         fetchConfigDefaults(this.hass),
@@ -4911,10 +4905,7 @@ export class HelmanConfigEditorPanel
     }
     this._validating = true;
     try {
-      const validation = await this.hass.callWS<ValidationReport>({
-        type: "helman/validate_config",
-        config: this._prunedConfig().config,
-      });
+      const validation = await callHelman(this.hass, "helman/validate_config", { config: this._prunedConfig().config });
       this._validation = validation;
       this._message = validation.valid
         ? { kind: "success", text: this._t("editor.messages.validation_passed") }
@@ -4948,10 +4939,7 @@ export class HelmanConfigEditorPanel
     const submittedConfig = canonicalJson(config);
     this._saving = true;
     try {
-      const response = await this.hass.callWS<SaveConfigResponse>({
-        type: "helman/save_config",
-        config,
-      });
+      const response = await callHelman(this.hass, "helman/save_config", { config });
       this._validation = response.validation;
       if (pruned && response.validation.valid && canonicalJson(this._config) === draftAtSave) {
         // Written, so what was written is the draft from here on. The YAML
@@ -5229,7 +5217,7 @@ export class HelmanConfigEditorPanel
 
   private _handleAddGrouping = (): void => {
     const groupings = asJsonArray(this._getValue(["devices", "groupings"])) ?? [];
-    const name = this._tFormat("editor.dynamic.new_grouping", { index: groupings.length + 1 });
+    const name = this._t("editor.dynamic.new_grouping", { index: groupings.length + 1 });
     const id = slugId(name, groupings.map((grouping) => this._stringValue(asJsonObject(grouping)?.id)), "grouping");
     this._applyMutation((draft) => {
       appendListItem(draft, ["devices", "groupings"], { id, name, groups: [] });
@@ -5240,7 +5228,7 @@ export class HelmanConfigEditorPanel
     const groupsPath: PathSegment[] = ["devices", "groupings", groupingIndex, "groups"];
     const groups = asJsonArray(this._getValue(groupsPath)) ?? [];
     const number = groups.length + 1;
-    const name = this._tFormat("editor.dynamic.new_group", { index: number });
+    const name = this._t("editor.dynamic.new_group", { index: number });
     const id = slugId(name, groups.map((group) => this._stringValue(asJsonObject(group)?.id)), "group");
     this._applyMutation((draft) => {
       appendListItem(draft, groupsPath, { id, name, short_name: String(number) });
@@ -5555,8 +5543,8 @@ export class HelmanConfigEditorPanel
   // Public because they are the interface, not because anything else calls
   // them: the private `_t` / `_getValue` remain the panel's own vocabulary.
 
-  t(key: string): string {
-    return this._t(key);
+  t(key: string, values?: Record<string, string | number>): string {
+    return this._t(key, values);
   }
 
   getValue(path: PathSegment[]): unknown {
@@ -5611,9 +5599,7 @@ export class HelmanConfigEditorPanel
       return null;
     }
     try {
-      const response = await this.hass.callWS<ApplianceMetadataResponse>({
-        type: "helman/get_appliances",
-      });
+      const response = await callHelman(this.hass, "helman/get_appliances", {});
       return Array.isArray(response?.appliances) ? response : { appliances: [] };
     } catch {
       return null;
@@ -5624,16 +5610,8 @@ export class HelmanConfigEditorPanel
     return booleanValue(value, fallback);
   }
 
-  private _t(key: string): string {
-    return (this._localize ?? this._fallbackLocalize)(key);
-  }
-
-  private _tFormat(key: string, values: Record<string, string | number>): string {
-    let text = this._t(key);
-    for (const [name, value] of Object.entries(values)) {
-      text = text.replaceAll(`{${name}}`, String(value));
-    }
-    return text;
+  private _t(key: string, values?: Record<string, string | number>): string {
+    return (this._localize ?? this._fallbackLocalize)(key, values);
   }
 
   private _formatScopeYamlValidationError(
@@ -5645,7 +5623,7 @@ export class HelmanConfigEditorPanel
       case "expected_array":
         return this._t("editor.yaml.errors.expected_array");
       case "unexpected_key":
-        return this._tFormat("editor.yaml.errors.unexpected_key", {
+        return this._t("editor.yaml.errors.unexpected_key", {
           key: error.key ?? "",
         });
     }

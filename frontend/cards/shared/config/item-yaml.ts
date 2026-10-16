@@ -27,7 +27,7 @@ import { normalizeYamlValue } from "./yaml-codec";
 
 /** All these helpers need of their caller: translations, and HA for the editor. */
 export interface ItemYamlHost {
-    t(key: string): string;
+    t(key: string, values?: Record<string, string | number>): string;
     /** Handed straight to `ha-yaml-editor`, which is the only reader of it. */
     hass?: unknown;
 }

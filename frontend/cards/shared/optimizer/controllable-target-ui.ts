@@ -1,3 +1,4 @@
+import { asJsonObject } from "../config/config-document";
 import { CONTROLLABLE_ID_INVERTER, deviceKind, findInverter, isSchedulable, iterDevices } from "../config/devices";
 import type { ApplianceMetadataEntry, ApplianceMetadataResponse, JsonObject } from "../config/types";
 
@@ -181,7 +182,8 @@ function _readLiveClimateModes(
     return null;
   }
 
-  const modes = liveAppliance.metadata?.scheduleCapabilities?.modes;
+  const metadata = asJsonObject(liveAppliance.metadata);
+  const modes = asJsonObject(metadata?.scheduleCapabilities)?.modes;
   if (!Array.isArray(modes)) {
     return null;
   }

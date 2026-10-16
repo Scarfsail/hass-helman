@@ -1,6 +1,7 @@
+import { callHelman } from "../data/helman-commands";
 import type { TemplateResult } from "lit";
 import type { JsonObject, JsonValue, PathSegment } from "../config/types";
-import { MISSING_TRANSLATION_PREFIX } from "../config/localize/localize";
+import { getLocalizeFunction } from "../../localize/localize";
 
 /**
  * The optimizer config schema, served by the backend over
@@ -110,9 +111,7 @@ export async function fetchOptimizerSchema(
 ): Promise<OptimizerSchemaDocument | null> {
     if (!hass) return null;
     try {
-        return await hass.callWS<OptimizerSchemaDocument>({
-            type: "helman/get_optimizer_schema",
-        });
+        return await callHelman(hass, "helman/get_optimizer_schema", {});
     } catch {
         return null;
     }
@@ -127,8 +126,7 @@ export async function fetchOptimizerSchema(
  */
 export interface OptimizerEditorHost {
     /** Translate a key. Falls back visibly, so a new field cannot ship unnamed. */
-    t(key: string): string;
-    tFormat(key: string, values: Record<string, string | number>): string;
+    t(key: string, values?: Record<string, string | number>): string;
     getValue(path: PathSegment[]): unknown;
     setValue(path: PathSegment[], value: JsonValue | undefined): void;
 
@@ -266,5 +264,5 @@ function firstTranslated(
 
 /** Whether a key resolves to real text rather than the visible missing-key marker. */
 function isTranslated(host: OptimizerEditorHost, key: string): boolean {
-    return !host.t(key).startsWith(MISSING_TRANSLATION_PREFIX);
+    return getLocalizeFunction().has(key);
 }

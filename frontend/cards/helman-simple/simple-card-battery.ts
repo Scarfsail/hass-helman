@@ -1,6 +1,7 @@
+import { formatPower } from "../shared/format";
 import { LitElement, css, html } from "lit-element";
 import { customElement, property, state } from "lit/decorators.js";
-import { formatPower } from "../power-format";
+
 import { BATT_COLOR, withAlpha } from "../color-utils";
 import { simpleCardSharedStyles } from "./simple-card-shared-styles";
 

@@ -1,3 +1,5 @@
+import { formatMoney, orNa } from "../shared/format";
+import { slotMinutes, formatClock } from "../shared/time/slot-time";
 import { LitElement, css, html, svg, type TemplateResult } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { nothing } from "lit-html";
@@ -114,7 +116,7 @@ export class HelmanSolarMoneyStrip extends LitElement {
     /** The currency the amounts are in, derived from the price rail's unit. */
     @property({ type: String }) public currency = "";
 
-    private _t(key: string): string {
+    private _t(key: string, values?: Record<string, string | number>): string {
         const localize: LocalizeFunction = this.hass
             ? getLocalizeFunction(this.hass)
             : (raw: string) => raw;
@@ -193,7 +195,7 @@ export class HelmanSolarMoneyStrip extends LitElement {
         const cells = new Map<number, MoneyCell>();
         const add = (points: readonly MoneyPoint[], wantElapsed: boolean) => {
             for (const point of points ?? []) {
-                const minutes = this._slotToMinutes(point.slot);
+                const minutes = slotMinutes(point.slot);
                 if (minutes === null) continue;
                 // Each slot is claimed by exactly one vintage, so the two can
                 // never both contribute and double the day's money.
@@ -219,15 +221,6 @@ export class HelmanSolarMoneyStrip extends LitElement {
     }
 
     /** Turn an `HH:MM` slot label into its minute-of-day, or null if malformed. */
-    private _slotToMinutes(slot: unknown): number | null {
-        if (typeof slot !== "string") return null;
-        const [hourText, minuteText] = slot.split(":");
-        const hour = Number(hourText);
-        const minute = Number(minuteText);
-        if (!Number.isInteger(hour) || !Number.isInteger(minute)) return null;
-        if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
-        return hour * 60 + minute;
-    }
 
     /**
      * Minute-of-day the day turns from measured into upcoming — the same rule
@@ -446,7 +439,7 @@ export class HelmanSolarMoneyStrip extends LitElement {
      * below that, where it is the difference between "something" and "nothing".
      */
     private _formatAmount(amount: number): string {
-        return Math.abs(amount) >= 10 ? amount.toFixed(0) : amount.toFixed(1);
+        return formatMoney(amount, "", { precision: "compact" });
     }
 
     private _renderGuides(
@@ -477,9 +470,9 @@ export class HelmanSolarMoneyStrip extends LitElement {
             return clearOfZero(y) ? svg`${line(y)}${label(y, text)}` : nothing;
         };
         return svg`
-            ${maxUp > 0 ? guide(maxUp, maxUp.toFixed(1)) : nothing}
+            ${maxUp > 0 ? guide(maxUp, formatMoney(maxUp, "", { precision: "axis" })) : nothing}
             ${line(zeroY)}${label(zeroY, "0")}
-            ${maxDown > 0 ? guide(-maxDown, maxDown.toFixed(1)) : nothing}
+            ${maxDown > 0 ? guide(-maxDown, formatMoney(maxDown, "", { precision: "axis" })) : nothing}
         `;
     }
 
@@ -567,7 +560,7 @@ export class HelmanSolarMoneyStrip extends LitElement {
         this._emitTooltip({
             x: event.clientX,
             y: event.clientY,
-            title: `${this._formatMinutes(cell.startMinutes)} – ${this._formatMinutes(cell.endMinutes)}`,
+            title: `${formatClock(cell.startMinutes)} – ${formatClock(cell.endMinutes)}`,
             hasActual: measured,
             rows: [
                 this._moneyRow("import_cost", cell.cost, measured, "var(--helman-grid-import)"),
@@ -588,14 +581,7 @@ export class HelmanSolarMoneyStrip extends LitElement {
 
     /** An amount, or the em dash the tiles print for an unpriced direction. */
     private _formatMoney(amount: number | null): string {
-        if (amount === null) return "—";
-        return `${amount.toFixed(2)} ${this.currency}`.trim();
-    }
-
-    private _formatMinutes(minutes: number): string {
-        const clamped = Math.max(0, Math.min(MINUTES_PER_DAY, Math.round(minutes)));
-        const hour = Math.floor(clamped / 60) % 24;
-        return `${String(hour).padStart(2, "0")}:${String(clamped % 60).padStart(2, "0")}`;
+        return orNa(amount, v => formatMoney(v, this.currency), "—");
     }
 
     private _emitHover(minutes: number | null): void {

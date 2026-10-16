@@ -1,3 +1,5 @@
+import { formatPower } from "../../shared/format";
+import { callHelman } from "../../shared/data/helman-commands";
 import { LitElement, css, html, nothing, type PropertyValues } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../../types/ha";
@@ -6,9 +8,9 @@ import type { TreeItem } from "../../helman/tree-item";
 import type { DeviceDetailParams } from "./node-detail-types";
 import { nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import { readPowerW } from "../../shared/power-reading";
-import { formatPower } from "../../power-format";
+
 import "../../appliance-switch-badge";
-import { fetchDeviceStats, type DeviceStats, type DeviceStatsSpread } from "../../helman-api";
+import { type DeviceStats, type DeviceStatsSpread } from "../../helman-api";
 import type { HelmanDeviceEditDialog } from "../../shared/devices/helman-device-edit-dialog";
 import "../../shared/devices/helman-device-edit-dialog";
 import {
@@ -240,7 +242,7 @@ export class NodeDetailDeviceContent extends LitElement {
         if (tiles.every((tile) => tile === nothing)) return nothing;
         return html`
             <div class="section-title">${day
-                ? this.localize("node_detail.device.stats.title").replace("{days}", String(day.days))
+                ? this.localize("node_detail.device.stats.title", { days: day.days })
                 : this.localize("node_detail.device.stats.title_undated")}</div>
             <div class="tiles stats">${tiles}</div>
         `;
@@ -267,7 +269,7 @@ export class NodeDetailDeviceContent extends LitElement {
         if (!deviceKey) return;
         let stats: DeviceStats | null;
         try {
-            stats = await fetchDeviceStats(this.hass, deviceKey);
+            stats = await callHelman(this.hass, "helman/get_device_stats", { device_key: deviceKey });
         } catch {
             stats = null;
         }

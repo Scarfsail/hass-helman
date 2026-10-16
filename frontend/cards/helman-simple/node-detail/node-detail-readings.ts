@@ -1,3 +1,4 @@
+import { isReadableState } from "../../shared/power-reading";
 import type { HomeAssistant } from "../../../types/ha";
 import { convertToKWh, isSupportedEnergyUnit } from "../../helman/energy-unit-converter";
 
@@ -11,7 +12,7 @@ export function readingText(
     onOff: (on: boolean) => string,
 ): string | null {
     const stateObj = entityId ? hass.states[entityId] : undefined;
-    if (!stateObj || stateObj.state === "unavailable" || stateObj.state === "unknown") return null;
+    if (!stateObj || !isReadableState(stateObj.state)) return null;
     if (stateObj.state === "on" || stateObj.state === "off") return onOff(stateObj.state === "on");
     const unit = stateObj.attributes.unit_of_measurement as string | undefined;
     return unit ? stateObj.state + " " + unit : stateObj.state;

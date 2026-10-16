@@ -1,3 +1,5 @@
+import type { ReactiveController, ReactiveControllerHost } from "lit";
+
 /**
  * The frontend half of automatic refresh.
  *
@@ -38,11 +40,8 @@ export type DataChangedKind = "schedule" | "plan" | "config" | "solar_bias";
 /**
  * Called once per collapsed batch, with every kind seen in that batch.
  *
- * The kinds are informational. A listener is expected to reload everything it
- * renders regardless of which arrived: the cards draw across the boundaries the
- * kinds describe (the inspector's one payload carries plan, forecast and bias
- * contributions at once), so filtering on them would be a bug waiting for the
- * day a `plan` event is the only thing announcing a moved forecast.
+ * Reload everything unless you provably depend on one kind. Most cards draw
+ * across kind boundaries: a plan announcement can also move a forecast.
  */
 export type DataChangedListener = (kinds: ReadonlySet<DataChangedKind>) => void;
 
@@ -221,5 +220,51 @@ class DataChangedFeedImpl implements DataChangedFeed {
         const request = this._unsubscribeRequest;
         this._unsubscribeRequest = null;
         void request?.then((unsubscribe) => unsubscribe()).catch(() => undefined);
+    }
+}
+
+/** Bind a Lit host to the connection's shared feed, including late hass arrival. */
+export class DataChangedController implements ReactiveController {
+    private _connected = false;
+    private _connection: DataChangedConnection | null | undefined;
+    private _unsubscribe?: () => void;
+
+    constructor(
+        host: ReactiveControllerHost,
+        private readonly _hass: () => DataChangedHost | undefined,
+        private readonly _options: { kinds?: readonly DataChangedKind[] },
+        private readonly _onChange: DataChangedListener,
+    ) {
+        host.addController(this);
+    }
+
+    hostConnected(): void {
+        this._connected = true;
+        this._sync();
+    }
+
+    hostUpdate(): void {
+        this._sync();
+    }
+
+    hostDisconnected(): void {
+        this._connected = false;
+        this._unsubscribe?.();
+        this._unsubscribe = undefined;
+        this._connection = undefined;
+    }
+
+    private _sync(): void {
+        if (!this._connected) return;
+        const hass = this._hass();
+        const connection = hass?.connection;
+        if (connection === this._connection) return;
+        this._unsubscribe?.();
+        this._connection = connection;
+        this._unsubscribe = hass ? getSharedDataChangedFeed(hass).subscribe((kinds) => {
+            if (!this._options.kinds || this._options.kinds.some((kind) => kinds.has(kind))) {
+                this._onChange(kinds);
+            }
+        }) : undefined;
     }
 }

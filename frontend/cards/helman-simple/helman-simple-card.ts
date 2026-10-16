@@ -1,12 +1,13 @@
+import { applyValueType } from "../shared/power-reading";
 import { LitElement, css, html, svg } from "lit-element";
 import { customElement, state } from "lit/decorators.js";
 import type { HomeAssistant, LovelaceCard } from "../../types/ha";
 import { HelmanSimpleCardConfig } from "./HelmanSimpleCardConfig";
 import { getLocalizeFunction, LocalizeFunction } from "../localize/localize";
-import { ValueType, TreeItemDTO, TreePayload, HelmanUiConfig, InverterDetailPayload, applyValueType } from "../helman-api";
+import { ValueType, TreeItemDTO, TreePayload, HelmanUiConfig, InverterDetailPayload } from "../helman-api";
 import { HistoryEngine } from "../helman/history-engine";
 import { getSharedHelmanStore } from "../helman/store";
-import { getSharedDataChangedFeed } from "../helman/data-changed";
+import { DataChangedController } from "../helman/data-changed";
 import { TreeItem } from "../helman/tree-item";
 import { hydrateItem } from "../helman/tree-item-hydrator";
 import type { NodeType } from "./node-detail/node-detail-types";
@@ -201,7 +202,6 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
     private _entityMap: EnergyEntityMap | null = null;
     private _localize?: LocalizeFunction;
     private _localizeLanguage?: string;
-    private _unsubscribeDataChanged?: () => void;
     private _latestHass?: HomeAssistant;
     private _watchedEntityIds: Set<string> = new Set();
     private _scheduleWatchedIds: Set<string> = new Set();
@@ -289,6 +289,11 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
     }
 
     // 9. Lifecycle methods
+    constructor() {
+        super();
+        new DataChangedController(this, () => this._latestHass, { kinds: ["config"] }, () => void this._loadFromBackend(true));
+    }
+
     async connectedCallback() {
         super.connectedCallback();
         // The house detail dialog draws the same consumer boxes the power card
@@ -300,9 +305,6 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         // A device name in the house detail swaps the open dialog to that device.
         this.addEventListener("show-device-detail", this._handleShowDeviceDetail);
         if (this._latestHass) {
-            this._unsubscribeDataChanged = getSharedDataChangedFeed(this._latestHass).subscribe((kinds) => {
-                if (kinds.has("config")) void this._loadFromBackend(true);
-            });
             await this._loadFromBackend();
         }
     }
@@ -312,8 +314,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         this.removeEventListener(OPEN_SCHEDULE_EDITOR_EVENT, this._handleOpenScheduleEditor);
         this.removeEventListener(WATCHED_ENTITIES_EVENT, this._handleWatchedEntities);
         this.removeEventListener("show-device-detail", this._handleShowDeviceDetail);
-        this._unsubscribeDataChanged?.();
-        this._unsubscribeDataChanged = undefined;
+
         this._loadGeneration += 1;
         this._inverterGeneration += 1;
         this._historyEngine?.stop();

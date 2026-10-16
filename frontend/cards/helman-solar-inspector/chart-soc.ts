@@ -1,3 +1,5 @@
+import { slotMinutes as slotToMinutes } from "../shared/time/slot-time";
+export { slotMinutes as slotToMinutes } from "../shared/time/slot-time";
 import { resolveSocDirection, type SocDirection } from "../shared/soc-columns";
 import type { BatterySocPoint } from "./solar-inspector-model";
 
@@ -20,11 +22,7 @@ export type SocBar = {
 
 type TimedPoint = { slot: string; minutes: number; pct: number };
 
-export function slotToMinutes(slot: string): number | null {
-  const match = /^(\d{2}):(\d{2})$/.exec(slot);
-  if (!match) return null;
-  return Number(match[1]) * 60 + Number(match[2]);
-}
+
 
 function timed(points: readonly BatterySocPoint[]): TimedPoint[] {
   return points

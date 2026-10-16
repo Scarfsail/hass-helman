@@ -1,4 +1,6 @@
-import { getCachedLocalDateTimeDescriptor } from "../../../shared/local-date-time-descriptor-cache";
+import { addDays as addDaysToDayKey } from "../../time/day-key";
+export { addDays as addDaysToDayKey } from "../../time/day-key";
+import { getCachedLocalDateTimeDescriptor } from "../../../shared/time/day-key";
 
 const TIME_FORMATTERS = new Map<string, Intl.DateTimeFormat>();
 const DAY_LABEL_FORMATTERS = new Map<string, Intl.DateTimeFormat>();
@@ -65,9 +67,6 @@ export function getScheduleDayKey(value: Date | string, timeZone: string): strin
     return getCachedLocalDateTimeDescriptor(value, timeZone)?.dayKey ?? null;
 }
 
-export function getScheduleSlotDayKey(slotId: string, timeZone: string): string | null {
-    return getScheduleDayKey(slotId, timeZone);
-}
 
 export function deriveScheduleGranularityMinutes(
     slotIds: readonly string[],
@@ -380,10 +379,4 @@ function _dayStepsFrom(dayKey: string): { dayKey: string; next: string; previous
         previous: addDaysToDayKey(dayKey, -1),
     };
     return DAY_STEP_MEMO;
-}
-
-export function addDaysToDayKey(dayKey: string, days: number): string {
-    const date = new Date(`${dayKey}T00:00:00Z`);
-    date.setUTCDate(date.getUTCDate() + days);
-    return date.toISOString().slice(0, 10);
 }

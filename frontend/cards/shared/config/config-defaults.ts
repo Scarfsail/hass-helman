@@ -1,3 +1,4 @@
+import { callHelman } from "../data/helman-commands";
 import type { PathSegment } from "./types";
 
 /**
@@ -25,9 +26,7 @@ export async function fetchConfigDefaults(
 ): Promise<ConfigDefaults | null> {
     if (!hass) return null;
     try {
-        return await hass.callWS<ConfigDefaults>({
-            type: "helman/get_config_defaults",
-        });
+        return await callHelman(hass, "helman/get_config_defaults", {});
     } catch {
         return null;
     }

@@ -1,3 +1,5 @@
+import type { ConditionTracePayload } from "../../data/helman-commands";
+import { callHelman } from "../../data/helman-commands";
 import { LitElement, css, html } from "lit-element";
 import { customElement, property, state } from "lit/decorators.js";
 import { nothing } from "lit-html";
@@ -8,24 +10,6 @@ import { formatScheduleTime } from "../model/schedule-time";
 import { schedulingSharedStyles } from "../styles/scheduling-shared-styles";
 
 const KEY_PREFIX = "scheduling.explanation.diagram.trace";
-
-/** The `helman/get_condition_trace` payload, or null for nothing recorded. */
-interface ConditionTracePayload {
-    optimizerId: string;
-    groupIndex: number;
-    runAt: string;
-    /** The group's `custom` list, exactly as it was evaluated. */
-    config: unknown[];
-    /**
-     * HA trace path -> the steps recorded at it.
-     *
-     * A step may carry a `params` key the backend put there: the entities the
-     * entry read, which HA's own trace has no place for. Nothing here has to
-     * draw it -- `ha-trace-path-details` dumps every step key it does not
-     * recognise into the block at the top of its pane.
-     */
-    trace: Record<string, unknown[]>;
-}
 
 /** What the dialog is doing, which is all the render needs to branch on. */
 type TraceViewState =
@@ -330,8 +314,7 @@ export class SchedulingConditionTraceDialog extends LitElement {
 
         let payload: ConditionTracePayload | null;
         try {
-            payload = await hass.callWS<ConditionTracePayload | null>({
-                type: "helman/get_condition_trace",
+            payload = await callHelman(hass, "helman/get_condition_trace", {
                 optimizer_id: optimizerId,
                 group_index: groupIndex,
             });
