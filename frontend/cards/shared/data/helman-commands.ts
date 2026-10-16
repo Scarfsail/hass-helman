@@ -57,41 +57,82 @@ export interface ConditionTracePayload {
     trace: Record<string, unknown[]>;
 }
 
-type ExplanationRuns<T> = [T | null, number][];
-interface ExplanationConditionColumn {
+export type ExplanationNodeState =
+    | "true"
+    | "false"
+    | "not_evaluated"
+    | "not_applicable";
+
+export type ExplanationNodeScope = "slot" | "day" | "window" | "run";
+
+export type ExplanationVerdict = "execute" | "candidate" | "skip";
+
+export type ExplanationStatus = "ok" | "skipped" | "failed";
+
+/** The authoritative runtime phases that emit explanation records. */
+export type ExplanationPhase = 2 | 3;
+
+export type ExplanationParamsSource =
+    | "slot_matched"
+    | "day_resolved"
+    | "master_fallback";
+
+/** One condition node as it resolved for one slot; absent keys were not recorded. */
+export interface ExplanationConditionRow {
     key: string;
-    scope: "slot" | "day" | "window" | "run";
-    state: ExplanationRuns<string>;
-    value?: ExplanationRuns<unknown>;
-    actual?: Record<string, unknown>;
+    scope: ExplanationNodeScope;
+    state: ExplanationNodeState;
+    value?: unknown;
+    actual?: unknown;
 }
-interface ExplanationGroupColumn {
+export interface ExplanationGateRow {
+    key: string;
+    state: ExplanationNodeState;
+    params: Record<string, unknown>;
+}
+export interface ExplanationGroupRow {
     index: number;
     label: string;
-    paramsSource: ExplanationRuns<string>;
-    params?: ExplanationRuns<Record<string, unknown>>;
-    customResults?: ExplanationRuns<unknown[]>;
-    conditions?: ExplanationConditionColumn[];
+    paramsSource: ExplanationParamsSource;
+    params: Record<string, unknown>;
+    customResults: (boolean | null)[];
+    conditions: ExplanationConditionRow[];
 }
-interface ExplanationOptimizerColumn {
+/** One optimizer's account of one slot. A slot it said nothing about has no row. */
+export interface ExplanationSlotRow {
+    slotId: string;
+    runAt: string;
+    verdict: ExplanationVerdict;
+    winningOptimizer?: string;
+    /** The group `Eligibility.at(slot)` matched; absent when no group covers the slot. */
+    matchedGroupIndex?: number;
+    groups: ExplanationGroupRow[];
+    gates: ExplanationGateRow[];
+}
+/** What a condition column is, as opposed to what it found in any one slot. */
+export interface ExplanationConditionColumnRow {
+    key: string;
+    /** Resolved by the optimizer for the slot, not by group matching. */
+    selfGating?: true;
+    /** How the test compares `actual` with `value`; absent where it does not compare. */
+    operator?: string;
+}
+export interface ExplanationOptimizerRows {
     optimizerId: string;
     kind: string;
-    phase: 2 | 3;
-    status: string;
-    verdict: ExplanationRuns<string>;
+    phase: ExplanationPhase;
+    status: ExplanationStatus;
     controllableId?: string;
     statusReason?: string;
-    winningOptimizer?: Record<string, string>;
-    groups?: ExplanationGroupColumn[];
-    gates?: { key: string; state: ExplanationRuns<string>; params?: ExplanationRuns<Record<string, unknown>> }[];
-    runAt: ExplanationRuns<string>;
+    conditions: ExplanationConditionColumnRow[];
+    slots: ExplanationSlotRow[];
 }
 export interface ScheduleExplanationPayload {
     controllableId: string;
     date: string;
     slotIds: string[];
     runAt: string | null;
-    optimizers: ExplanationOptimizerColumn[];
+    optimizers: ExplanationOptimizerRows[];
 }
 
 export interface SolarBiasStatus {

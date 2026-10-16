@@ -1,5 +1,10 @@
 import { test, expect, type Page } from "@playwright/test";
 import { loadBundle } from "./support/card-page";
+import { explanationRows, type ExplanationSlotInput } from "./support/payload-builders";
+import type {
+    ExplanationNodeState,
+    ExplanationParamsSource,
+} from "../cards/shared/data/helman-commands";
 
 /**
  * Level 3: the logic that produced one slot, as AND/OR blocks.
@@ -45,88 +50,93 @@ const SLOT_IDS = [
  * - **14:00** group 0 passes and its custom condition says no: a candidate.
  * - **14:30** every condition passes and the writer vetoes: blocked.
  */
-function conditionColumn(
-    key: string,
-    states: unknown[],
-    actual: Record<string, unknown>,
-    value: unknown = 1.0,
-) {
-    return { key, scope: "slot", state: states, value: [[value, 4]], actual };
-}
+const PAYLOAD_GROUPS: {
+    label: string;
+    paramsSource: ExplanationParamsSource;
+    minExportPrice: number;
+    priceValue: number;
+    price: ExplanationNodeState[];
+    priceActual: (number | undefined)[];
+    soc: ExplanationNodeState[];
+    socActual: (number | undefined)[];
+}[] = [
+    {
+        label: "Ráno",
+        paramsSource: "slot_matched",
+        minExportPrice: 1.0,
+        priceValue: 1.0,
+        price: ["false", "true", "true", "true"],
+        priceActual: [1.5],
+        soc: ["true", "false", "true", "true"],
+        socActual: [undefined, 0.2],
+    },
+    {
+        label: "Poledne",
+        paramsSource: "slot_matched",
+        minExportPrice: 2.0,
+        priceValue: 2.0,
+        price: ["true", "false", "true", "true"],
+        // Every slot carries its reading now, passing or not.
+        priceActual: [0.9, 3.1],
+        soc: ["true", "true", "true", "true"],
+        socActual: [],
+    },
+    {
+        label: "Večer",
+        // Not this slot's own params: `for_day()` resolved them, and the badge
+        // is the only thing that says so.
+        paramsSource: "day_resolved",
+        minExportPrice: 3.0,
+        priceValue: 1.0,
+        price: ["true", "false", "true", "true"],
+        priceActual: [undefined, 4.2],
+        soc: ["true", "true", "true", "true"],
+        socActual: [],
+    },
+];
 
-const PAYLOAD = {
+const PAYLOAD = explanationRows({
     controllableId: "inverter",
     date: DATE,
     slotIds: SLOT_IDS,
     runAt: RUN_AT,
     optimizers: [{
         optimizerId: "export_price",
-        kind: "export_price",
-        controllableId: "inverter",
-        status: "ok",
-        runAt: [[RUN_AT, 4]],
-        verdict: [["execute", 1], ["skip", 1], ["candidate", 1], ["execute", 1]],
-        winningOptimizer: { "0": "export_price" },
-        groups: [
-            {
-                index: 0,
-                label: "Ráno",
-                paramsSource: [["slot_matched", 4]],
-                params: [[{ min_export_price: 1.0 }, 4]],
-                // Only 14:00 configures a custom condition, and it says no.
-                customResults: [[[], 2], [[false], 1], [[], 1]],
+        slots: SLOT_IDS.map((slotId, slot) => ({
+            slotId,
+            verdict: (["execute", "skip", "candidate", "execute"] as const)[slot],
+            winningOptimizer: slot === 0 ? "export_price" : undefined,
+            // The backend's slot match: 13:00 and 14:00 under group 1, 13:30
+            // under none, 14:30 under group 0.
+            matchedGroupIndex: [1, undefined, 1, 0][slot],
+            groups: PAYLOAD_GROUPS.map((group) => ({
+                label: group.label,
+                paramsSource: group.paramsSource,
+                params: { min_export_price: group.minExportPrice },
+                // Only 14:00 of group 0 configures a custom condition, and it says no.
+                customResults: group.label === "Ráno" && slot === 2 ? [false] : [],
                 conditions: [
-                    conditionColumn(
-                        "when_price_below",
-                        [["false", 1], ["true", 3]],
-                        { "0": 1.5 },
-                    ),
-                    conditionColumn(
-                        "min_soc_pct",
-                        [["true", 1], ["false", 1], ["true", 2]],
-                        { "1": 0.2 },
-                    ),
+                    {
+                        key: "when_price_below",
+                        scope: "slot",
+                        state: group.price[slot],
+                        value: group.priceValue,
+                        actual: group.priceActual[slot],
+                    },
+                    {
+                        key: "min_soc_pct",
+                        scope: "slot",
+                        state: group.soc[slot],
+                        value: 1.0,
+                        actual: group.socActual[slot],
+                    },
                 ],
-            },
-            {
-                index: 1,
-                label: "Poledne",
-                paramsSource: [["slot_matched", 4]],
-                params: [[{ min_export_price: 2.0 }, 4]],
-                conditions: [
-                    conditionColumn(
-                        "when_price_below",
-                        [["true", 1], ["false", 1], ["true", 2]],
-                        // Every slot carries its reading now, passing or not.
-                        { "0": 0.9, "1": 3.1 },
-                        2.0,
-                    ),
-                    conditionColumn("min_soc_pct", [["true", 4]], {}),
-                ],
-            },
-            {
-                index: 2,
-                label: "Večer",
-                // Not this slot's own params: `for_day()` resolved them, and
-                // the badge is the only thing that says so.
-                paramsSource: [["day_resolved", 4]],
-                params: [[{ min_export_price: 3.0 }, 4]],
-                conditions: [
-                    conditionColumn(
-                        "when_price_below",
-                        [["true", 1], ["false", 1], ["true", 2]],
-                        { "1": 4.2 },
-                    ),
-                    conditionColumn("min_soc_pct", [["true", 4]], {}),
-                ],
-            },
-        ],
-        gates: [
+            })),
             // Only 14:30 reached the writer, and the user owns that slot.
-            { key: "blocked_user_owned", state: [[null, 3], ["false", 1]] },
-        ],
+            gates: slot === 3 ? [{ key: "blocked_user_owned", state: "false" }] : [],
+        })),
     }],
-};
+});
 
 /**
  * One optimizer, **one** condition group, and the gates that are not vetoes.
@@ -143,77 +153,91 @@ const PAYLOAD = {
  *
  * One group also means there is nothing for a `≥1` to choose between.
  */
-const SINGLE_GROUP_PAYLOAD = {
+const SINGLE_GROUP_PAYLOAD = explanationRows({
     controllableId: "appliance.dryer",
     date: DATE,
     slotIds: SLOT_IDS.slice(0, 2),
     runAt: RUN_AT,
     optimizers: [{
         optimizerId: "appliance_runtime",
-        kind: "appliance_runtime",
-        controllableId: "appliance.dryer",
-        status: "ok",
-        runAt: [[RUN_AT, 2]],
-        verdict: [["execute", 1], ["skip", 1]],
-        winningOptimizer: { "0": "appliance_runtime" },
-        groups: [{
-            index: 0,
-            label: "Den",
-            paramsSource: [["slot_matched", 2]],
-            params: [[{ max_price: 3.5 }, 2]],
-            conditions: [
-                {
-                    key: "when_price_below",
-                    scope: "slot",
-                    state: [["true", 2]],
-                    value: [[3.5, 2]],
-                    actual: { "1": 3.43 },
-                },
-                {
-                    // Set membership, not a comparison: `_run_when_mask` tests
-                    // the day's classification against the configured set.
-                    key: "run_when",
-                    scope: "day",
-                    state: [["true", 2]],
-                    value: [[["workday", "weekend"], 2]],
-                },
-                {
-                    key: "ensure_self_sustainability",
-                    scope: "slot",
-                    state: [["true", 1], ["false", 1]],
-                    value: [[0, 2]],
-                    // The overflow case, verbatim in shape: a refusal comes
-                    // back as an object naming which test failed and with
-                    // what, far wider than the block it has to live in.
-                    actual: {
-                        "1": {
-                            code: "over_battery_budget",
-                            tolerancePct: 0,
-                            budgetKwh: 0,
-                            spentKwh: 0.72,
-                            deltaSocPct: -3.05,
-                            deltaImportKwh: 0.42,
-                        },
+        slots: SLOT_IDS.slice(0, 2).map((slotId, slot) => ({
+            slotId,
+            verdict: slot === 0 ? "execute" : "skip",
+            winningOptimizer: slot === 0 ? "appliance_runtime" : undefined,
+            matchedGroupIndex: 0,
+            groups: [{
+                label: "Den",
+                params: { max_price: 3.5 },
+                conditions: [
+                    {
+                        key: "when_price_below",
+                        scope: "slot",
+                        state: "true",
+                        value: 3.5,
+                        actual: slot === 1 ? 3.43 : undefined,
                     },
+                    {
+                        // Set membership, not a comparison: `_run_when_mask`
+                        // tests the day's classification against the
+                        // configured set.
+                        key: "run_when",
+                        scope: "day",
+                        state: "true",
+                        value: ["workday", "weekend"],
+                    },
+                    {
+                        key: "ensure_self_sustainability",
+                        scope: "slot",
+                        state: slot === 0 ? "true" : "false",
+                        value: 0,
+                        // The overflow case, verbatim in shape: a refusal comes
+                        // back as an object naming which test failed and with
+                        // what, far wider than the block it has to live in.
+                        actual: slot === 1
+                            ? {
+                                code: "over_battery_budget",
+                                tolerancePct: 0,
+                                budgetKwh: 0,
+                                spentKwh: 0.72,
+                                deltaSocPct: -3.05,
+                                deltaImportKwh: 0.42,
+                            }
+                            : undefined,
+                    },
+                ],
+            }],
+            gates: [
+                // False, and not a veto: the day under-runs and this slot still ran.
+                {
+                    key: "placement_capacity",
+                    state: "false",
+                    params: { slotsNeeded: 6, slotsPlaceable: 4, windowSlots: 8 },
                 },
+                { key: "slot_available", state: "true" },
+                { key: "cheapest_rank", state: "true", params: { rank: 2, rankOf: 9 } },
             ],
-        }],
-        gates: [
-            // False, and not a veto: the day under-runs and this slot still ran.
-            {
-                key: "placement_capacity",
-                state: [["false", 2]],
-                params: [[{ slotsNeeded: 6, slotsPlaceable: 4, windowSlots: 8 }, 2]],
-            },
-            { key: "slot_available", state: [["true", 2]] },
-            {
-                key: "cheapest_rank",
-                state: [["true", 2]],
-                params: [[{ rank: 2, rankOf: 9 }, 2]],
-            },
-        ],
+        })),
     }],
-};
+});
+
+/** One pool slot under one optimizer: what most single-slot fixtures share. */
+function poolSlot(slot: ExplanationSlotInput) {
+    return explanationRows({
+        controllableId: "appliance.pool",
+        date: DATE,
+        slotIds: SLOT_IDS.slice(0, 1),
+        runAt: RUN_AT,
+        optimizers: [{
+            optimizerId: "appliance_runtime",
+            slots: [{ gates: [{ key: "slot_available", state: "true" }], ...slot }],
+        }],
+    });
+}
+
+/** A `max_run_price` node that passed against `value`. */
+function maxRunPrice(value: number) {
+    return { key: "max_run_price", scope: "slot", state: "true", value } as const;
+}
 
 /**
  * One slot whose only custom condition *threw*.
@@ -222,34 +246,17 @@ const SINGLE_GROUP_PAYLOAD = {
  * no or blew up, so the tri-state is the only thing that separates them --
  * and "your template is broken" is the one a person has to act on.
  */
-const ERRORED_CUSTOM_PAYLOAD = {
-    controllableId: "appliance.pool",
-    date: DATE,
-    slotIds: SLOT_IDS.slice(0, 1),
-    runAt: RUN_AT,
-    optimizers: [{
-        optimizerId: "appliance_runtime",
-        kind: "appliance_runtime",
-        controllableId: "appliance.pool",
-        status: "ok",
-        runAt: [[RUN_AT, 1]],
-        verdict: [["candidate", 1]],
-        groups: [{
-            index: 0,
-            label: "Studený bazén",
-            paramsSource: [["slot_matched", 1]],
-            params: [[{ max_run_price: 2.0 }, 1]],
-            customResults: [[[null], 1]],
-            conditions: [{
-                key: "max_run_price",
-                scope: "slot",
-                state: [["true", 1]],
-                value: [[2.0, 1]],
-            }],
-        }],
-        gates: [{ key: "slot_available", state: [["true", 1]] }],
+const ERRORED_CUSTOM_PAYLOAD = poolSlot({
+    slotId: SLOT_IDS[0],
+    verdict: "candidate",
+    matchedGroupIndex: 0,
+    groups: [{
+        label: "Studený bazén",
+        params: { max_run_price: 2.0 },
+        customResults: [null],
+        conditions: [maxRunPrice(2.0)],
     }],
-};
+});
 
 /**
  * A slot that will run, whose custom condition held **at planning time**.
@@ -260,91 +267,81 @@ const ERRORED_CUSTOM_PAYLOAD = {
  * claim about the future, not a settled fact — and the drawing has to say so
  * without downgrading it to a candidate.
  */
-const MET_CUSTOM_PAYLOAD = {
-    controllableId: "appliance.pool",
-    date: DATE,
-    slotIds: SLOT_IDS.slice(0, 1),
-    runAt: RUN_AT,
-    optimizers: [{
-        optimizerId: "appliance_runtime",
-        kind: "appliance_runtime",
-        controllableId: "appliance.pool",
-        status: "ok",
-        runAt: [[RUN_AT, 1]],
-        verdict: [["execute", 1]],
-        winningOptimizer: { "0": "appliance_runtime" },
-        groups: [{
-            index: 0,
-            label: "Studený bazén",
-            paramsSource: [["slot_matched", 1]],
-            params: [[{ max_run_price: 2.0 }, 1]],
-            customResults: [[[true], 1]],
-            conditions: [{
-                key: "max_run_price",
-                scope: "slot",
-                state: [["true", 1]],
-                value: [[2.0, 1]],
-            }],
-        }],
-        gates: [{ key: "slot_available", state: [["true", 1]] }],
+const MET_CUSTOM_PAYLOAD = poolSlot({
+    slotId: SLOT_IDS[0],
+    verdict: "execute",
+    winningOptimizer: "appliance_runtime",
+    matchedGroupIndex: 0,
+    groups: [{
+        label: "Studený bazén",
+        params: { max_run_price: 2.0 },
+        customResults: [true],
+        conditions: [maxRunPrice(2.0)],
     }],
-};
+});
 
 /**
  * Two groups match, and only the second one's custom conditions held.
  *
  * `Eligibility.__init__` settles on `fully or matching[0]` — the first group
  * that matched *and* whose custom conditions held, falling back to the first
- * that matched at all. Reading `matching[0]` instead gives a false custom stage
- * over a `spustit` terminal, which the diagram then has to suppress as a
- * contradiction: a slot that ran with no re-check stage at all, next to a
- * candidate that has one. That was the reported inconsistency.
+ * that matched at all — and the record carries its answer. Reading
+ * `matching[0]` instead gives a false custom stage over a `spustit` terminal,
+ * which the diagram then has to suppress as a contradiction: a slot that ran
+ * with no re-check stage at all, next to a candidate that has one. That was the
+ * reported inconsistency.
  */
-const SECOND_GROUP_CUSTOM_PAYLOAD = {
-    controllableId: "appliance.pool",
-    date: DATE,
-    slotIds: SLOT_IDS.slice(0, 1),
-    runAt: RUN_AT,
-    optimizers: [{
-        optimizerId: "appliance_runtime",
-        kind: "appliance_runtime",
-        controllableId: "appliance.pool",
-        status: "ok",
-        runAt: [[RUN_AT, 1]],
-        verdict: [["execute", 1]],
-        winningOptimizer: { "0": "appliance_runtime" },
+const SECOND_GROUP_CUSTOM_PAYLOAD = poolSlot({
+    slotId: SLOT_IDS[0],
+    verdict: "execute",
+    winningOptimizer: "appliance_runtime",
+    matchedGroupIndex: 1,
+    groups: [
+        {
+            label: "Ráno",
+            params: { max_run_price: 2.0 },
+            // Matched on the mask, and its template said no.
+            customResults: [false],
+            conditions: [maxRunPrice(2.0)],
+        },
+        {
+            label: "Poledne",
+            params: { max_run_price: 3.0 },
+            customResults: [true],
+            conditions: [maxRunPrice(3.0)],
+        },
+    ],
+});
+
+/**
+ * Two groups match, and the first one's custom conditions are **unknown**.
+ *
+ * The run recorded no per-entry results for group 0 — its custom state is
+ * neither true nor false on the record — while the backend, which did know,
+ * matched group 1. The diagram used to re-derive the match and accept anything
+ * that was not `false` or errored, which drew group 0 as matched here.
+ */
+function unknownCustomPayload(matchedGroupIndex: number) {
+    return poolSlot({
+        slotId: SLOT_IDS[0],
+        verdict: "execute",
+        winningOptimizer: "appliance_runtime",
+        matchedGroupIndex,
         groups: [
             {
-                index: 0,
                 label: "Ráno",
-                paramsSource: [["slot_matched", 1]],
-                params: [[{ max_run_price: 2.0 }, 1]],
-                // Matched on the mask, and its template said no.
-                customResults: [[[false], 1]],
-                conditions: [{
-                    key: "max_run_price",
-                    scope: "slot",
-                    state: [["true", 1]],
-                    value: [[2.0, 1]],
-                }],
+                params: { max_run_price: 2.0 },
+                conditions: [maxRunPrice(2.0)],
             },
             {
-                index: 1,
                 label: "Poledne",
-                paramsSource: [["slot_matched", 1]],
-                params: [[{ max_run_price: 3.0 }, 1]],
-                customResults: [[[true], 1]],
-                conditions: [{
-                    key: "max_run_price",
-                    scope: "slot",
-                    state: [["true", 1]],
-                    value: [[3.0, 1]],
-                }],
+                params: { max_run_price: 3.0 },
+                customResults: [true],
+                conditions: [maxRunPrice(3.0)],
             },
         ],
-        gates: [{ key: "slot_available", state: [["true", 1]] }],
-    }],
-};
+    });
+}
 
 /**
  * Both groups match, and the slot runs under the one with no template.
@@ -360,50 +357,26 @@ const SECOND_GROUP_CUSTOM_PAYLOAD = {
  * conditions are missing: the reader wrote that template and is looking right
  * at a diagram that appears to deny it exists.
  */
-const GROUP_WITHOUT_CUSTOM_WINS_PAYLOAD = {
-    controllableId: "appliance.pool",
-    date: DATE,
-    slotIds: SLOT_IDS.slice(0, 1),
-    runAt: RUN_AT,
-    optimizers: [{
-        optimizerId: "appliance_runtime",
-        kind: "appliance_runtime",
-        controllableId: "appliance.pool",
-        status: "ok",
-        runAt: [[RUN_AT, 1]],
-        verdict: [["execute", 1]],
-        winningOptimizer: { "0": "appliance_runtime" },
-        groups: [
-            {
-                index: 0,
-                label: "Záporná cena",
-                paramsSource: [["slot_matched", 1]],
-                params: [[{ max_run_price: 2.0 }, 1]],
-                // No custom conditions at all: the column is absent, not false.
-                conditions: [{
-                    key: "max_run_price",
-                    scope: "slot",
-                    state: [["true", 1]],
-                    value: [[2.0, 1]],
-                }],
-            },
-            {
-                index: 1,
-                label: "Studený bazén",
-                paramsSource: [["slot_matched", 1]],
-                params: [[{ min_soc_pct: 40 }, 1]],
-                customResults: [[[false], 1]],
-                conditions: [{
-                    key: "min_soc_pct",
-                    scope: "slot",
-                    state: [["true", 1]],
-                    value: [[40, 1]],
-                }],
-            },
-        ],
-        gates: [{ key: "slot_available", state: [["true", 1]] }],
-    }],
-};
+const GROUP_WITHOUT_CUSTOM_WINS_PAYLOAD = poolSlot({
+    slotId: SLOT_IDS[0],
+    verdict: "execute",
+    winningOptimizer: "appliance_runtime",
+    matchedGroupIndex: 0,
+    groups: [
+        {
+            label: "Záporná cena",
+            params: { max_run_price: 2.0 },
+            // No custom conditions at all: the list is empty, not false.
+            conditions: [maxRunPrice(2.0)],
+        },
+        {
+            label: "Studený bazén",
+            params: { min_soc_pct: 40 },
+            customResults: [false],
+            conditions: [{ key: "min_soc_pct", scope: "slot", state: "true", value: 40 }],
+        },
+    ],
+});
 
 /**
  * Four half-hour slots, all of them placed, against a two-hour daily minimum.
@@ -413,40 +386,33 @@ const GROUP_WITHOUT_CUSTOM_WINS_PAYLOAD = {
  * every slot of an eight-hour run carries the same "nothing done yet" the
  * morning did. The plan's own hours are the missing half.
  */
-const DAILY_MINIMUM_RUN_PAYLOAD = {
+const DAILY_MINIMUM_RUN_PAYLOAD = explanationRows({
     controllableId: "appliance.pool",
     date: DATE,
     slotIds: SLOT_IDS,
     runAt: RUN_AT,
     optimizers: [{
         optimizerId: "appliance_runtime",
-        kind: "appliance_runtime",
-        controllableId: "appliance.pool",
-        status: "ok",
-        runAt: [[RUN_AT, 4]],
-        verdict: [["execute", 4]],
-        winningOptimizer: { "0": "appliance_runtime", "1": "appliance_runtime", "2": "appliance_runtime", "3": "appliance_runtime" },
-        groups: [{
-            index: 0,
-            label: "Den",
-            paramsSource: [["slot_matched", 4]],
-            params: [[{ max_run_price: 9.0 }, 4]],
-            conditions: [{
-                key: "max_run_price",
-                scope: "slot",
-                state: [["true", 4]],
-                value: [[9.0, 4]],
+        slots: SLOT_IDS.map((slotId) => ({
+            slotId,
+            verdict: "execute",
+            winningOptimizer: "appliance_runtime",
+            matchedGroupIndex: 0,
+            groups: [{
+                label: "Den",
+                params: { max_run_price: 9.0 },
+                conditions: [maxRunPrice(9.0)],
             }],
-        }],
-        gates: [{
-            key: "daily_minimum_remaining",
-            state: [["true", 4]],
-            // Nothing had run when the plan was built, and the day owes two
-            // hours: the same params on all four slots.
-            params: [[{ minHours: 2, doneHours: 0, remainingHours: 2 }, 4]],
-        }],
+            gates: [{
+                key: "daily_minimum_remaining",
+                state: "true",
+                // Nothing had run when the plan was built, and the day owes two
+                // hours: the same params on all four slots.
+                params: { minHours: 2, doneHours: 0, remainingHours: 2 },
+            }],
+        })),
     }],
-};
+});
 
 /**
  * One group, with a custom condition, and a slot no group matched.
@@ -456,35 +422,16 @@ const DAILY_MINIMUM_RUN_PAYLOAD = {
  * enough to claim that *another* group carries the template. There is no other
  * group: the note would point at nothing.
  */
-const LONE_GROUP_UNMATCHED_PAYLOAD = {
-    controllableId: "appliance.pool",
-    date: DATE,
-    slotIds: SLOT_IDS.slice(0, 1),
-    runAt: RUN_AT,
-    optimizers: [{
-        optimizerId: "appliance_runtime",
-        kind: "appliance_runtime",
-        controllableId: "appliance.pool",
-        status: "ok",
-        runAt: [[RUN_AT, 1]],
-        verdict: [["skip", 1]],
-        groups: [{
-            index: 0,
-            label: "Den",
-            paramsSource: [["slot_matched", 1]],
-            params: [[{ max_run_price: 2.0 }, 1]],
-            customResults: [[[true], 1]],
-            conditions: [{
-                key: "max_run_price",
-                scope: "slot",
-                state: [["false", 1]],
-                value: [[2.0, 1]],
-                actual: { "0": 4.1 },
-            }],
-        }],
-        gates: [{ key: "slot_available", state: [["true", 1]] }],
+const LONE_GROUP_UNMATCHED_PAYLOAD = poolSlot({
+    slotId: SLOT_IDS[0],
+    verdict: "skip",
+    groups: [{
+        label: "Den",
+        params: { max_run_price: 2.0 },
+        customResults: [true],
+        conditions: [{ key: "max_run_price", scope: "slot", state: "false", value: 2.0, actual: 4.1 }],
     }],
-};
+});
 
 /**
  * The three ways self-sustainability refuses a slot.
@@ -495,63 +442,58 @@ const LONE_GROUP_UNMATCHED_PAYLOAD = {
  * passed, because the passing case has no numbers at all and must not grow any.
  */
 function selfSustainabilityPayload(tolerancePct = 0) {
-    return {
+    const refusals = [
+        undefined,
+        {
+            code: "would_break_soc_floor",
+            floor: 25,
+            projectedMinSoc: 18.4,
+            atSlot: `${DATE}T19:00:00+02:00`,
+        },
+        {
+            code: "soc_floor_already_breached",
+            floor: 25,
+            baselineMinSoc: 22.1,
+        },
+        {
+            code: "over_battery_budget",
+            tolerancePct: 0,
+            budgetKwh: 0,
+            spentKwh: 0.72,
+            deltaSocPct: -3.05,
+            deltaImportKwh: 0.42,
+        },
+    ];
+    return explanationRows({
         controllableId: "appliance.pool",
         date: DATE,
         slotIds: SLOT_IDS,
         runAt: RUN_AT,
         optimizers: [{
             optimizerId: "appliance_runtime",
-            kind: "appliance_runtime",
-            controllableId: "appliance.pool",
-            status: "ok",
-            runAt: [[RUN_AT, 4]],
-            verdict: [["execute", 1], ["skip", 3]],
-            winningOptimizer: { "0": "appliance_runtime" },
-            groups: [{
-                index: 0,
-                label: "Den",
-                paramsSource: [["slot_matched", 4]],
-                params: [[{ max_run_price: 9.0 }, 4]],
-                conditions: [
-                    {
-                        key: "max_run_price",
-                        scope: "slot",
-                        state: [["true", 4]],
-                        value: [[9.0, 4]],
-                    },
-                    {
-                        key: "ensure_self_sustainability",
-                        scope: "slot",
-                        state: [["true", 1], ["false", 3]],
-                        value: [[tolerancePct, 4]],
-                        actual: {
-                            "1": {
-                                code: "would_break_soc_floor",
-                                floor: 25,
-                                projectedMinSoc: 18.4,
-                                atSlot: `${DATE}T19:00:00+02:00`,
-                            },
-                            "2": {
-                                code: "soc_floor_already_breached",
-                                floor: 25,
-                                baselineMinSoc: 22.1,
-                            },
-                            "3": {
-                                code: "over_battery_budget",
-                                tolerancePct: 0,
-                                budgetKwh: 0,
-                                spentKwh: 0.72,
-                                deltaSocPct: -3.05,
-                                deltaImportKwh: 0.42,
-                            },
+            slots: SLOT_IDS.map((slotId, slot) => ({
+                slotId,
+                verdict: slot === 0 ? "execute" : "skip",
+                winningOptimizer: slot === 0 ? "appliance_runtime" : undefined,
+                matchedGroupIndex: 0,
+                groups: [{
+                    label: "Den",
+                    params: { max_run_price: 9.0 },
+                    conditions: [
+                        maxRunPrice(9.0),
+                        {
+                            key: "ensure_self_sustainability",
+                            scope: "slot",
+                            state: slot === 0 ? "true" : "false",
+                            value: tolerancePct,
+                            actual: refusals[slot],
                         },
-                    },
-                ],
-            }],
-            gates: [{ key: "slot_available", state: [["true", 4]] }],
+                    ],
+                }],
+                gates: [{ key: "slot_available", state: "true" }],
+            })),
         }],
-    };
+    });
 }
 
 const SELF_SUSTAINABILITY_PAYLOAD = selfSustainabilityPayload();
@@ -570,7 +512,7 @@ const SELF_SUSTAINABILITY_PAYLOAD = selfSustainabilityPayload();
  * picture falls back to `unexplained_veto` — over a refusal the record names,
  * with the failing test and the numbers, in the block right next to it.
  */
-const SELF_GATING_TWO_GROUP_PAYLOAD = {
+const SELF_GATING_TWO_GROUP_PAYLOAD = explanationRows({
     controllableId: "appliance.pool",
     date: DATE,
     slotIds: SLOT_IDS.slice(0, 1),
@@ -578,81 +520,69 @@ const SELF_GATING_TWO_GROUP_PAYLOAD = {
     optimizers: [{
         optimizerId: "pool-heatpump",
         kind: "appliance_runtime",
-        controllableId: "appliance.pool",
-        status: "ok",
-        runAt: [[RUN_AT, 1]],
-        verdict: [["skip", 1]],
-        winningOptimizer: { "0": "pool-heatpump" },
-        groups: [
-            {
-                index: 0,
-                label: "Záporná cena",
-                paramsSource: [["day_resolved", 1]],
-                params: [[{ max_run_price: 0.5 }, 1]],
-                conditions: [
-                    {
-                        key: "run_when",
-                        scope: "day",
-                        state: [["true", 1]],
-                        value: [[["surplus", "tight"], 1]],
-                        actual: { "0": "surplus" },
-                    },
-                    {
-                        key: "max_run_price",
-                        scope: "slot",
-                        state: [["true", 1]],
-                        value: [[0.5, 1]],
-                        actual: { "0": 0.164 },
-                    },
-                    {
-                        key: "ensure_self_sustainability",
-                        scope: "run",
-                        state: [["false", 1]],
-                        value: [["strict", 1]],
-                        actual: {
-                            "0": {
+        slots: [{
+            slotId: SLOT_IDS[0],
+            verdict: "skip",
+            winningOptimizer: "pool-heatpump",
+            matchedGroupIndex: 0,
+            groups: [
+                {
+                    label: "Záporná cena",
+                    paramsSource: "day_resolved",
+                    params: { max_run_price: 0.5 },
+                    conditions: [
+                        {
+                            key: "run_when",
+                            scope: "day",
+                            state: "true",
+                            value: ["surplus", "tight"],
+                            actual: "surplus",
+                        },
+                        {
+                            key: "max_run_price",
+                            scope: "slot",
+                            state: "true",
+                            value: 0.5,
+                            actual: 0.164,
+                        },
+                        {
+                            key: "ensure_self_sustainability",
+                            scope: "run",
+                            state: "false",
+                            value: "strict",
+                            actual: {
                                 code: "would_break_soc_floor",
                                 floor: 40,
                                 projectedMinSoc: 31.2,
                                 atSlot: `${DATE}T19:00:00+02:00`,
                             },
                         },
-                    },
-                ],
-            },
-            {
-                index: 1,
-                label: "Studený bazén",
-                paramsSource: [["day_resolved", 1]],
-                params: [[{}, 1]],
-                customResults: [[[false], 1]],
-                conditions: [
-                    {
-                        key: "run_when",
-                        scope: "day",
-                        state: [["true", 1]],
-                        value: [[["surplus", "tight"], 1]],
-                        actual: { "0": "surplus" },
-                    },
-                    {
-                        key: "max_run_price",
-                        scope: "slot",
-                        state: [["not_applicable", 1]],
-                    },
-                    {
-                        key: "ensure_self_sustainability",
-                        scope: "run",
-                        state: [["not_applicable", 1]],
-                    },
-                ],
-            },
-        ],
-        gates: [
-            { key: "run_window", state: [["true", 1]], params: [[{ start: "08:00", end: "18:00" }, 1]] },
-            { key: "blocked_user_owned", state: [["true", 1]] },
-        ],
+                    ],
+                },
+                {
+                    label: "Studený bazén",
+                    paramsSource: "day_resolved",
+                    customResults: [false],
+                    conditions: [
+                        {
+                            key: "run_when",
+                            scope: "day",
+                            state: "true",
+                            value: ["surplus", "tight"],
+                            actual: "surplus",
+                        },
+                        { key: "max_run_price", scope: "slot", state: "not_applicable" },
+                        { key: "ensure_self_sustainability", scope: "run", state: "not_applicable" },
+                    ],
+                },
+            ],
+            gates: [
+                { key: "run_window", state: "true", params: { start: "08:00", end: "18:00" } },
+                { key: "blocked_user_owned", state: "true" },
+            ],
+        }],
     }],
-};
+});
 
 /**
  * A **forced** day: every condition failed and the appliance ran anyway.
@@ -673,78 +603,58 @@ const SELF_GATING_TWO_GROUP_PAYLOAD = {
  * was deliberately never consulted (`min_solar_coverage_pct`), so all three
  * non-passing readings can be told apart in one picture.
  */
-const FORCED_DAY_PAYLOAD = {
-    controllableId: "appliance.pool",
-    date: DATE,
-    slotIds: SLOT_IDS.slice(0, 1),
-    runAt: RUN_AT,
-    optimizers: [{
-        optimizerId: "appliance_runtime",
-        kind: "appliance_runtime",
-        controllableId: "appliance.pool",
-        status: "ok",
-        runAt: [[RUN_AT, 1]],
-        verdict: [["execute", 1]],
-        winningOptimizer: { "0": "appliance_runtime" },
-        groups: [{
-            index: 0,
-            label: "Teplý den",
-            // One group, and its params still came from the day rather than
-            // from this slot: the badge has to show up without a caption.
-            paramsSource: [["day_resolved", 1]],
-            params: [[{ max_run_price: 2.0 }, 1]],
-            conditions: [
-                {
-                    key: "run_when",
-                    scope: "day",
-                    state: [["false", 1]],
-                    value: [[["weekend"], 1]],
-                    actual: { "0": "workday" },
-                },
-                { key: "min_soc_pct", scope: "slot", state: [["not_applicable", 1]] },
-                {
-                    key: "min_solar_coverage_pct",
-                    scope: "slot",
-                    state: [["not_evaluated", 1]],
-                    value: [[40, 1]],
-                },
-            ],
-        }],
-        gates: [
+const FORCED_DAY_PAYLOAD = poolSlot({
+    slotId: SLOT_IDS[0],
+    verdict: "execute",
+    winningOptimizer: "appliance_runtime",
+    groups: [{
+        label: "Teplý den",
+        // One group, and its params still came from the day rather than from
+        // this slot: the badge has to show up without a caption.
+        paramsSource: "day_resolved",
+        params: { max_run_price: 2.0 },
+        conditions: [
             {
-                key: "run_window",
-                state: [["true", 1]],
-                params: [[{ start: "08:00", end: "18:00" }, 1]],
+                key: "run_when",
+                scope: "day",
+                state: "false",
+                value: ["weekend"],
+                actual: "workday",
             },
+            { key: "min_soc_pct", scope: "slot", state: "not_applicable" },
             {
-                key: "daily_minimum_remaining",
-                state: [["true", 1]],
-                params: [[{
-                    minHours: 4,
-                    doneHours: 1.5,
-                    remainingHours: 2.5,
-                    slotsNeeded: 5,
-                }, 1]],
+                key: "min_solar_coverage_pct",
+                scope: "slot",
+                state: "not_evaluated",
+                value: 40,
             },
-            {
-                key: "consecutive_skip_override",
-                state: [["true", 1]],
-                params: [[{ consecutiveSkips: 2, maxConsecutiveSkips: 2 }, 1]],
-            },
-            {
-                key: "placement_capacity",
-                state: [["false", 1]],
-                params: [[{ slotsNeeded: 5, slotsPlaceable: 4, windowSlots: 8 }, 1]],
-            },
-            {
-                key: "cheapest_rank",
-                state: [["true", 1]],
-                params: [[{ rank: 1, rankOf: 16, cost: 2.1, worstChosenCost: 3.4 }, 1]],
-            },
-            { key: "slot_available", state: [["true", 1]] },
         ],
     }],
-};
+    gates: [
+        { key: "run_window", state: "true", params: { start: "08:00", end: "18:00" } },
+        {
+            key: "daily_minimum_remaining",
+            state: "true",
+            params: { minHours: 4, doneHours: 1.5, remainingHours: 2.5, slotsNeeded: 5 },
+        },
+        {
+            key: "consecutive_skip_override",
+            state: "true",
+            params: { consecutiveSkips: 2, maxConsecutiveSkips: 2 },
+        },
+        {
+            key: "placement_capacity",
+            state: "false",
+            params: { slotsNeeded: 5, slotsPlaceable: 4, windowSlots: 8 },
+        },
+        {
+            key: "cheapest_rank",
+            state: "true",
+            params: { rank: 1, rankOf: 16, cost: 2.1, worstChosenCost: 3.4 },
+        },
+        { key: "slot_available", state: "true" },
+    ],
+});
 
 /**
  * A group that configures only some of the optimizer's conditions.
@@ -754,37 +664,30 @@ const FORCED_DAY_PAYLOAD = {
  * like it checked fewer things than it did. It must be drawn and must take no
  * part in the AND, which is what lets this slot run.
  */
-const NOT_APPLICABLE_PAYLOAD = {
+const NOT_APPLICABLE_PAYLOAD = explanationRows({
     controllableId: "appliance.dryer",
     date: DATE,
     slotIds: SLOT_IDS.slice(0, 1),
     runAt: RUN_AT,
     optimizers: [{
         optimizerId: "appliance_runtime",
-        kind: "appliance_runtime",
-        controllableId: "appliance.dryer",
-        status: "ok",
-        runAt: [[RUN_AT, 1]],
-        verdict: [["execute", 1]],
-        winningOptimizer: { "0": "appliance_runtime" },
-        groups: [{
-            index: 0,
-            label: "Den",
-            paramsSource: [["slot_matched", 1]],
-            params: [[{ max_price: 3.5 }, 1]],
-            conditions: [
-                {
-                    key: "when_price_below",
-                    scope: "slot",
-                    state: [["true", 1]],
-                    value: [[3.5, 1]],
-                },
-                { key: "min_soc_pct", scope: "slot", state: [["not_applicable", 1]] },
-            ],
+        slots: [{
+            slotId: SLOT_IDS[0],
+            verdict: "execute",
+            winningOptimizer: "appliance_runtime",
+            matchedGroupIndex: 0,
+            groups: [{
+                label: "Den",
+                params: { max_price: 3.5 },
+                conditions: [
+                    { key: "when_price_below", scope: "slot", state: "true", value: 3.5 },
+                    { key: "min_soc_pct", scope: "slot", state: "not_applicable" },
+                ],
+            }],
+            gates: [{ key: "slot_available", state: "true" }],
         }],
-        gates: [{ key: "slot_available", state: [["true", 1]] }],
     }],
-};
+});
 
 /**
  * `translations` is for the keys whose *presence* is the behaviour under test.
@@ -1800,6 +1703,23 @@ test.describe("the diagram shows the test, not only the result", () => {
         await expect(custom).toHaveAttribute("data-group", "1");
         // Nothing gets pushed into the context panel to hide a contradiction.
         await expect(diagram(page).locator('.annotation[data-key="custom"]')).toHaveCount(0);
+    });
+
+    test("a group whose custom state is unknown is matched only when the backend says so", async ({ page }) => {
+        // Both groups match on their conditions and group 0 carries no custom
+        // record. The backend matched group 1, so the re-check is group 1's --
+        // re-deriving the match would accept the unknown group 0 instead.
+        await mountPanel(page, unknownCustomPayload(1));
+        await selectSlot(page, 0, "appliance_runtime");
+        const custom = diagram(page).locator('g.block[data-id="custom"]');
+        await expect(custom).toHaveAttribute("data-group", "1");
+        await expect(custom).toHaveAttribute("data-state", "true");
+
+        // The same record, matched under group 0: now it is group 0's.
+        await mountPanel(page, unknownCustomPayload(0));
+        await selectSlot(page, 0, "appliance_runtime");
+        await expect(diagram(page).locator('g.block[data-id="custom"]'))
+            .toHaveAttribute("data-group", "0");
     });
 
     test("an empty stage says whose conditions are missing", async ({ page }) => {

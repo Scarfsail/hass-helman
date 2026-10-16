@@ -384,6 +384,10 @@ def build_group_explanations(
     matching the slot. Where ``for_day`` finds no group at all, such a kind falls
     back to master params — ``master_fallback``. Without the marker the params
     column silently shows numbers the optimizer never ran under.
+
+    ``slot_matched`` marks the group :meth:`Eligibility.at` matched for the slot
+    whatever the kind's ``param_scope``: it is the slot match, not the origin of
+    the params a DAY/RUN-scoped kind ran under.
     """
     column_keys = _condition_column_keys(eligibility.groups)
     custom_results = _custom_results(snapshot, config)
@@ -404,6 +408,7 @@ def build_group_explanations(
                 source_by_date[local_date] = params_source
         else:
             params_source = PARAMS_SOURCE_SLOT_MATCHED
+        matched = eligibility.at(slot_id)
         explanations[slot_id] = tuple(
             GroupExplanation(
                 index=group.index,
@@ -412,6 +417,7 @@ def build_group_explanations(
                 params_source=params_source,
                 custom_results=custom_results.get(group.index, ()),
                 conditions=_condition_nodes(group, column_keys, slot_id),
+                slot_matched=matched is not None and matched.group is group,
             )
             for group in eligibility.groups
         )

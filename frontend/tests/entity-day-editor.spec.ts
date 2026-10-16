@@ -208,27 +208,32 @@ async function mountEditor(
             const slotIds = slots
                 .filter((slot) => slot.dayKey === dayOne)
                 .map((slot) => slot.id);
-            const runs = (value: unknown) => [[value, slotIds.length]];
             const optimizer = (id: string, kind: string, verdict: string, state: string) => ({
                 optimizerId: id,
                 kind,
-                controllableId: "",
+                phase: 2,
                 status: "ok",
-                runAt: runs(`${dayOne}T20:15:00Z`),
-                verdict: runs(verdict),
-                groups: [{
-                    index: 0,
-                    label: "",
-                    paramsSource: runs("slot_matched"),
-                    params: runs({ max_price: 2 }),
-                    conditions: [{
-                        key: "max_run_price",
-                        scope: "slot",
-                        state: runs(state),
-                        value: runs(2),
+                conditions: [{ key: "max_run_price", operator: "<" }],
+                slots: slotIds.map((slotId) => ({
+                    slotId,
+                    runAt: `${dayOne}T20:15:00Z`,
+                    verdict,
+                    ...(state === "true" ? { matchedGroupIndex: 0 } : {}),
+                    groups: [{
+                        index: 0,
+                        label: "",
+                        paramsSource: "slot_matched",
+                        params: { max_price: 2 },
+                        customResults: [],
+                        conditions: [{
+                            key: "max_run_price",
+                            scope: "slot",
+                            state,
+                            value: 2,
+                        }],
                     }],
-                }],
-                gates: [],
+                    gates: [],
+                })),
             });
             const payloads: Record<string, unknown> = {
                 "boiler": {

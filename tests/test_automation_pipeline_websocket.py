@@ -160,13 +160,19 @@ class ScheduleExplanationWebsocketTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(optimizer["kind"], "export_price")
         self.assertEqual(optimizer["controllableId"], "inverter")
         self.assertEqual(optimizer["status"], "ok")
-        self.assertEqual(optimizer["verdict"], [["execute", 2]])
         self.assertEqual(
-            optimizer["winningOptimizer"],
-            {"0": "avoid-negative-export", "1": "avoid-negative-export"},
-        )
-        self.assertEqual(
-            optimizer["runAt"], [["2026-07-31T08:00:00+02:00", 2]]
+            optimizer["slots"],
+            [
+                {
+                    "slotId": slot_id,
+                    "runAt": "2026-07-31T08:00:00+02:00",
+                    "verdict": "execute",
+                    "winningOptimizer": "avoid-negative-export",
+                    "groups": [],
+                    "gates": [],
+                }
+                for slot_id in payload["slotIds"]
+            ],
         )
 
     async def test_returns_null_when_nothing_is_recorded(self) -> None:

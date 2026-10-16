@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { loadBundle } from "./support/card-page";
+import { explanationRows } from "./support/payload-builders";
 
 /**
  * Editing the deciding optimizer from the slot it decided.
@@ -24,7 +25,7 @@ const RUN_AT = `${DATE}T20:15:00+02:00`;
 const SLOT_IDS = [`${DATE}T13:00:00+02:00`, `${DATE}T13:30:00+02:00`];
 
 /** One optimizer, one slot it rejected on price — enough to draw a diagram. */
-const PAYLOAD = {
+const PAYLOAD = explanationRows({
     controllableId: "inverter",
     date: DATE,
     slotIds: SLOT_IDS,
@@ -32,27 +33,24 @@ const PAYLOAD = {
     optimizers: [
         {
             optimizerId: "export_price",
-            kind: "export_price",
-            controllableId: "inverter",
-            status: "ok",
-            runAt: [[RUN_AT, 2]],
-            verdict: [["execute", 1], ["skip", 1]],
-            winningOptimizer: { "0": "export_price" },
-            groups: [{
-                index: 0,
-                label: "",
-                paramsSource: [["slot_matched", 2]],
-                conditions: [{
-                    key: "when_price_below",
-                    scope: "slot",
-                    state: [["true", 1], ["false", 1]],
-                    value: [[1.0, 2]],
-                    actual: { "0": 0.8, "1": 1.2 },
+            slots: SLOT_IDS.map((slotId, slot) => ({
+                slotId,
+                verdict: slot === 0 ? "execute" : "skip",
+                winningOptimizer: slot === 0 ? "export_price" : undefined,
+                matchedGroupIndex: slot === 0 ? 0 : undefined,
+                groups: [{
+                    conditions: [{
+                        key: "when_price_below",
+                        scope: "slot",
+                        state: slot === 0 ? "true" : "false",
+                        value: 1.0,
+                        actual: [0.8, 1.2][slot],
+                    }],
                 }],
-            }],
+            })),
         },
     ],
-};
+});
 
 const SCHEMA = {
     version: 2,

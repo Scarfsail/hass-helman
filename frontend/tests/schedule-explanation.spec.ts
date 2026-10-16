@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { loadBundle } from "./support/card-page";
+import { explanationRows } from "./support/payload-builders";
 
 /**
  * The lane explanation, as one slot at a time.
@@ -43,7 +44,7 @@ const SLOT_IDS = [
  * fails on price and charge_hold's SoC node was never consulted. 15:00
  * export_price said nothing at all. charge_from_grid never ran.
  */
-const INVERTER_PAYLOAD = {
+const INVERTER_PAYLOAD = explanationRows({
     controllableId: "inverter",
     date: DATE,
     slotIds: SLOT_IDS,
@@ -51,114 +52,95 @@ const INVERTER_PAYLOAD = {
     optimizers: [
         {
             optimizerId: "export_price",
-            kind: "export_price",
-            phase: 2,
-            controllableId: "inverter",
-            status: "ok",
-            runAt: [[RUN_AT, 5]],
-            verdict: [["skip", 2], ["execute", 1], ["skip", 1], [null, 1]],
-            winningOptimizer: { "2": "export_price" },
-            groups: [{
-                index: 0,
-                label: "",
-                paramsSource: [["slot_matched", 4], [null, 1]],
-                params: [[{ min_export_price: 1.0 }, 4], [null, 1]],
-                conditions: [{
-                    key: "when_price_below",
-                    scope: "slot",
-                    state: [["false", 2], ["true", 1], ["false", 1], [null, 1]],
-                    value: [[1.0, 4], [null, 1]],
-                    actual: { "0": 1.2, "1": 1.1, "3": 0.9 },
+            // 15:00 has no row: export_price never looked at it.
+            slots: SLOT_IDS.slice(0, 4).map((slotId, slot) => ({
+                slotId,
+                verdict: slot === 2 ? "execute" : "skip",
+                winningOptimizer: slot === 2 ? "export_price" : undefined,
+                matchedGroupIndex: slot === 2 ? 0 : undefined,
+                groups: [{
+                    params: { min_export_price: 1.0 },
+                    conditions: [{
+                        key: "when_price_below",
+                        scope: "slot",
+                        state: slot === 2 ? "true" : "false",
+                        value: 1.0,
+                        actual: [1.2, 1.1, undefined, 0.9][slot],
+                    }],
                 }],
-            }],
-            gates: [{ key: "stop_export_supported", state: [["true", 4], [null, 1]] }],
+                gates: [{ key: "stop_export_supported", state: "true" }],
+            })),
         },
         {
             optimizerId: "charge_hold",
-            kind: "charge_hold",
-            phase: 2,
-            controllableId: "inverter",
-            status: "ok",
-            runAt: [[RUN_AT, 5]],
-            verdict: [["execute", 3], ["skip", 2]],
-            winningOptimizer: { "0": "charge_hold", "2": "export_price" },
-            groups: [
-                {
-                    index: 0,
-                    label: "Ráno",
-                    // Resolved once for the day, so possibly from another group.
-                    paramsSource: [["day_resolved", 5]],
-                    params: [[{ min_soc_pct: 40, target_soc_pct: 80 }, 5]],
-                    // Two entries: one plainly false, one that threw.
-                    customResults: [[[true, null], 3], [[false, null], 2]],
-                    conditions: [
-                        {
-                            key: "min_soc_pct",
-                            scope: "slot",
-                            // Never consulted past the hold window: not false.
-                            state: [["true", 3], ["not_evaluated", 2]],
-                            value: [[40, 5]],
-                        },
-                        {
-                            // Fails only at 15:00, and says what it saw there.
-                            key: "hold_room",
-                            scope: "slot",
-                            state: [["true", 4], ["false", 1]],
-                            value: [[5, 5]],
-                            actual: { "4": 0.4 },
-                        },
-                        {
-                            // One result for the whole expensive band, not five.
-                            key: "reserve_floor_soc",
-                            scope: "window",
-                            state: [["true", 5]],
-                            value: [[20, 5]],
-                        },
-                    ],
-                },
-                {
-                    index: 1,
-                    label: "Večer",
-                    paramsSource: [["day_resolved", 5]],
-                    params: [[{ min_soc_pct: 60 }, 5]],
-                    customResults: [[[true, null], 5]],
-                    conditions: [
-                        {
+            slots: SLOT_IDS.map((slotId, slot) => ({
+                slotId,
+                verdict: slot < 3 ? "execute" : "skip",
+                winningOptimizer: ["charge_hold", undefined, "export_price", undefined, undefined][slot],
+                matchedGroupIndex: slot < 3 ? 0 : undefined,
+                groups: [
+                    {
+                        label: "Ráno",
+                        // Resolved once for the day, so possibly from another group.
+                        paramsSource: "day_resolved",
+                        params: { min_soc_pct: 40, target_soc_pct: 80 },
+                        // Two entries: one plainly false, one that threw.
+                        customResults: [slot < 3, null],
+                        conditions: [
+                            {
+                                key: "min_soc_pct",
+                                scope: "slot",
+                                // Never consulted past the hold window: not false.
+                                state: slot < 3 ? "true" : "not_evaluated",
+                                value: 40,
+                            },
+                            {
+                                // Fails only at 15:00, and says what it saw there.
+                                key: "hold_room",
+                                scope: "slot",
+                                state: slot < 4 ? "true" : "false",
+                                value: 5,
+                                actual: slot === 4 ? 0.4 : undefined,
+                            },
+                            {
+                                // One result for the whole expensive band, not five.
+                                key: "reserve_floor_soc",
+                                scope: "window",
+                                state: "true",
+                                value: 20,
+                            },
+                        ],
+                    },
+                    {
+                        label: "Večer",
+                        paramsSource: "day_resolved",
+                        params: { min_soc_pct: 60 },
+                        customResults: [true, null],
+                        conditions: [
                             // This group does not configure it at all.
-                            key: "min_soc_pct",
-                            scope: "slot",
-                            state: [["not_applicable", 5]],
-                        },
-                        {
-                            key: "reserve_floor_soc",
-                            scope: "window",
-                            state: [["true", 5]],
-                            value: [[20, 5]],
-                        },
-                    ],
-                },
-            ],
-            gates: [
-                // Unreached past 14:00: absent, never false.
-                { key: "hold_window", state: [["true", 3], [null, 2]] },
-                { key: "blocked_user_owned", state: [[null, 1], ["false", 1], ["true", 1], [null, 2]] },
-            ],
+                            { key: "min_soc_pct", scope: "slot", state: "not_applicable" },
+                            { key: "reserve_floor_soc", scope: "window", state: "true", value: 20 },
+                        ],
+                    },
+                ],
+                gates: [
+                    // Unreached past 14:00: absent, never false.
+                    ...(slot < 3 ? [{ key: "hold_window", state: "true" as const }] : []),
+                    ...(slot === 1 ? [{ key: "blocked_user_owned", state: "false" as const }] : []),
+                    ...(slot === 2 ? [{ key: "blocked_user_owned", state: "true" as const }] : []),
+                ],
+            })),
         },
         {
             optimizerId: "charge_from_grid",
-            kind: "charge_from_grid",
-            phase: 2,
-            controllableId: "inverter",
             status: "skipped",
             statusReason: "battery_params_missing",
-            runAt: [[RUN_AT, 5]],
-            verdict: [[null, 5]],
         },
     ],
-};
+});
 
 /** One appliance, one optimizer: the same table, one column narrower. */
-const APPLIANCE_PAYLOAD = {
+const APPLIANCE_PAYLOAD = explanationRows({
     controllableId: "boiler",
     date: DATE,
     slotIds: SLOT_IDS.slice(0, 2),
@@ -167,25 +149,27 @@ const APPLIANCE_PAYLOAD = {
         optimizerId: "appliance_runtime:boiler",
         kind: "appliance_runtime",
         phase: 3,
-        controllableId: "boiler",
-        status: "ok",
-        runAt: [[RUN_AT, 2]],
-        verdict: [["execute", 1], ["skip", 1]],
-        winningOptimizer: { "0": "appliance_runtime:boiler" },
-        groups: [{
-            index: 0,
-            label: "",
-            paramsSource: [["slot_matched", 2]],
-            conditions: [{
-                key: "max_run_price",
-                scope: "slot",
-                state: [["true", 1], ["false", 1]],
-                actual: { "1": 3.4 },
+        slots: SLOT_IDS.slice(0, 2).map((slotId, slot) => ({
+            slotId,
+            verdict: slot === 0 ? "execute" : "skip",
+            winningOptimizer: slot === 0 ? "appliance_runtime:boiler" : undefined,
+            matchedGroupIndex: slot === 0 ? 0 : undefined,
+            groups: [{
+                conditions: [{
+                    key: "max_run_price",
+                    scope: "slot",
+                    state: slot === 0 ? "true" : "false",
+                    actual: slot === 1 ? 3.4 : undefined,
+                }],
             }],
-        }],
-        gates: [{ key: "cheapest_rank", state: [["true", 1], ["false", 1]], params: [[{ rank: 1 }, 1], [{ rank: 9 }, 1]] }],
+            gates: [{
+                key: "cheapest_rank",
+                state: slot === 0 ? "true" : "false",
+                params: { rank: slot === 0 ? 1 : 9 },
+            }],
+        })),
     }],
-};
+});
 
 /**
  * A lane whose first slot is *placed but not running*.
@@ -195,7 +179,7 @@ const APPLIANCE_PAYLOAD = {
  * landed the write, so the row has no winner -- and reporting the optimizer's
  * action there would promise a run that will not happen.
  */
-const CANDIDATE_PAYLOAD = {
+const CANDIDATE_PAYLOAD = explanationRows({
     controllableId: "pool",
     date: DATE,
     slotIds: SLOT_IDS.slice(0, 2),
@@ -204,47 +188,37 @@ const CANDIDATE_PAYLOAD = {
         {
             optimizerId: "appliance_runtime:pool",
             kind: "appliance_runtime",
-            controllableId: "pool",
-            status: "ok",
-            runAt: [[RUN_AT, 2]],
-            verdict: [["candidate", 1], ["execute", 1]],
-            winningOptimizer: { "1": "appliance_runtime:pool" },
-            groups: [{
-                index: 0,
-                label: "Studený bazén",
-                paramsSource: [["slot_matched", 2]],
-                customResults: [[[false], 1], [[true], 1]],
-                conditions: [{
-                    key: "max_run_price",
-                    scope: "slot",
-                    state: [["true", 2]],
-                    value: [[2.0, 2]],
+            slots: SLOT_IDS.slice(0, 2).map((slotId, slot) => ({
+                slotId,
+                verdict: slot === 0 ? "candidate" : "execute",
+                winningOptimizer: slot === 1 ? "appliance_runtime:pool" : undefined,
+                matchedGroupIndex: 0,
+                groups: [{
+                    label: "Studený bazén",
+                    customResults: [slot === 1],
+                    conditions: [{ key: "max_run_price", scope: "slot", state: "true", value: 2.0 }],
                 }],
-            }],
-            gates: [{ key: "slot_available", state: [["true", 2]] }],
+                gates: [{ key: "slot_available", state: "true" }],
+            })),
         },
         {
             optimizerId: "charge_hold",
-            kind: "charge_hold",
-            controllableId: "pool",
-            status: "ok",
-            runAt: [[RUN_AT, 2]],
-            verdict: [["skip", 2]],
-            groups: [{
-                index: 0,
-                label: "",
-                paramsSource: [["slot_matched", 2]],
-                conditions: [{
-                    key: "min_soc_pct",
-                    scope: "slot",
-                    state: [["false", 2]],
-                    value: [[40, 2]],
-                    actual: { "0": 21, "1": 22 },
+            slots: SLOT_IDS.slice(0, 2).map((slotId, slot) => ({
+                slotId,
+                verdict: "skip",
+                groups: [{
+                    conditions: [{
+                        key: "min_soc_pct",
+                        scope: "slot",
+                        state: "false",
+                        value: 40,
+                        actual: [21, 22][slot],
+                    }],
                 }],
-            }],
+            })),
         },
     ],
-};
+});
 async function mountPanel(page: Page, payload: unknown, slotIndex: number | null): Promise<void> {
     await loadBundle(page, "scheduling-explanation-panel");
 

@@ -3,6 +3,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
 import { HA_PANEL_RESOLVER_FAILING_STUB, HA_TRACE_STUB } from "./support/ha-trace-stub";
 import { CARD_BUNDLE } from "./support/card-page";
+import { explanationRows } from "./support/payload-builders";
 
 /**
  * The custom-conditions block, opened into its last evaluation.
@@ -42,56 +43,40 @@ const OPTIMIZER_ID = "appliance_runtime";
  * The case the dialog exists for — the slot is planned and will not run, and
  * the block alone cannot say which condition refused.
  */
-const CANDIDATE_PAYLOAD = {
-    controllableId: "appliance.pool",
-    date: DATE,
-    slotIds: [SLOT_ID],
-    runAt: CELL_RUN_AT,
-    optimizers: [{
-        optimizerId: OPTIMIZER_ID,
-        kind: OPTIMIZER_ID,
+function candidatePayload(
+    { label = "Studený bazén", verdict = "candidate", customResults = [false] }:
+        { label?: string; verdict?: "candidate" | "execute"; customResults?: boolean[] } = {},
+) {
+    return explanationRows({
         controllableId: "appliance.pool",
-        status: "ok",
-        runAt: [[CELL_RUN_AT, 1]],
-        verdict: [["candidate", 1]],
-        groups: [{
-            index: 0,
-            label: "Studený bazén",
-            paramsSource: [["slot_matched", 1]],
-            params: [[{ max_run_price: 2.0 }, 1]],
-            customResults: [[[false], 1]],
-            conditions: [{
-                key: "max_run_price",
-                scope: "slot",
-                state: [["true", 1]],
-                value: [[2.0, 1]],
+        date: DATE,
+        slotIds: [SLOT_ID],
+        runAt: CELL_RUN_AT,
+        optimizers: [{
+            optimizerId: OPTIMIZER_ID,
+            slots: [{
+                slotId: SLOT_ID,
+                verdict,
+                matchedGroupIndex: 0,
+                groups: [{
+                    label,
+                    params: { max_run_price: 2.0 },
+                    customResults,
+                    conditions: [{ key: "max_run_price", scope: "slot", state: "true", value: 2.0 }],
+                }],
+                gates: [{ key: "slot_available", state: "true" }],
             }],
         }],
-        gates: [{ key: "slot_available", state: [["true", 1]] }],
-    }],
-};
+    });
+}
+
+const CANDIDATE_PAYLOAD = candidatePayload();
 
 /** The same slot with the matched group renamed -- or left unnamed. */
-const withGroupLabel = (payload: typeof CANDIDATE_PAYLOAD, label: string) => ({
-    ...payload,
-    optimizers: [{
-        ...payload.optimizers[0],
-        groups: [{ ...payload.optimizers[0].groups[0], label }],
-    }],
-});
+const withGroupLabel = (label: string) => candidatePayload({ label });
 
 /** The same slot, whose matched group configures no custom conditions at all. */
-const NO_CUSTOM_PAYLOAD = {
-    ...CANDIDATE_PAYLOAD,
-    optimizers: [{
-        ...CANDIDATE_PAYLOAD.optimizers[0],
-        verdict: [["execute", 1]],
-        groups: [{
-            ...CANDIDATE_PAYLOAD.optimizers[0].groups[0],
-            customResults: undefined,
-        }],
-    }],
-};
+const NO_CUSTOM_PAYLOAD = candidatePayload({ verdict: "execute", customResults: [] });
 
 /**
  * Two configured conditions, one of them a nest that short-circuited.
@@ -377,7 +362,7 @@ test.describe("the custom-conditions trace dialog", () => {
     test("an unnamed group still leads with something", async ({ page }) => {
         await mountPanel(page, {
             trace: TRACE_PAYLOAD,
-            fixture: withGroupLabel(CANDIDATE_PAYLOAD, ""),
+            fixture: withGroupLabel(""),
         });
         await customBlock(page).click();
 

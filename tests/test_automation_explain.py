@@ -355,8 +355,8 @@ class PlainRowTests(unittest.TestCase):
                 "status": "ok",
                 "conditions": [
                     {"key": "max_price"},
-                    {"key": "reserve_floor_soc"},
-                    {"key": "ensure_self_sustainability"},
+                    {"key": "reserve_floor_soc", "selfGating": True},
+                    {"key": "ensure_self_sustainability", "selfGating": True},
                 ],
                 "slots": [
                     {
@@ -499,6 +499,41 @@ class PlainRowTests(unittest.TestCase):
         )
 
 
+    def test_a_condition_column_names_its_operator_once(self) -> None:
+        slot_ids = _slot_ids(2)
+        optimizer = OptimizerExplanation(
+            optimizer_id="export",
+            kind="export_price",
+            slots=tuple(
+                SlotExplanation(
+                    slot_id=slot_id,
+                    groups=(
+                        GroupExplanation(
+                            index=0,
+                            conditions=(
+                                ConditionNode(key="when_price_below", state="true"),
+                                ConditionNode(key="run_when", state="true"),
+                                ConditionNode(
+                                    key="requires_appliance", state="true"
+                                ),
+                            ),
+                        ),
+                    ),
+                )
+                for slot_id in slot_ids
+            ),
+        )
+
+        self.assertEqual(
+            optimizer.to_rows()["conditions"],
+            [
+                {"key": "when_price_below", "operator": "<"},
+                {"key": "run_when", "operator": "∈"},
+                # A lookup, not a comparison: no operator is invented for it.
+                {"key": "requires_appliance"},
+            ],
+        )
+
 class ConditionMatrixTests(unittest.TestCase):
     """The matrix ``build_eligibility`` stamps, as an optimizer will read it.
 
@@ -514,7 +549,12 @@ class ConditionMatrixTests(unittest.TestCase):
     # SLOT_0 clears either threshold, SLOT_1 only the looser one, SLOT_2 neither.
     PRICES = {SLOT_0: -1.0, SLOT_1: 0.5, SLOT_2: 5.0}
 
-    def _snapshot(self, *, day_classification: str | None = None):
+    def _snapshot(
+        self,
+        *,
+        day_classification: str | None = None,
+        condition_met: tuple[bool, ...] | None = None,
+    ):
         from custom_components.helman.appliances.state import AppliancesRuntimeRegistry
         from custom_components.helman.automation.day_context import DayContext
         from custom_components.helman.automation.snapshot import (
@@ -555,10 +595,13 @@ class ConditionMatrixTests(unittest.TestCase):
                 appliance_registry=AppliancesRuntimeRegistry(),
                 when_active_hourly_energy_kwh_by_appliance_id={},
                 day_contexts=day_contexts,
+                condition_met_by_optimizer_id=(
+                    {} if condition_met is None else {"export": condition_met}
+                ),
             ),
         )
 
-    def _record(self, config, snapshot=None):
+    def _record(self, config, snapshot=None, *, eligibility_out=None):
         """Build the matrix and serialize it as plain rows, keyed by slot id."""
         from custom_components.helman.automation.conditions import (
             build_eligibility,
@@ -567,6 +610,8 @@ class ConditionMatrixTests(unittest.TestCase):
 
         snapshot = snapshot if snapshot is not None else self._snapshot()
         eligibility = build_eligibility(snapshot, config)
+        if eligibility_out is not None:
+            eligibility_out.append(eligibility)
         explanations = build_group_explanations(snapshot, config, eligibility)
         slot_ids = eligibility.horizon_slot_ids
         optimizer = OptimizerExplanation(
@@ -623,6 +668,51 @@ class ConditionMatrixTests(unittest.TestCase):
         )
         # The OR is satisfied, so the slot executes even though group 1 failed.
         self.assertEqual(slot["verdict"], "execute")
+
+    def _assert_matched_group_is_the_slot_match(self, slots, eligibility) -> None:
+        for slot_id in eligibility.horizon_slot_ids:
+            matched = eligibility.at(slot_id)
+            self.assertEqual(
+                slots[slot_id].get("matchedGroupIndex"),
+                None if matched is None else matched.group.index,
+                slot_id,
+            )
+
+    def test_the_matched_group_is_the_eligibility_slot_match(self) -> None:
+        eligibility = []
+        slots = self._record(
+            self._export_price_config(
+                {"when_price_below": 0.0}, {"when_price_below": 1.0}
+            ),
+            eligibility_out=eligibility,
+        )
+
+        self._assert_matched_group_is_the_slot_match(slots, eligibility[0])
+        # Both groups cover SLOT_0: the first one wins. Only the looser one
+        # covers SLOT_1, and nothing covers SLOT_2, so it names no group.
+        self.assertEqual(slots[self.SLOT_0]["matchedGroupIndex"], 0)
+        self.assertEqual(slots[self.SLOT_1]["matchedGroupIndex"], 1)
+        self.assertNotIn("matchedGroupIndex", slots[self.SLOT_2])
+
+    def test_a_group_whose_custom_conditions_failed_does_not_match(self) -> None:
+        # Both groups cover SLOT_0, and the first one's custom conditions said
+        # no: the slot runs under the second group, which is the one named.
+        # Where the second group does not cover the slot either, the failed
+        # first group is still the match -- it places a candidate.
+        eligibility = []
+        slots = self._record(
+            self._export_price_config(
+                {"when_price_below": 1.0}, {"when_price_below": 0.0}
+            ),
+            self._snapshot(condition_met=(False, True)),
+            eligibility_out=eligibility,
+        )
+
+        self._assert_matched_group_is_the_slot_match(slots, eligibility[0])
+        self.assertEqual(slots[self.SLOT_0]["matchedGroupIndex"], 1)
+        self.assertEqual(slots[self.SLOT_0]["verdict"], "execute")
+        self.assertEqual(slots[self.SLOT_1]["matchedGroupIndex"], 0)
+        self.assertEqual(slots[self.SLOT_1]["verdict"], "candidate")
 
     def test_a_slot_failing_on_price_carries_the_actual_price(self) -> None:
         slots = self._record(self._export_price_config({"when_price_below": 0.0}))
@@ -726,7 +816,7 @@ class ExplanationBookTests(unittest.TestCase):
         book.record(self._run(self.RUN_08, self.MORNING))
         book.record(self._run(self.RUN_20, self.EVENING))
 
-        record = book.get_rows(controllable_id="inverter", date="2026-07-31")
+        record = book.get(controllable_id="inverter", date="2026-07-31")
 
         self.assertEqual(
             record["slotIds"], list(self.MORNING) + list(self.EVENING)
@@ -737,7 +827,7 @@ class ExplanationBookTests(unittest.TestCase):
         book.record(self._run(self.RUN_08, self.MORNING))
         book.record(self._run(self.RUN_20, self.EVENING))
 
-        record = book.get_rows(controllable_id="inverter", date="2026-07-31")
+        record = book.get(controllable_id="inverter", date="2026-07-31")
         run_ats = [row["runAt"] for row in record["optimizers"][0]["slots"]]
 
         self.assertEqual(
@@ -755,7 +845,7 @@ class ExplanationBookTests(unittest.TestCase):
         book.record(run)
         book.record(self._run(self.RUN_20, self.EVENING, phase=3))
 
-        record = book.get_rows(controllable_id="inverter", date="2026-07-31")
+        record = book.get(controllable_id="inverter", date="2026-07-31")
         self.assertEqual(record["optimizers"][0]["phase"], 3)
 
     def test_a_newer_run_overwrites_the_same_slot(self) -> None:
@@ -763,7 +853,7 @@ class ExplanationBookTests(unittest.TestCase):
         book.record(self._run(self.RUN_08, self.MORNING, verdict="skip"))
         book.record(self._run(self.RUN_20, self.MORNING, verdict="execute"))
 
-        record = book.get_rows(controllable_id="inverter", date="2026-07-31")
+        record = book.get(controllable_id="inverter", date="2026-07-31")
         rows = record["optimizers"][0]["slots"]
 
         self.assertEqual([row["verdict"] for row in rows], ["execute"] * 4)
@@ -771,9 +861,9 @@ class ExplanationBookTests(unittest.TestCase):
             [row["runAt"] for row in rows], [self.RUN_20.isoformat()] * 4
         )
 
-    def test_the_served_record_is_still_run_length_encoded(self) -> None:
-        # ``get`` is what ``helman/get_schedule_explanation`` serves until the
-        # plain rows replace it.
+    def test_the_served_record_is_plain_rows(self) -> None:
+        # ``get`` is what ``helman/get_schedule_explanation`` serves: one plain
+        # row per explained slot, nothing run-length encoded.
         book = ExplanationBook()
         book.record(self._run(self.RUN_08, self.MORNING))
         book.record(self._run(self.RUN_20, self.EVENING, verdict="execute"))
@@ -782,11 +872,25 @@ class ExplanationBookTests(unittest.TestCase):
             "optimizers"
         ][0]
 
-        self.assertEqual(step["verdict"], [["skip", 4], ["execute", 4]])
         self.assertEqual(
-            step["runAt"],
-            [[self.RUN_08.isoformat(), 4], [self.RUN_20.isoformat(), 4]],
+            step["slots"],
+            [
+                {
+                    "slotId": slot_id,
+                    "runAt": run_at.isoformat(),
+                    "verdict": verdict,
+                    "groups": [],
+                    "gates": [],
+                }
+                for slot_ids, run_at, verdict in (
+                    (self.MORNING, self.RUN_08, "skip"),
+                    (self.EVENING, self.RUN_20, "execute"),
+                )
+                for slot_id in slot_ids
+            ],
         )
+        self.assertNotIn("verdict", step)
+        self.assertNotIn("runAt", step)
 
     def test_a_run_that_explains_nothing_leaves_the_record_intact(self) -> None:
         # A failed run raises out of the optimizer loop before assembly, so the
@@ -794,11 +898,11 @@ class ExplanationBookTests(unittest.TestCase):
         # an empty record did arrive, it must not erase what stands.
         book = ExplanationBook()
         book.record(self._run(self.RUN_08, self.MORNING, verdict="execute"))
-        before = book.get_rows(controllable_id="inverter", date="2026-07-31")
+        before = book.get(controllable_id="inverter", date="2026-07-31")
 
         book.record(RunExplanation(run_at=self.RUN_20, slot_ids=self.MORNING))
 
-        self.assertEqual(book.get_rows(controllable_id="inverter", date="2026-07-31"), before)
+        self.assertEqual(book.get(controllable_id="inverter", date="2026-07-31"), before)
 
     def test_dates_before_the_run_are_evicted(self) -> None:
         book = ExplanationBook()
@@ -810,12 +914,12 @@ class ExplanationBookTests(unittest.TestCase):
         book.record(
             self._run(datetime(2026, 7, 30, 8, 0, tzinfo=TZ), yesterday)
         )
-        self.assertIsNotNone(book.get_rows(controllable_id="inverter", date="2026-07-30"))
+        self.assertIsNotNone(book.get(controllable_id="inverter", date="2026-07-30"))
 
         book.record(self._run(self.RUN_08, self.MORNING))
 
-        self.assertIsNone(book.get_rows(controllable_id="inverter", date="2026-07-30"))
-        self.assertIsNotNone(book.get_rows(controllable_id="inverter", date="2026-07-31"))
+        self.assertIsNone(book.get(controllable_id="inverter", date="2026-07-30"))
+        self.assertIsNotNone(book.get(controllable_id="inverter", date="2026-07-31"))
 
     def test_a_run_is_filed_into_every_date_it_spans(self) -> None:
         # A 48 h horizon from a slot-floored start spans three calendar dates.
@@ -828,10 +932,10 @@ class ExplanationBookTests(unittest.TestCase):
         book.record(self._run(self.RUN_20, crossing))
 
         self.assertEqual(
-            len(book.get_rows(controllable_id="inverter", date="2026-07-31")["slotIds"]), 2
+            len(book.get(controllable_id="inverter", date="2026-07-31")["slotIds"]), 2
         )
         self.assertEqual(
-            len(book.get_rows(controllable_id="inverter", date="2026-08-01")["slotIds"]), 2
+            len(book.get(controllable_id="inverter", date="2026-08-01")["slotIds"]), 2
         )
 
     def test_lanes_are_separate_and_unknown_lanes_return_none(self) -> None:
@@ -847,8 +951,8 @@ class ExplanationBookTests(unittest.TestCase):
             )
         )
 
-        inverter = book.get_rows(controllable_id="inverter", date="2026-07-31")
-        appliance = book.get_rows(controllable_id="boiler", date="2026-07-31")
+        inverter = book.get(controllable_id="inverter", date="2026-07-31")
+        appliance = book.get(controllable_id="boiler", date="2026-07-31")
 
         self.assertEqual(
             [entry["optimizerId"] for entry in inverter["optimizers"]], ["export"]
@@ -857,8 +961,8 @@ class ExplanationBookTests(unittest.TestCase):
             [entry["optimizerId"] for entry in appliance["optimizers"]],
             ["boiler-run"],
         )
-        self.assertIsNone(book.get_rows(controllable_id="heatpump", date="2026-07-31"))
-        self.assertIsNone(book.get_rows(controllable_id="inverter", date="2026-08-05"))
+        self.assertIsNone(book.get(controllable_id="heatpump", date="2026-07-31"))
+        self.assertIsNone(book.get(controllable_id="inverter", date="2026-08-05"))
 
     def test_every_optimizer_touching_a_lane_is_returned_in_pipeline_order(
         self,
@@ -889,7 +993,7 @@ class ExplanationBookTests(unittest.TestCase):
             )
         )
 
-        record = book.get_rows(controllable_id="inverter", date="2026-07-31")
+        record = book.get(controllable_id="inverter", date="2026-07-31")
 
         self.assertEqual(
             [entry["optimizerId"] for entry in record["optimizers"]],
@@ -901,7 +1005,7 @@ class ExplanationBookTests(unittest.TestCase):
         book.record(self._run(self.RUN_08, self.MORNING, status="ok"))
         book.record(self._run(self.RUN_20, self.EVENING, status="skipped"))
 
-        record = book.get_rows(controllable_id="inverter", date="2026-07-31")
+        record = book.get(controllable_id="inverter", date="2026-07-31")
 
         self.assertEqual(record["optimizers"][0]["status"], "skipped")
 
@@ -909,8 +1013,8 @@ class ExplanationBookTests(unittest.TestCase):
         book = ExplanationBook()
         book.record(self._run(self.RUN_08, self.MORNING, controllable_id=""))
 
-        self.assertIsNone(book.get_rows(controllable_id="inverter", date="2026-07-31"))
-        self.assertIsNone(book.get_rows(controllable_id="", date="2026-07-31"))
+        self.assertIsNone(book.get(controllable_id="inverter", date="2026-07-31"))
+        self.assertIsNone(book.get(controllable_id="", date="2026-07-31"))
 
 
 if __name__ == "__main__":
