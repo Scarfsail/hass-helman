@@ -16,13 +16,13 @@ Design notes:
 - **Node scope is explicit** (:data:`NODE_SCOPES`). ``reserve_floor_soc`` tests
   the expensive band while writing the preceding cheap one, so its result is
   window-scoped; rendering it as a per-slot column would be a lie.
-- The DTOs are **per slot** (one :class:`SlotExplanation` per horizon slot);
-  serialization **pivots** them into index-aligned columns keyed by the single
-  ``slotIds`` array of the :class:`RunExplanation`. Every per-slot column is
-  run-length encoded and every ``actual`` is a sparse ``{index: value}`` map, so
-  the ~90 KB of redundant ISO-8601 timestamps that :mod:`.trace`'s
-  group-encoded ``slotIds`` would cost here never materializes.
-- ``null`` in any per-slot column means *the element does not exist in that
+- The DTOs are **per slot** (one :class:`SlotExplanation` per horizon slot).
+  The encoded serialization **pivots** them into index-aligned columns keyed by
+  the single ``slotIds`` array of the :class:`RunExplanation`. Every per-slot
+  column is run-length encoded and every ``actual`` is a sparse ``{index:
+  value}`` map, so the ~90 KB of redundant ISO-8601 timestamps that
+  :mod:`.trace`'s group-encoded ``slotIds`` would cost here never materializes.
+- ``null`` in any encoded per-slot column means *the element does not exist in that
   slot* — an absent group, an unevaluated-because-absent node, an optimizer that
   never looked at the slot. It is distinct from ``"not_evaluated"``, which means
   the node exists and was deliberately not consulted.
@@ -31,10 +31,15 @@ Design notes:
   reports no reading at all (the self-gating pair, whose result is a
   simulation rather than a comparison) leaves it ``None``, contributes nothing
   to the sparse map, and the key disappears from the payload entirely.
-- Serialization canonicalizes ordering: nodes and groups are emitted in
-  first-appearance order across slots, and slots in horizon order. A round trip
-  is lossless for records built that way (every builder in this package is).
+- The encoded serialization canonicalizes ordering: nodes and groups are
+  emitted in first-appearance order across slots, and slots in horizon order.
 - Frontend-facing keys are camelCase, matching the trace payload.
+- Two serializations exist. ``to_rows`` is the plain one that
+  ``helman/get_schedule_explanation`` serves: one row per explained slot, built
+  straight from the DTOs, with facts about a condition column (as opposed to
+  its per-slot result) listed once per optimizer under ``conditions``.
+  ``to_dict`` is the pivoted, run-length encoded one that :mod:`.trace` still
+  embeds in the ``helman/run_automation`` payload.
 """
 
 from __future__ import annotations
@@ -42,9 +47,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date, datetime
 import logging
-from typing import Any, Iterable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Iterable, Sequence
 
 from ..scheduling.schedule import parse_slot_id
+
+if TYPE_CHECKING:
+    from .conditions.types import ConditionType
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -143,26 +151,6 @@ def encode_runs(values: Sequence[Any]) -> list[list[Any]]:
     return runs
 
 
-def decode_runs(runs: Any, length: int | None = None) -> list[Any]:
-    """Expand :func:`encode_runs` output, right-padding with ``None``."""
-    values: list[Any] = []
-    if isinstance(runs, list):
-        for run in runs:
-            if not isinstance(run, (list, tuple)) or len(run) != 2:
-                _LOGGER.warning("explanation has malformed run %r", run)
-                continue
-            value, count = run
-            if not isinstance(count, int) or count < 0:
-                _LOGGER.warning("explanation has malformed run length %r", count)
-                continue
-            values.extend([value] * count)
-    if length is None:
-        return values
-    if len(values) > length:
-        return values[:length]
-    return values + [None] * (length - len(values))
-
-
 def encode_sparse(values: Sequence[Any]) -> dict[str, Any]:
     """Encode an index-aligned column as ``{index: value}``, omitting ``None``.
 
@@ -177,19 +165,24 @@ def encode_sparse(values: Sequence[Any]) -> dict[str, Any]:
     }
 
 
-def decode_sparse(mapping: Any, length: int) -> list[Any]:
-    """Expand :func:`encode_sparse` output back to an index-aligned list."""
-    values: list[Any] = [None] * length
-    if isinstance(mapping, Mapping):
-        for key, value in mapping.items():
-            try:
-                index = int(key)
-            except (TypeError, ValueError):
-                _LOGGER.warning("explanation has non-integer sparse key %r", key)
-                continue
-            if 0 <= index < length:
-                values[index] = value
-    return values
+def _without_none(payload: dict[str, Any]) -> dict[str, Any]:
+    """Drop ``None`` values: an absent reading has no key in a plain row."""
+    return {key: value for key, value in payload.items() if value is not None}
+
+
+def _condition_column(
+    key: str, condition: "ConditionType | None"
+) -> dict[str, Any]:
+    """One condition column's own facts; an unregistered key has only its key."""
+    if condition is None:
+        return {"key": key}
+    return _without_none(
+        {
+            "key": key,
+            "selfGating": True if condition.self_gating else None,
+            "operator": condition.operator,
+        }
+    )
 
 
 # --- per-slot DTOs -----------------------------------------------------------
@@ -220,6 +213,20 @@ class ConditionNode:
         _warn_unknown("node state", self.state, NODE_STATES)
         _warn_unknown("node scope", self.scope, NODE_SCOPES)
 
+    def to_row(self) -> dict[str, Any]:
+        # Scope stays per slot: an optimizer may re-scope a resolved node
+        # (``reserve_floor_soc`` resolves per band) while unresolved slots keep
+        # the scope the condition type declared.
+        return _without_none(
+            {
+                "key": self.key,
+                "scope": self.scope,
+                "state": self.state,
+                "value": self.value,
+                "actual": self.actual,
+            }
+        )
+
 
 @dataclass(frozen=True)
 class GateNode:
@@ -239,6 +246,9 @@ class GateNode:
     def __post_init__(self) -> None:
         _warn_unknown("gate state", self.state, NODE_STATES)
 
+    def to_row(self) -> dict[str, Any]:
+        return {"key": self.key, "state": self.state, "params": dict(self.params)}
+
 
 @dataclass(frozen=True)
 class GroupExplanation:
@@ -250,9 +260,25 @@ class GroupExplanation:
     params_source: str = PARAMS_SOURCE_SLOT_MATCHED
     custom_results: tuple[bool | None, ...] = ()
     conditions: tuple[ConditionNode, ...] = ()
+    #: This is the group ``Eligibility.at(slot)`` matched: the first group whose
+    #: system mask covers the slot and whose custom conditions held, else the
+    #: first whose mask covers it. The *slot* match only — a DAY/RUN-scoped
+    #: kind runs under ``for_day()``'s group, which may be another one (see
+    #: ``params_source``). Serialized once per slot as ``matchedGroupIndex``.
+    slot_matched: bool = False
 
     def __post_init__(self) -> None:
         _warn_unknown("params source", self.params_source, PARAMS_SOURCES)
+
+    def to_row(self) -> dict[str, Any]:
+        return {
+            "index": self.index,
+            "label": self.label,
+            "paramsSource": self.params_source,
+            "params": dict(self.params),
+            "customResults": list(self.custom_results),
+            "conditions": [node.to_row() for node in self.conditions],
+        }
 
 
 @dataclass(frozen=True)
@@ -268,19 +294,40 @@ class SlotExplanation:
     def __post_init__(self) -> None:
         _warn_unknown("verdict", self.verdict, VERDICTS)
 
+    def to_row(self) -> dict[str, Any]:
+        return _without_none(
+            {
+                "slotId": self.slot_id,
+                "verdict": self.verdict,
+                "winningOptimizer": self.winning_optimizer,
+                "matchedGroupIndex": next(
+                    (group.index for group in self.groups if group.slot_matched),
+                    None,
+                ),
+                "groups": [group.to_row() for group in self.groups],
+                "gates": [gate.to_row() for gate in self.gates],
+            }
+        )
+
 
 # --- record DTOs (own the pivot) ---------------------------------------------
+
+
+def _first_appearance_keys(node_groups: Iterable[Iterable[ConditionNode]]) -> list[str]:
+    """Condition keys across ``node_groups``, in first-appearance order."""
+    keys: list[str] = []
+    for nodes in node_groups:
+        for node in nodes:
+            if node.key not in keys:
+                keys.append(node.key)
+    return keys
 
 
 def _encode_condition_columns(
     nodes_by_slot: Sequence[tuple[ConditionNode, ...] | None],
 ) -> list[dict[str, Any]]:
     """Pivot per-slot node tuples into index-aligned columns, recursively."""
-    keys: list[str] = []
-    for nodes in nodes_by_slot:
-        for node in nodes or ():
-            if node.key not in keys:
-                keys.append(node.key)
+    keys = _first_appearance_keys(nodes or () for nodes in nodes_by_slot)
 
     columns: list[dict[str, Any]] = []
     for key in keys:
@@ -306,34 +353,6 @@ def _encode_condition_columns(
             column["actual"] = actuals
         columns.append(column)
     return columns
-
-
-def _decode_condition_columns(
-    columns: Any, length: int
-) -> list[list[ConditionNode]]:
-    """Inverse of :func:`_encode_condition_columns`."""
-    per_slot: list[list[ConditionNode]] = [[] for _ in range(length)]
-    if not isinstance(columns, list):
-        return per_slot
-    for column in columns:
-        if not isinstance(column, Mapping):
-            continue
-        states = decode_runs(column.get("state"), length)
-        values = decode_runs(column.get("value"), length)
-        actuals = decode_sparse(column.get("actual"), length)
-        for index in range(length):
-            if states[index] is None:
-                continue
-            per_slot[index].append(
-                ConditionNode(
-                    key=column.get("key", ""),
-                    scope=column.get("scope", SCOPE_SLOT),
-                    state=states[index],
-                    value=values[index],
-                    actual=actuals[index],
-                )
-            )
-    return per_slot
 
 
 def _encode_gate_columns(
@@ -365,28 +384,6 @@ def _encode_gate_columns(
             column["params"] = encode_runs(params)
         columns.append(column)
     return columns
-
-
-def _decode_gate_columns(columns: Any, length: int) -> list[list[GateNode]]:
-    per_slot: list[list[GateNode]] = [[] for _ in range(length)]
-    if not isinstance(columns, list):
-        return per_slot
-    for column in columns:
-        if not isinstance(column, Mapping):
-            continue
-        states = decode_runs(column.get("state"), length)
-        params = decode_runs(column.get("params"), length)
-        for index in range(length):
-            if states[index] is None:
-                continue
-            per_slot[index].append(
-                GateNode(
-                    key=column.get("key", ""),
-                    state=states[index],
-                    params=dict(params[index] or {}),
-                )
-            )
-    return per_slot
 
 
 def _encode_group_columns(
@@ -443,35 +440,6 @@ def _encode_group_columns(
     return columns
 
 
-def _decode_group_columns(
-    columns: Any, length: int
-) -> list[list[GroupExplanation]]:
-    per_slot: list[list[GroupExplanation]] = [[] for _ in range(length)]
-    if not isinstance(columns, list):
-        return per_slot
-    for column in columns:
-        if not isinstance(column, Mapping):
-            continue
-        sources = decode_runs(column.get("paramsSource"), length)
-        params = decode_runs(column.get("params"), length)
-        custom = decode_runs(column.get("customResults"), length)
-        conditions = _decode_condition_columns(column.get("conditions"), length)
-        for index in range(length):
-            if sources[index] is None:
-                continue
-            per_slot[index].append(
-                GroupExplanation(
-                    index=column.get("index", 0),
-                    label=column.get("label", ""),
-                    params=dict(params[index] or {}),
-                    params_source=sources[index],
-                    custom_results=tuple(custom[index] or ()),
-                    conditions=tuple(conditions[index]),
-                )
-            )
-    return per_slot
-
-
 @dataclass(frozen=True)
 class OptimizerExplanation:
     """One pipeline step's evaluation of the whole horizon.
@@ -516,6 +484,38 @@ class OptimizerExplanation:
             aligned[index] = slot
         return aligned
 
+    def to_rows(self) -> dict[str, Any]:
+        """Serialize as plain rows: one per explained slot, in record order.
+
+        A slot this optimizer said nothing about has no row. ``conditions``
+        lists every condition column once, in first-appearance order across
+        slots and groups, with the facts about the column rather than its
+        per-slot result — ``selfGating`` and the ``operator`` its test
+        compares with (:class:`~.conditions.types.ConditionType`) — so they
+        are not repeated per slot.
+        """
+        # Imported here: ``conditions`` builds these DTOs, so a module-level
+        # import would be circular.
+        from .conditions.types import CONDITION_TYPES
+
+        keys = _first_appearance_keys(
+            group.conditions for slot in self.slots for group in slot.groups
+        )
+        return _without_none(
+            {
+                "optimizerId": self.optimizer_id,
+                "kind": self.kind,
+                "controllableId": self.controllable_id or None,
+                "phase": self.phase,
+                "status": self.status,
+                "statusReason": self.status_reason,
+                "conditions": [
+                    _condition_column(key, CONDITION_TYPES.get(key)) for key in keys
+                ],
+                "slots": [slot.to_row() for slot in self.slots],
+            }
+        )
+
     def to_dict(self, slot_ids: Sequence[str]) -> dict[str, Any]:
         """Serialize, pivoted against the record's ``slotIds`` array."""
         aligned = self._aligned_slots(slot_ids)
@@ -554,37 +554,6 @@ class OptimizerExplanation:
             payload["gates"] = gates
         return payload
 
-    @classmethod
-    def from_dict(
-        cls, payload: Mapping[str, Any], slot_ids: Sequence[str]
-    ) -> "OptimizerExplanation":
-        length = len(slot_ids)
-        verdicts = decode_runs(payload.get("verdict"), length)
-        winners = decode_sparse(payload.get("winningOptimizer"), length)
-        groups = _decode_group_columns(payload.get("groups"), length)
-        gates = _decode_gate_columns(payload.get("gates"), length)
-        slots = [
-            SlotExplanation(
-                slot_id=slot_ids[index],
-                groups=tuple(groups[index]),
-                gates=tuple(gates[index]),
-                verdict=verdicts[index],
-                winning_optimizer=winners[index],
-            )
-            for index in range(length)
-            if verdicts[index] is not None
-        ]
-        return cls(
-            optimizer_id=payload.get("optimizerId", ""),
-            kind=payload.get("kind", ""),
-            controllable_id=payload.get("controllableId", ""),
-            phase=payload.get("phase", PHASE_SYSTEM_PLAN),
-            status=payload.get("status", STATUS_OK),
-            status_reason=payload.get("statusReason"),
-            slots=tuple(slots),
-        )
-
-
 @dataclass(frozen=True)
 class RunExplanation:
     """The whole run: one ``slotIds`` array, one record per pipeline step."""
@@ -601,27 +570,6 @@ class RunExplanation:
                 optimizer.to_dict(self.slot_ids) for optimizer in self.optimizers
             ],
         }
-
-    @classmethod
-    def from_dict(cls, payload: Mapping[str, Any]) -> "RunExplanation":
-        raw_slot_ids = payload.get("slotIds")
-        slot_ids: tuple[str, ...] = (
-            tuple(raw_slot_ids) if isinstance(raw_slot_ids, list) else ()
-        )
-        raw_optimizers = payload.get("optimizers")
-        optimizers: Iterable[Any] = (
-            raw_optimizers if isinstance(raw_optimizers, list) else ()
-        )
-        return cls(
-            run_at=datetime.fromisoformat(payload["runAt"]),
-            slot_ids=slot_ids,
-            optimizers=tuple(
-                OptimizerExplanation.from_dict(entry, slot_ids)
-                for entry in optimizers
-                if isinstance(entry, Mapping)
-            ),
-        )
-
 
 # --- the in-memory book ------------------------------------------------------
 #
@@ -656,6 +604,20 @@ class _OptimizerRecord:
     slots: dict[str, tuple[datetime, SlotExplanation]] = field(
         default_factory=dict
     )
+
+    def explanation(self, slot_ids: Sequence[str]) -> OptimizerExplanation:
+        """The accumulated rows as one record, in ``slot_ids`` order."""
+        return OptimizerExplanation(
+            optimizer_id=self.optimizer_id,
+            kind=self.kind,
+            controllable_id=self.controllable_id,
+            phase=self.phase,
+            status=self.status,
+            status_reason=self.status_reason,
+            slots=tuple(
+                self.slots[slot_id][1] for slot_id in slot_ids if slot_id in self.slots
+            ),
+        )
 
 
 def _slot_start(slot_id: str) -> datetime | None:
@@ -760,57 +722,33 @@ class ExplanationBook:
     # --- reading -------------------------------------------------------------
 
     def get(self, *, controllable_id: str, date: str) -> dict[str, Any] | None:
-        """The serialized record for one lane on one date, or ``None``.
+        """The plain rows for one lane on one date, or ``None``.
 
         Returns **every** optimizer that touched the target, in pipeline order —
         the inverter lane is written by three optimizer kinds, so a lane click
-        has no single optimizer to ask.
+        has no single optimizer to ask. Each row carries the ``runAt`` of the
+        run that produced it: rows do not all come from the same run — that is
+        the whole point of accumulating.
         """
         records = self._by_date.get(date, {}).get(controllable_id)
         if not records:
             return None
-
         slot_ids = sorted(
             {slot_id for record in records.values() for slot_id in record.slots},
             key=lambda slot_id: (_slot_start(slot_id), slot_id),
         )
         optimizers: list[dict[str, Any]] = []
-        newest: datetime | None = None
         for record in records.values():
-            payload = OptimizerExplanation(
-                optimizer_id=record.optimizer_id,
-                kind=record.kind,
-                controllable_id=record.controllable_id,
-                phase=record.phase,
-                status=record.status,
-                status_reason=record.status_reason,
-                slots=tuple(
-                    record.slots[slot_id][1]
-                    for slot_id in slot_ids
-                    if slot_id in record.slots
-                ),
-            ).to_dict(slot_ids)
-            # Index-aligned, run-length encoded: which run produced each row.
-            # Rows do not all come from the same run — that is the whole point
-            # of accumulating.
-            payload["runAt"] = encode_runs(
-                [
-                    record.slots[slot_id][0].isoformat()
-                    if slot_id in record.slots
-                    else None
-                    for slot_id in slot_ids
-                ]
-            )
+            payload = record.explanation(slot_ids).to_rows()
+            for row in payload["slots"]:
+                row["runAt"] = record.slots[row["slotId"]][0].isoformat()
             optimizers.append(payload)
-            if newest is None or record.run_at > newest:
-                newest = record.run_at
-
         return {
             "controllableId": controllable_id,
             "date": date,
             "slotIds": slot_ids,
             # The newest run contributing to this lane/date; per-row provenance
-            # lives in each optimizer's `runAt` column.
-            "runAt": None if newest is None else newest.isoformat(),
+            # lives on each optimizer's rows.
+            "runAt": max(record.run_at for record in records.values()).isoformat(),
             "optimizers": optimizers,
         }

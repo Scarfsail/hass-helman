@@ -110,6 +110,12 @@ class ConditionType:
     #: actuals to report. Call through :func:`evaluate_mask`, never directly.
     build_mask: Callable[[MaskInputs], "frozenset[str] | MaskResult"]
     self_gating: bool = False
+    #: How the mask tests ``actual`` against the configured value, for the
+    #: explanation UI to draw the comparison: ``<``, ``≥`` or ``∈`` (set
+    #: membership). ``None`` for a condition with no such test — a lookup
+    #: (``requires_appliance``) or a simulation (the self-gating pair) — which
+    #: then draws no comparison rather than an invented one.
+    operator: str | None = None
     #: This entry configures *another* condition's test rather than being one.
     #: It admits every slot, resolves nothing, and gets no node in the
     #: explanation — a block that could only ever read "not evaluated" is noise
@@ -453,6 +459,7 @@ CONDITION_TYPES: dict[str, ConditionType] = {
             scope=Scope.DAY,
             field=F.day_classifications("run_when", default=DAY_CLASSIFICATIONS),
             build_mask=_run_when_mask,
+            operator="∈",
         ),
         # A structural precondition rather than a threshold, which is why it
         # sits next to `run_when` and ahead of the numeric conditions: the
@@ -481,6 +488,7 @@ CONDITION_TYPES: dict[str, ConditionType] = {
             scope=Scope.SLOT,
             field=F.number("when_price_below", required=False),
             build_mask=_export_price_below_mask,
+            operator="<",
         ),
         # `appliance_runtime`'s own price condition (issue #5): permission to
         # consume needs the opposite aggregation from `when_price_below`, so it
@@ -491,6 +499,7 @@ CONDITION_TYPES: dict[str, ConditionType] = {
             scope=Scope.SLOT,
             field=F.number("max_run_price", required=False),
             build_mask=_max_run_price_mask,
+            operator="<",
         ),
         # Optional and without a default, for the same reason as
         # `when_price_below`: a floor filled in for a group that never asked for
@@ -500,6 +509,7 @@ CONDITION_TYPES: dict[str, ConditionType] = {
             scope=Scope.SLOT,
             field=F.soc("min_soc_pct", required=False),
             build_mask=_min_soc_mask,
+            operator="≥",
         ),
         # Optional and without a default, as above: a coverage floor filled in
         # for a group that never asked for one would stop the appliance running
@@ -509,6 +519,7 @@ CONDITION_TYPES: dict[str, ConditionType] = {
             scope=Scope.SLOT,
             field=F.percent("min_solar_coverage_pct", required=False),
             build_mask=_min_solar_coverage_mask,
+            operator="≥",
         ),
         # Self-gating, and for a sharper reason than `reserve_floor_soc`: this
         # condition *couples slots*. Placing at 09:00 changes whether 20:00 is

@@ -5,11 +5,11 @@ import { getLocalizeFunction, type LocalizeFunction } from "../../../localize/lo
 import { helmanColorVars } from "../../../color-vars";
 import type {
     ExplanationCell,
+    ExplanationConditionNode,
     ExplanationGate,
     ExplanationGroup,
-    ExplanationNodeState,
-    ExplanationParamsSource,
 } from "../model/schedule-explanation-model";
+import type { ExplanationNodeState, ExplanationParamsSource } from "../../data/helman-commands";
 import { BLOCKED_USER_OWNED_GATE } from "../model/schedule-explanation-model";
 
 const KEY_PREFIX = "scheduling.explanation";
@@ -239,48 +239,6 @@ const COL_TERM_X = 1060;
 const FINAL_ELBOW_X = COL_FINAL_X - 12;
 
 /**
- * How each system condition compares, mirrored from the backend masks.
- *
- * Read off `conditions/types.py`, one mask at a time — a guessed operator is a
- * diagram that lies about the record:
- *
- * - `when_price_below` (`_export_price_below_mask`) — a slot qualifies when
- *   *any* of its buckets has `price < threshold`, and the reported actual is the
- *   cheapest of them. So the drawn test is `actual < value`.
- * - `max_run_price` (`_max_run_price_mask`) — *every* pending bucket must have
- *   `price < threshold`, and the actual is the most expensive one. Same
- *   operator, opposite aggregation, and the aggregation is already baked into
- *   the number the record carries.
- * - `min_soc_pct` (`_min_soc_mask`) — every pending bucket needs
- *   `soc_pct >= threshold`; the actual is the worst.
- * - `min_solar_coverage_pct` (`_min_solar_coverage_mask`) — `coverage_pct >=
- *   threshold`.
- *
- * `run_when` is not in here on purpose: `_run_when_mask` tests the day's
- * classification for *membership* of a configured set, and drawing that as `<`
- * or `>` would be a fabrication. It gets `∈` instead.
- *
- * `requires_appliance` is in neither table, also on purpose. Its value is an
- * appliance id and its test is a lookup in the plan (`_requires_appliance_mask`)
- * — there is no reading to put on the left of an operator, and inventing one
- * would claim the record holds something it does not. The node still draws, with
- * its label and its true/false state; only the comparison line is absent.
- *
- * The self-gating pair (`ensure_self_sustainability`, `reserve_floor_soc`) has
- * no numeric form at all — the optimizer resolves them by simulation — so they
- * get no comparison and keep showing whatever the record recorded.
- */
-const CONDITION_OPERATORS: Record<string, string> = {
-    when_price_below: "<",
-    max_run_price: "<",
-    min_soc_pct: "≥",
-    min_solar_coverage_pct: "≥",
-};
-
-/** Conditions whose test is set membership rather than a comparison. */
-const SET_MEMBERSHIP_CONDITIONS = new Set<string>(["run_when"]);
-
-/**
  * The one condition whose `actual` is a *reason*, not a reading.
  *
  * It resolves by re-simulating the horizon rather than by comparing a number
@@ -288,33 +246,6 @@ const SET_MEMBERSHIP_CONDITIONS = new Set<string>(["run_when"]);
  * which of three tests failed and with what — see `selfSustainabilityComparison`.
  */
 export const SELF_SUSTAINABILITY = "ensure_self_sustainability";
-
-/**
- * The nodes that gate the **slot**, not the group that configured them.
- *
- * Both contribute an all-true mask to `build_eligibility` (`trace.py:572-578`),
- * so group matching never looks at them: the optimizer that consults them
- * resolves the placeholder afterwards, on the slots it actually reached, and
- * *for the group it had already matched*. Two consequences, and the drawing
- * needs both.
- *
- * They are **not terms of their group's AND**. Drawing them there claims the
- * group failed to match on a node matching never read, which is the opposite of
- * what the record says — and it hands the frontend a different matched group
- * from the backend's.
- *
- * They **are terms of the planning AND**. A refusal stops the placement whatever
- * else held: `_optimize_uncapped` drops the slot on the spot
- * (`appliance_runtime.py:539-541`) and never offers it to another group. Left
- * inside the group, that falsehood is swallowed by the `≥1` the moment a second
- * group's own conditions hold — the slot is then not planned with every drawn
- * term true, and the diagram falls back to `unexplained_veto` over a refusal
- * the record names in full.
- */
-const SELF_GATING_CONDITIONS = new Set<string>([
-    SELF_SUSTAINABILITY,
-    "reserve_floor_soc",
-]);
 
 /**
  * A self-sustainability refusal, as the comparison that produced it.
@@ -381,28 +312,19 @@ function numericComparison(
  * Only the sides that are actually in the record are drawn. A condition that
  * measures nothing carries no `actual`, so it renders as the threshold alone
  * rather than as a number nobody measured; everything that does measure
- * carries its reading whether it passed or failed.
+ * carries its reading whether it passed or failed. The operator is the
+ * condition column's own, from the backend; a column without one draws no
+ * comparison.
  */
-export function conditionComparison(
-    key: string,
-    value: unknown,
-    actual: unknown,
-): LogicComparison | null {
-    if (key === SELF_SUSTAINABILITY) {
-        return selfSustainabilityComparison(actual);
+export function conditionComparison(node: ExplanationConditionNode): LogicComparison | null {
+    if (node.key === SELF_SUSTAINABILITY) {
+        return selfSustainabilityComparison(node.actual);
     }
-    const rendered = comparisonSide(value);
-    if (rendered === null) {
+    const rendered = comparisonSide(node.value);
+    if (rendered === null || node.operator === null) {
         return null;
     }
-    if (SET_MEMBERSHIP_CONDITIONS.has(key)) {
-        return { actual: comparisonSide(actual), operator: "∈", value: rendered };
-    }
-    const operator = CONDITION_OPERATORS[key];
-    if (operator === undefined) {
-        return null;
-    }
-    return { actual: comparisonSide(actual), operator, value: rendered };
+    return { actual: comparisonSide(node.actual), operator: node.operator, value: rendered };
 }
 
 /** One side of a comparison as a short string; objects have no short form. */
@@ -754,7 +676,7 @@ function isPlanInput(key: string, state: LogicState, terminal: LogicTerminal): b
  * never reads them — they contribute an all-true mask and the optimizer
  * resolves them afterwards, for the group it had already matched — so they are
  * drawn in their group's column and wired past its `&` and past the `≥1`,
- * straight into the planning AND. See `SELF_GATING_CONDITIONS` for what goes
+ * straight into the planning AND. See the note at `selfGating` in the build for what goes
  * wrong when they sit inside the group: a second group's conditions hold, the
  * `≥1` swallows the refusal, and a slot the record explains in full comes out
  * as `unexplained_veto`.
@@ -824,9 +746,21 @@ export function buildLogicDiagram(
     const groupInputIds: string[][] = [];
     const groupInputStates: LogicState[][] = [];
     const andCenters: number[] = [];
-    // The self-gating nodes, hoisted out of the groups they are configured in:
-    // drawn in their group's column, wired past its `&` and past the `≥1`
-    // straight into the planning AND. See `SELF_GATING_CONDITIONS`.
+    // The self-gating nodes (`selfGating` on their condition column), hoisted
+    // out of the groups they are configured in: drawn in their group's column,
+    // wired past its `&` and past the `≥1` straight into the planning AND.
+    // They gate the **slot**, not the group that configured them. Group
+    // matching never reads them (they contribute an all-true mask to
+    // `build_eligibility`, `trace.py:572-578`); the optimizer that consults them
+    // resolves the placeholder afterwards, for the group it had already matched.
+    // So they are **not terms of their group's AND**: drawing them there claims
+    // the group failed to match on a node matching never read. They **are terms
+    // of the planning AND**: a refusal stops the placement whatever else held
+    // (`_optimize_uncapped` drops the slot on the spot,
+    // `appliance_runtime.py:539-541`, and never offers it to another group).
+    // Left inside the group, that falsehood is swallowed by the `≥1` the moment
+    // a second group's own conditions hold, and the diagram falls back to
+    // `unexplained_veto` over a refusal the record names in full.
     const selfGating: { id: string; key: string; state: LogicState }[] = [];
 
     cell.groups.forEach((group, groupPos) => {
@@ -841,7 +775,7 @@ export function buildLogicDiagram(
         });
         cursorY += GROUP_LABEL_H;
         const top = cursorY;
-        if (group.conditions.every((node) => SELF_GATING_CONDITIONS.has(node.key))) {
+        if (group.conditions.every((node) => node.selfGating)) {
             // A group with nothing configured still gets a row, so the diagram
             // never silently drops a branch that exists in the record. A group
             // that configured *only* self-gating nodes is the same case: none of
@@ -880,7 +814,7 @@ export function buildLogicDiagram(
                 groupIndex: group.index,
                 actual: node.actual,
                 value: node.value,
-                comparison: conditionComparison(node.key, node.value, node.actual),
+                comparison: conditionComparison(node),
                 params: {},
                 detail: null,
                 x: COL_INPUT_X,
@@ -888,7 +822,7 @@ export function buildLogicDiagram(
                 width: INPUT_W,
                 height: BLOCK_H,
             });
-            if (SELF_GATING_CONDITIONS.has(node.key)) {
+            if (node.selfGating) {
                 selfGating.push({ id, key: node.key, state: node.state });
             } else {
                 inputIds.push(id);
@@ -996,26 +930,15 @@ export function buildLogicDiagram(
         }
     }
 
-    // The group the OR settled on, mirroring `Eligibility.__init__`:
-    //
-    //     fully = next(g for g in matching if g.custom_met)
-    //     self._matched[slot_id] = fully or matching[0]
-    //
-    // The *first satisfied* group, never "all that passed" — but a group whose
-    // custom conditions also held wins over an earlier one whose did not. Take
-    // the mask alone and a slot that ran under group 2 gets read against group
-    // 1's failed template, which is a false custom stage over a `spustit`
-    // terminal: the whole re-check then reads as a contradiction and drops out
-    // of the picture, on exactly the slots that ran.
+    // The group the backend matched for this slot (`Eligibility.at`), read
+    // off the record rather than re-derived: the first group whose system
+    // conditions and custom conditions both held, else the first whose system
+    // conditions did. Take the mask alone and a slot that ran under group 2
+    // gets read against group 1's failed template, which is a false custom
+    // stage over a `spustit` terminal.
     const groupCustomStates = cell.groups.map((group) => customState(group));
-    const systemMatched = groupAndStates.flatMap(
-        (state, groupPos) => state === "true" ? [groupPos] : [],
-    );
-    const matchedPos = systemMatched.find(
-        (groupPos) => groupCustomStates[groupPos] !== "false"
-            && groupCustomStates[groupPos] !== "errored",
-    ) ?? systemMatched[0] ?? -1;
-    const matchedGroupIndex = matchedPos < 0 ? null : cell.groups[matchedPos].index;
+    const matchedPos = cell.groups.findIndex((group) => group.index === cell.matchedGroupIndex);
+    const matchedGroupIndex = matchedPos < 0 ? null : cell.matchedGroupIndex;
 
     // The spine: the one term that carries "some group's conditions held".
     const spineId = showOr ? orId : (groupAndIds[0] ?? null);
@@ -1180,9 +1103,9 @@ export function buildLogicDiagram(
     // so rather than resolving true above the word "kandidát".
     const unexplainedCustom = terminal === "candidate" && recorded !== "false" && recorded !== "errored";
     // The mirror of `isPlanInput`'s second rule, and a last resort: a slot that
-    // ran cannot have failed the stage that would have stopped it. Picking the
-    // matched group the way the backend does is what keeps this from firing on
-    // ordinary multi-group records; what is left is a record that disagrees
+    // ran cannot have failed the stage that would have stopped it. Reading the
+    // backend's matched group is what keeps this from firing on ordinary
+    // multi-group records; what is left is a record that disagrees
     // with itself, and the honest place for that is beside the chain.
     const contradictsRun = terminal === "execute" && (recorded === "false" || recorded === "errored");
     if (contradictsRun) {
@@ -1382,9 +1305,10 @@ export function buildLogicDiagram(
  * an uncaptioned pair of them is a picture nobody can navigate.
  *
  * A condition block shows the *test*, not only the reading: `3.43 < 3.50`, not
- * `3.43`. The operator is the backend's own — see `CONDITION_OPERATORS` — and
- * conditions that do not compare (`run_when`'s set membership, the self-gating
- * pair) never get one invented for them. A node whose condition measures
+ * `3.43`. The operator is the backend's own (the condition column's
+ * `operator`, `∈` for `run_when`'s set membership), and conditions that do not
+ * compare (`requires_appliance`'s lookup, the self-gating pair) carry none and
+ * never get one invented for them. A node whose condition measures
  * nothing has no `actual` in the record at all, so it shows the threshold
  * alone; every other node shows the reading it was tested with, passing or
  * failing -- 41 % and 95 % clear `≥ 40` and do not mean the same thing.

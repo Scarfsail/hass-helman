@@ -42,34 +42,25 @@ from custom_components.helman.scheduling.schedule import (  # noqa: E402
     iter_horizon_slot_ids,
 )
 from custom_components.helman.automation.trace import OptimizerTrace  # noqa: E402
-from custom_components.helman.automation.explain import (  # noqa: E402
-    OptimizerExplanation,
-)
 from automation_config_builders import make_appliance_member_config  # noqa: E402
 from automation_trace_contract import (  # noqa: E402
     assert_trace_contract,
+    explanation_rows,
     run_optimizer_with_trace,
 )
 
 
-def _explanation(trace) -> OptimizerExplanation:
-    payload = trace.to_dict()
-    return OptimizerExplanation.from_dict(
-        payload["steps"][0]["explanation"], payload["slotIds"]
-    )
-
-
 def _slots_by_id(trace) -> dict:
-    return {slot.slot_id: slot for slot in _explanation(trace).slots}
+    return {slot["slotId"]: slot for slot in explanation_rows(trace)["slots"]}
 
 
 def _gate(slot, key: str):
-    return next((gate for gate in slot.gates if gate.key == key), None)
+    return next((gate for gate in slot["gates"] if gate["key"] == key), None)
 
 
 def _node(slot, key: str, group_index: int = 0):
-    group = next(group for group in slot.groups if group.index == group_index)
-    return next(node for node in group.conditions if node.key == key)
+    group = next(group for group in slot["groups"] if group["index"] == group_index)
+    return next(node for node in group["conditions"] if node["key"] == key)
 
 
 def _at(hour: int, minute: int = 0) -> datetime:
@@ -926,16 +917,16 @@ class DailyRuntimePriceConditionTests(unittest.TestCase):
         # The day has no params to run under, and the gate names which condition
         # emptied it — the price threshold, not the classification.
         matched = _gate(priced_out, "day_group_matched")
-        self.assertEqual(matched.state, "false")
+        self.assertEqual(matched["state"], "false")
         self.assertEqual(
-            matched.params["failingCondition"], "max_run_price"
+            matched["params"]["failingCondition"], "max_run_price"
         )
-        self.assertEqual(matched.params["conditionValue"], 0.5)
-        self.assertEqual(matched.params["classification"], "tight")
+        self.assertEqual(matched["params"]["conditionValue"], 0.5)
+        self.assertEqual(matched["params"]["classification"], "tight")
         # The condition matrix carries the per-slot verdict and the price the
         # slot actually presented; nothing here re-states it as prose.
-        self.assertEqual(_node(priced_out, "max_run_price").state, "false")
-        self.assertEqual(priced_out.verdict, "skip")
+        self.assertEqual(_node(priced_out, "max_run_price")["state"], "false")
+        self.assertEqual(priced_out["verdict"], "skip")
 
     def test_an_unmatched_day_still_reports_its_classification(self) -> None:
         appliance = _generic()
@@ -957,9 +948,9 @@ class DailyRuntimePriceConditionTests(unittest.TestCase):
 
         assert_trace_contract(self, trace)
         matched = _gate(_slots_by_id(trace)[_slot_id(12, 0)], "day_group_matched")
-        self.assertEqual(matched.state, "false")
+        self.assertEqual(matched["state"], "false")
         self.assertEqual(
-            matched.params,
+            matched["params"],
             {
                 "classification": "deficit",
                 # The reading behind the band, not just its name (#264).
@@ -1166,16 +1157,16 @@ class SolarCoverageConditionTests(unittest.TestCase):
         # The condition node carries the coverage the slot actually achieved —
         # the optimizer no longer restates it as a reason code.
         gated = _node(slots[_slot_id(12, 30)], "min_solar_coverage_pct")
-        self.assertEqual(gated.state, "false")
-        self.assertEqual(gated.value, 80.0)
-        self.assertEqual(gated.actual, 40.0)
-        self.assertEqual(slots[_slot_id(12, 30)].verdict, "skip")
+        self.assertEqual(gated["state"], "false")
+        self.assertEqual(gated.get("value"), 80.0)
+        self.assertEqual(gated.get("actual"), 40.0)
+        self.assertEqual(slots[_slot_id(12, 30)]["verdict"], "skip")
         # The slot that cleared the gate is placed, and says by how much: the
         # margin is what tells a coverage of 81 % apart from one of 100 %.
         cleared = _node(slots[_slot_id(12, 0)], "min_solar_coverage_pct")
-        self.assertEqual(cleared.state, "true")
-        self.assertEqual(cleared.actual, 81.0)
-        self.assertEqual(slots[_slot_id(12, 0)].verdict, "execute")
+        self.assertEqual(cleared["state"], "true")
+        self.assertEqual(cleared.get("actual"), 81.0)
+        self.assertEqual(slots[_slot_id(12, 0)]["verdict"], "execute")
 
 
 class SoftSelfSustainabilityTests(unittest.TestCase):
@@ -1357,12 +1348,12 @@ class SoftSelfSustainabilityTests(unittest.TestCase):
         # The self-gating node the rails leave `not_evaluated` is resolved by the
         # optimizer, and carries what the refusal was measured against.
         node = _node(_slots_by_id(trace)[_slot_id(8, 0)], "ensure_self_sustainability")
-        self.assertEqual(node.state, "false")
-        self.assertEqual(node.value, 100.0)
-        self.assertEqual(node.actual["code"], "would_break_soc_floor")
-        self.assertEqual(node.actual["floor"], 15.0)
-        self.assertEqual(node.actual["projectedMinSoc"], 14.0)
-        self.assertEqual(node.actual["atSlot"], _slot_id(9, 0))
+        self.assertEqual(node["state"], "false")
+        self.assertEqual(node.get("value"), 100.0)
+        self.assertEqual(node["actual"]["code"], "would_break_soc_floor")
+        self.assertEqual(node["actual"]["floor"], 15.0)
+        self.assertEqual(node["actual"]["projectedMinSoc"], 14.0)
+        self.assertEqual(node["actual"]["atSlot"], _slot_id(9, 0))
 
     def test_a_trajectory_already_below_the_floor_blames_the_baseline(self) -> None:
         """And blames it for the *first* candidate, not just the later ones.
@@ -1397,15 +1388,15 @@ class SoftSelfSustainabilityTests(unittest.TestCase):
         assert_trace_contract(self, trace)
         slots = _slots_by_id(trace)
         codes = {
-            slot_id: _node(slot, "ensure_self_sustainability").actual["code"]
+            slot_id: _node(slot, "ensure_self_sustainability")["actual"]["code"]
             for slot_id, slot in slots.items()
-            if _node(slot, "ensure_self_sustainability").state == "false"
+            if _node(slot, "ensure_self_sustainability")["state"] == "false"
         }
         # The cheapest slot is considered first; it must not take the blame.
         self.assertEqual(codes[_slot_id(8, 0)], "soc_floor_already_breached")
         self.assertNotIn("would_break_soc_floor", set(codes.values()))
         self.assertEqual(
-            _node(slots[_slot_id(8, 0)], "ensure_self_sustainability").actual,
+            _node(slots[_slot_id(8, 0)], "ensure_self_sustainability").get("actual"),
             {
                 "code": "soc_floor_already_breached",
                 "floor": 15.0,
@@ -1624,7 +1615,7 @@ class SoftSelfSustainabilityTests(unittest.TestCase):
         assert_trace_contract(self, trace)
         slots = _slots_by_id(trace)
         states = {
-            slot_id: _node(slot, "ensure_self_sustainability").state
+            slot_id: _node(slot, "ensure_self_sustainability")["state"]
             for slot_id, slot in slots.items()
             if _gate(slot, "cheapest_rank") is not None
         }
@@ -1649,8 +1640,8 @@ class SoftSelfSustainabilityTests(unittest.TestCase):
         # The ranking says the same thing in its own vocabulary: the cut never
         # reached them. It is an ordinal, so the position is still recorded.
         beyond = slots[unreached[-1]]
-        self.assertEqual(_gate(beyond, "cheapest_rank").state, "false")
-        self.assertGreater(_gate(beyond, "cheapest_rank").params["rank"], 1)
+        self.assertEqual(_gate(beyond, "cheapest_rank")["state"], "false")
+        self.assertGreater(_gate(beyond, "cheapest_rank")["params"]["rank"], 1)
 
     def test_unavailable_rails_report_a_skipped_step_with_a_reason(self) -> None:
         """Not "every slot false" — nothing was evaluated at all."""
@@ -1674,9 +1665,9 @@ class SoftSelfSustainabilityTests(unittest.TestCase):
         # What the pipeline does with it.
         trace.end_step(status="skipped")
 
-        explanation = _explanation(trace)
-        self.assertEqual(explanation.status, "skipped")
-        self.assertEqual(explanation.status_reason, "condition_rails_unavailable")
+        explanation = explanation_rows(trace)
+        self.assertEqual(explanation["status"], "skipped")
+        self.assertEqual(explanation.get("statusReason"), "condition_rails_unavailable")
 
     def test_nothing_is_simulated_when_no_group_asks_for_it(self) -> None:
         # The gate is inert without the condition, so a config that never
@@ -1810,13 +1801,13 @@ class FloorEmptiedDayOverrideTests(unittest.TestCase):
         assert_trace_contract(self, trace)
         placed = _slots_by_id(trace)[_slot_id(8, 0)]
         override = _gate(placed, "consecutive_skip_override")
-        self.assertEqual(override.state, "true")
-        self.assertEqual(override.params["consecutiveSkips"], 3)
-        self.assertEqual(override.params["trigger"], "self_sustainability")
+        self.assertEqual(override["state"], "true")
+        self.assertEqual(override["params"]["consecutiveSkips"], 3)
+        self.assertEqual(override["params"]["trigger"], "self_sustainability")
         # A forced run matched no group, so the floor it crossed is not resolved
         # against one either — and the retry must not leave the first pass's
         # rejection behind on a slot it went on to apply.
-        self.assertEqual(placed.verdict, "execute")
+        self.assertEqual(placed["verdict"], "execute")
         rejected = {
             slot_id
             for decision in trace.to_dict()["steps"][0]["decisions"]
@@ -2082,12 +2073,12 @@ class FloorEmptiedDayOverrideTests(unittest.TestCase):
         self.assertEqual(_placed_slots(result, appliance.id), {})
         slots = _slots_by_id(trace)
         refused = _node(slots[_slot_id(8, 0)], "ensure_self_sustainability")
-        self.assertEqual(refused.state, "false")
+        self.assertEqual(refused["state"], "false")
         self.assertIsNone(_gate(slots[_slot_id(8, 0)], "consecutive_skip_override"))
         # The day's own minimum, not the master one it no longer owes.
         minimum = _gate(slots[_slot_id(8, 0)], "daily_minimum_remaining")
-        self.assertEqual(minimum.state, "true")
-        self.assertEqual(minimum.params["minHours"], 3)
+        self.assertEqual(minimum["state"], "true")
+        self.assertEqual(minimum["params"]["minHours"], 3)
 
 
 class HorizonSkipChainTests(unittest.TestCase):
@@ -2301,7 +2292,7 @@ class StrictSelfSustainabilityTests(unittest.TestCase):
         assert_trace_contract(self, trace)
         actual = _node(
             _slots_by_id(trace)[_slot_id(6, 0)], "ensure_self_sustainability"
-        ).actual
+        ).get("actual")
         self.assertEqual(actual["code"], "over_battery_budget")
         # The battery is restored exactly...
         self.assertEqual(actual["deltaSocPct"], 0.0)
@@ -2331,8 +2322,8 @@ class StrictSelfSustainabilityTests(unittest.TestCase):
         node = _node(
             _slots_by_id(trace)[_slot_id(6, 0)], "ensure_self_sustainability"
         )
-        self.assertEqual(node.state, "false")
-        self.assertEqual(node.actual["code"], "would_break_soc_floor")
+        self.assertEqual(node["state"], "false")
+        self.assertEqual(node["actual"]["code"], "would_break_soc_floor")
 
 
 class SelfSustainabilityConfigTests(unittest.TestCase):
@@ -2453,40 +2444,40 @@ class DailyRuntimeTraceContractTests(unittest.TestCase):
 
         slots = _slots_by_id(trace)
         placed = slots[_slot_id(12, 0)]
-        self.assertEqual(placed.verdict, "execute")
-        self.assertEqual(_gate(placed, "run_window").state, "true")
-        self.assertEqual(_gate(placed, "day_group_matched").state, "true")
-        self.assertEqual(_gate(placed, "slot_available").state, "true")
+        self.assertEqual(placed["verdict"], "execute")
+        self.assertEqual(_gate(placed, "run_window")["state"], "true")
+        self.assertEqual(_gate(placed, "day_group_matched")["state"], "true")
+        self.assertEqual(_gate(placed, "slot_available")["state"], "true")
         # `slot_available` is the ownership node in capped mode; the writer's
         # veto would say the same thing a second time, so it stays out.
         self.assertIsNone(_gate(placed, "blocked_user_owned"))
         remaining = _gate(placed, "daily_minimum_remaining")
-        self.assertEqual(remaining.state, "true")
-        self.assertEqual(remaining.params["minHours"], 1)
-        self.assertEqual(remaining.params["doneHours"], 0.0)
-        self.assertEqual(remaining.params["slotsNeeded"], SLOTS_PER_HOUR)
-        self.assertEqual(_gate(placed, "placement_capacity").state, "true")
+        self.assertEqual(remaining["state"], "true")
+        self.assertEqual(remaining["params"]["minHours"], 1)
+        self.assertEqual(remaining["params"]["doneHours"], 0.0)
+        self.assertEqual(remaining["params"]["slotsNeeded"], SLOTS_PER_HOUR)
+        self.assertEqual(_gate(placed, "placement_capacity")["state"], "true")
         # Forced runs are the exception, so the override gate is absent here.
         self.assertIsNone(_gate(placed, "consecutive_skip_override"))
         rank = _gate(placed, "cheapest_rank")
-        self.assertEqual(rank.state, "true")
-        self.assertEqual(rank.params["rank"], 1)
-        self.assertEqual(rank.params["slotsNeeded"], SLOTS_PER_HOUR)
+        self.assertEqual(rank["state"], "true")
+        self.assertEqual(rank["params"]["rank"], 1)
+        self.assertEqual(rank["params"]["slotsNeeded"], SLOTS_PER_HOUR)
 
         # The ranking is an ordinal: a slot that lost carries its position, not
         # a truth value dressed up as a reason code.
         loser = slots[_slot_id(9, 0)]
         loser_rank = _gate(loser, "cheapest_rank")
-        self.assertEqual(loser_rank.state, "false")
-        self.assertGreater(loser_rank.params["rank"], loser_rank.params["slotsNeeded"])
+        self.assertEqual(loser_rank["state"], "false")
+        self.assertGreater(loser_rank["params"]["rank"], loser_rank["params"]["slotsNeeded"])
         # The whole 08:00-18:00 window is ranked.
-        self.assertEqual(loser_rank.params["rankOf"], 10 * SLOTS_PER_HOUR)
-        self.assertEqual(loser.verdict, "skip")
+        self.assertEqual(loser_rank["params"]["rankOf"], 10 * SLOTS_PER_HOUR)
+        self.assertEqual(loser["verdict"], "skip")
         # Outside the window it never reached the ranking at all.
         outside = slots[_slot_id(6, 0)]
-        self.assertEqual(_gate(outside, "run_window").state, "false")
+        self.assertEqual(_gate(outside, "run_window")["state"], "false")
         self.assertEqual(
-            _gate(outside, "run_window").params, {"start": "08:00", "end": "18:00"}
+            _gate(outside, "run_window")["params"], {"start": "08:00", "end": "18:00"}
         )
         self.assertIsNone(_gate(outside, "cheapest_rank"))
         self.assertIsNone(_gate(outside, "daily_minimum_remaining"))
@@ -2513,14 +2504,14 @@ class DailyRuntimeTraceContractTests(unittest.TestCase):
         assert_trace_contract(self, trace)
         slots = _slots_by_id(trace)
         priced_out = _node(slots[_slot_id(9, 0)], "max_run_price")
-        self.assertEqual(priced_out.state, "false")
-        self.assertEqual(priced_out.value, 2.0)
-        self.assertEqual(slots[_slot_id(9, 0)].verdict, "skip")
+        self.assertEqual(priced_out["state"], "false")
+        self.assertEqual(priced_out.get("value"), 2.0)
+        self.assertEqual(slots[_slot_id(9, 0)]["verdict"], "skip")
         # Never ranked: the group does not own it, so it is not a candidate.
         self.assertIsNone(_gate(slots[_slot_id(9, 0)], "cheapest_rank"))
         # The two that cleared the threshold did.
-        self.assertEqual(_node(slots[_slot_id(12, 0)], "max_run_price").state, "true")
-        self.assertEqual(slots[_slot_id(12, 0)].verdict, "execute")
+        self.assertEqual(_node(slots[_slot_id(12, 0)], "max_run_price")["state"], "true")
+        self.assertEqual(slots[_slot_id(12, 0)]["verdict"], "execute")
 
     def test_a_soc_rejected_slot_is_not_reported_as_priced_out(self) -> None:
         # The rejection used to be hardcoded to the price code for *every*
@@ -2550,9 +2541,9 @@ class DailyRuntimeTraceContractTests(unittest.TestCase):
         # The failing column is the one that actually failed, and a condition
         # this config never set is `not_applicable` rather than a null-threshold
         # price rejection.
-        self.assertEqual(_node(slot, "min_soc_pct").state, "false")
+        self.assertEqual(_node(slot, "min_soc_pct")["state"], "false")
         self.assertEqual(
-            [node.key for node in slot.groups[0].conditions if node.state == "false"],
+            [node["key"] for node in slot["groups"][0]["conditions"] if node["state"] == "false"],
             ["min_soc_pct"],
         )
         # Still left to the frontend's derivation, exactly as before: only price
@@ -2591,15 +2582,15 @@ class DailyRuntimeTraceContractTests(unittest.TestCase):
         assert_trace_contract(self, trace)
         placed = _slots_by_id(trace)[_slot_id(12, 0)]
         # No group matched the day; the override is why it ran anyway.
-        self.assertEqual(_gate(placed, "day_group_matched").state, "false")
+        self.assertEqual(_gate(placed, "day_group_matched")["state"], "false")
         override = _gate(placed, "consecutive_skip_override")
-        self.assertEqual(override.state, "true")
-        self.assertEqual(override.params["consecutiveSkips"], 2)
-        self.assertEqual(override.params["maxConsecutiveSkips"], 1)
+        self.assertEqual(override["state"], "true")
+        self.assertEqual(override["params"]["consecutiveSkips"], 2)
+        self.assertEqual(override["params"]["maxConsecutiveSkips"], 1)
         # An ordinary forced day: it came up short, rather than having been
         # emptied by the battery floor.
-        self.assertEqual(override.params["trigger"], "day_short")
-        self.assertEqual(placed.verdict, "execute")
+        self.assertEqual(override["params"]["trigger"], "day_short")
+        self.assertEqual(placed["verdict"], "execute")
 
     def test_a_user_owned_slot_never_reaches_the_ranking(self) -> None:
         appliance = _generic()
@@ -2627,11 +2618,11 @@ class DailyRuntimeTraceContractTests(unittest.TestCase):
 
         assert_trace_contract(self, trace)
         owned = _slots_by_id(trace)[_slot_id(12, 0)]
-        self.assertEqual(_gate(owned, "slot_available").state, "false")
+        self.assertEqual(_gate(owned, "slot_available")["state"], "false")
         # Dropped before the ranking, so it has no rank at all — the writer
         # never sees it and its veto cannot speak for the slot.
         self.assertIsNone(_gate(owned, "cheapest_rank"))
-        self.assertEqual(owned.verdict, "skip")
+        self.assertEqual(owned["verdict"], "skip")
 
     def test_a_satisfied_day_closes_the_daily_minimum_gate(self) -> None:
         appliance = _generic()
@@ -2650,14 +2641,14 @@ class DailyRuntimeTraceContractTests(unittest.TestCase):
         assert_trace_contract(self, trace)
         slot = _slots_by_id(trace)[_slot_id(12, 0)]
         remaining = _gate(slot, "daily_minimum_remaining")
-        self.assertEqual(remaining.state, "false")
-        self.assertEqual(remaining.params["doneHours"], 5.0)
-        self.assertEqual(remaining.params["minHours"], 1)
-        self.assertEqual(remaining.params["remainingHours"], -4.0)
+        self.assertEqual(remaining["state"], "false")
+        self.assertEqual(remaining["params"]["doneHours"], 5.0)
+        self.assertEqual(remaining["params"]["minHours"], 1)
+        self.assertEqual(remaining["params"]["remainingHours"], -4.0)
         # Nothing past the bookkeeping was consulted, so nothing past it reports.
         self.assertIsNone(_gate(slot, "cheapest_rank"))
         self.assertIsNone(_gate(slot, "placement_capacity"))
-        self.assertEqual(slot.verdict, "skip")
+        self.assertEqual(slot["verdict"], "skip")
 
 
 def _uncapped_config(
@@ -2729,7 +2720,7 @@ class UncappedModeTests(unittest.TestCase):
         assert_trace_contract(self, trace)
         placed = _slots_by_id(trace)[_slot_id(8, 0)]
         self.assertIsNone(_gate(placed, "slot_available"))
-        self.assertEqual(_gate(placed, "blocked_user_owned").state, "true")
+        self.assertEqual(_gate(placed, "blocked_user_owned")["state"], "true")
 
     def test_price_does_not_rank_when_there_is_no_cap(self) -> None:
         # The capped path would take only the two cheap slots; uncapped takes
@@ -2802,14 +2793,14 @@ class UncappedModeTests(unittest.TestCase):
 
         slots = _slots_by_id(trace)
         inside = slots[_slot_id(8, 0)]
-        self.assertEqual(inside.verdict, "execute")
-        self.assertEqual(_gate(inside, "run_window").state, "true")
+        self.assertEqual(inside["verdict"], "execute")
+        self.assertEqual(_gate(inside, "run_window")["state"], "true")
         self.assertEqual(
-            _gate(inside, "run_window").params, {"start": "08:00", "end": "09:00"}
+            _gate(inside, "run_window")["params"], {"start": "08:00", "end": "09:00"}
         )
         outside = slots[_slot_id(12, 0)]
-        self.assertEqual(_gate(outside, "run_window").state, "false")
-        self.assertEqual(outside.verdict, "skip")
+        self.assertEqual(_gate(outside, "run_window")["state"], "false")
+        self.assertEqual(outside["verdict"], "skip")
         # Uncapped mode never ranks: there is no deficit to size a cut against.
         self.assertIsNone(_gate(inside, "cheapest_rank"))
 

@@ -19,10 +19,9 @@ invariants. Explanation coverage replaces them.
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping
 
 from custom_components.helman.automation.explain import (
-    OptimizerExplanation,
     VERDICT_CANDIDATE,
     VERDICT_EXECUTE,
 )
@@ -44,7 +43,7 @@ CONTRACT_TESTED_KINDS: frozenset[str] = frozenset(
 )
 
 
-#: Key under which a step carries its serialized
+#: Key under which a step carries its
 #: :class:`~custom_components.helman.automation.explain.OptimizerExplanation`.
 #: Every non-skipped step must populate it, covering the whole horizon.
 EXPLANATION_KEY = "explanation"
@@ -69,24 +68,33 @@ def run_optimizer_with_trace(
     return result, trace
 
 
-def _decode_explanation(
-    step: Mapping[str, Any], slot_ids: Sequence[str]
-) -> OptimizerExplanation | None:
-    """Return the step's explanation record, or ``None`` if it reports none."""
-    payload = step.get(EXPLANATION_KEY)
-    if not isinstance(payload, Mapping):
-        return None
-    return OptimizerExplanation.from_dict(payload, slot_ids)
+def trace_rows_payload(trace: OptimizerTrace) -> dict[str, Any]:
+    """``trace.to_dict()`` with each step's explanation as plain rows.
+
+    Test-only: the trace still embeds the run-length encoded explanation, and
+    the contract observes the record through
+    :meth:`~custom_components.helman.automation.explain.OptimizerExplanation.to_rows`
+    instead. A step that recorded nothing keeps no explanation key at all.
+    """
+    payload = trace.to_dict()
+    for step, explanation in zip(payload["steps"], trace.optimizer_explanations()):
+        if EXPLANATION_KEY in step:
+            step[EXPLANATION_KEY] = explanation.to_rows()
+    return payload
+
+
+def explanation_rows(trace: OptimizerTrace, step_index: int = 0) -> dict[str, Any]:
+    """One step's explanation as plain rows (see :func:`trace_rows_payload`)."""
+    return trace_rows_payload(trace)["steps"][step_index][EXPLANATION_KEY]
 
 
 def assert_trace_contract(testcase, trace: OptimizerTrace) -> None:
     """Assert the structural trace contract + explanation coverage."""
-    payload = trace.to_dict()
-    assert_trace_payload_contract(testcase, payload)
+    assert_trace_payload_contract(testcase, trace_rows_payload(trace))
 
 
 def assert_trace_payload_contract(testcase, payload: Mapping[str, Any]) -> None:
-    """The contract, expressed over a serialized trace payload.
+    """The contract, expressed over a :func:`trace_rows_payload` payload.
 
     Split out from :func:`assert_trace_contract` so the meta-test can exercise
     the assertions themselves against synthetic payloads that no real optimizer
@@ -114,7 +122,7 @@ def assert_trace_payload_contract(testcase, payload: Mapping[str, Any]) -> None:
                 if decision["outcome"] == "applied":
                     applied.add(slot_id)
 
-        explanation = _decode_explanation(step, slot_ids)
+        explanation = step.get(EXPLANATION_KEY)
 
         # --- explanation coverage (the v2 contract) --------------------------
         # Every non-skipped step must report an explanation, and it must cover
@@ -126,7 +134,7 @@ def assert_trace_payload_contract(testcase, payload: Mapping[str, Any]) -> None:
             f"{prefix} reports no explanation; every non-skipped step must "
             "carry a per-slot condition record",
         )
-        explained = {slot.slot_id for slot in explanation.slots}
+        explained = {row["slotId"] for row in explanation["slots"]}
         missing = [slot_id for slot_id in slot_ids if slot_id not in explained]
         testcase.assertFalse(
             missing,
@@ -140,9 +148,9 @@ def assert_trace_payload_contract(testcase, payload: Mapping[str, Any]) -> None:
         # verdict for that slot is execute/candidate. A write nothing accounts
         # for is always a bug.
         attributable = applied | {
-            slot.slot_id
-            for slot in explanation.slots
-            if slot.verdict in (VERDICT_EXECUTE, VERDICT_CANDIDATE)
+            row["slotId"]
+            for row in explanation["slots"]
+            if row["verdict"] in (VERDICT_EXECUTE, VERDICT_CANDIDATE)
         }
         for write in step["writes"]:
             if write["slotId"] not in horizon:

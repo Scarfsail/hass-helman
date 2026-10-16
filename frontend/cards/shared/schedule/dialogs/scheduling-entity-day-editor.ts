@@ -1,4 +1,4 @@
-import { callHelman } from "../../data/helman-commands";
+import { callHelman, type ScheduleExplanationPayload } from "../../data/helman-commands";
 import { DialogHistoryController } from "../../dialog-history-controller";
 import { LitElement, css, html } from "lit-element";
 import { customElement, property, state } from "lit/decorators.js";
@@ -448,7 +448,7 @@ export class SchedulingEntityDayEditor extends LitElement {
      * lane, so they are asked for once per lane per day and kept for as long as
      * the dialog is open.
      */
-    @state() private _explanations: ReadonlyMap<string, unknown> = new Map();
+    @state() private _explanations: ReadonlyMap<string, ScheduleExplanationPayload | null> = new Map();
     /** Lanes whose record could not be fetched, which is not the same as none. */
     @state() private _explanationFailures: ReadonlySet<string> = new Set();
     /** The parsed form of `_explanations`, rebuilt only when that map changes. */

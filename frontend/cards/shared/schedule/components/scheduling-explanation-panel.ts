@@ -2,6 +2,7 @@ import { LitElement, css, html } from "lit-element";
 import { customElement, property, state } from "lit/decorators.js";
 import { nothing } from "lit-html";
 import type { HomeAssistant } from "../../../../types/ha";
+import type { ScheduleExplanationPayload } from "../../data/helman-commands";
 import { getLocalizeFunction, type LocalizeFunction } from "../../../localize/localize";
 import "./scheduling-logic-diagram";
 import "../dialogs/scheduling-condition-trace-dialog";
@@ -160,7 +161,7 @@ export class SchedulingExplanationPanel extends LitElement {
     /** Only for the condition-trace dialog, which asks the backend itself. */
     @property({ attribute: false }) public hass?: HomeAssistant;
     /** The raw `helman/get_schedule_explanation` payload, or null for none. */
-    @property({ attribute: false }) public payload: unknown = null;
+    @property({ attribute: false }) public payload: ScheduleExplanationPayload | null = null;
     /** Which slot of it is being asked about, or null for none. */
     @property({ type: String }) public slotId: string | null = null;
     @property({ type: Boolean }) public loading = false;
@@ -266,7 +267,7 @@ export class SchedulingExplanationPanel extends LitElement {
     }
 
     /** The full run context; phase 1 is intentionally informational only. */
-    private _renderPipeline(activePhase: ExplanationColumn["phase"]) {
+    private _renderPipeline(activePhase: ExplanationColumn["phase"] | null) {
         const stages: Array<{ phase: number; label: string; unavailable?: boolean }> = [
             { phase: 1, label: this._text("pipeline.appliance_estimate"), unavailable: true },
             { phase: 2, label: this._text("pipeline.system_plan") },

@@ -1,5 +1,13 @@
 import type { ConfigDocument, ForecastPayload, InspectorPayload, SchedulePayload, TreeItemDTO, TreePayload, ValueType } from "../../cards/helman-api";
 import type { ConfigSnapshot } from "../../cards/shared/config/types";
+import type {
+    ExplanationConditionColumnRow,
+    ExplanationGateRow,
+    ExplanationGroupRow,
+    ExplanationOptimizerRows,
+    ExplanationSlotRow,
+    ScheduleExplanationPayload,
+} from "../../cards/shared/data/helman-commands";
 
 type InspectorDayOverrides = Omit<Partial<InspectorPayload>, "range" | "series" | "totals" | "availability"> & {
     range?: Partial<InspectorPayload["range"]>;
@@ -122,5 +130,67 @@ export function scheduleSlots({ slotMinutes, start = "2026-01-01T00:00:00.000Z",
             controllables: {},
         })),
         ...overrides,
+    };
+}
+
+/** What each condition column is, as `conditions/types.py` registers it. */
+const CONDITION_COLUMNS: Record<string, Omit<ExplanationConditionColumnRow, "key">> = {
+    run_when: { operator: "∈" },
+    when_price_below: { operator: "<" },
+    max_run_price: { operator: "<" },
+    min_soc_pct: { operator: "≥" },
+    min_solar_coverage_pct: { operator: "≥" },
+    ensure_self_sustainability: { selfGating: true },
+    reserve_floor_soc: { selfGating: true },
+};
+
+export type ExplanationGroupInput = Partial<ExplanationGroupRow>;
+export type ExplanationGateInput = Omit<ExplanationGateRow, "params"> & Partial<Pick<ExplanationGateRow, "params">>;
+export type ExplanationSlotInput = Partial<Omit<ExplanationSlotRow, "groups" | "gates">>
+    & Pick<ExplanationSlotRow, "slotId"> & { groups?: ExplanationGroupInput[]; gates?: ExplanationGateInput[] };
+export type ExplanationOptimizerInput = Partial<Omit<ExplanationOptimizerRows, "slots">>
+    & Pick<ExplanationOptimizerRows, "optimizerId"> & { slots?: ExplanationSlotInput[] };
+export type ExplanationRowsInput = Partial<Omit<ScheduleExplanationPayload, "optimizers">>
+    & { optimizers?: ExplanationOptimizerInput[] };
+
+/**
+ * A `helman/get_schedule_explanation` payload: one plain row per explained slot.
+ *
+ * Fills in what a fixture does not care about: a group's index is its position,
+ * an optimizer's kind is its id, a row's `runAt` is the payload's, and the
+ * optimizer-level `conditions` list names every condition key its rows use, in
+ * first-appearance order, with the backend's facts about it.
+ */
+export function explanationRows({ optimizers = [], ...overrides }: ExplanationRowsInput = {}): ScheduleExplanationPayload {
+    const controllableId = overrides.controllableId ?? "inverter";
+    const runAt = overrides.runAt ?? null;
+    const built = optimizers.map(({ slots = [], ...optimizer }): ExplanationOptimizerRows => {
+        const rows = slots.map(({ groups = [], gates = [], ...slot }): ExplanationSlotRow => ({
+            runAt: runAt ?? "",
+            verdict: "skip",
+            ...slot,
+            groups: groups.map((group, index) => ({
+                index, label: "", paramsSource: "slot_matched", params: {}, customResults: [], conditions: [], ...group,
+            })),
+            gates: gates.map((gate) => ({ params: {}, ...gate })),
+        }));
+        const keys = [...new Set(rows.flatMap((row) => row.groups.flatMap((group) => group.conditions.map((node) => node.key))))];
+        return {
+            kind: optimizer.optimizerId,
+            phase: 2,
+            status: "ok",
+            controllableId,
+            conditions: keys.map((key) => ({ key, ...CONDITION_COLUMNS[key] })),
+            ...optimizer,
+            slots: rows,
+        };
+    });
+    return {
+        controllableId,
+        date: "2026-07-31",
+        slotIds: [...new Set(built.flatMap((optimizer) => optimizer.slots.map((row) => row.slotId)))],
+        runAt,
+        ...overrides,
+        optimizers: built,
     };
 }

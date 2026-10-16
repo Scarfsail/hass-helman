@@ -9,19 +9,16 @@
  * union condition-column set) hanging off the same cells, so the drill-down is
  * a lookup rather than a second parse.
  *
- * Three encodings have to be undone, and conflating any two of them loses the
- * distinction the record exists to make:
+ * The payload is plain rows: one per slot an optimizer explained, so a slot
+ * with no row is one the optimizer never looked at. That absence is
+ * structural: it is not `"not_evaluated"` (the node exists and was
+ * deliberately not consulted) and neither of them is `"false"`. All three
+ * reach the UI as distinct outcomes.
  *
- * - **Run-length encoding.** Every per-slot column arrives as `[[value, count],
- *   ...]`, index-aligned to `slotIds`.
- * - **Sparse maps.** `actual` and `winningOptimizer` arrive as `{rowIndex:
- *   value}` and are present only where they mean something -- a condition that
- *   measures nothing carries no `actual` at all.
- * - **`null` is structural.** `null` in a per-slot column means *this element
- *   does not exist in that slot*: an absent group, an optimizer that never
- *   looked at the slot. It is not `"not_evaluated"` (the node exists and was
- *   deliberately not consulted) and neither of them is `"false"`. All three
- *   reach the UI as distinct outcomes.
+ * What the backend already knows is read, never re-derived: which group the
+ * slot matched (`matchedGroupIndex`), and per condition column whether it gates
+ * the slot rather than its group (`selfGating`) and how its test compares
+ * (`operator`).
  *
  * **Winner attribution is not the verdict.** `ScheduleWriter.set_inverter` is
  * last-writer-wins among optimizers, so an optimizer can decide `execute`,
@@ -31,25 +28,17 @@
  * `overwritten`.
  */
 
-export type ExplanationNodeState =
-    | "true"
-    | "false"
-    | "not_evaluated"
-    | "not_applicable";
-
-export type ExplanationNodeScope = "slot" | "day" | "window" | "run";
-
-export type ExplanationVerdict = "execute" | "candidate" | "skip";
-
-export type ExplanationStatus = "ok" | "skipped" | "failed";
-
-/** The authoritative runtime phases that emit explanation records. */
-export type ExplanationPhase = 2 | 3;
-
-export type ExplanationParamsSource =
-    | "slot_matched"
-    | "day_resolved"
-    | "master_fallback";
+import type {
+    ExplanationConditionRow,
+    ExplanationNodeScope,
+    ExplanationNodeState,
+    ExplanationOptimizerRows,
+    ExplanationParamsSource,
+    ExplanationPhase,
+    ExplanationStatus,
+    ExplanationVerdict,
+    ScheduleExplanationPayload,
+} from "../../data/helman-commands";
 
 /**
  * What a level-1 cell says. Ordered from "this slot ran because of me" down to
@@ -79,6 +68,10 @@ export interface ExplanationConditionNode {
     value: unknown;
     /** What the slot presented, passing or failing; null where nothing is measured. */
     actual: unknown;
+    /** Gates the slot, not its group: group matching never reads it. */
+    selfGating: boolean;
+    /** How the test compares `actual` with `value`; null where it does not compare. */
+    operator: string | null;
 }
 
 export interface ExplanationGate {
@@ -118,6 +111,12 @@ export interface ExplanationCell {
     runAt: string | null;
     /** Who landed the write on this slot, per this optimizer's record. */
     winningOptimizer: string | null;
+    /**
+     * The group the backend matched for this slot, or null where none covers
+     * it. The slot match only: a day-resolved kind may run under another
+     * group's params (see `paramsSource`).
+     */
+    matchedGroupIndex: number | null;
     groups: ExplanationGroup[];
     gates: ExplanationGate[];
     outcome: ExplanationCellOutcome;
@@ -134,7 +133,7 @@ export interface ExplanationColumn {
     optimizerId: string;
     kind: string;
     /** Runtime phase carried by the payload; never inferred from kind or lane. */
-    phase: ExplanationPhase | null;
+    phase: ExplanationPhase;
     /** The lane this optimizer writes: the controllable's own id. */
     controllableId: string;
     status: ExplanationStatus;
@@ -142,8 +141,8 @@ export interface ExplanationColumn {
     /** True for `skipped`/`failed`: the whole column is greyed. */
     inactive: boolean;
     /**
-     * Top-level condition keys this optimizer ever evaluated, in
-     * first-appearance order. Level 2's column set for this optimizer.
+     * Condition keys this optimizer ever evaluated, in first-appearance
+     * order, as the backend lists them.
      */
     conditionKeys: string[];
     /** Index-aligned to `rows`. */
@@ -180,191 +179,8 @@ export interface ScheduleExplanationModel {
     conditionKeys: string[];
 }
 
-const NODE_STATES = new Set<string>([
-    "true",
-    "false",
-    "not_evaluated",
-    "not_applicable",
-]);
-const NODE_SCOPES = new Set<string>(["slot", "day", "window", "run"]);
-const VERDICTS = new Set<string>(["execute", "candidate", "skip"]);
-const STATUSES = new Set<string>(["ok", "skipped", "failed"]);
-const PHASES = new Set<number>([2, 3]);
-const PARAMS_SOURCES = new Set<string>([
-    "slot_matched",
-    "day_resolved",
-    "master_fallback",
-]);
-
 /** The writer-level veto: conditions all passed and the user owns the slot. */
 export const BLOCKED_USER_OWNED_GATE = "blocked_user_owned";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-    return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/**
- * Expand `[[value, count], ...]` into a `length`-long, index-aligned array.
- *
- * Missing tail entries are `null`, which is the encoding's own meaning for
- * "absent in that slot" -- so a short column and an explicitly-null run read
- * the same, deliberately.
- */
-export function decodeExplanationRuns<T>(runs: unknown, length: number): (T | null)[] {
-    const values: (T | null)[] = [];
-    if (Array.isArray(runs)) {
-        for (const run of runs) {
-            if (!Array.isArray(run) || run.length !== 2) {
-                continue;
-            }
-            const [value, count] = run as [T, unknown];
-            if (typeof count !== "number" || !Number.isInteger(count) || count < 0) {
-                continue;
-            }
-            for (let index = 0; index < count; index += 1) {
-                values.push(value ?? null);
-            }
-        }
-    }
-    if (values.length > length) {
-        values.length = length;
-        return values;
-    }
-    while (values.length < length) {
-        values.push(null);
-    }
-    return values;
-}
-
-/** Expand `{rowIndex: value}` into a `length`-long, index-aligned array. */
-export function decodeExplanationSparse<T>(mapping: unknown, length: number): (T | null)[] {
-    const values: (T | null)[] = new Array(length).fill(null);
-    if (isRecord(mapping)) {
-        for (const [key, value] of Object.entries(mapping)) {
-            const index = Number.parseInt(key, 10);
-            if (Number.isInteger(index) && index >= 0 && index < length) {
-                values[index] = (value ?? null) as T | null;
-            }
-        }
-    }
-    return values;
-}
-
-function decodeNodeColumns(
-    columns: unknown,
-    length: number,
-): ExplanationConditionNode[][] {
-    const perSlot: ExplanationConditionNode[][] = Array.from(
-        { length },
-        () => [],
-    );
-    if (!Array.isArray(columns)) {
-        return perSlot;
-    }
-
-    for (const column of columns) {
-        if (!isRecord(column)) {
-            continue;
-        }
-        const states = decodeExplanationRuns<string>(column.state, length);
-        const values = decodeExplanationRuns<unknown>(column.value, length);
-        const actuals = decodeExplanationSparse<unknown>(column.actual, length);
-        const key = typeof column.key === "string" ? column.key : "";
-        const rawScope = typeof column.scope === "string" ? column.scope : "slot";
-        const scope = (NODE_SCOPES.has(rawScope) ? rawScope : "slot") as ExplanationNodeScope;
-
-        for (let index = 0; index < length; index += 1) {
-            const state = states[index];
-            // null here means the node does not exist in this slot at all --
-            // structurally different from `not_evaluated`, so it produces no
-            // node rather than a node in some "unknown" state.
-            if (state === null || !NODE_STATES.has(state)) {
-                continue;
-            }
-            perSlot[index].push({
-                key,
-                scope,
-                state: state as ExplanationNodeState,
-                value: values[index],
-                actual: actuals[index],
-            });
-        }
-    }
-    return perSlot;
-}
-
-function decodeGateColumns(columns: unknown, length: number): ExplanationGate[][] {
-    const perSlot: ExplanationGate[][] = Array.from({ length }, () => []);
-    if (!Array.isArray(columns)) {
-        return perSlot;
-    }
-
-    for (const column of columns) {
-        if (!isRecord(column)) {
-            continue;
-        }
-        const states = decodeExplanationRuns<string>(column.state, length);
-        const params = decodeExplanationRuns<Record<string, unknown>>(column.params, length);
-        const key = typeof column.key === "string" ? column.key : "";
-        for (let index = 0; index < length; index += 1) {
-            const state = states[index];
-            // A gate is emitted only for the slots that reached it: an
-            // unreached gate is absent, never `false`.
-            if (state === null || !NODE_STATES.has(state)) {
-                continue;
-            }
-            perSlot[index].push({
-                key,
-                state: state as ExplanationNodeState,
-                params: isRecord(params[index]) ? { ...params[index] } : {},
-            });
-        }
-    }
-    return perSlot;
-}
-
-function decodeGroupColumns(columns: unknown, length: number): ExplanationGroup[][] {
-    const perSlot: ExplanationGroup[][] = Array.from({ length }, () => []);
-    if (!Array.isArray(columns)) {
-        return perSlot;
-    }
-
-    for (const column of columns) {
-        if (!isRecord(column)) {
-            continue;
-        }
-        // `paramsSource` is the presence column: null == this group does not
-        // exist for that slot.
-        const sources = decodeExplanationRuns<string>(column.paramsSource, length);
-        const params = decodeExplanationRuns<Record<string, unknown>>(column.params, length);
-        const custom = decodeExplanationRuns<unknown[]>(column.customResults, length);
-        const conditions = decodeNodeColumns(column.conditions, length);
-        const index = typeof column.index === "number" ? column.index : 0;
-        const label = typeof column.label === "string" ? column.label : "";
-
-        for (let row = 0; row < length; row += 1) {
-            const source = sources[row];
-            if (source === null) {
-                continue;
-            }
-            const customResults = Array.isArray(custom[row])
-                ? (custom[row] as unknown[]).map((entry) =>
-                    typeof entry === "boolean" ? entry : null)
-                : [];
-            perSlot[row].push({
-                index,
-                label,
-                params: isRecord(params[row]) ? { ...params[row] } : {},
-                paramsSource: (PARAMS_SOURCES.has(source)
-                    ? source
-                    : "slot_matched") as ExplanationParamsSource,
-                customResults,
-                conditions: conditions[row],
-            });
-        }
-    }
-    return perSlot;
-}
 
 /**
  * The node that decided a rejected slot.
@@ -435,51 +251,41 @@ function resolveOutcome(
     return "not_eligible";
 }
 
-function collectConditionKeys(cells: readonly ExplanationCell[]): string[] {
-    const keys: string[] = [];
-    for (const cell of cells) {
-        for (const group of cell.groups) {
-            for (const node of group.conditions) {
-                if (!keys.includes(node.key)) {
-                    keys.push(node.key);
-                }
-            }
-        }
-    }
-    return keys;
-}
-
 function parseColumn(
-    payload: Record<string, unknown>,
+    payload: ExplanationOptimizerRows,
     slotIds: readonly string[],
 ): ExplanationColumn {
-    const length = slotIds.length;
-    const optimizerId = typeof payload.optimizerId === "string" ? payload.optimizerId : "";
-    const rawStatus = typeof payload.status === "string" ? payload.status : "ok";
-    const status = (STATUSES.has(rawStatus) ? rawStatus : "ok") as ExplanationStatus;
-    const verdicts = decodeExplanationRuns<string>(payload.verdict, length);
-    const runAts = decodeExplanationRuns<string>(payload.runAt, length);
-    const winners = decodeExplanationSparse<string>(payload.winningOptimizer, length);
-    const groups = decodeGroupColumns(payload.groups, length);
-    const gates = decodeGateColumns(payload.gates, length);
+    const { optimizerId, status } = payload;
     const inactive = status !== "ok";
+    const columns = new Map(payload.conditions.map((column) => [column.key, column]));
+    const parseNode = (node: ExplanationConditionRow): ExplanationConditionNode => ({
+        key: node.key,
+        scope: node.scope,
+        state: node.state,
+        value: node.value ?? null,
+        actual: node.actual ?? null,
+        selfGating: columns.get(node.key)?.selfGating === true,
+        operator: columns.get(node.key)?.operator ?? null,
+    });
+    const rows = new Map(payload.slots.map((row) => [row.slotId, row]));
 
     const cells: ExplanationCell[] = slotIds.map((slotId, rowIndex) => {
-        const verdict = verdicts[rowIndex];
-        // `verdict` is the presence column: null == this optimizer said
-        // nothing about the slot.
+        // No row == this optimizer said nothing about the slot.
+        const row = rows.get(slotId);
         const base = {
             optimizerId,
             slotId,
             rowIndex,
-            present: verdict !== null,
-            verdict: (verdict !== null && VERDICTS.has(verdict)
-                ? verdict
-                : null) as ExplanationVerdict | null,
-            runAt: runAts[rowIndex],
-            winningOptimizer: winners[rowIndex],
-            groups: groups[rowIndex],
-            gates: gates[rowIndex],
+            present: row !== undefined,
+            verdict: row?.verdict ?? null,
+            runAt: row?.runAt ?? null,
+            winningOptimizer: row?.winningOptimizer ?? null,
+            matchedGroupIndex: row?.matchedGroupIndex ?? null,
+            groups: (row?.groups ?? []).map((group) => ({
+                ...group,
+                conditions: group.conditions.map(parseNode),
+            })),
+            gates: row?.gates ?? [],
         };
         return {
             ...base,
@@ -490,16 +296,13 @@ function parseColumn(
 
     return {
         optimizerId,
-        kind: typeof payload.kind === "string" ? payload.kind : "",
-        phase: typeof payload.phase === "number" && PHASES.has(payload.phase)
-            ? payload.phase as ExplanationPhase
-            : null,
-        controllableId:
-            typeof payload.controllableId === "string" ? payload.controllableId : "",
+        kind: payload.kind,
+        phase: payload.phase,
+        controllableId: payload.controllableId ?? "",
         status,
-        statusReason: typeof payload.statusReason === "string" ? payload.statusReason : null,
+        statusReason: payload.statusReason ?? null,
         inactive,
-        conditionKeys: collectConditionKeys(cells),
+        conditionKeys: payload.conditions.map((column) => column.key),
         cells,
     };
 }
@@ -507,23 +310,20 @@ function parseColumn(
 /**
  * Parse one `helman/get_schedule_explanation` payload.
  *
- * Returns `null` for the backend's own `null` (nothing recorded for this lane
- * and date) and for anything that is not a payload at all -- the dialog treats
- * both as "no record", which is the truth in either case.
+ * Returns `null` for the backend's own `null`: nothing recorded for this lane
+ * and date, which the dialog treats as "no record".
  */
-export function parseScheduleExplanation(payload: unknown): ScheduleExplanationModel | null {
-    if (!isRecord(payload)) {
+export function parseScheduleExplanation(
+    payload: ScheduleExplanationPayload | null,
+): ScheduleExplanationModel | null {
+    if (payload === null) {
         return null;
     }
-    const slotIds = Array.isArray(payload.slotIds)
-        ? payload.slotIds.filter((slotId): slotId is string => typeof slotId === "string")
-        : [];
+    const { slotIds } = payload;
 
     // Traced-phase order is the payload's order. Re-sorting would break winner
     // attribution, which is last-writer-wins within that order.
-    const columns = (Array.isArray(payload.optimizers) ? payload.optimizers : [])
-        .filter(isRecord)
-        .map((entry) => parseColumn(entry, slotIds));
+    const columns = payload.optimizers.map((entry) => parseColumn(entry, slotIds));
 
     const rows: ExplanationRow[] = slotIds.map((slotId, index) => {
         let winnerOptimizerId: string | null = null;
@@ -563,10 +363,9 @@ export function parseScheduleExplanation(payload: unknown): ScheduleExplanationM
     }
 
     return {
-        controllableId:
-            typeof payload.controllableId === "string" ? payload.controllableId : "",
-        date: typeof payload.date === "string" ? payload.date : "",
-        runAt: typeof payload.runAt === "string" ? payload.runAt : null,
+        controllableId: payload.controllableId,
+        date: payload.date,
+        runAt: payload.runAt,
         rows,
         columns,
         conditionKeys,

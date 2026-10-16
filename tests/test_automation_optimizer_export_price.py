@@ -39,12 +39,10 @@ from custom_components.helman.scheduling.schedule import (  # noqa: E402
     schedule_document_to_dict,
 )
 from custom_components.helman.appliances.state import AppliancesRuntimeRegistry  # noqa: E402
-from custom_components.helman.automation.explain import (  # noqa: E402
-    OptimizerExplanation,
-)
 from automation_config_builders import make_optimizer_config  # noqa: E402
 from automation_trace_contract import (  # noqa: E402
     assert_trace_contract,
+    explanation_rows,
     run_optimizer_with_trace,
 )
 
@@ -60,25 +58,17 @@ def _slot_ids(start: str, end: str) -> list[str]:
     return ids
 
 
-def _explanation(trace) -> OptimizerExplanation:
-    """The first step's explanation record, decoded from the payload."""
-    payload = trace.to_dict()
-    return OptimizerExplanation.from_dict(
-        payload["steps"][0]["explanation"], payload["slotIds"]
-    )
-
-
-def _slots_by_id(explanation: OptimizerExplanation) -> dict:
-    return {slot.slot_id: slot for slot in explanation.slots}
+def _slots_by_id(explanation: dict) -> dict:
+    return {slot["slotId"]: slot for slot in explanation["slots"]}
 
 
 def _node(slot, key: str, group_index: int = 0):
-    group = next(group for group in slot.groups if group.index == group_index)
-    return next(node for node in group.conditions if node.key == key)
+    group = next(group for group in slot["groups"] if group["index"] == group_index)
+    return next(node for node in group["conditions"] if node["key"] == key)
 
 
 def _gate(slot, key: str):
-    return next((gate for gate in slot.gates if gate.key == key), None)
+    return next((gate for gate in slot["gates"] if gate["key"] == key), None)
 
 
 def _make_optimizer_config(
@@ -465,11 +455,11 @@ class ExportPriceTraceContractTests(unittest.TestCase):
         self.assertEqual(len(applied), 1)
         self.assertIn(CURRENT_SLOT_ID, applied[0]["slotIds"])
 
-        slots = _slots_by_id(_explanation(trace))
+        slots = _slots_by_id(explanation_rows(trace))
         written = slots[CURRENT_SLOT_ID]
-        self.assertEqual(written.verdict, "execute")
-        self.assertEqual(_node(written, "when_price_below").state, "true")
-        self.assertEqual(_gate(written, "stop_export_supported").state, "true")
+        self.assertEqual(written["verdict"], "execute")
+        self.assertEqual(_node(written, "when_price_below")["state"], "true")
+        self.assertEqual(_gate(written, "stop_export_supported")["state"], "true")
 
     def test_a_rejected_slot_names_the_failing_condition_and_its_actual(self) -> None:
         """The whole rationale for a rejection is now the condition matrix.
@@ -495,13 +485,13 @@ class ExportPriceTraceContractTests(unittest.TestCase):
         )
 
         assert_trace_contract(self, trace)
-        slots = _slots_by_id(_explanation(trace))
+        slots = _slots_by_id(explanation_rows(trace))
         rejected = slots[NEXT_SLOT_ID]
-        self.assertEqual(rejected.verdict, "skip")
+        self.assertEqual(rejected["verdict"], "skip")
         node = _node(rejected, "when_price_below")
-        self.assertEqual(node.state, "false")
-        self.assertEqual(node.value, 0.0)
-        self.assertEqual(node.actual, 1.5)
+        self.assertEqual(node["state"], "false")
+        self.assertEqual(node.get("value"), 0.0)
+        self.assertEqual(node.get("actual"), 1.5)
         # A rejected slot never reaches the capability gate.
         self.assertIsNone(_gate(rejected, "stop_export_supported"))
 
@@ -514,10 +504,10 @@ class ExportPriceTraceContractTests(unittest.TestCase):
             reference_time=REFERENCE_TIME,
         )
         assert_trace_contract(self, trace)
-        explanation = _explanation(trace)
-        self.assertEqual(explanation.status, "ok")
+        explanation = explanation_rows(trace)
+        self.assertEqual(explanation["status"], "ok")
         self.assertEqual(
-            {slot.verdict for slot in explanation.slots}, {"skip"}
+            {slot["verdict"] for slot in explanation["slots"]}, {"skip"}
         )
 
     def test_blocked_user_owned_is_emitted(self) -> None:
@@ -547,9 +537,9 @@ class ExportPriceTraceContractTests(unittest.TestCase):
 
         # Every condition passed and nothing was placed: the verdict must not
         # claim otherwise.
-        slots = _slots_by_id(_explanation(trace))
-        self.assertEqual(_node(slots[CURRENT_SLOT_ID], "when_price_below").state, "true")
-        self.assertEqual(slots[CURRENT_SLOT_ID].verdict, "skip")
+        slots = _slots_by_id(explanation_rows(trace))
+        self.assertEqual(_node(slots[CURRENT_SLOT_ID], "when_price_below")["state"], "true")
+        self.assertEqual(slots[CURRENT_SLOT_ID]["verdict"], "skip")
 
     def test_a_user_owned_slot_records_the_veto_rather_than_a_failed_condition(
         self,
@@ -587,16 +577,20 @@ class ExportPriceTraceContractTests(unittest.TestCase):
         )
 
         assert_trace_contract(self, trace)
-        slots = _slots_by_id(_explanation(trace))
+        slots = _slots_by_id(explanation_rows(trace))
 
         blocked = slots[CURRENT_SLOT_ID]
         veto = _gate(blocked, "blocked_user_owned")
         self.assertIsNotNone(veto)
-        self.assertEqual(veto.state, "false")
-        self.assertEqual(veto.params, {"domain": "inverter"})
+        self.assertEqual(veto["state"], "false")
+        self.assertEqual(veto["params"], {"domain": "inverter"})
         # Not a condition failure: every condition column on this slot is true.
         self.assertEqual(
-            {node.state for group in blocked.groups for node in group.conditions},
+            {
+                node["state"]
+                for group in blocked["groups"]
+                for node in group["conditions"]
+            },
             {"true"},
         )
 
@@ -604,7 +598,7 @@ class ExportPriceTraceContractTests(unittest.TestCase):
         # two are told apart by state and not by absence.
         written = _gate(slots[NEXT_SLOT_ID], "blocked_user_owned")
         self.assertIsNotNone(written)
-        self.assertEqual(written.state, "true")
+        self.assertEqual(written["state"], "true")
 
         # A slot the optimizer never offered to the writer has no veto node at
         # all — the veto has nothing to say about it.
@@ -629,17 +623,17 @@ class ExportPriceTraceContractTests(unittest.TestCase):
 
         # A capability the inverter lacks is not "every slot false": it is a
         # skipped step, and the status is what keeps the two distinguishable.
-        explanation = _explanation(trace)
-        self.assertEqual(explanation.status, "skipped")
-        self.assertEqual(explanation.status_reason, "stop_export_unsupported")
+        explanation = explanation_rows(trace)
+        self.assertEqual(explanation["status"], "skipped")
+        self.assertEqual(explanation.get("statusReason"), "stop_export_unsupported")
         slots = _slots_by_id(explanation)
         gate = _gate(slots[CURRENT_SLOT_ID], "stop_export_supported")
-        self.assertEqual(gate.state, "false")
+        self.assertEqual(gate["state"], "false")
         self.assertEqual(
-            gate.params["skippedSlots"],
+            gate["params"]["skippedSlots"],
             len(_slot_ids(CURRENT_SLOT_ID, "2026-03-21T00:00:00+01:00")),
         )
-        self.assertEqual(slots[CURRENT_SLOT_ID].verdict, "skip")
+        self.assertEqual(slots[CURRENT_SLOT_ID]["verdict"], "skip")
 
 
 if __name__ == "__main__":

@@ -1,13 +1,13 @@
 """The explanation DTOs, their serialization, and the matrix the rails produce.
 
-Most of this file is codec: no optimizer, no pipeline, no store. What is
-guarded there is (a) that a record survives a round trip unchanged, (b) that the
-per-slot columns really are index-aligned and run-length encoded, and (c) that a
-passing node costs nothing in the payload.
+Most of this file is serialization: no optimizer, no pipeline, no store. What
+is guarded there is (a) that the plain rows carry every recorded fact, (b) that
+the encoded form :mod:`.trace` still embeds really is index-aligned and
+run-length encoded, and (c) that a passing node costs nothing in either.
 
 :class:`ConditionMatrixTests` is the one behavioural half: it drives the real
 ``build_eligibility`` and asserts on the matrix it stamps, end to end through
-serialization — the properties an optimizer will rely on before it ever calls
+the plain rows — the properties an optimizer will rely on before it ever calls
 ``resolve_condition``.
 """
 
@@ -38,8 +38,6 @@ from custom_components.helman.automation.explain import (  # noqa: E402
     OptimizerExplanation,
     RunExplanation,
     SlotExplanation,
-    decode_runs,
-    decode_sparse,
     encode_runs,
     encode_sparse,
 )
@@ -67,11 +65,13 @@ class RunLengthCodecTests(unittest.TestCase):
 
     def test_empty_column_encodes_to_empty_runs(self) -> None:
         self.assertEqual(encode_runs([]), [])
-        self.assertEqual(decode_runs([], 0), [])
 
-    def test_round_trip_preserves_order_and_length(self) -> None:
+    def test_runs_preserve_order_and_length(self) -> None:
         values = ["true"] * 3 + ["not_evaluated"] * 2 + [None] * 4 + ["false"]
-        self.assertEqual(decode_runs(encode_runs(values), len(values)), values)
+        self.assertEqual(
+            encode_runs(values),
+            [["true", 3], ["not_evaluated", 2], [None, 4], ["false", 1]],
+        )
 
     def test_dict_values_collapse_by_equality(self) -> None:
         params = {"targetSocPct": 80}
@@ -83,18 +83,6 @@ class RunLengthCodecTests(unittest.TestCase):
     def test_bool_and_int_are_not_merged(self) -> None:
         self.assertEqual(encode_runs([True, 1]), [[True, 1], [1, 1]])
 
-    def test_decode_pads_short_columns_with_none(self) -> None:
-        self.assertEqual(
-            decode_runs([["true", 2]], 4), ["true", "true", None, None]
-        )
-
-    def test_decode_truncates_over_long_columns(self) -> None:
-        self.assertEqual(decode_runs([["true", 5]], 2), ["true", "true"])
-
-    def test_malformed_runs_are_skipped_not_raised(self) -> None:
-        self.assertEqual(decode_runs([["true", 1], "junk", ["x", -1]], 1), ["true"])
-        self.assertEqual(decode_runs("not-a-list", 2), [None, None])
-
 
 class SparseCodecTests(unittest.TestCase):
     def test_none_entries_are_omitted(self) -> None:
@@ -103,12 +91,8 @@ class SparseCodecTests(unittest.TestCase):
     def test_all_none_column_encodes_to_empty_map(self) -> None:
         self.assertEqual(encode_sparse([None, None]), {})
 
-    def test_round_trip(self) -> None:
-        values = [None, 4.2, None]
-        self.assertEqual(decode_sparse(encode_sparse(values), 3), values)
-
-    def test_out_of_range_and_non_integer_keys_are_ignored(self) -> None:
-        self.assertEqual(decode_sparse({"9": 1.0, "x": 2.0}, 2), [None, None])
+    def test_keys_are_the_string_index_of_each_present_value(self) -> None:
+        self.assertEqual(encode_sparse([None, 4.2, None]), {"1": 4.2})
 
 
 class IndexAlignedShapeTests(unittest.TestCase):
@@ -224,7 +208,7 @@ class IndexAlignedShapeTests(unittest.TestCase):
             [[{"rank": 0}, 1], [{"rank": 1}, 1], [{"rank": 2}, 1], [{"rank": 3}, 1]],
         )
 
-    def test_empty_slot_list_serializes_and_round_trips(self) -> None:
+    def test_empty_slot_list_serializes(self) -> None:
         record = RunExplanation(
             run_at=RUN_AT,
             slot_ids=(),
@@ -235,7 +219,7 @@ class IndexAlignedShapeTests(unittest.TestCase):
         payload = record.to_dict()
         self.assertEqual(payload["slotIds"], [])
         self.assertEqual(payload["optimizers"][0]["verdict"], [])
-        self.assertEqual(RunExplanation.from_dict(payload), record)
+        self.assertEqual(record.optimizers[0].to_rows()["slots"], [])
 
     def test_off_horizon_slot_is_dropped_not_raised(self) -> None:
         record = RunExplanation(
@@ -252,7 +236,9 @@ class IndexAlignedShapeTests(unittest.TestCase):
         self.assertEqual(record.to_dict()["optimizers"][0]["verdict"], [[None, 1]])
 
 
-class RoundTripTests(unittest.TestCase):
+class PlainRowTests(unittest.TestCase):
+    """:meth:`OptimizerExplanation.to_rows`: one plain row per explained slot."""
+
     def _rich_record(self) -> RunExplanation:
         slot_ids = _slot_ids(5)
         # slot 0: two groups, the second one not configuring max_price at all;
@@ -348,65 +334,212 @@ class RoundTripTests(unittest.TestCase):
             ),
         )
 
-    def test_record_round_trips_losslessly(self) -> None:
-        record = self._rich_record()
-        self.assertEqual(RunExplanation.from_dict(record.to_dict()), record)
+    def _rows(self, optimizer_index: int = 0) -> dict:
+        return self._rich_record().optimizers[optimizer_index].to_rows()
 
-    def test_round_trip_survives_json(self) -> None:
+    def test_rows_carry_every_recorded_fact(self) -> None:
+        slot_ids = self._rich_record().slot_ids
+        night = {
+            "index": 0,
+            "label": "cheap night",
+            "paramsSource": "day_resolved",
+            "params": {"targetSocPct": 80, "powerW": 3000},
+            "customResults": [True, False],
+        }
+        self.assertEqual(
+            self._rows(),
+            {
+                "optimizerId": "grid-1",
+                "kind": "charge_from_grid",
+                "phase": 2,
+                "status": "ok",
+                "conditions": [
+                    {"key": "max_price"},
+                    {"key": "reserve_floor_soc", "selfGating": True},
+                    {"key": "ensure_self_sustainability", "selfGating": True},
+                ],
+                "slots": [
+                    {
+                        "slotId": slot_ids[0],
+                        "verdict": "candidate",
+                        "groups": [
+                            {
+                                **night,
+                                "conditions": [
+                                    {
+                                        "key": "max_price",
+                                        "scope": "slot",
+                                        "state": "false",
+                                        "value": 3.5,
+                                        "actual": 4.2,
+                                    },
+                                    {
+                                        "key": "reserve_floor_soc",
+                                        "scope": "window",
+                                        "state": "true",
+                                    },
+                                ],
+                            },
+                            {
+                                "index": 1,
+                                "label": "fallback",
+                                "paramsSource": "master_fallback",
+                                "params": {},
+                                "customResults": [],
+                                "conditions": [
+                                    {
+                                        "key": "max_price",
+                                        "scope": "slot",
+                                        "state": "not_applicable",
+                                    }
+                                ],
+                            },
+                        ],
+                        "gates": [{"key": "capacity", "state": "true", "params": {}}],
+                    },
+                    {
+                        "slotId": slot_ids[1],
+                        "verdict": "skip",
+                        "groups": [
+                            {
+                                **night,
+                                "conditions": [
+                                    {
+                                        "key": "ensure_self_sustainability",
+                                        "scope": "slot",
+                                        "state": "not_evaluated",
+                                    }
+                                ],
+                            }
+                        ],
+                        "gates": [],
+                    },
+                    {
+                        "slotId": slot_ids[2],
+                        "verdict": "skip",
+                        "groups": [],
+                        "gates": [
+                            {
+                                "key": "capacity",
+                                "state": "false",
+                                "params": {"rank": 7},
+                            },
+                            {"key": "deadline", "state": "true", "params": {}},
+                        ],
+                    },
+                    {
+                        "slotId": slot_ids[4],
+                        "verdict": "execute",
+                        "winningOptimizer": "export_price",
+                        "groups": [],
+                        "gates": [
+                            {
+                                "key": "blocked_user_owned",
+                                "state": "false",
+                                "params": {},
+                            }
+                        ],
+                    },
+                ],
+            },
+        )
+
+    def test_rows_survive_json(self) -> None:
         import json
 
-        record = self._rich_record()
-        payload = json.loads(json.dumps(record.to_dict()))
-        self.assertEqual(RunExplanation.from_dict(payload), record)
+        rows = self._rows()
+        self.assertEqual(json.loads(json.dumps(rows)), rows)
 
     def test_skipped_step_keeps_its_reason_and_stays_distinct(self) -> None:
-        payload = self._rich_record().to_dict()
-        step = payload["optimizers"][1]
+        step = self._rows(1)
         self.assertEqual(step["status"], "skipped")
         self.assertEqual(step["statusReason"], "condition_rails_unavailable")
         # a skipped step has no per-slot matrix at all -- it is not "every slot
         # false".
-        self.assertEqual(step["verdict"], [[None, 5]])
-        self.assertNotIn("groups", step)
+        self.assertEqual(step["slots"], [])
+        self.assertEqual(step["conditions"], [])
 
-    def test_absent_slot_stays_absent_after_a_round_trip(self) -> None:
+    def test_an_absent_slot_has_no_row(self) -> None:
         record = self._rich_record()
-        restored = RunExplanation.from_dict(record.to_dict())
-        explained = {slot.slot_id for slot in restored.optimizers[0].slots}
+        explained = [row["slotId"] for row in self._rows()["slots"]]
         self.assertNotIn(record.slot_ids[3], explained)
         self.assertEqual(len(explained), 4)
 
-    def test_not_applicable_and_not_evaluated_survive_distinctly(self) -> None:
-        restored = RunExplanation.from_dict(self._rich_record().to_dict())
-        slots = {slot.slot_id: slot for slot in restored.optimizers[0].slots}
-        fallback = slots[restored.slot_ids[0]].groups[1]
-        self.assertEqual(fallback.conditions[0].state, "not_applicable")
-        gated = slots[restored.slot_ids[1]].groups[0].conditions[0]
-        self.assertEqual(gated.state, "not_evaluated")
+    def test_not_applicable_and_not_evaluated_stay_distinct(self) -> None:
+        rows = self._rows()["slots"]
+        fallback = rows[0]["groups"][1]
+        self.assertEqual(fallback["conditions"][0]["state"], "not_applicable")
+        gated = rows[1]["groups"][0]["conditions"][0]
+        self.assertEqual(gated["state"], "not_evaluated")
 
-    def test_per_entry_custom_results_round_trip(self) -> None:
+    def test_per_entry_custom_results_are_group_level(self) -> None:
         """Custom conditions are group-level, never nested under a condition.
 
         This is the shape the removed ``ConditionNode.children`` field implied
         and never delivered: no producer ever populated it, so per-entry custom
         results have always lived here instead.
         """
-        restored = RunExplanation.from_dict(self._rich_record().to_dict())
-        group = restored.optimizers[0].slots[0].groups[0]
-        self.assertEqual(group.custom_results, (True, False))
+        group = self._rows()["slots"][0]["groups"][0]
+        self.assertEqual(group["customResults"], [True, False])
 
     def test_window_scope_is_carried(self) -> None:
-        restored = RunExplanation.from_dict(self._rich_record().to_dict())
-        node = restored.optimizers[0].slots[0].groups[0].conditions[1]
-        self.assertEqual(node.scope, "window")
+        node = self._rows()["slots"][0]["groups"][0]["conditions"][1]
+        self.assertEqual(node["scope"], "window")
 
+    def test_a_node_without_a_reading_has_no_actual_or_value_key(self) -> None:
+        node = self._rows()["slots"][0]["groups"][0]["conditions"][1]
+        self.assertNotIn("actual", node)
+        self.assertNotIn("value", node)
+
+    def test_each_condition_column_is_listed_once(self) -> None:
+        # max_price appears in two groups of slot 0; it is still one column.
+        self.assertEqual(
+            [column["key"] for column in self._rows()["conditions"]],
+            ["max_price", "reserve_floor_soc", "ensure_self_sustainability"],
+        )
+
+
+    def test_a_condition_column_names_its_operator_once(self) -> None:
+        slot_ids = _slot_ids(2)
+        optimizer = OptimizerExplanation(
+            optimizer_id="export",
+            kind="export_price",
+            slots=tuple(
+                SlotExplanation(
+                    slot_id=slot_id,
+                    groups=(
+                        GroupExplanation(
+                            index=0,
+                            conditions=(
+                                ConditionNode(key="when_price_below", state="true"),
+                                ConditionNode(key="run_when", state="true"),
+                                ConditionNode(
+                                    key="requires_appliance", state="true"
+                                ),
+                            ),
+                        ),
+                    ),
+                )
+                for slot_id in slot_ids
+            ),
+        )
+
+        self.assertEqual(
+            optimizer.to_rows()["conditions"],
+            [
+                {"key": "when_price_below", "operator": "<"},
+                {"key": "run_when", "operator": "∈"},
+                # A lookup, not a comparison: no operator is invented for it.
+                {"key": "requires_appliance"},
+            ],
+        )
 
 class ConditionMatrixTests(unittest.TestCase):
     """The matrix ``build_eligibility`` stamps, as an optimizer will read it.
 
-    Driven through the real condition rails and then through serialization, so a
-    property asserted here holds in the payload the frontend receives — not just
-    in the in-memory DTO.
+    Driven through the real condition rails and then through the plain rows, so
+    a property asserted here holds in the payload the frontend receives — not
+    just in the in-memory DTO.
     """
 
     REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
@@ -416,7 +549,12 @@ class ConditionMatrixTests(unittest.TestCase):
     # SLOT_0 clears either threshold, SLOT_1 only the looser one, SLOT_2 neither.
     PRICES = {SLOT_0: -1.0, SLOT_1: 0.5, SLOT_2: 5.0}
 
-    def _snapshot(self, *, day_classification: str | None = None):
+    def _snapshot(
+        self,
+        *,
+        day_classification: str | None = None,
+        condition_met: tuple[bool, ...] | None = None,
+    ):
         from custom_components.helman.appliances.state import AppliancesRuntimeRegistry
         from custom_components.helman.automation.day_context import DayContext
         from custom_components.helman.automation.snapshot import (
@@ -457,11 +595,14 @@ class ConditionMatrixTests(unittest.TestCase):
                 appliance_registry=AppliancesRuntimeRegistry(),
                 when_active_hourly_energy_kwh_by_appliance_id={},
                 day_contexts=day_contexts,
+                condition_met_by_optimizer_id=(
+                    {} if condition_met is None else {"export": condition_met}
+                ),
             ),
         )
 
-    def _record(self, config, snapshot=None):
-        """Build the matrix and push it through a full serialization round trip."""
+    def _record(self, config, snapshot=None, *, eligibility_out=None):
+        """Build the matrix and serialize it as plain rows, keyed by slot id."""
         from custom_components.helman.automation.conditions import (
             build_eligibility,
             build_group_explanations,
@@ -469,6 +610,8 @@ class ConditionMatrixTests(unittest.TestCase):
 
         snapshot = snapshot if snapshot is not None else self._snapshot()
         eligibility = build_eligibility(snapshot, config)
+        if eligibility_out is not None:
+            eligibility_out.append(eligibility)
         explanations = build_group_explanations(snapshot, config, eligibility)
         slot_ids = eligibility.horizon_slot_ids
         optimizer = OptimizerExplanation(
@@ -489,11 +632,7 @@ class ConditionMatrixTests(unittest.TestCase):
                 for slot_id in slot_ids
             ),
         )
-        record = RunExplanation(
-            run_at=self.REFERENCE_TIME, slot_ids=slot_ids, optimizers=(optimizer,)
-        )
-        restored = RunExplanation.from_dict(record.to_dict())
-        return {slot.slot_id: slot for slot in restored.optimizers[0].slots}
+        return {row["slotId"]: row for row in optimizer.to_rows()["slots"]}
 
     def _export_price_config(self, *groups):
         from automation_config_builders import make_optimizer_config
@@ -524,19 +663,65 @@ class ConditionMatrixTests(unittest.TestCase):
 
         slot = slots[self.SLOT_1]
         self.assertEqual(
-            [group.conditions[0].state for group in slot.groups], ["false", "true"]
+            [group["conditions"][0]["state"] for group in slot["groups"]],
+            ["false", "true"],
         )
         # The OR is satisfied, so the slot executes even though group 1 failed.
-        self.assertEqual(slot.verdict, "execute")
+        self.assertEqual(slot["verdict"], "execute")
+
+    def _assert_matched_group_is_the_slot_match(self, slots, eligibility) -> None:
+        for slot_id in eligibility.horizon_slot_ids:
+            matched = eligibility.at(slot_id)
+            self.assertEqual(
+                slots[slot_id].get("matchedGroupIndex"),
+                None if matched is None else matched.group.index,
+                slot_id,
+            )
+
+    def test_the_matched_group_is_the_eligibility_slot_match(self) -> None:
+        eligibility = []
+        slots = self._record(
+            self._export_price_config(
+                {"when_price_below": 0.0}, {"when_price_below": 1.0}
+            ),
+            eligibility_out=eligibility,
+        )
+
+        self._assert_matched_group_is_the_slot_match(slots, eligibility[0])
+        # Both groups cover SLOT_0: the first one wins. Only the looser one
+        # covers SLOT_1, and nothing covers SLOT_2, so it names no group.
+        self.assertEqual(slots[self.SLOT_0]["matchedGroupIndex"], 0)
+        self.assertEqual(slots[self.SLOT_1]["matchedGroupIndex"], 1)
+        self.assertNotIn("matchedGroupIndex", slots[self.SLOT_2])
+
+    def test_a_group_whose_custom_conditions_failed_does_not_match(self) -> None:
+        # Both groups cover SLOT_0, and the first one's custom conditions said
+        # no: the slot runs under the second group, which is the one named.
+        # Where the second group does not cover the slot either, the failed
+        # first group is still the match -- it places a candidate.
+        eligibility = []
+        slots = self._record(
+            self._export_price_config(
+                {"when_price_below": 1.0}, {"when_price_below": 0.0}
+            ),
+            self._snapshot(condition_met=(False, True)),
+            eligibility_out=eligibility,
+        )
+
+        self._assert_matched_group_is_the_slot_match(slots, eligibility[0])
+        self.assertEqual(slots[self.SLOT_0]["matchedGroupIndex"], 1)
+        self.assertEqual(slots[self.SLOT_0]["verdict"], "execute")
+        self.assertEqual(slots[self.SLOT_1]["matchedGroupIndex"], 0)
+        self.assertEqual(slots[self.SLOT_1]["verdict"], "candidate")
 
     def test_a_slot_failing_on_price_carries_the_actual_price(self) -> None:
         slots = self._record(self._export_price_config({"when_price_below": 0.0}))
 
-        node = slots[self.SLOT_2].groups[0].conditions[0]
-        self.assertEqual(node.state, "false")
-        self.assertEqual(node.value, 0.0)
-        self.assertEqual(node.actual, 5.0)
-        self.assertEqual(slots[self.SLOT_2].verdict, "skip")
+        node = slots[self.SLOT_2]["groups"][0]["conditions"][0]
+        self.assertEqual(node["state"], "false")
+        self.assertEqual(node["value"], 0.0)
+        self.assertEqual(node["actual"], 5.0)
+        self.assertEqual(slots[self.SLOT_2]["verdict"], "skip")
 
     def test_a_passing_node_carries_the_price_it_passed_with(self) -> None:
         # The margin is the point: a threshold on its own says what was asked
@@ -544,9 +729,9 @@ class ConditionMatrixTests(unittest.TestCase):
         # pass by wildly different margins mean different things.
         slots = self._record(self._export_price_config({"when_price_below": 0.0}))
 
-        node = slots[self.SLOT_0].groups[0].conditions[0]
-        self.assertEqual(node.state, "true")
-        self.assertEqual(node.actual, -1.0)
+        node = slots[self.SLOT_0]["groups"][0]["conditions"][0]
+        self.assertEqual(node["state"], "true")
+        self.assertEqual(node["actual"], -1.0)
 
     def test_a_group_not_configuring_a_condition_is_not_applicable(self) -> None:
         slots = self._record(
@@ -558,8 +743,10 @@ class ConditionMatrixTests(unittest.TestCase):
         )
 
         states = [
-            next(node for node in group.conditions if node.key == "max_run_price").state
-            for group in slots[self.SLOT_0].groups
+            next(
+                node for node in group["conditions"] if node["key"] == "max_run_price"
+            )["state"]
+            for group in slots[self.SLOT_0]["groups"]
         ]
         self.assertEqual(states, ["false", "not_applicable"])
 
@@ -573,11 +760,11 @@ class ConditionMatrixTests(unittest.TestCase):
 
         node = next(
             node
-            for node in slots[self.SLOT_0].groups[0].conditions
-            if node.key == "ensure_self_sustainability"
+            for node in slots[self.SLOT_0]["groups"][0]["conditions"]
+            if node["key"] == "ensure_self_sustainability"
         )
-        self.assertEqual(node.state, "not_evaluated")
-        self.assertEqual(node.scope, "run")
+        self.assertEqual(node["state"], "not_evaluated")
+        self.assertEqual(node["scope"], "run")
 
 
 class ExplanationBookTests(unittest.TestCase):
@@ -641,9 +828,7 @@ class ExplanationBookTests(unittest.TestCase):
         book.record(self._run(self.RUN_20, self.EVENING))
 
         record = book.get(controllable_id="inverter", date="2026-07-31")
-        run_ats = decode_runs(
-            record["optimizers"][0]["runAt"], len(record["slotIds"])
-        )
+        run_ats = [row["runAt"] for row in record["optimizers"][0]["slots"]]
 
         self.assertEqual(
             run_ats,
@@ -656,7 +841,7 @@ class ExplanationBookTests(unittest.TestCase):
         book = ExplanationBook()
         run = self._run(self.RUN_08, self.MORNING, phase=3)
 
-        self.assertEqual(RunExplanation.from_dict(run.to_dict()), run)
+        self.assertEqual(run.optimizers[0].to_rows()["phase"], 3)
         book.record(run)
         book.record(self._run(self.RUN_20, self.EVENING, phase=3))
 
@@ -669,13 +854,43 @@ class ExplanationBookTests(unittest.TestCase):
         book.record(self._run(self.RUN_20, self.MORNING, verdict="execute"))
 
         record = book.get(controllable_id="inverter", date="2026-07-31")
-        verdicts = decode_runs(record["optimizers"][0]["verdict"], 4)
+        rows = record["optimizers"][0]["slots"]
 
-        self.assertEqual(verdicts, ["execute"] * 4)
+        self.assertEqual([row["verdict"] for row in rows], ["execute"] * 4)
         self.assertEqual(
-            decode_runs(record["optimizers"][0]["runAt"], 4),
-            [self.RUN_20.isoformat()] * 4,
+            [row["runAt"] for row in rows], [self.RUN_20.isoformat()] * 4
         )
+
+    def test_the_served_record_is_plain_rows(self) -> None:
+        # ``get`` is what ``helman/get_schedule_explanation`` serves: one plain
+        # row per explained slot, nothing run-length encoded.
+        book = ExplanationBook()
+        book.record(self._run(self.RUN_08, self.MORNING))
+        book.record(self._run(self.RUN_20, self.EVENING, verdict="execute"))
+
+        step = book.get(controllable_id="inverter", date="2026-07-31")[
+            "optimizers"
+        ][0]
+
+        self.assertEqual(
+            step["slots"],
+            [
+                {
+                    "slotId": slot_id,
+                    "runAt": run_at.isoformat(),
+                    "verdict": verdict,
+                    "groups": [],
+                    "gates": [],
+                }
+                for slot_ids, run_at, verdict in (
+                    (self.MORNING, self.RUN_08, "skip"),
+                    (self.EVENING, self.RUN_20, "execute"),
+                )
+                for slot_id in slot_ids
+            ],
+        )
+        self.assertNotIn("verdict", step)
+        self.assertNotIn("runAt", step)
 
     def test_a_run_that_explains_nothing_leaves_the_record_intact(self) -> None:
         # A failed run raises out of the optimizer loop before assembly, so the
