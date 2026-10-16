@@ -1,5 +1,6 @@
+import { formatKwh, formatPower } from "../../shared/format";
 import { callHelman } from "../../shared/data/helman-commands";
-import { SLOT_MS } from "../../shared/time/slot-time";
+import { pad2, SLOT_MS } from "../../shared/time/slot-time";
 import { phaseSign } from "../../shared/power-reading";
 import { css, html, nothing, unsafeCSS } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
@@ -21,8 +22,7 @@ import { BATT_COLOR, GRID_COLOR, HOUSE_COLOR, NEUTRAL_LIGHT_COLOR, SOLAR_COLOR }
 import { helmanColorVars } from "../../color-vars";
 import type { TreeItem } from "../../helman/tree-item";
 import { getSharedHelmanStore } from "../../helman/store";
-import { formatPower } from "../../power-format";
-import { formatGridEnergy } from "../../shared/forecast-value-format";
+
 import type { FlowItem } from "../../shared/node-flow";
 import { houseGlyph, type HouseShare } from "../../shared/node-glyphs";
 import { scheduleActionToneStyles, type ScheduleActionTone } from "../../shared/schedule/action-tones";
@@ -587,7 +587,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
     private _todayFlow(): { flow: NodeFlow; shares: HouseShare[] | null } {
         const today = this._todayPayload();
         const house = today?.house ?? null;
-        const energy = (value: number | null) => value === null ? "–" : formatGridEnergy(value);
+        const energy = (value: number | null) => value === null ? "–" : (formatKwh(Math.abs(value)) + " kWh");
         const inputs = SOURCES.map(([key]) => this._flowItem(key, house ? house.sources[key] : null, energy));
         const top = (today?.consumers?.top ?? []).slice(0, TOP_CONSUMERS).map((load) => ({ label: this._loadName(load), value: load.kwh }));
         const named = top.reduce((sum, load) => sum + load.value, 0);
@@ -596,7 +596,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         const status = this._todayFlowStatus();
         if (status) notes.push(status);
         if (house) {
-            if (house.sources.unattributed > 0) notes.push(fillTemplate(this._t("flow.unattributed"), { kwh: formatGridEnergy(house.sources.unattributed) }));
+            if (house.sources.unattributed > 0) notes.push(fillTemplate(this._t("flow.unattributed"), { kwh: (formatKwh(Math.abs(house.sources.unattributed)) + " kWh") }));
             if (house.money.paid !== null) notes.push(fillTemplate(this._t("flow.paid"), { value: this._money(house.money.paid, today!.currency) }));
         }
         const { sumIn, sumOut, ...totals } = this._flowTotals(inputs, outputs, energy, house?.sources.unattributed ?? 0);
@@ -680,7 +680,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
     /** Today's energy so far, with today against the usual once the comparison is read. */
     private _renderPatternTile() {
         const house = this._todayPayload()?.house;
-        return this._tile("pattern", house ? formatGridEnergy(house.kwh) : "–", this._patternPreview() ?? this._t("tile.today_so_far"));
+        return this._tile("pattern", house ? (formatKwh(Math.abs(house.kwh)) + " kWh") : "–", this._patternPreview() ?? this._t("tile.today_so_far"));
     }
 
     /**
@@ -760,14 +760,14 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         const self = today.selfConsumption;
         return html`
             ${period}
-            ${this._row(this._t("sources.used"), formatGridEnergy(house.kwh), "used")}
+            ${this._row(this._t("sources.used"), (formatKwh(Math.abs(house.kwh)) + " kWh"), "used")}
             <div class="split" aria-hidden="true">
                 ${parts.filter(([, kwh]) => kwh > 0).map(([key, kwh, color]) => html`<span data-split=${key} style="width: ${Math.min(100, kwh / house.kwh * 100)}%; background: ${color}"></span>`)}
             </div>
             ${parts.map(([key, kwh, color]) => key === "unattributed" && kwh <= 0 ? nothing : html`
                 <div class="row" data-row=${key}>
                     <span class="label"><span class="swatch" style="background: ${color}"></span>${this._t(`sources.${key}`)}</span>
-                    <span class="value">${fillTemplate(this._t("share_value"), { kwh: formatGridEnergy(kwh), share: this._share(kwh / house.kwh) })}</span>
+                    <span class="value">${fillTemplate(this._t("share_value"), { kwh: (formatKwh(Math.abs(kwh)) + " kWh"), share: this._share(kwh / house.kwh) })}</span>
                 </div>
             `)}
             ${this._row(this._t("sources.independence"), independence
@@ -793,18 +793,18 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
             <div class="section-title">${this._t("sources.valuation")}</div>
             ${this._row(this._t("sources.paid"), money.paid === null ? this._t("unknown") : this._money(money.paid, today.currency), "paid", this._t("sources.paid_scope"))}
             ${this._row(this._t("sources.priced"), fillTemplate(this._t("sources.priced_value"), {
-                kwh: formatGridEnergy(money.paidPricedKwh),
+                kwh: (formatKwh(Math.abs(money.paidPricedKwh)) + " kWh"),
                 share: house.kwh > 0 ? this._share(money.paidPricedKwh / house.kwh) : "–",
             }), "priced")}
             ${this._row(this._t("sources.forgone"), money.forgone === null ? this._t("unknown") : this._money(money.forgone, today.currency), "forgone", this._t("sources.forgone_scope"))}
             <div class="section-title">${this._t("sources.unresolved_title")}</div>
-            ${this._row(this._t("sources.unattributed"), formatGridEnergy(house.sources.unattributed), "unresolved")}
-            ${house.ambiguousKwh > 0 ? this._row(this._t("sources.ambiguous"), formatGridEnergy(house.ambiguousKwh), "ambiguous", this._t("sources.ambiguous_scope")) : nothing}
-            ${house.mismatchKwh > 0 ? this._row(this._t("sources.mismatch"), formatGridEnergy(house.mismatchKwh), "mismatch") : nothing}
+            ${this._row(this._t("sources.unattributed"), (formatKwh(Math.abs(house.sources.unattributed)) + " kWh"), "unresolved")}
+            ${house.ambiguousKwh > 0 ? this._row(this._t("sources.ambiguous"), (formatKwh(Math.abs(house.ambiguousKwh)) + " kWh"), "ambiguous", this._t("sources.ambiguous_scope")) : nothing}
+            ${house.mismatchKwh > 0 ? this._row(this._t("sources.mismatch"), (formatKwh(Math.abs(house.mismatchKwh)) + " kWh"), "mismatch") : nothing}
             ${destinations ? html`
-                ${this._row(this._t("sources.matched_solar"), formatGridEnergy(destinations.attributedKwh), "matched-solar")}
-                ${this._row(this._t("sources.solar_used"), formatGridEnergy(destinations.houseKwh + destinations.batteryKwh), "solar-used")}
-                ${destinations.unattributedKwh > 0 ? this._row(this._t("sources.solar_unmatched"), formatGridEnergy(destinations.unattributedKwh), "solar-unmatched") : nothing}
+                ${this._row(this._t("sources.matched_solar"), (formatKwh(Math.abs(destinations.attributedKwh)) + " kWh"), "matched-solar")}
+                ${this._row(this._t("sources.solar_used"), (formatKwh(Math.abs(destinations.houseKwh + destinations.batteryKwh)) + " kWh"), "solar-used")}
+                ${destinations.unattributedKwh > 0 ? this._row(this._t("sources.solar_unmatched"), (formatKwh(Math.abs(destinations.unattributedKwh)) + " kWh"), "solar-unmatched") : nothing}
             ` : nothing}
             ${!today.complete ? html`<p class="note" data-incomplete>${this._t("incomplete")}</p>` : nothing}
             <p class="note">${this._t("sources.evidence_note")}</p>
@@ -817,7 +817,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         const consumers = this._todayPayload()?.consumers;
         const top = consumers?.top[0];
         if (!top) return null;
-        return fillTemplate(this._t("consumers.top_short"), { name: this._loadName(top), kwh: formatGridEnergy(top.kwh) });
+        return fillTemplate(this._t("consumers.top_short"), { name: this._loadName(top), kwh: (formatKwh(Math.abs(top.kwh)) + " kWh") });
     }
 
     private _renderConsumers() {
@@ -836,10 +836,10 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
             ))}
             ${consumers.others.count > 0 ? this._row(
                 fillTemplate(this._t("consumers.others"), { count: String(consumers.others.count) }),
-                formatGridEnergy(consumers.others.kwh),
+                (formatKwh(Math.abs(consumers.others.kwh)) + " kWh"),
                 "others",
             ) : nothing}
-            ${consumers.unmeasuredKwh !== null ? this._row(this._t("consumers.unmeasured"), formatGridEnergy(consumers.unmeasuredKwh), "unmeasured", this._t("consumers.unmeasured_scope")) : nothing}
+            ${consumers.unmeasuredKwh !== null ? this._row(this._t("consumers.unmeasured"), (formatKwh(Math.abs(consumers.unmeasuredKwh)) + " kWh"), "unmeasured", this._t("consumers.unmeasured_scope")) : nothing}
             <p class="note">${this._t("consumers.explain")}</p>
         `;
     }
@@ -852,7 +852,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
 
     /** kWh first; the attributed paid cost beside it, an estimate. */
     private _loadValue(load: HouseLoadDTO, currency: string | null): string {
-        const kwh = formatGridEnergy(load.kwh);
+        const kwh = (formatKwh(Math.abs(load.kwh)) + " kWh");
         return load.money.paid === null
             ? kwh
             : fillTemplate(this._t("consumers.value_paid"), { kwh, paid: this._money(load.money.paid, currency) });
@@ -873,7 +873,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
                     `money-${index + 1}`,
                 ))}
                 <p class="note">${this._t("consumers.money_note")}</p>
-                ${consumers.overallocatedKwh > 0 ? this._row(this._t("consumers.overallocated"), formatGridEnergy(consumers.overallocatedKwh), "overallocated", this._t("consumers.overallocated_scope")) : nothing}
+                ${consumers.overallocatedKwh > 0 ? this._row(this._t("consumers.overallocated"), (formatKwh(Math.abs(consumers.overallocatedKwh)) + " kWh"), "overallocated", this._t("consumers.overallocated_scope")) : nothing}
             ` : nothing}
             <div class="section-title">${this._t("consumers.ranking_title")}</div>
             ${this._renderRanking()}
@@ -908,7 +908,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         const rest = this._restOfDayKwh();
         const run = this._plannedRuns()[0];
         const parts: string[] = [];
-        if (rest !== null) parts.push(fillTemplate(this._t("next.rest_short"), { kwh: formatGridEnergy(rest) }));
+        if (rest !== null) parts.push(fillTemplate(this._t("next.rest_short"), { kwh: (formatKwh(Math.abs(rest)) + " kWh") }));
         if (run) parts.push(fillTemplate(this._t("next.run_short"), { name: run.name, time: this._time(run.startMs) }));
         if (parts.length) return parts.join(" · ");
         return this._forecastFailed ? this.localize("node_detail.forecast_failed") : null;
@@ -920,7 +920,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         const executionOff = this._schedule?.executionEnabled === false;
         return html`
             ${rest !== null
-                ? this._row(this._t("next.rest"), formatGridEnergy(rest), "rest", this._t("next.rest_scope"))
+                ? this._row(this._t("next.rest"), (formatKwh(Math.abs(rest)) + " kWh"), "rest", this._t("next.rest_scope"))
                 : this._forecastFailed ? this._renderForecastFailed() : html`<p class="note" data-no-forecast>${this._forecastMissing()}</p>`}
             <div class="section-title">${this._t("next.planned_title")}</div>
             ${runs.length ? runs.map((run, index) => html`
@@ -948,9 +948,9 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
                     window: String(forecast.trainingWindowDays),
                 }), "history")}
                 ${slot ? this._row(this._t("next.slot"), fillTemplate(this._t("next.slot_value"), {
-                    kwh: formatGridEnergy(slot.nonDeferrable.value),
-                    lower: formatGridEnergy(slot.nonDeferrable.lower),
-                    upper: formatGridEnergy(slot.nonDeferrable.upper),
+                    kwh: (formatKwh(Math.abs(slot.nonDeferrable.value)) + " kWh"),
+                    lower: (formatKwh(Math.abs(slot.nonDeferrable.lower)) + " kWh"),
+                    upper: (formatKwh(Math.abs(slot.nonDeferrable.upper)) + " kWh"),
                 }), "slot") : nothing}
             ` : html`<p class="note">${this._forecastMissing()}</p>`}
             <p class="note">${this._t("next.forecast_note")}</p>
@@ -1141,7 +1141,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
             <div class="bar-row" data-bar=${key}>
                 <span class="bar-label">${label}</span>
                 <div class="bar-track"><div class="bar-fill" style="width: ${Math.min(100, Math.max(0, kwh) / scale * 100)}%"></div></div>
-                <span class="bar-text">${formatGridEnergy(kwh)}</span>
+                <span class="bar-text">${(formatKwh(Math.abs(kwh)) + " kWh")}</span>
             </div>
         `;
     }
@@ -1173,7 +1173,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
                     this._date(day.date),
                     day.kwh === null
                         ? fillTemplate(this._t("pattern.day_incomplete"), { known: String(day.knownHours), compared: String(comparison.comparedHours) })
-                        : formatGridEnergy(day.kwh),
+                        : (formatKwh(Math.abs(day.kwh)) + " kWh"),
                     `day-${day.date}`,
                 ))}
                 <p class="note">${fillTemplate(this._t("pattern.days_note"), { time: this._time(until) })}</p>
@@ -1198,8 +1198,8 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         const dayNames = this._weekdayNames();
         const cell = (day: number, hour: number) => fillTemplate(this._t("pattern.cell"), {
             day: dayNames[day],
-            hour: String(hour).padStart(2, "0"),
-            kwh: formatGridEnergy(profile.kwh[day][hour]),
+            hour: pad2(hour),
+            kwh: (formatKwh(Math.abs(profile.kwh[day][hour])) + " kWh"),
         });
         return html`
             <div class="heatmap" data-heatmap role="img" aria-label=${fillTemplate(this._t("pattern.heatmap_summary"), {

@@ -1,3 +1,4 @@
+import { formatKwh, formatPower } from "../../shared/format";
 import { SLOT_MS } from "../../shared/time/slot-time";
 import { css, html, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
@@ -17,8 +18,7 @@ import type {
 import { helmanColorVars } from "../../color-vars";
 import { currencyFromPriceUnit } from "../../helman-solar-inspector/money-model";
 import { getSharedHelmanStore } from "../../helman/store";
-import { formatPower } from "../../power-format";
-import { formatGridEnergy } from "../../shared/forecast-value-format";
+
 import { loadHaEntityToggle } from "../../shared/load-ha-elements";
 import "../../shared/mode-strip";
 import { modeStripWindow, type ModeChange, type ModeSegment } from "../../shared/mode-strip";
@@ -620,7 +620,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
                 soc: this._percent(Math.floor(completion.endSoc)),
                 limit: this._percent(car.limit!),
                 time: completion.endMs === null ? "?" : this._time(completion.endMs),
-                kwh: formatGridEnergy(completion.shortfallKwh),
+                kwh: (formatKwh(Math.abs(completion.shortfallKwh)) + " kWh"),
             });
     }
 
@@ -651,7 +651,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
                     .soc=${car?.soc ?? null}
                     .max=${car?.limit ?? null}
                     .maxLabel=${car?.limit != null ? fillTemplate(this._t("glyph.limit"), { soc: this._percent(car.limit) }) : null}
-                    .roomLabel=${car?.neededKwh != null && car.neededKwh > 0 ? formatGridEnergy(car.neededKwh) : null}
+                    .roomLabel=${car?.neededKwh != null && car.neededKwh > 0 ? (formatKwh(Math.abs(car.neededKwh)) + " kWh") : null}
                     .direction=${this._charging(overview) ? "charge" : "idle"}
                 ></helman-soc-glyph>
             </button>
@@ -695,7 +695,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
     private _todayFlow(): NodeFlow {
         const payload = this._today?.status === "ready" ? this._today.payload : null;
         const charger = payload?.charger ?? null;
-        const energy = (value: number | null) => value === null ? "–" : formatGridEnergy(value);
+        const energy = (value: number | null) => value === null ? "–" : (formatKwh(Math.abs(value)) + " kWh");
         const paid = charger?.money.paid ?? null;
         const inputs = (["solar", "battery", "grid"] as const).map((node) => this._flowItem(node, charger ? charger.sources[node] : null, energy));
         if (paid !== null && (charger?.sources.grid ?? 0) > 0) {
@@ -705,7 +705,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         const status = this._todayStatus();
         if (status) notes.push(status);
         if (charger && charger.sources.unattributed > 0) {
-            notes.push(fillTemplate(this._t("flow.unattributed"), { kwh: formatGridEnergy(charger.sources.unattributed) }));
+            notes.push(fillTemplate(this._t("flow.unattributed"), { kwh: (formatKwh(Math.abs(charger.sources.unattributed)) + " kWh") }));
         }
         const { totalIn, sumIn } = this._flowTotals(inputs, [], energy, charger?.sources.unattributed ?? 0);
         return {
@@ -740,7 +740,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         if (this._pluggedIn(overview) === false) return this._tile("progress", this._t("progress.no_car"), null);
         const session = this._sessionKWh(overview);
         const minutes = this._sessionMinutes(overview);
-        return this._tile("progress", session === null ? "–" : formatGridEnergy(session),
+        return this._tile("progress", session === null ? "–" : (formatKwh(Math.abs(session)) + " kWh"),
             minutes === null ? this._t("tile.session") : fillTemplate(this._t("tile.session_for"), { duration: this._duration(minutes) }));
     }
 
@@ -774,11 +774,11 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         if (this._pluggedIn(overview) === false) return this._t("progress.no_car");
         const parts: string[] = [];
         const session = this._sessionKWh(overview);
-        if (session !== null) parts.push(fillTemplate(this._t("progress.session_short"), { kwh: formatGridEnergy(session) }));
+        if (session !== null) parts.push(fillTemplate(this._t("progress.session_short"), { kwh: (formatKwh(Math.abs(session)) + " kWh") }));
         if (selection.kind === "selected" && selection.car.neededKwh !== null) {
             parts.push(selection.car.neededKwh <= 0
                 ? this._t("progress.reached_short")
-                : fillTemplate(this._t("progress.needed_short"), { kwh: formatGridEnergy(selection.car.neededKwh) }));
+                : fillTemplate(this._t("progress.needed_short"), { kwh: (formatKwh(Math.abs(selection.car.neededKwh)) + " kWh") }));
         }
         return parts.length ? parts.join(" · ") : this._t("progress.no_figures");
     }
@@ -792,7 +792,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         return html`
             ${pluggedIn === false ? html`<p class="note" data-no-session>${this._t("progress.no_session")}</p>` : nothing}
             <div class="section-title">${this._t(pluggedIn === false ? "progress.last_session" : "progress.session")}</div>
-            ${this._row(this._t("progress.session_energy"), session === null ? unavailable : formatGridEnergy(session), "session-energy", this._t("progress.hardware_scope"))}
+            ${this._row(this._t("progress.session_energy"), session === null ? unavailable : (formatKwh(Math.abs(session)) + " kWh"), "session-energy", this._t("progress.hardware_scope"))}
             ${this._row(this._t("progress.session_duration"), minutes === null ? unavailable : this._duration(minutes), "session-duration", this._t("progress.hardware_scope"))}
             ${this._renderSegment()}
             ${!overview.profile ? html`<p class="note">${this._t("progress.no_profile")}</p>` : nothing}
@@ -832,7 +832,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
             ${this._row(this._t("car.limit"), car.limit === null ? this._t("car.no_limit") : this._percent(car.limit), "car-limit", undefined, car.vehicle.telemetry.chargeLimitEntityId)}
             ${this._row(this._t("car.needed"), car.neededKwh === null
                 ? this._t("car.needed_unknown")
-                : car.neededKwh <= 0 ? this._t("car.reached") : formatGridEnergy(car.neededKwh), "car-needed")}
+                : car.neededKwh <= 0 ? this._t("car.reached") : (formatKwh(Math.abs(car.neededKwh)) + " kWh"), "car-needed")}
         `;
     }
 
@@ -855,7 +855,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
             ${this._optionalRow(overview, "active_phase", "progress.active_phase")}
             ${known && active === 1 ? html`<p class="note" data-single-phase>${this._t("progress.single_phase")}</p>` : nothing}
             ${selection.kind === "selected" ? html`
-                ${selection.car.capacityKwh !== null ? this._row(this._t("car.capacity"), formatGridEnergy(selection.car.capacityKwh), "car-capacity", this._t("car.capacity_scope")) : nothing}
+                ${selection.car.capacityKwh !== null ? this._row(this._t("car.capacity"), (formatKwh(Math.abs(selection.car.capacityKwh)) + " kWh"), "car-capacity", this._t("car.capacity_scope")) : nothing}
                 ${this._row(this._t("car.soc_source"), this._name(selection.car.vehicle.telemetry.socEntityId), "car-soc-source")}
                 ${selection.car.vehicle.telemetry.chargeLimitEntityId
                     ? this._row(this._t("car.limit_source"), this._name(selection.car.vehicle.telemetry.chargeLimitEntityId), "car-limit-source") : nothing}
@@ -954,7 +954,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
             }), "end-soc", this._t("plan.estimate_scope"))}
             ${this._row(this._t("plan.reach"), completion.reachMs !== null
                 ? fillTemplate(this._t("plan.reach_value"), { time: this._time(completion.reachMs) })
-                : fillTemplate(this._t("plan.shortfall"), { kwh: formatGridEnergy(completion.shortfallKwh) }), "reach", this._t("plan.estimate_scope"))}
+                : fillTemplate(this._t("plan.shortfall"), { kwh: (formatKwh(Math.abs(completion.shortfallKwh)) + " kWh") }), "reach", this._t("plan.estimate_scope"))}
             <p class="note">${this._t("plan.explain")}</p>
         `;
     }
@@ -1045,7 +1045,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
             ${this._optionalRow(overview, "eco_gear", "plan.eco_gear")}
             ${this._optionalRow(overview, "charge_mode", "plan.charge_mode")}
             ${this._row(this._t("plan.runtime"), runtime ? this._runtimeText(runtime) : this._t("plan.no_runtime"), "runtime")}
-            ${supplied?.kind === "estimate" ? this._row(this._t("plan.supplied"), formatGridEnergy(supplied.suppliedKwh), "supplied") : nothing}
+            ${supplied?.kind === "estimate" ? this._row(this._t("plan.supplied"), (formatKwh(Math.abs(supplied.suppliedKwh)) + " kWh"), "supplied") : nothing}
             ${projection ? this._row(this._t("plan.generated"), this._time(Date.parse(projection.generatedAt)), "generated") : nothing}
             <p class="note">${this._t("plan.evidence_note")}</p>
         `;
@@ -1153,7 +1153,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         const payload = this._today?.status === "ready" ? this._today.payload : null;
         const charger = payload?.charger;
         if (!charger) return null;
-        const parts = [fillTemplate(this._t("today.kwh_short"), { kwh: formatGridEnergy(charger.kwh) })];
+        const parts = [fillTemplate(this._t("today.kwh_short"), { kwh: (formatKwh(Math.abs(charger.kwh)) + " kWh") })];
         if (charger.money.paid !== null) {
             parts.push(fillTemplate(this._t("today.paid_short"), { value: this._formatMoney(charger.money.paid, currencyFromPriceUnit(payload!.currency)) }));
         }
@@ -1179,11 +1179,11 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         }
         const currency = currencyFromPriceUnit(payload.currency);
         const share = (kwh: number) => charger.kwh > 0
-            ? fillTemplate(this._t("today.share"), { kwh: formatGridEnergy(kwh), share: this._share(kwh / charger.kwh) })
-            : formatGridEnergy(kwh);
+            ? fillTemplate(this._t("today.share"), { kwh: (formatKwh(Math.abs(kwh)) + " kWh"), share: this._share(kwh / charger.kwh) })
+            : (formatKwh(Math.abs(kwh)) + " kWh");
         return html`
             ${period}
-            ${this._row(this._t("today.kwh"), formatGridEnergy(charger.kwh), "today-kwh")}
+            ${this._row(this._t("today.kwh"), (formatKwh(Math.abs(charger.kwh)) + " kWh"), "today-kwh")}
             ${charger.kwh > 0 ? html`
                 ${this._row(this._t("today.solar"), share(charger.sources.solar), "today-solar")}
                 ${this._row(this._t("today.battery"), share(charger.sources.battery), "today-battery")}
@@ -1205,8 +1205,8 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
             ${charger ? html`
                 ${this._row(this._t("today.coverage"), this._share(charger.coverage), "coverage")}
                 ${this._row(this._t("today.priced"), fillTemplate(this._t("today.priced_value"), {
-                    priced: formatGridEnergy(charger.money.paidPricedKwh),
-                    unpriced: formatGridEnergy(charger.money.paidUnpricedKwh),
+                    priced: (formatKwh(Math.abs(charger.money.paidPricedKwh)) + " kWh"),
+                    unpriced: (formatKwh(Math.abs(charger.money.paidUnpricedKwh)) + " kWh"),
                 }), "priced")}
                 ${charger.money.forgone !== null ? this._row(this._t("today.forgone"), this._formatMoney(charger.money.forgone, currency), "forgone", this._t("today.forgone_scope")) : nothing}
                 ${charger.estimated ? html`<p class="note">${this._t("today.estimated")}</p>` : nothing}

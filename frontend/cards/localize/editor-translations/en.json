@@ -122,8 +122,6 @@
       "grouping": "Grouping",
       "phases": "Phases",
       "house_phases": "House phases",
-      "daily_energy_entity": "Daily energy entity",
-      "import_window": "Import window",
       "local_time_window": "Local time window",
       "optimizer": "Optimizer",
       "use_mode_mapping": "Use mode mapping",
@@ -346,7 +344,6 @@
       "optimizer_targets": "The first appliance takes the surplus first; each one below plans against what those above it left.",
       "day_context_deficit_ratio": "Days whose solar/consumption ratio is at or below this value lean deficit.",
       "day_context_surplus_ratio": "Days whose solar/consumption ratio is at or above this value lean surplus.",
-      "appliance_runtime_max_consecutive_skips": "How many days in a row the appliance may be skipped before it is forced to run.",
       "appliance_runtime_climate_mode": "Choose one of the live supported modes currently exposed by the selected climate appliance.",
       "appliance_runtime_climate_mode_unavailable": "Live climate modes are not available for this draft appliance yet. Save and reload the config to load runtime-supported modes.",
       "appliance_runtime_climate_mode_single": "This climate appliance currently exposes only one authorable mode, so the field is read-only.",
@@ -402,7 +399,6 @@
       "load_ha_yaml_editor_failed": "Failed to load the Home Assistant YAML editor.",
       "fix_yaml_errors_first": "Fix the YAML errors before validating or saving.",
       "fix_descendant_yaml_errors": "Fix child YAML errors before switching this scope to YAML.",
-      "enter_yaml_failed": "Failed to open the YAML editor for this scope.",
       "load_inspector_card_failed": "Failed to load the solar inspector card. Reload the page to try again.",
       "load_device_detail_failed": "Failed to load the device detail. Reload the page to try again.",
       "card_module_url_missing": "The solar inspector chart is unavailable here: it needs the card resource this integration registers for Lovelace, which is not in use on this installation."
@@ -663,7 +659,6 @@
     }
   },
   "common": {
-    "yes": "Yes",
     "no": "No",
     "unknown": "Unknown",
     "not_available": "N/A"

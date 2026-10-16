@@ -1,3 +1,4 @@
+import { pad2 } from "../shared/time/slot-time";
 import { LitElement, css, html } from "lit-element";
 import { customElement, property } from "lit/decorators.js";
 import { TreeItem } from "./tree-item";
@@ -50,7 +51,6 @@ export class HelmanTreeItemInfo extends LitElement {
             helman-schedule-badge {
                 margin-left: auto;
             }
-
 
         `];
     }
@@ -266,12 +266,10 @@ export class HelmanTreeItemInfo extends LitElement {
             ` : nothing}
             ${targetTimeStr ? html`
                 <span class="clickable" @click=${() => this._showMoreInfo(etaEntityId)}>🕓${targetTimeStr}</span>
-                <span class="clickable" @click=${() => this._showMoreInfo(etaEntityId)}>⏳${hours}:${String(mins).padStart(2, '0')}</span>
+                <span class="clickable" @click=${() => this._showMoreInfo(etaEntityId)}>⏳${hours}:${pad2(mins)}</span>
             ` : nothing}
         `;
     }
-
-
 
 }
 

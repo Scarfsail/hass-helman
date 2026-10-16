@@ -18,7 +18,7 @@ import type { JsonValue, PathSegment } from "./types";
 
 export interface FormFieldHost {
     /** Translate a key. */
-    t(key: string): string;
+    t(key: string, values?: Record<string, string | number>): string;
     getValue(path: PathSegment[]): unknown;
     /** `undefined` removes the path rather than writing a blank. */
     setValue(path: PathSegment[], value: JsonValue | undefined): void;
@@ -462,8 +462,8 @@ export function renameObjectKeyError(
         case "empty_key":
             return host.t("editor.rename.key_empty");
         case "duplicate_key":
-            return host.t("editor.rename.key_exists").replaceAll("{key}", key);
+            return host.t("editor.rename.key_exists", { key });
         case "missing_key":
-            return host.t("editor.rename.key_missing").replaceAll("{key}", key);
+            return host.t("editor.rename.key_missing", { key });
     }
 }

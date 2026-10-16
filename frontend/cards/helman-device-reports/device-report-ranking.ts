@@ -1,3 +1,4 @@
+import { formatMoney, formatKwh } from "../shared/format";
 import { LitElement, css, html, nothing, unsafeCSS, type PropertyValues } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type {
@@ -10,7 +11,7 @@ import { PRICE_NEGATIVE_COLOR } from "../color-utils";
 import { fillTemplate, type LocalizeFunction } from "../localize/localize";
 import { ACTUAL_FILL_OPACITY, CHART_COLORS } from "../helman-solar-inspector/chart-colors";
 import { currencyFromPriceUnit } from "../helman-solar-inspector/money-model";
-import { formatKwhValue, formatPriceValue } from "../shared/forecast-value-format";
+
 import {
     HoverTooltipController,
     hoverTooltipStyles,
@@ -306,7 +307,7 @@ export class HelmanDeviceReportRanking extends LitElement {
         }
     }
 
-    private _t(key: string): string {
+    private _t(key: string, values?: Record<string, string | number>): string {
         return this.localize ? this.localize(key) : key;
     }
 
@@ -319,17 +320,17 @@ export class HelmanDeviceReportRanking extends LitElement {
     private _money(amount: number | null): string {
         // The payload's currency is the price unit (CZK/kWh); an amount is in CZK.
         const currency = currencyFromPriceUnit(this.payload?.currency);
-        return amount === null ? "—" : formatPriceValue(amount, currency || null);
+        return amount === null ? "—" : formatMoney(amount, currency || null, { precision: "ranking" });
     }
 
     private _pricedTitle(side: DeviceReportMoneySide, kwh: number): string {
         let title = fillTemplate(this._t("device_reports.ranking.priced"), {
-            priced: formatKwhValue(side.priced_kwh),
-            total: formatKwhValue(kwh),
+            priced: formatKwh(Math.abs(side.priced_kwh)),
+            total: formatKwh(Math.abs(kwh)),
         });
         if ((side.tariff_kwh ?? 0) > 0) {
             title += "; " + fillTemplate(this._t("device_reports.ranking.tariff"), {
-                kwh: formatKwhValue(side.tariff_kwh ?? 0),
+                kwh: formatKwh(Math.abs(side.tariff_kwh ?? 0)),
             });
         }
         return title;
@@ -360,7 +361,7 @@ export class HelmanDeviceReportRanking extends LitElement {
     }
 
     private _buildTooltip(node: RankingNode, model: RankingModel): TooltipBody {
-        let total = formatKwhValue(node.kwh) + " kWh";
+        let total = formatKwh(Math.abs(node.kwh)) + " kWh";
         if (node.id !== model.house.id) {
             total += " · " + fillTemplate(this._t("device_reports.ranking.of_house"), {
                 pct: percent(node.kwh, model.house.kwh),
@@ -370,7 +371,7 @@ export class HelmanDeviceReportRanking extends LitElement {
             tooltipRow(this._t("device_reports.over_time.total"), total),
             ...SOURCES.map((source) => tooltipRow(
                 this._t("device_reports.ranking.sources." + source),
-                formatKwhValue(node.sources[source]) + " kWh ("
+                formatKwh(Math.abs(node.sources[source])) + " kWh ("
                     + percent(node.sources[source], node.kwh) + " %)",
                 SOURCE_COLORS[source],
             )),
@@ -380,7 +381,7 @@ export class HelmanDeviceReportRanking extends LitElement {
         if (partlyCovered(node.coverage)) rows.push(coverageRow(this._t.bind(this), node.coverage, node.first_hour));
         if (node.overallocated_kwh > MARK_SHARE * node.kwh && node.overallocated_kwh > 0) {
             rows.push(tooltipRow("", fillTemplate(this._t("device_reports.ranking.overallocated"), {
-                kwh: formatKwhValue(node.overallocated_kwh),
+                kwh: formatKwh(Math.abs(node.overallocated_kwh)),
             })));
         }
         return { title: this._label(node, model.house), hasActual: false, rows };
@@ -468,7 +469,7 @@ export class HelmanDeviceReportRanking extends LitElement {
                     ` : html`<span class="toggle"></span>`}
                     <span class="label">${node.estimated ? html`<span class="estimated">≈ </span>` : nothing}${this._label(node, model.house)}</span>
                 </div>
-                <span class="num kwh">${formatKwhValue(node.kwh)} kWh</span>
+                <span class="num kwh">${formatKwh(Math.abs(node.kwh))} kWh</span>
                 <span class="num share">${isHouse ? nothing : percent(node.kwh, houseKwh) + " %"}</span>
                 ${this._show !== "energy" ? html`
                     ${this._renderMoneyFigure(node, "paid")}

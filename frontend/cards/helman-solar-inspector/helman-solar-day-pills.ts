@@ -1,3 +1,4 @@
+import { formatKwh } from "../shared/format";
 import { LitElement, css, html, type PropertyValues } from "lit-element";
 import { customElement, property, state } from "lit/decorators.js";
 import { nothing } from "lit-html";
@@ -37,7 +38,7 @@ import {
 } from "./day-pill-model";
 import type { ScheduleTableDayAggregateScale } from "../shared/schedule/schedule-table-types";
 import { helmanColorVars } from "../color-vars";
-import { formatSolarGaugeTitle, formatSolarGaugeValue } from "../shared/forecast-value-format";
+
 import { formatHouseForecastErrorPct, houseForecastError } from "./solar-inspector-model";
 
 /**
@@ -251,7 +252,6 @@ export class HelmanSolarDayPills extends LitElement {
             border-color: var(--divider-color);
             background: var(--card-background-color);
         }
-
 
         /* The label sets the pill's floor, so it is never clipped: a day nobody
            can read is not worth a pill. */
@@ -712,8 +712,8 @@ export class HelmanSolarDayPills extends LitElement {
         const title = [
             forecastWh === null
                 ? null
-                : `${this._localize("bias_correction.inspector.house_pill_predicted")} ${formatSolarGaugeTitle(forecastWh)}`,
-            `${this._localize("bias_correction.inspector.house_pill_actual")} ${formatSolarGaugeTitle(actualWh)}`,
+                : `${this._localize("bias_correction.inspector.house_pill_predicted")} ${(formatKwh((forecastWh) / 1000, { precision: "gauge" }) + " kWh")}`,
+            `${this._localize("bias_correction.inspector.house_pill_actual")} ${(formatKwh((actualWh) / 1000, { precision: "gauge" }) + " kWh")}`,
             error === null
                 ? null
                 : `${this._localize("bias_correction.inspector.house_pill_error")} ${formatHouseForecastErrorPct(error)}`,
@@ -730,7 +730,7 @@ export class HelmanSolarDayPills extends LitElement {
                     style=${`left:${scalePct(forecastWh)}%;`}
                     aria-hidden="true"
                 ></span>`}
-                <span class="day-aggregate-gauge-value">${formatSolarGaugeValue(actualWh)}</span>
+                <span class="day-aggregate-gauge-value">${formatKwh((actualWh) / 1000, { precision: "gauge" })}</span>
             </div>
         `;
     }

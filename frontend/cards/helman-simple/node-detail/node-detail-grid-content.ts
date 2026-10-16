@@ -1,3 +1,4 @@
+import { formatKwh, formatMoney, formatPower } from "../../shared/format";
 import { callHelman } from "../../shared/data/helman-commands";
 import { phaseSign } from "../../shared/power-reading";
 import { css, html, nothing, svg } from "lit";
@@ -14,8 +15,7 @@ import { currencyFromPriceUnit } from "../../helman-solar-inspector/money-model"
 import { PHASE_COLORS } from "../../color-utils";
 import { helmanColorVars } from "../../color-vars";
 import { getSharedHelmanStore } from "../../helman/store";
-import { formatPower } from "../../power-format";
-import { formatGridEnergy, formatPriceValue } from "../../shared/forecast-value-format";
+
 import { todayKey } from "../../shared/time/day-key";
 import { pylonGlyph } from "../../shared/node-glyphs";
 import { scheduleActionToneStyles } from "../../shared/schedule/action-tones";
@@ -553,7 +553,7 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
      */
     private _todayFlow(): NodeFlow {
         const flows = this._todayFlows?.status === "ready" ? this._todayFlows.payload.flows : null;
-        const energy = (value: number | null) => value === null ? "–" : formatGridEnergy(value);
+        const energy = (value: number | null) => value === null ? "–" : (formatKwh(Math.abs(value)) + " kWh");
         const inputs = [
             this._flowItem("solar", flows?.solarToGrid ?? null, energy),
             this._flowItem("battery", flows?.batteryToGrid ?? null, energy),
@@ -956,7 +956,7 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         const side = (key: string, kwh: number | null, priced: number | null) => {
             if (!kwh) return fillTemplate(this._t(`money.coverage_${key}_none`), {});
             const share = Math.min(1, (priced ?? 0) / kwh);
-            return fillTemplate(this._t(`money.coverage_${key}`), { share: this._percent(share), kwh: formatGridEnergy(kwh) });
+            return fillTemplate(this._t(`money.coverage_${key}`), { share: this._percent(share), kwh: (formatKwh(Math.abs(kwh)) + " kWh") });
         };
         return side("import", money.importKwh, money.costKwh) + " · " + side("export", money.exportKwh, money.gainKwh);
     }
@@ -1100,8 +1100,8 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
 
     private _flowText(imported: number, exported: number): string {
         const direction = flowDirection(imported, exported);
-        if (direction === "import") return fillTemplate(this._t("next.flow_import_kwh"), { kwh: formatGridEnergy(imported) });
-        if (direction === "export") return fillTemplate(this._t("next.flow_export_kwh"), { kwh: formatGridEnergy(exported) });
+        if (direction === "import") return fillTemplate(this._t("next.flow_import_kwh"), { kwh: (formatKwh(Math.abs(imported)) + " kWh") });
+        if (direction === "export") return fillTemplate(this._t("next.flow_export_kwh"), { kwh: (formatKwh(Math.abs(exported)) + " kWh") });
         return this._t("next.flow_balanced");
     }
 
@@ -1170,7 +1170,7 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
     }
 
     private _price(value: number, unit: string | null): string {
-        return formatPriceValue(value, unit);
+        return formatMoney(value, unit);
     }
 
 }

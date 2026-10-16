@@ -602,7 +602,7 @@ test.describe("today's charge", () => {
         await expect(charge.locator(".preview")).toHaveText("6.0 kWh charged today · paid 4.00 CZK");
 
         await evidence(page, "charge").click();
-        await expect(charge.locator("[data-row='paid-rate']")).toContainText("4.0 CZK/kWh");
+        await expect(charge.locator("[data-row='paid-rate']")).toContainText("4.00 CZK/kWh");
         await expect(charge.locator("[data-row='forgone']")).toContainText("5.04 CZK");
         await expect(charge.locator("[data-row='forgone']")).toContainText("opportunity value, not a payment");
         await expect(charge.locator("[data-row='grid-unpriced']")).toContainText("0.50 kWh");

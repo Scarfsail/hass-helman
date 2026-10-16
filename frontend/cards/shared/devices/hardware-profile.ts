@@ -160,14 +160,6 @@ export class VendorsController implements ReactiveController {
     }
 }
 
-function tFormat(host: FormFieldHost, key: string, values: Record<string, string>): string {
-    let text = host.t(key);
-    for (const [name, value] of Object.entries(values)) {
-        text = text.replaceAll(`{${name}}`, value);
-    }
-    return text;
-}
-
 /**
  * The known profile a device's `profile` names, if any, and if it goes on a
  * device of `kind`: the backend ignores a profile of another kind.
@@ -251,7 +243,7 @@ export function renderProvidedField(
     return html`
         <div class="field vendor-provided" data-path=${validationPath(path)}>
             <label>${host.t(labelKey)}</label>
-            <div class="inline-note">${tFormat(host, "editor.dynamic.provided_by", { profile: provision.label })}</div>
+            <div class="inline-note">${host.t("editor.dynamic.provided_by", { profile: provision.label })}</div>
             <div class=${text ? "vendor-provided-entity" : "vendor-provided-entity unresolved"}>
                 ${text ?? host.t("editor.dynamic.vendor_entity_unresolved")}
             </div>
@@ -313,7 +305,7 @@ export function renderHardwareProfileFields(
                     (option) => html`
                         <option value=${option.id} ?selected=${option.id === profileId}>
                             ${matching(option)
-                                ? tFormat(host, "editor.dynamic.profile_matches", { profile: option.label })
+                                ? host.t("editor.dynamic.profile_matches", { profile: option.label })
                                 : option.label}
                         </option>
                     `,
@@ -326,7 +318,7 @@ export function renderHardwareProfileFields(
             ? html`
                   <div class="field">
                       <p class="inline-note" data-field="profile-meter-change">
-                          ${tFormat(host, "editor.dynamic.profile_meter_change", { from: storedMeter, to: meter })}
+                          ${host.t("editor.dynamic.profile_meter_change", { from: storedMeter, to: meter })}
                       </p>
                   </div>
               `
@@ -368,14 +360,14 @@ export function renderProfileEntities(
     return html`
         <details class="vendor-resolved">
             <summary>
-                ${tFormat(host, "editor.dynamic.profile_entities", { count: String(entities.length) })}
+                ${host.t("editor.dynamic.profile_entities", { count: String(entities.length) })}
                 ${unmapped
                     ? html`<span class="unresolved" data-field="profile-entities-unmapped">
-                          ${tFormat(host, "editor.dynamic.profile_entities_unmapped", { count: String(unmapped) })}
+                          ${host.t("editor.dynamic.profile_entities_unmapped", { count: String(unmapped) })}
                       </span>`
                     : nothing}
             </summary>
-            <div class="inline-note">${tFormat(host, "editor.dynamic.provided_by", { profile: profile.label })}</div>
+            <div class="inline-note">${host.t("editor.dynamic.provided_by", { profile: profile.label })}</div>
             <ul>
                 ${entities.map(
                     ([configPath, entityId]) => html`
@@ -428,7 +420,7 @@ function renderBinding(
                           class="vendor-provided-entity unresolved"
                           data-field=${byDevice ? "vendor-no-devices" : "vendor-no-entries"}
                       >
-                          ${tFormat(host, byDevice ? "editor.dynamic.vendor_no_devices" : "editor.dynamic.vendor_no_entries", {
+                          ${host.t(byDevice ? "editor.dynamic.vendor_no_devices" : "editor.dynamic.vendor_no_entries", {
                               profile: profile.label,
                           })}
                       </div>

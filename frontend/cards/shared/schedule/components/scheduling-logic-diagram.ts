@@ -1,7 +1,7 @@
 import { LitElement, css, html, svg } from "lit-element";
 import { customElement, property } from "lit/decorators.js";
 import { nothing } from "lit-html";
-import type { LocalizeFunction } from "../../../localize/localize";
+import { getLocalizeFunction, type LocalizeFunction } from "../../../localize/localize";
 import { helmanColorVars } from "../../../color-vars";
 import type {
     ExplanationCell,
@@ -2527,7 +2527,7 @@ export class SchedulingLogicDiagram extends LitElement {
         if (key.length === 0) return "";
         const full = `${KEY_PREFIX}.${group}.${key}`;
         const translated = this.localize(full);
-        return translated === full || translated === undefined ? key : translated;
+        return (this.localize.has?.(full) ?? getLocalizeFunction().has(full)) ? translated : key;
     }
 
     /**
@@ -2582,7 +2582,7 @@ export class SchedulingLogicDiagram extends LitElement {
         if (key.length === 0) return "";
         const full = `${KEY_PREFIX}.condition_detail.${key}`;
         const translated = this.localize(full);
-        return translated === full || translated === undefined ? "" : translated;
+        return (this.localize.has?.(full) ?? getLocalizeFunction().has(full)) ? translated : "";
     }
 }
 

@@ -97,7 +97,7 @@ import {
   type TabId,
 } from "./config-editor-scopes";
 import { DataChangedController } from "../cards/helman/data-changed";
-import { getLocalizeFunction, type LocalizeFunction } from "../cards/shared/config/localize/localize";
+import { getLocalizeFunction, type LocalizeFunction } from "../cards/localize/localize";
 import { mdiAlertOutline, mdiDragVertical } from "@mdi/js";
 import {
   fetchOptimizerSchema,
@@ -153,10 +153,6 @@ import type { HomeAssistant } from "../types/ha";
 import { getSharedHelmanStore } from "../cards/helman/store";
 import type { TreeItem } from "../cards/helman/tree-item";
 import { hydrateItem } from "../cards/helman/tree-item-hydrator";
-import {
-  getLocalizeFunction as getCardLocalizeFunction,
-  type LocalizeFunction as CardLocalizeFunction,
-} from "../cards/localize/localize";
 import "./info-callout";
 import "../cards/shared/config/entity-group";
 import {
@@ -1108,7 +1104,6 @@ export class HelmanConfigEditorPanel
   /** The device whose detail dialog is open. */
   private _deviceDetail: TreeItem | null = null;
   /** The card's own localize: the device detail dialog reads `node_detail.*` keys. */
-  private _cardLocalize?: CardLocalizeFunction;
   private _trainingStatusTimer?: ReturnType<typeof setInterval>;
   private _trainingStatusSequence = 0;
   private _trainingStatusApplied = 0;
@@ -1122,7 +1117,6 @@ export class HelmanConfigEditorPanel
     this._hass = hass;
     if (hass && !this._localize) {
       this._localize = getLocalizeFunction(hass);
-      this._cardLocalize = getCardLocalizeFunction(hass);
     }
     // Reused HA components (e.g. the condition builder) localize via
     // hass.localize, but the "config" fragment is only lazy-loaded on the
@@ -1377,7 +1371,7 @@ export class HelmanConfigEditorPanel
         ? html`
             <node-detail-dialog
               .hass=${this.hass}
-              .localize=${this._cardLocalize}
+              .localize=${this._localize}
               .open=${true}
               .params=${{ nodeType: "device", item: this._deviceDetail }}
               @closed=${() => {
@@ -1444,7 +1438,7 @@ export class HelmanConfigEditorPanel
     return html`<span
       class="tab-warning-dot"
       role="img"
-      aria-label=${this._tFormat("training.badge_failed", { count: failed })}
+      aria-label=${this._t("training.badge_failed", { count: failed })}
     ></span>`;
   }
 
@@ -1899,7 +1893,7 @@ export class HelmanConfigEditorPanel
             .hass=${this.hass}
             .defaultValue=${editorValue}
             .showErrors=${false}
-            aria-label=${this._tFormat("editor.yaml.aria_label", { scope: scopeLabel })}
+            aria-label=${this._t("editor.yaml.aria_label", { scope: scopeLabel })}
             aria-describedby=${describedBy}
             dir="ltr"
             @value-changed=${(event: CustomEvent<YamlEditorValueChangedDetail>) =>
@@ -2887,7 +2881,7 @@ export class HelmanConfigEditorPanel
           ? hourly
           : undefined,
       note: issue
-        ? this._tFormat("device_energy.failed", { reason: issue.reason })
+        ? this._t("device_energy.failed", { reason: issue.reason })
         : stored || adopted
           ? undefined
           : this._t("device_energy.not_trained"),
@@ -3101,7 +3095,7 @@ export class HelmanConfigEditorPanel
             ? html`<button
                 type="button"
                 class="training-depth-entity-button"
-                aria-label=${this._tFormat("editor.training_depth.device_detail_aria", {
+                aria-label=${this._t("editor.training_depth.device_detail_aria", {
                   device: device.name,
                 })}
                 @click=${() => void this._showDeviceDetail(item)}
@@ -3113,7 +3107,7 @@ export class HelmanConfigEditorPanel
         </td>
         <td class="training-depth-role">${this._renderApplianceEnergyValue(device)}</td>
         <td class="training-depth-number">
-          ${this._tFormat("editor.training_depth.days", { days: device.lookbackDays })}
+          ${this._t("editor.training_depth.days", { days: device.lookbackDays })}
         </td>
         <td class="training-depth-number">
           <div>${known ? this._trainingDepthDays(Math.min(...(depths as number[]))) : "—"}</div>
@@ -3181,7 +3175,7 @@ export class HelmanConfigEditorPanel
    * dialog could not be loaded anyway; a failed fetch leaves the names plain.
    */
   private async _loadDeviceTree(): Promise<void> {
-    if (!this.hass || !this._cardLocalize || !this.panel?.config?.card_module_url) {
+    if (!this.hass || !this._localize || !this.panel?.config?.card_module_url) {
       // Not ready yet: let the table's next render ask again.
       this._deviceTreeRequested = false;
       return;
@@ -3198,7 +3192,7 @@ export class HelmanConfigEditorPanel
         item.children.forEach(walk);
       };
       for (const dto of [...payload.sources, ...payload.consumers]) {
-        walk(hydrateItem(dto, payload.uiConfig.history_buckets, this._cardLocalize));
+        walk(hydrateItem(dto, payload.uiConfig.history_buckets, this._localize));
       }
       this._deviceTreeItems = items;
       // An open detail follows the re-read tree, so a rename or re-wiring
@@ -3247,7 +3241,7 @@ export class HelmanConfigEditorPanel
   /** A depth in days, or a dash while it is unknown. */
   private _trainingDepthDays(value: unknown): string {
     return typeof value === "number" && Number.isFinite(value)
-      ? this._tFormat("editor.training_depth.days", { days: value })
+      ? this._t("editor.training_depth.days", { days: value })
       : "—";
   }
 
@@ -3273,7 +3267,7 @@ export class HelmanConfigEditorPanel
   private _moreInfoLabel(entityId: string): string {
     const template = this._t("editor.entity_group.more_info_aria");
     return template.includes("{entity}")
-      ? template.replace("{entity}", entityId)
+      ? this._t("editor.entity_group.more_info_aria", { entity: entityId })
       : `${template} ${entityId}`;
   }
 
@@ -3422,7 +3416,7 @@ export class HelmanConfigEditorPanel
         .applianceMetadata=${this._liveApplianceMetadata}
         .hass=${this.hass}
         .narrow=${this.narrow ?? false}
-        .localize=${(key: string) => this._t(key)}
+        .localize=${(key: string, values?: Record<string, string | number>) => this._t(key, values)}
         .warning=${this._optimizerOrderingWarning(bucket, index)}
         .listActions=${(basePath: PathSegment[], enabled: boolean) =>
           this._renderOptimizerListActions(bucket, basePath, index, enabled)}
@@ -3646,8 +3640,8 @@ export class HelmanConfigEditorPanel
         ${preview.additions.map((item) => html`<li>${this._t("editor.import.add")}: ${item.deviceId} — ${item.energyEntityId}${item.powerEntityId ? html`, ${item.powerEntityId}` : nothing}${item.parentId ? html` → ${item.parentId}` : nothing}</li>`)}
         ${preview.powerEntities.map((item) => html`<li>${this._t("editor.import.power")}: ${item.deviceId} → ${item.entityId}</li>`)}
         ${preview.nestingChanges.map((item) => html`<li>${this._t("editor.import.move")}: ${item.deviceId} → ${item.parentId}</li>`)}
-        ${preview.skippedRows.map((item) => html`<li>${this._t("editor.import.skipped")}: ${item.energy_entity_id} — ${this._tFormat(`editor.import.skip_reasons.${item.reason}`, { device: item.device_id ?? "" })}</li>`)}
-        ${preview.warnings.map((item) => html`<li class="message info">${this._tFormat(`editor.import.warnings.${item.reason}`, { meter: item.energy_entity_id, device: item.device_id ?? "" })}</li>`)}
+        ${preview.skippedRows.map((item) => html`<li>${this._t("editor.import.skipped")}: ${item.energy_entity_id} — ${this._t(`editor.import.skip_reasons.${item.reason}`, { device: item.device_id ?? "" })}</li>`)}
+        ${preview.warnings.map((item) => html`<li class="message info">${this._t(`editor.import.warnings.${item.reason}`, { meter: item.energy_entity_id, device: item.device_id ?? "" })}</li>`)}
         ${preview.validation.errors.length ? html`<li>${this._t("editor.import.blocked")}</li>` : nothing}
         ${preview.validation.errors.map((item) => html`<li class="message error">${item.path}: ${item.message}</li>`)}
       </ul>
@@ -3840,7 +3834,7 @@ export class HelmanConfigEditorPanel
     if (candidates.length === 0) {
       return html`
         <div class="vendor-provided-entity unresolved" data-field="vendor-no-devices">
-          ${this._tFormat("editor.dynamic.vendor_no_devices", { profile: profile.label })}
+          ${this._t("editor.dynamic.vendor_no_devices", { profile: profile.label })}
         </div>
       `;
     }
@@ -4227,7 +4221,7 @@ export class HelmanConfigEditorPanel
           <div class="appliance-summary-left">
             ${renderDragHandle(this)}
             <div class="card-title">
-              <strong>${this._tFormat("editor.dynamic.daily_energy_entity", { index: index + 1 })}</strong>
+              <strong>${this._t("editor.dynamic.daily_energy_entity", { index: index + 1 })}</strong>
             </div>
           </div>
           <div class="list-actions">
@@ -4269,7 +4263,7 @@ export class HelmanConfigEditorPanel
           <div class="appliance-summary-left">
             ${renderDragHandle(this)}
             <div class="card-title">
-              <strong>${this._tFormat("editor.dynamic.import_window", { index: index + 1 })}</strong>
+              <strong>${this._t("editor.dynamic.import_window", { index: index + 1 })}</strong>
               <span class="card-subtitle">${this._t("editor.card.local_time_window")}</span>
             </div>
           </div>
@@ -4388,7 +4382,7 @@ export class HelmanConfigEditorPanel
                 ? [
                     {
                       key: "count",
-                      text: this._tFormat("editor.section_badges.count", { count: optionCount }),
+                      text: this._t("editor.section_badges.count", { count: optionCount }),
                     },
                   ]
                 : [],
@@ -4415,7 +4409,7 @@ export class HelmanConfigEditorPanel
 
   private _renderUnsupportedDevice(device: JsonObject, path: PathSegment[]): TemplateResult {
     const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
-    const subtitle = this._tFormat("editor.dynamic.unsupported_appliance_kind", {
+    const subtitle = this._t("editor.dynamic.unsupported_appliance_kind", {
       kind: this._stringValue(device.kind) || this._t("editor.values.unknown"),
     });
     return html`
@@ -4468,7 +4462,7 @@ export class HelmanConfigEditorPanel
         .parent=${parent}
         .hass=${this.hass}
         .narrow=${this.narrow ?? false}
-        .localize=${(key: string) => this._t(key)}
+        .localize=${(key: string, values?: Record<string, string | number>) => this._t(key, values)}
         .validation=${this._validation}
         .inspections=${this._inspections.results}
         .vendors=${this._vendors.vendors}
@@ -4622,12 +4616,11 @@ export class HelmanConfigEditorPanel
    * integration's *backend* strings, which carry no editor keys at all, so a
    * label looked up that way is the English fallback in every locale --
    * however carefully the editor's own locale files were translated. A missing
-   * key comes back as the key itself, which is why the fallback is compared
-   * rather than ``||``-ed.
+   * key uses the shared localizer's availability check before choosing the fallback.
    */
   private _optionLabel(key: string, fallback: string): string {
-    const translated = this._t(key);
-    return translated === key ? fallback : translated;
+    const t = getLocalizeFunction(this.hass);
+    return t.has(key) ? t(key) : fallback;
   }
 
   private _renderBooleanField(
@@ -5224,7 +5217,7 @@ export class HelmanConfigEditorPanel
 
   private _handleAddGrouping = (): void => {
     const groupings = asJsonArray(this._getValue(["devices", "groupings"])) ?? [];
-    const name = this._tFormat("editor.dynamic.new_grouping", { index: groupings.length + 1 });
+    const name = this._t("editor.dynamic.new_grouping", { index: groupings.length + 1 });
     const id = slugId(name, groupings.map((grouping) => this._stringValue(asJsonObject(grouping)?.id)), "grouping");
     this._applyMutation((draft) => {
       appendListItem(draft, ["devices", "groupings"], { id, name, groups: [] });
@@ -5235,7 +5228,7 @@ export class HelmanConfigEditorPanel
     const groupsPath: PathSegment[] = ["devices", "groupings", groupingIndex, "groups"];
     const groups = asJsonArray(this._getValue(groupsPath)) ?? [];
     const number = groups.length + 1;
-    const name = this._tFormat("editor.dynamic.new_group", { index: number });
+    const name = this._t("editor.dynamic.new_group", { index: number });
     const id = slugId(name, groups.map((group) => this._stringValue(asJsonObject(group)?.id)), "group");
     this._applyMutation((draft) => {
       appendListItem(draft, groupsPath, { id, name, short_name: String(number) });
@@ -5550,8 +5543,8 @@ export class HelmanConfigEditorPanel
   // Public because they are the interface, not because anything else calls
   // them: the private `_t` / `_getValue` remain the panel's own vocabulary.
 
-  t(key: string): string {
-    return this._t(key);
+  t(key: string, values?: Record<string, string | number>): string {
+    return this._t(key, values);
   }
 
   getValue(path: PathSegment[]): unknown {
@@ -5617,16 +5610,8 @@ export class HelmanConfigEditorPanel
     return booleanValue(value, fallback);
   }
 
-  private _t(key: string): string {
-    return (this._localize ?? this._fallbackLocalize)(key);
-  }
-
-  private _tFormat(key: string, values: Record<string, string | number>): string {
-    let text = this._t(key);
-    for (const [name, value] of Object.entries(values)) {
-      text = text.replaceAll(`{${name}}`, String(value));
-    }
-    return text;
+  private _t(key: string, values?: Record<string, string | number>): string {
+    return (this._localize ?? this._fallbackLocalize)(key, values);
   }
 
   private _formatScopeYamlValidationError(
@@ -5638,7 +5623,7 @@ export class HelmanConfigEditorPanel
       case "expected_array":
         return this._t("editor.yaml.errors.expected_array");
       case "unexpected_key":
-        return this._tFormat("editor.yaml.errors.unexpected_key", {
+        return this._t("editor.yaml.errors.unexpected_key", {
           key: error.key ?? "",
         });
     }

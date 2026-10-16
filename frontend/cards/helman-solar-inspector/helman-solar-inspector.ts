@@ -1,6 +1,7 @@
+import { formatEnergyWh, formatMoney, orNa } from "../shared/format";
 import { LatestRequest } from "../shared/data/latest-request";
 import { callHelman } from "../shared/data/helman-commands";
-import { slotMinutes, formatClock } from "../shared/time/slot-time";
+import { pad2, slotMinutes, formatClock } from "../shared/time/slot-time";
 import { LitElement, css, html, svg, unsafeCSS, type PropertyValues, type TemplateResult } from "lit";
 import { property, query, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../types/ha";
@@ -34,7 +35,7 @@ import {
   nodeAccentColor,
 } from "../color-utils";
 import { ACTUAL_FILL_OPACITY, CHART_COLORS } from "./chart-colors";
-import { formatEnergy } from "../power-format";
+
 import {
   hoverTooltipStyles,
   renderHoverTooltip,
@@ -2157,7 +2158,7 @@ export class HelmanSolarInspector extends LitElement {
             ${this._renderSelectedSlotDetails(view)}
             ${this._renderTotals(view)}
           `
-        : html`<div class="note">${this._tFormat("bias_correction.inspector.no_data", { date: this._formatDay(view.date) })}</div>`}
+        : html`<div class="note">${this._t("bias_correction.inspector.no_data", { date: this._formatDay(view.date) })}</div>`}
     `;
   }
 
@@ -2558,7 +2559,7 @@ export class HelmanSolarInspector extends LitElement {
       // request that would explain an empty span either way has finished.
       return this._spanLoading || this._spanError
         ? ""
-        : html`<div class="note">${this._tFormat("bias_correction.inspector.no_span_data", { span: this._spanLabel() })}</div>`;
+        : html`<div class="note">${this._t("bias_correction.inspector.no_span_data", { span: this._spanLabel() })}</div>`;
     }
     return html`
       ${this._renderTooltip()}
@@ -3564,7 +3565,7 @@ export class HelmanSolarInspector extends LitElement {
       const left = (layout.xForMinutes(tick.minutes) / layout.width) * 100;
       return html`
         <span class="schedule-header-hour" aria-hidden="true" style=${`left: ${left}%`}>
-          ${String(tick.hour).padStart(2, "0")}
+          ${pad2(tick.hour)}
         </span>
       `;
     });
@@ -5022,12 +5023,12 @@ export class HelmanSolarInspector extends LitElement {
     return html`
       <div class="metrics-section">
         <strong>
-          ${this._tFormat("bias_correction.inspector.selected_slot", {
+          ${this._t("bias_correction.inspector.selected_slot", {
             slot: this._formatSelectionRange(slots),
           })}
           ${interpolated && showDiagnostics
             ? html`<span class="interpolation-note" title=${this._t("bias_correction.inspector.interpolated_explanation")}>
-                ${this._tFormat("bias_correction.inspector.interpolated_from", {
+                ${this._t("bias_correction.inspector.interpolated_from", {
                   left: anchors?.left ?? this._t("bias_correction.inspector.interpolated_anchor_zero"),
                   right: anchors?.right ?? this._t("bias_correction.inspector.interpolated_anchor_zero"),
                 })}
@@ -5788,7 +5789,7 @@ export class HelmanSolarInspector extends LitElement {
       return html`<div class="note">${this._t("bias_correction.inspector.no_explainability")}</div>`;
     }
     if (!trainingSlot) {
-      return html`<div class="note">${this._tFormat("bias_correction.inspector.no_slot_explainability", { slot: selectedSlot })}</div>`;
+      return html`<div class="note">${this._t("bias_correction.inspector.no_slot_explainability", { slot: selectedSlot })}</div>`;
     }
     const selectedTrainingDate = this._resolveSelectedTrainingDate(selectedSlot);
     const interpolated = trainingSlot.interpolated === true;
@@ -5808,14 +5809,14 @@ export class HelmanSolarInspector extends LitElement {
       ${this._trainingTableCollapsed ? "" : html`
         <div class="contribution-summary">
           <div class="day-state">
-            ${this._tFormat("bias_correction.inspector.training_contribution_meta", {
+            ${this._t("bias_correction.inspector.training_contribution_meta", {
               ratio: this._formatFactor(trainingSlot.rawRatio),
               factor: this._formatFactor(trainingSlot.factor),
             })}
           </div>
           ${interpolated
             ? html`<div class="day-state">
-                ${this._tFormat("bias_correction.inspector.interpolated_meta", {
+                ${this._t("bias_correction.inspector.interpolated_meta", {
                   left: anchors?.left ?? this._t("bias_correction.inspector.interpolated_anchor_zero"),
                   right: anchors?.right ?? this._t("bias_correction.inspector.interpolated_anchor_zero"),
                 })}
@@ -6210,46 +6211,24 @@ export class HelmanSolarInspector extends LitElement {
     return this._payload?.timezone ?? this.hass?.config?.time_zone;
   }
 
-  /**
-   * Energy for display. Every figure on this card — summary metrics, the
-   * contribution table, the composition boxes — goes through `formatEnergy`, so a
-   * quantity reads the same wherever it appears and small values stay legible
-   * instead of rounding away to "0.0 kWh".
-   *
-   * These wrappers own only what `formatEnergy` deliberately does not: what a
-   * missing reading looks like, and whether a gain is written with its sign.
-   */
   private _formatWh(value: number | null) {
-    if (value === null || !Number.isFinite(value)) {
-      return this._t("bias_correction.inspector.actual_not_available");
-    }
-    return formatEnergy(value).display;
+    return orNa(value, v => formatEnergyWh(v).display, this._t("bias_correction.inspector.actual_not_available"));
   }
 
   private _formatSignedWh(value: number | null) {
-    if (value === null || !Number.isFinite(value)) return this._t("bias_correction.inspector.actual_not_available");
-    // formatEnergy carries a minus of its own; only a gain needs marking.
-    const sign = value > 0 ? "+" : "";
-    return `${sign}${formatEnergy(value).display}`;
+    return orNa(value, v => formatEnergyWh(v, { signed: true }).display, this._t("bias_correction.inspector.actual_not_available"));
   }
 
   private _formatFactor(value: number | null) {
-    if (value === null || !Number.isFinite(value)) return "-";
-    return value.toFixed(3);
+    return orNa(value, v => v.toFixed(3), "-");
   }
 
   private _formatPct(value: number | null): string {
-    if (value === null || !Number.isFinite(value)) {
-      return this._t("bias_correction.inspector.actual_not_available");
-    }
-    return `${value.toFixed(1)} %`;
+    return orNa(value, v => `${v.toFixed(1)} %`, this._t("bias_correction.inspector.actual_not_available"));
   }
 
   private _formatPrice(value: number | null): string {
-    if (value === null || !Number.isFinite(value)) {
-      return this._t("bias_correction.inspector.actual_not_available");
-    }
-    return `${value.toFixed(2)} ${this._priceUnit}`.trim();
+    return orNa(value, v => formatMoney(v, this._priceUnit), this._t("bias_correction.inspector.actual_not_available"));
   }
 
   /**
@@ -6301,9 +6280,7 @@ export class HelmanSolarInspector extends LitElement {
   private _slotLabelForMinutes(minutes: number): string {
     const width = this._slotMinutes > 0 ? this._slotMinutes : 15;
     const start = Math.floor(minutes / width) * width;
-    const hh = String(Math.floor(start / 60)).padStart(2, "0");
-    const mm = String(start % 60).padStart(2, "0");
-    return `${hh}:${mm}`;
+    return formatClock(start);
   }
 
   private _handleChartClick(event: MouseEvent, payload: InspectorPayload) {
@@ -6497,7 +6474,7 @@ export class HelmanSolarInspector extends LitElement {
    */
   private _formatIncompleteNote(key: string, missing: number, expected: number): string {
     const share = expected > 0 ? (missing / expected) * 100 : 0;
-    return this._tFormat(key, {
+    return this._t(key, {
       count: missing,
       total: expected,
       percent: share > 0 && share < 1 ? "<1" : String(Math.round(share)),
@@ -6556,19 +6533,12 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   /** `_t` as a stable function reference, for components taking a localizer. */
-  private _localize: LocalizeFunction = (key: string) => this._t(key);
+  private _localize: LocalizeFunction = (key: string, values?: Record<string, string | number>) => this._t(key, values);
 
-  private _t(key: string): string {
-    return this.hass ? getLocalizeFunction(this.hass)(key) : this._fallbackLocalize(key);
+  private _t(key: string, values?: Record<string, string | number>): string {
+    return (this.hass ? getLocalizeFunction(this.hass) : this._fallbackLocalize)(key, values);
   }
 
-  private _tFormat(key: string, values: Record<string, string | number>): string {
-    let text = this._t(key);
-    for (const [name, value] of Object.entries(values)) {
-      text = text.replaceAll(`{${name}}`, String(value));
-    }
-    return text;
-  }
 }
 
 declare global {

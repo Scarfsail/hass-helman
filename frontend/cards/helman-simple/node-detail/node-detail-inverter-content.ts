@@ -1,3 +1,4 @@
+import { formatKwh, formatPower } from "../../shared/format";
 import { css, html, nothing, svg } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { fillTemplate } from "../../localize/localize";
@@ -13,8 +14,7 @@ import type { HelmanSolarInspectorCardConfig } from "../../helman-solar-inspecto
 import { helmanColorVars } from "../../color-vars";
 import { getSharedHelmanStore } from "../../helman/store";
 import { commandedModeKind } from "../../helman-api";
-import { formatPower } from "../../power-format";
-import { formatGridEnergy } from "../../shared/forecast-value-format";
+
 import "../../shared/mode-strip";
 import { modeStripWindow, type ModeChange, type ModeSegment } from "../../shared/mode-strip";
 import { inverterGlyph } from "../../shared/node-glyphs";
@@ -623,7 +623,7 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
      */
     private _todayFlow(): NodeFlow {
         const flows = this._todayFlows?.status === "ready" ? this._todayFlows.payload.flows : null;
-        const energy = (value: number | null) => value === null ? "–" : formatGridEnergy(value);
+        const energy = (value: number | null) => value === null ? "–" : (formatKwh(Math.abs(value)) + " kWh");
         const sum = (...keys: Array<keyof TodayFlowsDTO>) => {
             const values = keys.map((key) => flows?.[key] ?? null);
             return values.some((value) => value === null) ? null : values.reduce((total, value) => total! + value!, 0);
@@ -643,9 +643,9 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
         const unresolvedSolar = flows?.solarUnresolved ?? 0;
         const unknownCharge = flows?.unknownToBattery ?? 0;
         const unknownHouse = flows?.unknownToHouse ?? 0;
-        if (unresolvedSolar > 0) notes.push(fillTemplate(this.localize("node_detail.solar.flow.unresolved"), { kwh: formatGridEnergy(unresolvedSolar) }));
-        if (unknownCharge > 0) notes.push(fillTemplate(this.localize("node_detail.battery.flow.unknown_charge"), { kwh: formatGridEnergy(unknownCharge) }));
-        if (unknownHouse > 0) notes.push(fillTemplate(this._t("flow.unknown_house"), { kwh: formatGridEnergy(unknownHouse) }));
+        if (unresolvedSolar > 0) notes.push(fillTemplate(this.localize("node_detail.solar.flow.unresolved"), { kwh: (formatKwh(Math.abs(unresolvedSolar)) + " kWh") }));
+        if (unknownCharge > 0) notes.push(fillTemplate(this.localize("node_detail.battery.flow.unknown_charge"), { kwh: (formatKwh(Math.abs(unknownCharge)) + " kWh") }));
+        if (unknownHouse > 0) notes.push(fillTemplate(this._t("flow.unknown_house"), { kwh: (formatKwh(Math.abs(unknownHouse)) + " kWh") }));
         const { sumOut, ...totals } = this._flowTotals(inputs, outputs, energy, unresolvedSolar, unknownCharge + unknownHouse);
         return {
             scopeLabel: this._todayScopeLabel(),

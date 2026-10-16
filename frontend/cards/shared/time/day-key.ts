@@ -1,3 +1,4 @@
+import { pad2 } from "./slot-time";
 /**
  * Today's day key (`YYYY-MM-DD`) in Home Assistant's time zone.
  *
@@ -7,7 +8,7 @@
 
 /** A calendar date as its `YYYY-MM-DD` key. */
 export function formatIsoDate(year: number, month: number, day: number): string {
-    return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    return `${year}-${pad2(month)}-${pad2(day)}`;
 }
 
 /** The local day `value` falls on in `timeZone`, or in the browser's zone without one. */
@@ -163,7 +164,7 @@ function _normalizeOffset(rawOffset: string): string | null {
     }
 
     const [, sign, rawHours, rawMinutes = "0"] = match;
-    return `${sign}${rawHours.padStart(2, "0")}:${rawMinutes.padStart(2, "0")}`;
+    return `${sign}${pad2(rawHours)}:${pad2(rawMinutes)}`;
 }
 
 function _getLocalDateTimeFormatter(timeZone: string): Intl.DateTimeFormat {

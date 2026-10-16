@@ -1,7 +1,7 @@
+import { formatValue, type ValueKind } from "../shared/format";
 import { LitElement, TemplateResult, css, html } from "lit-element";
 import { customElement, property } from "lit/decorators.js";
 import { sharedStyles } from "./shared-styles";
-import { formatValue, type ValueKind } from "../power-format";
 
 @customElement("helman-tree-item-power-display")
 export class HelmanTreeItemPowerDisplay extends LitElement {

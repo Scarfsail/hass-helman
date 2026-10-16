@@ -1,3 +1,4 @@
+import { formatMoney } from "../../shared/format";
 import { LitElement, html, nothing, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../../types/ha";
@@ -627,10 +628,10 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
     }
 
     protected _formatMoney(value: number, currency: string): string {
-        return (value.toFixed(2) + " " + currency).trim();
+        return formatMoney(value, currency);
     }
 
-    protected _t(key: string): string {
+    protected _t(key: string, values?: Record<string, string | number>): string {
         return this.localize(`node_detail.${this._node}.${key}`);
     }
 }

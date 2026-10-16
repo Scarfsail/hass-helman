@@ -1,3 +1,5 @@
+import { pad2 } from "../shared/time/slot-time";
+import { formatKwh, formatPower } from "../shared/format";
 import { LitElement, css, html, nothing, type PropertyValues } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import type {
@@ -7,8 +9,7 @@ import type {
 } from "../helman-api";
 import { GRID_EXPORT_COLOR, GRID_IMPORT_COLOR, PRICE_NEGATIVE_COLOR } from "../color-utils";
 import type { LocalizeFunction } from "../localize/localize";
-import { formatPower } from "../power-format";
-import { formatKwhValue } from "../shared/forecast-value-format";
+
 import {
     HoverTooltipController,
     hoverTooltipStyles,
@@ -46,7 +47,7 @@ interface DailyProfileModel {
 }
 
 function pad(hour: number): string {
-    return String(hour).padStart(2, "0");
+    return pad2(hour);
 }
 
 function hourSpan(hour: number): string {
@@ -150,7 +151,7 @@ export class HelmanDeviceReportDailyProfile extends LitElement {
         }
     }
 
-    private _t(key: string): string {
+    private _t(key: string, values?: Record<string, string | number>): string {
         return this.localize ? this.localize(key) : key;
     }
 
@@ -209,7 +210,7 @@ export class HelmanDeviceReportDailyProfile extends LitElement {
                 ),
                 tooltipRow(
                     this._t("device_reports.daily_profile.per_day"),
-                    formatKwhValue(perDay) + " kWh",
+                    formatKwh(Math.abs(perDay)) + " kWh",
                     color,
                 ),
             ],

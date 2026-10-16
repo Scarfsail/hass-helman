@@ -1,3 +1,4 @@
+import { formatMoney } from "../shared/format";
 import { slotMinutes, formatClock } from "../shared/time/slot-time";
 import { LitElement, css, html, svg, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, property } from "lit/decorators.js";
@@ -519,7 +520,7 @@ export class HelmanSolarPriceStrip extends LitElement {
                         // Both rates in the key, so either one moving makes the
                         // column a new reading; their sum as the value, so
                         // either one swinging makes it a prominent one.
-                        text: bars.map(({ value }) => value.toFixed(1)).join("/"),
+                        text: bars.map(({ value }) => formatMoney(value, "")).join("/"),
                         value: bars.reduce((total, { value }) => total + value, 0),
                     };
             }),
@@ -571,7 +572,7 @@ export class HelmanSolarPriceStrip extends LitElement {
                     const y = value >= 0
                         ? Math.max(valueY - 3, 9)
                         : Math.min(valueY + 9, ctx.height - 2);
-                    return stripValueLabel({ x: centre, y, text: value.toFixed(1) });
+                    return stripValueLabel({ x: centre, y, text: formatMoney(value, "") });
                 }
                 const fitsInside = Math.abs(valueY - ctx.zeroY) >= LABEL_INSIDE_MIN_HEIGHT;
                 const y = value >= 0
@@ -587,7 +588,7 @@ export class HelmanSolarPriceStrip extends LitElement {
                     ? { value, side }
                     : (shareSign ? outer : null);
                 return stripValueLabel({
-                    x: centre, y, text: value.toFixed(1), ink: _inkOn(onFill), bold: true,
+                    x: centre, y, text: formatMoney(value, ""), ink: _inkOn(onFill), bold: true,
                 });
             });
         });
@@ -636,10 +637,10 @@ export class HelmanSolarPriceStrip extends LitElement {
         // the bars were actually scaled by rather than one shared maximum.
         return svg`
             ${line(yForValue(maxPositive))}
-            ${label(yForValue(maxPositive), maxPositive.toFixed(1))}
+            ${label(yForValue(maxPositive), formatMoney(maxPositive, "", { precision: "axis" }))}
             ${line(zeroY)}${label(zeroY, "0")}
             ${hasNegative
-                ? svg`${line(yForValue(-maxNegative))}${label(yForValue(-maxNegative), `-${maxNegative.toFixed(1)}`)}`
+                ? svg`${line(yForValue(-maxNegative))}${label(yForValue(-maxNegative), `-${formatMoney(maxNegative, "", { precision: "axis" })}`)}`
                 : nothing}
         `;
     }
@@ -788,7 +789,7 @@ export class HelmanSolarPriceStrip extends LitElement {
         return {
             label: this._t(`bias_correction.inspector.${key}`),
             actual: null,
-            forecast: { value: `${value.toFixed(1)} ${this.unit}`.trim(), color },
+            forecast: { value: formatMoney(value, this.unit), color },
         };
     }
 
@@ -812,8 +813,7 @@ export class HelmanSolarPriceStrip extends LitElement {
         );
     }
 
-
-    private _t(key: string): string {
+    private _t(key: string, values?: Record<string, string | number>): string {
         const localize: LocalizeFunction = this.hass
             ? getLocalizeFunction(this.hass)
             : (raw: string) => raw;

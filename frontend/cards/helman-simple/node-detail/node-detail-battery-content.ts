@@ -1,3 +1,4 @@
+import { formatKwh, formatMoney, formatPower } from "../../shared/format";
 import { css, html, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { fillTemplate } from "../../localize/localize";
@@ -9,8 +10,7 @@ import type {
 } from "../../helman-api";
 import { currencyFromPriceUnit } from "../../helman-solar-inspector/money-model";
 import { getSharedHelmanStore } from "../../helman/store";
-import { formatPower } from "../../power-format";
-import { formatGridEnergy, formatPriceValue } from "../../shared/forecast-value-format";
+
 import "../../shared/soc-glyph";
 import type { SocDirection } from "../../shared/soc-glyph";
 import { getScheduleActionTone, scheduleActionToneStyles, type ScheduleActionTone } from "../../shared/schedule/action-tones";
@@ -287,8 +287,8 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
                     .soc=${soc !== null && soc >= 0 && soc <= 100 ? soc : null}
                     .min=${reserve?.minSoc ?? null}
                     .max=${reserve?.maxSoc ?? null}
-                    .usableLabel=${reserve?.usableKwh != null ? formatGridEnergy(reserve.usableKwh) : null}
-                    .roomLabel=${reserve?.roomKwh != null ? formatGridEnergy(reserve.roomKwh) : null}
+                    .usableLabel=${reserve?.usableKwh != null ? (formatKwh(Math.abs(reserve.usableKwh)) + " kWh") : null}
+                    .roomLabel=${reserve?.roomKwh != null ? (formatKwh(Math.abs(reserve.roomKwh)) + " kWh") : null}
                     .minLabel=${reserve?.minSoc != null ? fillTemplate(this._t("glyph.min"), { soc: this._percent(reserve.minSoc) }) : null}
                     .maxLabel=${reserve?.maxSoc != null ? fillTemplate(this._t("glyph.max"), { soc: this._percent(reserve.maxSoc) }) : null}
                     .direction=${this._direction()}
@@ -338,7 +338,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
     private _todayFlow(overview: BatteryDetailPayload): NodeFlow {
         const payload = this._todayFlows?.status === "ready" ? this._todayFlows.payload : null;
         const flows = payload?.flows ?? null;
-        const energy = (value: number | null) => value === null ? "–" : formatGridEnergy(value);
+        const energy = (value: number | null) => value === null ? "–" : (formatKwh(Math.abs(value)) + " kWh");
         const cost = flows?.gridToBatteryCost;
         const inputs = [
             this._flowItem("solar", flows?.solarToBattery ?? null, energy),
@@ -357,13 +357,13 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
         const notes: string[] = status ? [status] : [];
         if (flows) {
             if ((flows.unknownToBattery ?? 0) > 0) {
-                notes.push(fillTemplate(this._t("flow.unknown_charge"), { kwh: formatGridEnergy(flows.unknownToBattery!) }));
+                notes.push(fillTemplate(this._t("flow.unknown_charge"), { kwh: (formatKwh(Math.abs(flows.unknownToBattery!)) + " kWh") }));
             }
             const charged = readEnergyKWh(this.hass, overview.entities.today_charge);
             const discharged = readEnergyKWh(this.hass, overview.entities.today_discharge);
             if (charged !== null && discharged !== null) {
                 const net = charged - discharged;
-                notes.push(fillTemplate(this._t("flow.net"), { kwh: (net > 0 ? "+" : net < 0 ? "−" : "") + formatGridEnergy(Math.abs(net)) }));
+                notes.push(fillTemplate(this._t("flow.net"), { kwh: (net > 0 ? "+" : net < 0 ? "−" : "") + (formatKwh(Math.abs(Math.abs(net))) + " kWh") }));
             }
         }
         // The charge of unknown origin is part of what went in.
@@ -472,8 +472,8 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
     private _reservePreview(reserve: Reserve | null): string {
         if (!reserve) return this._t("reserve.unavailable");
         const parts: string[] = [];
-        if (reserve.usableKwh !== null) parts.push(fillTemplate(this._t("reserve.usable_short"), { kwh: formatGridEnergy(reserve.usableKwh), floor: this._percent(reserve.minSoc!) }));
-        if (reserve.roomKwh !== null) parts.push(fillTemplate(this._t("reserve.room_short"), { kwh: formatGridEnergy(reserve.roomKwh), ceiling: this._percent(reserve.maxSoc!) }));
+        if (reserve.usableKwh !== null) parts.push(fillTemplate(this._t("reserve.usable_short"), { kwh: (formatKwh(Math.abs(reserve.usableKwh)) + " kWh"), floor: this._percent(reserve.minSoc!) }));
+        if (reserve.roomKwh !== null) parts.push(fillTemplate(this._t("reserve.room_short"), { kwh: (formatKwh(Math.abs(reserve.roomKwh)) + " kWh"), ceiling: this._percent(reserve.maxSoc!) }));
         return parts.length ? parts.join(" · ") : this._t("reserve.no_range");
     }
 
@@ -483,9 +483,9 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
         const estimate = this._estimate(overview);
         return html`
             ${this._row(fillTemplate(this._t("reserve.usable"), { floor: reserve.minSoc === null ? "?" : this._percent(reserve.minSoc) }),
-                reserve.usableKwh === null ? unknown : formatGridEnergy(reserve.usableKwh), "usable")}
+                reserve.usableKwh === null ? unknown : (formatKwh(Math.abs(reserve.usableKwh)) + " kWh"), "usable")}
             ${this._row(fillTemplate(this._t("reserve.room"), { ceiling: reserve.maxSoc === null ? "?" : this._percent(reserve.maxSoc) }),
-                reserve.roomKwh === null ? unknown : formatGridEnergy(reserve.roomKwh), "room")}
+                reserve.roomKwh === null ? unknown : (formatKwh(Math.abs(reserve.roomKwh)) + " kWh"), "room")}
             ${this._row(this._t("reserve.range"), (reserve.minSoc === null ? "?" : this._percent(reserve.minSoc)) + " – " + (reserve.maxSoc === null ? "?" : this._percent(reserve.maxSoc)), "soc-range", this._t("reserve.range_scope"))}
             ${this._row(this._t("reserve.time"), estimate ? estimate.text : this._t("reserve.no_estimate"), "time")}
             <p class="note">${this._t("reserve.explain")}</p>
@@ -496,8 +496,8 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
         const minutes = Math.round(this.params.historyBuckets * this.params.historyBucketDuration / 60);
         return html`
             ${reserve ? this._row(this._t("reserve.capacity"), fillTemplate(this._t("reserve.capacity_value"), {
-                capacity: formatGridEnergy(reserve.capacityKwh),
-                remaining: formatGridEnergy(reserve.remainingKwh),
+                capacity: (formatKwh(Math.abs(reserve.capacityKwh)) + " kWh"),
+                remaining: (formatKwh(Math.abs(reserve.remainingKwh)) + " kWh"),
                 soc: this._percent(reserve.soc),
             }), "capacity") : nothing}
             <p class="note">${this._t("reserve.capacity_note")}</p>
@@ -715,7 +715,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
         const charge = section?.charge;
         if (charge) {
             if (charge.chargedKwh <= 0) return this._t("charge.none_today");
-            const parts = [fillTemplate(this._t("charge.charged_short"), { kwh: formatGridEnergy(charge.chargedKwh) })];
+            const parts = [fillTemplate(this._t("charge.charged_short"), { kwh: (formatKwh(Math.abs(charge.chargedKwh)) + " kWh") })];
             const cost = charge.paidCost;
             if (cost !== null) parts.push(fillTemplate(this._t("charge.paid_short"), { value: this._formatMoney(cost, currencyFromPriceUnit(section!.currency)) }));
             return parts.join(" · ");
@@ -723,7 +723,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
         // Before the answer opens: today's charge from the battery's own meter.
         const kwh = readEnergyKWh(this.hass, overview.entities.today_charge);
         if (kwh === null) return null;
-        return kwh <= 0 ? this._t("charge.none_today") : fillTemplate(this._t("charge.charged_short"), { kwh: formatGridEnergy(kwh) });
+        return kwh <= 0 ? this._t("charge.none_today") : fillTemplate(this._t("charge.charged_short"), { kwh: (formatKwh(Math.abs(kwh)) + " kWh") });
     }
 
     private _renderCharge() {
@@ -752,12 +752,12 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
             return html`${period}<p class="note" data-no-charge>${this._t("charge.none_long")}</p>`;
         }
         const share = (kwh: number) => fillTemplate(this._t("charge.share"), {
-            kwh: formatGridEnergy(kwh),
+            kwh: (formatKwh(Math.abs(kwh)) + " kWh"),
             share: this._percent(kwh / charge.chargedKwh * 100),
         });
         return html`
             ${period}
-            ${this._row(this._t("charge.charged"), formatGridEnergy(charge.chargedKwh), "charged")}
+            ${this._row(this._t("charge.charged"), (formatKwh(Math.abs(charge.chargedKwh)) + " kWh"), "charged")}
             ${this._row(this._t("charge.from_solar"), share(charge.solarKwh), "solar")}
             ${this._row(this._t("charge.from_grid"), share(charge.gridKwh), "grid")}
             ${charge.unknownKwh > 0 ? this._row(this._t("charge.from_unknown"), share(charge.unknownKwh), "unknown") : nothing}
@@ -772,7 +772,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
         if (charge.gridKwh <= 0) return this._t("charge.coverage_no_grid");
         return fillTemplate(this._t("charge.coverage_grid"), {
             share: this._percent(Math.min(1, charge.gridPricedKwh / charge.gridKwh) * 100),
-            kwh: formatGridEnergy(charge.gridKwh),
+            kwh: (formatKwh(Math.abs(charge.gridKwh)) + " kWh"),
         });
     }
 
@@ -784,15 +784,15 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
         const unit = payload?.currency ?? null;
         return html`
             ${charge && charge.chargedKwh > 0 ? html`
-                ${this._row(this._t("charge.paid_rate"), charge.paidRate === null ? this._t("unknown") : formatPriceValue(charge.paidRate, unit), "paid-rate")}
-                ${charge.gridUnpricedKwh > 0 ? this._row(this._t("charge.grid_unpriced"), formatGridEnergy(charge.gridUnpricedKwh), "grid-unpriced") : nothing}
+                ${this._row(this._t("charge.paid_rate"), charge.paidRate === null ? this._t("unknown") : formatMoney(charge.paidRate, unit), "paid-rate")}
+                ${charge.gridUnpricedKwh > 0 ? this._row(this._t("charge.grid_unpriced"), (formatKwh(Math.abs(charge.gridUnpricedKwh)) + " kWh"), "grid-unpriced") : nothing}
                 ${charge.solarKwh > 0 ? this._row(this._t("charge.forgone"), charge.forgoneValue === null ? this._t("unknown") : this._formatMoney(charge.forgoneValue, currencyFromPriceUnit(unit)), "forgone", this._t("charge.forgone_scope")) : nothing}
-                ${charge.forgoneRate !== null ? this._row(this._t("charge.forgone_rate"), formatPriceValue(charge.forgoneRate, unit), "forgone-rate") : nothing}
+                ${charge.forgoneRate !== null ? this._row(this._t("charge.forgone_rate"), formatMoney(charge.forgoneRate, unit), "forgone-rate") : nothing}
                 <p class="note">${this._t("charge.attribution_note")}</p>
             ` : nothing}
             <div class="section-title">${this._t("charge.meters")}</div>
-            ${this._row(this._t("charge.input_today"), input === null ? this._t("unavailable") : formatGridEnergy(input), "input-today", undefined, overview.entities.today_charge)}
-            ${this._row(this._t("charge.output_today"), output === null ? this._t("unavailable") : formatGridEnergy(output), "output-today", undefined, overview.entities.today_discharge)}
+            ${this._row(this._t("charge.input_today"), input === null ? this._t("unavailable") : (formatKwh(Math.abs(input)) + " kWh"), "input-today", undefined, overview.entities.today_charge)}
+            ${this._row(this._t("charge.output_today"), output === null ? this._t("unavailable") : (formatKwh(Math.abs(output)) + " kWh"), "output-today", undefined, overview.entities.today_discharge)}
             ${input !== null && output !== null && input > 0 ? html`
                 ${this._row(this._t("charge.flow_ratio"), (output / input).toFixed(2), "flow-ratio")}
                 <p class="note" data-flow-ratio-note>${this._t("charge.flow_ratio_note")}</p>
@@ -826,7 +826,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
             ${this._optionalRow(overview, "cell_voltage_difference", "diagnostics.cell_gap")}
             ${this._optionalRow(overview, "bms_connect_state", "diagnostics.bms_connect")}
             <p class="note">${cycles.capacityKwh !== null
-                ? fillTemplate(this._t("diagnostics.cycles_note"), { capacity: formatGridEnergy(cycles.capacityKwh) })
+                ? fillTemplate(this._t("diagnostics.cycles_note"), { capacity: (formatKwh(Math.abs(cycles.capacityKwh)) + " kWh") })
                 : this._t("diagnostics.cycles_note_no_capacity")}</p>
             <p class="note">${this._t("diagnostics.explain")}</p>
         `;
@@ -842,9 +842,9 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
                 : nothing;
         };
         return html`
-            ${cycles.inputKwh !== null ? this._row(this._t("diagnostics.lifetime_in"), formatGridEnergy(cycles.inputKwh), "lifetime-in") : nothing}
-            ${cycles.outputKwh !== null ? this._row(this._t("diagnostics.lifetime_out"), formatGridEnergy(cycles.outputKwh), "lifetime-out") : nothing}
-            ${cycles.capacityKwh !== null ? this._row(this._t("diagnostics.capacity"), formatGridEnergy(cycles.capacityKwh), "capacity") : nothing}
+            ${cycles.inputKwh !== null ? this._row(this._t("diagnostics.lifetime_in"), (formatKwh(Math.abs(cycles.inputKwh)) + " kWh"), "lifetime-in") : nothing}
+            ${cycles.outputKwh !== null ? this._row(this._t("diagnostics.lifetime_out"), (formatKwh(Math.abs(cycles.outputKwh)) + " kWh"), "lifetime-out") : nothing}
+            ${cycles.capacityKwh !== null ? this._row(this._t("diagnostics.capacity"), (formatKwh(Math.abs(cycles.capacityKwh)) + " kWh"), "capacity") : nothing}
             ${this._optionalRow(overview, "cell_voltage_high", "diagnostics.cell_high")}
             ${this._optionalRow(overview, "cell_voltage_low", "diagnostics.cell_low")}
             ${this._optionalRow(overview, "battery_type", "diagnostics.type")}

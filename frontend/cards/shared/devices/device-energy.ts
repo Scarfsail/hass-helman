@@ -1,7 +1,7 @@
+import { formatPower } from "../format";
 import { css, html, type TemplateResult } from "lit";
 
 import type { DeviceStats } from "../../helman-api";
-import { formatPower } from "../../power-format";
 
 /**
  * One device's energy on one power scale, auto-scaled W or kW, wherever it is

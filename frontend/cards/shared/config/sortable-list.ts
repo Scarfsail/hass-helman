@@ -29,7 +29,7 @@ import { renderSvgIcon } from "./form-fields";
 
 /** All these helpers need of their caller: its translations. */
 export interface SortableListHost {
-    t(key: string): string;
+    t(key: string, values?: Record<string, string | number>): string;
 }
 
 /** What `renderDragHandle` draws, and what `ha-sortable` drags by. */

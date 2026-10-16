@@ -1,3 +1,7 @@
+export function pad2(value: number | string): string {
+    return String(value).padStart(2, "0");
+}
+
 export const DEFAULT_SLOT_MINUTES = 15;
 export const SLOT_MS = DEFAULT_SLOT_MINUTES * 60_000;
 
@@ -13,7 +17,7 @@ export function slotMinutes(value: unknown): number | null {
 
 export function minutesToSlot(minutes: number): string {
     const value = Math.max(0, Math.floor(minutes));
-    return `${String(Math.floor(value / 60)).padStart(2, "0")}:${String(value % 60).padStart(2, "0")}`;
+    return `${pad2(Math.floor(value / 60))}:${pad2(value % 60)}`;
 }
 
 export function formatClock(minutes: number, { endOfDay = "24:00" }: { endOfDay?: "24:00" | "00:00" } = {}): string {
