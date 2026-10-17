@@ -64,24 +64,27 @@ from .slot_grid import SLOT_MINUTES, slot_starts
 from .solar_bias_correction.forecast_slot_history import (
     SOLAR_FORECAST_CURRENT_ENTITY,
 )
+from .statistics_backfill import (
+    _CHUNK,
+    _CHUNK_PAUSE_SECONDS,
+    _MAX_SPAN,
+    _RECORDER_DOMAIN,
+    _first_hour_home_assistant_owns,
+    _time_weighted_mean,
+    async_walk_backward,
+    first_compiled_hour,
+    mean_metadata,
+    time_weighted_hourly_rows,
+    BackfillCursorStore,
+)
 
 _LOGGER = logging.getLogger(__name__)
-
-_RECORDER_DOMAIN = "recorder"
-#: How much history one pass reads and writes before yielding. The source
-#: publishes a handful of times a day, so a week is tens of state rows -- but
-#: each carries a 96-entry attribute map, which is why the chunk is not larger.
-_CHUNK = timedelta(days=7)
-#: The walk's real stopping condition is the source's history running out. This
-#: is the guard for the case where it somehow never does.
-_MAX_SPAN = timedelta(days=1100)
-_CHUNK_PAUSE_SECONDS = 1.0
 
 _STORAGE_KEY = f"{DOMAIN}.solar_forecast_backfill"
 _STORAGE_VERSION = 1
 
 
-class SolarForecastBackfillStore:
+class SolarForecastBackfillStore(BackfillCursorStore):
     """Where the backward walk got to, across restarts.
 
     Persisted payload shape (v1)::
@@ -95,37 +98,7 @@ class SolarForecastBackfillStore:
     """
 
     def __init__(self, hass: HomeAssistant) -> None:
-        self._store = storage.Store(hass, _STORAGE_VERSION, _STORAGE_KEY)
-        self._data: dict[str, Any] = {}
-
-    async def async_load(self) -> None:
-        stored = await self._store.async_load()
-        self._data = stored if isinstance(stored, dict) else {}
-
-    def done_for(self, source_entity_id: str) -> bool:
-        return bool(self._data.get("done")) and self._data.get("source") == source_entity_id
-
-    def oldest_hour_for(self, source_entity_id: str) -> datetime | None:
-        if self._data.get("source") != source_entity_id:
-            return None
-        raw = self._data.get("oldest_hour")
-        if not isinstance(raw, str):
-            return None
-        try:
-            return dt_util.as_utc(datetime.fromisoformat(raw))
-        except ValueError:
-            return None
-
-    async def async_record(
-        self, *, source_entity_id: str, oldest_hour: datetime, done: bool
-    ) -> None:
-        self._data = {
-            "version": _STORAGE_VERSION,
-            "source": source_entity_id,
-            "oldest_hour": oldest_hour.isoformat(),
-            "done": done,
-        }
-        await self._store.async_save(self._data)
+        super().__init__(hass, _STORAGE_KEY)
 
 
 async def async_backfill_solar_forecast_statistics(
@@ -140,108 +113,32 @@ async def async_backfill_solar_forecast_statistics(
     nothing that is currently working and is logged rather than taken out on
     whatever started the task.
     """
-    from .recorder_statistics_span import async_forget_imported_statistics
+    store = SolarForecastBackfillStore(hass)
+    timezone = ZoneInfo(str(hass.config.time_zone))
 
-    try:
-        store = SolarForecastBackfillStore(hass)
-        await store.async_load()
-        if store.done_for(source_entity_id):
-            return
-
-        timezone = ZoneInfo(str(hass.config.time_zone))
-        cursor = store.oldest_hour_for(source_entity_id) or await _first_hour_home_assistant_owns(
-            hass, target_entity_id
-        )
-        floor = dt_util.as_utc(dt_util.now()) - _MAX_SPAN
-        written = 0
-        found_any = False
-
-        while cursor > floor:
-            chunk_start = max(cursor - _CHUNK, floor)
-            rows = await _chunk_statistics(
-                hass,
-                source_entity_id,
-                utc_start=chunk_start,
-                utc_end=cursor,
-                timezone=timezone,
-            )
-            exhausted = rows is None
-            if rows:
-                found_any = True
-                async_import_statistics(hass, _metadata(target_entity_id), rows)
-                written += len(rows)
-                await async_forget_imported_statistics(hass, target_entity_id)
-            cursor = chunk_start
-            # ``done`` only once something was actually recovered. A walk that
-            # finds nothing at all is far more likely to mean the recorder has
-            # never held this entity -- an ``exclude:`` filter, a rename, an
-            # instance restored without its database -- than that its history
-            # is genuinely exhausted. Latching on that would mean the past is
-            # unrecoverable the moment the user fixes their config, since the
-            # cursor is keyed on the source id and would never be walked again.
-            await store.async_record(
-                source_entity_id=source_entity_id,
-                oldest_hour=cursor,
-                done=exhausted and found_any,
-            )
-            if exhausted:
-                break
-            await asyncio.sleep(_CHUNK_PAUSE_SECONDS)
-
-        _LOGGER.info(
-            "Back-filled %d hourly solar forecast statistics for %s from %s, back to %s",
-            written,
-            target_entity_id,
-            source_entity_id,
-            cursor.isoformat(),
-        )
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        _LOGGER.exception(
-            "Failed to back-fill solar forecast statistics for %s", target_entity_id
-        )
-
-
-async def _first_hour_home_assistant_owns(
-    hass: HomeAssistant, target_entity_id: str
-) -> datetime:
-    """The oldest hour the statistics compiler has written for the sensor.
-
-    The back-fill must stop strictly before this so the compiler's rows and the
-    imported ones never describe the same hour by two different routes. Usually
-    there are none, the sensor being new, and the walk starts from now.
-    """
-    from homeassistant.components.recorder.statistics import (
-        list_statistic_ids,
-        statistics_during_period,
-    )
-
-    recorder = get_instance(hass)
-
-    def _query() -> datetime | None:
-        ids = list_statistic_ids(hass, statistic_ids={target_entity_id})
-        if not ids:
-            return None
-        rows = statistics_during_period(
+    async def _read(
+        chunk_start: datetime, cursor: datetime
+    ) -> list[StatisticData] | None:
+        return await _chunk_statistics(
             hass,
-            dt_util.utc_from_timestamp(0),
-            None,
-            {target_entity_id},
-            "hour",
-            None,
-            {"mean"},
+            source_entity_id,
+            utc_start=chunk_start,
+            utc_end=cursor,
+            timezone=timezone,
         )
-        series = rows.get(target_entity_id) or []
-        if not series:
-            return None
-        return dt_util.utc_from_timestamp(series[0]["start"])
 
-    oldest = await recorder.async_add_executor_job(_query)
-    now_hour = dt_util.as_utc(dt_util.now()).replace(
-        minute=0, second=0, microsecond=0
+    await async_walk_backward(
+        hass,
+        store=store,
+        source_entity_id=source_entity_id,
+        target_entity_id=target_entity_id,
+        metadata=_metadata(target_entity_id),
+        read_chunk=_read,
+        log_name="solar forecast",
+        pause_seconds=_CHUNK_PAUSE_SECONDS,
+        import_fn=async_import_statistics,
     )
-    return oldest or now_hour
+
 
 
 async def _chunk_statistics(
@@ -409,92 +306,11 @@ def _hourly_rows(
     utc_start: datetime,
     utc_end: datetime,
 ) -> list[StatisticData]:
-    """One row per hour that has any slot, time weighted across the hour.
-
-    An hour with no slots at all -- before the source's first publication, or
-    through a purged stretch -- is omitted rather than carried, so a hole in the
-    source's history stays a hole here instead of being papered over with a
-    forecast that was never published.
-    """
-    rows: list[StatisticData] = []
-    hour = utc_start.replace(minute=0, second=0, microsecond=0)
-    if hour < utc_start:
-        hour += timedelta(hours=1)
-
-    index = 0
-    while index < len(samples) and samples[index][0] < hour:
-        index += 1
-
-    while hour < utc_end:
-        hour_end = hour + timedelta(hours=1)
-        inside: list[tuple[datetime, float]] = []
-        while index < len(samples) and samples[index][0] < hour_end:
-            inside.append(samples[index])
-            index += 1
-        if inside:
-            values = [value for _, value in inside]
-            rows.append(
-                StatisticData(
-                    start=hour,
-                    mean=_time_weighted_mean(inside, start=hour, end=hour_end),
-                    min=min(values),
-                    max=max(values),
-                )
-            )
-        hour = hour_end
-    return rows
-
-
-def _time_weighted_mean(
-    window: list[tuple[datetime, float]],
-    *,
-    start: datetime,
-    end: datetime,
-) -> float:
-    """The mean value in force across ``[start, end)``, weighted by duration.
-
-    The same re-implementation of the recorder's
-    ``_time_weighted_arithmetic_mean`` the export-price back-fill carries,
-    including the part that looks like an edge case and is not: a window whose
-    first reading arrives after the period began shortens the period rather than
-    stretching that reading backward. An hour holding only its last slot
-    therefore reports that slot, not a quarter of it.
-    """
-    accumulated = 0.0
-    previous_value: float | None = None
-    previous_instant: datetime | None = None
-    for instant, value in window:
-        instant = max(instant, start)
-        if previous_instant is None:
-            start = instant
-        else:
-            accumulated += previous_value * (instant - previous_instant).total_seconds()
-        previous_value = value
-        previous_instant = instant
-
-    accumulated += previous_value * (end - previous_instant).total_seconds()
-    return accumulated / (end - start).total_seconds()
+    """One row per hour that has any slot, time weighted across the hour."""
+    return time_weighted_hourly_rows(samples, utc_start, utc_end, carry_in=False)
 
 
 def _metadata(target_entity_id: str) -> StatisticMetaData:
-    """What the imported rows describe, in the shape the recorder validates.
+    """What the imported rows describe, in the shape the recorder validates."""
+    return mean_metadata(target_entity_id, unit="Wh", unit_class="energy")
 
-    ``source`` is the recorder's own domain rather than ``helman``: the series
-    belongs to an entity and lives in the recorder's table, and
-    ``async_import_statistics`` rejects anything else. ``unit_class`` is
-    ``energy`` because that is what watt-hours convert within -- naming none
-    where one applies leaves the series unconvertible for a reader whose
-    display unit differs. It is stated here rather than inferred from a device
-    class, the target entity deliberately carrying none: see
-    ``_HelmanSolarForecastCurrentSensorBase`` for why, and note that the
-    recorder reaches the same answer from the unit alone.
-    """
-    return StatisticMetaData(
-        mean_type=StatisticMeanType.ARITHMETIC,
-        has_sum=False,
-        name=None,
-        source=_RECORDER_DOMAIN,
-        statistic_id=target_entity_id,
-        unit_class="energy",
-        unit_of_measurement="Wh",
-    )
