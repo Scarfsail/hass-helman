@@ -29,6 +29,7 @@ from custom_components.helman.scheduling.schedule import (  # noqa: E402
     ScheduleAction,
     ScheduleDocument,
     ScheduleExecutionUnavailableError,
+    build_controllable_actions,
     build_horizon_start,
 )
 
@@ -58,8 +59,10 @@ class ScheduleForecastOverlayTests(unittest.TestCase):
             schedule_document=ScheduleDocument(
                 execution_enabled=True,
                 slots={
-                    current_slot_start.isoformat(timespec="seconds"): ScheduleAction(
-                        kind=SCHEDULE_ACTION_STOP_CHARGING
+                    current_slot_start.isoformat(timespec="seconds"): build_controllable_actions(
+                        inverter=ScheduleAction(
+                            kind=SCHEDULE_ACTION_STOP_CHARGING
+                        )
                     )
                 },
             ),
@@ -84,9 +87,11 @@ class ScheduleForecastOverlayTests(unittest.TestCase):
             schedule_document=ScheduleDocument(
                 execution_enabled=True,
                 slots={
-                    current_slot_start.isoformat(timespec="seconds"): ScheduleAction(
-                        kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
-                        target_soc=80,
+                    current_slot_start.isoformat(timespec="seconds"): build_controllable_actions(
+                        inverter=ScheduleAction(
+                            kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+                            target_soc=80,
+                        )
                     )
                 },
             ),
@@ -111,8 +116,10 @@ class ScheduleForecastOverlayTests(unittest.TestCase):
             schedule_document=ScheduleDocument(
                 execution_enabled=False,
                 slots={
-                    current_slot_start.isoformat(timespec="seconds"): ScheduleAction(
-                        kind=SCHEDULE_ACTION_STOP_DISCHARGING
+                    current_slot_start.isoformat(timespec="seconds"): build_controllable_actions(
+                        inverter=ScheduleAction(
+                            kind=SCHEDULE_ACTION_STOP_DISCHARGING
+                        )
                     )
                 },
             ),
@@ -131,11 +138,15 @@ class ScheduleForecastOverlayTests(unittest.TestCase):
             schedule_document=ScheduleDocument(
                 execution_enabled=True,
                 slots={
-                    first_slot_start.isoformat(timespec="seconds"): ScheduleAction(
-                        kind=SCHEDULE_ACTION_STOP_CHARGING
+                    first_slot_start.isoformat(timespec="seconds"): build_controllable_actions(
+                        inverter=ScheduleAction(
+                            kind=SCHEDULE_ACTION_STOP_CHARGING
+                        )
                     ),
-                    next_slot_start.isoformat(timespec="seconds"): ScheduleAction(
-                        kind=SCHEDULE_ACTION_STOP_DISCHARGING
+                    next_slot_start.isoformat(timespec="seconds"): build_controllable_actions(
+                        inverter=ScheduleAction(
+                            kind=SCHEDULE_ACTION_STOP_DISCHARGING
+                        )
                     ),
                 },
             ),

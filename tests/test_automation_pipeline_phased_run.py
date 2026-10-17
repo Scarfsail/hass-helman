@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from automation_pipeline_support import *
+from custom_components.helman.scheduling.schedule import SlotAction
 
 
 def _make_appliance_optimizer_instance(
@@ -375,7 +376,8 @@ class PhasedRunTests(unittest.IsolatedAsyncioTestCase):
             # automation-owned action is present there in this document --
             # exactly what a real forecast rebuild would reflect.
             slot_actions = document.slots.get(CURRENT_SLOT_ID, {})
-            boiler_present = slot_actions.get("boiler", {}).get("setBy") == "automation"
+            boiler = slot_actions.get("boiler")
+            boiler_present = boiler is not None and boiler.set_by == "automation"
             house_kwh = 3.0 + (2.0 if boiler_present else 0.0)
             base = _make_snapshot(schedule_document=document)
             return replace(
@@ -459,7 +461,7 @@ class ApplianceGroupExpansionTests(unittest.TestCase):
                 current = slots.setdefault(CURRENT_SLOT_ID, {})
                 if len(current) >= capacity:
                     return snapshot.schedule
-                current[lane] = dict(self.ACTION)
+                current[lane] = SlotAction(payload={"on": True}, set_by="automation")
                 return ScheduleDocument(execution_enabled=True, slots=slots)
 
             return SimpleNamespace(optimize=Mock(side_effect=_optimize))

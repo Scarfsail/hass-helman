@@ -35,10 +35,10 @@ from ...const import (
     SCHEDULE_ACTION_STOP_DISCHARGING,
     SCHEDULE_SLOT_MINUTES,
 )
+from ...controllables.config import CONTROLLABLE_ID_INVERTER
 from ...scheduling.schedule import (
     ScheduleDocument,
     ScheduleAction,
-    inverter_action,
     build_horizon_end,
     build_horizon_start,
     format_slot_id,
@@ -57,7 +57,7 @@ from ..explain import (
     VERDICT_EXECUTE,
     VERDICT_SKIP,
 )
-from ..ownership import is_user_owned_inverter_action
+from ..ownership import is_user_owned
 from ..rails import (
     horizon_slots_between,
     read_forecast_soc_at,
@@ -495,10 +495,11 @@ class ChargeFromGridOptimizer:
                     floor=breached,
                 )
                 continue
-            writer.set_inverter(
+            writer.set(
                 slot_id,
-                kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
-                target_soc=target_soc,
+                ScheduleAction(
+                    kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC, target_soc=target_soc
+                ),
             )
             emit.applied(
                 slot_id,
@@ -540,8 +541,8 @@ class ChargeFromGridOptimizer:
 
         writable = [
             slot_id for slot_id in cheap_slots
-            if not is_user_owned_inverter_action(
-                inverter_action(writer.document.slots.get(slot_id, {}))
+            if not is_user_owned(
+                writer.document.slots.get(slot_id, {}).get(CONTROLLABLE_ID_INVERTER)
             )
         ]
         if not writable:
@@ -759,7 +760,7 @@ class ChargeFromGridOptimizer:
                 # stays the explanation.
                 continue
             planned_actions[keys[index]] = action
-            writer.set_inverter(slot_id, kind=action.kind, target_soc=action.target_soc)
+            writer.set(slot_id, action)
             emit.applied(
                 slot_id,
                 gates=[
@@ -790,7 +791,7 @@ def _rank_cheapest_slots(
     candidates: list[tuple[float, datetime, str]] = []
     for slot_id in cheap_slots:
         current_actions = document.slots.get(slot_id, {})
-        if is_user_owned_inverter_action(inverter_action(current_actions)):
+        if is_user_owned(current_actions.get(CONTROLLABLE_ID_INVERTER)):
             continue
         cursor = parse_slot_id(slot_id)
         candidates.append(

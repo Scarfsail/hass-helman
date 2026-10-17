@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from datetime import datetime, timedelta
 
@@ -32,8 +33,10 @@ from custom_components.helman.scheduling.schedule import (
     ScheduleSlot,
     ScheduleStorageCompatibilityError,
     ScheduleSlotsError,
+    SlotAction,
     appliance_actions,
     build_controllable_actions,
+    controllable_actions_to_dict,
     inverter_action,
     apply_slot_patches,
     build_horizon_start,
@@ -79,9 +82,11 @@ class ScheduleHelperTests(unittest.TestCase):
         slot_ids = iter_horizon_slot_ids(REFERENCE_TIME)
         slots = materialize_schedule_slots(
             stored_slots={
-                slot_ids[1]: ScheduleAction(
-                    kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
-                    target_soc=80,
+                slot_ids[1]: build_controllable_actions(
+                    inverter=ScheduleAction(
+                        kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+                        target_soc=80,
+                    )
                 )
             },
             reference_time=REFERENCE_TIME,
@@ -95,7 +100,9 @@ class ScheduleHelperTests(unittest.TestCase):
         slot_ids = iter_horizon_slot_ids(REFERENCE_TIME)
         active_slot = find_active_slot(
             stored_slots={
-                slot_ids[0]: ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                slot_ids[0]: build_controllable_actions(
+                    inverter=ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                )
             },
             reference_time=REFERENCE_TIME,
         )
@@ -117,9 +124,11 @@ class ScheduleHelperTests(unittest.TestCase):
         slot_ids = iter_horizon_slot_ids(REFERENCE_TIME)
         patched = apply_slot_patches(
             stored_slots={
-                slot_ids[1]: ScheduleAction(
-                    kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
-                    target_soc=80,
+                slot_ids[1]: build_controllable_actions(
+                    inverter=ScheduleAction(
+                        kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+                        target_soc=80,
+                    )
                 )
             },
             slot_patches=[
@@ -136,13 +145,17 @@ class ScheduleHelperTests(unittest.TestCase):
         slot_ids = iter_horizon_slot_ids(REFERENCE_TIME)
         pruned = prune_expired_slots(
             stored_slots={
-                slot_ids[0]: ScheduleAction(
-                    kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
-                    target_soc=80,
+                slot_ids[0]: build_controllable_actions(
+                    inverter=ScheduleAction(
+                        kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+                        target_soc=80,
+                    )
                 ),
-                slot_ids[1]: ScheduleAction(
-                    kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
-                    target_soc=80,
+                slot_ids[1]: build_controllable_actions(
+                    inverter=ScheduleAction(
+                        kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+                        target_soc=80,
+                    )
                 ),
             },
             reference_time=datetime.fromisoformat(slot_ids[0])
@@ -227,9 +240,11 @@ class ScheduleHelperTests(unittest.TestCase):
             ScheduleDocument(
                 execution_enabled=True,
                 slots={
-                    slot_ids[0]: ScheduleAction(
-                        kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
-                        target_soc=80,
+                    slot_ids[0]: build_controllable_actions(
+                        inverter=ScheduleAction(
+                            kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+                            target_soc=80,
+                        )
                     )
                 },
             ),
@@ -265,7 +280,9 @@ class ScheduleHelperTests(unittest.TestCase):
             ScheduleDocument(
                 execution_enabled=True,
                 slots={
-                    slot_ids[1]: ScheduleAction(kind=SCHEDULE_ACTION_NORMAL),
+                    slot_ids[1]: build_controllable_actions(
+                        inverter=ScheduleAction(kind=SCHEDULE_ACTION_NORMAL)
+                    ),
                 },
             ),
         )
@@ -345,6 +362,67 @@ class ScheduleHelperTests(unittest.TestCase):
                     }
                 },
             },
+        )
+
+    def test_stored_document_round_trip_with_every_kind_is_byte_identical(self) -> None:
+        slot_ids = iter_horizon_slot_ids(REFERENCE_TIME)
+        stored_document = {
+            "executionEnabled": True,
+            "slotMinutes": SCHEDULE_SLOT_MINUTES,
+            "slots": {
+                slot_ids[0]: {
+                    "boiler": {
+                        "on": True,
+                        "setBy": "user",
+                    },
+                    "garage-ev": {
+                        "charge": True,
+                        "ecoGear": "6A",
+                        "setBy": "user",
+                        "useMode": "Fast",
+                        "vehicleId": "kona",
+                    },
+                    "inverter": {
+                        "conditionMet": False,
+                        "kind": SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+                        "setBy": "automation",
+                        "targetSoc": 80,
+                    },
+                    "living-room-ac": {
+                        "mode": "heat",
+                        "setBy": "automation",
+                    },
+                },
+                slot_ids[1]: {
+                    "boiler": {
+                        "conditionMet": False,
+                        "on": False,
+                        "setBy": "automation",
+                    },
+                    "garage-ev": {
+                        "charge": False,
+                        "setBy": "automation",
+                    },
+                    "inverter": {
+                        "kind": SCHEDULE_ACTION_NORMAL,
+                        "setBy": "user",
+                    },
+                    "living-room-ac": {
+                        "mode": "off",
+                        "setBy": "user",
+                    },
+                },
+            },
+        }
+
+        doc = schedule_document_from_dict(stored_document)
+        round_tripped = schedule_document_to_dict(doc)
+
+        self.assertEqual(round_tripped, stored_document)
+        # Byte-identical serialization: no storage version bump or migration needed.
+        self.assertEqual(
+            json.dumps(round_tripped, sort_keys=True).encode("utf-8"),
+            json.dumps(stored_document, sort_keys=True).encode("utf-8"),
         )
 
     def test_a_slot_with_only_an_appliance_action_is_not_empty(self) -> None:
@@ -468,13 +546,22 @@ class ScheduleHelperTests(unittest.TestCase):
         self.assertEqual(
             appliance_actions(first),
             {
-                "boiler": {"on": True, "setBy": "user"},
-                "garage-ev": {"charge": True, "setBy": "automation"},
+                "boiler": {"on": True},
+                "garage-ev": {"charge": True},
             },
+        )
+        self.assertEqual(
+            first["boiler"],
+            SlotAction(payload={"on": True}, set_by="user"),
+        )
+        self.assertEqual(
+            first["garage-ev"],
+            SlotAction(payload={"charge": True}, set_by="automation"),
         )
         # An empty inverter action converts to absence, like an appliance's.
         self.assertEqual(
-            doc.slots[slot_ids[1]], {"boiler": {"on": False, "setBy": "user"}}
+            doc.slots[slot_ids[1]],
+            {"boiler": SlotAction(payload={"on": False}, set_by="user")},
         )
 
     def test_a_stored_domains_document_rewrites_flat(self) -> None:

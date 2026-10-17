@@ -4,7 +4,6 @@ from collections.abc import Mapping
 from typing import Any
 
 from ..controllables.spec import spec_for
-from ..schedule_action_metadata import ScheduleActionSetBy
 from .climate_schedule import ClimateApplianceScheduleActionDict
 from .ev_schedule import (
     ApplianceScheduleNormalizationMode,
@@ -87,22 +86,6 @@ def is_appliance_action_active(
     ask it rather than keep a copy free to drift.
     """
     return spec_for(appliance.kind).is_running(action)
-
-
-def with_appliance_schedule_actions_set_by(
-    actions: Mapping[str, ApplianceScheduleActionDict],
-    *,
-    set_by: ScheduleActionSetBy | None,
-) -> ApplianceScheduleActionsDict:
-    normalized_actions = {
-        appliance_id: dict(action) for appliance_id, action in actions.items()
-    }
-    if set_by is None:
-        return normalized_actions
-
-    for action in normalized_actions.values():
-        action["setBy"] = set_by
-    return normalized_actions
 
 
 def _read_appliance_id(value: object, *, context: str) -> str:

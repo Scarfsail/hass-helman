@@ -1,20 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, NotRequired, TypedDict
+from typing import Any, TypedDict
 
 from .ev_schedule import ApplianceScheduleNormalizationMode
 from .generic_appliance import GenericApplianceRuntime
-from ..schedule_action_metadata import (
-    ScheduleActionSetBy,
-    read_optional_schedule_action_set_by,
-)
 
 
 class GenericApplianceScheduleActionDict(TypedDict):
     on: bool
-    setBy: NotRequired[ScheduleActionSetBy]
-    conditionMet: NotRequired[bool]
 
 
 def normalize_generic_appliance_schedule_action(
@@ -28,9 +22,7 @@ def normalize_generic_appliance_schedule_action(
     if not isinstance(value, Mapping):
         raise ValueError(f"{context} must be an object")
 
-    unsupported_keys = sorted(
-        str(key) for key in value.keys() if key not in {"on", "setBy", "conditionMet"}
-    )
+    unsupported_keys = sorted(str(key) for key in value.keys() if key != "on")
     if unsupported_keys:
         raise ValueError(
             f"{context} contains unsupported fields: {', '.join(unsupported_keys)}"
@@ -39,16 +31,7 @@ def normalize_generic_appliance_schedule_action(
     if "on" not in value or not isinstance(value["on"], bool):
         raise ValueError(f"{context}.on must be boolean")
 
-    payload: GenericApplianceScheduleActionDict = {"on": value["on"]}
-    set_by = read_optional_schedule_action_set_by(
-        value.get("setBy"),
-        path=f"{context}.setBy",
-    )
-    if set_by is not None:
-        payload["setBy"] = set_by
-    if value.get("conditionMet") is False:
-        payload["conditionMet"] = False
-    return payload
+    return {"on": value["on"]}
 
 
 def is_generic_action_running(action: Mapping[str, Any]) -> bool:

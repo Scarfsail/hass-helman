@@ -47,6 +47,7 @@ from custom_components.helman.automation.snapshot import (  # noqa: E402
 from custom_components.helman.scheduling.schedule import (  # noqa: E402
     ScheduleAction,
     ScheduleDocument,
+    build_controllable_actions,
     inverter_action,
 )
 from custom_components.helman.appliances.state import AppliancesRuntimeRegistry  # noqa: E402
@@ -279,13 +280,13 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
 
     def test_simulation_does_not_restore_inactive_document_action(self) -> None:
         inactive = ScheduleDocument(slots={
-            _slot_id(6): {
-                "inverter": ScheduleAction(
+            _slot_id(6): build_controllable_actions(
+                inverter=ScheduleAction(
                     kind="stop_discharging",
                     set_by="automation",
                     condition_met=False,
                 )
-            }
+            )
         })
         result = self._run_with_fake_simulator(
             holds_needed=4,
@@ -324,9 +325,9 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
     def test_simulated_trace_marks_user_owned_slots_unavailable(self) -> None:
         owned_slot = _slot_id(6, 30)
         schedule = ScheduleDocument(slots={
-            owned_slot: {
-                "inverter": ScheduleAction(kind="normal", set_by="user")
-            }
+            owned_slot: build_controllable_actions(
+                inverter=ScheduleAction(kind="normal", set_by="user")
+            )
         })
         _result, trace = self._run_with_fake_simulator(
             holds_needed=4,

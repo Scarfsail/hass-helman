@@ -1,16 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from typing import TYPE_CHECKING, Any
-
-from ..const import SCHEDULE_ACTION_EMPTY
+from dataclasses import replace
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ..scheduling.schedule import (
-        ControllableScheduleAction,
         ControllableScheduleActions,
-        ScheduleAction,
         ScheduleDocument,
+        SlotAction,
     )
 
 
@@ -28,7 +26,7 @@ def strip_automation_owned_actions(
     re-plan while leaving the phase-2 inverter/system lanes untouched, rather
     than adding a second stripper.
     """
-    from ..scheduling.schedule import ControllableScheduleActions, ScheduleDocument
+    from ..scheduling.schedule import ScheduleDocument
 
     wanted = None if controllable_ids is None else frozenset(controllable_ids)
 
@@ -40,7 +38,7 @@ def strip_automation_owned_actions(
             for controllable_id, action in actions.items()
             if not (
                 (wanted is None or controllable_id in wanted)
-                and _is_automation_owned(action)
+                and not is_user_owned(action)
             )
         }
         if not stripped:
@@ -55,7 +53,7 @@ def strip_automation_owned_actions(
 
 def has_automation_owned_actions(doc: "ScheduleDocument") -> bool:
     return any(
-        _is_automation_owned(action)
+        not is_user_owned(action)
         for actions in doc.slots.values()
         for action in actions.values()
     )
@@ -66,7 +64,7 @@ def count_automation_owned_actions(doc: "ScheduleDocument") -> int:
         1
         for actions in doc.slots.values()
         for action in actions.values()
-        if _is_automation_owned(action)
+        if not is_user_owned(action)
     )
 
 
@@ -75,7 +73,7 @@ def merge_automation_result(
     baseline: "ScheduleDocument",
     automation_result: "ScheduleDocument",
 ) -> "ScheduleDocument":
-    from ..scheduling.schedule import ControllableScheduleActions, ScheduleDocument
+    from ..scheduling.schedule import ScheduleDocument
 
     clean_baseline = strip_automation_owned_actions(baseline)
     merged_slots: dict[str, ControllableScheduleActions] = {}
@@ -99,8 +97,8 @@ def merge_automation_result(
 def _merge_slot_actions(
     *,
     slot_id: str,
-    baseline: Mapping[str, Any],
-    automation_result: Mapping[str, Any],
+    baseline: Mapping[str, "SlotAction"],
+    automation_result: Mapping[str, "SlotAction"],
 ) -> "ControllableScheduleActions":
     """Fold one slot's automation result onto the user-owned baseline.
 
@@ -131,7 +129,7 @@ def _merge_slot_actions(
     """
     from ..scheduling.schedule import ScheduleActionError
 
-    merged: dict[str, Any] = {}
+    merged: ControllableScheduleActions = {}
 
     for controllable_id in sorted(set(baseline) | set(automation_result)):
         baseline_action = baseline.get(controllable_id)
@@ -143,73 +141,27 @@ def _merge_slot_actions(
                     "Automation cannot overwrite user-owned action for "
                     f"controllable {controllable_id!r} in slot {slot_id}"
                 )
-            merged[controllable_id] = (
-                dict(baseline_action)
-                if isinstance(baseline_action, Mapping)
-                else baseline_action
-            )
+            merged[controllable_id] = baseline_action
             continue
 
         if result_action is None:
             continue
 
-        merged[controllable_id] = _stamp_automation(result_action)
+        merged[controllable_id] = stamp_automation(result_action)
 
     return merged
 
 
-def _stamp_automation(action: "ControllableScheduleAction") -> Any:
-    """Mark an action as the automation's, in whichever shape it arrived.
+def stamp_automation(action: "SlotAction") -> "SlotAction":
+    """Mark an action as the automation's; its payload and candidacy are kept."""
+    return replace(action, set_by="automation")
 
-    Dispatch is on ``Mapping`` rather than on ``isinstance(..., ScheduleAction)``
-    because several test modules install a stub ``scheduling.schedule``, which
-    makes the class identity two different objects while the value is still the
-    real one. "Is this a plain action dict?" is also the honest question: it is
-    the shape that decides, not the class.
+
+def is_user_owned(action: "SlotAction | None") -> bool:
+    """Whether a position in a slot's action map is the user's.
+
+    Anything the automation did not stamp is the user's, including a legacy
+    action with no ``setBy`` at all; an absent entry means "nothing scheduled",
+    which is nobody's.
     """
-    from ..scheduling.schedule import ScheduleAction
-
-    if isinstance(action, Mapping):
-        return stamp_automation_appliance_action(action)
-    return ScheduleAction(
-        kind=action.kind,
-        target_soc=action.target_soc,
-        set_by="automation",
-        condition_met=action.condition_met,
-    )
-
-
-def is_user_owned_appliance_action(
-    action: Mapping[str, object] | None,
-) -> bool:
-    return action is not None and action.get("setBy") != "automation"
-
-
-def is_user_owned_inverter_action(action: "ScheduleAction") -> bool:
-    return action.kind != SCHEDULE_ACTION_EMPTY and action.set_by != "automation"
-
-
-def _is_automation_owned(action: Any) -> bool:
-    """Whether an action in the id-keyed map was placed by the automation.
-
-    Both shapes carry the same fact under the same name; only the accessor
-    differs, because the inverter's action is a dataclass and an appliance's is
-    the dict its own kind's normalizer owns.
-    """
-    if action is None:
-        return False
-    if isinstance(action, Mapping):
-        return action.get("setBy") == "automation"
-    return action.set_by == "automation"
-
-
-def stamp_automation_appliance_action(
-    action: Mapping[str, object],
-    *,
-    condition_met: bool = True,
-) -> dict[str, object]:
-    stamped = {str(key): value for key, value in action.items()}
-    stamped["setBy"] = "automation"
-    if not condition_met:
-        stamped["conditionMet"] = False
-    return stamped
+    return action is not None and action.set_by != "automation"

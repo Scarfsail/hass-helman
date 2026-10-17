@@ -41,6 +41,7 @@ from custom_components.helman.scheduling.schedule import (  # noqa: E402
     ScheduleDocument,
     ScheduleSlot,
     iter_horizon_slot_ids,
+    slot_action_to_dict,
 )
 from custom_components.helman.automation.trace import OptimizerTrace  # noqa: E402
 from automation_config_builders import make_appliance_member_config  # noqa: E402
@@ -430,10 +431,10 @@ def _runtime(appliance_id: str, cfg: OptimizerInstanceConfig):
 
 def _placed_slots(result: ScheduleDocument, appliance_id: str) -> dict[str, dict]:
     return {
-        slot_id: actions[appliance_id]
+        slot_id: slot_action_to_dict(actions[appliance_id])
         for slot_id, actions in result.slots.items()
         if appliance_id in actions
-        and actions[appliance_id].get("setBy") == "automation"
+        and actions[appliance_id].set_by == "automation"
     }
 
 

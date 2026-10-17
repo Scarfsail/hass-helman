@@ -20,7 +20,12 @@ REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
 
 from custom_components.helman.coordinator import HelmanCoordinator  # noqa: E402
 from custom_components.helman import coordinator as coordinator_module
-from custom_components.helman.scheduling.schedule import ScheduleAction, ScheduleDocument  # noqa: E402
+from custom_components.helman.scheduling.schedule import (  # noqa: E402
+    ScheduleAction,
+    ScheduleDocument,
+    SlotAction,
+    build_controllable_actions,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -111,7 +116,9 @@ def _make_projection_plan() -> SimpleNamespace:
 
 def _make_schedule_action(kind: str, target_soc: int | None = None) -> dict:
     """One slot's flat, id-keyed action map holding just the inverter's."""
-    return {"inverter": ScheduleAction(kind=kind, target_soc=target_soc)}
+    return build_controllable_actions(
+        inverter=ScheduleAction(kind=kind, target_soc=target_soc)
+    )
 
 
 def _make_schedule_document(
@@ -478,7 +485,7 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             return_value=_make_control_config()
         )
         slot = _make_schedule_action("stop_charging")
-        slot["boiler"] = {"kind": "run"}
+        slot["boiler"] = SlotAction(payload={"kind": "run"})
         schedule_document = _make_schedule_document(
             execution_enabled=False,
             slots={"2026-03-20T21:00:00+01:00": slot},

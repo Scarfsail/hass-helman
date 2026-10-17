@@ -18,7 +18,11 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from ...const import SCHEDULE_ACTION_STOP_EXPORT
-from ...scheduling.schedule import ScheduleDocument, iter_horizon_slot_ids
+from ...scheduling.schedule import (
+    ScheduleAction,
+    ScheduleDocument,
+    iter_horizon_slot_ids,
+)
 from ..base import ScheduleWriter
 from ..conditions import build_eligibility
 from ..explain import (
@@ -105,8 +109,8 @@ class ExportPriceOptimizer:
 
         applied_by_group: dict[int, list[str]] = {}
         for resolved in eligible:
-            if not writer.set_inverter(
-                resolved.slot_id, kind=SCHEDULE_ACTION_STOP_EXPORT
+            if not writer.set(
+                resolved.slot_id, ScheduleAction(kind=SCHEDULE_ACTION_STOP_EXPORT)
             ):
                 # User-owned: the writer vetoed it and the slot keeps its `skip`
                 # baseline. `base.py` records the veto node itself.

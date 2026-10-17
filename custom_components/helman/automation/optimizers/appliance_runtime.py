@@ -88,7 +88,7 @@ from ..explain import (
     VERDICT_SKIP,
 )
 from ..fields import time_on
-from ..ownership import is_user_owned_appliance_action
+from ..ownership import is_user_owned
 from ..rails import (
     horizon_slots_between,
     read_available_surplus_by_bucket,
@@ -549,11 +549,7 @@ class ApplianceRuntimeOptimizer:
                 floor_rejected=floor_rejected,
             )
             for _cost, slot_id in chosen:
-                if not writer.set_appliance(
-                    slot_id,
-                    appliance_id=appliance_id,
-                    action=self.target.authored_action,
-                ):
+                if not writer.set(slot_id, self.target.authored_action):
                     # User-owned: `base.py` records the veto and the slot keeps
                     # its `skip` baseline. Unreachable while `_rank_slots` drops
                     # those slots, but the verdict must not outrun the write.
@@ -754,11 +750,7 @@ class ApplianceRuntimeOptimizer:
             if rejection is not None:
                 trace.decision(slot_ids=[resolved.slot_id], outcome="rejected")
                 continue
-            if writer.set_appliance(
-                resolved.slot_id,
-                appliance_id=appliance_id,
-                action=self.target.authored_action,
-            ):
+            if writer.set(resolved.slot_id, self.target.authored_action):
                 applied_by_group.setdefault(resolved.group.index, []).append(
                     resolved.slot_id
                 )
@@ -1560,7 +1552,7 @@ def _rank_slots(
     candidates: list[tuple[float, int, datetime, str]] = []
     for slot_id in window_slots:
         current_actions = document.slots.get(slot_id, {})
-        if is_user_owned_appliance_action(current_actions.get(appliance_id)):
+        if is_user_owned(current_actions.get(appliance_id)):
             continue
         covered = _slot_is_solar_covered(
             slot_id=slot_id,

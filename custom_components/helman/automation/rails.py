@@ -12,7 +12,6 @@ Nothing here validates config; see :mod:`.fields` for that.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -317,11 +316,9 @@ def read_planned_appliance_slot_ids(
     planned: set[str] = set()
     for slot_id, actions in snapshot.schedule.slots.items():
         action = actions.get(appliance_id)
-        if not isinstance(action, Mapping):
+        if action is None or not action.condition_met:
             continue
-        if action.get("conditionMet") is False:
-            continue
-        if is_appliance_action_active(action, appliance=appliance):
+        if is_appliance_action_active(action.payload, appliance=appliance):
             planned.add(slot_id)
     return frozenset(planned)
 

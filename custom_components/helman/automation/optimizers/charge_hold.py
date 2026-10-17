@@ -54,6 +54,7 @@ from homeassistant.util import dt as dt_util
 
 from ...const import SCHEDULE_ACTION_STOP_CHARGING, SCHEDULE_SLOT_MINUTES
 from ...scheduling.schedule import (
+    ScheduleAction,
     ScheduleDocument,
     build_horizon_start,
     format_slot_id,
@@ -252,7 +253,7 @@ class ChargeHoldOptimizer:
                 released_by_day.setdefault(local_date, []).append(slot_id)
                 continue
             held_by_day.setdefault(local_date, []).append(slot_id)
-            if writer.set_inverter(slot_id, kind=SCHEDULE_ACTION_STOP_CHARGING):
+            if writer.set(slot_id, ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)):
                 applied_by_day.setdefault(local_date, []).append(slot_id)
 
         _emit_charge_hold_gates(
