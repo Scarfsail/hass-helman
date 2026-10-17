@@ -75,14 +75,17 @@ from .solar_bias_correction.battery_forecast_history import (
     GRID_IMPORT_FORECAST_CURRENT_ENTITY,
     GRID_NET_FORECAST_CURRENT_ENTITY,
 )
-from .solar_forecast_backfill import _first_hour_home_assistant_owns
+from .statistics_backfill import (
+    _CHUNK,
+    _CHUNK_PAUSE_SECONDS,
+    _RECORDER_DOMAIN,
+    _first_hour_home_assistant_owns,
+    async_import_and_forget,
+    first_compiled_hour,
+    mean_metadata,
+)
 
 _LOGGER = logging.getLogger(__name__)
-
-#: The recorder's own domain, which ``async_import_statistics`` insists the
-#: metadata's ``source`` equals -- the series belong to entities and live in the
-#: recorder's own table.
-_RECORDER_DOMAIN = "recorder"
 
 #: The retired store's file. Its shape (v1)::
 #:
@@ -101,17 +104,6 @@ _SOURCE_STORAGE_VERSION = 1
 _STORAGE_KEY = f"{DOMAIN}.battery_forecast_backfill"
 _STORAGE_VERSION = 1
 
-#: Fifteen-minute slots per statistics hour. The reader
-#: ``statistics_day._forecast_wh_points`` multiplies an hour's mean by
-#: ``_KWH_TO_WH * SLOTS_PER_HOUR`` because each Wh entity publishes one slot's
-#: Wh, so the mean written here is the hour's slot sum divided by this. Keep in
-#: step with ``statistics_day.SLOTS_PER_HOUR``.
-
-#: How much history one import job covers before the walk pauses. Mirrors the
-#: seven-day chunk the sibling back-fills read in; here the whole source is
-#: already in memory, so the chunk only paces the write side.
-_CHUNK = timedelta(days=7)
-_CHUNK_PAUSE_SECONDS = 1.0
 
 
 @dataclass(frozen=True)
@@ -281,11 +273,13 @@ async def _backfill_series(
     metadata = _metadata(series)
     written = 0
     for chunk in _in_chunks(rows):
-        async_import_statistics(hass, metadata, chunk)
+        await async_import_and_forget(
+            hass, metadata, chunk, import_fn=async_import_statistics
+        )
         written += len(chunk)
-        await async_forget_imported_statistics(hass, series.entity_id)
         await asyncio.sleep(_CHUNK_PAUSE_SECONDS)
     return written
+
 
 
 def _hourly_rows(
@@ -392,31 +386,8 @@ def _parse_slot(
 
 
 def _metadata(series: _Series) -> StatisticMetaData:
-    """What the imported rows describe, in the shape the recorder validates.
-
-    ``source`` is the recorder's own domain -- an entity-id-shaped series lives
-    in the recorder's table and ``async_import_statistics`` rejects anything
-    else. The four Wh series convert within ``energy``; ``socPct`` is a
-    percentage, whose unit class is ``unitless`` -- naming ``energy`` there is an
-    outright rejection, and both are stated explicitly because the entities
-    carry no device class the recorder could infer them from.
-    """
+    """What the imported rows describe, in the shape the recorder validates."""
     if series.is_energy:
-        return StatisticMetaData(
-            mean_type=StatisticMeanType.ARITHMETIC,
-            has_sum=False,
-            name=None,
-            source=_RECORDER_DOMAIN,
-            statistic_id=series.entity_id,
-            unit_class="energy",
-            unit_of_measurement="Wh",
-        )
-    return StatisticMetaData(
-        mean_type=StatisticMeanType.ARITHMETIC,
-        has_sum=False,
-        name=None,
-        source=_RECORDER_DOMAIN,
-        statistic_id=series.entity_id,
-        unit_class="unitless",
-        unit_of_measurement="%",
-    )
+        return mean_metadata(series.entity_id, unit="Wh", unit_class="energy")
+    return mean_metadata(series.entity_id, unit="%", unit_class="unitless")
+

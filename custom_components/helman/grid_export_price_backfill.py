@@ -66,45 +66,27 @@ from homeassistant.helpers import storage
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, GRID_EXPORT_PRICE_ENTITY_ID
+from .statistics_backfill import (
+    _CHUNK,
+    _CHUNK_PAUSE_SECONDS,
+    _MAX_SPAN,
+    _RECORDER_DOMAIN,
+    _first_hour_home_assistant_owns,
+    _time_weighted_mean,
+    async_walk_backward,
+    first_compiled_hour,
+    mean_metadata,
+    time_weighted_hourly_rows,
+    BackfillCursorStore,
+)
 
 _LOGGER = logging.getLogger(__name__)
-
-#: The recorder's own domain, which ``async_import_statistics`` insists the
-#: metadata's ``source`` equals. Spelled out rather than imported from
-#: ``homeassistant.components.recorder.const`` so this module keeps to the
-#: recorder's public surface.
-_RECORDER_DOMAIN = "recorder"
-
-#: How much history one pass reads and writes before yielding.
-#:
-#: A week of a fast-writing price entity is a few thousand state rows -- a read
-#: the recorder's executor finishes in well under a second -- and 168 statistics
-#: rows, which is a comfortable single import job. Smaller chunks would multiply
-#: round-trips through the recorder's single DB thread for no gain; larger ones
-#: would hold that thread while the rest of the integration waits behind it.
-_CHUNK = timedelta(days=7)
-
-#: How far back the walk may reach before giving up regardless of what it finds.
-#:
-#: The walk's real stopping condition is the source entity's history running
-#: out, and that is what ends it on every real instance. This is the guard
-#: against the case where it somehow never does -- three years is past any
-#: retention setting a user is likely to have, and comfortably past the two the
-#: reference instance keeps.
-_MAX_SPAN = timedelta(days=1100)
-
-#: Breathing room between chunks.
-#:
-#: Zero would be enough to let the loop run, but not enough to keep the recorder's
-#: queue short: the import job is queued rather than awaited, so an unpaced walk
-#: could enqueue a year of imports before the first one is written.
-_CHUNK_PAUSE_SECONDS = 1.0
 
 _STORAGE_KEY = f"{DOMAIN}.grid_export_price_backfill"
 _STORAGE_VERSION = 1
 
 
-class GridExportPriceBackfillStore:
+class GridExportPriceBackfillStore(BackfillCursorStore):
     """Where the backward walk got to, across restarts.
 
     Persisted payload shape (v1)::
@@ -125,53 +107,7 @@ class GridExportPriceBackfillStore:
     """
 
     def __init__(self, hass: HomeAssistant) -> None:
-        self._store = storage.Store(hass, _STORAGE_VERSION, _STORAGE_KEY)
-        self._document: dict[str, Any] = {}
-
-    async def async_load(self) -> None:
-        stored = await self._store.async_load()
-        if not isinstance(stored, dict) or stored.get("version") != _STORAGE_VERSION:
-            self._document = {}
-            return
-        self._document = stored
-
-    def done_for(self, source_entity_id: str) -> bool:
-        """Whether a previous run exhausted *this* source's history.
-
-        A cursor recorded against another entity says nothing about this one, so
-        it reads as unfinished and the walk starts again from the top.
-        """
-        if self._document.get("source") != source_entity_id:
-            return False
-        return bool(self._document.get("done"))
-
-    def oldest_hour_for(self, source_entity_id: str) -> datetime | None:
-        """Where the walk got to for this source, or None to start afresh."""
-        if self._document.get("source") != source_entity_id:
-            return None
-        return self.oldest_hour
-
-    @property
-    def oldest_hour(self) -> datetime | None:
-        """The oldest hour written so far, or None when nothing has been."""
-        raw = self._document.get("oldest_hour")
-        if not isinstance(raw, str):
-            return None
-        try:
-            return dt_util.as_utc(datetime.fromisoformat(raw))
-        except ValueError:
-            return None
-
-    async def async_record(
-        self, *, source_entity_id: str, oldest_hour: datetime, done: bool
-    ) -> None:
-        self._document = {
-            "version": _STORAGE_VERSION,
-            "source": source_entity_id,
-            "oldest_hour": oldest_hour.isoformat(),
-            "done": done,
-        }
-        await self._store.async_save(self._document)
+        super().__init__(hass, _STORAGE_KEY)
 
 
 async def async_backfill_grid_export_price_statistics(
@@ -191,106 +127,30 @@ async def async_backfill_grid_export_price_statistics(
     without it, so a failure here is logged and dropped rather than taken out on
     whatever started the task.
     """
-    from .recorder_statistics_span import async_forget_imported_statistics
+    store = GridExportPriceBackfillStore(hass)
 
-    try:
-        store = GridExportPriceBackfillStore(hass)
-        await store.async_load()
-        if store.done_for(source_entity_id):
-            return
-
-        cursor = store.oldest_hour_for(source_entity_id) or await _first_hour_home_assistant_owns(
-            hass, target_entity_id
-        )
-        floor = dt_util.as_utc(dt_util.now()) - _MAX_SPAN
-        written = 0
-
-        while cursor > floor:
-            chunk_start = max(cursor - _CHUNK, floor)
-            rows = await _chunk_statistics(
-                hass,
-                source_entity_id,
-                utc_start=chunk_start,
-                utc_end=cursor,
-            )
-            # ``None`` means the recorder holds no state for this entity in the
-            # chunk and none before it either, which is the walk's stopping
-            # condition. An empty list is a chunk whose states were all
-            # non-numeric -- unusual, but not evidence that history has ended.
-            exhausted = rows is None
-            if rows:
-                async_import_statistics(
-                    hass,
-                    _metadata(target_entity_id, unit_of_measurement),
-                    rows,
-                )
-                written += len(rows)
-                await async_forget_imported_statistics(hass, target_entity_id)
-            cursor = chunk_start
-            await store.async_record(
-                source_entity_id=source_entity_id, oldest_hour=cursor, done=exhausted
-            )
-            if exhausted:
-                break
-            await asyncio.sleep(_CHUNK_PAUSE_SECONDS)
-
-        # Info rather than debug: this runs a handful of times in an
-        # installation's life, and how far back it reached is the one thing that
-        # explains why a month view prices some buckets and not others.
-        _LOGGER.info(
-            "Back-filled %d hourly export price statistics for %s from %s, back to %s",
-            written,
-            target_entity_id,
-            source_entity_id,
-            cursor.isoformat(),
-        )
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        _LOGGER.exception(
-            "Failed to back-fill export price statistics for %s", target_entity_id
-        )
-
-
-async def _first_hour_home_assistant_owns(
-    hass: HomeAssistant, target_entity_id: str
-) -> datetime:
-    """The oldest hour the statistics compiler has written for the mirror.
-
-    The back-fill must stop strictly before this, so that the compiler's rows and
-    the imported ones never describe the same hour by two different routes.
-
-    Usually there are none -- the mirror is new, and the first run of this
-    back-fill happens within minutes of its first state -- and then the answer is
-    the *current* hour: the compiler will write that one when it ends, and has
-    never written an earlier one because the entity did not exist. Reading the
-    series anyway costs one query on a path that runs once per installation, and
-    is what makes the walk correct on an instance whose store was wiped while its
-    statistics survived.
-    """
-    from .recorder_statistics_span import query_hourly_statistics
-
-    now = dt_util.as_utc(dt_util.now())
-    current_hour = now.replace(minute=0, second=0, microsecond=0)
-    try:
-        span = await query_hourly_statistics(
+    async def _read(
+        chunk_start: datetime, cursor: datetime
+    ) -> list[StatisticData] | None:
+        return await _chunk_statistics(
             hass,
-            [target_entity_id],
-            local_start=now - _MAX_SPAN,
-            local_end=now,
+            source_entity_id,
+            utc_start=chunk_start,
+            utc_end=cursor,
         )
-    except Exception:
-        _LOGGER.exception(
-            "Failed to read existing statistics for %s; "
-            "back-filling from the current hour",
-            target_entity_id,
-        )
-        return current_hour
 
-    compiled = span.rows_for(target_entity_id)
-    if not compiled:
-        return current_hour
-    return min(min(compiled), current_hour)
+    await async_walk_backward(
+        hass,
+        store=store,
+        source_entity_id=source_entity_id,
+        target_entity_id=target_entity_id,
+        metadata=_metadata(target_entity_id, unit_of_measurement),
+        read_chunk=_read,
+        log_name="export price",
+        pause_seconds=_CHUNK_PAUSE_SECONDS,
+        import_fn=async_import_statistics,
+    )
+
 
 
 async def _chunk_statistics(
@@ -372,101 +232,11 @@ def _hourly_rows(
     utc_start: datetime,
     utc_end: datetime,
 ) -> list[StatisticData]:
-    """One :class:`StatisticData` per hour of the chunk that has any reading.
-
-    Hours with nothing standing in them -- before the entity's first ever state,
-    or through a stretch the recorder has purged -- are omitted rather than
-    carried, so a hole in the source's history stays a hole in the mirror's
-    statistics instead of being papered over with a rate that was never
-    published.
-    """
-    rows: list[StatisticData] = []
-    hour = utc_start.replace(minute=0, second=0, microsecond=0)
-    if hour < utc_start:
-        hour += timedelta(hours=1)
-
-    # One forward sweep rather than a scan per hour: ``standing`` is the reading
-    # in force as the hour opens, and ``index`` never walks backward, so a week
-    # of a fast-writing entity costs one pass over its states and not 168.
-    index = 0
-    standing: tuple[datetime, float] | None = None
-    while index < len(samples) and samples[index][0] <= hour:
-        standing = samples[index]
-        index += 1
-
-    while hour < utc_end:
-        hour_end = hour + timedelta(hours=1)
-        inside: list[tuple[datetime, float]] = []
-        while index < len(samples) and samples[index][0] < hour_end:
-            inside.append(samples[index])
-            index += 1
-        window = ([standing] if standing is not None else []) + inside
-        if inside:
-            standing = inside[-1]
-        if window:
-            values = [value for _, value in window]
-            rows.append(
-                StatisticData(
-                    start=hour,
-                    mean=_time_weighted_mean(window, start=hour, end=hour_end),
-                    min=min(values),
-                    max=max(values),
-                )
-            )
-        hour = hour_end
-    return rows
-
-
-def _time_weighted_mean(
-    window: list[tuple[datetime, float]],
-    *,
-    start: datetime,
-    end: datetime,
-) -> float:
-    """The mean value *in force* across ``[start, end)``, weighted by duration.
-
-    A deliberate re-implementation of the recorder's
-    ``_time_weighted_arithmetic_mean``, including the part that looks like an
-    edge case and is not: when the first reading arrives *after* the period
-    began, the period is shortened to start there rather than the reading being
-    stretched backward over time it did not apply to. An hour whose only reading
-    lands at :50 therefore reports that reading, not a tenth of it.
-
-    ``window`` must be in time order and must not be empty; the reading in force
-    at ``start`` may carry a ``last_updated`` from before it, which is clamped
-    the way the recorder clamps it.
-    """
-    accumulated = 0.0
-    previous_value: float | None = None
-    previous_instant: datetime | None = None
-    for instant, value in window:
-        instant = max(instant, start)
-        if previous_instant is None:
-            start = instant
-        else:
-            accumulated += previous_value * (instant - previous_instant).total_seconds()
-        previous_value = value
-        previous_instant = instant
-
-    accumulated += previous_value * (end - previous_instant).total_seconds()
-    return accumulated / (end - start).total_seconds()
+    """One :class:`StatisticData` per hour of the chunk that has any reading."""
+    return time_weighted_hourly_rows(samples, utc_start, utc_end, carry_in=True)
 
 
 def _metadata(target_entity_id: str, unit: str | None) -> StatisticMetaData:
-    """What the imported rows describe, in the shape the recorder validates.
+    """What the imported rows describe, in the shape the recorder validates."""
+    return mean_metadata(target_entity_id, unit=unit, unit_class=None)
 
-    ``source`` is the recorder's own domain and not ``helman``: the series being
-    written is an entity's, which lives in the recorder's table, and
-    ``async_import_statistics`` rejects anything else. ``unit_class`` is None
-    because a currency per kilowatt-hour converts into nothing -- naming a class
-    the unit does not belong to is an outright error, not a warning.
-    """
-    return StatisticMetaData(
-        mean_type=StatisticMeanType.ARITHMETIC,
-        has_sum=False,
-        name=None,
-        source=_RECORDER_DOMAIN,
-        statistic_id=target_entity_id,
-        unit_class=None,
-        unit_of_measurement=unit,
-    )

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from collections import OrderedDict, deque
 from datetime import date, datetime, timedelta, timezone
 from statistics import median
-from typing import TYPE_CHECKING, Any, Callable, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Coroutine, Sequence
 from zoneinfo import ZoneInfo
 
 from homeassistant.core import HomeAssistant, callback
@@ -698,7 +698,19 @@ class _CachedDeviceDataset:
     generation: int
 
 
+@dataclass
+class _BackfillJob:
+    """One background statistics back-fill job and its starting state."""
+
+    name: str
+    ready: Callable[[], bool]
+    start: Callable[[], Coroutine[Any, Any, None]]
+    started: bool = False
+    task: asyncio.Task[None] | None = None
+
+
 class HelmanCoordinator:
+
     def __init__(self, hass: HomeAssistant, storage: HelmanStorage) -> None:
         self._hass = hass
         self._storage = storage
@@ -774,16 +786,30 @@ class HelmanCoordinator:
         #: published sensor's attributes can be compared key for key with the
         #: entity they were ingested from.
         self._grid_export_price_schedule: dict[str, float] = {}
-        #: The one-shot statistics back-fill for the export price mirror.
-        self._grid_export_price_backfill_task: Any | None = None
-        self._grid_export_price_backfill_started = False
-        #: The one-shot walk that recovers the forecast's past publications.
-        self._solar_forecast_backfill_task: Any | None = None
-        self._solar_forecast_backfill_started = False
-        #: The one-shot back-fill of the five battery-forecast entities'
-        #: statistics from the retired store's orphaned .storage file.
-        self._battery_forecast_backfill_task: Any | None = None
-        self._battery_forecast_backfill_started = False
+        self._backfill_jobs: list[_BackfillJob] = [
+            _BackfillJob(
+                name="helman_solar_forecast_backfill",
+                ready=lambda: (
+                    self.get_solar_forecast_current_wh(corrected=False) is not None
+                    and bool(self._get_solar_forecast_source_entity_id())
+                ),
+                start=self._start_solar_forecast_backfill,
+            ),
+            _BackfillJob(
+                name="helman_battery_forecast_backfill",
+                ready=lambda: self.get_battery_forecast_current() is not None,
+                start=self._start_battery_forecast_backfill,
+            ),
+            _BackfillJob(
+                name="helman_grid_export_price_backfill",
+                ready=lambda: (
+                    self._grid_export_price_current is not None
+                    and self._grid_export_price_unit is not None
+                    and bool(self._get_grid_sell_price_entity_id())
+                ),
+                start=self._start_grid_export_price_backfill,
+            ),
+        ]
         self._cached_solar_forecast: dict[str, Any] | None = None
         #: (slot start, snapshot) for `_build_grid_price_snapshot`'s per-slot hold.
         self._grid_price_snapshot_cache: tuple[datetime, dict[str, Any]] | None = None
@@ -1104,9 +1130,7 @@ class HelmanCoordinator:
             and getattr(export_price_sensor, "hass", None) is not None
         ):
             export_price_sensor.async_write_ha_state()
-        self._maybe_start_grid_export_price_backfill()
-        self._maybe_start_solar_forecast_backfill()
-        self._maybe_start_battery_forecast_backfill()
+        self._maybe_start_backfill_jobs()
 
     async def async_setup(self) -> None:
         """Register event listeners that invalidate the cached tree."""
@@ -2373,157 +2397,50 @@ class HelmanCoordinator:
             return self._ingest_grid_export_price()
         return channel
 
-    def _maybe_start_solar_forecast_backfill(self) -> None:
-        """Start the one-shot walk that recovers the forecast's past publications.
+    def _maybe_start_backfill_jobs(self) -> None:
+        """Start any ready one-shot statistics back-fill jobs on the publish beat."""
+        for job in self._backfill_jobs:
+            if job.started or not job.ready():
+                continue
+            job.started = True
+            job.task = self._hass.async_create_background_task(
+                job.start(),
+                job.name,
+            )
 
-        Triggered from the publish beat rather than from setup, for the same
-        reason the export-price walk is: the first import writes the target
-        entity's statistics metadata, so it must not run before that entity has
-        published a value of its own and the compiler owns an hour to stop
-        before.
-
-        Unprompted rather than on request, because what it reads is perishable.
-        The source's states carry the only surviving record of what each past
-        slot was forecast at before it ran, and they purge on
-        ``purge_keep_days`` -- by the time #173 makes anything read these rows,
-        waiting to be asked would mean there was nothing left to write.
-
-        Runs at most once per Home Assistant start; the task keeps a persisted
-        cursor, so a run cut short by a restart resumes rather than restarting.
-        """
-        # Wait for the publish beat to provide a current forecast value before
-        # starting a walk that writes into the sensor's statistics series.
-        if self._solar_forecast_backfill_started:
-            return
-        if self.get_solar_forecast_current_wh(corrected=False) is None:
-            # No value published yet, so the sensor has no series to write into
-            # and no compiled hour to stop before.
-            return
-        source_entity_id = self._get_solar_forecast_source_entity_id()
-        if not source_entity_id:
-            return
-
+    def _start_solar_forecast_backfill(self) -> Coroutine[Any, Any, None]:
         from .solar_forecast_backfill import async_backfill_solar_forecast_statistics
 
-        self._solar_forecast_backfill_started = True
-        # Tracked so it can be cancelled on unload, for the reason the
-        # export-price task is: a reload builds a fresh coordinator whose
-        # "started" flag is False, and a second walk would trample the first's
-        # cursor. The imports upsert, so nothing corrupts -- but progress is
-        # lost and the region is walked again.
-        self._solar_forecast_backfill_task = self._hass.async_create_background_task(
-            async_backfill_solar_forecast_statistics(
-                self._hass, source_entity_id=source_entity_id
-            ),
-            "helman_solar_forecast_backfill",
+        source_entity_id = self._get_solar_forecast_source_entity_id()
+        assert source_entity_id is not None
+        return async_backfill_solar_forecast_statistics(
+            self._hass, source_entity_id=source_entity_id
         )
 
     def _get_solar_forecast_source_entity_id(self) -> str | None:
         entities = read_solar_forecast_entities(self._active_config)
         return entities[0] if entities else None
 
-    def _maybe_start_battery_forecast_backfill(self) -> None:
-        """Start the one-shot back-fill of the five battery-forecast entities.
-
-        The source -- ``BatteryForecastHistoryStore``'s orphaned ``.storage``
-        file -- is static, not perishable, so this could have waited; it does
-        not, only because there is no cost to running it now and the file is
-        exactly the kind of artifact a cleanup sweeps up.
-
-        The guard is ``get_battery_forecast_current() is not None``, which is a
-        check on the *pipeline*, not directly on the five entities' states. It is
-        sufficient because every way that accessor has of returning a value
-        traces back to a slot-aligned rebuild: either the snapshot's current-slot
-        entry is a full one, which only the beat produces, or it is a partial
-        served from the memo, which only a full read earlier in the same slot can
-        have filled (see :meth:`get_battery_forecast_current`). Either way the
-        beat has run, and it writes the five sensors earlier in this same
-        :meth:`_publish_solar_forecast_entities` pass, before this starter is
-        reached -- so by the time the guard passes, the entities have published
-        and own their statistics metadata. This matches the pipeline-level guard
-        the solar walk uses.
-
-        Runs at most once per Home Assistant start. The task keeps a per-series
-        done-marker, so a run cut short by a restart resumes by skipping the
-        series it already wrote.
-        """
-        # Wait for a current-slot value from the publish beat before importing
-        # statistics for the five forecast entities.
-        if self._battery_forecast_backfill_started:
-            return
-        if self.get_battery_forecast_current() is None:
-            # No value for the current slot yet: no slot-aligned rebuild has
-            # run, so the five entities have not published and there is no
-            # metadata or compiled hour to align the import to.
-            return
-
+    def _start_battery_forecast_backfill(self) -> Coroutine[Any, Any, None]:
         from .battery_forecast_backfill import (
             async_backfill_battery_forecast_statistics,
         )
 
-        self._battery_forecast_backfill_started = True
-        # Tracked so it can be cancelled on unload, for the reason the sibling
-        # tasks are: a reload builds a fresh coordinator whose "started" flag is
-        # False, and a second run would re-read the file and re-import. The
-        # persisted original ownership boundaries let an interrupted series
-        # safely re-import its chunks; completed series are skipped.
-        self._battery_forecast_backfill_task = self._hass.async_create_background_task(
-            async_backfill_battery_forecast_statistics(self._hass),
-            "helman_battery_forecast_backfill",
-        )
+        return async_backfill_battery_forecast_statistics(self._hass)
 
-    def _maybe_start_grid_export_price_backfill(self) -> None:
-        """Start the one-shot statistics back-fill, once the mirror has a value.
-
-        Deliberately triggered from the publish beat rather than from setup: the
-        back-fill writes into the mirror's own statistics series, so it must not
-        run before the mirror exists, has a rate and knows its unit -- writing
-        metadata with the wrong unit would make the recorder treat the compiled
-        rows and the imported ones as two different quantities.
-
-        It runs at most once per Home Assistant start. The task keeps its own
-        persisted cursor, so a run cut short by a restart resumes where it
-        stopped rather than starting over.
-        """
-        # Wait for the publish beat to provide a rate and unit before writing
-        # the mirror's statistics metadata.
-        if self._grid_export_price_backfill_started:
-            return
-        if self._grid_export_price_current is None:
-            return
-        unit = self._grid_export_price_unit
-        if unit is None:
-            # No unit yet, so wait. The first import writes the mirror's
-            # statistics metadata, and writing it with a null unit would leave
-            # the archived series claiming no unit while the sensor's own states
-            # carry one -- a disagreement the recorder surfaces as a statistics
-            # issue and that nothing here would ever correct. The rate and the
-            # unit are read independently off the price snapshot, so a source
-            # publishing a bare number has one without the other; the next beat
-            # that carries both starts the walk.
-            return
-        source_entity_id = self._get_grid_sell_price_entity_id()
-        if not source_entity_id:
-            return
-
+    def _start_grid_export_price_backfill(self) -> Coroutine[Any, Any, None]:
         from .grid_export_price_backfill import (
             async_backfill_grid_export_price_statistics,
         )
 
-        self._grid_export_price_backfill_started = True
-        # Tracked so it can be cancelled on unload: a config-entry reload builds
-        # a fresh coordinator whose "started" flag is False, and a second walk
-        # over the same store would trample the first's cursor. The imports
-        # themselves upsert, so nothing is corrupted -- but progress is lost and
-        # the region is walked again on the next start.
-        self._grid_export_price_backfill_task = self._hass.async_create_background_task(
-            async_backfill_grid_export_price_statistics(
-                self._hass,
-                source_entity_id=source_entity_id,
-                unit_of_measurement=unit,
-            ),
-            "helman_grid_export_price_backfill",
+        source_entity_id = self._get_grid_sell_price_entity_id()
+        assert source_entity_id is not None
+        return async_backfill_grid_export_price_statistics(
+            self._hass,
+            source_entity_id=source_entity_id,
+            unit_of_measurement=self._grid_export_price_unit,
         )
+
 
     async def _async_get_canonical_solar_forecast(
         self,
@@ -5962,18 +5879,10 @@ class HelmanCoordinator:
         # reload can easily land mid-walk. Cancelling here keeps the reloaded
         # coordinator's walk the only one holding the cursor; the work already
         # imported stands, and the persisted cursor is where the new one starts.
-        backfill_task = self._grid_export_price_backfill_task
-        if backfill_task is not None:
-            backfill_task.cancel()
-            self._grid_export_price_backfill_task = None
-        solar_backfill_task = self._solar_forecast_backfill_task
-        if solar_backfill_task is not None:
-            solar_backfill_task.cancel()
-            self._solar_forecast_backfill_task = None
-        battery_backfill_task = self._battery_forecast_backfill_task
-        if battery_backfill_task is not None:
-            battery_backfill_task.cancel()
-            self._battery_forecast_backfill_task = None
+        for job in self._backfill_jobs:
+            if job.task is not None:
+                job.task.cancel()
+                job.task = None
         await self._automation_triggers.async_shutdown()
         self._prune_optimizer_condition_checkers(active_keys=set())
         await self._schedule_executor.async_unload()
