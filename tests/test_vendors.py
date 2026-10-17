@@ -10,7 +10,6 @@ from unittest.mock import patch
 import pytest
 
 from custom_components.helman.config_validation import validate_config_document
-from custom_components.helman.controllables.spec import CONTROLLABLE_SPECS
 from custom_components.helman.vendors import (
     PROFILES,
     describe_vendors,
@@ -23,7 +22,11 @@ from custom_components.helman.vendors.profile import (
 )
 
 ENTRY_ID = "solax-entry"
-INVERTER_ACTION_KINDS = list(CONTROLLABLE_SPECS["inverter"].action_option_attrs)
+from custom_components.helman.scheduling.schedule import (
+    INVERTER_ACTION_KINDS as _INVERTER_ACTION_KINDS,
+)
+
+INVERTER_ACTION_KINDS = list(_INVERTER_ACTION_KINDS)
 
 #: The issue's table, as the prod registry had it on 2026-10-09: config path →
 #: (unique id, entity id).

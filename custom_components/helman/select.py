@@ -21,7 +21,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
 from .const import DOMAIN, INVERTER_MODE_ENTITY_ID, INVERTER_MODE_UNIQUE_ID
-from .controllables.spec import CONTROLLABLE_KIND_INVERTER, CONTROLLABLE_SPECS
+from .scheduling.schedule import INVERTER_ACTION_KINDS
 from .scheduling.actuation import async_write_vendor_entity
 from .vendors import VendorProfile, find_mode_vendor, resolve_unique_ids
 from .vendors.modes import (
@@ -82,9 +82,7 @@ class HelmanInverterModeSelect(SelectEntity, RestoreEntity):
         )
         self.entity_id = INVERTER_MODE_ENTITY_ID
         self._attr_unique_id = INVERTER_MODE_UNIQUE_ID
-        self._attr_options = list(
-            CONTROLLABLE_SPECS[CONTROLLABLE_KIND_INVERTER].action_option_attrs
-        )
+        self._attr_options = list(INVERTER_ACTION_KINDS)
         self._attr_current_option = None
         self._coordinator = coordinator
         self._profile = profile

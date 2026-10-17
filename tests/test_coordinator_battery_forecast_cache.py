@@ -22,6 +22,7 @@ from custom_components.helman.coordinator import HelmanCoordinator  # noqa: E402
 from custom_components.helman import coordinator as coordinator_module
 from custom_components.helman.scheduling.schedule import (  # noqa: E402
     ScheduleAction,
+    ScheduleControlConfig,
     ScheduleDocument,
     SlotAction,
     build_controllable_actions,
@@ -137,11 +138,21 @@ def _make_control_config(
     charge_to_target_soc_option: str | None = "charge_target",
     discharge_to_target_soc_option: str | None = "discharge_target",
     stop_export_option: str | None = "stop_export",
-) -> SimpleNamespace:
-    return SimpleNamespace(
-        charge_to_target_soc_option=charge_to_target_soc_option,
-        discharge_to_target_soc_option=discharge_to_target_soc_option,
-        stop_export_option=stop_export_option,
+) -> ScheduleControlConfig:
+    options: dict[str, str] = {
+        "normal": "normal",
+        "stop_charging": "stop_charging",
+        "stop_discharging": "stop_discharging",
+    }
+    if charge_to_target_soc_option is not None:
+        options["charge_to_target_soc"] = charge_to_target_soc_option
+    if discharge_to_target_soc_option is not None:
+        options["discharge_to_target_soc"] = discharge_to_target_soc_option
+    if stop_export_option is not None:
+        options["stop_export"] = stop_export_option
+    return ScheduleControlConfig(
+        mode_entity_id="select.inverter_mode",
+        options=options,
     )
 
 

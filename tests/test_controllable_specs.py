@@ -176,7 +176,6 @@ class ControllableSpecRegistryTests(unittest.TestCase):
             declared = {spec.control_entity_attr}
             if spec.resting_state_attr is not None:
                 declared.add(spec.resting_state_attr)
-            declared.update(spec.action_option_attrs.values())
 
             self.assertEqual(
                 declared - available,
@@ -213,8 +212,8 @@ class ControllableSpecRegistryTests(unittest.TestCase):
         self.assertEqual(
             {
                 kind
-                for kind, spec in CONTROLLABLE_SPECS.items()
-                if spec.action_option_attrs
+                for kind, runtime_type in _RUNTIME_TYPE_BY_KIND.items()
+                if "options" in {f.name for f in dataclasses.fields(runtime_type)}
             },
             {"inverter"},
         )

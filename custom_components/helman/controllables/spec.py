@@ -42,7 +42,7 @@ from here; the decision logic of the executors stays in the executors.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from ..appliances.climate_appliance import (
@@ -74,14 +74,6 @@ from ..appliances.generic_appliance import (
 from ..appliances.generic_schedule import (
     is_generic_action_running,
     normalize_generic_appliance_schedule_action,
-)
-from ..const import (
-    SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
-    SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
-    SCHEDULE_ACTION_NORMAL,
-    SCHEDULE_ACTION_STOP_CHARGING,
-    SCHEDULE_ACTION_STOP_DISCHARGING,
-    SCHEDULE_ACTION_STOP_EXPORT,
 )
 from .config import RUNNING_ACTIVITY_BY_CONTROL
 from .kinds import (
@@ -135,10 +127,6 @@ class ControllableSpec:
     #: Shown when the runtime object carries no ``name`` of its own. Only the
     #: inverter needs it — it is a singleton the user never named.
     default_name: str | None = None
-    #: For a kind driven by picking an option on a select entity: which
-    #: attribute supplies the option for each schedule action kind. Insertion
-    #: order is the order the roster emits, so it is part of the wire payload.
-    action_option_attrs: dict[str, str] = field(default_factory=dict)
     #: See the module docstring — these record verified asymmetries, not
     #: guesses about which kind feels more like an appliance.
     affects_consumption: bool = False
@@ -209,11 +197,10 @@ class ControllableSpec:
         rather than mapped to a placeholder, so a consumer can tell "not
         available here" apart from "selects this option".
         """
-        options = {
-            action_kind: getattr(source, attribute, None)
-            for action_kind, attribute in self.action_option_attrs.items()
-        }
-        return {kind: option for kind, option in options.items() if option}
+        options = getattr(source, "options", None)
+        if isinstance(options, Mapping):
+            return dict(options)
+        return {}
 
 
 CONTROLLABLE_SPECS: dict[str, ControllableSpec] = {
@@ -224,16 +211,6 @@ CONTROLLABLE_SPECS: dict[str, ControllableSpec] = {
             control_entity_attr="mode_entity_id",
             resting_state_attr="normal_option",
             default_name="Inverter",
-            action_option_attrs={
-                SCHEDULE_ACTION_NORMAL: "normal_option",
-                SCHEDULE_ACTION_STOP_CHARGING: "stop_charging_option",
-                SCHEDULE_ACTION_STOP_DISCHARGING: "stop_discharging_option",
-                SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC: "charge_to_target_soc_option",
-                SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC: (
-                    "discharge_to_target_soc_option"
-                ),
-                SCHEDULE_ACTION_STOP_EXPORT: "stop_export_option",
-            },
             optimizer_kinds=("charge_hold", "export_price", "charge_from_grid"),
         ),
         ControllableSpec(

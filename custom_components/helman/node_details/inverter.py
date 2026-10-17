@@ -25,7 +25,6 @@ from typing import Any
 
 from homeassistant.util import dt as dt_util
 
-from ..controllables.spec import CONTROLLABLE_KIND_INVERTER, CONTROLLABLE_SPECS
 from ..scheduling.schedule import read_schedule_control_config
 from ..vendors import INVERTER_TELEMETRY_KEY
 from ..vendors.modes import BoundWrite, bound_mode_writes, first_matching_option, mode_agreement
@@ -59,9 +58,7 @@ def build_inverter_overview(
     mode: dict[str, Any] | None = None
     commanded: str | None = None
     if control is not None:
-        action_options = CONTROLLABLE_SPECS[CONTROLLABLE_KIND_INVERTER].action_options(
-            control
-        )
+        action_options = dict(control.options)
         mode = {"entityId": control.mode_entity_id, "actionOptions": action_options}
         state = hass.states.get(control.mode_entity_id)
         if state is not None:

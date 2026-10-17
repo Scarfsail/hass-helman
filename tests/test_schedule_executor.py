@@ -58,8 +58,7 @@ from custom_components.helman.scheduling.schedule_executor import (  # noqa: E40
 )
 from custom_components.helman.scheduling.runtime_status import (  # noqa: E402
     ActiveSlotRuntimeStatus,
-    ApplianceRuntimeStatus,
-    InverterRuntimeStatus,
+    ControllableRuntimeStatus,
     ScheduleExecutionStatus,
 )
 
@@ -132,12 +131,14 @@ class FakeScheduleStore:
 def _build_control_config(entity_id: str) -> ScheduleControlConfig:
     return ScheduleControlConfig(
         mode_entity_id=entity_id,
-        normal_option="Normal",
-        charge_to_target_soc_option="Charge To Target",
-        discharge_to_target_soc_option="Discharge To Target",
-        stop_charging_option="Stop Charging",
-        stop_discharging_option="Stop Discharging",
-        stop_export_option="Stop Export",
+        options={
+            SCHEDULE_ACTION_NORMAL: "Normal",
+            SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC: "Charge To Target",
+            SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC: "Discharge To Target",
+            SCHEDULE_ACTION_STOP_CHARGING: "Stop Charging",
+            SCHEDULE_ACTION_STOP_DISCHARGING: "Stop Discharging",
+            SCHEDULE_ACTION_STOP_EXPORT: "Stop Export",
+        },
     )
 
 
@@ -263,7 +264,7 @@ class RuntimeAnnouncementTests(unittest.IsolatedAsyncioTestCase):
             return ScheduleExecutionStatus(
                 active_slot_id=CURRENT_SLOT_ID,
                 active_slot_runtime=ActiveSlotRuntimeStatus(
-                    inverter=InverterRuntimeStatus(
+                    inverter=ControllableRuntimeStatus(
                         action_kind="apply", outcome="failed", error_code=error_code
                     ),
                     reconciled_at=reconciled_at,
@@ -290,7 +291,7 @@ class RuntimeAnnouncementTests(unittest.IsolatedAsyncioTestCase):
                 active_slot_id=CURRENT_SLOT_ID,
                 active_slot_runtime=ActiveSlotRuntimeStatus(
                     appliances={
-                        "garage-ev": ApplianceRuntimeStatus(
+                        "garage-ev": ControllableRuntimeStatus(
                             action_kind="apply",
                             outcome="failed",
                             error_code="execution_unavailable",
@@ -935,11 +936,12 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             ),
             control_config=ScheduleControlConfig(
                 mode_entity_id="input_select.mode",
-                normal_option="Normal",
-                charge_to_target_soc_option=None,
-                discharge_to_target_soc_option="Discharge To Target",
-                stop_charging_option="Stop Charging",
-                stop_discharging_option="Stop Discharging",
+                options={
+                    SCHEDULE_ACTION_NORMAL: "Normal",
+                    SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC: "Discharge To Target",
+                    SCHEDULE_ACTION_STOP_CHARGING: "Stop Charging",
+                    SCHEDULE_ACTION_STOP_DISCHARGING: "Stop Discharging",
+                },
             ),
             battery_state=_build_battery_state(current_soc=70),
         )
@@ -977,11 +979,12 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             ),
             control_config=ScheduleControlConfig(
                 mode_entity_id="input_select.mode",
-                normal_option="Normal",
-                charge_to_target_soc_option=None,
-                discharge_to_target_soc_option="Discharge To Target",
-                stop_charging_option="Stop Charging",
-                stop_discharging_option="Stop Discharging",
+                options={
+                    SCHEDULE_ACTION_NORMAL: "Normal",
+                    SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC: "Discharge To Target",
+                    SCHEDULE_ACTION_STOP_CHARGING: "Stop Charging",
+                    SCHEDULE_ACTION_STOP_DISCHARGING: "Stop Discharging",
+                },
             ),
             battery_state=_build_battery_state(current_soc=80),
         )
@@ -1012,12 +1015,13 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             ),
             control_config=ScheduleControlConfig(
                 mode_entity_id="input_select.mode",
-                normal_option="Normal",
-                charge_to_target_soc_option="Charge To Target",
-                discharge_to_target_soc_option="Discharge To Target",
-                stop_charging_option="Stop Charging",
-                stop_discharging_option="Stop Discharging",
-                stop_export_option=None,
+                options={
+                    SCHEDULE_ACTION_NORMAL: "Normal",
+                    SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC: "Charge To Target",
+                    SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC: "Discharge To Target",
+                    SCHEDULE_ACTION_STOP_CHARGING: "Stop Charging",
+                    SCHEDULE_ACTION_STOP_DISCHARGING: "Stop Discharging",
+                },
             ),
         )
 

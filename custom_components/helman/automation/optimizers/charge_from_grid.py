@@ -44,7 +44,6 @@ from ...scheduling.schedule import (
     format_slot_id,
 )
 from ..base import ScheduleWriter
-from ..conditions import build_eligibility
 from ..conditions.types import ConditionRailsUnavailable
 from ..day_context import ImportBand
 from ..explain import (
@@ -53,9 +52,6 @@ from ..explain import (
     STATE_NOT_EVALUATED,
     STATE_TRUE,
     STATUS_SKIPPED,
-    VERDICT_CANDIDATE,
-    VERDICT_EXECUTE,
-    VERDICT_SKIP,
 )
 from ..ownership import is_user_owned
 from ..rails import (
@@ -116,18 +112,13 @@ class ChargeFromGridOptimizer:
         trace: "OptimizerTrace | None" = None,
     ) -> ScheduleDocument:
         trace = trace or NULL_TRACE
-        eligibility = build_eligibility(snapshot, config, trace)
-        writer = ScheduleWriter(
+        writer = ScheduleWriter.open(
             snapshot,
-            eligibility=eligibility,
-            trace=trace,
-            # Every write comes out of the ranking, and the ranking already
-            # dropped user-owned slots under `slot_available`.
+            config,
+            trace,
             pre_filters_ownership=True,
         )
-        trace.set_verdict(
-            slot_ids=eligibility.horizon_slot_ids, verdict=VERDICT_SKIP
-        )
+        eligibility = writer.eligibility
 
         battery_state = snapshot.context.battery_state
         usable_capacity_kwh = snapshot.context.battery_usable_capacity_kwh
@@ -181,7 +172,7 @@ class ChargeFromGridOptimizer:
         try:
             # Kept lazy so lightweight optimizer-only consumers do not need to
             # import Home Assistant's battery-state integration.
-            from ..horizon_simulation import build_horizon_simulator
+            from .self_sustainability import build_horizon_simulator
             simulator = build_horizon_simulator(snapshot, appliance_id=self.id)
         except ImportError:
             # Optimizer-only callers deliberately stub the narrow scheduling
@@ -505,7 +496,6 @@ class ChargeFromGridOptimizer:
                 slot_id,
                 gates=_rank_gates(index, price, made_the_cut=True),
                 floor=breached,
-                condition_met=resolved.condition_met,
                 action=_ACTION,
             )
 
@@ -769,7 +759,6 @@ class ChargeFromGridOptimizer:
                     _Gate(GATE_LATEST_CUTOFF, STATE_TRUE, cutoff_params),
                 ],
                 floor=floor,
-                condition_met=resolved.condition_met,
                 action=_ACTION if action.kind == SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC else _HOLD_ACTION,
             )
         emit.observe_reserve_floor(ReserveFloorObservation(
@@ -826,7 +815,6 @@ class _SlotRecord:
     outcome: str | None
     gates: tuple[_Gate, ...]
     floor: _FloorResolution | None
-    verdict: str | None = None
     action: dict[str, str] | None = None
 
 
@@ -872,7 +860,7 @@ class _ChargeFromGridEmission:
         ):
             self._by_slot[slot_id] = record
 
-    def applied(self, slot_id, *, gates, floor, condition_met, action) -> None:
+    def applied(self, slot_id, *, gates, floor, action) -> None:
         self._add(
             slot_id,
             _SlotRecord(
@@ -880,7 +868,6 @@ class _ChargeFromGridEmission:
                 outcome="applied",
                 gates=tuple(gates),
                 floor=floor,
-                verdict=VERDICT_EXECUTE if condition_met else VERDICT_CANDIDATE,
                 action=action,
             ),
         )
@@ -957,13 +944,10 @@ class _ChargeFromGridEmission:
         by_outcome: dict[str, list[str]] = {}
         by_gate: dict[str, tuple[_Gate, list[str]]] = {}
         by_floor: dict[str, tuple[_FloorResolution, list[str]]] = {}
-        by_verdict: dict[str, list[str]] = {}
         for slot_id, record in self._by_slot.items():
             if record.outcome is not None:
                 key = json.dumps([record.outcome, record.action], sort_keys=True)
                 by_outcome.setdefault(key, []).append(slot_id)
-            if record.verdict is not None:
-                by_verdict.setdefault(record.verdict, []).append(slot_id)
             for gate in record.gates:
                 key = json.dumps(
                     [gate.key, gate.state, gate.params], sort_keys=True
@@ -1003,8 +987,6 @@ class _ChargeFromGridEmission:
                 # run-scoped cell would span a horizon whose answer changes.
                 scope=SCOPE_WINDOW,
             )
-        for verdict, slot_ids in by_verdict.items():
-            self._trace.set_verdict(slot_ids=slot_ids, verdict=verdict)
 
 
 def _find_preceding_cheap_band(

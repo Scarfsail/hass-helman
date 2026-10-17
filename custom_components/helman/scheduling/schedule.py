@@ -63,6 +63,19 @@ TARGET_ACTION_KINDS = {
     SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
     SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
 }
+INVERTER_ACTION_KINDS: tuple[ScheduleActionKind, ...] = (
+    SCHEDULE_ACTION_NORMAL,
+    SCHEDULE_ACTION_STOP_CHARGING,
+    SCHEDULE_ACTION_STOP_DISCHARGING,
+    SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+    SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
+    SCHEDULE_ACTION_STOP_EXPORT,
+)
+REQUIRED_INVERTER_ACTIONS: frozenset[str] = frozenset({
+    SCHEDULE_ACTION_NORMAL,
+    SCHEDULE_ACTION_STOP_CHARGING,
+    SCHEDULE_ACTION_STOP_DISCHARGING,
+})
 #: The two members of the pre-version-8 ``domains`` object, kept only so a
 #: stored document in that shape can still be recognised and converted.
 LEGACY_SCHEDULE_DOMAIN_KEYS = {"inverter", "appliances"}
@@ -258,12 +271,17 @@ class ScheduleDocument:
 @dataclass(frozen=True)
 class ScheduleControlConfig:
     mode_entity_id: str
-    normal_option: str
-    stop_charging_option: str
-    stop_discharging_option: str
-    charge_to_target_soc_option: str | None = None
-    discharge_to_target_soc_option: str | None = None
-    stop_export_option: str | None = None
+    options: Mapping[ScheduleActionKind, str] = field(default_factory=dict)
+
+    @property
+    def normal_option(self) -> str:
+        return self.options.get(SCHEDULE_ACTION_NORMAL, "")
+
+    def __getattr__(self, name: str) -> str | None:
+        if name.endswith("_option"):
+            action = name[:-7]
+            return self.options.get(action)
+        raise AttributeError(f"{type(self).__name__} has no attribute {name!r}")
 
 
 class ScheduleStorageCompatibilityError(ScheduleSlotsError):
@@ -609,41 +627,21 @@ def read_schedule_control_config(
     control_config, action_option_map = _read_inverter_mode_control(config)
 
     mode_entity_id = _read_non_empty_string(control_config.get("entity_id"))
-    normal_option = _read_non_empty_string(
-        action_option_map.get(SCHEDULE_ACTION_NORMAL)
-    )
-    charge_to_target_soc_option = _read_non_empty_string(
-        action_option_map.get(SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC)
-    )
-    discharge_to_target_soc_option = _read_non_empty_string(
-        action_option_map.get(SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC)
-    )
-    stop_charging_option = _read_non_empty_string(
-        action_option_map.get(SCHEDULE_ACTION_STOP_CHARGING)
-    )
-    stop_discharging_option = _read_non_empty_string(
-        action_option_map.get(SCHEDULE_ACTION_STOP_DISCHARGING)
-    )
-    stop_export_option = _read_non_empty_string(
-        action_option_map.get(SCHEDULE_ACTION_STOP_EXPORT)
-    )
+    if mode_entity_id is None:
+        return None
 
-    if (
-        mode_entity_id is None
-        or normal_option is None
-        or stop_charging_option is None
-        or stop_discharging_option is None
-    ):
+    options: dict[str, str] = {}
+    for action_kind in INVERTER_ACTION_KINDS:
+        option = _read_non_empty_string(action_option_map.get(action_kind))
+        if option is not None:
+            options[action_kind] = option
+
+    if not REQUIRED_INVERTER_ACTIONS.issubset(options):
         return None
 
     return ScheduleControlConfig(
         mode_entity_id=mode_entity_id,
-        normal_option=normal_option,
-        stop_charging_option=stop_charging_option,
-        stop_discharging_option=stop_discharging_option,
-        charge_to_target_soc_option=charge_to_target_soc_option,
-        discharge_to_target_soc_option=discharge_to_target_soc_option,
-        stop_export_option=stop_export_option,
+        options=options,
     )
 
 
@@ -655,12 +653,10 @@ def describe_schedule_control_config_issue(
     missing_fields: list[str] = []
     if _read_non_empty_string(control_config.get("entity_id")) is None:
         missing_fields.append(f"{_INVERTER_CONTROL_PATH}.entity_id")
-    if _read_non_empty_string(action_option_map.get(SCHEDULE_ACTION_NORMAL)) is None:
-        missing_fields.append(f"{_INVERTER_CONTROL_PATH}.options.normal")
-    if _read_non_empty_string(action_option_map.get(SCHEDULE_ACTION_STOP_CHARGING)) is None:
-        missing_fields.append(f"{_INVERTER_CONTROL_PATH}.options.stop_charging")
-    if _read_non_empty_string(action_option_map.get(SCHEDULE_ACTION_STOP_DISCHARGING)) is None:
-        missing_fields.append(f"{_INVERTER_CONTROL_PATH}.options.stop_discharging")
+    for action_kind in INVERTER_ACTION_KINDS:
+        if action_kind in REQUIRED_INVERTER_ACTIONS:
+            if _read_non_empty_string(action_option_map.get(action_kind)) is None:
+                missing_fields.append(f"{_INVERTER_CONTROL_PATH}.options.{action_kind}")
 
     if not missing_fields:
         return None

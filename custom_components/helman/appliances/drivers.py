@@ -20,7 +20,7 @@ from ..controllables.config import SWITCH_CONTROL_DOMAINS
 from ..controllables.controllers import SelectEntityController
 from ..scheduling.actuation import ScheduleActuator
 from ..scheduling.runtime_status import (
-    ApplianceRuntimeStatus,
+    ControllableRuntimeStatus,
     RuntimeActionKind,
     RuntimeOutcome,
 )
@@ -202,7 +202,7 @@ class ApplianceActionDriver(Protocol):
         action: Any | None,
         action_kind: RuntimeActionKind,
         reference_time: datetime,
-    ) -> ApplianceRuntimeStatus:
+    ) -> ControllableRuntimeStatus:
         """Drive the appliance; ``action is None`` means "go to rest"."""
 
 
@@ -241,7 +241,7 @@ class EvChargerDriver:
         action: EvChargerScheduleActionDict | None,
         action_kind: RuntimeActionKind,
         reference_time: datetime,
-    ) -> ApplianceRuntimeStatus:
+    ) -> ControllableRuntimeStatus:
         if action is None or not is_ev_charger_action_running(action):
             return await self._async_stop_charge_only(
                 actuator,
@@ -311,7 +311,7 @@ class EvChargerDriver:
         appliance: EvChargerApplianceRuntime,
         action_kind: RuntimeActionKind,
         reference_time: datetime,
-    ) -> ApplianceRuntimeStatus:
+    ) -> ControllableRuntimeStatus:
         try:
             switch_controller = SwitchEntityController(
                 appliance.charge_entity_id,
@@ -379,7 +379,7 @@ class GenericApplianceDriver:
         action: GenericApplianceScheduleActionDict | None,
         action_kind: RuntimeActionKind,
         reference_time: datetime,
-    ) -> ApplianceRuntimeStatus:
+    ) -> ControllableRuntimeStatus:
         enabled = action is not None and is_generic_action_running(action)
         try:
             switch_controller = SwitchEntityController(
@@ -428,7 +428,7 @@ class ClimateApplianceDriver:
         action: ClimateApplianceScheduleActionDict | None,
         action_kind: RuntimeActionKind,
         reference_time: datetime,
-    ) -> ApplianceRuntimeStatus:
+    ) -> ControllableRuntimeStatus:
         hvac_mode = appliance.stop_hvac_mode if action is None else action["mode"]
         if hvac_mode is None:
             return build_runtime_status(
@@ -470,8 +470,8 @@ def build_runtime_status(
     outcome: RuntimeOutcome,
     reference_time: datetime,
     error: ScheduleError | None = None,
-) -> ApplianceRuntimeStatus:
-    return ApplianceRuntimeStatus(
+) -> ControllableRuntimeStatus:
+    return ControllableRuntimeStatus(
         action_kind=action_kind,
         outcome=outcome,
         error_code=None if error is None else error.code,

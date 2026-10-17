@@ -682,14 +682,14 @@ class ScheduleHelperTests(unittest.TestCase):
         assert control_config is not None
         self.assertEqual(control_config.mode_entity_id, "input_select.rezim_fv")
         self.assertEqual(control_config.normal_option, "Standardní")
-        self.assertEqual(control_config.stop_charging_option, "Zákaz nabíjení")
         self.assertEqual(
-            control_config.stop_discharging_option,
-            "Zákaz vybíjení",
+            control_config.options,
+            {
+                "normal": "Standardní",
+                "stop_charging": "Zákaz nabíjení",
+                "stop_discharging": "Zákaz vybíjení",
+            },
         )
-        self.assertIsNone(control_config.charge_to_target_soc_option)
-        self.assertIsNone(control_config.discharge_to_target_soc_option)
-        self.assertIsNone(control_config.stop_export_option)
 
     def test_read_schedule_control_config_reads_stop_export_option(self) -> None:
         control_config = read_schedule_control_config(
@@ -714,7 +714,7 @@ class ScheduleHelperTests(unittest.TestCase):
 
         self.assertIsNotNone(control_config)
         assert control_config is not None
-        self.assertEqual(control_config.stop_export_option, "Zákaz exportu")
+        self.assertEqual(control_config.options.get("stop_export"), "Zákaz exportu")
 
     def test_schedule_document_accepts_stop_export_action(self) -> None:
         slot_id = "2026-03-20T21:00:00+01:00"
