@@ -21,17 +21,12 @@ from ...const import SCHEDULE_ACTION_STOP_EXPORT
 from ...scheduling.schedule import (
     ScheduleAction,
     ScheduleDocument,
-    iter_horizon_slot_ids,
 )
 from ..base import ScheduleWriter
-from ..conditions import build_eligibility
 from ..explain import (
     STATE_FALSE,
     STATE_TRUE,
     STATUS_SKIPPED,
-    VERDICT_CANDIDATE,
-    VERDICT_EXECUTE,
-    VERDICT_SKIP,
 )
 from ..trace import NULL_TRACE
 
@@ -62,14 +57,8 @@ class ExportPriceOptimizer:
         trace: "OptimizerTrace | None" = None,
     ) -> ScheduleDocument:
         trace = trace or NULL_TRACE
-        horizon_slot_ids = list(iter_horizon_slot_ids(snapshot.context.now))
-
-        eligibility = build_eligibility(snapshot, config, trace)
-        writer = ScheduleWriter(snapshot, eligibility=eligibility, trace=trace)
-        # The baseline every slot keeps unless something below writes it: the
-        # condition matrix is stamped for the whole horizon, so leaving a slot
-        # verdict-less would read as "never looked at" rather than "rejected".
-        trace.set_verdict(slot_ids=horizon_slot_ids, verdict=VERDICT_SKIP)
+        writer = ScheduleWriter.open(snapshot, config, trace)
+        eligibility = writer.eligibility
         eligible = list(eligibility.iter_slots())
         if not eligible:
             return writer.flush(action=_ACTION)
@@ -117,12 +106,6 @@ class ExportPriceOptimizer:
                 continue
             applied_by_group.setdefault(resolved.group.index, []).append(
                 resolved.slot_id
-            )
-            trace.set_verdict(
-                slot_ids=[resolved.slot_id],
-                verdict=(
-                    VERDICT_EXECUTE if resolved.condition_met else VERDICT_CANDIDATE
-                ),
             )
 
         for group_index, slot_ids in applied_by_group.items():

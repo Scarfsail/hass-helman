@@ -8,7 +8,7 @@ from typing import Any
 
 from ..controllables.spec import CONTROLLABLE_SPECS
 from ..scheduling.actuation import ScheduleActuator
-from ..scheduling.runtime_status import ApplianceRuntimeStatus
+from ..scheduling.runtime_status import ControllableRuntimeStatus
 from ..scheduling.slots import ScheduleError, ScheduleExecutionUnavailableError
 from .drivers import (
     CHARGE_POLL_INTERVAL_SECONDS,
@@ -30,7 +30,7 @@ class ApplianceExecutionMemory:
 
 @dataclass(frozen=True)
 class AppliancesExecutionResult:
-    runtimes: dict[str, ApplianceRuntimeStatus]
+    runtimes: dict[str, ControllableRuntimeStatus]
     memories: dict[str, ApplianceExecutionMemory]
     first_error: ScheduleError | None = None
 
@@ -61,7 +61,7 @@ class ApplianceExecutor:
         memory: ApplianceExecutionMemory | None,
         active_slot_id: str,
         reference_time: datetime,
-    ) -> tuple[ApplianceRuntimeStatus | None, ApplianceExecutionMemory | None]:
+    ) -> tuple[ControllableRuntimeStatus | None, ApplianceExecutionMemory | None]:
         if action is None:
             if (
                 memory is not None
@@ -141,7 +141,7 @@ class ApplianceExecutor:
         appliance: Any,
         action: ApplianceScheduleActionDict | None,
         reference_time: datetime,
-    ) -> ApplianceRuntimeStatus | None:
+    ) -> ControllableRuntimeStatus | None:
         if action is None or not self._driver.is_enabled(appliance, action):
             return None
         return await self._driver.async_apply(
@@ -183,7 +183,7 @@ class AppliancesExecutor:
         previous_memories: Mapping[str, ApplianceExecutionMemory],
         reference_time: datetime,
     ) -> AppliancesExecutionResult:
-        runtimes: dict[str, ApplianceRuntimeStatus] = {}
+        runtimes: dict[str, ControllableRuntimeStatus] = {}
         memories: dict[str, ApplianceExecutionMemory] = {}
         first_error: ScheduleError | None = None
 
@@ -218,7 +218,7 @@ class AppliancesExecutor:
         active_actions: Mapping[str, ApplianceScheduleActionDict],
         reference_time: datetime,
     ) -> AppliancesExecutionResult:
-        runtimes: dict[str, ApplianceRuntimeStatus] = {}
+        runtimes: dict[str, ControllableRuntimeStatus] = {}
         first_error: ScheduleError | None = None
 
         for appliance in registry.appliances:

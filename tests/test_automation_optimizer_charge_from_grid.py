@@ -556,7 +556,7 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
         })
         prices = _import_points({6: 2.0, 8: 6.0})
         with patch(
-            "custom_components.helman.automation.horizon_simulation.build_horizon_simulator",
+            "custom_components.helman.automation.optimizers.self_sustainability.build_horizon_simulator",
             side_effect=lambda *_args, **_kwargs: FakeSimulator(),
         ):
             optimizer = build_charge_from_grid_optimizer(_make_config())

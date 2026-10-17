@@ -4840,11 +4840,11 @@ class HelmanCoordinator:
             for slot_id, actions in schedule_document.slots.items()
             if not (
                 inverter_action(actions).kind == SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC
-                and control_config.charge_to_target_soc_option is None
+                and SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC not in control_config.options
             )
             and not (
                 inverter_action(actions).kind == SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC
-                and control_config.discharge_to_target_soc_option is None
+                and SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC not in control_config.options
             )
         }
         return ScheduleDocument(

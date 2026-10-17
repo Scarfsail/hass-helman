@@ -20,7 +20,14 @@ from ..appliances.generic_appliance import GenericApplianceRuntime
 from ..controllables.config import CONTROLLABLE_ID_INVERTER
 from ..controllables.spec import CONTROLLABLE_KIND_CLIMATE, CONTROLLABLE_KIND_GENERIC
 from ..scheduling.schedule import ScheduleAction, ScheduleDocument, SlotAction
-from .explain import STATE_FALSE, STATE_TRUE
+from .conditions import build_eligibility
+from .explain import (
+    STATE_FALSE,
+    STATE_TRUE,
+    VERDICT_CANDIDATE,
+    VERDICT_EXECUTE,
+    VERDICT_SKIP,
+)
 from .fields import OptimizerConfigError
 from .ownership import is_user_owned, stamp_automation
 from .trace import NULL_TRACE
@@ -143,15 +150,38 @@ class ScheduleWriter:
             execution_enabled=snapshot.schedule.execution_enabled,
             slots=deepcopy(snapshot.schedule.slots),
         )
-        self._eligibility = eligibility
+        self.eligibility = eligibility
         self._trace = trace or NULL_TRACE
         self._controllable_id = controllable_id
         self._pre_filters_ownership = pre_filters_ownership
         self._blocked_slot_ids: list[str] = []
         self._written_slot_ids: list[str] = []
 
+    @classmethod
+    def open(
+        cls,
+        snapshot: "OptimizationSnapshot",
+        config: "OptimizerInstanceConfig",
+        trace: "OptimizerTrace | None" = None,
+        *,
+        controllable_id: str = CONTROLLABLE_ID_INVERTER,
+        pre_filters_ownership: bool = False,
+    ) -> "ScheduleWriter":
+        trace = trace or NULL_TRACE
+        eligibility = build_eligibility(snapshot, config, trace)
+        trace.set_verdict(
+            slot_ids=eligibility.horizon_slot_ids, verdict=VERDICT_SKIP
+        )
+        return cls(
+            snapshot,
+            eligibility=eligibility,
+            trace=trace,
+            controllable_id=controllable_id,
+            pre_filters_ownership=pre_filters_ownership,
+        )
+
     def _condition_met(self, slot_id: str) -> bool:
-        resolved = self._eligibility.at(slot_id)
+        resolved = self.eligibility.at(slot_id)
         # A slot no group covers is only reachable when an optimizer writes
         # outside its own eligibility, which none do; treat it as met so the
         # fallback can never silently downgrade a real action to a candidate.
@@ -166,13 +196,18 @@ class ScheduleWriter:
         if is_user_owned(current.get(self._controllable_id)):
             self._blocked_slot_ids.append(slot_id)
             return False
+        condition_met = self._condition_met(slot_id)
         self.document.slots[slot_id] = {
             **current,
             self._controllable_id: stamp_automation(
-                SlotAction(payload=payload, condition_met=self._condition_met(slot_id))
+                SlotAction(payload=payload, condition_met=condition_met)
             ),
         }
         self._written_slot_ids.append(slot_id)
+        self._trace.set_verdict(
+            slot_ids=[slot_id],
+            verdict=VERDICT_EXECUTE if condition_met else VERDICT_CANDIDATE,
+        )
         return True
 
     def flush(self, *, action: dict[str, Any] | None = None) -> ScheduleDocument:

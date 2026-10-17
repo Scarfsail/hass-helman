@@ -52,12 +52,14 @@ class FakeEvAppliance:
 def _control_config() -> ScheduleControlConfig:
     return ScheduleControlConfig(
         mode_entity_id="select.inverter_mode",
-        normal_option="Normal",
-        charge_to_target_soc_option="Charge To Target",
-        discharge_to_target_soc_option="Discharge To Target",
-        stop_charging_option="Stop Charging",
-        stop_discharging_option="Stop Discharging",
-        stop_export_option="Stop Export",
+        options={
+            "normal": "Normal",
+            "charge_to_target_soc": "Charge To Target",
+            "discharge_to_target_soc": "Discharge To Target",
+            "stop_charging": "Stop Charging",
+            "stop_discharging": "Stop Discharging",
+            "stop_export": "Stop Export",
+        },
     )
 
 
@@ -110,9 +112,11 @@ class BuildControllableEntitiesTests(unittest.TestCase):
         entities = build_controllable_entities(
             control_config=ScheduleControlConfig(
                 mode_entity_id="select.inverter_mode",
-                normal_option="Normal",
-                stop_charging_option="Stop Charging",
-                stop_discharging_option="Stop Discharging",
+                options={
+                    "normal": "Normal",
+                    "stop_charging": "Stop Charging",
+                    "stop_discharging": "Stop Discharging",
+                },
             ),
             registry=_registry(),
         )

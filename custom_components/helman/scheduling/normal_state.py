@@ -41,7 +41,7 @@ class ControllableEntityDict(TypedDict):
     inverter mode with the same chip the slot editor uses, and to project a
     scheduled action onto the entity state it will produce. Only the inverter
     carries it -- appliance states follow from their action shape, which is why
-    only the inverter's spec declares ``action_option_attrs``.
+    only the inverter carries configured ``options``.
     """
 
     kind: str

@@ -435,3 +435,23 @@ def _read_optional_float(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return float(value)
+
+
+def day_ratio_params(day_context: "DayContext") -> dict[str, Any]:
+    """The reading behind a day's band, for the trace (#264).
+
+    ``classification`` on its own no longer says where the band came from: it is
+    resolved per optimizer, over that optimizer's own house view, so the same
+    calendar day can legitimately be deficit here and tight for the appliance
+    that runs after. The ratio and the instance whose consumption sits in the
+    denominator are what makes an explanation reproducible.
+    """
+    return {
+        "solarToConsumptionRatio": (
+            None if day_context.ratio == float("inf") else round(day_context.ratio, 3)
+        ),
+        "denominatorOptimizerId": day_context.denominator_optimizer_id,
+    }
+
+
+_day_ratio_params = day_ratio_params
