@@ -9,6 +9,7 @@ from .optimizers import (
     build_appliance_runtime_optimizer,
     build_export_price_optimizer,
 )
+from ..const import SCHEDULE_ACTION_STOP_EXPORT
 from .spec import KNOWN_OPTIMIZER_KINDS
 
 if TYPE_CHECKING:
@@ -59,6 +60,7 @@ def build_optimizer(
         appliance_registry=appliance_registry,
         path=path,
         stop_export_supported=(
-            control_config is not None and control_config.stop_export_option is not None
+            control_config is not None
+            and SCHEDULE_ACTION_STOP_EXPORT in control_config.options
         ),
     )

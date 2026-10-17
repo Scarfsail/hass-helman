@@ -127,6 +127,11 @@ from .controllables.config import (
     running_active_states,
     running_signal,
 )
+from .controllables.spec import (
+    CONTROLLABLE_KIND_CLIMATE,
+    CONTROLLABLE_KIND_GENERIC,
+    spec_for,
+)
 from .consumption_forecast_profiles import (
     HouseConsumptionProfile,
     profile_from_dict,
@@ -157,6 +162,7 @@ from .recorder_hourly_series import (
     get_local_current_slot_start,
 )
 from .scheduling.schedule import (
+    ScheduleActionSetBy,
     ScheduleControlConfig,
     ScheduleDocument,
     ScheduleError,
@@ -181,7 +187,6 @@ from .scheduling.schedule import (
     with_slot_set_by,
     validate_slot_patch_request,
 )
-from .schedule_action_metadata import ScheduleActionSetBy
 from .appliances.generic_appliance import GenericApplianceRuntime
 from .scheduling.runtime_status import (
     schedule_execution_status_to_dict,
@@ -442,19 +447,26 @@ def _battery_forecast_slot_values(entry: dict[str, Any]) -> dict[str, float] | N
     return values or None
 
 
+#: The kinds whose runtime history and live running state automation reads: the
+#: ones an ``appliance_runtime`` optimizer can drive. An EV charger's ``charge``
+#: switch would answer the same question, but nothing plans against it yet.
+_AUTOMATION_CANDIDATE_KINDS = (CONTROLLABLE_KIND_GENERIC, CONTROLLABLE_KIND_CLIMATE)
+
+
 def _resolve_runtime_entity_and_states(
     appliance: GenericApplianceRuntime | ClimateApplianceRuntime,
 ) -> tuple[str | None, tuple[str, ...]]:
     """Return the recorder entity id and active-state set defining "on" runtime.
 
-    Generic appliances count their switch being ``on``; climate appliances count
-    the compressor running in any active heating/cooling mode.
+    The kind's running signal and its active states — a switch being ``on``, a
+    climate entity heating or cooling — the same pair a meterless child's share
+    is split by.
     """
-    if isinstance(appliance, GenericApplianceRuntime):
-        return appliance.switch_entity_id, ("on",)
-    if isinstance(appliance, ClimateApplianceRuntime):
-        return appliance.climate_entity_id, ("heat", "cool")
-    return None, ()
+    signal = spec_for(appliance.kind).running_signal(appliance)
+    if signal is None:
+        return None, ()
+    entity_id, activity = signal
+    return entity_id, running_active_states(activity)
 
 
 def _build_forecast_staleness(
@@ -1870,7 +1882,7 @@ class HelmanCoordinator:
         learners = {
             appliance.id: appliance
             for appliance in self._iter_automation_candidate_appliances()
-            if appliance.uses_history_average
+            if appliance.projection.uses_history_average
         }
         subjects: dict[str, DeviceSubject] = {}
         for device, parent in iter_devices(self._active_config):
@@ -1908,7 +1920,7 @@ class HelmanCoordinator:
                 power_value_type="default",
                 running_signal=running_signal(device),
                 lookback_days=(
-                    learner.history_lookback_days
+                    learner.projection.history_lookback_days
                     if learner is not None
                     else DEFAULT_HISTORY_LOOKBACK_DAYS
                 ),
@@ -4033,8 +4045,9 @@ class HelmanCoordinator:
             if entity_id is None:
                 continue
             state = self._hass.states.get(entity_id)
-            raw_state = getattr(state, "state", None)
-            active_by_id[appliance.id] = raw_state in active_states
+            active_by_id[appliance.id] = is_active_state(
+                getattr(state, "state", None), active_states
+            )
         return active_by_id
 
     async def _async_evaluate_optimizer_conditions(
@@ -4827,11 +4840,11 @@ class HelmanCoordinator:
             for slot_id, actions in schedule_document.slots.items()
             if not (
                 inverter_action(actions).kind == SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC
-                and control_config.charge_to_target_soc_option is None
+                and SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC not in control_config.options
             )
             and not (
                 inverter_action(actions).kind == SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC
-                and control_config.discharge_to_target_soc_option is None
+                and SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC not in control_config.options
             )
         }
         return ScheduleDocument(
@@ -5118,11 +5131,11 @@ class HelmanCoordinator:
         self,
         appliance: GenericApplianceRuntime | ClimateApplianceRuntime,
     ) -> float:
-        if not appliance.uses_history_average:
-            return appliance.hourly_energy_kwh
+        if not appliance.projection.uses_history_average:
+            return appliance.projection.hourly_energy_kwh
         estimate = self._appliance_energy_estimates.get(appliance.id)
         if estimate is None or estimate <= 0:
-            return appliance.hourly_energy_kwh
+            return appliance.projection.hourly_energy_kwh
         return estimate
 
     async def _async_resolve_runtime_hours_by_appliance_id_by_local_date(
@@ -5244,7 +5257,7 @@ class HelmanCoordinator:
         return [
             appliance
             for appliance in self._appliances_registry.current.appliances
-            if isinstance(appliance, (GenericApplianceRuntime, ClimateApplianceRuntime))
+            if appliance.kind in _AUTOMATION_CANDIDATE_KINDS
         ]
 
     def _iter_projected_history_appliances(
@@ -5266,7 +5279,7 @@ class HelmanCoordinator:
                     action=action,
                 ):
                     continue
-                if appliance.history_energy_entity_id is None:
+                if appliance.projection.history_energy_entity_id is None:
                     continue
 
                 seen_appliance_ids.add(appliance_id)
@@ -5278,20 +5291,17 @@ class HelmanCoordinator:
     def _is_projected_history_action_active(
         *,
         appliance,
-        action: object,
+        action: Mapping[str, Any] | None,
     ) -> bool:
-        if not isinstance(action, Mapping):
+        if appliance is None or action is None:
             return False
-        if isinstance(appliance, GenericApplianceRuntime):
-            return appliance.uses_history_average and action.get("on") is True
-        if isinstance(appliance, ClimateApplianceRuntime):
-            mode = action.get("mode")
-            return (
-                appliance.uses_history_average
-                and isinstance(mode, str)
-                and mode in {"heat", "cool"}
-            )
-        return False
+        spec = spec_for(appliance.kind)
+        projection = spec.projection(appliance)
+        return (
+            projection is not None
+            and projection.uses_history_average
+            and spec.is_running(action)
+        )
 
     def _has_compatible_battery_forecast_live_state(self) -> bool:
         battery_entity_config = read_battery_entity_config(self._active_config)

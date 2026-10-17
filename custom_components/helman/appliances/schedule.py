@@ -3,23 +3,13 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from ..schedule_action_metadata import ScheduleActionSetBy
-from .climate_appliance import ClimateApplianceRuntime
-from .climate_schedule import (
-    ClimateApplianceScheduleActionDict,
-    normalize_climate_appliance_schedule_action,
-)
-from .ev_charger import EvChargerApplianceRuntime
+from ..controllables.spec import spec_for
+from .climate_schedule import ClimateApplianceScheduleActionDict
 from .ev_schedule import (
     ApplianceScheduleNormalizationMode,
     EvChargerScheduleActionDict,
-    normalize_ev_charger_schedule_action,
 )
-from .generic_appliance import GenericApplianceRuntime
-from .generic_schedule import (
-    GenericApplianceScheduleActionDict,
-    normalize_generic_appliance_schedule_action,
-)
+from .generic_schedule import GenericApplianceScheduleActionDict
 from .state import ApplianceRuntime, AppliancesRuntimeRegistry
 
 ApplianceScheduleActionDict = (
@@ -69,34 +59,12 @@ def normalize_appliance_schedule_actions(
                 f"{context}.{appliance_id} must reference a configured appliance"
             )
 
-        if isinstance(appliance, ClimateApplianceRuntime):
-            normalized_action = normalize_climate_appliance_schedule_action(
-                action,
-                appliance=appliance,
-                context=f"{context}.{appliance_id}",
-                mode=mode,
-            )
-        elif isinstance(appliance, EvChargerApplianceRuntime):
-            normalized_action = normalize_ev_charger_schedule_action(
-                action,
-                appliance=appliance,
-                context=f"{context}.{appliance_id}",
-                mode=mode,
-            )
-        elif isinstance(appliance, GenericApplianceRuntime):
-            normalized_action = normalize_generic_appliance_schedule_action(
-                action,
-                appliance=appliance,
-                context=f"{context}.{appliance_id}",
-                mode=mode,
-            )
-        else:
-            if mode == "load_prune":
-                continue
-            raise ValueError(
-                f"{context}.{appliance_id} references unsupported appliance kind "
-                f"{appliance.kind!r}"
-            )
+        normalized_action = spec_for(appliance.kind).normalize_action(
+            action,
+            appliance=appliance,
+            context=f"{context}.{appliance_id}",
+            mode=mode,
+        )
         if normalized_action is not None:
             normalized[appliance_id] = normalized_action
 
@@ -110,40 +78,14 @@ def is_appliance_action_active(
 ) -> bool:
     """Whether a scheduled action means "this appliance is running".
 
-    One definition of *running*, per kind, mirroring what each executor already
-    treats as a state that must be stopped at the end of its slot
-    (``execution.py``'s ``_last_scheduled_action_requires_slot_stop``). Callers
-    that plan against another appliance's schedule need exactly that predicate,
-    and a second copy of it would be free to drift.
-
-    ``appliance`` is what resolves the climate branch — "running" there means
-    "not the appliance's own stop mode" — and is the reason this lives beside
-    the action union rather than among the snapshot readers that call it.
+    The kind's :attr:`..controllables.spec.ControllableSpec.is_running` — the
+    one definition of *running* the executor's drivers also use to decide
+    whether a slot's end must stop the appliance
+    (:meth:`.execution.ApplianceExecutor.async_execute`). Callers that plan
+    against another appliance's schedule need exactly that predicate, so they
+    ask it rather than keep a copy free to drift.
     """
-    if isinstance(appliance, ClimateApplianceRuntime):
-        raw_mode = action.get("mode")
-        return isinstance(raw_mode, str) and raw_mode != appliance.stop_hvac_mode
-    if isinstance(appliance, EvChargerApplianceRuntime):
-        return bool(action.get("charge"))
-    if isinstance(appliance, GenericApplianceRuntime):
-        return bool(action.get("on"))
-    return False
-
-
-def with_appliance_schedule_actions_set_by(
-    actions: Mapping[str, ApplianceScheduleActionDict],
-    *,
-    set_by: ScheduleActionSetBy | None,
-) -> ApplianceScheduleActionsDict:
-    normalized_actions = {
-        appliance_id: dict(action) for appliance_id, action in actions.items()
-    }
-    if set_by is None:
-        return normalized_actions
-
-    for action in normalized_actions.values():
-        action["setBy"] = set_by
-    return normalized_actions
+    return spec_for(appliance.kind).is_running(action)
 
 
 def _read_appliance_id(value: object, *, context: str) -> str:

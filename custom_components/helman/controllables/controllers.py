@@ -9,7 +9,7 @@ because one lived on the "inverter" side of a split that had no reason to exist.
 
 The fold keeps every diagnostic exactly as specific as it was: ``description``
 names the thing being driven ("Schedule mode", "EV select") and every message is
-built from it, the same way :class:`..appliances.execution.SwitchEntityController`
+built from it, the same way :class:`..appliances.drivers.SwitchEntityController`
 already does. A caller that drives two different selects passes two different
 descriptions, so a failure still says which one failed.
 """
@@ -20,7 +20,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from ..scheduling.actuation import ScheduleActuator
-from ..scheduling.schedule import ScheduleError, ScheduleExecutionUnavailableError
+from ..scheduling.slots import ScheduleError, ScheduleExecutionUnavailableError
 
 _SELECT_DOMAINS = {"input_select", "select"}
 _UNAVAILABLE_STATES = {"unknown", "unavailable", "none"}

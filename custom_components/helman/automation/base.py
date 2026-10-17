@@ -10,6 +10,7 @@ contains only its decision logic.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -17,18 +18,18 @@ from typing import TYPE_CHECKING, Any
 from ..appliances.climate_appliance import ClimateApplianceRuntime
 from ..appliances.generic_appliance import GenericApplianceRuntime
 from ..controllables.config import CONTROLLABLE_ID_INVERTER
-from ..scheduling.schedule import (
-    ScheduleAction,
-    ScheduleDocument,
-    inverter_action,
+from ..controllables.spec import CONTROLLABLE_KIND_CLIMATE, CONTROLLABLE_KIND_GENERIC
+from ..scheduling.schedule import ScheduleAction, ScheduleDocument, SlotAction
+from .conditions import build_eligibility
+from .explain import (
+    STATE_FALSE,
+    STATE_TRUE,
+    VERDICT_CANDIDATE,
+    VERDICT_EXECUTE,
+    VERDICT_SKIP,
 )
-from .explain import STATE_FALSE, STATE_TRUE
 from .fields import OptimizerConfigError
-from .ownership import (
-    is_user_owned_appliance_action,
-    is_user_owned_inverter_action,
-    stamp_automation_appliance_action,
-)
+from .ownership import is_user_owned, stamp_automation
 from .trace import NULL_TRACE
 
 if TYPE_CHECKING:
@@ -80,7 +81,7 @@ def resolve_appliance_target(
         )
 
     climate_mode = config.target.get("climate_mode")
-    if isinstance(appliance, GenericApplianceRuntime):
+    if appliance.kind == CONTROLLABLE_KIND_GENERIC:
         if climate_mode is not None:
             raise OptimizerConfigError(
                 path=f"{path}.target.climate_mode",
@@ -91,7 +92,7 @@ def resolve_appliance_target(
                 ),
             )
         return ApplianceTarget(appliance=appliance, authored_action={"on": True})
-    if isinstance(appliance, ClimateApplianceRuntime):
+    if appliance.kind == CONTROLLABLE_KIND_CLIMATE:
         if climate_mode is None:
             raise OptimizerConfigError(
                 path=f"{path}.target.climate_mode",
@@ -149,62 +150,64 @@ class ScheduleWriter:
             execution_enabled=snapshot.schedule.execution_enabled,
             slots=deepcopy(snapshot.schedule.slots),
         )
-        self._eligibility = eligibility
+        self.eligibility = eligibility
         self._trace = trace or NULL_TRACE
         self._controllable_id = controllable_id
         self._pre_filters_ownership = pre_filters_ownership
         self._blocked_slot_ids: list[str] = []
         self._written_slot_ids: list[str] = []
 
+    @classmethod
+    def open(
+        cls,
+        snapshot: "OptimizationSnapshot",
+        config: "OptimizerInstanceConfig",
+        trace: "OptimizerTrace | None" = None,
+        *,
+        controllable_id: str = CONTROLLABLE_ID_INVERTER,
+        pre_filters_ownership: bool = False,
+    ) -> "ScheduleWriter":
+        trace = trace or NULL_TRACE
+        eligibility = build_eligibility(snapshot, config, trace)
+        trace.set_verdict(
+            slot_ids=eligibility.horizon_slot_ids, verdict=VERDICT_SKIP
+        )
+        return cls(
+            snapshot,
+            eligibility=eligibility,
+            trace=trace,
+            controllable_id=controllable_id,
+            pre_filters_ownership=pre_filters_ownership,
+        )
+
     def _condition_met(self, slot_id: str) -> bool:
-        resolved = self._eligibility.at(slot_id)
+        resolved = self.eligibility.at(slot_id)
         # A slot no group covers is only reachable when an optimizer writes
         # outside its own eligibility, which none do; treat it as met so the
         # fallback can never silently downgrade a real action to a candidate.
         return True if resolved is None else resolved.condition_met
 
-    def set_inverter(
-        self,
-        slot_id: str,
-        *,
-        kind: str,
-        target_soc: int | None = None,
-    ) -> bool:
-        """Write an inverter action. ``False`` when the user owns the slot."""
-        current = self.document.slots.get(slot_id, {})
-        if is_user_owned_inverter_action(inverter_action(current)):
-            self._blocked_slot_ids.append(slot_id)
-            return False
-        action = ScheduleAction(
-            kind=kind,
-            set_by="automation",
-            condition_met=self._condition_met(slot_id),
-            **({} if target_soc is None else {"target_soc": target_soc}),
-        )
-        updated = dict(current)
-        updated[CONTROLLABLE_ID_INVERTER] = action
-        self.document.slots[slot_id] = updated
-        self._written_slot_ids.append(slot_id)
-        return True
+    def set(self, slot_id: str, payload: ScheduleAction | Mapping[str, Any]) -> bool:
+        """Write the writer's controllable's ``payload`` into ``slot_id``.
 
-    def set_appliance(
-        self,
-        slot_id: str,
-        *,
-        appliance_id: str,
-        action: dict[str, Any],
-    ) -> bool:
-        """Write an appliance action. ``False`` when the user owns the slot."""
+        ``False`` when the user owns the slot, which is then left untouched.
+        """
         current = self.document.slots.get(slot_id, {})
-        if is_user_owned_appliance_action(current.get(appliance_id)):
+        if is_user_owned(current.get(self._controllable_id)):
             self._blocked_slot_ids.append(slot_id)
             return False
-        updated = dict(current)
-        updated[appliance_id] = stamp_automation_appliance_action(
-            action, condition_met=self._condition_met(slot_id)
-        )
-        self.document.slots[slot_id] = updated
+        condition_met = self._condition_met(slot_id)
+        self.document.slots[slot_id] = {
+            **current,
+            self._controllable_id: stamp_automation(
+                SlotAction(payload=payload, condition_met=condition_met)
+            ),
+        }
         self._written_slot_ids.append(slot_id)
+        self._trace.set_verdict(
+            slot_ids=[slot_id],
+            verdict=VERDICT_EXECUTE if condition_met else VERDICT_CANDIDATE,
+        )
         return True
 
     def flush(self, *, action: dict[str, Any] | None = None) -> ScheduleDocument:

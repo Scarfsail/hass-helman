@@ -5,6 +5,7 @@ import unittest
 
 
 
+from custom_components.helman.appliances._read import ProjectionConfig
 from custom_components.helman.appliances.state import AppliancesRuntimeRegistry
 from custom_components.helman.appliances.climate_appliance import ClimateApplianceRuntime
 from custom_components.helman.appliances.dto import build_appliances_response
@@ -271,9 +272,7 @@ class ApplianceStateTests(unittest.TestCase):
                     id="living-room-hvac",
                     name="Living Room HVAC",
                     climate_entity_id="climate.living_room",
-                    projection_strategy="fixed",
-                    hourly_energy_kwh=1.5,
-                    history_energy_entity_id=None,
+                    projection=ProjectionConfig(strategy="fixed", hourly_energy_kwh=1.5),
                     supported_modes=("heat",),
                     stop_hvac_mode="off",
                 )
@@ -294,9 +293,7 @@ class ApplianceStateTests(unittest.TestCase):
                     id="living-room-hvac",
                     name="Living Room HVAC",
                     climate_entity_id="climate.living_room",
-                    projection_strategy="fixed",
-                    hourly_energy_kwh=1.5,
-                    history_energy_entity_id=None,
+                    projection=ProjectionConfig(strategy="fixed", hourly_energy_kwh=1.5),
                     supported_modes=(),
                     stop_hvac_mode="off",
                 )

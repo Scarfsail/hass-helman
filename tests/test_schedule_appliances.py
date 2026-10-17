@@ -17,6 +17,7 @@ def _install_import_stubs() -> None:
 
 _install_import_stubs()
 
+from custom_components.helman.appliances._read import ProjectionConfig
 from custom_components.helman.appliances.state import AppliancesRuntimeRegistry
 from custom_components.helman.appliances.climate_appliance import ClimateApplianceRuntime
 from custom_components.helman.appliances.config import build_appliances_runtime_registry
@@ -27,6 +28,7 @@ from custom_components.helman.scheduling.schedule import (
     ScheduleSlot,
     appliance_actions,
     build_controllable_actions,
+    controllable_actions_to_dict,
     inverter_action,
     normalize_schedule_document_for_registry,
     normalize_slot_patch_request,
@@ -336,6 +338,10 @@ class ScheduleApplianceTests(unittest.TestCase):
 
         self.assertEqual(
             appliance_actions(normalized[0].controllables),
+            {"dishwasher": {"on": True}},
+        )
+        self.assertEqual(
+            controllable_actions_to_dict(normalized[0].controllables),
             {"dishwasher": {"on": True, "setBy": "automation", "conditionMet": False}},
         )
 
@@ -372,6 +378,22 @@ class ScheduleApplianceTests(unittest.TestCase):
 
         self.assertEqual(
             appliance_actions(normalized[0].controllables),
+            {
+                "garage-ev": {
+                    "charge": True,
+                    "vehicleId": "kona",
+                    "useMode": "Fast",
+                },
+                "dishwasher": {
+                    "on": True,
+                },
+                "living-room-hvac": {
+                    "mode": "heat",
+                },
+            },
+        )
+        self.assertEqual(
+            controllable_actions_to_dict(normalized[0].controllables),
             {
                 "garage-ev": {
                     "charge": True,
@@ -447,9 +469,7 @@ class ScheduleApplianceTests(unittest.TestCase):
                     id="living-room-hvac",
                     name="Living Room HVAC",
                     climate_entity_id="climate.living_room",
-                    projection_strategy="fixed",
-                    hourly_energy_kwh=1.5,
-                    history_energy_entity_id=None,
+                    projection=ProjectionConfig(strategy="fixed", hourly_energy_kwh=1.5),
                     supported_modes=("heat",),
                     stop_hvac_mode="off",
                 )

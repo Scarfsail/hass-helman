@@ -24,8 +24,6 @@ from ..const import (
     SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
     SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
     SCHEDULE_ACTION_NORMAL,
-    SCHEDULE_ACTION_STOP_CHARGING,
-    SCHEDULE_ACTION_STOP_DISCHARGING,
     SCHEDULE_ACTION_STOP_EXPORT,
     SCHEDULE_EXECUTOR_INTERVAL_SECONDS,
 )
@@ -33,13 +31,15 @@ from .action_resolution import resolve_executed_schedule_action
 from .actuation import ScheduleActuator
 from .runtime_status import (
     ActiveSlotRuntimeStatus,
-    InverterRuntimeStatus,
+    ControllableRuntimeStatus,
     RuntimeActionKind,
     ScheduleExecutionStatus,
 )
 from .schedule import (
     EMPTY_SCHEDULE_ACTION,
+    INVERTER_ACTION_KINDS,
     NORMAL_SCHEDULE_ACTION,
+    REQUIRED_INVERTER_ACTIONS,
     ScheduleAction,
     ScheduleControlConfig,
     ScheduleDocument,
@@ -97,16 +97,21 @@ class ScheduleExecutionRuntime:
 
 @dataclass(frozen=True)
 class InverterExecutionResult:
-    runtime: InverterRuntimeStatus
+    runtime: ControllableRuntimeStatus
     error: ScheduleError | None = None
 
 
 class InverterExecutor:
     def __init__(
-        self, actuator: ScheduleActuator, runtime: ScheduleExecutionRuntime
+        self,
+        actuator: ScheduleActuator,
+        runtime: ScheduleExecutionRuntime,
+        *,
+        read_battery_state: Callable[[], BatteryLiveState | None] | None = None,
     ) -> None:
         self._actuator = actuator
         self._runtime = runtime
+        self._read_battery_state = read_battery_state or (lambda: None)
 
     def validate_control_entity(
         self,
@@ -118,10 +123,71 @@ class InverterExecutor:
             description=_INVERTER_MODE_DESCRIPTION,
         )
         state = controller.read_state(self._actuator)
-        controller.validate_option(state, control_config.normal_option)
-        controller.validate_option(state, control_config.stop_charging_option)
-        controller.validate_option(state, control_config.stop_discharging_option)
+        for action_kind in INVERTER_ACTION_KINDS:
+            if action_kind in REQUIRED_INVERTER_ACTIONS:
+                controller.validate_option(state, control_config.options[action_kind])
         return controller, state
+
+    async def async_reconcile(
+        self,
+        control_config: ScheduleControlConfig | None,
+        action: ScheduleAction,
+        slot_id: str,
+        now: datetime,
+    ) -> tuple[ControllableRuntimeStatus, ScheduleError | None]:
+        if action.kind == SCHEDULE_ACTION_EMPTY:
+            cached_runtime = self.build_cached_empty_runtime(
+                active_slot_id=slot_id
+            )
+            if cached_runtime is not None:
+                return cached_runtime, None
+            if _empty_inverter_action_requires_slot_stop(self._runtime):
+                if control_config is None:
+                    return (
+                        ControllableRuntimeStatus(
+                            action_kind="slot_stop",
+                            outcome="failed",
+                            executed_action=NORMAL_SCHEDULE_ACTION,
+                            reason="scheduled",
+                            error_code="not_configured",
+                        ),
+                        ScheduleNotConfiguredError(
+                            "Schedule control config is required to restore normal mode "
+                            "after an inverter schedule override"
+                        ),
+                    )
+                result = await self.async_cleanup_empty_slot(
+                    control_config=control_config,
+                    active_slot_id=slot_id,
+                )
+                return result.runtime, result.error
+            return (
+                self.build_empty_noop_runtime(active_slot_id=slot_id),
+                None,
+            )
+
+        if control_config is None:
+            return (
+                ControllableRuntimeStatus(
+                    action_kind="apply",
+                    outcome="failed",
+                    executed_action=action,
+                    reason="scheduled",
+                    error_code="not_configured",
+                ),
+                ScheduleNotConfiguredError(
+                    "Schedule control config is required to execute the schedule"
+                ),
+            )
+
+        result = await self.async_execute(
+            control_config=control_config,
+            action=action,
+            active_slot_id=slot_id,
+            reference_time=now,
+            read_battery_state=self._read_battery_state,
+        )
+        return result.runtime, result.error
 
     async def async_execute(
         self,
@@ -155,7 +221,7 @@ class InverterExecutor:
                 fallback_reason = resolution.reason
                 fallback_action = resolution.executed_action
             return InverterExecutionResult(
-                runtime=InverterRuntimeStatus(
+                runtime=ControllableRuntimeStatus(
                     action_kind="apply",
                     outcome="failed",
                     executed_action=fallback_action,
@@ -166,7 +232,7 @@ class InverterExecutor:
             )
 
         return InverterExecutionResult(
-            runtime=InverterRuntimeStatus(
+            runtime=ControllableRuntimeStatus(
                 action_kind="apply",
                 outcome="success",
                 executed_action=resolution.executed_action,
@@ -207,7 +273,7 @@ class InverterExecutor:
             )
         except ScheduleError as err:
             return InverterExecutionResult(
-                runtime=InverterRuntimeStatus(
+                runtime=ControllableRuntimeStatus(
                     action_kind="slot_stop",
                     outcome="failed",
                     executed_action=NORMAL_SCHEDULE_ACTION,
@@ -218,7 +284,7 @@ class InverterExecutor:
             )
 
         return InverterExecutionResult(
-            runtime=InverterRuntimeStatus(
+            runtime=ControllableRuntimeStatus(
                 action_kind="slot_stop",
                 outcome="success",
                 executed_action=NORMAL_SCHEDULE_ACTION,
@@ -226,11 +292,11 @@ class InverterExecutor:
             )
         )
 
-    def build_empty_noop_runtime(self, *, active_slot_id: str) -> InverterRuntimeStatus:
+    def build_empty_noop_runtime(self, *, active_slot_id: str) -> ControllableRuntimeStatus:
         self._runtime.last_applied_action = EMPTY_SCHEDULE_ACTION
         self._runtime.last_active_slot_id = active_slot_id
         self._runtime.last_runtime_action_kind = "noop"
-        return InverterRuntimeStatus(
+        return ControllableRuntimeStatus(
             action_kind="noop",
             outcome="skipped",
             executed_action=EMPTY_SCHEDULE_ACTION,
@@ -241,11 +307,11 @@ class InverterExecutor:
         self,
         *,
         active_slot_id: str,
-    ) -> InverterRuntimeStatus | None:
+    ) -> ControllableRuntimeStatus | None:
         if self._runtime.last_active_slot_id != active_slot_id:
             return None
         if self._runtime.last_runtime_action_kind == "slot_stop":
-            return InverterRuntimeStatus(
+            return ControllableRuntimeStatus(
                 action_kind="slot_stop",
                 outcome="success",
                 executed_action=NORMAL_SCHEDULE_ACTION,
@@ -255,7 +321,7 @@ class InverterExecutor:
             self._runtime.last_runtime_action_kind == "noop"
             and self._runtime.last_applied_action == EMPTY_SCHEDULE_ACTION
         ):
-            return InverterRuntimeStatus(
+            return ControllableRuntimeStatus(
                 action_kind="noop",
                 outcome="skipped",
                 executed_action=EMPTY_SCHEDULE_ACTION,
@@ -286,29 +352,18 @@ class InverterExecutor:
         control_config: ScheduleControlConfig,
         action: ScheduleAction,
     ) -> str:
-        if action.kind == SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC:
-            if control_config.charge_to_target_soc_option is None:
+        option = control_config.options.get(action.kind)
+        if option is None:
+            if action.kind in {
+                SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+                SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
+                SCHEDULE_ACTION_STOP_EXPORT,
+            }:
                 raise ScheduleNotConfiguredError(
-                    "Schedule control config is missing the charge_to_target_soc action option"
+                    f"Schedule control config is missing the {action.kind} action option"
                 )
-            return control_config.charge_to_target_soc_option
-        if action.kind == SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC:
-            if control_config.discharge_to_target_soc_option is None:
-                raise ScheduleNotConfiguredError(
-                    "Schedule control config is missing the discharge_to_target_soc action option"
-                )
-            return control_config.discharge_to_target_soc_option
-        if action.kind == SCHEDULE_ACTION_STOP_CHARGING:
-            return control_config.stop_charging_option
-        if action.kind == SCHEDULE_ACTION_STOP_DISCHARGING:
-            return control_config.stop_discharging_option
-        if action.kind == SCHEDULE_ACTION_STOP_EXPORT:
-            if control_config.stop_export_option is None:
-                raise ScheduleNotConfiguredError(
-                    "Schedule control config is missing the stop_export action option"
-                )
-            return control_config.stop_export_option
-        return control_config.normal_option
+            return control_config.options.get(SCHEDULE_ACTION_NORMAL, "")
+        return option
 
     async def _async_apply_action(
         self,
@@ -367,7 +422,11 @@ class ScheduleExecutor:
             ),
         )
         self._runtime = ScheduleExecutionRuntime()
-        self._inverter_executor = InverterExecutor(self._actuator, self._runtime)
+        self._inverter_executor = InverterExecutor(
+            self._actuator,
+            self._runtime,
+            read_battery_state=lambda: self._dependencies.read_battery_state(),
+        )
         self._appliances_executor = AppliancesExecutor(self._actuator)
         # Serializes every hardware-touching path -- reconcile and explicit
         # restore. The schedule lock is only ever taken inside it, briefly, to
@@ -395,7 +454,11 @@ class ScheduleExecutor:
 
     def reset_runtime(self) -> None:
         self._runtime = ScheduleExecutionRuntime()
-        self._inverter_executor = InverterExecutor(self._actuator, self._runtime)
+        self._inverter_executor = InverterExecutor(
+            self._actuator,
+            self._runtime,
+            read_battery_state=lambda: self._dependencies.read_battery_state(),
+        )
 
     async def async_start(self) -> None:
         if self._unloaded:
@@ -597,66 +660,15 @@ class ScheduleExecutor:
             reference_time=request_now,
         )
 
-        inverter_runtime: InverterRuntimeStatus | None = None
-        first_error: ScheduleError | None = None
-        if active_action.kind == SCHEDULE_ACTION_EMPTY:
-            cached_runtime = self._inverter_executor.build_cached_empty_runtime(
-                active_slot_id=current_slot_id
+        control_config = self._dependencies.read_schedule_control_config()
+        inverter_runtime, first_error = (
+            await self._inverter_executor.async_reconcile(
+                control_config,
+                active_action,
+                current_slot_id,
+                request_now,
             )
-            if cached_runtime is not None:
-                inverter_runtime = cached_runtime
-            elif _empty_inverter_action_requires_slot_stop(self._runtime):
-                control_config = self._dependencies.read_schedule_control_config()
-                if control_config is None:
-                    inverter_runtime = InverterRuntimeStatus(
-                        action_kind="slot_stop",
-                        outcome="failed",
-                        executed_action=NORMAL_SCHEDULE_ACTION,
-                        reason="scheduled",
-                        error_code="not_configured",
-                    )
-                    first_error = ScheduleNotConfiguredError(
-                        "Schedule control config is required to restore normal mode "
-                        "after an inverter schedule override"
-                    )
-                else:
-                    inverter_result = (
-                        await self._inverter_executor.async_cleanup_empty_slot(
-                            control_config=control_config,
-                            active_slot_id=current_slot_id,
-                        )
-                    )
-                    inverter_runtime = inverter_result.runtime
-                    if inverter_result.error is not None:
-                        first_error = inverter_result.error
-            else:
-                inverter_runtime = self._inverter_executor.build_empty_noop_runtime(
-                    active_slot_id=current_slot_id
-                )
-        else:
-            control_config = self._dependencies.read_schedule_control_config()
-            if control_config is None:
-                inverter_runtime = InverterRuntimeStatus(
-                    action_kind="apply",
-                    outcome="failed",
-                    executed_action=active_action,
-                    reason="scheduled",
-                    error_code="not_configured",
-                )
-                first_error = ScheduleNotConfiguredError(
-                    "Schedule control config is required to execute the schedule"
-                )
-            else:
-                inverter_result = await self._inverter_executor.async_execute(
-                    control_config=control_config,
-                    action=active_action,
-                    active_slot_id=current_slot_id,
-                    reference_time=request_now,
-                    read_battery_state=self._dependencies.read_battery_state,
-                )
-                inverter_runtime = inverter_result.runtime
-                if inverter_result.error is not None:
-                    first_error = inverter_result.error
+        )
 
         appliance_result = await self._appliances_executor.async_execute(
             registry=self._dependencies.read_appliances_registry(),

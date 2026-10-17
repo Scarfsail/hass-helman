@@ -58,8 +58,7 @@ from custom_components.helman.scheduling.schedule_executor import (  # noqa: E40
 )
 from custom_components.helman.scheduling.runtime_status import (  # noqa: E402
     ActiveSlotRuntimeStatus,
-    ApplianceRuntimeStatus,
-    InverterRuntimeStatus,
+    ControllableRuntimeStatus,
     ScheduleExecutionStatus,
 )
 
@@ -132,12 +131,14 @@ class FakeScheduleStore:
 def _build_control_config(entity_id: str) -> ScheduleControlConfig:
     return ScheduleControlConfig(
         mode_entity_id=entity_id,
-        normal_option="Normal",
-        charge_to_target_soc_option="Charge To Target",
-        discharge_to_target_soc_option="Discharge To Target",
-        stop_charging_option="Stop Charging",
-        stop_discharging_option="Stop Discharging",
-        stop_export_option="Stop Export",
+        options={
+            SCHEDULE_ACTION_NORMAL: "Normal",
+            SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC: "Charge To Target",
+            SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC: "Discharge To Target",
+            SCHEDULE_ACTION_STOP_CHARGING: "Stop Charging",
+            SCHEDULE_ACTION_STOP_DISCHARGING: "Stop Discharging",
+            SCHEDULE_ACTION_STOP_EXPORT: "Stop Export",
+        },
     )
 
 
@@ -211,9 +212,11 @@ class RuntimeAnnouncementTests(unittest.IsolatedAsyncioTestCase):
             document=ScheduleDocument(
                 execution_enabled=True,
                 slots={
-                    CURRENT_SLOT_ID: ScheduleAction(
-                        kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
-                        target_soc=80,
+                    CURRENT_SLOT_ID: build_controllable_actions(
+                        inverter=ScheduleAction(
+                            kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+                            target_soc=80,
+                        )
                     )
                 },
             ),
@@ -261,7 +264,7 @@ class RuntimeAnnouncementTests(unittest.IsolatedAsyncioTestCase):
             return ScheduleExecutionStatus(
                 active_slot_id=CURRENT_SLOT_ID,
                 active_slot_runtime=ActiveSlotRuntimeStatus(
-                    inverter=InverterRuntimeStatus(
+                    inverter=ControllableRuntimeStatus(
                         action_kind="apply", outcome="failed", error_code=error_code
                     ),
                     reconciled_at=reconciled_at,
@@ -288,7 +291,7 @@ class RuntimeAnnouncementTests(unittest.IsolatedAsyncioTestCase):
                 active_slot_id=CURRENT_SLOT_ID,
                 active_slot_runtime=ActiveSlotRuntimeStatus(
                     appliances={
-                        "garage-ev": ApplianceRuntimeStatus(
+                        "garage-ev": ControllableRuntimeStatus(
                             action_kind="apply",
                             outcome="failed",
                             error_code="execution_unavailable",
@@ -314,7 +317,9 @@ class RuntimeAnnouncementTests(unittest.IsolatedAsyncioTestCase):
             document=ScheduleDocument(
                 execution_enabled=False,
                 slots={
-                    CURRENT_SLOT_ID: ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                    CURRENT_SLOT_ID: build_controllable_actions(
+                        inverter=ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                    )
                 },
             ),
             save_pruned_schedule_document=(
@@ -397,7 +402,9 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             document=ScheduleDocument(
                 execution_enabled=True,
                 slots={
-                    CURRENT_SLOT_ID: ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                    CURRENT_SLOT_ID: build_controllable_actions(
+                        inverter=ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                    )
                 },
             ),
         )
@@ -432,7 +439,9 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             document=ScheduleDocument(
                 execution_enabled=False,
                 slots={
-                    CURRENT_SLOT_ID: ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                    CURRENT_SLOT_ID: build_controllable_actions(
+                        inverter=ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                    )
                 },
             ),
             check_reality_and_maybe_replan=check,
@@ -458,7 +467,9 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             document=ScheduleDocument(
                 execution_enabled=True,
                 slots={
-                    CURRENT_SLOT_ID: ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                    CURRENT_SLOT_ID: build_controllable_actions(
+                        inverter=ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                    )
                 },
             ),
             check_reality_and_maybe_replan=check,
@@ -481,7 +492,9 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             document=ScheduleDocument(
                 execution_enabled=True,
                 slots={
-                    CURRENT_SLOT_ID: ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                    CURRENT_SLOT_ID: build_controllable_actions(
+                        inverter=ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                    )
                 },
             ),
             check_reality_and_maybe_replan=check,
@@ -501,10 +514,12 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             document=ScheduleDocument(
                 execution_enabled=True,
                 slots={
-                    CURRENT_SLOT_ID: ScheduleAction(
-                        kind=SCHEDULE_ACTION_STOP_CHARGING,
-                        set_by="automation",
-                        condition_met=False,
+                    CURRENT_SLOT_ID: build_controllable_actions(
+                        inverter=ScheduleAction(
+                            kind=SCHEDULE_ACTION_STOP_CHARGING,
+                            set_by="automation",
+                            condition_met=False,
+                        )
                     )
                 },
             ),
@@ -528,8 +543,10 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             document=ScheduleDocument(
                 execution_enabled=True,
                 slots={
-                    CURRENT_SLOT_ID: ScheduleAction(
-                        kind=SCHEDULE_ACTION_STOP_DISCHARGING
+                    CURRENT_SLOT_ID: build_controllable_actions(
+                        inverter=ScheduleAction(
+                            kind=SCHEDULE_ACTION_STOP_DISCHARGING
+                        )
                     )
                 },
             ),
@@ -561,7 +578,9 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             ),
             document=ScheduleDocument(
                 execution_enabled=True,
-                slots={CURRENT_SLOT_ID: ScheduleAction(kind=SCHEDULE_ACTION_STOP_EXPORT)},
+                slots={CURRENT_SLOT_ID: build_controllable_actions(
+                    inverter=ScheduleAction(kind=SCHEDULE_ACTION_STOP_EXPORT)
+                )},
             ),
         )
 
@@ -662,7 +681,9 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             document=ScheduleDocument(
                 execution_enabled=True,
                 slots={
-                    CURRENT_SLOT_ID: ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                    CURRENT_SLOT_ID: build_controllable_actions(
+                        inverter=ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                    )
                 },
             ),
         )
@@ -683,9 +704,11 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             document=ScheduleDocument(
                 execution_enabled=True,
                 slots={
-                    CURRENT_SLOT_ID: ScheduleAction(
-                        kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
-                        target_soc=80,
+                    CURRENT_SLOT_ID: build_controllable_actions(
+                        inverter=ScheduleAction(
+                            kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+                            target_soc=80,
+                        )
                     )
                 },
             ),
@@ -726,9 +749,11 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             document=ScheduleDocument(
                 execution_enabled=True,
                 slots={
-                    CURRENT_SLOT_ID: ScheduleAction(
-                        kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
-                        target_soc=80,
+                    CURRENT_SLOT_ID: build_controllable_actions(
+                        inverter=ScheduleAction(
+                            kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+                            target_soc=80,
+                        )
                     )
                 },
             ),
@@ -772,9 +797,11 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             document=ScheduleDocument(
                 execution_enabled=True,
                 slots={
-                    CURRENT_SLOT_ID: ScheduleAction(
-                        kind=SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
-                        target_soc=30,
+                    CURRENT_SLOT_ID: build_controllable_actions(
+                        inverter=ScheduleAction(
+                            kind=SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
+                            target_soc=30,
+                        )
                     )
                 },
             ),
@@ -815,9 +842,11 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             document=ScheduleDocument(
                 execution_enabled=True,
                 slots={
-                    CURRENT_SLOT_ID: ScheduleAction(
-                        kind=SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
-                        target_soc=30,
+                    CURRENT_SLOT_ID: build_controllable_actions(
+                        inverter=ScheduleAction(
+                            kind=SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
+                            target_soc=30,
+                        )
                     )
                 },
             ),
@@ -860,9 +889,11 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             document=ScheduleDocument(
                 execution_enabled=True,
                 slots={
-                    CURRENT_SLOT_ID: ScheduleAction(
-                        kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
-                        target_soc=80,
+                    CURRENT_SLOT_ID: build_controllable_actions(
+                        inverter=ScheduleAction(
+                            kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+                            target_soc=80,
+                        )
                     )
                 },
             ),
@@ -895,19 +926,22 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             document=ScheduleDocument(
                 execution_enabled=True,
                 slots={
-                    CURRENT_SLOT_ID: ScheduleAction(
-                        kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
-                        target_soc=80,
+                    CURRENT_SLOT_ID: build_controllable_actions(
+                        inverter=ScheduleAction(
+                            kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+                            target_soc=80,
+                        )
                     )
                 },
             ),
             control_config=ScheduleControlConfig(
                 mode_entity_id="input_select.mode",
-                normal_option="Normal",
-                charge_to_target_soc_option=None,
-                discharge_to_target_soc_option="Discharge To Target",
-                stop_charging_option="Stop Charging",
-                stop_discharging_option="Stop Discharging",
+                options={
+                    SCHEDULE_ACTION_NORMAL: "Normal",
+                    SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC: "Discharge To Target",
+                    SCHEDULE_ACTION_STOP_CHARGING: "Stop Charging",
+                    SCHEDULE_ACTION_STOP_DISCHARGING: "Stop Discharging",
+                },
             ),
             battery_state=_build_battery_state(current_soc=70),
         )
@@ -935,19 +969,22 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             document=ScheduleDocument(
                 execution_enabled=True,
                 slots={
-                    CURRENT_SLOT_ID: ScheduleAction(
-                        kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
-                        target_soc=80,
+                    CURRENT_SLOT_ID: build_controllable_actions(
+                        inverter=ScheduleAction(
+                            kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+                            target_soc=80,
+                        )
                     )
                 },
             ),
             control_config=ScheduleControlConfig(
                 mode_entity_id="input_select.mode",
-                normal_option="Normal",
-                charge_to_target_soc_option=None,
-                discharge_to_target_soc_option="Discharge To Target",
-                stop_charging_option="Stop Charging",
-                stop_discharging_option="Stop Discharging",
+                options={
+                    SCHEDULE_ACTION_NORMAL: "Normal",
+                    SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC: "Discharge To Target",
+                    SCHEDULE_ACTION_STOP_CHARGING: "Stop Charging",
+                    SCHEDULE_ACTION_STOP_DISCHARGING: "Stop Discharging",
+                },
             ),
             battery_state=_build_battery_state(current_soc=80),
         )
@@ -972,16 +1009,19 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             ),
             document=ScheduleDocument(
                 execution_enabled=True,
-                slots={CURRENT_SLOT_ID: ScheduleAction(kind=SCHEDULE_ACTION_STOP_EXPORT)},
+                slots={CURRENT_SLOT_ID: build_controllable_actions(
+                    inverter=ScheduleAction(kind=SCHEDULE_ACTION_STOP_EXPORT)
+                )},
             ),
             control_config=ScheduleControlConfig(
                 mode_entity_id="input_select.mode",
-                normal_option="Normal",
-                charge_to_target_soc_option="Charge To Target",
-                discharge_to_target_soc_option="Discharge To Target",
-                stop_charging_option="Stop Charging",
-                stop_discharging_option="Stop Discharging",
-                stop_export_option=None,
+                options={
+                    SCHEDULE_ACTION_NORMAL: "Normal",
+                    SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC: "Charge To Target",
+                    SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC: "Discharge To Target",
+                    SCHEDULE_ACTION_STOP_CHARGING: "Stop Charging",
+                    SCHEDULE_ACTION_STOP_DISCHARGING: "Stop Discharging",
+                },
             ),
         )
 
@@ -1003,7 +1043,9 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             document=ScheduleDocument(
                 execution_enabled=True,
                 slots={
-                    CURRENT_SLOT_ID: ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                    CURRENT_SLOT_ID: build_controllable_actions(
+                        inverter=ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                    )
                 },
             ),
         )
@@ -1029,7 +1071,9 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             document=ScheduleDocument(
                 execution_enabled=True,
                 slots={
-                    CURRENT_SLOT_ID: ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                    CURRENT_SLOT_ID: build_controllable_actions(
+                        inverter=ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                    )
                 },
             ),
         )
@@ -1072,7 +1116,9 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             ScheduleDocument(
                 execution_enabled=True,
                 slots={
-                    CURRENT_SLOT_ID: ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                    CURRENT_SLOT_ID: build_controllable_actions(
+                        inverter=ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                    )
                 },
             )
         )
@@ -1156,7 +1202,9 @@ class ScheduleExecutorConcurrencyTests(unittest.IsolatedAsyncioTestCase):
             document=ScheduleDocument(
                 execution_enabled=True,
                 slots={
-                    CURRENT_SLOT_ID: ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                    CURRENT_SLOT_ID: build_controllable_actions(
+                        inverter=ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                    )
                 },
             ),
         )
@@ -1180,8 +1228,10 @@ class ScheduleExecutorConcurrencyTests(unittest.IsolatedAsyncioTestCase):
             document=ScheduleDocument(
                 execution_enabled=True,
                 slots={
-                    CURRENT_SLOT_ID: ScheduleAction(
-                        kind=SCHEDULE_ACTION_STOP_DISCHARGING
+                    CURRENT_SLOT_ID: build_controllable_actions(
+                        inverter=ScheduleAction(
+                            kind=SCHEDULE_ACTION_STOP_DISCHARGING
+                        )
                     )
                 },
             ),
@@ -1214,7 +1264,9 @@ class ScheduleExecutorConcurrencyTests(unittest.IsolatedAsyncioTestCase):
             document=ScheduleDocument(
                 execution_enabled=True,
                 slots={
-                    CURRENT_SLOT_ID: ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                    CURRENT_SLOT_ID: build_controllable_actions(
+                        inverter=ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                    )
                 },
             ),
             check_reality_and_maybe_replan=check,
@@ -1252,7 +1304,9 @@ class ScheduleExecutorConcurrencyTests(unittest.IsolatedAsyncioTestCase):
             document=ScheduleDocument(
                 execution_enabled=True,
                 slots={
-                    CURRENT_SLOT_ID: ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                    CURRENT_SLOT_ID: build_controllable_actions(
+                        inverter=ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                    )
                 },
             ),
             now=lambda: REFERENCE_TIME,
@@ -1355,7 +1409,9 @@ class ScheduleExecutorConcurrencyTests(unittest.IsolatedAsyncioTestCase):
             document=ScheduleDocument(
                 execution_enabled=True,
                 slots={
-                    CURRENT_SLOT_ID: ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                    CURRENT_SLOT_ID: build_controllable_actions(
+                        inverter=ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                    )
                 },
             ),
             now=lambda: clock[0],
@@ -1372,11 +1428,15 @@ class ScheduleExecutorConcurrencyTests(unittest.IsolatedAsyncioTestCase):
                 ScheduleDocument(
                     execution_enabled=True,
                     slots={
-                        CURRENT_SLOT_ID: ScheduleAction(
-                            kind=SCHEDULE_ACTION_STOP_CHARGING
+                        CURRENT_SLOT_ID: build_controllable_actions(
+                            inverter=ScheduleAction(
+                                kind=SCHEDULE_ACTION_STOP_CHARGING
+                            )
                         ),
-                        NEXT_SLOT_ID: ScheduleAction(
-                            kind=SCHEDULE_ACTION_STOP_DISCHARGING
+                        NEXT_SLOT_ID: build_controllable_actions(
+                            inverter=ScheduleAction(
+                                kind=SCHEDULE_ACTION_STOP_DISCHARGING
+                            )
                         ),
                     },
                 )
@@ -1439,7 +1499,9 @@ class ScheduleExecutorConcurrencyTests(unittest.IsolatedAsyncioTestCase):
             document=ScheduleDocument(
                 execution_enabled=True,
                 slots={
-                    CURRENT_SLOT_ID: ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                    CURRENT_SLOT_ID: build_controllable_actions(
+                        inverter=ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                    )
                 },
             ),
             now=lambda: REFERENCE_TIME,
@@ -1466,7 +1528,9 @@ class ScheduleExecutorConcurrencyTests(unittest.IsolatedAsyncioTestCase):
             document=ScheduleDocument(
                 execution_enabled=True,
                 slots={
-                    CURRENT_SLOT_ID: ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                    CURRENT_SLOT_ID: build_controllable_actions(
+                        inverter=ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
+                    )
                 },
             ),
             now=lambda: REFERENCE_TIME,

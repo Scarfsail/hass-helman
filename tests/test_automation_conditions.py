@@ -27,6 +27,7 @@ def _install_import_stubs() -> None:
 
 _install_import_stubs()
 
+from custom_components.helman.appliances._read import ProjectionConfig  # noqa: E402
 from custom_components.helman.appliances.state import AppliancesRuntimeRegistry  # noqa: E402
 from custom_components.helman.const import (  # noqa: E402
     SCHEDULE_HORIZON_HOURS,
@@ -895,9 +896,7 @@ class RequiresApplianceConditionTests(unittest.TestCase):
                 id=appliance_id,
                 name=appliance_id.title(),
                 switch_entity_id=f"switch.{appliance_id}",
-                projection_strategy="fixed",
-                hourly_energy_kwh=0.4,
-                history_energy_entity_id=None,
+                projection=ProjectionConfig(strategy="fixed", hourly_energy_kwh=0.4),
             )
 
         return (generic("pool-heatpump"), generic("pool-filtration"))

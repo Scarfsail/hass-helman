@@ -648,7 +648,7 @@ class ApplianceProjectionBuilderTests(unittest.TestCase):
         )
 
         demand_profile = get_when_active_demand_profile(
-            appliance=appliance,
+            projection=appliance.projection,
             resolved_hourly_energy_kwh=0.8,
         )
         self.assertIsNotNone(demand_profile)

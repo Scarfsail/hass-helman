@@ -54,20 +54,18 @@ from homeassistant.util import dt as dt_util
 
 from ...const import SCHEDULE_ACTION_STOP_CHARGING, SCHEDULE_SLOT_MINUTES
 from ...scheduling.schedule import (
+    ScheduleAction,
     ScheduleDocument,
     build_horizon_start,
     format_slot_id,
     parse_slot_id,
 )
 from ..base import ScheduleWriter
-from ..conditions import build_eligibility
+from ..day_context import _day_ratio_params
 from ..explain import (
     STATE_FALSE,
     STATE_TRUE,
     STATUS_SKIPPED,
-    VERDICT_CANDIDATE,
-    VERDICT_EXECUTE,
-    VERDICT_SKIP,
 )
 from ..fields import time_on
 from ..rails import (
@@ -129,14 +127,8 @@ class ChargeHoldOptimizer:
         trace: "OptimizerTrace | None" = None,
     ) -> ScheduleDocument:
         trace = trace or NULL_TRACE
-        eligibility = build_eligibility(snapshot, config, trace)
-        writer = ScheduleWriter(snapshot, eligibility=eligibility, trace=trace)
-        # Every slot starts at `skip` and is upgraded only where something is
-        # actually placed; the condition matrix covers the whole horizon, so a
-        # verdict-less slot would read as "never looked at".
-        trace.set_verdict(
-            slot_ids=eligibility.horizon_slot_ids, verdict=VERDICT_SKIP
-        )
+        writer = ScheduleWriter.open(snapshot, config, trace)
+        eligibility = writer.eligibility
 
         battery_state = snapshot.context.battery_state
         usable_capacity_kwh = snapshot.context.battery_usable_capacity_kwh
@@ -252,7 +244,7 @@ class ChargeHoldOptimizer:
                 released_by_day.setdefault(local_date, []).append(slot_id)
                 continue
             held_by_day.setdefault(local_date, []).append(slot_id)
-            if writer.set_inverter(slot_id, kind=SCHEDULE_ACTION_STOP_CHARGING):
+            if writer.set(slot_id, ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)):
                 applied_by_day.setdefault(local_date, []).append(slot_id)
 
         _emit_charge_hold_gates(
@@ -514,23 +506,6 @@ def _emit_charge_hold_decisions(
         trace.decision(slot_ids=slot_ids, outcome="out_of_scope")
 
 
-def _day_ratio_params(day_context: "DayContext") -> dict[str, Any]:
-    """The reading behind a day's band, for the trace (#264).
-
-    ``classification`` on its own no longer says where the band came from: it is
-    resolved per optimizer, over that optimizer's own house view, so the same
-    calendar day can legitimately be deficit here and tight for the appliance
-    that runs after. The ratio and the instance whose consumption sits in the
-    denominator are what makes an explanation reproducible.
-    """
-    return {
-        "solarToConsumptionRatio": (
-            None if day_context.ratio == float("inf") else round(day_context.ratio, 3)
-        ),
-        "denominatorOptimizerId": day_context.denominator_optimizer_id,
-    }
-
-
 def _emit_charge_hold_gates(
     trace,
     *,
@@ -710,27 +685,6 @@ def _emit_charge_hold_gates(
             params=_room_params(resolved),
         )
         _emit_rank(local_date, slot_ids, state=STATE_TRUE)
-    for slot_ids in applied_by_day.values():
-        _stamp_verdicts(trace, eligibility, slot_ids)
-
-
-def _stamp_verdicts(
-    trace, eligibility: "Eligibility", slot_ids: list[str]
-) -> None:
-    """Upgrade written slots from the ``skip`` baseline.
-
-    ``condition_met`` is read per slot exactly as ``ScheduleWriter`` reads it —
-    including its "a slot no group covers counts as met" fallback, since
-    ``charge_hold`` resolves its params per *day* and may hold a slot its own
-    group never matched.
-    """
-    for slot_id in slot_ids:
-        resolved = eligibility.at(slot_id)
-        condition_met = True if resolved is None else resolved.condition_met
-        trace.set_verdict(
-            slot_ids=[slot_id],
-            verdict=VERDICT_EXECUTE if condition_met else VERDICT_CANDIDATE,
-        )
 
 
 def _rounded(value: float | None) -> float | None:

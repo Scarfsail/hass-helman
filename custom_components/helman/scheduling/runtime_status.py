@@ -13,31 +13,14 @@ RuntimeActionKind = Literal["apply", "slot_stop", "noop"]
 RuntimeOutcome = Literal["success", "failed", "skipped"]
 
 
-class InverterRuntimeDict(TypedDict):
+class ControllableRuntimeDict(TypedDict):
     actionKind: RuntimeActionKind
     outcome: RuntimeOutcome
     executedAction: NotRequired["ScheduleActionDict"]
     reason: NotRequired[ScheduleExecutionReason]
     errorCode: NotRequired[str]
     message: NotRequired[str]
-
-
-class ApplianceRuntimeDict(TypedDict):
-    actionKind: RuntimeActionKind
-    outcome: RuntimeOutcome
-    errorCode: NotRequired[str]
-    message: NotRequired[str]
     updatedAt: NotRequired[str]
-
-
-#: What one controllable did with its slot, on the wire.
-#:
-#: A union rather than one shape, keyed by controllable id in the same flat map
-#: the slot's actions travel in: the inverter reports the action it applied and
-#: why, an appliance reports when it was last written. Both answer "did this
-#: lane do what the schedule said", which is the only question the card asks of
-#: the map as a whole.
-ControllableRuntimeDict = InverterRuntimeDict | ApplianceRuntimeDict
 
 
 class ActiveSlotRuntimeBranchDict(TypedDict):
@@ -52,33 +35,29 @@ class ScheduleRuntimeDict(TypedDict):
 
 
 @dataclass(frozen=True)
-class InverterRuntimeStatus:
+class ControllableRuntimeStatus:
     action_kind: RuntimeActionKind
     outcome: RuntimeOutcome
     executed_action: "ScheduleAction | None" = None
     reason: ScheduleExecutionReason | None = None
     error_code: str | None = None
     message: str | None = None
-
-
-@dataclass(frozen=True)
-class ApplianceRuntimeStatus:
-    action_kind: RuntimeActionKind
-    outcome: RuntimeOutcome
-    error_code: str | None = None
-    message: str | None = None
     updated_at: str | None = None
+
+
+InverterRuntimeStatus = ControllableRuntimeStatus
 
 
 @dataclass(frozen=True)
 class ActiveSlotRuntimeStatus:
-    inverter: InverterRuntimeStatus | None = None
-    appliances: dict[str, ApplianceRuntimeStatus] = field(default_factory=dict)
+    inverter: ControllableRuntimeStatus | None = None
+    appliances: dict[str, ControllableRuntimeStatus] = field(default_factory=dict)
     reconciled_at: str | None = None
 
     @property
     def executed_action(self) -> "ScheduleAction | None":
         return None if self.inverter is None else self.inverter.executed_action
+
 
 @dataclass(frozen=True)
 class ScheduleExecutionStatus:
@@ -86,15 +65,38 @@ class ScheduleExecutionStatus:
     active_slot_runtime: ActiveSlotRuntimeStatus | None = None
 
 
+def controllable_runtime_to_dict(
+    runtime: ControllableRuntimeStatus,
+) -> ControllableRuntimeDict:
+    # Deferred: ``schedule`` reaches this module through the appliance drivers.
+    from .schedule import action_to_dict
+
+    payload: ControllableRuntimeDict = {
+        "actionKind": runtime.action_kind,
+        "outcome": runtime.outcome,
+    }
+    if runtime.executed_action is not None:
+        payload["executedAction"] = action_to_dict(runtime.executed_action)
+    if runtime.reason is not None:
+        payload["reason"] = runtime.reason
+    if runtime.error_code is not None:
+        payload["errorCode"] = runtime.error_code
+    if runtime.message is not None:
+        payload["message"] = runtime.message
+    if runtime.updated_at is not None:
+        payload["updatedAt"] = runtime.updated_at
+    return payload
+
+
 def active_slot_runtime_to_dict(
     runtime: ActiveSlotRuntimeStatus,
 ) -> ActiveSlotRuntimeBranchDict:
     controllables: dict[str, ControllableRuntimeDict] = {
-        appliance_id: _appliance_runtime_to_dict(appliance_runtime)
+        appliance_id: controllable_runtime_to_dict(appliance_runtime)
         for appliance_id, appliance_runtime in runtime.appliances.items()
     }
     if runtime.inverter is not None:
-        controllables[CONTROLLABLE_ID_INVERTER] = _inverter_runtime_to_dict(
+        controllables[CONTROLLABLE_ID_INVERTER] = controllable_runtime_to_dict(
             runtime.inverter
         )
     payload: ActiveSlotRuntimeBranchDict = {"controllables": controllables}
@@ -119,47 +121,4 @@ def schedule_execution_status_to_dict(
     }
     if "reconciledAt" in runtime:
         payload["reconciledAt"] = runtime["reconciledAt"]
-    return payload
-
-
-def _inverter_runtime_to_dict(
-    runtime: InverterRuntimeStatus,
-) -> InverterRuntimeDict:
-    payload: InverterRuntimeDict = {
-        "actionKind": runtime.action_kind,
-        "outcome": runtime.outcome,
-    }
-    if runtime.executed_action is not None:
-        payload["executedAction"] = _schedule_action_to_dict(runtime.executed_action)
-    if runtime.reason is not None:
-        payload["reason"] = runtime.reason
-    if runtime.error_code is not None:
-        payload["errorCode"] = runtime.error_code
-    if runtime.message is not None:
-        payload["message"] = runtime.message
-    return payload
-
-
-def _schedule_action_to_dict(action: "ScheduleAction") -> "ScheduleActionDict":
-    payload: ScheduleActionDict = {"kind": action.kind}
-    if action.target_soc is not None:
-        payload["targetSoc"] = action.target_soc
-    if action.set_by is not None:
-        payload["setBy"] = action.set_by
-    return payload
-
-
-def _appliance_runtime_to_dict(
-    runtime: ApplianceRuntimeStatus,
-) -> ApplianceRuntimeDict:
-    payload: ApplianceRuntimeDict = {
-        "actionKind": runtime.action_kind,
-        "outcome": runtime.outcome,
-    }
-    if runtime.error_code is not None:
-        payload["errorCode"] = runtime.error_code
-    if runtime.message is not None:
-        payload["message"] = runtime.message
-    if runtime.updated_at is not None:
-        payload["updatedAt"] = runtime.updated_at
     return payload

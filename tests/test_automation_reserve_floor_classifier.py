@@ -87,6 +87,8 @@ from custom_components.helman.appliances.state import AppliancesRuntimeRegistry 
 from custom_components.helman.scheduling.schedule import (  # noqa: E402
     ScheduleAction,
     ScheduleDocument,
+    SlotAction,
+    build_controllable_actions,
     parse_slot_id,
 )
 from automation_config_builders import make_optimizer_config  # noqa: E402
@@ -238,9 +240,9 @@ class DecisionTableTests(unittest.TestCase):
     def test_rule3_inverter_lane_change_summary(self) -> None:
         demand = ScheduleDocument(
             slots={
-                "2026-07-10T08:30:00+02:00": {
-                    "inverter": ScheduleAction(kind="normal", set_by="automation")
-                },
+                "2026-07-10T08:30:00+02:00": build_controllable_actions(
+                    inverter=ScheduleAction(kind="normal", set_by="automation")
+                ),
             }
         )
         final = ScheduleDocument(slots={})
@@ -429,15 +431,15 @@ def _project_soc(
         ts = parse_slot_id(slot_id)
         inverter = actions.get("inverter")
         if (
-            isinstance(inverter, ScheduleAction)
-            and inverter.kind == "charge_to_target_soc"
+            inverter is not None
+            and inverter.payload.kind == "charge_to_target_soc"
             and inverter.set_by == "automation"
         ):
             charge_delta[ts] = charge_delta.get(ts, 0.0) + charge_bump_pp
         for controllable_id, action in actions.items():
             if controllable_id == "inverter":
                 continue
-            if isinstance(action, dict) and action.get("on") and action.get("setBy") == "automation":
+            if action.payload.get("on") and action.set_by == "automation":
                 drain_delta[ts] = drain_delta.get(ts, 0.0) - appliance_drain_pp
 
     out: list[dict[str, object]] = []
@@ -673,17 +675,15 @@ class ScenarioSuiteTests(unittest.TestCase):
         build_snapshot = _make_build_snapshot()
 
         def place_safely(document: ScheduleDocument) -> None:
-            document.slots.setdefault(_slot_id(11), {})["boiler"] = {
-                "on": True,
-                "setBy": "automation",
-            }
+            document.slots.setdefault(_slot_id(11), {})["boiler"] = SlotAction(
+                payload={"on": True}, set_by="automation"
+            )
 
         def move_into_window(document: ScheduleDocument) -> None:
             document.slots.get(_slot_id(11), {}).pop("boiler", None)
-            document.slots.setdefault(_slot_id(9), {})["boiler"] = {
-                "on": True,
-                "setBy": "automation",
-            }
+            document.slots.setdefault(_slot_id(9), {})["boiler"] = SlotAction(
+                payload={"on": True}, set_by="automation"
+            )
 
         result = _run(
             execution_optimizers=[
@@ -709,9 +709,9 @@ class ScenarioSuiteTests(unittest.TestCase):
         def clear_bridge(document: ScheduleDocument) -> None:
             for slot_id, actions in list(document.slots.items()):
                 inverter = actions.get("inverter")
-                if isinstance(inverter, ScheduleAction) and inverter.kind == "charge_to_target_soc":
-                    document.slots[slot_id]["inverter"] = ScheduleAction(
-                        kind="normal", set_by="automation"
+                if inverter is not None and inverter.payload.kind == "charge_to_target_soc":
+                    document.slots[slot_id]["inverter"] = SlotAction(
+                        payload=ScheduleAction(kind="normal"), set_by="automation"
                     )
 
         result = _run(
@@ -740,10 +740,9 @@ class ScenarioSuiteTests(unittest.TestCase):
 
     @staticmethod
     def _add_draining_appliance(document: ScheduleDocument) -> None:
-        document.slots.setdefault(_slot_id(8, 30), {})["boiler"] = {
-            "on": True,
-            "setBy": "automation",
-        }
+        document.slots.setdefault(_slot_id(8, 30), {})["boiler"] = SlotAction(
+            payload={"on": True}, set_by="automation"
+        )
 
     def test_cheap_window_too_few_rankable_slots_is_capacity(self) -> None:
         # Every cheap slot but one is user-owned, so only one slot is
@@ -751,9 +750,9 @@ class ScenarioSuiteTests(unittest.TestCase):
         # appliance step introduces.
         document = ScheduleDocument(execution_enabled=True)
         for hour, minute in ((6, 0), (6, 15), (6, 30), (6, 45), (7, 15), (7, 30), (7, 45)):
-            document.slots[_slot_id(hour, minute)] = {
-                "inverter": ScheduleAction(kind="normal", set_by="user")
-            }
+            document.slots[_slot_id(hour, minute)] = build_controllable_actions(
+                inverter=ScheduleAction(kind="normal", set_by="user")
+            )
         # Only 07:00 is left rankable.
         build_snapshot = _make_build_snapshot(
             base_soc_by_hour=self._FLAT_SOC_BY_HOUR,
@@ -1029,10 +1028,9 @@ class TransportAndSafetyTests(unittest.TestCase):
             return boundary
 
         def add_boiler(document: ScheduleDocument) -> None:
-            document.slots.setdefault(_slot_id(9), {})["boiler"] = {
-                "on": True,
-                "setBy": "automation",
-            }
+            document.slots.setdefault(_slot_id(9), {})["boiler"] = SlotAction(
+                payload={"on": True}, set_by="automation"
+            )
 
         with patch.object(
             harness_module,
@@ -1056,7 +1054,9 @@ class TransportAndSafetyTests(unittest.TestCase):
     def test_control_snapshot_carries_user_owned_actions_only(self) -> None:
         document = ScheduleDocument(
             execution_enabled=True,
-            slots={_slot_id(7): {"inverter": ScheduleAction(kind="normal", set_by="user")}},
+            slots={_slot_id(7): build_controllable_actions(
+                inverter=ScheduleAction(kind="normal", set_by="user")
+            )},
         )
         build_snapshot = _make_build_snapshot()
         captured: list[ScheduleDocument] = []
@@ -1083,9 +1083,7 @@ class TransportAndSafetyTests(unittest.TestCase):
             for controllable_id, action in actions.items():
                 if controllable_id == "inverter":
                     continue
-                self.assertNotEqual(
-                    (action or {}).get("setBy"), "automation"
-                )
+                self.assertNotEqual(action.set_by, "automation")
 
     def test_never_records_power_as_a_limit(self) -> None:
         committed = json.loads(GOLDEN_PATH.read_text())

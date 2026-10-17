@@ -176,7 +176,6 @@ class ControllableSpecRegistryTests(unittest.TestCase):
             declared = {spec.control_entity_attr}
             if spec.resting_state_attr is not None:
                 declared.add(spec.resting_state_attr)
-            declared.update(spec.action_option_attrs.values())
 
             self.assertEqual(
                 declared - available,
@@ -197,13 +196,24 @@ class ControllableSpecRegistryTests(unittest.TestCase):
             {"climate", "ev_charger", "generic"},
         )
 
+    def test_every_appliance_kind_declares_its_behaviour(self) -> None:
+        """A kind missing a driver used to fail at import; now this fails instead."""
+        behaviour = ("read", "normalize_action", "is_running", "metadata", "driver")
+        for kind, spec in CONTROLLABLE_SPECS.items():
+            declared = {name for name in behaviour if getattr(spec, name) is not None}
+            with self.subTest(kind=kind):
+                self.assertEqual(
+                    declared,
+                    set(behaviour) if spec.affects_consumption else set(),
+                )
+
     def test_only_the_inverter_maps_schedule_actions_to_options(self) -> None:
         """An appliance's state follows from its action shape, not an option map."""
         self.assertEqual(
             {
                 kind
-                for kind, spec in CONTROLLABLE_SPECS.items()
-                if spec.action_option_attrs
+                for kind, runtime_type in _RUNTIME_TYPE_BY_KIND.items()
+                if "options" in {f.name for f in dataclasses.fields(runtime_type)}
             },
             {"inverter"},
         )

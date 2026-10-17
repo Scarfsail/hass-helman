@@ -12,6 +12,7 @@ from ..controllables.config import (
     read_name_cleaner_regex,
     resolve_device_name,
 )
+from ..controllables.spec import CONTROLLABLE_KIND_CLIMATE
 from .climate_appliance import ClimateApplianceRuntime, resolve_supported_climate_modes
 from .state import AppliancesRuntimeRegistry
 
@@ -53,7 +54,7 @@ class AppliancesRegistryHolder:
                 )
                 if name != appliance.name:
                     refreshed_appliance = replace(refreshed_appliance, name=name)
-            if isinstance(refreshed_appliance, ClimateApplianceRuntime):
+            if refreshed_appliance.kind == CONTROLLABLE_KIND_CLIMATE:
                 refreshed_appliance = self._resolve_climate_appliance_capabilities(
                     refreshed_appliance
                 )

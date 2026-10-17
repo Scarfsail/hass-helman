@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal, NotRequired, TypedDict
 
@@ -12,11 +12,6 @@ from ..appliances.schedule import (
     ApplianceScheduleActionsDict,
     normalize_appliance_schedule_actions,
     read_appliance_schedule_actions,
-    with_appliance_schedule_actions_set_by,
-)
-from ..schedule_action_metadata import (
-    ScheduleActionSetBy,
-    read_optional_schedule_action_set_by,
 )
 from ..appliances.state import AppliancesRuntimeRegistry
 from ..controllables.config import (
@@ -36,6 +31,15 @@ from ..const import (
     SCHEDULE_SLOT_MINUTES,
 )
 
+from .slots import (  # noqa: F401 -- re-exported for existing importers
+    SCHEDULE_SLOT_DURATION,
+    ScheduleError,
+    ScheduleExecutionUnavailableError,
+    ScheduleSlotsError,
+    format_slot_id,
+    parse_slot_id,
+)
+
 if TYPE_CHECKING:
     from ..battery_state import BatterySocBounds
     from .runtime_status import ScheduleRuntimeDict
@@ -49,19 +53,39 @@ ScheduleActionKind = Literal[
     "stop_discharging",
     "stop_export",
 ]
+#: Who placed an action: the user (any write through the schedule API) or an
+#: optimizer. ``None`` is a legacy action written before attribution existed,
+#: which ownership treats as the user's.
+ScheduleActionSetBy = Literal["user", "automation"]
+SCHEDULE_ACTION_SET_BY_VALUES = {"user", "automation"}
 
 TARGET_ACTION_KINDS = {
     SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
     SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
 }
+INVERTER_ACTION_KINDS: tuple[ScheduleActionKind, ...] = (
+    SCHEDULE_ACTION_NORMAL,
+    SCHEDULE_ACTION_STOP_CHARGING,
+    SCHEDULE_ACTION_STOP_DISCHARGING,
+    SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
+    SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
+    SCHEDULE_ACTION_STOP_EXPORT,
+)
+REQUIRED_INVERTER_ACTIONS: frozenset[str] = frozenset({
+    SCHEDULE_ACTION_NORMAL,
+    SCHEDULE_ACTION_STOP_CHARGING,
+    SCHEDULE_ACTION_STOP_DISCHARGING,
+})
 #: The two members of the pre-version-8 ``domains`` object, kept only so a
 #: stored document in that shape can still be recognised and converted.
 LEGACY_SCHEDULE_DOMAIN_KEYS = {"inverter", "appliances"}
 #: How the inverter's control block is named when reporting a config problem.
 _INVERTER_CONTROL_PATH = "energy_nodes.inverter.controls.mode"
 SCHEDULE_SLOT_KEYS = {"id", "controllables"}
-
-SCHEDULE_SLOT_DURATION = timedelta(minutes=SCHEDULE_SLOT_MINUTES)
+#: The keys every controllable's action carries beside its kind's own payload,
+#: on the wire and in storage. :func:`slot_action_from_dict` lifts them into
+#: :class:`SlotAction`, so no per-kind normalizer ever sees them.
+SLOT_ACTION_ENVELOPE_KEYS = frozenset({"setBy", "conditionMet"})
 
 
 class ScheduleActionDict(TypedDict):
@@ -71,13 +95,12 @@ class ScheduleActionDict(TypedDict):
     conditionMet: NotRequired[bool]
 
 
-#: One controllable's action as it travels on the wire and in storage.
-#:
-#: Deliberately a union rather than one shape: the inverter's action is a
-#: ``kind``/``targetSoc`` pair, a generic appliance's is ``{"on": bool}``, a
-#: climate's a mode and an EV charger's a charge flag. The map they live in is
-#: keyed by controllable id and discriminated by that controllable's configured
-#: kind, exactly as the appliance map already was before the inverter joined it.
+#: One controllable's action as it travels on the wire and in storage: its
+#: kind's payload with the envelope keys (``setBy``, ``conditionMet``) written
+#: flat beside it. The inverter's payload is a ``kind``/``targetSoc`` pair, a
+#: generic appliance's is ``{"on": bool}``, a climate's a mode and an EV
+#: charger's a charge flag. The map they live in is keyed by controllable id and
+#: discriminated by that controllable's configured kind.
 ControllableScheduleActionDict = ScheduleActionDict | ApplianceScheduleActionDict
 ControllableScheduleActionsDict = dict[str, ControllableScheduleActionDict]
 
@@ -96,6 +119,16 @@ class ScheduleResponseDict(TypedDict):
 
 @dataclass(frozen=True)
 class ScheduleAction:
+    """The inverter's action: what :class:`SlotAction` carries as its payload.
+
+    In a slot's map the envelope lives on the :class:`SlotAction`, never here:
+    the payload stored there always has ``set_by=None`` and
+    ``condition_met=True``. The two fields stay on the dataclass for the
+    inverter's *view* — :func:`inverter_action` folds the envelope back in, so
+    the executor reports the attribution of the action it ran — and so a caller
+    can hand :func:`build_controllable_actions` a complete inverter action.
+    """
+
     kind: ScheduleActionKind
     target_soc: int | None = None
     set_by: ScheduleActionSetBy | None = None
@@ -110,14 +143,24 @@ EMPTY_SCHEDULE_ACTION = ScheduleAction(kind=SCHEDULE_ACTION_EMPTY)
 NORMAL_SCHEDULE_ACTION = ScheduleAction(kind=SCHEDULE_ACTION_NORMAL)
 
 
-#: One controllable's action, in memory.
-#:
-#: The inverter's stays the validated :class:`ScheduleAction` it has always
-#: been — its ``kind``/``target_soc`` pair drives the battery simulation and is
-#: read attribute-wise by the forecast, the executor and three optimizers —
-#: while an appliance's stays the plain dict its own per-kind normalizer owns.
-#: The map is what unified; the shapes inside it never were the same.
-ControllableScheduleAction = ScheduleAction | ApplianceScheduleActionDict
+@dataclass(frozen=True)
+class SlotAction:
+    """One controllable's action in a slot, in memory: one shape for every kind.
+
+    ``payload`` is what the controllable's kind owns and validates — the
+    inverter's :class:`ScheduleAction`, an appliance's plain dict (``{"on":
+    True}``, ``{"mode": "heat"}``, ``{"charge": True, ...}``). The envelope —
+    who placed it and whether its optimizer's condition held — is the same for
+    every kind, so ownership, stamping and candidate stripping each read it here
+    once instead of forking on the payload's shape.
+    """
+
+    payload: ScheduleAction | Mapping[str, Any]
+    set_by: ScheduleActionSetBy | None = None
+    # False marks a candidate; see :attr:`ScheduleAction.condition_met`.
+    condition_met: bool = True
+
+
 #: Every controllable's action for one slot, keyed by controllable id.
 #:
 #: The inverter sits under its reserved ``inverter`` id as a peer, which is what
@@ -125,45 +168,49 @@ ControllableScheduleAction = ScheduleAction | ApplianceScheduleActionDict
 #: "nothing scheduled" is never stored: an appliance says that by being absent,
 #: and since version 8 so does the inverter, so ``not actions`` is the whole of
 #: "this slot is empty".
-ControllableScheduleActions = dict[str, ControllableScheduleAction]
+ControllableScheduleActions = dict[str, SlotAction]
 
 
 def build_controllable_actions(
     *,
     inverter: ScheduleAction | None = None,
-    appliances: Mapping[str, ApplianceScheduleActionDict] | None = None,
+    appliances: Mapping[str, Any] | None = None,
 ) -> ControllableScheduleActions:
-    """One slot's action map, assembled from the two halves that produce it.
+    """One slot's action map, assembled from a complete inverter action and
+    appliance actions (already :class:`SlotAction` or flat wire dicts).
 
-    Optimizers, the merge and the executor each still author *either* an
-    inverter action *or* appliance actions — that is a fact about what they
-    drive, not a leftover of the old split — so this is the one place that knows
-    the inverter's reserved id and that an empty inverter action is stored as
-    absence.
+    The one place that knows an empty inverter action is stored as absence and
+    that the inverter's envelope moves off its :class:`ScheduleAction` onto the
+    :class:`SlotAction`.
     """
     actions: ControllableScheduleActions = {}
     if inverter is not None and inverter.kind != SCHEDULE_ACTION_EMPTY:
-        actions[CONTROLLABLE_ID_INVERTER] = inverter
-    if appliances:
-        actions.update(
-            {
-                appliance_id: dict(action)
-                for appliance_id, action in appliances.items()
-            }
+        actions[CONTROLLABLE_ID_INVERTER] = SlotAction(
+            payload=ScheduleAction(kind=inverter.kind, target_soc=inverter.target_soc),
+            set_by=inverter.set_by,
+            condition_met=inverter.condition_met,
         )
+    if appliances:
+        actions.update(_coerce_controllable_actions(appliances))
     return actions
 
 
-def inverter_action(actions: Mapping[str, Any]) -> ScheduleAction:
-    """The inverter's action for a slot, empty when it has none."""
+def inverter_action(actions: Mapping[str, SlotAction]) -> ScheduleAction:
+    """The inverter's action for a slot, envelope folded in; empty when none."""
     action = actions.get(CONTROLLABLE_ID_INVERTER)
-    return EMPTY_SCHEDULE_ACTION if action is None else action
+    if action is None:
+        return EMPTY_SCHEDULE_ACTION
+    return replace(
+        action.payload, set_by=action.set_by, condition_met=action.condition_met
+    )
 
 
-def appliance_actions(actions: Mapping[str, Any]) -> ApplianceScheduleActionsDict:
-    """Everything in the map that is not the inverter."""
+def appliance_actions(
+    actions: Mapping[str, SlotAction],
+) -> ApplianceScheduleActionsDict:
+    """Every non-inverter controllable's payload, keyed by its id."""
     return {
-        controllable_id: action
+        controllable_id: action.payload
         for controllable_id, action in actions.items()
         if controllable_id != CONTROLLABLE_ID_INVERTER
     }
@@ -178,7 +225,7 @@ class ScheduleSlot:
         self,
         id: str,
         *,
-        action: ScheduleAction | Mapping[str, Any] | None = None,
+        action: ScheduleAction | None = None,
         controllables: Mapping[str, Any] | None = None,
     ) -> None:
         if action is not None and controllables is not None:
@@ -190,7 +237,7 @@ class ScheduleSlot:
         object.__setattr__(
             self,
             "controllables",
-            build_controllable_actions(inverter=_coerce_schedule_action(action))
+            build_controllable_actions(inverter=action)
             if controllables is None
             else _coerce_controllable_actions(controllables),
         )
@@ -224,23 +271,17 @@ class ScheduleDocument:
 @dataclass(frozen=True)
 class ScheduleControlConfig:
     mode_entity_id: str
-    normal_option: str
-    stop_charging_option: str
-    stop_discharging_option: str
-    charge_to_target_soc_option: str | None = None
-    discharge_to_target_soc_option: str | None = None
-    stop_export_option: str | None = None
+    options: Mapping[ScheduleActionKind, str] = field(default_factory=dict)
 
+    @property
+    def normal_option(self) -> str:
+        return self.options.get(SCHEDULE_ACTION_NORMAL, "")
 
-class ScheduleError(Exception):
-    def __init__(self, code: str, message: str) -> None:
-        super().__init__(message)
-        self.code = code
-
-
-class ScheduleSlotsError(ScheduleError):
-    def __init__(self, message: str) -> None:
-        super().__init__("invalid_slots", message)
+    def __getattr__(self, name: str) -> str | None:
+        if name.endswith("_option"):
+            action = name[:-7]
+            return self.options.get(action)
+        raise AttributeError(f"{type(self).__name__} has no attribute {name!r}")
 
 
 class ScheduleStorageCompatibilityError(ScheduleSlotsError):
@@ -257,28 +298,14 @@ class ScheduleNotConfiguredError(ScheduleError):
         super().__init__("not_configured", message)
 
 
-class ScheduleExecutionUnavailableError(ScheduleError):
-    def __init__(self, message: str) -> None:
-        super().__init__("execution_unavailable", message)
-
-
 def action_from_dict(data: Mapping[str, Any]) -> ScheduleAction:
+    """The inverter's payload (``kind``, ``targetSoc``) off the wire."""
     kind = _read_non_empty_string(data.get("kind"))
     if kind not in SCHEDULE_ACTION_KINDS:
         raise ScheduleActionError("Unknown schedule action kind")
 
     has_target_soc, target_soc = _read_target_soc(data)
-    try:
-        set_by = _read_action_set_by(data)
-    except ValueError as err:
-        raise ScheduleActionError(str(err)) from err
-
-    action = ScheduleAction(
-        kind=kind,
-        target_soc=target_soc,
-        set_by=set_by,
-        condition_met=_read_condition_met(data),
-    )
+    action = ScheduleAction(kind=kind, target_soc=target_soc)
     _validate_action(
         action=action,
         has_target_soc=has_target_soc,
@@ -299,53 +326,115 @@ def action_to_dict(action: ScheduleAction) -> ScheduleActionDict:
     return payload
 
 
+def read_optional_schedule_action_set_by(
+    value: object,
+    *,
+    path: str,
+) -> ScheduleActionSetBy | None:
+    if value is None:
+        return None
+    if value not in SCHEDULE_ACTION_SET_BY_VALUES:
+        raise ScheduleActionError(
+            f"{path} must be one of {', '.join(sorted(SCHEDULE_ACTION_SET_BY_VALUES))}"
+        )
+    return value
+
+
+def slot_action_from_dict(
+    controllable_id: str, data: Any, *, context: str
+) -> SlotAction:
+    """One controllable's flat wire action, split into envelope and payload.
+
+    The envelope is read here, once, for every kind. The payload is parsed
+    only as far as this layer can: the inverter's into a
+    :class:`ScheduleAction`, every other id's kept as the raw dict its own
+    kind's normalizer validates later, since which kind an id names is a fact
+    about the *config*, which this layer does not have.
+    """
+    if not isinstance(data, Mapping):
+        raise ScheduleActionError(f"{context} must be an object")
+
+    payload = {
+        str(key): value
+        for key, value in data.items()
+        if key not in SLOT_ACTION_ENVELOPE_KEYS
+    }
+    return SlotAction(
+        payload=(
+            action_from_dict(payload)
+            if controllable_id == CONTROLLABLE_ID_INVERTER
+            else payload
+        ),
+        set_by=read_optional_schedule_action_set_by(
+            data.get("setBy"), path=f"{context}.setBy"
+        ),
+        condition_met=data.get("conditionMet") is not False,
+    )
+
+
+def slot_action_to_dict(action: SlotAction) -> ControllableScheduleActionDict:
+    """The flat wire shape: the payload, then the envelope beside it."""
+    payload: dict[str, Any] = (
+        action_to_dict(action.payload)
+        if isinstance(action.payload, ScheduleAction)
+        else dict(action.payload)
+    )
+    if action.set_by is not None:
+        payload["setBy"] = action.set_by
+    if not action.condition_met:
+        payload["conditionMet"] = False
+    return payload
+
+
 def controllable_actions_from_dict(
     data: Any, *, context: str
 ) -> ControllableScheduleActions:
     """One slot's flat, id-keyed action map, as read off the wire or storage.
 
-    Only the inverter's entry is parsed into a :class:`ScheduleAction`; every
-    other id keeps the raw dict its own kind's normalizer validates later, since
-    which kind an id names is a fact about the *config*, which this layer does
-    not have. An inverter action of kind ``empty`` is dropped rather than kept,
-    so "nothing scheduled" is spelled the same way for every controllable.
+    Each entry is parsed once by :func:`slot_action_from_dict`. An inverter
+    action of kind ``empty`` is dropped rather than kept, so "nothing
+    scheduled" is spelled the same way for every controllable, and the
+    inverter's entry always comes first.
     """
     if not isinstance(data, Mapping):
         raise ScheduleActionError(f"{context} controllables must be an object")
 
-    raw_inverter = data.get(CONTROLLABLE_ID_INVERTER)
-    if raw_inverter is not None and not isinstance(raw_inverter, Mapping):
-        raise ScheduleActionError(
-            f"{context} controllables.{CONTROLLABLE_ID_INVERTER} must be an object"
-        )
-
     try:
-        appliances = read_appliance_schedule_actions(
-            {
-                controllable_id: action
-                for controllable_id, action in data.items()
-                if controllable_id != CONTROLLABLE_ID_INVERTER
-            },
-            context=f"{context} controllables",
+        raw_actions = read_appliance_schedule_actions(
+            data, context=f"{context} controllables"
         )
     except ValueError as err:
         raise ScheduleActionError(str(err)) from err
 
-    return build_controllable_actions(
-        inverter=None if raw_inverter is None else action_from_dict(raw_inverter),
-        appliances=appliances,
+    raw_inverter = raw_actions.pop(CONTROLLABLE_ID_INVERTER, None)
+    inverter = (
+        None
+        if raw_inverter is None
+        else slot_action_from_dict(
+            CONTROLLABLE_ID_INVERTER,
+            raw_inverter,
+            context=f"{context} controllables.{CONTROLLABLE_ID_INVERTER}",
+        )
     )
+    actions: ControllableScheduleActions = {}
+    if inverter is not None and inverter.payload.kind != SCHEDULE_ACTION_EMPTY:
+        actions[CONTROLLABLE_ID_INVERTER] = inverter
+    for controllable_id, raw_action in raw_actions.items():
+        actions[controllable_id] = slot_action_from_dict(
+            controllable_id,
+            raw_action,
+            context=f"{context} controllables.{controllable_id}",
+        )
+    return actions
 
 
 def controllable_actions_to_dict(
-    actions: Mapping[str, Any],
+    actions: Mapping[str, SlotAction],
 ) -> ControllableScheduleActionsDict:
-    payload: ControllableScheduleActionsDict = {}
-    for controllable_id, action in actions.items():
-        payload[controllable_id] = (
-            dict(action) if isinstance(action, Mapping) else action_to_dict(action)
-        )
-    return payload
+    return {
+        controllable_id: slot_action_to_dict(action)
+        for controllable_id, action in actions.items()
+    }
 
 
 def slot_from_dict(data: Mapping[str, Any]) -> ScheduleSlot:
@@ -395,21 +484,12 @@ def with_slot_set_by(
     if set_by is None:
         return slot
 
-    current_inverter = inverter_action(slot.controllables)
     return ScheduleSlot(
         id=slot.id,
-        controllables=build_controllable_actions(
-            inverter=ScheduleAction(
-                kind=current_inverter.kind,
-                target_soc=current_inverter.target_soc,
-                set_by=set_by,
-                condition_met=current_inverter.condition_met,
-            ),
-            appliances=with_appliance_schedule_actions_set_by(
-                appliance_actions(slot.controllables),
-                set_by=set_by,
-            ),
-        ),
+        controllables={
+            controllable_id: replace(action, set_by=set_by)
+            for controllable_id, action in slot.controllables.items()
+        },
     )
 
 
@@ -487,7 +567,7 @@ def _convert_legacy_slot_domains(raw_slot: Mapping[str, Any]) -> Mapping[str, An
     converts silently on first start instead of being thrown away. Every field
     survives: the inverter's action dict is passed through untouched, so
     ``kind``, ``targetSoc``, ``setBy`` and ``conditionMet`` all arrive at
-    :func:`action_from_dict` exactly as they were written.
+    :func:`slot_action_from_dict` exactly as they were written.
 
     Recognising the old shape has to be positive rather than negative, because
     the new shape is also a mapping of ids to action objects. ``appliances``
@@ -547,41 +627,21 @@ def read_schedule_control_config(
     control_config, action_option_map = _read_inverter_mode_control(config)
 
     mode_entity_id = _read_non_empty_string(control_config.get("entity_id"))
-    normal_option = _read_non_empty_string(
-        action_option_map.get(SCHEDULE_ACTION_NORMAL)
-    )
-    charge_to_target_soc_option = _read_non_empty_string(
-        action_option_map.get(SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC)
-    )
-    discharge_to_target_soc_option = _read_non_empty_string(
-        action_option_map.get(SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC)
-    )
-    stop_charging_option = _read_non_empty_string(
-        action_option_map.get(SCHEDULE_ACTION_STOP_CHARGING)
-    )
-    stop_discharging_option = _read_non_empty_string(
-        action_option_map.get(SCHEDULE_ACTION_STOP_DISCHARGING)
-    )
-    stop_export_option = _read_non_empty_string(
-        action_option_map.get(SCHEDULE_ACTION_STOP_EXPORT)
-    )
+    if mode_entity_id is None:
+        return None
 
-    if (
-        mode_entity_id is None
-        or normal_option is None
-        or stop_charging_option is None
-        or stop_discharging_option is None
-    ):
+    options: dict[str, str] = {}
+    for action_kind in INVERTER_ACTION_KINDS:
+        option = _read_non_empty_string(action_option_map.get(action_kind))
+        if option is not None:
+            options[action_kind] = option
+
+    if not REQUIRED_INVERTER_ACTIONS.issubset(options):
         return None
 
     return ScheduleControlConfig(
         mode_entity_id=mode_entity_id,
-        normal_option=normal_option,
-        stop_charging_option=stop_charging_option,
-        stop_discharging_option=stop_discharging_option,
-        charge_to_target_soc_option=charge_to_target_soc_option,
-        discharge_to_target_soc_option=discharge_to_target_soc_option,
-        stop_export_option=stop_export_option,
+        options=options,
     )
 
 
@@ -593,12 +653,10 @@ def describe_schedule_control_config_issue(
     missing_fields: list[str] = []
     if _read_non_empty_string(control_config.get("entity_id")) is None:
         missing_fields.append(f"{_INVERTER_CONTROL_PATH}.entity_id")
-    if _read_non_empty_string(action_option_map.get(SCHEDULE_ACTION_NORMAL)) is None:
-        missing_fields.append(f"{_INVERTER_CONTROL_PATH}.options.normal")
-    if _read_non_empty_string(action_option_map.get(SCHEDULE_ACTION_STOP_CHARGING)) is None:
-        missing_fields.append(f"{_INVERTER_CONTROL_PATH}.options.stop_charging")
-    if _read_non_empty_string(action_option_map.get(SCHEDULE_ACTION_STOP_DISCHARGING)) is None:
-        missing_fields.append(f"{_INVERTER_CONTROL_PATH}.options.stop_discharging")
+    for action_kind in INVERTER_ACTION_KINDS:
+        if action_kind in REQUIRED_INVERTER_ACTIONS:
+            if _read_non_empty_string(action_option_map.get(action_kind)) is None:
+                missing_fields.append(f"{_INVERTER_CONTROL_PATH}.options.{action_kind}")
 
     if not missing_fields:
         return None
@@ -620,19 +678,6 @@ def build_horizon_start(reference_time: datetime) -> datetime:
 
 def build_horizon_end(reference_time: datetime) -> datetime:
     return build_horizon_start(reference_time) + timedelta(hours=SCHEDULE_HORIZON_HOURS)
-
-
-def parse_slot_id(slot_id: str) -> datetime:
-    parsed = dt_util.parse_datetime(slot_id)
-    if parsed is None or parsed.tzinfo is None:
-        raise ScheduleSlotsError(
-            "Schedule slot ids must be timezone-aware ISO timestamps"
-        )
-    return dt_util.as_local(parsed)
-
-
-def format_slot_id(slot_start: datetime) -> str:
-    return dt_util.as_local(slot_start).isoformat(timespec="seconds")
 
 
 def iter_horizon_slot_ids(reference_time: datetime) -> list[str]:
@@ -789,14 +834,11 @@ def strip_candidate_actions(doc: "ScheduleDocument") -> "ScheduleDocument":
     """
     stripped_slots: dict[str, ControllableScheduleActions] = {}
     for slot_id, actions in doc.slots.items():
-        stripped: ControllableScheduleActions = {}
-        for controllable_id, action in actions.items():
-            if not isinstance(action, Mapping):
-                if action.condition_met:
-                    stripped[controllable_id] = action
-                continue
-            if action.get("conditionMet") is not False:
-                stripped[controllable_id] = dict(action)
+        stripped = {
+            controllable_id: action
+            for controllable_id, action in actions.items()
+            if action.condition_met
+        }
         if not stripped:
             continue
         stripped_slots[slot_id] = stripped
@@ -809,24 +851,26 @@ def strip_candidate_actions(doc: "ScheduleDocument") -> "ScheduleDocument":
 
 def normalize_controllable_actions(
     *,
-    controllables: Mapping[str, Any],
+    controllables: Mapping[str, SlotAction],
     battery_soc_bounds: BatterySocBounds | None,
     require_target_soc_bounds: bool,
     appliances_registry: AppliancesRuntimeRegistry | None,
     context: str,
     appliance_mode: Literal["strict", "load_prune"],
 ) -> ControllableScheduleActions:
+    """Validate each action's payload against its kind; the envelope rides along."""
     registry = (
         AppliancesRuntimeRegistry() if appliances_registry is None else appliances_registry
     )
 
-    inverter = inverter_action(controllables)
-    _validate_action(
-        action=inverter,
-        has_target_soc=inverter.target_soc is not None,
-        battery_soc_bounds=battery_soc_bounds,
-        require_target_soc_bounds=require_target_soc_bounds,
-    )
+    inverter = controllables.get(CONTROLLABLE_ID_INVERTER)
+    if inverter is not None:
+        _validate_action(
+            action=inverter.payload,
+            has_target_soc=inverter.payload.target_soc is not None,
+            battery_soc_bounds=battery_soc_bounds,
+            require_target_soc_bounds=require_target_soc_bounds,
+        )
 
     try:
         appliances = normalize_appliance_schedule_actions(
@@ -838,7 +882,12 @@ def normalize_controllable_actions(
     except ValueError as err:
         raise ScheduleActionError(str(err)) from err
 
-    return build_controllable_actions(inverter=inverter, appliances=appliances)
+    normalized: ControllableScheduleActions = (
+        {} if inverter is None else {CONTROLLABLE_ID_INVERTER: inverter}
+    )
+    for appliance_id, payload in appliances.items():
+        normalized[appliance_id] = replace(controllables[appliance_id], payload=payload)
+    return normalized
 
 
 def normalize_schedule_document_for_registry(
@@ -867,91 +916,18 @@ def normalize_schedule_document_for_registry(
     )
 
 
-def _coerce_controllable_actions(value: Any) -> ControllableScheduleActions:
-    """Accept whatever a caller has and return the canonical id-keyed map.
+def _coerce_controllable_actions(value: Mapping[str, Any] | None) -> ControllableScheduleActions:
+    """The canonical id-keyed map from whatever map a caller has.
 
-    Callers hand in already-built maps (the common case), raw wire mappings, or
-    — in tests — a bare inverter action. The inverter's entry is coerced to a
-    validated :class:`ScheduleAction` whichever way it arrived; every other
-    entry stays the dict its own kind owns.
+    An already-built map (every value a :class:`SlotAction`, the production
+    case) is kept as it is; a flat wire map goes through the one parser,
+    :func:`controllable_actions_from_dict`.
     """
     if value is None:
         return {}
-
-    if not isinstance(value, Mapping):
-        return build_controllable_actions(inverter=_coerce_schedule_action(value))
-
-    raw_inverter = value.get(CONTROLLABLE_ID_INVERTER)
-    return build_controllable_actions(
-        inverter=(
-            None if raw_inverter is None else _coerce_schedule_action(raw_inverter)
-        ),
-        appliances=_coerce_appliances_mapping(
-            {
-                controllable_id: action
-                for controllable_id, action in value.items()
-                if controllable_id != CONTROLLABLE_ID_INVERTER
-            }
-        ),
-    )
-
-
-def _coerce_schedule_action(value: Any) -> ScheduleAction:
-    if value is None:
-        return EMPTY_SCHEDULE_ACTION
-
-    if isinstance(value, ScheduleAction):
-        return value
-
-    if isinstance(value, Mapping):
-        return action_from_dict(value)
-
-    kind = _read_non_empty_string(getattr(value, "kind", None))
-    if kind not in SCHEDULE_ACTION_KINDS:
-        raise ScheduleActionError("Unknown schedule action kind")
-
-    raw_target_soc = getattr(value, "target_soc", getattr(value, "targetSoc", None))
-    has_target_soc = raw_target_soc is not None
-    if has_target_soc and (
-        isinstance(raw_target_soc, bool) or not isinstance(raw_target_soc, int)
-    ):
-        raise ScheduleActionError("targetSoc must be an integer")
-
-    try:
-        set_by = read_optional_schedule_action_set_by(
-            getattr(value, "set_by", getattr(value, "setBy", None)),
-            path="Schedule action setBy",
-        )
-    except ValueError as err:
-        raise ScheduleActionError(str(err)) from err
-
-    action = ScheduleAction(
-        kind=kind,
-        target_soc=raw_target_soc,
-        set_by=set_by,
-        condition_met=bool(
-            getattr(value, "condition_met", getattr(value, "conditionMet", True))
-        ),
-    )
-    _validate_action(
-        action=action,
-        has_target_soc=has_target_soc,
-        battery_soc_bounds=None,
-        require_target_soc_bounds=False,
-    )
-    return action
-
-
-def _coerce_appliances_mapping(value: Any) -> dict[str, Any]:
-    if value is None:
-        return {}
-    try:
-        return read_appliance_schedule_actions(
-            value,
-            context="Schedule appliances mapping",
-        )
-    except ValueError as err:
-        raise ScheduleActionError(str(err)) from err
+    if all(isinstance(action, SlotAction) for action in value.values()):
+        return dict(value)
+    return controllable_actions_from_dict(value, context="Schedule slot")
 
 
 def _read_mapping(value: Any) -> Mapping[str, Any]:
@@ -969,41 +945,14 @@ def _read_non_empty_string(value: Any) -> str | None:
 
 
 def _read_target_soc(data: Mapping[str, Any]) -> tuple[bool, int | None]:
-    if "targetSoc" in data:
-        raw_target_soc = data["targetSoc"]
-    elif "target_soc" in data:
-        raw_target_soc = data["target_soc"]
-    else:
+    if "targetSoc" not in data:
         return False, None
 
+    raw_target_soc = data["targetSoc"]
     if isinstance(raw_target_soc, bool) or not isinstance(raw_target_soc, int):
         raise ScheduleActionError("targetSoc must be an integer")
 
     return True, raw_target_soc
-
-
-def _read_condition_met(data: Mapping[str, Any]) -> bool:
-    if "conditionMet" in data:
-        raw = data["conditionMet"]
-    elif "condition_met" in data:
-        raw = data["condition_met"]
-    else:
-        return True
-    return raw if isinstance(raw, bool) else True
-
-
-def _read_action_set_by(data: Mapping[str, Any]) -> ScheduleActionSetBy | None:
-    if "setBy" in data:
-        raw_set_by = data["setBy"]
-    elif "set_by" in data:
-        raw_set_by = data["set_by"]
-    else:
-        return None
-
-    return read_optional_schedule_action_set_by(
-        raw_set_by,
-        path="Schedule action setBy",
-    )
 
 
 def _is_slot_aligned(slot_start: datetime) -> bool:

@@ -1,23 +1,18 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import NotRequired, TypedDict
+from typing import Any, TypedDict
 
 from .climate_appliance import (
+    SUPPORTED_CLIMATE_MODES,
     ClimateApplianceMode,
     ClimateApplianceRuntime,
 )
 from .ev_schedule import ApplianceScheduleNormalizationMode
-from ..schedule_action_metadata import (
-    ScheduleActionSetBy,
-    read_optional_schedule_action_set_by,
-)
 
 
 class ClimateApplianceScheduleActionDict(TypedDict):
     mode: str
-    setBy: NotRequired[ScheduleActionSetBy]
-    conditionMet: NotRequired[bool]
 
 
 def normalize_climate_appliance_schedule_action(
@@ -30,9 +25,7 @@ def normalize_climate_appliance_schedule_action(
     if not isinstance(value, Mapping):
         raise ValueError(f"{context} must be an object")
 
-    unsupported_keys = sorted(
-        str(key) for key in value.keys() if key not in {"mode", "setBy", "conditionMet"}
-    )
+    unsupported_keys = sorted(str(key) for key in value.keys() if key != "mode")
     if unsupported_keys:
         raise ValueError(
             f"{context} contains unsupported fields: {', '.join(unsupported_keys)}"
@@ -53,20 +46,7 @@ def normalize_climate_appliance_schedule_action(
         )
 
     normalized_mode = raw_mode.strip()
-    set_by = read_optional_schedule_action_set_by(
-        value.get("setBy"),
-        path=f"{context}.setBy",
-    )
-    condition_not_met = value.get("conditionMet") is False
-    if stop_mode is not None and normalized_mode == stop_mode:
-        payload: ClimateApplianceScheduleActionDict = {"mode": normalized_mode}
-        if set_by is not None:
-            payload["setBy"] = set_by
-        if condition_not_met:
-            payload["conditionMet"] = False
-        return payload
-
-    if normalized_mode not in supported_modes:
+    if normalized_mode != stop_mode and normalized_mode not in supported_modes:
         if mode == "load_prune":
             return None
         allowed_modes = list(supported_modes)
@@ -75,9 +55,15 @@ def normalize_climate_appliance_schedule_action(
         allowed = ", ".join(allowed_modes)
         raise ValueError(f"{context}.mode must be one of {allowed}")
 
-    payload = {"mode": normalized_mode}
-    if set_by is not None:
-        payload["setBy"] = set_by
-    if condition_not_met:
-        payload["conditionMet"] = False
-    return payload
+    return {"mode": normalized_mode}
+
+
+def is_climate_action_running(action: Mapping[str, Any]) -> bool:
+    """A climate appliance runs while its normalized action heats or cools.
+
+    The normalizer above accepts only an authorable mode — always one of
+    :data:`SUPPORTED_CLIMATE_MODES` — or the appliance's own stop mode, so
+    "one of the supported modes" and "not the stop mode" are the same answer on
+    a normalized action, and this one needs no appliance to give it.
+    """
+    return action.get("mode") in SUPPORTED_CLIMATE_MODES

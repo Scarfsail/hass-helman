@@ -77,18 +77,15 @@ from ...scheduling.schedule import (
     parse_slot_id,
 )
 from ..base import ApplianceTarget, ScheduleWriter, resolve_appliance_target
-from ..conditions import build_eligibility
 from ..conditions.types import ConditionRailsUnavailable
+from ..day_context import _day_ratio_params
 from ..explain import (
     STATE_FALSE,
     STATE_TRUE,
     STATUS_SKIPPED,
-    VERDICT_CANDIDATE,
-    VERDICT_EXECUTE,
-    VERDICT_SKIP,
 )
 from ..fields import time_on
-from ..ownership import is_user_owned_appliance_action
+from ..ownership import is_user_owned
 from ..rails import (
     horizon_slots_between,
     read_available_surplus_by_bucket,
@@ -255,26 +252,20 @@ class ApplianceRuntimeOptimizer:
         config: "OptimizerInstanceConfig",
         trace: "OptimizerTrace",
     ) -> ScheduleDocument:
-        eligibility = build_eligibility(snapshot, config, trace)
-        # Every slot starts at `skip` and is upgraded only where something is
-        # actually written: the condition matrix covers the whole horizon, so a
-        # verdict-less slot would read as "never looked at".
-        trace.set_verdict(
-            slot_ids=eligibility.horizon_slot_ids, verdict=VERDICT_SKIP
-        )
         appliance_id = self.target.appliance.id
         # Capped mode ranks, and `_rank_slots` drops user-owned slots and reports
         # that as `slot_available`, so the writer's veto would only restate it.
         # Uncapped mode does not rank at all: there the veto is the only node
         # that speaks about ownership, so it keeps its say.
         capped = config.params.get("daily_minimum") is not None
-        writer = ScheduleWriter(
+        writer = ScheduleWriter.open(
             snapshot,
-            eligibility=eligibility,
-            trace=trace,
+            config,
+            trace,
             controllable_id=appliance_id,
             pre_filters_ownership=capped,
         )
+        eligibility = writer.eligibility
         action = {"domain": appliance_id, **self.target.authored_action}
 
         # Master params decide the mode: `daily_minimum` is not something a group
@@ -549,24 +540,7 @@ class ApplianceRuntimeOptimizer:
                 floor_rejected=floor_rejected,
             )
             for _cost, slot_id in chosen:
-                if not writer.set_appliance(
-                    slot_id,
-                    appliance_id=appliance_id,
-                    action=self.target.authored_action,
-                ):
-                    # User-owned: `base.py` records the veto and the slot keeps
-                    # its `skip` baseline. Unreachable while `_rank_slots` drops
-                    # those slots, but the verdict must not outrun the write.
-                    continue
-                resolved_slot = eligibility.at(slot_id)
-                trace.set_verdict(
-                    slot_ids=[slot_id],
-                    verdict=(
-                        VERDICT_EXECUTE
-                        if resolved_slot is None or resolved_slot.condition_met
-                        else VERDICT_CANDIDATE
-                    ),
-                )
+                writer.set(slot_id, self.target.authored_action)
             if chosen:
                 trace.decision(
                     slot_ids=[slot_id for _cost, slot_id in chosen],
@@ -754,21 +728,9 @@ class ApplianceRuntimeOptimizer:
             if rejection is not None:
                 trace.decision(slot_ids=[resolved.slot_id], outcome="rejected")
                 continue
-            if writer.set_appliance(
-                resolved.slot_id,
-                appliance_id=appliance_id,
-                action=self.target.authored_action,
-            ):
+            if writer.set(resolved.slot_id, self.target.authored_action):
                 applied_by_group.setdefault(resolved.group.index, []).append(
                     resolved.slot_id
-                )
-                trace.set_verdict(
-                    slot_ids=[resolved.slot_id],
-                    verdict=(
-                        VERDICT_EXECUTE
-                        if resolved.condition_met
-                        else VERDICT_CANDIDATE
-                    ),
                 )
 
         for slot_ids in applied_by_group.values():
@@ -1417,23 +1379,6 @@ def _jsonable(value: Any) -> Any:
     return value
 
 
-def _day_ratio_params(day_context: "DayContext") -> dict[str, Any]:
-    """The reading behind a day's band, for the trace (#264).
-
-    ``classification`` on its own no longer says where the band came from: it is
-    resolved per optimizer, over that optimizer's own house view, so the same
-    calendar day can legitimately be tight here and deficit next door. The ratio
-    and the instance whose consumption sits in the denominator are what makes an
-    explanation reproducible.
-    """
-    return {
-        "solarToConsumptionRatio": (
-            None if day_context.ratio == float("inf") else round(day_context.ratio, 3)
-        ),
-        "denominatorOptimizerId": day_context.denominator_optimizer_id,
-    }
-
-
 def _trace_unmatched_day(
     *,
     trace: "OptimizerTrace",
@@ -1560,7 +1505,7 @@ def _rank_slots(
     candidates: list[tuple[float, int, datetime, str]] = []
     for slot_id in window_slots:
         current_actions = document.slots.get(slot_id, {})
-        if is_user_owned_appliance_action(current_actions.get(appliance_id)):
+        if is_user_owned(current_actions.get(appliance_id)):
             continue
         covered = _slot_is_solar_covered(
             slot_id=slot_id,

@@ -36,11 +36,13 @@ from .controllables.config import (
 )
 from .controllables.spec import (
     CONTROLLABLE_KIND_INVERTER,
-    CONTROLLABLE_SPECS,
     KNOWN_CONTROLLABLE_KINDS,
     appliance_controllable_kinds,
 )
-from .scheduling.schedule import describe_schedule_control_config_issue
+from .scheduling.schedule import (
+    INVERTER_ACTION_KINDS,
+    describe_schedule_control_config_issue,
+)
 from .const import (
     RETIRED_ENERGY_NODE_TEXT_KEYS,
     RETIRED_UI_TEXT_KEYS,
@@ -94,11 +96,8 @@ _DEVICES_SECTION_KEYS = (
 )
 
 #: The action options an inverter's ``controls.mode.options`` may carry, in the
-#: order the editor lays them out. Read off the registry so a kind's declared
-#: actions and the fields validated for it cannot drift.
-_INVERTER_ACTION_OPTIONS = tuple(
-    CONTROLLABLE_SPECS[CONTROLLABLE_KIND_INVERTER].action_option_attrs
-)
+#: order the editor lays them out.
+_INVERTER_ACTION_OPTIONS = INVERTER_ACTION_KINDS
 
 
 @dataclass(frozen=True)

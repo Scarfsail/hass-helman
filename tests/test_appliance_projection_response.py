@@ -26,6 +26,9 @@ projection_response_module = importlib.import_module(
     "custom_components.helman.appliances.projection_response"
 )
 state_module = importlib.import_module("custom_components.helman.appliances.state")
+ProjectionConfig = importlib.import_module(
+    "custom_components.helman.appliances._read"
+).ProjectionConfig
 
 ApplianceProjectionPlan = projection_builder_module.ApplianceProjectionPlan
 ApplianceProjectionPlanPoint = projection_builder_module.ApplianceProjectionPlanPoint
@@ -90,9 +93,7 @@ def _generic_registry() -> AppliancesRuntimeRegistry:
                 id="dishwasher",
                 name="Dishwasher",
                 switch_entity_id="switch.dishwasher",
-                projection_strategy="fixed",
-                hourly_energy_kwh=0.9,
-                history_energy_entity_id=None,
+                projection=ProjectionConfig(strategy="fixed", hourly_energy_kwh=0.9),
             )
         ]
     )
@@ -105,9 +106,7 @@ def _climate_registry() -> AppliancesRuntimeRegistry:
                 id="living-room-hvac",
                 name="Living Room HVAC",
                 climate_entity_id="climate.living_room",
-                projection_strategy="fixed",
-                hourly_energy_kwh=1.5,
-                history_energy_entity_id=None,
+                projection=ProjectionConfig(strategy="fixed", hourly_energy_kwh=1.5),
             )
         ]
     )
