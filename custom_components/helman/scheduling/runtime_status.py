@@ -125,27 +125,21 @@ def schedule_execution_status_to_dict(
 def _inverter_runtime_to_dict(
     runtime: InverterRuntimeStatus,
 ) -> InverterRuntimeDict:
+    # Deferred: ``schedule`` reaches this module through the appliance drivers.
+    from .schedule import action_to_dict
+
     payload: InverterRuntimeDict = {
         "actionKind": runtime.action_kind,
         "outcome": runtime.outcome,
     }
     if runtime.executed_action is not None:
-        payload["executedAction"] = _schedule_action_to_dict(runtime.executed_action)
+        payload["executedAction"] = action_to_dict(runtime.executed_action)
     if runtime.reason is not None:
         payload["reason"] = runtime.reason
     if runtime.error_code is not None:
         payload["errorCode"] = runtime.error_code
     if runtime.message is not None:
         payload["message"] = runtime.message
-    return payload
-
-
-def _schedule_action_to_dict(action: "ScheduleAction") -> "ScheduleActionDict":
-    payload: ScheduleActionDict = {"kind": action.kind}
-    if action.target_soc is not None:
-        payload["targetSoc"] = action.target_soc
-    if action.set_by is not None:
-        payload["setBy"] = action.set_by
     return payload
 
 

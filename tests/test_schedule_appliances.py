@@ -28,6 +28,7 @@ from custom_components.helman.scheduling.schedule import (
     ScheduleSlot,
     appliance_actions,
     build_controllable_actions,
+    controllable_actions_to_dict,
     inverter_action,
     normalize_schedule_document_for_registry,
     normalize_slot_patch_request,
@@ -337,6 +338,10 @@ class ScheduleApplianceTests(unittest.TestCase):
 
         self.assertEqual(
             appliance_actions(normalized[0].controllables),
+            {"dishwasher": {"on": True}},
+        )
+        self.assertEqual(
+            controllable_actions_to_dict(normalized[0].controllables),
             {"dishwasher": {"on": True, "setBy": "automation", "conditionMet": False}},
         )
 
@@ -373,6 +378,22 @@ class ScheduleApplianceTests(unittest.TestCase):
 
         self.assertEqual(
             appliance_actions(normalized[0].controllables),
+            {
+                "garage-ev": {
+                    "charge": True,
+                    "vehicleId": "kona",
+                    "useMode": "Fast",
+                },
+                "dishwasher": {
+                    "on": True,
+                },
+                "living-room-hvac": {
+                    "mode": "heat",
+                },
+            },
+        )
+        self.assertEqual(
+            controllable_actions_to_dict(normalized[0].controllables),
             {
                 "garage-ev": {
                     "charge": True,

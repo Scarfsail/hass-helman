@@ -385,7 +385,7 @@ class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):
         slot = coordinator.schedule_calls[0]["slots"][0]
         self.assertEqual(coordinator.schedule_calls[0]["set_by"], "user")
         self.assertEqual(inverter_action(slot.controllables).set_by, "automation")
-        self.assertEqual(appliance_actions(slot.controllables)["garage-ev"]["setBy"], "automation")
+        self.assertEqual(slot.controllables["garage-ev"].set_by, "automation")
         self.assertEqual(connection.results, [(1, SCHEDULE_RESPONSE)])
         self.assertEqual(connection.errors, [])
 

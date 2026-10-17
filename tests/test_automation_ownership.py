@@ -33,12 +33,14 @@ from custom_components.helman.scheduling.schedule import (  # noqa: E402
     ScheduleAction,
     ScheduleActionError,
     ScheduleDocument,
+    SlotAction,
     appliance_actions,
     build_controllable_actions,
     inverter_action,
-    action_from_dict,
     action_to_dict,
     schedule_document_to_dict,
+    slot_action_from_dict,
+    slot_action_to_dict,
     strip_candidate_actions,
 )
 
@@ -104,10 +106,8 @@ class StripAutomationOwnedActionsTests(unittest.TestCase):
 
         stripped = strip_automation_owned_actions(document)
 
-        self.assertEqual(
-            appliance_actions(stripped.slots[SLOT_ID]),
-            {"boiler": {"on": False, "setBy": "user"}},
-        )
+        self.assertEqual(appliance_actions(stripped.slots[SLOT_ID]), {"boiler": {"on": False}})
+        self.assertEqual(stripped.slots[SLOT_ID]["boiler"].set_by, "user")
         self.assertEqual(inverter_action(stripped.slots[SLOT_ID]).set_by, "user")
 
     def test_strip_drops_slot_when_everything_becomes_default(self) -> None:
@@ -194,7 +194,7 @@ class MergeAutomationResultTests(unittest.TestCase):
 
         self.assertEqual(inverter_action(merged.slots[SLOT_ID]).set_by, "user")
         self.assertEqual(
-            appliance_actions(merged.slots[SLOT_ID])["boiler"],
+            slot_action_to_dict(merged.slots[SLOT_ID]["boiler"]),
             {"on": True, "setBy": "automation"},
         )
 
@@ -311,7 +311,7 @@ class MergeAutomationResultTests(unittest.TestCase):
 
         self.assertEqual(inverter_action(merged.slots[SLOT_ID]).set_by, "user")
         self.assertEqual(
-            appliance_actions(merged.slots[SLOT_ID])["boiler"],
+            slot_action_to_dict(merged.slots[SLOT_ID]["boiler"]),
             {"on": True, "setBy": "user"},
         )
 
@@ -348,14 +348,16 @@ class ConditionMetSerializationTests(unittest.TestCase):
         self.assertNotIn("conditionMet", action_to_dict(action))
 
     def test_candidate_action_round_trips(self) -> None:
-        action = ScheduleAction(
-            kind=SCHEDULE_ACTION_STOP_CHARGING,
+        action = SlotAction(
+            payload=ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING),
             set_by="automation",
             condition_met=False,
         )
-        payload = action_to_dict(action)
+        payload = slot_action_to_dict(action)
         self.assertIs(payload["conditionMet"], False)
-        self.assertFalse(action_from_dict(payload).condition_met)
+        self.assertEqual(
+            slot_action_from_dict("inverter", payload, context="Schedule slot"), action
+        )
 
 
 class StripCandidateActionsTests(unittest.TestCase):

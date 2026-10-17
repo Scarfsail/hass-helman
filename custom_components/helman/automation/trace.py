@@ -667,7 +667,7 @@ class OptimizerTrace:
     def winning_optimizers(self) -> dict[tuple[str, str], str]:
         """``(lane, slot id) -> the optimizer whose write survived``.
 
-        ``ScheduleWriter.set_inverter`` blind-overwrites and guards only against
+        ``ScheduleWriter.set`` blind-overwrites and guards only against
         *user*-owned actions, so among optimizers the schedule is
         **last-writer-wins in pipeline order**: an optimizer can decide
         ``execute``, write, and silently lose to a later step. Steps are visited

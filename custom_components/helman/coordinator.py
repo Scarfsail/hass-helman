@@ -162,6 +162,7 @@ from .recorder_hourly_series import (
     get_local_current_slot_start,
 )
 from .scheduling.schedule import (
+    ScheduleActionSetBy,
     ScheduleControlConfig,
     ScheduleDocument,
     ScheduleError,
@@ -186,7 +187,6 @@ from .scheduling.schedule import (
     with_slot_set_by,
     validate_slot_patch_request,
 )
-from .schedule_action_metadata import ScheduleActionSetBy
 from .appliances.generic_appliance import GenericApplianceRuntime
 from .scheduling.runtime_status import (
     schedule_execution_status_to_dict,
@@ -5291,9 +5291,9 @@ class HelmanCoordinator:
     def _is_projected_history_action_active(
         *,
         appliance,
-        action: object,
+        action: Mapping[str, Any] | None,
     ) -> bool:
-        if appliance is None or not isinstance(action, Mapping):
+        if appliance is None or action is None:
             return False
         spec = spec_for(appliance.kind)
         projection = spec.projection(appliance)

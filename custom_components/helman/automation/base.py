@@ -10,6 +10,7 @@ contains only its decision logic.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -18,18 +19,10 @@ from ..appliances.climate_appliance import ClimateApplianceRuntime
 from ..appliances.generic_appliance import GenericApplianceRuntime
 from ..controllables.config import CONTROLLABLE_ID_INVERTER
 from ..controllables.spec import CONTROLLABLE_KIND_CLIMATE, CONTROLLABLE_KIND_GENERIC
-from ..scheduling.schedule import (
-    ScheduleAction,
-    ScheduleDocument,
-    inverter_action,
-)
+from ..scheduling.schedule import ScheduleAction, ScheduleDocument, SlotAction
 from .explain import STATE_FALSE, STATE_TRUE
 from .fields import OptimizerConfigError
-from .ownership import (
-    is_user_owned_appliance_action,
-    is_user_owned_inverter_action,
-    stamp_automation_appliance_action,
-)
+from .ownership import is_user_owned, stamp_automation
 from .trace import NULL_TRACE
 
 if TYPE_CHECKING:
@@ -164,47 +157,21 @@ class ScheduleWriter:
         # fallback can never silently downgrade a real action to a candidate.
         return True if resolved is None else resolved.condition_met
 
-    def set_inverter(
-        self,
-        slot_id: str,
-        *,
-        kind: str,
-        target_soc: int | None = None,
-    ) -> bool:
-        """Write an inverter action. ``False`` when the user owns the slot."""
-        current = self.document.slots.get(slot_id, {})
-        if is_user_owned_inverter_action(inverter_action(current)):
-            self._blocked_slot_ids.append(slot_id)
-            return False
-        action = ScheduleAction(
-            kind=kind,
-            set_by="automation",
-            condition_met=self._condition_met(slot_id),
-            **({} if target_soc is None else {"target_soc": target_soc}),
-        )
-        updated = dict(current)
-        updated[CONTROLLABLE_ID_INVERTER] = action
-        self.document.slots[slot_id] = updated
-        self._written_slot_ids.append(slot_id)
-        return True
+    def set(self, slot_id: str, payload: ScheduleAction | Mapping[str, Any]) -> bool:
+        """Write the writer's controllable's ``payload`` into ``slot_id``.
 
-    def set_appliance(
-        self,
-        slot_id: str,
-        *,
-        appliance_id: str,
-        action: dict[str, Any],
-    ) -> bool:
-        """Write an appliance action. ``False`` when the user owns the slot."""
+        ``False`` when the user owns the slot, which is then left untouched.
+        """
         current = self.document.slots.get(slot_id, {})
-        if is_user_owned_appliance_action(current.get(appliance_id)):
+        if is_user_owned(current.get(self._controllable_id)):
             self._blocked_slot_ids.append(slot_id)
             return False
-        updated = dict(current)
-        updated[appliance_id] = stamp_automation_appliance_action(
-            action, condition_met=self._condition_met(slot_id)
-        )
-        self.document.slots[slot_id] = updated
+        self.document.slots[slot_id] = {
+            **current,
+            self._controllable_id: stamp_automation(
+                SlotAction(payload=payload, condition_met=self._condition_met(slot_id))
+            ),
+        }
         self._written_slot_ids.append(slot_id)
         return True
 

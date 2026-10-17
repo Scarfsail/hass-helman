@@ -625,7 +625,7 @@ class TraceExplanationPayloadTests(unittest.TestCase):
 
 
 class TraceWinnerAttributionTests(unittest.TestCase):
-    """``ScheduleWriter.set_inverter`` blind-overwrites among optimizers.
+    """``ScheduleWriter.set`` blind-overwrites among optimizers.
 
     It guards only against *user*-owned actions, so between optimizers the
     schedule is last-writer-wins in pipeline order: a step can decide

@@ -272,8 +272,11 @@ def _build_ev_charger_projection_series(
     )
 
     for slot_id, actions in sorted(schedule_document.slots.items()):
-        action = actions.get(appliance.id)
-        if not action or not spec_for(appliance.kind).is_running(action):
+        slot_action = actions.get(appliance.id)
+        if slot_action is None:
+            continue
+        action = slot_action.payload
+        if not spec_for(appliance.kind).is_running(action):
             continue
 
         vehicle_id = action.get("vehicleId")
@@ -475,10 +478,10 @@ def _build_constant_hourly_projection_series(
     demand_points: list[ApplianceDemandPoint] = []
 
     for slot_id, actions in sorted(schedule_document.slots.items()):
-        action = actions.get(appliance_id)
-        if not isinstance(action, Mapping):
+        slot_action = actions.get(appliance_id)
+        if slot_action is None:
             continue
-
+        action = slot_action.payload
         if not is_running(action):
             continue
 

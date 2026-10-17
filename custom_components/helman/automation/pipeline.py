@@ -22,8 +22,7 @@ from .explain import (
 )
 from .ownership import (
     count_automation_owned_actions,
-    is_user_owned_appliance_action,
-    is_user_owned_inverter_action,
+    is_user_owned,
     strip_automation_owned_actions,
 )
 from .optimizer import build_optimizer
@@ -34,13 +33,12 @@ from .trace import (
     aggregate_series_to_slots,
     price_points_to_slots,
 )
-from ..const import SCHEDULE_ACTION_EMPTY
 from ..scheduling.schedule import (
-    ScheduleAction,
     ScheduleDocument,
-    action_to_dict,
+    SlotAction,
     iter_horizon_slot_ids,
     schedule_document_to_dict,
+    slot_action_to_dict,
 )
 
 if TYPE_CHECKING:
@@ -1156,21 +1154,9 @@ def _capture_step_rails(
     }
 
 
-def _write_action_to_dict(action: Any) -> dict[str, Any] | None:
-    """Serialize a schedule action for the trace, treating empty as ``None``.
-
-    Inverter actions are ``ScheduleAction`` objects; appliance actions are plain
-    serializable dicts (``{"on": True, "setBy": ...}``).
-    """
-    if action is None:
-        return None
-    if isinstance(action, ScheduleAction):
-        if action.kind == SCHEDULE_ACTION_EMPTY:
-            return None
-        return action_to_dict(action)
-    if isinstance(action, dict):
-        return dict(action)
-    return None
+def _write_action_to_dict(action: SlotAction | None) -> dict[str, Any] | None:
+    """Serialize a schedule action for the trace; an absent one is ``None``."""
+    return None if action is None else slot_action_to_dict(action)
 
 
 def _collect_changed_writable_action_records(
@@ -1189,7 +1175,7 @@ def _collect_changed_writable_action_records(
             after_action = after_actions.get(controllable_id)
             if before_action == after_action:
                 continue
-            if _is_user_owned(before_action) or _is_user_owned(after_action):
+            if is_user_owned(before_action) or is_user_owned(after_action):
                 continue
             records.append(
                 TraceWrite(
@@ -1200,20 +1186,6 @@ def _collect_changed_writable_action_records(
                 )
             )
     return records
-
-
-def _is_user_owned(action: Any) -> bool:
-    """Whether a position in the slot's action map is the user's.
-
-    One question, two shapes: the inverter's action is a ``ScheduleAction`` and
-    an appliance's is the dict its own kind owns, and an absent entry means
-    "nothing scheduled" for both — which is nobody's.
-    """
-    if action is None:
-        return False
-    if isinstance(action, Mapping):
-        return is_user_owned_appliance_action(action)
-    return is_user_owned_inverter_action(action)
 
 
 def _build_optimizer_summary(
