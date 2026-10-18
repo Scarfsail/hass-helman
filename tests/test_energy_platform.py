@@ -61,10 +61,36 @@ class _FakeCoordinator:
         self.calls.append({"forecast_days": forecast_days})
         return self._forecast
 
+    def get_corrected_solar_forecast_points(self) -> list[dict]:
+        self.calls.append({"get_corrected_solar_forecast_points": True})
+        solar = self._forecast.get("solar", {})
+        points = solar.get("adjustedPoints")
+        if not isinstance(points, list):
+            points = solar.get("points")
+        if isinstance(points, list):
+            return points
+        return []
+
 
 class EnergyPlatformTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.energy = _load_energy_module()
+
+    async def test_get_solar_forecast_output_equals_legacy_fixture(self) -> None:
+        """Regression test ensuring async_get_solar_forecast produces the exact same hourly result as legacy get_forecast path."""
+        coordinator = _FakeCoordinator()
+        entry = _FakeConfigEntry("entry-1", "helman")
+        hass = _FakeHass(coordinator, {"entry-1": entry})
+
+        forecast = await coordinator.get_forecast(forecast_days=14)
+        solar = forecast.get("solar", {})
+        legacy_points = solar.get("adjustedPoints") or solar.get("points")
+        legacy_output = {"wh_hours": dict(self.energy._to_hourly(legacy_points))}
+
+        coordinator.calls.clear()
+        result = await self.energy.async_get_solar_forecast(hass, "entry-1")
+        self.assertEqual(result, legacy_output)
+        self.assertEqual(coordinator.calls, [{"get_corrected_solar_forecast_points": True}])
 
     async def test_get_solar_forecast_returns_hourly_wh_for_matching_entry(self) -> None:
         coordinator = _FakeCoordinator()
@@ -73,7 +99,7 @@ class EnergyPlatformTests(unittest.IsolatedAsyncioTestCase):
 
         result = await self.energy.async_get_solar_forecast(hass, "entry-1")
 
-        self.assertEqual(coordinator.calls, [{"forecast_days": 14}])
+        self.assertEqual(coordinator.calls, [{"get_corrected_solar_forecast_points": True}])
         # 300 + 300 + 325.25 + 325 = 1250.25 for the 10:00 hour; the two
         # surviving 12:00 quarters are half an hour and are dropped.
         self.assertEqual(

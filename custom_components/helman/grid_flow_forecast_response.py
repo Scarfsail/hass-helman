@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime
 from typing import Any
 
-from .const import (
-    FORECAST_CANONICAL_GRANULARITY_MINUTES,
-)
+from .forecast_response import envelope, parse_ts, read_entries, slice_to_horizon
 
-_INTERNAL_SNAPSHOT_FIELDS = {
+_DROP_FIELDS = {
     "sourceGranularityMinutes",
+    "series",
 }
 
 
@@ -18,27 +16,22 @@ def build_grid_flow_forecast_response(
     *,
     forecast_days: int,
 ) -> dict[str, Any]:
-    response = {
-        key: deepcopy(value)
-        for key, value in snapshot.items()
-        if key not in _INTERNAL_SNAPSHOT_FIELDS
-        and key not in {"series"}
-    }
+    response = envelope(snapshot, drop=_DROP_FIELDS)
     response["series"] = []
 
     if snapshot.get("status") not in {"available", "partial"}:
         return response
 
-    started_at = _parse_timestamp(snapshot.get("startedAt"))
+    started_at = parse_ts(snapshot.get("startedAt"))
     if started_at is None:
         return response
 
-    target_count = (
-        forecast_days * 24 * 60 // FORECAST_CANONICAL_GRANULARITY_MINUTES
-    )
     response["series"] = [
         _build_public_entry(entry)
-        for entry in _read_entries(snapshot.get("series"))[:target_count]
+        for entry in slice_to_horizon(
+            read_entries(snapshot.get("series")),
+            forecast_days=forecast_days,
+        )
     ]
     return response
 
@@ -55,15 +48,3 @@ def _build_public_entry(entry: dict[str, Any]) -> dict[str, Any]:
             entry.get("availableSurplusKwh")
         )
     return public_entry
-
-
-def _read_entries(raw_value: Any) -> list[dict[str, Any]]:
-    if not isinstance(raw_value, list):
-        return []
-    return [deepcopy(entry) for entry in raw_value if isinstance(entry, dict)]
-
-
-def _parse_timestamp(raw_value: Any) -> datetime | None:
-    if not isinstance(raw_value, str):
-        return None
-    return datetime.fromisoformat(raw_value)

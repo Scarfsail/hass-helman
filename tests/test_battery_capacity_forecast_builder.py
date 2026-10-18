@@ -360,8 +360,12 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         )
         solar_forecast = _make_solar_forecast(
             {
-                datetime(2026, 3, 20, 21, 0, tzinfo=TZ): 400.0,
-                datetime(2026, 3, 20, 22, 0, tzinfo=TZ): 800.0,
+                datetime(2026, 3, 20, 21, minute, tzinfo=TZ): 100.0
+                for minute in (0, 15, 30, 45)
+            }
+            | {
+                datetime(2026, 3, 20, 22, minute, tzinfo=TZ): 200.0
+                for minute in (0, 15, 30, 45)
             }
         )
 
@@ -1441,19 +1445,16 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("baselineSocPct", payload["series"][0])
 
 
-    def test_solar_slot_expansion_skips_inner_loop_when_divisor_is_one(self) -> None:
+    def test_solar_slot_map_preserves_canonical_points(self) -> None:
         from datetime import timedelta
+        from custom_components.helman.forecast_builder import solar_slot_map
 
-        module, builder = self._make_builder()
-
-        # 5-min granularity input → split_factor = 1 (finer than canonical 15 min)
         base = datetime(2026, 5, 10, 12, 0, tzinfo=TZ)
         points = [
-            {"timestamp": (base + timedelta(minutes=5 * i)).isoformat(), "value": 1.0}
+            {"timestamp": (base + timedelta(minutes=15 * i)).isoformat(), "value": 1.0}
             for i in range(4)
         ]
-        result = builder._build_solar_slot_map({"points": points})
-        # 4 input points, divisor=1 → 4 output keys, value preserved
+        result = solar_slot_map({"points": points})
         assert len(result) == 4
         assert all(v == 1.0 for v in result.values())
 

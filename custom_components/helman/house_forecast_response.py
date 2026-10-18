@@ -6,17 +6,17 @@ from typing import Any
 
 from homeassistant.util import dt as dt_util
 
-from .config_read import parse_timestamp
-from .const import (
-    FORECAST_CANONICAL_GRANULARITY_MINUTES,
-)
+from .forecast_response import envelope, parse_ts, target_count
 from .slot_grid import advance, slot_starts
 
-_INTERNAL_SNAPSHOT_FIELDS = {
+_DROP_FIELDS = {
     "sourceGranularityMinutes",
     "forecastDaysAvailable",
     "resolution",
     "horizonHours",
+    "currentSlot",
+    "series",
+    "actualHistory",
 }
 
 
@@ -25,12 +25,7 @@ def build_house_forecast_response(
     *,
     forecast_days: int,
 ) -> dict[str, Any]:
-    response = {
-        key: deepcopy(value)
-        for key, value in snapshot.items()
-        if key not in _INTERNAL_SNAPSHOT_FIELDS
-        and key not in {"currentSlot", "series", "actualHistory"}
-    }
+    response = envelope(snapshot, drop=_DROP_FIELDS)
     response["actualHistory"] = []
     response["series"] = []
 
@@ -38,7 +33,7 @@ def build_house_forecast_response(
         return response
 
     current_slot = snapshot.get("currentSlot")
-    current_slot_start = parse_timestamp(
+    current_slot_start = parse_ts(
         current_slot.get("timestamp") if isinstance(current_slot, dict) else None
     )
     if current_slot_start is None:
@@ -65,16 +60,14 @@ def _build_future_series(
     current_slot_start: datetime,
     forecast_days: int,
 ) -> list[dict[str, Any]]:
-    target_count = (
-        forecast_days * 24 * 60 // FORECAST_CANONICAL_GRANULARITY_MINUTES
-    )
-    if target_count <= 0:
+    target = target_count(forecast_days)
+    if target <= 0:
         return []
 
     entries: list[dict[str, Any]] = []
     for slot_start in slot_starts(
         advance(current_slot_start),
-        advance(current_slot_start, slot_count=target_count + 1),
+        advance(current_slot_start, slot_count=target + 1),
     ):
         entry = canonical_map.get(slot_start)
         if entry is None:
@@ -97,7 +90,7 @@ def _build_actual_history(
     for entry in raw_history:
         if not isinstance(entry, dict):
             continue
-        timestamp = parse_timestamp(entry.get("timestamp"))
+        timestamp = parse_ts(entry.get("timestamp"))
         if timestamp is None or dt_util.as_utc(timestamp) >= current_slot_start_utc:
             continue
         filtered_entries.append(deepcopy(entry))
@@ -108,7 +101,7 @@ def _build_entry_map(snapshot: dict[str, Any]) -> dict[datetime, dict[str, Any]]
     result: dict[datetime, dict[str, Any]] = {}
     current_slot = snapshot.get("currentSlot")
     if isinstance(current_slot, dict):
-        current_slot_start = parse_timestamp(current_slot.get("timestamp"))
+        current_slot_start = parse_ts(current_slot.get("timestamp"))
         if current_slot_start is not None:
             result[current_slot_start] = deepcopy(current_slot)
 
@@ -119,7 +112,7 @@ def _build_entry_map(snapshot: dict[str, Any]) -> dict[datetime, dict[str, Any]]
     for entry in series:
         if not isinstance(entry, dict):
             continue
-        slot_start = parse_timestamp(entry.get("timestamp"))
+        slot_start = parse_ts(entry.get("timestamp"))
         if slot_start is None:
             continue
         result[slot_start] = deepcopy(entry)

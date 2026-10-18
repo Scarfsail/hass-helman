@@ -27,6 +27,7 @@ from .const import (
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
     MAX_FORECAST_DAYS,
 )
+from .forecast_builder import solar_slot_map
 from .recorder_hourly_series import get_local_current_slot_start
 from .scheduling.schedule import EMPTY_SCHEDULE_ACTION
 from .slot_grid import SLOT, advance
@@ -176,7 +177,7 @@ class BatteryCapacityForecastBuilder:
                 model=model,
             )
 
-        solar_by_slot = self._build_solar_slot_map(solar_forecast)
+        solar_by_slot = solar_slot_map(solar_forecast)
 
         slot_inputs_result = self._build_slot_inputs(
             canonical_slot_count=canonical_slot_count,
@@ -504,47 +505,6 @@ class BatteryCapacityForecastBuilder:
 
         return by_slot
 
-    def _build_solar_slot_map(self, solar_forecast: dict[str, Any]) -> dict[datetime, float]:
-        points = solar_forecast.get("points")
-        if not isinstance(points, list):
-            return {}
-
-        parsed_points: list[tuple[datetime, float]] = []
-        for point in points:
-            if not isinstance(point, dict):
-                continue
-
-            timestamp = parse_timestamp(point.get("timestamp"))
-            value = read_float(point.get("value"))
-            if timestamp is None or value is None:
-                continue
-
-            parsed_points.append((dt_util.as_local(timestamp), value))
-
-        if not parsed_points:
-            return {}
-
-        split_factor = self._get_solar_point_split_factor(parsed_points)
-        slot_value_divisor = split_factor if split_factor > 0 else 1
-        by_slot: dict[datetime, float] = {}
-
-        if slot_value_divisor == 1:
-            for slot_start, value in parsed_points:
-                by_slot[slot_start] = by_slot.get(slot_start, 0.0) + value
-            return by_slot
-
-        for slot_start, value in parsed_points:
-            slot_value = value / slot_value_divisor
-            for split_index in range(slot_value_divisor):
-                expanded_slot_start = advance(
-                    slot_start,
-                    slot_count=split_index,
-                )
-                by_slot[expanded_slot_start] = (
-                    by_slot.get(expanded_slot_start, 0.0) + slot_value
-                )
-
-        return by_slot
 
     @staticmethod
     def _read_house_entry_value(entry: dict[str, Any]) -> float | None:
@@ -557,32 +517,6 @@ class BatteryCapacityForecastBuilder:
     def _get_slot_fraction(duration_hours: float) -> float:
         return duration_hours / _CANONICAL_SLOT_HOURS
 
-    @staticmethod
-    def _get_solar_point_split_factor(
-        parsed_points: list[tuple[datetime, float]],
-    ) -> int:
-        if len(parsed_points) < 2:
-            return 1
-
-        candidate_intervals: list[int] = []
-        for index in range(1, len(parsed_points)):
-            delta_seconds = (
-                dt_util.as_utc(parsed_points[index][0])
-                - dt_util.as_utc(parsed_points[index - 1][0])
-            ).total_seconds()
-            if delta_seconds <= 0:
-                continue
-            candidate_intervals.append(int(round(delta_seconds / 60)))
-
-        if not candidate_intervals:
-            return 1
-
-        interval_minutes = min(candidate_intervals)
-        if interval_minutes < FORECAST_CANONICAL_GRANULARITY_MINUTES:
-            return 1
-        if interval_minutes % FORECAST_CANONICAL_GRANULARITY_MINUTES != 0:
-            return 1
-        return interval_minutes // FORECAST_CANONICAL_GRANULARITY_MINUTES
 
     @staticmethod
     def _make_payload(

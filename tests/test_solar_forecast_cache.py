@@ -172,7 +172,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             return_value=solar_snapshot
         )
         raw_forecast_builder = SimpleNamespace(
-            build=AsyncMock(return_value={"solar": {}, "grid": {}})
+            build=AsyncMock(return_value={})
         )
 
         with (
@@ -183,7 +183,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch.object(
                 coordinator_module,
-                "HelmanForecastBuilder",
+                "SolarForecastBuilder",
                 return_value=raw_forecast_builder,
             ) as raw_forecast_builder_cls,
         ):
@@ -241,7 +241,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             return_value={"status": "available", "points": [], "rawPoints": []}
         )
         raw_forecast_builder = SimpleNamespace(
-            build=AsyncMock(return_value={"solar": {}, "grid": {}})
+            build=AsyncMock(return_value={})
         )
 
         with (
@@ -252,7 +252,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch.object(
                 coordinator_module,
-                "HelmanForecastBuilder",
+                "SolarForecastBuilder",
                 return_value=raw_forecast_builder,
             ),
         ):
@@ -315,7 +315,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             build=AsyncMock(return_value={"status": "available"})
         )
         raw_forecast_builder = SimpleNamespace(
-            build=AsyncMock(return_value={"solar": {}, "grid": {}})
+            build=AsyncMock(return_value={})
         )
         with (
             patch.object(
@@ -325,7 +325,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch.object(
                 coordinator_module,
-                "HelmanForecastBuilder",
+                "SolarForecastBuilder",
                 return_value=raw_forecast_builder,
             ),
         ):
@@ -379,7 +379,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             return_value={"status": "available", "points": [], "rawPoints": []}
         )
         raw_forecast_builder = SimpleNamespace(
-            build=AsyncMock(return_value={"solar": {}, "grid": {}})
+            build=AsyncMock(return_value={})
         )
 
         with (
@@ -390,7 +390,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch.object(
                 coordinator_module,
-                "HelmanForecastBuilder",
+                "SolarForecastBuilder",
                 return_value=raw_forecast_builder,
             ),
         ):
@@ -887,9 +887,9 @@ class DegradedSolarRebuildTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch.object(
                 coordinator_module,
-                "HelmanForecastBuilder",
+                "SolarForecastBuilder",
                 return_value=SimpleNamespace(
-                    build=AsyncMock(return_value={"solar": {}, "grid": {}})
+                    build=AsyncMock(return_value={})
                 ),
             ),
         ):

@@ -1,25 +1,25 @@
 from __future__ import annotations
 
-from copy import deepcopy
 from datetime import datetime
 from typing import Any
 
 from homeassistant.util import dt as dt_util
 
-from .config_read import parse_timestamp
-
 from .const import (
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
 )
+from .forecast_response import envelope, parse_ts, read_entries, slice_to_horizon
 from .forecast_series_fields import (
     BATTERY_PUBLIC_SERIES_FIELDS,
     project_series_fields,
 )
 from .recorder_hourly_series import get_local_current_slot_start
 
-_INTERNAL_SNAPSHOT_FIELDS = {
+_DROP_FIELDS = {
     "sourceGranularityMinutes",
     "baselineSeries",
+    "series",
+    "actualHistory",
 }
 
 
@@ -28,29 +28,24 @@ def build_battery_forecast_response(
     *,
     forecast_days: int,
 ) -> dict[str, Any]:
-    response = {
-        key: deepcopy(value)
-        for key, value in snapshot.items()
-        if key not in _INTERNAL_SNAPSHOT_FIELDS
-        and key not in {"series", "actualHistory"}
-    }
+    response = envelope(snapshot, drop=_DROP_FIELDS)
     response["actualHistory"] = []
     response["series"] = []
 
     if snapshot.get("status") not in {"available", "partial"}:
         return response
 
-    started_at = parse_timestamp(snapshot.get("startedAt"))
+    started_at = parse_ts(snapshot.get("startedAt"))
     if started_at is None:
         return response
 
-    target_count = (
-        forecast_days * 24 * 60 // FORECAST_CANONICAL_GRANULARITY_MINUTES
+    response["series"] = slice_to_horizon(
+        project_series_fields(
+            read_entries(snapshot.get("series")),
+            BATTERY_PUBLIC_SERIES_FIELDS,
+        ),
+        forecast_days=forecast_days,
     )
-    response["series"] = project_series_fields(
-        _read_entries(snapshot.get("series")),
-        BATTERY_PUBLIC_SERIES_FIELDS,
-    )[:target_count]
     response["actualHistory"] = _build_actual_history(
         snapshot=snapshot,
         started_at=started_at,
@@ -77,15 +72,9 @@ def _build_actual_history(
     )
     return [
         entry
-        for entry in _read_entries(snapshot.get("actualHistory"))
+        for entry in read_entries(snapshot.get("actualHistory"))
         if (
-            (timestamp := parse_timestamp(entry.get("timestamp"))) is not None
+            (timestamp := parse_ts(entry.get("timestamp"))) is not None
             and dt_util.as_utc(timestamp) < current_slot_start_utc
         )
     ]
-
-
-def _read_entries(raw_value: Any) -> list[dict[str, Any]]:
-    if not isinstance(raw_value, list):
-        return []
-    return [deepcopy(entry) for entry in raw_value if isinstance(entry, dict)]
