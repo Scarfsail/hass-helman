@@ -1094,6 +1094,33 @@ test.describe("the house composition at D and M", () => {
         expect(firstDeviceMixes).toBeDefined();
         expect(firstDeviceMixes[0]?.grid).toBeDefined();
         expect(firstDeviceMixes[0]?.grid?.power).toBeGreaterThan(0);
+
+        // Bucket 3 has houseSourceMix: { solar: 0, battery: 0, grid: 9000, unattributed: 9000 }.
+        // For the first consumer (12000 Wh), grid and unattributed must each be 6000 Wh (50%),
+        // not 12000 Wh (100% grid).
+        await clickGutter(page);
+        await clickColumn(page, 3);
+        const firstDeviceBar = await page.evaluate(() => {
+            const el = document.querySelector("helman-solar-inspector") as any;
+            const container = el.shadowRoot
+                .querySelector(".house-breakdown")
+                ?.querySelector("helman-tree-item-list");
+            const devices = [...(container?.shadowRoot?.querySelectorAll("helman-tree-item") ?? [])].flatMap((group: any) => [
+                ...(group.shadowRoot
+                    ?.querySelector("helman-tree-item-list")
+                    ?.shadowRoot?.querySelectorAll("helman-tree-item") ?? []),
+            ]);
+            const bars = devices[0]?.shadowRoot?.querySelector(".deviceContent")?.querySelector("helman-power-history-bars") as any;
+            return {
+                historyToRender: bars?.historyToRender,
+                sourceHistory: bars?.sourceHistory,
+            };
+        });
+        expect(firstDeviceBar.historyToRender).toEqual([12000]);
+        const mix = firstDeviceBar.sourceHistory?.[0];
+        expect(mix).toBeDefined();
+        expect(mix?.grid?.power).toBeCloseTo(6000, 5);
+        expect(mix?.unattributed?.power).toBeCloseTo(6000, 5);
     });
 
     test("a bucket the house meter missed shows no panel", async ({ page }) => {

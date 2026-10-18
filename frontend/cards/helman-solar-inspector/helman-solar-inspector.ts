@@ -2822,6 +2822,9 @@ export class HelmanSolarInspector extends LitElement {
         if (sm.solar > 0) mix.solar = { power: sm.solar, color: nodeAccentColor("solar") };
         if (sm.battery > 0) mix.battery = { power: sm.battery, color: nodeAccentColor("battery") };
         if (sm.grid > 0) mix.grid = { power: sm.grid, color: nodeAccentColor("grid") };
+        if (sm.unattributed > 0) {
+          mix.unattributed = { power: sm.unattributed, color: nodeAccentColor("unattributed") };
+        }
         if (Object.keys(mix).length > 0) mixes.set(row.date, mix);
       }
     }

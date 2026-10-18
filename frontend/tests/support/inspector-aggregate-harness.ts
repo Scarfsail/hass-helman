@@ -188,7 +188,12 @@ export async function mountInspector(
                         ? null
                         : overSoc ? (index === 0 ? 100.4 : 100) : 90,
                     houseWh: missing || noEnergy ? null : 18000,
-                    houseSourceMix: missing || noEnergy ? null : {
+                    houseSourceMix: missing || noEnergy ? null : index === 3 && bucket !== "month" ? {
+                        solar: 0,
+                        battery: 0,
+                        grid: 9000,
+                        unattributed: 9000,
+                    } : {
                         solar: 8000,
                         battery: 6000,
                         grid: 4000,
