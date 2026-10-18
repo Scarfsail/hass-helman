@@ -8,34 +8,29 @@ counts the queries rather than trusting the shape of the call site.
 """
 
 from __future__ import annotations
-import types
-from _fakes import _bias_service_config
-
-
-from _fakes import DummyStore as _DummyStore
 
 import unittest
-
-import pytest
-from homeassistant.components import recorder
-from homeassistant.components.recorder import history as recorder_history
 from contextlib import contextmanager
 from datetime import date, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
-
+import pytest
+from _fakes import DummyStore as _DummyStore
+from _fakes import _bias_service_config
+from homeassistant.components import recorder
+from homeassistant.components.recorder import history as recorder_history
 
 QUERIES: dict[str, list] = {"batched": [], "per_entity": [], "all": []}
 
 
 
 
-import importlib  # noqa: E402
+import importlib
 
 service_mod = importlib.import_module(
-    "custom_components.helman.solar_bias_correction.service"
+    "custom_components.helman.solar_inspector.service"
 )
 models = importlib.import_module(
     "custom_components.helman.solar_bias_correction.models"
@@ -175,7 +170,7 @@ def _make_service():
         # each test starts cold and counts the probes a first open really costs.
         data={},
     )
-    service = service_mod.SolarBiasCorrectionService(
+    service = service_mod.SolarInspector(
         hass,
         _DummyStore(),
         _make_cfg(),

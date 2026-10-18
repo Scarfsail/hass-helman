@@ -24,22 +24,19 @@ style of ``test_inspector_span_aggregates.py``.
 """
 
 from __future__ import annotations
-from _fakes import _bias_service_config
-
-
-from _fakes import DummyStore as _DummyStore
 
 import asyncio
 import unittest
-import pytest
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
+
+import pytest
+from _fakes import DummyStore as _DummyStore
+from _fakes import FakeInspectorLiveSources, _bias_service_config
 from homeassistant.components import recorder
 from homeassistant.util import dt as dt_util
-
-
 
 #: What the fake recorder hands back for ``period="hour"``, keyed by statistic id.
 STATISTICS_ROWS: dict[str, list[dict]] = {}
@@ -82,7 +79,8 @@ NOW = datetime(2026, 5, 25, 10, 0, tzinfo=PRAGUE)
 RECORDER_STUB = SimpleNamespace(async_add_executor_job=_run_in_executor)
 
 import importlib
-service_mod = importlib.import_module("custom_components.helman.solar_bias_correction.service")
+
+service_mod = importlib.import_module("custom_components.helman.solar_inspector.service")
 models = importlib.import_module("custom_components.helman.solar_bias_correction.models")
 recorder_series_mod = importlib.import_module("custom_components.helman.recorder_slot_energy")
 span_mod = importlib.import_module("custom_components.helman.recorder_statistics_span")
@@ -200,10 +198,11 @@ def _make_service(*, with_consumers: bool = False):
         daily_energy_entity_ids=["sensor.solar_today"],
         total_energy_entity_id=SOLAR_METER,
     )
-    service = service_mod.SolarBiasCorrectionService(
+    service = service_mod.SolarInspector(
         hass,
         _DummyStore(),
         cfg,
+        live_sources=FakeInspectorLiveSources(),
         config=_bias_service_config(
             cfg,
             house=HOUSE_METER,
@@ -218,7 +217,7 @@ def _make_service(*, with_consumers: bool = False):
         async def _device_consumers():
             return [{"energy_entity_id": WASHER_METER, "label": "Washer"}]
 
-        service._house_device_consumers_provider = _device_consumers
+        service._live_sources._house_device_consumers = _device_consumers
     return service
 
 

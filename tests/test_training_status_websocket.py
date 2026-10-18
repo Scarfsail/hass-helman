@@ -7,19 +7,16 @@ so faking the record would test nothing.
 
 from __future__ import annotations
 
-from homeassistant.exceptions import Unauthorized
-from _fakes import _bias_service_config
-
-from tests._fakes import make_coordinator
-
-from _fakes import FakeConnection as SharedFakeConnection
-
 import asyncio
 import importlib
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+from _fakes import FakeConnection as SharedFakeConnection
+from homeassistant.exceptions import Unauthorized
+
+from tests._fakes import make_coordinator
 
 coordinator_module = importlib.import_module("custom_components.helman.coordinator")
 training_ws = importlib.import_module("custom_components.helman.training.websocket")
@@ -130,7 +127,7 @@ def _make_bias_service(*, enabled: bool = True, metadata=None, profile=None):
         ),
         _BiasStore(),
         _bias_cfg(enabled=enabled),
-     config=_bias_service_config(_bias_cfg(enabled=enabled)),)
+    )
     if metadata is not None:
         service._metadata = metadata
     service._profile = profile
@@ -886,7 +883,7 @@ class TrainNowTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_non_admin_is_refused(self) -> None:
         house_job = _StubJob("profile_trained")
-        coordinator = _make_coordinator(house_job=house_job)
+        _make_coordinator(house_job=house_job)
 
         with self.assertRaises(Unauthorized):
             training_ws.ws_train_now(SimpleNamespace(), FakeConnection(is_admin=False), {"id": 1})

@@ -20,23 +20,20 @@ of ``test_inspector_recorder_query_count.py``.
 """
 
 from __future__ import annotations
-from _fakes import _bias_service_config
-
-
-from _fakes import DummyStore as _DummyStore
 
 import asyncio
-from contextlib import contextmanager
 import unittest
-import pytest
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
+
+import pytest
+from _fakes import DummyStore as _DummyStore
+from _fakes import FakeInspectorLiveSources, _bias_service_config
 from homeassistant.components import recorder
 from homeassistant.util import dt as dt_util
-
-
 
 #: Every ``statistics_during_period`` call the fake recorder saw, in order.
 STATISTICS_CALLS: list[dict] = []
@@ -152,10 +149,10 @@ def _purging_after(keep_days: int, *, auto_purge: bool = True):
         del RECORDER_STUB.keep_days
         del RECORDER_STUB.auto_purge
 
-import importlib  # noqa: E402
+import importlib
 
 service_mod = importlib.import_module(
-    "custom_components.helman.solar_bias_correction.service"
+    "custom_components.helman.solar_inspector.service"
 )
 models = importlib.import_module(
     "custom_components.helman.solar_bias_correction.models"
@@ -217,10 +214,11 @@ def _make_service(*, import_price_config=None):
         daily_energy_entity_ids=["sensor.solar_today"],
         total_energy_entity_id=SOLAR_METER,
     )
-    return service_mod.SolarBiasCorrectionService(
+    return service_mod.SolarInspector(
         hass,
         _DummyStore(),
         cfg,
+        live_sources=FakeInspectorLiveSources(),
         config=_bias_service_config(
             cfg,
             house=HOUSE_METER,
@@ -263,7 +261,7 @@ def _make_service_with_consumers():
     service._house_deferrable_consumers = lambda: service._normalize_consumers([
         {"energy_entity_id": WASHER_METER, "label": "Washer", "ids": ["washer"]}
     ], deferrable=True)
-    service._house_device_consumers_provider = _device_consumers
+    service._live_sources._house_device_consumers = _device_consumers
     return service
 
 
@@ -717,7 +715,7 @@ class TestHouseBreakdown(unittest.IsolatedAsyncioTestCase):
                 }
             ]
 
-        service._house_device_consumers_provider = _device_consumers
+        service._live_sources._house_device_consumers = _device_consumers
 
         payload = await service.async_get_span_aggregates(
             "2026-04-23", "2026-04-23", house_breakdown=True

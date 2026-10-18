@@ -1,26 +1,17 @@
 from __future__ import annotations
-import sys
-import types
-from _fakes import _bias_service_config
 
-
-from _fakes import DummyStore as _DummyStore
-
+import importlib
 import unittest
 from datetime import date, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
-
-
-
-
-
-import importlib  # noqa: E402
+from _fakes import DummyStore as _DummyStore
+from _fakes import _bias_service_config
 
 service_mod = importlib.import_module(
-    "custom_components.helman.solar_bias_correction.service"
+    "custom_components.helman.solar_inspector.service"
 )
 models = importlib.import_module(
     "custom_components.helman.solar_bias_correction.models"
@@ -111,7 +102,7 @@ class TestLoadBatteryActual(unittest.IsolatedAsyncioTestCase):
             config=SimpleNamespace(time_zone="Europe/Prague"),
             bus=SimpleNamespace(async_fire=lambda *a, **kw: None),
         )
-        return service_mod.SolarBiasCorrectionService(
+        return service_mod.SolarInspector(
             hass,
             _DummyStore(),
             _make_cfg(),
@@ -200,11 +191,12 @@ class TestRecordedBatteryForecastPoints(unittest.IsolatedAsyncioTestCase):
             config=SimpleNamespace(time_zone="Europe/Prague"),
             bus=SimpleNamespace(async_fire=lambda *a, **kw: None),
         )
-        return service_mod.SolarBiasCorrectionService(
+        return service_mod.SolarInspector(
             hass,
             _DummyStore(),
             _make_cfg(),
-         config=_bias_service_config(_make_cfg()),)
+            config=_bias_service_config(_make_cfg()),
+        )
 
     def _loader(self, *, soc=None, grid_net=None, battery_net=None):
         return AsyncMock(

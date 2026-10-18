@@ -11,27 +11,20 @@ it -- alongside the pricing properties themselves, which moved here from
 """
 
 from __future__ import annotations
-import sys
-import types
-from _fakes import _bias_service_config
 
-
-from _fakes import DummyStore as _DummyStore
-
+import importlib
 import unittest
-
-import pytest
-from datetime import date, datetime
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 from zoneinfo import ZoneInfo
 
-
-
-import importlib  # noqa: E402
+import pytest
+from _fakes import DummyStore as _DummyStore
+from _fakes import FakeInspectorLiveSources, _bias_service_config
 
 service_mod = importlib.import_module(
-    "custom_components.helman.solar_bias_correction.service"
+    "custom_components.helman.solar_inspector.service"
 )
 models = importlib.import_module(
     "custom_components.helman.solar_bias_correction.models"
@@ -198,12 +191,15 @@ class TestRunningSlotSplit(unittest.IsolatedAsyncioTestCase):
             bus=SimpleNamespace(async_fire=lambda *a, **kw: None),
             states=SimpleNamespace(get=lambda entity_id: None),
         )
-        service = service_mod.SolarBiasCorrectionService(
+        service = service_mod.SolarInspector(
             hass,
             _DummyStore(),
             _make_cfg(),
-            grid_price_snapshot_provider=lambda: price_snapshot or {},
-         config=_bias_service_config(_make_cfg()),)
+            live_sources=FakeInspectorLiveSources(
+                grid_price_snapshot=lambda: price_snapshot or {},
+            ),
+            config=_bias_service_config(_make_cfg()),
+        )
         service._profile = models.SolarBiasProfile(factors={}, omitted_slots=[])
         service._metadata = models.SolarBiasMetadata(
             trained_at="2026-05-01T03:00:00+02:00",
