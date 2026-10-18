@@ -4,7 +4,7 @@ import asyncio
 import unittest
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
 
@@ -23,13 +23,8 @@ def _state(local_iso: str, value):
 
 def _read(states, first: date, last: date | None = None):
     """Run the reader against a stubbed recorder returning ``states``."""
-
-    class _Recorder:
-        @staticmethod
-        async def async_add_executor_job(func):
-            return {mod.SOLAR_FORECAST_CURRENT_ENTITY: states}
-
-    with patch.object(mod, "get_instance", lambda hass: _Recorder()):
+    fake_result = {mod.SOLAR_FORECAST_CURRENT_ENTITY: states}
+    with patch.object(mod, "read_states", AsyncMock(return_value=fake_result)):
         return asyncio.run(
             mod.load_forecast_slots_for_window(
                 HASS, first_date=first, last_date=last or first
@@ -212,7 +207,7 @@ class WindowTests(unittest.TestCase):
         )
 
     def test_no_recorder_instance_is_not_an_error(self):
-        with patch.object(mod, "get_instance", lambda hass: None):
+        with patch.object(mod, "read_states", AsyncMock(return_value={})):
             days = asyncio.run(
                 mod.load_forecast_slots_for_window(
                     HASS, first_date=date(2026, 4, 24), last_date=date(2026, 4, 24)
@@ -223,27 +218,18 @@ class WindowTests(unittest.TestCase):
 
 class SingleDayTests(unittest.TestCase):
     def test_the_day_helper_returns_that_day_alone(self):
-        class _Recorder:
-            @staticmethod
-            async def async_add_executor_job(func):
-                return {
-                    mod.SOLAR_FORECAST_CURRENT_ENTITY: [
-                        _state("2026-04-24T09:00:00.412+02:00", "250")
-                    ]
-                }
-
-        with patch.object(mod, "get_instance", lambda hass: _Recorder()):
+        fake_result = {
+            mod.SOLAR_FORECAST_CURRENT_ENTITY: [
+                _state("2026-04-24T09:00:00.412+02:00", "250")
+            ]
+        }
+        with patch.object(mod, "read_states", AsyncMock(return_value=fake_result)):
             slots = asyncio.run(mod.load_forecast_slots_for_day(HASS, date(2026, 4, 24)))
 
         self.assertEqual(slots["09:00"], 250.0)
 
     def test_a_day_with_nothing_recorded_is_empty(self):
-        class _Recorder:
-            @staticmethod
-            async def async_add_executor_job(func):
-                return {}
-
-        with patch.object(mod, "get_instance", lambda hass: _Recorder()):
+        with patch.object(mod, "read_states", AsyncMock(return_value={})):
             slots = asyncio.run(mod.load_forecast_slots_for_day(HASS, date(2026, 4, 24)))
 
         self.assertEqual(slots, {})

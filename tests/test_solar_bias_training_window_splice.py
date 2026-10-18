@@ -301,9 +301,12 @@ def _patches(recorder: _Recorder):
         patch.object(
             history_mod, "state_changes_during_period", recorder.state_changes_during_period
         ),
-        patch.object(slot_history_mod, "get_instance", lambda hass: recorder),
+        patch(
+            "homeassistant.components.recorder.get_instance",
+            lambda hass: recorder,
+        ),
         patch.object(
-            slot_history_mod, "get_significant_states", recorder.get_significant_states
+            history_mod, "get_significant_states", recorder.get_significant_states
         ),
         patch.object(actuals_mod, "get_instance", lambda hass: recorder),
         patch.object(

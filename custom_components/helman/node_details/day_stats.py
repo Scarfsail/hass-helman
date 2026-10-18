@@ -29,6 +29,7 @@ from typing import Any
 
 from homeassistant.util import dt as dt_util
 
+from ..recorder_states import read_states
 from ..slot_grid import slot_starts
 
 BUCKET = timedelta(minutes=5)
@@ -217,7 +218,7 @@ async def async_day_stats(
             for entity_id in ids
         }
 
-    def _read() -> tuple[set[str], dict[str, list[dict[str, Any]]], dict[str, list[Any]], dict[str, str | None]]:
+    def _read_statistics() -> tuple[set[str], dict[str, list[dict[str, Any]]], dict[str, str | None]]:
         from homeassistant.components.recorder.statistics import (
             get_metadata,
             statistics_during_period,
@@ -250,13 +251,20 @@ async def async_day_stats(
             if with_statistics
             else {}
         )
-        without = [entity_id for entity_id in ids if entity_id not in with_statistics]
-        history = _read_states(hass, without, utc_start, stop) if without else {}
-        return with_statistics, statistics or {}, history, statistic_units
+        return with_statistics, statistics or {}, statistic_units
 
-    with_statistics, statistics, history, statistic_units = await get_instance(
+    with_statistics, statistics, statistic_units = await get_instance(
         hass
-    ).async_add_executor_job(_read)
+    ).async_add_executor_job(_read_statistics)
+
+    without = [entity_id for entity_id in ids if entity_id not in with_statistics]
+    history = (
+        await read_states(
+            hass, without, utc_start, stop, include_start_state=True, no_attributes=True
+        )
+        if without
+        else {}
+    )
 
     result = {}
     for entity_id in ids:
@@ -285,12 +293,8 @@ async def async_state_history(
     on the recorder's executor, never on the event loop; the newest state may
     not be committed yet, which :func:`with_live_state` adds.
     """
-    from homeassistant.components.recorder import get_instance
-
-    ids = list(dict.fromkeys(entity_ids))
-    utc_start, utc_end = dt_util.as_utc(start), dt_util.as_utc(end)
-    return await get_instance(hass).async_add_executor_job(
-        _read_states, hass, ids, utc_start, utc_end
+    return await read_states(
+        hass, entity_ids, start, end, include_start_state=True, no_attributes=True
     )
 
 
@@ -304,30 +308,6 @@ def with_live_state(hass: Any, entity_id: str, states: Sequence[Any]) -> list[An
     if live is not None and (not states or live.last_changed > states[-1].last_changed):
         states.append(live)
     return states
-
-
-def _read_states(
-    hass: Any, entity_ids: list[str], start: datetime, end: datetime
-) -> dict[str, list[Any]]:
-    """The recorder's states of ``entity_ids`` over ``[start, end]``; run on its executor."""
-    from homeassistant.components.recorder.history import get_significant_states
-
-    history = get_significant_states(
-        hass,
-        start,
-        end,
-        entity_ids=entity_ids,
-        filters=None,
-        include_start_time_state=True,
-        significant_changes_only=False,
-        minimal_response=False,
-        no_attributes=True,
-        compressed_state_format=False,
-    ) or {}
-    return {
-        entity_id: list(history.get(entity_id) or history.get(entity_id.lower()) or [])
-        for entity_id in entity_ids
-    }
 
 
 def _live_unit(hass: Any, entity_id: str) -> str | None:

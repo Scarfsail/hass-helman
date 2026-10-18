@@ -21,7 +21,7 @@ Three things are derived, each documented where it is built and in
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone, tzinfo
 import math
@@ -633,6 +633,28 @@ class MoneySide:
     def known_amount(self) -> float | None:
         """The amount, or None when nothing at all was priced."""
         return self.amount if self.priced_kwh > _EPSILON_KWH else None
+
+
+def price_hourly_series(
+    kwh_by_hour: Mapping[datetime, float],
+    rate_by_hour: Mapping[datetime, float],
+    *,
+    key_fn: Callable[[datetime], Any] | None = None,
+) -> dict[Any, MoneySide]:
+    """Cost or gain priced hour by hour, with the kWh priced.
+
+    Hours with a known rate accumulate amount and priced_kwh on a MoneySide.
+    Hours with no rate are skipped (not priced).
+    """
+    priced: dict[Any, MoneySide] = {}
+    for utc_hour, kwh in kwh_by_hour.items():
+        rate = rate_by_hour.get(utc_hour)
+        if rate is None:
+            continue
+        key = key_fn(utc_hour) if key_fn is not None else utc_hour
+        side = priced.setdefault(key, MoneySide())
+        side.price(kwh, kwh * rate)
+    return priced
 
 
 @dataclass

@@ -1,22 +1,14 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
-from functools import partial
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from homeassistant.core import HomeAssistant
-from homeassistant.util import dt as dt_util
 
+from ..recorder_states import numeric_timeline, read_states
 from ..slot_grid import SLOT_MINUTES, day_slots
 from .forecast_slot_sampling import resolve_forecast_slot_values
-
-try:
-    from homeassistant.components.recorder import get_instance
-    from homeassistant.components.recorder.history import get_significant_states
-except Exception:  # pragma: no cover - Home Assistant API compatibility
-    get_instance = None  # type: ignore[assignment]
-    get_significant_states = None  # type: ignore[assignment]
 
 #: The five entities Helman now publishes in place of ``BatteryForecastHistoryStore``.
 #:
@@ -74,7 +66,7 @@ async def load_battery_forecast_points_for_day(
     Reads the recorder history of the five battery-forecast entities and holds
     each value forward across the slot it covers -- the same hold-forward the
     house forecast's :func:`load_house_forecast_points_for_day` does for its one
-    sensor, batched into a single ``get_significant_states`` read because these
+    sensor, batched into a single recorder read because these
     five ride one another's beat. The four Wh entities publish a slot's own Wh,
     so unlike the house forecast (which publishes power) there is nothing to
     scale.
@@ -88,26 +80,17 @@ async def load_battery_forecast_points_for_day(
     list is empty when the recorder has no states for the day.
     """
     empty: _BatteryForecastPoints = ([], [], [], [], [])
-    if get_significant_states is None or get_instance is None:
-        return empty
 
     day_start_local = datetime.combine(target_date, time(0, 0), tzinfo=timezone)
     day_end_local = day_start_local + timedelta(days=1)
     entity_ids = [BATTERY_SOC_FORECAST_CURRENT_ENTITY, *_WH_ENTITIES]
 
-    states_by_entity = await get_instance(hass).async_add_executor_job(
-        partial(
-            get_significant_states,
-            hass,
-            dt_util.as_utc(day_start_local),
-            dt_util.as_utc(day_end_local),
-            entity_ids,
-            significant_changes_only=False,
-            # Only the state and its timestamp are read; these five entities
-            # carry no attributes worth materialising across a day of rows --
-            # the same flag ``forecast_slot_history._load_timeline`` passes.
-            no_attributes=True,
-        )
+    states_by_entity = await read_states(
+        hass,
+        entity_ids,
+        day_start_local,
+        day_end_local,
+        no_attributes=True,
     )
     if not states_by_entity:
         return empty
@@ -146,22 +129,9 @@ def _hold_forward(
     docstring for why a ``<= slot_start`` sweep drew the whole curve one slot
     late, and for why non-numeric rows are kept here as hold-breakers.
     """
-    timeline: list[tuple[datetime, float | None]] = []
-    for state in states or []:
-        raw = getattr(state, "state", None)
-        try:
-            value: float | None = float(raw)
-        except (TypeError, ValueError):
-            value = None
-        when = getattr(state, "last_changed", None) or getattr(
-            state, "last_updated", None
-        )
-        if when is None:
-            continue
-        timeline.append((dt_util.as_local(when), value))
+    timeline = numeric_timeline(states, keep_non_numeric=True)
     if not timeline:
         return {}
-    timeline.sort(key=lambda pair: pair[0])
 
     slot_starts = day_slots(day_start_local.date(), tzinfo=day_start_local.tzinfo, wall_clock=True)
 

@@ -304,9 +304,7 @@ class TestLoadBatteryForecastPointsForDay(unittest.IsolatedAsyncioTestCase):
             "custom_components.helman.solar_bias_correction.battery_forecast_history"
         )
         with patch.object(
-            battery_history, "get_significant_states", lambda *a, **kw: states_by_entity
-        ), patch.object(
-            battery_history, "get_instance", lambda hass: _SyncRecorderInstance()
+            battery_history, "read_states", AsyncMock(return_value=states_by_entity)
         ):
             return await battery_history.load_battery_forecast_points_for_day(
                 SimpleNamespace(config=SimpleNamespace(time_zone="Europe/Prague")),

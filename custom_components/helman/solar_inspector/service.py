@@ -24,6 +24,7 @@ from ..slot_grid import (
     SLOT_LABELS,
     SLOT_MINUTES,
 )
+from ..recorder_states import read_states
 from ..slot_grid import (
     floor_to_slot as _current_slot_start,
 )
@@ -75,10 +76,17 @@ if TYPE_CHECKING:
     from ..recorder_slot_energy import SlotEnergyBatch
 
 from .day import (
+    DayForecastAndActualSeries,
+    DayMeters,
+    DayPriceRails,
+    DaySolar,
     _actual_points_for_date,
     _battery_soc_points_from_raw,
+    _build_day_house_forecast,
     _build_house_actual_breakdown,
     _build_house_forecast_breakdown,
+    _compose_inspector_series,
+    _compose_inspector_totals,
     _consumer_own_energy,
     _consumer_slot_map,
     _copy_points,
@@ -89,13 +97,13 @@ from .day import (
     _filter_battery_soc_future,
     _filter_grid_forecast_future,
     _filter_points_to_local_date,
-    _get_significant_states_safe,
     _house_forecast_points_from_snapshot,
     _house_forecast_total_for_slot,
     _impact_points_for_day,
     _inspector_points,
     _inspector_points_from_raw,
     _live_price_rail,
+    _merge_battery_forecast_future,
     _money_points,
     _money_totals,
     _normalize_consumers,
@@ -114,11 +122,11 @@ from .span import (
     _MAX_AGGREGATE_BUCKETS,
     _bucket_house_breakdown,
     _energy_by_bucket,
+    _fold_span_aggregates_days,
     _house_forecast_by_bucket,
-    _last_day_of_month,
     _money_by_bucket,
+    _resolve_span_bounds,
     _soc_bounds_by_bucket,
-    _trim_span_to_cap,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -317,6 +325,28 @@ class SolarInspector:
     _normalize_consumers = staticmethod(_normalize_consumers)
     _consumer_slot_map = staticmethod(_consumer_slot_map)
 
+    async def _resolve_span_consumer_roster(
+        self, house_breakdown: bool
+    ) -> tuple[list[dict], list[str]]:
+        breakdown_consumers: list[dict] = []
+        if house_breakdown:
+            try:
+                breakdown_consumers = await self._house_breakdown_consumers()
+            except Exception:
+                _LOGGER.exception("Failed to resolve house consumers for span aggregates")
+                breakdown_consumers = []
+        consumer_entities = list(
+            dict.fromkeys(
+                entity
+                for consumer in breakdown_consumers
+                for entity in (
+                    consumer["energy_entity_id"],
+                    *consumer["metered_children"],
+                )
+            )
+        )
+        return breakdown_consumers, consumer_entities
+
     async def async_get_span_aggregates(
         self,
         raw_start_date: str,
@@ -362,23 +392,13 @@ class SolarInspector:
         both fold onto the same local date. Nothing to work around -- and nothing
         to re-implement the day view's workaround for.
         """
-        bucket = bucket if bucket in _MAX_AGGREGATE_BUCKETS else "day"
-        start_date = date.fromisoformat(raw_start_date)
-        end_date = date.fromisoformat(raw_end_date)
         local_tz = ZoneInfo(str(self._hass.config.time_zone))
         local_now = dt_util.as_local(dt_util.now())
-
-        # Month buckets describe whole months, so the requested edges are snapped
-        # outward before anything else looks at them -- otherwise a span starting
-        # mid-month would report a partial month as if it were a whole one.
-        if bucket == "month":
-            start_date = start_date.replace(day=1)
-            end_date = _last_day_of_month(end_date)
-        # Nothing is measured beyond now, and a span that reached past today
-        # would only widen the recorder read. The month in progress stays, cut
-        # short at today: a partial current month is the answer, not an absent
-        # one.
-        end_date = min(end_date, local_now.date())
+        bucket, start_date, end_date, local_start, local_end, tail_start = (
+            _resolve_span_bounds(
+                raw_start_date, raw_end_date, bucket, local_tz, local_now
+            )
+        )
         # The range travels with every answer, empty ones included: it is what
         # the card navigates by, and a span with no rows is exactly when the
         # reader is about to press an arrow.
@@ -393,56 +413,11 @@ class SolarInspector:
                 "days": [],
                 "range": navigation_range,
             }
-        start_date = _trim_span_to_cap(start_date, end_date, bucket)
-
-        local_start = datetime.combine(start_date, time(0, 0), tzinfo=local_tz)
-        local_end = datetime.combine(
-            end_date + timedelta(days=1), time(0, 0), tzinfo=local_tz
-        )
-        # Hourly statistics only exist for hours that have ended and been
-        # compiled, so the bucket in progress is short by up to a couple of
-        # hours -- and just after midnight a day bucket has no completed hour at
-        # all. These views are history-only, so nothing draws in the gap's place.
-        # Naming the newest bucket's start asks the span read to top those hours
-        # up from the short-term table; a span that stops before today is fully
-        # compiled and is not asked to.
-        tail_start = None
-        if end_date == local_now.date():
-            newest_bucket_start = end_date if bucket == "day" else end_date.replace(day=1)
-            tail_start = max(
-                local_start,
-                datetime.combine(newest_bucket_start, time(0, 0), tzinfo=local_tz),
-            )
 
         meters = read_span_meters(self._config)
         soc_entity = self._battery_soc_entity_id()
-        # The same roster the day view splits its house actual by, so a day
-        # column and that day's slots itemise the same appliances under the same
-        # labels. Resolved before the read because its meters join the one query
-        # rather than adding a second: the discipline this docstring commits to
-        # is one statistics read however wide the span, and a per-consumer read
-        # would be one per appliance per span.
-        #
-        # Only where the caller asked for it. The day pills share this endpoint
-        # and read six scalars a bucket, so resolving the roster for them would
-        # widen a 31-day read by a meter per consumer for a field they never
-        # look at.
-        breakdown_consumers: list[dict] = []
-        if house_breakdown:
-            try:
-                breakdown_consumers = await self._house_breakdown_consumers()
-            except Exception:
-                _LOGGER.exception("Failed to resolve house consumers for span aggregates")
-                breakdown_consumers = []
-        consumer_entities = list(
-            dict.fromkeys(
-                entity
-                for consumer in breakdown_consumers
-                for entity in (
-                    consumer["energy_entity_id"],
-                    *consumer["metered_children"],
-                )
-            )
+        breakdown_consumers, consumer_entities = (
+            await self._resolve_span_consumer_roster(house_breakdown)
         )
 
         from ..span_history import read_span_history
@@ -465,81 +440,18 @@ class SolarInspector:
             ),
         )
 
-        solar_kwh = _energy_by_bucket(history.energy_for(meters.solar), bucket, local_tz)
-        imported_kwh = _energy_by_bucket(
-            history.energy_for(meters.grid_import), bucket, local_tz
-        )
-        exported_kwh = _energy_by_bucket(
-            history.energy_for(meters.grid_export), bucket, local_tz
-        )
-        house_kwh = _energy_by_bucket(history.energy_for(meters.house), bucket, local_tz)
-        charged_kwh = _energy_by_bucket(
-            history.energy_for(meters.battery_charge), bucket, local_tz
-        )
-        discharged_kwh = _energy_by_bucket(
-            history.energy_for(meters.battery_discharge), bucket, local_tz
-        )
-        soc_by_bucket = _soc_bounds_by_bucket(
-            history.rows_for(soc_entity), bucket, local_tz
-        )
-        house_forecast_kwh = _house_forecast_by_bucket(
-            history.rows_for(house_forecast_entity), bucket, local_tz
-        )
-        # One fold per consumer through the same helper the six meters use, so a
-        # consumer's bucket total is arrived at exactly as the house total it is
-        # subtracted from.
-        consumer_kwh_by_entity = {
-            consumer["energy_entity_id"]: _energy_by_bucket(
-                self._consumer_own_energy(
-                    consumer, history.energy_kwh, slot=timedelta(hours=1)
-                ),
-                bucket,
-                local_tz,
-            )
-            for consumer in breakdown_consumers
-        }
-
-        money_by_bucket = _money_by_bucket(
-            history.energy_for(meters.grid_import),
-            history.energy_for(meters.grid_export),
-            history.import_rate,
-            history.export_rate,
+        days = _fold_span_aggregates_days(
+            history=history,
+            meters=meters,
+            soc_entity=soc_entity,
+            house_forecast_entity=house_forecast_entity,
+            breakdown_consumers=breakdown_consumers,
+            start_date=start_date,
+            end_date=end_date,
             bucket=bucket,
             local_tz=local_tz,
+            house_forecast=house_forecast,
         )
-
-        days: list[dict[str, Any]] = []
-        for key in bucket_keys(start_date, end_date, bucket):
-            min_pct, max_pct = soc_by_bucket.get(key, (None, None))
-            cost, gain, cost_kwh, gain_kwh = money_by_bucket.get(
-                key, (None, None, None, None)
-            )
-            row: dict[str, Any] = {
-                "date": key,
-                "solarWh": _round_wh(solar_kwh.get(key)),
-                "gridImportKwh": _round_kwh(imported_kwh.get(key)),
-                "gridExportKwh": _round_kwh(exported_kwh.get(key)),
-                "batteryMinSocPct": min_pct,
-                "batteryMaxSocPct": max_pct,
-                "houseWh": _round_wh(house_kwh.get(key)),
-                "batteryChargeWh": _round_wh(charged_kwh.get(key)),
-                "batteryDischargeWh": _round_wh(discharged_kwh.get(key)),
-                "moneyCost": None if cost is None else round(cost, 3),
-                "moneyGain": None if gain is None else round(gain, 3),
-                # The kWh each side priced, so a reader can tell a partly
-                # priced direction from a fully priced one.
-                "moneyCostKwh": _round_kwh(cost_kwh),
-                "moneyGainKwh": _round_kwh(gain_kwh),
-                "houseBreakdown": _bucket_house_breakdown(
-                    breakdown_consumers,
-                    consumer_kwh_by_entity,
-                    key,
-                    _round_wh(house_kwh.get(key)),
-                ),
-            }
-            if house_forecast:
-                row["houseForecastWh"] = _round_wh(house_forecast_kwh.get(key))
-            days.append(row)
 
         return {
             "bucket": bucket,
@@ -808,56 +720,23 @@ class SolarInspector:
         )
         return await self._async_history_floor(local_now), max_date
 
-    async def async_get_inspector_day(self, raw_date: str) -> dict[str, Any]:
-        target_date = date.fromisoformat(raw_date)
-        local_now = dt_util.as_local(dt_util.now())
-        today = local_now.date()
-        min_date, max_date = await self._async_navigation_range(local_now)
-
-        status, effective_variant, _fallback_reason = self._resolve_status()
-        timezone = ZoneInfo(str(self._hass.config.time_zone))
-
-        need_past = target_date <= today
-        need_future = target_date >= today
-
-        # Which store the day's measured series come from, decided once and for
-        # the whole day. A horizon the recorder can state answers it outright;
-        # ``None`` -- no recorder, purging switched off, the attribute moved --
-        # means trying raw states first and deciding on what they bring back,
-        # which is settled a few lines down once the meters have been read too.
-        actuals_by_slot: dict[str, float] = {}
-        undecided = False
-        reads_statistics = False
-
-        # Every cumulative meter the day's actual series need — house, both grid
-        # sides, both battery sides, the solar meter and one per house consumer —
-        # is read in a single recorder query up front. The recorder serves from
-        # one DB executor thread, so gathering a read per meter would only queue
-        # them; the batch turns ~18 serial round-trips into one. The consumer
-        # roster has to be resolved first because it decides most of the entity
-        # ids. The two steps degrade apart, the way the per-series loaders they
-        # came from did: a roster that cannot be built costs the breakdown, and a
-        # recorder that cannot be read costs the meter series, neither the other.
-        #
-        # The solar actuals are that same batch's solar column, cut off at the
-        # current completed slot -- not a read of their own. The batch already
-        # has to carry the meter for its liveness trace (the meter is silent
-        # from dusk to dawn and cannot prove on its own that the recorder was up
-        # while it said nothing -- see ``_is_carry_stale`` and issue #208), and
-        # it parses and samples that column with the very helper the actuals
-        # reader called, so the second read bought nothing (#245).
-        #
-        # A statistics-backed day reads the same meters from the same one query,
-        # only against the hourly long-term table -- and it brings back every
-        # other measured series in the bargain (solar actuals and forecast, SoC,
-        # the house and battery forecasts, both price rails), because they live in
-        # that one read rather than in a raw-state read apiece. What comes back is
-        # keyed and shaped exactly as the raw read's output, so the branches that
-        # take it below are source switches, not shape ones.
+    async def _load_day_meters(
+        self,
+        target_date: date,
+        local_now: datetime,
+        timezone: ZoneInfo,
+        need_past: bool,
+    ) -> DayMeters:
         breakdown_consumers_for_day: list[dict] = []
         slot_energy_by_entity: dict[str, dict[datetime, float]] = {}
         statistics_day = StatisticsDay()
+        actuals_by_slot: dict[str, float] = {}
+        reads_statistics = False
+        solar_meter_entity_id: str | None = None
+        meter_entity_ids: list[str] = []
+
         if need_past:
+            today = local_now.date()
             decided = self._day_reads_statistics(target_date, local_now)
             reads_statistics = decided is True
             # Only an elapsed day can be judged by an empty read: today reads
@@ -945,11 +824,29 @@ class SolarInspector:
                 slot_energy_by_entity = statistics_day.energy_kwh_by_entity
                 actuals_by_slot = statistics_day.solar_actuals_by_slot
 
-        current_slot_start = _current_slot_start(local_now) if target_date == today else None
-        next_slot = (
-            None if current_slot_start is None else current_slot_start + SLOT
+        return DayMeters(
+            reads_statistics=reads_statistics,
+            slot_energy_by_entity=slot_energy_by_entity,
+            actuals_by_slot=actuals_by_slot,
+            statistics_day=statistics_day,
+            breakdown_consumers_for_day=breakdown_consumers_for_day,
+            solar_meter_entity_id=solar_meter_entity_id,
+            meter_entity_ids=meter_entity_ids,
         )
 
+    async def _load_day_solar(
+        self,
+        target_date: date,
+        local_now: datetime,
+        timezone: ZoneInfo,
+        need_past: bool,
+        need_future: bool,
+        next_slot: datetime | None,
+        reads_statistics: bool,
+        statistics_day: StatisticsDay,
+        actuals_by_slot: dict[str, float],
+        effective_variant: str,
+    ) -> DaySolar:
         # --- Solar forecast ---
         # Spliced at the current slot exactly like the battery, house and price
         # series below. An elapsed slot comes from the archive, which holds what
@@ -1029,237 +926,239 @@ class SolarInspector:
         invalidated_slots = set(
             self._metadata.invalidated_slots_by_date.get(target_date.isoformat(), [])
         )
-        if target_date < today and actual_points and invalidated_slots:
+        if target_date < local_now.date() and actual_points and invalidated_slots:
             actual_points, invalidated_points = _partition_actual_points(
                 actual_points,
                 invalidated_slots=invalidated_slots,
             )
 
-        # --- House forecast ---
-        # The recorder history of the house forecast sensor (W → Wh) covers the
-        # slots that have elapsed; the cached forecast snapshot (kWh → Wh) covers
-        # the slots after the one in progress, because the recorder would hold the
-        # last value flat across the rest of the day. The slot in progress sits
-        # between them, in the snapshot's "currentSlot" field rather than its
-        # "series", and is served from the live composition — total and parts from
-        # the one vintage.
-        # How far the price recorder reads go: to the end of an elapsed day, and
-        # on today only as far as the slot in progress, whose start already
-        # carries the rate that applies to it. Everything past that is the live
-        # feed's to fill, so the two halves meet without overlapping.
+        return DaySolar(
+            raw_points=raw_points,
+            corrected_points=corrected_points,
+            actual_points=actual_points,
+            invalidated_points=invalidated_points,
+            factors=factors,
+            has_profile=has_profile,
+        )
+
+    def _day_forecast_past_coros(
+        self,
+        target_date: date,
+        timezone: ZoneInfo,
+        price_history_end: datetime,
+        next_slot: datetime | None,
+        reads_statistics: bool,
+        statistics_day: StatisticsDay,
+        slot_energy_by_entity: dict[str, dict[datetime, float]],
+        soc_entity_id: str | None,
+        bounds_entity_ids: tuple[str | None, str | None],
+        need_past: bool,
+    ) -> list[Any]:
+        if not need_past:
+            return []
+        numeric_entity_ids = [
+            *([soc_entity_id] if soc_entity_id else []),
+            *bounds_entity_ids,
+        ]
+        return [
+            self._already(statistics_day.house_forecast_points)
+            if reads_statistics
+            else self._guarded_points(
+                load_house_forecast_points_for_day(self._hass, target_date),
+                "house forecast history",
+            ),
+            self._guarded_points(
+                self._load_house_actual_for_date(target_date, slot_energy_by_entity),
+                "house actual",
+            ),
+            self._load_numeric_history_by_slot_for_entities(
+                numeric_entity_ids, target_date, timezone
+            ),
+            self._guarded_point_sets(
+                self._load_grid_actual_for_date(target_date, slot_energy_by_entity),
+                "grid actual",
+                count=3,
+            ),
+            self._guarded_points(
+                self._load_battery_actual_for_date(target_date, slot_energy_by_entity),
+                "battery actual",
+            ),
+            self._guarded_point_sets(
+                self._load_recorded_price_rails(
+                    [
+                        GRID_IMPORT_PRICE_ENTITY_ID,
+                        GRID_EXPORT_PRICE_ENTITY_ID,
+                    ],
+                    target_date,
+                    timezone,
+                    local_end=price_history_end,
+                ),
+                "price history",
+                count=2,
+            ),
+            self._recorded_battery_forecast_points(
+                target_date,
+                cutoff=next_slot,
+                timezone=timezone,
+                reads_statistics=reads_statistics,
+                statistics_day=statistics_day,
+            ),
+        ]
+
+    def _unpack_day_forecast_past(
+        self,
+        gathered: list[Any],
+        target_date: date,
+        need_past: bool,
+        reads_statistics: bool,
+        statistics_day: StatisticsDay,
+        soc_entity_id: str | None,
+        breakdown_consumers_for_day: list[dict],
+        slot_energy_by_entity: dict[str, dict[datetime, float]],
+    ) -> tuple[
+        list[dict],
+        list[dict],
+        list[dict],
+        list[dict],
+        dict[str, dict[str, float]],
+        tuple[list[dict], list[dict], list[dict]],
+        list[dict],
+        list[dict],
+        list[dict],
+        tuple[list[dict], list[dict], list[dict], list[dict], list[dict]],
+        list[dict],
+    ]:
+        if not need_past:
+            return ([], [], [], [], {}, ([], [], []), [], [], [], ([], [], [], [], []), [])
+        (
+            house_forecast_history_points,
+            house_actual_points,
+            numeric_history_by_entity,
+            grid_actual_series,
+            battery_actual_points,
+            recorded_price_series,
+            battery_forecast_series,
+        ) = gathered[:7]
+        battery_soc_actual_points = (
+            statistics_day.battery_soc_points
+            if reads_statistics
+            else self._battery_soc_actual_points(
+                soc_entity_id, numeric_history_by_entity
+            )
+        )
+        recorded_import_price_points, recorded_export_price_points = (
+            recorded_price_series
+        )
+        breakdown_consumers, consumer_slot_maps = (
+            self._house_consumer_breakdown_for_date(
+                target_date,
+                breakdown_consumers_for_day,
+                slot_energy_by_entity,
+            )
+        )
+        house_actual_breakdown_points = _build_house_actual_breakdown(
+            house_actual_points,
+            breakdown_consumers,
+            consumer_slot_maps,
+        )
+        return (
+            house_forecast_history_points,
+            house_actual_points,
+            house_actual_breakdown_points,
+            battery_soc_actual_points,
+            numeric_history_by_entity,
+            grid_actual_series,
+            battery_actual_points,
+            recorded_import_price_points,
+            recorded_export_price_points,
+            battery_forecast_series,
+            breakdown_consumers,
+        )
+
+    async def _load_day_forecast_and_actual_series(
+        self,
+        target_date: date,
+        local_now: datetime,
+        timezone: ZoneInfo,
+        need_past: bool,
+        need_future: bool,
+        next_slot: datetime | None,
+        current_slot_start: datetime | None,
+        reads_statistics: bool,
+        statistics_day: StatisticsDay,
+        slot_energy_by_entity: dict[str, dict[datetime, float]],
+        breakdown_consumers_for_day: list[dict],
+    ) -> DayForecastAndActualSeries:
         price_history_end = next_slot or (
             datetime.combine(target_date, time(0, 0), tzinfo=timezone)
             + timedelta(days=1)
         )
-
-        # The day's numeric (non-cumulative) sensors, resolved once and read
-        # together: the battery SoC sensor and the two SoC-bound sensors sample
-        # the same day onto the same grid, so they are one recorder round-trip
-        # rather than three (#245). SoC drops out of the roster on a statistics
-        # day because the hourly read already carries it, and adding it here
-        # would put back exactly the raw-state read that path exists to avoid.
-        # Resolved only where it is read: a provider that raises should not log
-        # a traceback on a future day, or on a statistics day, neither of which
-        # asks the SoC sensor anything.
         wants_raw_soc = need_past and not reads_statistics
         soc_entity_id = self._battery_soc_entity_id() if wants_raw_soc else None
         bounds_entity_ids = self._battery_soc_bounds_entity_ids()
-        numeric_entity_ids = [
-            *([soc_entity_id] if wants_raw_soc else []),
-            *(bounds_entity_ids if need_past else ()),
-        ]
 
-        # Independent recorder/snapshot reads, so overlap them rather than
-        # awaiting in turn.
-        past_coros = (
-            [
-                self._already(statistics_day.house_forecast_points)
-                if reads_statistics
-                else self._guarded_points(
-                    load_house_forecast_points_for_day(self._hass, target_date),
-                    "house forecast history",
-                ),
-                self._guarded_points(
-                    self._load_house_actual_for_date(target_date, slot_energy_by_entity),
-                    "house actual",
-                ),
-                self._load_numeric_history_by_slot_for_entities(
-                    numeric_entity_ids, target_date, timezone
-                ),
-                self._guarded_point_sets(
-                    self._load_grid_actual_for_date(target_date, slot_energy_by_entity),
-                    "grid actual",
-                    count=3,
-                ),
-                self._guarded_points(
-                    self._load_battery_actual_for_date(target_date, slot_energy_by_entity),
-                    "battery actual",
-                ),
-                # Both rails, on every day, from Helman's own two price
-                # entities. Not behind ``reads_statistics``: that fork is the
-                # cumulative meters' -- one store for the whole day, because a
-                # meter's day cannot be stitched from two grains -- and a rate
-                # has no such constraint. A price rail picks its tier from its
-                # own entity's coverage, slot by slot, so a day whose meters are
-                # purged can still carry the quarter-hour rates that applied.
-                self._guarded_point_sets(
-                    self._load_recorded_price_rails(
-                        [
-                            GRID_IMPORT_PRICE_ENTITY_ID,
-                            GRID_EXPORT_PRICE_ENTITY_ID,
-                        ],
-                        target_date,
-                        timezone,
-                        local_end=price_history_end,
-                    ),
-                    "price history",
-                    count=2,
-                ),
-                # The recorded SoC/grid/battery forecast curves — a recorder read
-                # of their own on a raw-state day, so it joins the batch rather
-                # than awaiting after it on the recorder's one DB thread. Already
-                # guarded internally; on a statistics day it just hands back the
-                # ``statistics_day`` lists.
-                self._recorded_battery_forecast_points(
-                    target_date,
-                    cutoff=next_slot,
-                    timezone=timezone,
-                    reads_statistics=reads_statistics,
-                    statistics_day=statistics_day,
-                ),
-            ]
-            if need_past
-            else []
+        past_coros = self._day_forecast_past_coros(
+            target_date=target_date,
+            timezone=timezone,
+            price_history_end=price_history_end,
+            next_slot=next_slot,
+            reads_statistics=reads_statistics,
+            statistics_day=statistics_day,
+            slot_energy_by_entity=slot_energy_by_entity,
+            soc_entity_id=soc_entity_id,
+            bounds_entity_ids=bounds_entity_ids,
+            need_past=need_past,
         )
         future_coros = (
             [self._get_battery_forecast_snapshot()] if need_future else []
         )
         gathered = await asyncio.gather(*past_coros, *future_coros)
 
-        house_forecast_history_points: list[dict] = []
-        house_actual_points: list[dict] = []
-        battery_soc_actual_points: list[dict] = []
-        numeric_history_by_entity: dict[str, dict[str, float]] = {}
-        grid_actual_series: tuple[list[dict], list[dict], list[dict]] = ([], [], [])
-        battery_actual_points: list[dict] = []
-        breakdown_consumers: list[dict] = []
-        consumer_slot_maps: list[dict] = []
-        recorded_import_price_points: list[dict] = []
-        recorded_export_price_points: list[dict] = []
-        battery_forecast_series: tuple[
-            list[dict], list[dict], list[dict], list[dict], list[dict]
-        ] = ([], [], [], [], [])
-        if need_past:
-            (
-                house_forecast_history_points,
-                house_actual_points,
-                numeric_history_by_entity,
-                grid_actual_series,
-                battery_actual_points,
-                recorded_price_series,
-                battery_forecast_series,
-            ) = gathered[:7]
-            battery_soc_actual_points = (
-                statistics_day.battery_soc_points
-                if reads_statistics
-                else self._battery_soc_actual_points(
-                    soc_entity_id, numeric_history_by_entity
-                )
-            )
-            recorded_import_price_points, recorded_export_price_points = (
-                recorded_price_series
-            )
-            # Shaping only — the consumer meters came out of the batched read
-            # above, so this is not another recorder round-trip.
-            breakdown_consumers, consumer_slot_maps = (
-                self._house_consumer_breakdown_for_date(
-                    target_date,
-                    breakdown_consumers_for_day,
-                    slot_energy_by_entity,
-                )
-            )
+        (
+            house_forecast_history_points,
+            house_actual_points,
+            house_actual_breakdown_points,
+            battery_soc_actual_points,
+            numeric_history_by_entity,
+            grid_actual_series,
+            battery_actual_points,
+            recorded_import_price_points,
+            recorded_export_price_points,
+            battery_forecast_series,
+            breakdown_consumers,
+        ) = self._unpack_day_forecast_past(
+            gathered,
+            target_date,
+            need_past,
+            reads_statistics,
+            statistics_day,
+            soc_entity_id,
+            breakdown_consumers_for_day,
+            slot_energy_by_entity,
+        )
         battery_snapshot = gathered[-1] if need_future else None
 
-        # The breakdown decomposes the house actual already loaded, so it is
-        # composed here rather than in its own recorder read: base load plus each
-        # appliance reconciles to that slot's houseActual value.
-        house_actual_breakdown_points = _build_house_actual_breakdown(
-            house_actual_points,
-            breakdown_consumers,
-            consumer_slot_maps,
+        house_forecast_points, house_forecast_breakdown_points = _build_day_house_forecast(
+            self._get_house_forecast_composition() if need_future else None,
+            self._house_scheduled_consumers() if need_future else [],
+            target_date,
+            current_slot_start=current_slot_start,
+            next_slot=next_slot,
+            breakdown_consumers=breakdown_consumers,
+            house_forecast_history_points=house_forecast_history_points,
+            snapshot=self._get_house_forecast_snapshot() if need_future else None,
+            need_past=need_past,
+            need_future=need_future,
         )
 
-        # Every actual series stops at the slot in progress, which is a forecast
-        # like any other unfinished slot; the day's totals below still count it,
-        # since a sum is an accumulation and not a slot-by-slot comparison, so the
-        # drawn series and the summed series are held apart here.
-        running_slot = (
-            None if current_slot_start is None else current_slot_start.strftime("%H:%M")
-        )
-        drawn_actual_points = _drop_running_slot(actual_points, running_slot=running_slot)
-        drawn_invalidated_points = _drop_running_slot(
-            invalidated_points, running_slot=running_slot
-        )
-        drawn_house_actual_points = _drop_running_slot(
-            house_actual_points, running_slot=running_slot
-        )
-        drawn_house_actual_breakdown_points = _drop_running_slot(
-            house_actual_breakdown_points, running_slot=running_slot
-        )
-        drawn_battery_soc_actual_points = _drop_running_slot(
-            battery_soc_actual_points, running_slot=running_slot
-        )
-        grid_actual_points, grid_import_actual_points, grid_export_actual_points = (
-            grid_actual_series
-        )
-        drawn_grid_actual_points = _drop_running_slot(
-            grid_actual_points, running_slot=running_slot
-        )
-        drawn_battery_actual_points = _drop_running_slot(
-            battery_actual_points, running_slot=running_slot
-        )
-
-        house_forecast_breakdown_points: list[SolarBiasHouseBreakdownPoint] = []
         if need_future:
-            # Only here, inside the need_future branch: the composition is read
-            # off the pipeline the gather above has just built, so a past-only
-            # day never touches it and no forecast rebuild can follow from
-            # opening an old day.
-            house_forecast_breakdown_points = _build_house_forecast_breakdown(
-                self._get_house_forecast_composition(),
-                self._house_scheduled_consumers(),
-                target_date,
-                next_slot=next_slot,
-                metered_by_entity=breakdown_consumers,
+            battery_forecast_series = _merge_battery_forecast_future(
+                battery_forecast_series,
+                battery_snapshot,
+                target_date=target_date,
+                local_now=local_now,
+                timezone=timezone,
             )
-        current_slot_points = _house_forecast_total_for_slot(
-            house_forecast_breakdown_points, slot_start=current_slot_start
-        )
-
-        house_forecast_points: list[dict] = []
-        if need_past:
-            # The archive stops where the composition takes over: at the slot in
-            # progress when that slot has a composition, so its total and its
-            # parts are one vintage and neither moves as the slot ages — and one
-            # slot later when it has none, a lagging or cold pipeline being no
-            # reason to leave a hole where the user is looking.
-            house_forecast_points = _points_before(
-                house_forecast_history_points,
-                cutoff=current_slot_start if current_slot_points else next_slot,
-            )
-        house_forecast_points += current_slot_points
-        if need_future:
-            house_forecast_points += _house_forecast_points_from_snapshot(
-                self._get_house_forecast_snapshot(),
-                target_date,
-                next_slot=next_slot,
-            )
-
-        # --- Battery SoC, grid and battery forecast ---
-        # Elapsed slots come from the five published sensors' recorder history
-        # (loaded in the batch above), since the live snapshot starts at the
-        # current slot. Slots still ahead of the clock come from that live
-        # snapshot, which begins one slot boundary after now.
         (
             battery_soc_forecast_points,
             grid_forecast_points,
@@ -1267,41 +1166,38 @@ class SolarInspector:
             grid_import_forecast_points,
             grid_export_forecast_points,
         ) = battery_forecast_series
-        if need_future:
-            battery_soc_forecast_points += _filter_battery_soc_future(
-                battery_snapshot,
-                target_date=target_date,
-                local_now=local_now,
-                timezone=timezone,
-            )
-            future_net, future_import, future_export = _filter_grid_forecast_future(
-                battery_snapshot,
-                target_date=target_date,
-                local_now=local_now,
-                timezone=timezone,
-            )
-            grid_forecast_points += future_net
-            grid_import_forecast_points += future_import
-            grid_export_forecast_points += future_export
-            battery_forecast_points += _filter_battery_forecast_future(
-                battery_snapshot,
-                target_date=target_date,
-                local_now=local_now,
-                timezone=timezone,
-            )
 
-        # --- Price rails ---
-        # One rail per direction, spanning the whole day. Elapsed slots come
-        # from the recorder — the two price sensors Helman publishes, resolved
-        # raw first and hourly means for whatever raw does not cover — and
-        # slots the clock has not reached come from the live feed. The import
-        # side then fills whatever is still empty from the window config, which
-        # is derivable for any minute of any date; that is what makes the rail
-        # whole on days that predate the sensor, and on the stretch past
-        # recorder retention. It is a per-slot fill rather than a per-day
-        # branch, because the ship day and the retention edge are each covered
-        # in part: filling by day would either blank half a rail or overwrite a
-        # day of recorded truth with today's tariff.
+        return DayForecastAndActualSeries(
+            house_forecast_points=house_forecast_points,
+            house_actual_points=house_actual_points,
+            house_actual_breakdown_points=house_actual_breakdown_points,
+            house_forecast_breakdown_points=house_forecast_breakdown_points,
+            battery_soc_forecast_points=battery_soc_forecast_points,
+            battery_soc_actual_points=battery_soc_actual_points,
+            grid_forecast_points=grid_forecast_points,
+            grid_actual_series=grid_actual_series,
+            battery_forecast_points=battery_forecast_points,
+            battery_actual_points=battery_actual_points,
+            grid_import_forecast_points=grid_import_forecast_points,
+            grid_export_forecast_points=grid_export_forecast_points,
+            recorded_import_price_points=recorded_import_price_points,
+            recorded_export_price_points=recorded_export_price_points,
+            numeric_history_by_entity=numeric_history_by_entity,
+            bounds_entity_ids=bounds_entity_ids,
+        )
+
+    async def _load_day_price_rails(
+        self,
+        target_date: date,
+        timezone: ZoneInfo,
+        need_future: bool,
+        running_slot: str | None,
+        recorded_import_price_points: list[dict],
+        recorded_export_price_points: list[dict],
+        grid_actual_series: tuple[list[dict], list[dict], list[dict]],
+        grid_import_forecast_points: list[dict],
+        grid_export_forecast_points: list[dict],
+    ) -> DayPriceRails:
         import_price_by_slot: dict[str, float] = {
             point["slot"]: point["value"] for point in recorded_import_price_points
         }
@@ -1313,18 +1209,6 @@ class SolarInspector:
             price_snapshot.get("import"), target_date, timezone
         ).items():
             import_price_by_slot.setdefault(slot, value)
-        # The export channel carries the whole day, elapsed hours included, so
-        # unlike the forward-only import channel it has to be cut at the clock.
-        # It used to be laid down whole, on the argument that the day-ahead
-        # schedule beat a recorded state that only ever sampled the hours Home
-        # Assistant was up for; now that the recorded rail resolves raw states
-        # first and fills from hourly means, the recorder holds the better
-        # answer and the schedule would only overwrite it. So the schedule
-        # answers for the slot in progress and everything after it, and an
-        # elapsed slot the recorder has nothing for stays empty rather than
-        # borrowing today's schedule: filling it would complete today's rail
-        # and today's money while the day is current, then shrink both at
-        # midnight once the same day is served from history alone.
         for slot, value in _live_price_rail(
             price_snapshot.get("export"), target_date, timezone
         ).items():
@@ -1345,17 +1229,11 @@ class SolarInspector:
                 unit = export_channel.get("unit")
                 price_unit = unit if isinstance(unit, str) and unit else None
         if price_unit is None:
-            # An elapsed day has no live snapshot to read the unit off, so with
-            # no import windows configured the export rail would draw bare
-            # numbers. Helman's own export sensor states its unit, and it is the
-            # same entity the recorded rail came from.
             price_unit = await self._grid_export_price_unit()
 
-        # Money, priced off the two grid directions and the rails just built.
-        # The actual side is computed once from the *undropped* points and then
-        # split the way every energy series is: the totals count the slot in
-        # progress, the drawn series stops before it. The forecast side has no
-        # such split, since no forecast series is ever dropped.
+        grid_actual_points, grid_import_actual_points, grid_export_actual_points = (
+            grid_actual_series
+        )
         money_actual_points = _money_points(
             grid_import_actual_points,
             grid_export_actual_points,
@@ -1368,10 +1246,75 @@ class SolarInspector:
             import_price_by_slot,
             export_price_by_slot,
         )
-        drawn_money_actual_points = _drop_running_slot(
-            money_actual_points, running_slot=running_slot
+
+        return DayPriceRails(
+            import_price_by_slot=import_price_by_slot,
+            export_price_by_slot=export_price_by_slot,
+            price_unit=price_unit,
+            money_actual_points=money_actual_points,
+            money_forecast_points=money_forecast_points,
         )
 
+    def _compose_inspector_day(
+        self,
+        *,
+        target_date: date,
+        local_now: datetime,
+        min_date: date,
+        max_date: date,
+        status: str,
+        effective_variant: str,
+        meters: DayMeters,
+        solar: DaySolar,
+        series: DayForecastAndActualSeries,
+        price_rails: DayPriceRails,
+        running_slot: str | None,
+    ) -> dict[str, Any]:
+        drawn_actual_points = _drop_running_slot(solar.actual_points, running_slot=running_slot)
+        drawn_invalidated_points = _drop_running_slot(
+            solar.invalidated_points, running_slot=running_slot
+        )
+        drawn_house_actual_points = _drop_running_slot(
+            series.house_actual_points, running_slot=running_slot
+        )
+        drawn_house_actual_breakdown_points = _drop_running_slot(
+            series.house_actual_breakdown_points, running_slot=running_slot
+        )
+        drawn_battery_soc_actual_points = _drop_running_slot(
+            series.battery_soc_actual_points, running_slot=running_slot
+        )
+        grid_actual_points, _, _ = series.grid_actual_series
+        drawn_grid_actual_points = _drop_running_slot(
+            grid_actual_points, running_slot=running_slot
+        )
+        drawn_battery_actual_points = _drop_running_slot(
+            series.battery_actual_points, running_slot=running_slot
+        )
+        drawn_money_actual_points = _drop_running_slot(
+            price_rails.money_actual_points, running_slot=running_slot
+        )
+
+        today = local_now.date()
+        composed_series = _compose_inspector_series(
+            solar=solar,
+            series=series,
+            price_rails=price_rails,
+            drawn_actual_points=drawn_actual_points,
+            drawn_invalidated_points=drawn_invalidated_points,
+            drawn_house_actual_points=drawn_house_actual_points,
+            drawn_house_actual_breakdown_points=drawn_house_actual_breakdown_points,
+            drawn_battery_soc_actual_points=drawn_battery_soc_actual_points,
+            drawn_grid_actual_points=drawn_grid_actual_points,
+            drawn_battery_actual_points=drawn_battery_actual_points,
+            drawn_money_actual_points=drawn_money_actual_points,
+        )
+        composed_totals = _compose_inspector_totals(
+            solar=solar,
+            series=series,
+            price_rails=price_rails,
+            actuals_by_slot=meters.actuals_by_slot,
+            grid_actual_points=grid_actual_points,
+        )
         day = SolarBiasInspectorDay(
             date=target_date.isoformat(),
             timezone=str(self._hass.config.time_zone),
@@ -1380,101 +1323,111 @@ class SolarInspector:
             trained_at=self._trained_at,
             min_date=min_date.isoformat(),
             max_date=max_date.isoformat(),
-            series=SolarBiasInspectorSeries(
-                raw=_inspector_points(raw_points),
-                corrected=_inspector_points(corrected_points),
-                actual=drawn_actual_points,
-                invalidated=drawn_invalidated_points,
-                factors=factors,
-                impact=_impact_points_for_day(
-                    raw_points,
-                    corrected_points,
-                ),
-                house_forecast=_inspector_points_from_raw(house_forecast_points),
-                house_actual=_inspector_points_from_raw(drawn_house_actual_points),
-                house_actual_breakdown=drawn_house_actual_breakdown_points,
-                house_forecast_breakdown=house_forecast_breakdown_points,
-                battery_soc_forecast=_battery_soc_points_from_raw(battery_soc_forecast_points),
-                battery_soc_actual=_battery_soc_points_from_raw(
-                    drawn_battery_soc_actual_points
-                ),
-                grid_forecast=_inspector_points_from_raw(grid_forecast_points),
-                grid_actual=_inspector_points_from_raw(drawn_grid_actual_points),
-                battery_forecast=_inspector_points_from_raw(battery_forecast_points),
-                battery_actual=_inspector_points_from_raw(drawn_battery_actual_points),
-                import_price=_price_points(import_price_by_slot),
-                export_price=_price_points(export_price_by_slot),
-                money_actual=drawn_money_actual_points,
-                money_forecast=money_forecast_points,
-            ),
-            totals=SolarBiasInspectorTotals(
-                raw_wh=_sum_point_values(raw_points) if raw_points else None,
-                corrected_wh=(
-                    _sum_point_values(corrected_points) if corrected_points else None
-                ),
-                actual_wh=sum(actuals_by_slot.values()) if actuals_by_slot else None,
-                house_forecast_wh=(
-                    sum(p["wh"] for p in house_forecast_points)
-                    if house_forecast_points
-                    else None
-                ),
-                house_actual_wh=(
-                    sum(p["wh"] for p in house_actual_points)
-                    if house_actual_points
-                    else None
-                ),
-                grid_forecast_wh=(
-                    sum(p["wh"] for p in grid_forecast_points)
-                    if grid_forecast_points
-                    else None
-                ),
-                grid_actual_wh=(
-                    sum(p["wh"] for p in grid_actual_points)
-                    if grid_actual_points
-                    else None
-                ),
-                battery_forecast_wh=(
-                    sum(p["wh"] for p in battery_forecast_points)
-                    if battery_forecast_points
-                    else None
-                ),
-                battery_actual_wh=(
-                    sum(p["wh"] for p in battery_actual_points)
-                    if battery_actual_points
-                    else None
-                ),
-                money_actual=_money_totals(money_actual_points),
-                money_forecast=_money_totals(money_forecast_points),
-            ),
+            series=composed_series,
+            totals=composed_totals,
             availability=SolarBiasInspectorAvailability(
-                has_raw_forecast=bool(raw_points),
-                has_corrected_forecast=bool(corrected_points),
+                has_raw_forecast=bool(solar.raw_points),
+                has_corrected_forecast=bool(solar.corrected_points),
                 has_actuals=bool(drawn_actual_points),
-                has_profile=has_profile,
+                has_profile=solar.has_profile,
                 has_invalidated=bool(drawn_invalidated_points),
-                has_house_forecast=bool(house_forecast_points),
+                has_house_forecast=bool(series.house_forecast_points),
                 has_house_actual=bool(drawn_house_actual_points),
                 has_house_actual_breakdown=bool(drawn_house_actual_breakdown_points),
-                has_house_forecast_breakdown=bool(house_forecast_breakdown_points),
-                has_battery_soc_forecast=bool(battery_soc_forecast_points),
+                has_house_forecast_breakdown=bool(series.house_forecast_breakdown_points),
+                has_battery_soc_forecast=bool(series.battery_soc_forecast_points),
                 has_battery_soc_actual=bool(drawn_battery_soc_actual_points),
-                has_grid_forecast=bool(grid_forecast_points),
+                has_grid_forecast=bool(series.grid_forecast_points),
                 has_grid_actual=bool(drawn_grid_actual_points),
-                has_battery_forecast=bool(battery_forecast_points),
+                has_battery_forecast=bool(series.battery_forecast_points),
                 has_battery_actual=bool(drawn_battery_actual_points),
-                has_import_price=bool(import_price_by_slot),
-                has_export_price=bool(export_price_by_slot),
+                has_import_price=bool(price_rails.import_price_by_slot),
+                has_export_price=bool(price_rails.export_price_by_slot),
             ),
             is_today=target_date == today,
             is_future=target_date > today,
-            training_explainability=self._explainability if has_profile else None,
+            training_explainability=self._explainability if solar.has_profile else None,
             battery_soc_bounds=self._battery_soc_bounds_for_date(
-                bounds_entity_ids, numeric_history_by_entity
+                series.bounds_entity_ids, series.numeric_history_by_entity
             ),
-            price_unit=price_unit,
-            data_granularity_minutes=HOUR_MINUTES if reads_statistics else SLOT_MINUTES,
+            price_unit=price_rails.price_unit,
+            data_granularity_minutes=HOUR_MINUTES if meters.reads_statistics else SLOT_MINUTES,
         )
         return inspector_day_to_payload(day)
+
+    async def async_get_inspector_day(self, raw_date: str) -> dict[str, Any]:
+        target_date = date.fromisoformat(raw_date)
+        local_now = dt_util.as_local(dt_util.now())
+        today = local_now.date()
+        min_date, max_date = await self._async_navigation_range(local_now)
+
+        status, effective_variant, _fallback_reason = self._resolve_status()
+        timezone = ZoneInfo(str(self._hass.config.time_zone))
+
+        need_past = target_date <= today
+        need_future = target_date >= today
+
+        current_slot_start = _current_slot_start(local_now) if target_date == today else None
+        next_slot = (
+            None if current_slot_start is None else current_slot_start + SLOT
+        )
+        running_slot = (
+            None if current_slot_start is None else current_slot_start.strftime("%H:%M")
+        )
+
+        meters = await self._load_day_meters(
+            target_date, local_now, timezone, need_past
+        )
+        solar = await self._load_day_solar(
+            target_date,
+            local_now,
+            timezone,
+            need_past,
+            need_future,
+            next_slot,
+            meters.reads_statistics,
+            meters.statistics_day,
+            meters.actuals_by_slot,
+            effective_variant,
+        )
+        series = await self._load_day_forecast_and_actual_series(
+            target_date,
+            local_now,
+            timezone,
+            need_past,
+            need_future,
+            next_slot,
+            current_slot_start,
+            meters.reads_statistics,
+            meters.statistics_day,
+            meters.slot_energy_by_entity,
+            meters.breakdown_consumers_for_day,
+        )
+        price_rails = await self._load_day_price_rails(
+            target_date,
+            timezone,
+            need_future,
+            running_slot,
+            series.recorded_import_price_points,
+            series.recorded_export_price_points,
+            series.grid_actual_series,
+            series.grid_import_forecast_points,
+            series.grid_export_forecast_points,
+        )
+
+        return self._compose_inspector_day(
+            target_date=target_date,
+            local_now=local_now,
+            min_date=min_date,
+            max_date=max_date,
+            status=status,
+            effective_variant=effective_variant,
+            meters=meters,
+            solar=solar,
+            series=series,
+            price_rails=price_rails,
+            running_slot=running_slot,
+        )
 
     def _live_battery_soc_bounds(self) -> tuple[float | None, float | None]:
         if self._live_sources is None or not hasattr(self._live_sources, "battery_soc_bounds"):
@@ -2140,7 +2093,7 @@ class SolarInspector:
         The battery SoC sensor and the two SoC-bound sensors share a day, a grid
         and a sampling rule, and used to cost a recorder round-trip each. The
         recorder answers from one DB executor thread, so those were three serial
-        trips however they were awaited; ``get_significant_states`` takes a list
+        trips however they were awaited; ``read_states`` takes a list
         of entity ids, which makes them one (#245). Each entity's timeline is
         still parsed and sampled on its own, so nothing about the per-series
         semantics changes -- only how often the recorder is asked.
@@ -2157,8 +2110,8 @@ class SolarInspector:
         start_utc = dt_util.as_utc(local_start)
         end_utc = dt_util.as_utc(local_end)
         try:
-            states_by_entity = await _get_significant_states_safe(
-                self._hass, start_utc, end_utc, list(entity_ids)
+            states_by_entity = await read_states(
+                self._hass, list(entity_ids), local_start, local_end, no_attributes=True
             )
         except Exception:
             # Named, because one read now carries the SoC sensor and both bound
