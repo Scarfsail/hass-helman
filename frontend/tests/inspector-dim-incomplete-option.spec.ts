@@ -63,7 +63,7 @@ async function punchHoleAtHourWidth(page: Page): Promise<void> {
             if (minutes === 615 || minutes === 630) continue; // 10:15, 10:30
             const hh = String(Math.floor(minutes / 60)).padStart(2, "0");
             const mm = String(minutes % 60).padStart(2, "0");
-            points.push({ timestamp: `${payload.date}T${hh}:${mm}:00`, valueWh: -200 });
+            points.push({ slot: `${hh}:${mm}`, valueWh: -200 });
         }
         payload.series.houseActual = points;
         payload.totals.houseActualWh = -18000;

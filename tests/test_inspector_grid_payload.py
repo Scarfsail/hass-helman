@@ -345,8 +345,5 @@ class TestInspectorGridPayload(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [p["valueWh"] for p in payload["series"]["gridActual"]], [-300.0, 800.0]
         )
-        self.assertTrue(payload["availability"]["hasGridActual"])
-        # Past date, so no forecast slots come out of the battery snapshot.
-        self.assertFalse(payload["availability"]["hasGridForecast"])
         self.assertEqual(payload["totals"]["gridActualWh"], 500.0)
         self.assertIsNone(payload["totals"]["gridForecastWh"])

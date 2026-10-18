@@ -66,7 +66,7 @@ export async function mountInspector(
         // otherwise, so every existing case is unaffected.
         const dayFloor = rawDayFloor ?? floor;
 
-        const corrected: Array<{ timestamp: string; valueWh: number }> = [];
+        const corrected: Array<{ slot: string; valueWh: number }> = [];
         const price: Array<{ slot: string; value: number }> = [];
         // Today's own composition, spread flat across the day so that its
         // per-slot parts sum to exactly the figures the span row for today
@@ -74,7 +74,7 @@ export async function mountInspector(
         // of that day at 60 are two readings of one measurement, and a test can
         // only hold them to that if the fixture makes them the same.
         const SLOTS_PER_DAY = 96;
-        const houseActual: Array<{ timestamp: string; valueWh: number }> = [];
+        const houseActual: Array<{ slot: string; valueWh: number }> = [];
         const houseActualBreakdown: InspectorPayload["series"]["houseActualBreakdown"] = [];
         // The day chart resolves a click to the nearest slot the impact series
         // knows, so without these a press in the day view selects nothing at
@@ -84,12 +84,12 @@ export async function mountInspector(
             const hh = String(Math.floor(m / 60)).padStart(2, "0");
             const mm = String(m % 60).padStart(2, "0");
             corrected.push({
-                timestamp: `${date}T${hh}:${mm}:00`,
+                slot: `${hh}:${mm}`,
                 valueWh: Math.max(0, 400 - Math.abs(m - 720) / 2),
             });
             price.push({ slot: `${hh}:${mm}`, value: 3.5 });
             houseActual.push({
-                timestamp: `${date}T${hh}:${mm}:00`,
+                slot: `${hh}:${mm}`,
                 valueWh: 18000 / SLOTS_PER_DAY,
             });
             impact.push({
@@ -146,12 +146,8 @@ export async function mountInspector(
                 gridForecastWh: null, gridActualWh: null,
                 batteryForecastWh: null, batteryActualWh: null,
             },
-            availability: { hasRawForecast: false, hasCorrectedForecast: true, hasActuals: false,
-                hasInvalidated: false, hasProfile: true, hasHouseForecast: false,
-                hasHouseActual: true, hasHouseActualBreakdown: true,
-                hasBatterySocForecast: false, hasBatterySocActual: false,
-                hasGridForecast: false, hasGridActual: false, hasBatteryForecast: false,
-                hasBatteryActual: false,
+            availability: {
+                hasProfile: true,
             },
             batterySocBounds: [],
             trainingExplainability: null,
@@ -192,6 +188,12 @@ export async function mountInspector(
                         ? null
                         : overSoc ? (index === 0 ? 100.4 : 100) : 90,
                     houseWh: missing || noEnergy ? null : 18000,
+                    houseSourceMix: missing || noEnergy ? null : {
+                        solar: 8000,
+                        battery: 6000,
+                        grid: 4000,
+                        unattributed: 0,
+                    },
                     batteryChargeWh: missing || noEnergy ? null : 7000,
                     batteryDischargeWh: missing || noEnergy ? null : 6000,
                     moneyCost: missing ? null : 40,

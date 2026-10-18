@@ -16,75 +16,75 @@
   "series": {
     "raw": [
       {
-        "timestamp": "2026-04-25T08:00:00+02:00",
+        "slot": "08:00",
         "valueWh": 25.0
       },
       {
-        "timestamp": "2026-04-25T08:15:00+02:00",
+        "slot": "08:15",
         "valueWh": 25.0
       },
       {
-        "timestamp": "2026-04-25T08:30:00+02:00",
+        "slot": "08:30",
         "valueWh": 25.0
       },
       {
-        "timestamp": "2026-04-25T08:45:00+02:00",
+        "slot": "08:45",
         "valueWh": 25.0
       },
       {
-        "timestamp": "2026-04-25T09:00:00+02:00",
+        "slot": "09:00",
         "valueWh": 50.0
       },
       {
-        "timestamp": "2026-04-25T09:15:00+02:00",
+        "slot": "09:15",
         "valueWh": 50.0
       },
       {
-        "timestamp": "2026-04-25T09:30:00+02:00",
+        "slot": "09:30",
         "valueWh": 50.0
       },
       {
-        "timestamp": "2026-04-25T09:45:00+02:00",
+        "slot": "09:45",
         "valueWh": 50.0
       }
     ],
     "corrected": [
       {
-        "timestamp": "2026-04-25T08:00:00+02:00",
+        "slot": "08:00",
         "valueWh": 37.5
       },
       {
-        "timestamp": "2026-04-25T08:15:00+02:00",
+        "slot": "08:15",
         "valueWh": 25.0
       },
       {
-        "timestamp": "2026-04-25T08:30:00+02:00",
+        "slot": "08:30",
         "valueWh": 25.0
       },
       {
-        "timestamp": "2026-04-25T08:45:00+02:00",
+        "slot": "08:45",
         "valueWh": 25.0
       },
       {
-        "timestamp": "2026-04-25T09:00:00+02:00",
+        "slot": "09:00",
         "valueWh": 25.0
       },
       {
-        "timestamp": "2026-04-25T09:15:00+02:00",
+        "slot": "09:15",
         "valueWh": 50.0
       },
       {
-        "timestamp": "2026-04-25T09:30:00+02:00",
+        "slot": "09:30",
         "valueWh": 50.0
       },
       {
-        "timestamp": "2026-04-25T09:45:00+02:00",
+        "slot": "09:45",
         "valueWh": 50.0
       }
     ],
     "actual": [
       {
-        "timestamp": "2026-04-25T08:00:00+02:00",
+        "slot": "08:00",
         "valueWh": 90.0
       }
     ],
@@ -186,23 +186,7 @@
     "moneyForecast": null
   },
   "availability": {
-    "hasRawForecast": true,
-    "hasCorrectedForecast": true,
-    "hasActuals": true,
-    "hasProfile": true,
-    "hasInvalidated": false,
-    "hasHouseForecast": false,
-    "hasHouseActual": false,
-    "hasHouseActualBreakdown": false,
-    "hasHouseForecastBreakdown": false,
-    "hasBatterySocForecast": false,
-    "hasBatterySocActual": false,
-    "hasGridForecast": false,
-    "hasGridActual": false,
-    "hasBatteryForecast": false,
-    "hasBatteryActual": false,
-    "hasImportPrice": false,
-    "hasExportPrice": false
+    "hasProfile": true
   },
   "priceUnit": null,
   "batterySocBounds": [],

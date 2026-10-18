@@ -27,14 +27,14 @@ async function mountPurgedPastDay(
     await loadBundle(page, "helman-solar-inspector");
 
     await page.evaluate(({ date, biasRatioDefault }) => {
-        const corrected: Array<{ timestamp: string; valueWh: number }> = [];
-        const actual: Array<{ timestamp: string; valueWh: number }> = [];
+        const corrected: Array<{ slot: string; valueWh: number }> = [];
+        const actual: Array<{ slot: string; valueWh: number }> = [];
         for (let m = 0; m < 1440; m += 15) {
             const hh = String(Math.floor(m / 60)).padStart(2, "0");
             const mm = String(m % 60).padStart(2, "0");
             const v = Math.max(0, 400 - Math.abs(m - 720) / 2);
-            corrected.push({ timestamp: `${date}T${hh}:${mm}:00`, valueWh: v });
-            actual.push({ timestamp: `${date}T${hh}:${mm}:00`, valueWh: v * 1.05 });
+            corrected.push({ slot: `${hh}:${mm}`, valueWh: v });
+            actual.push({ slot: `${hh}:${mm}`, valueWh: v * 1.05 });
         }
         const payload = window.__inspectorDay({ date,
             timezone: "UTC",
@@ -58,11 +58,8 @@ async function mountPurgedPastDay(
                 gridForecastWh: null, gridActualWh: null,
                 batteryForecastWh: null, batteryActualWh: null,
             },
-            availability: { hasRawForecast: false, hasCorrectedForecast: true, hasActuals: true,
-                hasInvalidated: false, hasProfile: true, hasHouseForecast: false,
-                hasHouseActual: false, hasBatterySocForecast: false, hasBatterySocActual: false,
-                hasGridForecast: false, hasGridActual: false, hasBatteryForecast: false,
-                hasBatteryActual: false,
+            availability: {
+                hasProfile: true,
             },
             batterySocBounds: [],
             trainingExplainability: {

@@ -730,8 +730,6 @@ class TestTodayJoinsRecorderAndLiveFeed(_PayloadCase):
         self.assertEqual(by_slot["10:00"], 5.0)
         self.assertEqual(by_slot["10:15"], 9.0)
         self.assertEqual(self._by_slot(export_rail)["10:15"], 1.5)
-        self.assertTrue(payload["availability"]["hasImportPrice"])
-        self.assertTrue(payload["availability"]["hasExportPrice"])
 
 
 class TestTodaysExportFeedStopsAtTheClock(_PayloadCase):
@@ -865,7 +863,6 @@ class TestPartiallyCoveredDayFallsBackPerSlot(_PayloadCase):
         # Export has no config to fall back on -- a spot price is not derivable --
         # so it stays absent rather than being invented.
         self.assertEqual(payload["series"]["exportPrice"], [])
-        self.assertFalse(payload["availability"]["hasExportPrice"])
 
 
 class TestUnconfiguredSides(_PayloadCase):
@@ -874,16 +871,13 @@ class TestUnconfiguredSides(_PayloadCase):
         payload = await self._payload(service, PAST_DAY, recorded={})
 
         self.assertEqual(len(payload["series"]["importPrice"]), 96)
-        self.assertTrue(payload["availability"]["hasImportPrice"])
         self.assertEqual(payload["series"]["exportPrice"], [])
-        self.assertFalse(payload["availability"]["hasExportPrice"])
 
     async def test_no_import_windows_and_no_history_leaves_the_rail_empty(self):
         service = self._make_service(import_config=None)
         payload = await self._payload(service, PAST_DAY, recorded={})
 
         self.assertEqual(payload["series"]["importPrice"], [])
-        self.assertFalse(payload["availability"]["hasImportPrice"])
         self.assertIsNone(payload["priceUnit"])
 
     async def test_an_elapsed_day_takes_the_unit_off_helmans_export_sensor(self):

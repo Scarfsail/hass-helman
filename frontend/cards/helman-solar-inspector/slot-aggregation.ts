@@ -1,5 +1,5 @@
-import { timestampMinutes, minutesToSlot, slotKey } from "../shared/time/slot-time";
-export { timestampMinutes, minutesToSlot, slotKey } from "../shared/time/slot-time";
+import { slotMinutes, minutesToSlot } from "../shared/time/slot-time";
+export { slotMinutes, minutesToSlot } from "../shared/time/slot-time";
 import { SLOT_MINUTES } from "./chart-stack";
 import { slotToMinutes, type SocBar, type SocBoundsPoint } from "./chart-soc";
 import { nodeAccentColor } from "../color-utils";
@@ -21,12 +21,9 @@ import type {
  * so every wider bucket lands on real sample boundaries and no slot is split.
  */
 
-/** Minute-of-day from an ISO-ish "…THH:MM…" timestamp; null if unparseable. */
-
-
 /** The wider bucket a minute-of-day falls in, as its start minute. */
-function bucketStart(minutes: number, slotMinutes: number): number {
-  return Math.floor(minutes / slotMinutes) * slotMinutes;
+function bucketStart(minutes: number, slotMinutesWidth: number): number {
+  return Math.floor(minutes / slotMinutesWidth) * slotMinutesWidth;
 }
 
 /**
@@ -55,7 +52,7 @@ export function seriesCoverage(
 ): { missing: number[]; expected: number } {
   const present = new Set<number>();
   for (const point of points) {
-    const minutes = timestampMinutes(point.timestamp);
+    const minutes = slotMinutes(point.slot);
     if (minutes !== null) present.add(minutes);
   }
   if (present.size === 0) return { missing: [], expected: 0 };
@@ -122,42 +119,30 @@ export function missingMinutesByBucket(
 }
 
 /**
- * The sample timestamp with its time-of-day rewritten to the bucket start,
- * keeping the date, seconds and zone offset so the rest of the card parses it
- * unchanged. A series may start off the wider grid — actuals often begin
- * mid-hour — so the bucket must be stamped at its grid-aligned start, not at the
- * earliest sample, or `stackSlots` would step off the sample keys and drop every
- * band but the first.
- */
-function bucketTimestamp(sampleTimestamp: string, bucketStartMinutes: number): string {
-  return sampleTimestamp.replace(/T\d{2}:\d{2}/, `T${minutesToSlot(bucketStartMinutes)}`);
-}
-
-/**
  * Sum a Wh series into wider buckets, stamping each at its grid-aligned start so
  * downstream slot keys land on the wider grid regardless of where the series
  * begins.
  */
 export function aggregateWhSeries(
   points: InspectorPoint[],
-  slotMinutes: number,
+  slotMinutesWidth: number,
 ): InspectorPoint[] {
-  if (slotMinutes <= SLOT_MINUTES) return points;
-  const buckets = new Map<number, { timestamp: string; valueWh: number }>();
+  if (slotMinutesWidth <= SLOT_MINUTES) return points;
+  const buckets = new Map<number, { slot: string; valueWh: number }>();
   for (const point of points) {
-    const minutes = timestampMinutes(point.timestamp);
+    const minutes = slotMinutes(point.slot);
     if (minutes === null || !Number.isFinite(point.valueWh)) continue;
-    const start = bucketStart(minutes, slotMinutes);
+    const start = bucketStart(minutes, slotMinutesWidth);
     const existing = buckets.get(start);
     if (existing) {
       existing.valueWh += point.valueWh;
     } else {
-      buckets.set(start, { timestamp: bucketTimestamp(point.timestamp, start), valueWh: point.valueWh });
+      buckets.set(start, { slot: minutesToSlot(start), valueWh: point.valueWh });
     }
   }
   return [...buckets.entries()]
     .sort((a, b) => a[0] - b[0])
-    .map(([, bucket]) => ({ timestamp: bucket.timestamp, valueWh: bucket.valueWh }));
+    .map(([, bucket]) => ({ slot: bucket.slot, valueWh: bucket.valueWh }));
 }
 
 /**
@@ -179,7 +164,7 @@ export function actualsCoverUntil(
   let latest: number | null = null;
   for (const points of series) {
     for (const point of points) {
-      const minutes = timestampMinutes(point.timestamp);
+      const minutes = slotMinutes(point.slot);
       if (minutes === null) continue;
       if (latest === null || minutes > latest) latest = minutes;
     }
@@ -373,7 +358,7 @@ export function sumWhOverSlots(
   const wanted = new Set(slots);
   return sumNullable(
     points
-      .filter((point) => wanted.has(slotKey(point.timestamp)))
+      .filter((point) => wanted.has(point.slot))
       .map((point) => point.valueWh),
   );
 }
@@ -425,11 +410,11 @@ export function splitHouseByDeferrable(
   for (const point of points) {
     const total = Number.isFinite(point.valueWh) ? point.valueWh : 0;
     const shiftable = Math.min(
-      Math.max(0, deferrableBySlot.get(slotKey(point.timestamp)) ?? 0),
+      Math.max(0, deferrableBySlot.get(point.slot) ?? 0),
       Math.max(0, total),
     );
-    deferrable.push({ timestamp: point.timestamp, valueWh: shiftable });
-    nonDeferrable.push({ timestamp: point.timestamp, valueWh: total - shiftable });
+    deferrable.push({ slot: point.slot, valueWh: shiftable });
+    nonDeferrable.push({ slot: point.slot, valueWh: total - shiftable });
   }
   return { deferrable, nonDeferrable };
 }
@@ -551,7 +536,7 @@ export function houseSourceMixBySlot(
     for (const point of points) {
       const value = point.valueWh;
       if (!Number.isFinite(value)) continue;
-      map.set(slotKey(point.timestamp), value);
+      map.set(point.slot, value);
     }
     return map;
   };

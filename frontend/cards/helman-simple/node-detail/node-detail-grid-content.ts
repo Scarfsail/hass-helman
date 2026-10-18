@@ -1,10 +1,10 @@
 import { formatKwh, formatMoney, formatPower } from "../../shared/format";
-import { callHelman } from "../../shared/data/helman-commands";
 import { phaseSign } from "../../shared/power-reading";
 import { css, html, nothing, svg } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { fillTemplate } from "../../localize/localize";
 import {
+    fetchDayAggregates,
     type DayStatsDTO,
     type GridDayAggregatesPayload,
     type GridDetailPayload,
@@ -294,7 +294,7 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         this._moneyDate = date;
         this._moneyRequestedAt = Date.now();
         try {
-            const payload = await callHelman(this.hass, "helman/solar_bias/day_aggregates", {
+            const payload = await fetchDayAggregates(this.hass, {
                 start_date: date,
                 end_date: date,
             });

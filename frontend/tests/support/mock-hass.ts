@@ -333,7 +333,7 @@ export async function installFakeHass(page: Page, options: FakeHassOptions): Pro
             series: {
                 raw: [],
                 corrected: Array.from({ length: 96 }, (_, index) => ({
-                    timestamp: `${date}T${String(Math.floor(index / 4)).padStart(2, "0")}:${String(index % 4 * 15).padStart(2, "0")}:00`,
+                    slot: `${String(Math.floor(index / 4)).padStart(2, "0")}:${String(index % 4 * 15).padStart(2, "0")}`,
                     valueWh: index >= 8 * 4 && index < 16 * 4 ? 125 : 0,
                 })),
                 actual: [],
@@ -362,19 +362,7 @@ export async function installFakeHass(page: Page, options: FakeHassOptions): Pro
                 batteryActualWh: null,
             },
             availability: {
-                hasRawForecast: false,
-                hasCorrectedForecast: true,
-                hasActuals: false,
-                hasInvalidated: false,
                 hasProfile: true,
-                hasHouseForecast: false,
-                hasHouseActual: false,
-                hasBatterySocForecast: false,
-                hasBatterySocActual: false,
-                hasGridForecast: false,
-                hasGridActual: false,
-                hasBatteryForecast: false,
-                hasBatteryActual: false,
             },
             batterySocBounds: [],
             trainingExplainability: null,
@@ -395,6 +383,12 @@ export async function installFakeHass(page: Page, options: FakeHassOptions): Pro
                     batteryMinSocPct: 20,
                     batteryMaxSocPct: 90,
                     houseWh: 7680,
+                    houseSourceMix: {
+                        solar: 5000,
+                        battery: 1000,
+                        grid: 1680,
+                        unattributed: 0,
+                    },
                     ...(houseForecast ? { houseForecastWh: 7200 } : {}),
                 })),
         });

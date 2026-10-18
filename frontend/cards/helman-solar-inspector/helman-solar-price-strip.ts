@@ -256,7 +256,7 @@ export class HelmanSolarPriceStrip extends LitElement {
     private _buildColumns(points: readonly PriceRailPoint[]): PriceColumn[] {
         const slot = this._slotSpan();
         const cells = new Map<number, { total: number; count: number }>();
-        for (const point of points ?? []) {
+        for (const point of points) {
             const value = Number(point.value);
             if (!Number.isFinite(value)) {
                 continue;

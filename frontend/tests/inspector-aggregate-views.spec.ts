@@ -10,6 +10,7 @@ import {
     clickUnderColumn,
     breakdownBoxes,
     breakdownGroups,
+    expandBreakdownGroups,
     hasBreakdownPanel,
     selectDaySlots,
     clickStop,
@@ -1061,6 +1062,38 @@ test.describe("the house composition at D and M", () => {
         // Three buckets picked: three bars, and a figure three times the one.
         expect(threeWasher.bars).toBe(3);
         expect(parseFloat(threeWasher.power)).toBeCloseTo(parseFloat(oneWasher.power) * 3, 5);
+    });
+
+    test("a net-export day with gross import shows grid use in month view breakdown (B13)", async ({ page }) => {
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+        await clickColumn(page, 2);
+        await expandBreakdownGroups(page);
+
+        // Check that the breakdown bars for the selected bucket include grid share
+        const sourceMixes = await page.evaluate(() => {
+            const el = document.querySelector("helman-solar-inspector") as any;
+            const container = el.shadowRoot
+                .querySelector(".house-breakdown")
+                ?.querySelector("helman-tree-item-list");
+            const devices = [...(container?.shadowRoot?.querySelectorAll("helman-tree-item") ?? [])].flatMap((group: any) => [
+                ...(group.shadowRoot
+                    ?.querySelector("helman-tree-item-list")
+                    ?.shadowRoot?.querySelectorAll("helman-tree-item") ?? []),
+            ]);
+            return devices.map((d: any) => {
+                const bars = d.shadowRoot?.querySelector(".deviceContent")?.querySelector("helman-power-history-bars") as any;
+                return bars?.sourceHistory;
+            });
+        });
+
+        // The bucket has gridExportKwh: 6 and gridImportKwh: 4 (net export +2 kWh).
+        // Under gross source mix (B13), grid contribution is preserved rather than zeroed out.
+        expect(sourceMixes.length).toBeGreaterThan(0);
+        const firstDeviceMixes = sourceMixes[0];
+        expect(firstDeviceMixes).toBeDefined();
+        expect(firstDeviceMixes[0]?.grid).toBeDefined();
+        expect(firstDeviceMixes[0]?.grid?.power).toBeGreaterThan(0);
     });
 
     test("a bucket the house meter missed shows no panel", async ({ page }) => {

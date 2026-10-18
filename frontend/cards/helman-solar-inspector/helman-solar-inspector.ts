@@ -68,7 +68,7 @@ import type {
 } from "./helman-solar-span-pills";
 import "../shared/forecast-health-banner";
 import { buildForecastHealthItems } from "../shared/forecast-health-banner";
-import type { ForecastPayload } from "../helman-api";
+import { fetchDayAggregates, type ForecastPayload } from "../helman-api";
 import {
   buildHistoryDaysFromAggregates,
   calendarWindow,
@@ -124,9 +124,7 @@ import {
   partBarsOverSlots,
   expandSlotsToNative,
   houseSourceMixBySlot,
-  sourceMixFromTotals,
   dropPartialBuckets,
-  timestampMinutes,
   seriesCoverage,
   missingMinutesByBucket,
   type CoverageSeries,
@@ -136,7 +134,6 @@ import {
   minutesToSlot,
   sampleBounds,
   socBarAtSelectionEnd,
-  slotKey,
   sumWhOverSlots,
   sampleBucketEndOnGrid,
   sampleOnGrid,
@@ -528,23 +525,7 @@ export type InspectorPayload = {
     moneyForecast: MoneyTotals | null;
   };
   availability: {
-    hasRawForecast: boolean;
-    hasCorrectedForecast: boolean;
-    hasActuals: boolean;
-    hasInvalidated: boolean;
     hasProfile: boolean;
-    hasHouseForecast: boolean;
-    hasHouseActual: boolean;
-    hasHouseActualBreakdown: boolean;
-    hasHouseForecastBreakdown: boolean;
-    hasBatterySocForecast: boolean;
-    hasBatterySocActual: boolean;
-    hasGridForecast: boolean;
-    hasGridActual: boolean;
-    hasBatteryForecast: boolean;
-    hasBatteryActual: boolean;
-    hasImportPrice: boolean;
-    hasExportPrice: boolean;
   };
   /** Per-slot SoC window the battery is driven within; empty when unconfigured. */
   batterySocBounds: SocBoundsPoint[];
@@ -2171,8 +2152,7 @@ export class HelmanSolarInspector extends LitElement {
    * card to hourly against an older Helman.
    */
   private _payloadGranularity(payload: InspectorPayload | null): number {
-    const minutes = payload?.dataGranularityMinutes;
-    return typeof minutes === "number" && minutes > 0 ? minutes : 15;
+    return payload?.dataGranularityMinutes ?? 15;
   }
 
   /** The floor the width toggle may not go below on the day currently loaded. */
@@ -2511,11 +2491,11 @@ export class HelmanSolarInspector extends LitElement {
     // and is overwritten below on success or left in place under the error
     // note on failure.
     try {
-      const result = await callHelman(this.hass, "helman/solar_bias/day_aggregates", {
-          start_date: start,
-          end_date: end,
-          bucket,
-          // Only this composition panel needs the per-consumer statistics read.
+      const result = await fetchDayAggregates(this.hass, {
+        start_date: start,
+        end_date: end,
+        bucket,
+        // Only this composition panel needs the per-consumer statistics read.
         house_breakdown: true,
       });
       if (!this._spanRequest.isCurrent(request)) return;
@@ -2836,16 +2816,14 @@ export class HelmanSolarInspector extends LitElement {
         unmeasuredWh: breakdown.unmeasuredWh,
         appliances: breakdown.appliances,
       });
-      // One mix rule for both granularities. The payload's energy is
-      // consumption-positive the other way round from a slot's -- it reports
-      // what each meter measured, not a signed flow -- so the nets are formed
-      // here to match: positive grid is export, positive battery is charge.
-      const mix = sourceMixFromTotals(
-        row.houseWh,
-        ((row.gridExportKwh ?? 0) - (row.gridImportKwh ?? 0)) * 1000,
-        (row.batteryChargeWh ?? 0) - (row.batteryDischargeWh ?? 0),
-      );
-      if (mix !== null) mixes.set(row.date, mix);
+      if (row.houseSourceMix) {
+        const sm = row.houseSourceMix;
+        const mix: BucketSourceMix = {};
+        if (sm.solar > 0) mix.solar = { power: sm.solar, color: nodeAccentColor("solar") };
+        if (sm.battery > 0) mix.battery = { power: sm.battery, color: nodeAccentColor("battery") };
+        if (sm.grid > 0) mix.grid = { power: sm.grid, color: nodeAccentColor("grid") };
+        if (Object.keys(mix).length > 0) mixes.set(row.date, mix);
+      }
     }
     const breakdown = aggregateBreakdownOverSlots(series, keys);
     if (!breakdown) return "";
@@ -3218,11 +3196,12 @@ export class HelmanSolarInspector extends LitElement {
       this._stacksFor = { view, hidden, enabled, houseFocus: this.houseFocus };
       // "Nothing to draw" is a fact about the view alone, so it is decided
       // here with the stacks rather than beside them in the render.
-      const hasAnySeries = view.availability.hasRawForecast
-        || view.availability.hasCorrectedForecast
-        || view.availability.hasActuals
-        || view.availability.hasInvalidated
-        || (this.houseFocus && (view.availability.hasHouseForecast || view.availability.hasHouseActual));
+      const series = payload.series;
+      const hasAnySeries = (series.raw?.length ?? 0) > 0
+        || (series.corrected?.length ?? 0) > 0
+        || (series.actual?.length ?? 0) > 0
+        || (series.invalidated?.length ?? 0) > 0
+        || (this.houseFocus && ((series.houseForecast?.length ?? 0) > 0 || (series.houseActual?.length ?? 0) > 0));
       this._stacks = hasAnySeries ? this._buildStacks(view) : null;
       this._forecastFillFromMinutes = this._stacks === null
         ? Number.NEGATIVE_INFINITY
@@ -3358,7 +3337,7 @@ export class HelmanSolarInspector extends LitElement {
     );
     const measured = (points: InspectorPoint[]) =>
       dropPartialBuckets(aggregateWhSeries(points, slot), slot, coverUntil, (p) =>
-        timestampMinutes(p.timestamp));
+        slotMinutes(p.slot));
     return {
       ...payload,
       series: {
@@ -5707,7 +5686,7 @@ export class HelmanSolarInspector extends LitElement {
    * `_partialBuckets`.
    */
   private _everySlotHasActual(points: readonly InspectorPoint[], slots: readonly string[]): boolean {
-    const measured = new Set(points.map((point) => slotKey(point.timestamp)));
+    const measured = new Set(points.map((point) => point.slot));
     return slots.every((slot) => measured.has(slot));
   }
 
@@ -5915,35 +5894,6 @@ export class HelmanSolarInspector extends LitElement {
     }
     try {
       const payload = await callHelman(this.hass, "helman/solar_bias/inspector", { date: requestedDate });
-      payload.series.houseForecast ??= [];
-      payload.series.houseActual ??= [];
-      payload.series.houseActualBreakdown ??= [];
-      payload.series.houseForecastBreakdown ??= [];
-      payload.series.batterySocForecast ??= [];
-      payload.series.batterySocActual ??= [];
-      payload.series.gridForecast ??= [];
-      payload.series.gridActual ??= [];
-      payload.series.batteryForecast ??= [];
-      payload.series.batteryActual ??= [];
-      payload.series.moneyActual ??= [];
-      payload.series.moneyForecast ??= [];
-      payload.totals.houseForecastWh ??= null;
-      payload.totals.houseActualWh ??= null;
-      payload.totals.gridForecastWh ??= null;
-      payload.totals.gridActualWh ??= null;
-      payload.totals.batteryForecastWh ??= null;
-      payload.totals.batteryActualWh ??= null;
-      payload.totals.moneyActual ??= null;
-      payload.totals.moneyForecast ??= null;
-      payload.availability.hasHouseForecast ??= false;
-      payload.availability.hasHouseActual ??= false;
-      payload.availability.hasBatterySocForecast ??= false;
-      payload.availability.hasBatterySocActual ??= false;
-      payload.availability.hasGridForecast ??= false;
-      payload.availability.hasGridActual ??= false;
-      payload.availability.hasBatteryForecast ??= false;
-      payload.availability.hasBatteryActual ??= false;
-      payload.batterySocBounds ??= [];
       if (this._dayRequest.isCurrent(request) && requestedDate === this._selectedDate) {
         // Cleared here rather than on the way out: a request dropped as a
         // duplicate or one that fails leaves the day owed, so returning to it
@@ -6078,10 +6028,10 @@ export class HelmanSolarInspector extends LitElement {
       return;
     }
     try {
-      const result = await callHelman(this.hass, "helman/solar_bias/day_aggregates", {
-          start_date: start,
-          end_date: measuredEnd,
-          ...(this.houseFocus ? { house_forecast: true } : {}),
+      const result = await fetchDayAggregates(this.hass, {
+        start_date: start,
+        end_date: measuredEnd,
+        ...(this.houseFocus ? { house_forecast: true } : {}),
       });
       if (!this._historyRequest.isCurrent(request)) {
         return;

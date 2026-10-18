@@ -15,11 +15,11 @@ import type { InspectorPoint } from "../cards/helman-solar-inspector/solar-inspe
  */
 
 /** A day's worth of 15-minute points, `date`-stamped, skipping the given minutes. */
-function series(date: string, presentMinutes: number[]): InspectorPoint[] {
+function series(_date: string, presentMinutes: number[]): InspectorPoint[] {
     return presentMinutes.map((m) => {
         const hh = String(Math.floor(m / 60)).padStart(2, "0");
         const mm = String(m % 60).padStart(2, "0");
-        return { timestamp: `${date}T${hh}:${mm}:00`, valueWh: 100 };
+        return { slot: `${hh}:${mm}`, valueWh: 100 };
     });
 }
 

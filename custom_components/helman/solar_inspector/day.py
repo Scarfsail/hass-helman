@@ -192,18 +192,21 @@ def _copy_points(raw_points: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _inspector_points(raw_points: list[dict[str, Any]]) -> list[SolarBiasInspectorPoint]:
-    points: list[SolarBiasInspectorPoint] = []
+    by_slot: dict[str, float] = {}
     for point in raw_points:
-        timestamp = point.get("timestamp")
-        value = point.get("value")
-        if not isinstance(timestamp, str):
+        slot = point.get("slot")
+        if not isinstance(slot, str):
+            timestamp = point.get("timestamp")
+            if isinstance(timestamp, str) and len(timestamp) >= 16:
+                slot = timestamp[11:16]
+        if not isinstance(slot, str):
             continue
         try:
-            value_wh = float(value)
+            value_wh = float(point.get("value", point.get("wh", point.get("value_wh", 0))))
         except (TypeError, ValueError):
             continue
-        points.append(SolarBiasInspectorPoint(timestamp=timestamp, value_wh=value_wh))
-    return points
+        by_slot[slot] = value_wh
+    return [SolarBiasInspectorPoint(slot=slot, value_wh=val) for slot, val in sorted(by_slot.items())]
 
 
 def _sum_point_values(raw_points: list[dict[str, Any]]) -> float:
@@ -231,8 +234,7 @@ def _partition_actual_points(
     actual: list[SolarBiasInspectorPoint] = []
     invalidated: list[SolarBiasInspectorPoint] = []
     for point in actual_points:
-        point_slot = point.timestamp[11:16]
-        if point_slot in invalidated_slots:
+        if point.slot in invalidated_slots:
             invalidated.append(point)
             continue
         actual.append(point)
@@ -300,21 +302,15 @@ def _impact_points_for_day(
 
 def _actual_points_for_date(
     actuals_by_slot: dict[str, float],
-    target_date: date,
-    local_tz: ZoneInfo,
+    target_date: date | None = None,
+    local_tz: ZoneInfo | None = None,
 ) -> list[SolarBiasInspectorPoint]:
     points: list[SolarBiasInspectorPoint] = []
     for slot, value in sorted(actuals_by_slot.items()):
         try:
-            hour, minute = [int(part) for part in slot.split(":", 1)]
-            timestamp = datetime.combine(
-                target_date,
-                time(hour=hour, minute=minute),
-                tzinfo=local_tz,
-            )
             points.append(
                 SolarBiasInspectorPoint(
-                    timestamp=timestamp.isoformat(),
+                    slot=slot,
                     value_wh=float(value),
                 )
             )
@@ -1152,11 +1148,22 @@ def _merge_battery_forecast_future(
 
 
 def _inspector_points_from_raw(raw: list[dict]) -> list[SolarBiasInspectorPoint]:
-    return [
-        SolarBiasInspectorPoint(timestamp=p["timestamp"], value_wh=float(p["wh"]))
-        for p in raw
-        if "timestamp" in p and "wh" in p
-    ]
+    by_slot: dict[str, float] = {}
+    for p in raw:
+        slot = p.get("slot")
+        if not isinstance(slot, str):
+            ts = p.get("timestamp")
+            if isinstance(ts, str) and len(ts) >= 16:
+                slot = ts[11:16]
+        if not isinstance(slot, str):
+            continue
+        value = p.get("wh", p.get("value", p.get("value_wh")))
+        try:
+            value_wh = float(value)
+        except (TypeError, ValueError):
+            continue
+        by_slot[slot] = value_wh
+    return [SolarBiasInspectorPoint(slot=slot, value_wh=val) for slot, val in sorted(by_slot.items())]
 
 
 def _battery_soc_points_from_raw(raw: list[dict]) -> list[BatterySocPoint]:

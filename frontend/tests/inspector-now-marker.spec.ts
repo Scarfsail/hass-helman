@@ -32,7 +32,7 @@ function todayUtc(): string {
  */
 async function mountInspector(page: Page, date: string): Promise<void> {
     await page.evaluate((day: string) => {
-        const corrected: Array<{ timestamp: string; valueWh: number }> = [];
+        const corrected: Array<{ slot: string; valueWh: number }> = [];
         const socForecast: Array<{ slot: string; pct: number }> = [];
         const importPrice: Array<{ slot: string; value: number }> = [];
         const money: Array<{ slot: string; cost: number; gain: number }> = [];
@@ -47,7 +47,7 @@ async function mountInspector(page: Page, date: string): Promise<void> {
             const hh = String(Math.floor(m / 60)).padStart(2, "0");
             const mm = String(m % 60).padStart(2, "0");
             const v = Math.max(0, 400 - Math.abs(m - 720) / 2);
-            corrected.push({ timestamp: `${day}T${hh}:${mm}:00`, valueWh: v });
+            corrected.push({ slot: `${hh}:${mm}`, valueWh: v });
             socForecast.push({ slot: `${hh}:${mm}`, pct: 40 + (m / 1440) * 30 });
             importPrice.push({ slot: `${hh}:${mm}`, value: 3 + (m % 240) / 60 });
             money.push({ slot: `${hh}:${mm}`, cost: 0.1, gain: 0 });
@@ -94,19 +94,8 @@ async function mountInspector(page: Page, date: string): Promise<void> {
                 batteryForecastWh: null,
                 batteryActualWh: null,
             },
-            availability: { hasRawForecast: false,
-                hasCorrectedForecast: true,
-                hasActuals: false,
-                hasInvalidated: false,
+            availability: {
                 hasProfile: true,
-                hasHouseForecast: false,
-                hasHouseActual: false,
-                hasBatterySocForecast: true,
-                hasBatterySocActual: false,
-                hasGridForecast: false,
-                hasGridActual: false,
-                hasBatteryForecast: false,
-                hasBatteryActual: false,
             },
             batterySocBounds: [],
             trainingExplainability: null,

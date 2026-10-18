@@ -251,7 +251,7 @@ def test_inspector_day_to_payload_includes_invalidated_series():
             actual=[],
             invalidated=[
                 SolarBiasInspectorPoint(
-                    timestamp="2026-04-15T12:00:00+00:00",
+                    slot="12:00",
                     value_wh=1200.0,
                 )
             ],
@@ -263,11 +263,7 @@ def test_inspector_day_to_payload_includes_invalidated_series():
             actual_wh=9500.0,
         ),
         availability=SolarBiasInspectorAvailability(
-            has_raw_forecast=True,
-            has_corrected_forecast=True,
-            has_actuals=True,
             has_profile=True,
-            has_invalidated=True,
         ),
         is_today=False,
         is_future=False,
@@ -277,11 +273,11 @@ def test_inspector_day_to_payload_includes_invalidated_series():
 
     assert payload["series"]["invalidated"] == [
         {
-            "timestamp": "2026-04-15T12:00:00+00:00",
+            "slot": "12:00",
             "valueWh": 1200.0,
         }
     ]
-    assert payload["availability"]["hasInvalidated"] is True
+    assert payload["availability"] == {"hasProfile": True}
 
 
 def test_appliance_component_defaults_carry_no_controllable():

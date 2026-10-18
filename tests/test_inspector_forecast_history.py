@@ -251,8 +251,6 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
         grid = payload["series"]["gridForecast"]
         self.assertEqual([p["slot"] for p in soc], ["00:00", "23:45"])
         self.assertEqual([p["valueWh"] for p in grid], [-100.0, 250.0])
-        self.assertTrue(payload["availability"]["hasBatterySocForecast"])
-        self.assertTrue(payload["availability"]["hasGridForecast"])
 
     async def test_today_joins_the_recorder_to_the_live_snapshot_without_overlap(self):
         # Now is 10:07, so the current slot is 10:00 and the snapshot starts at 10:15.
@@ -335,7 +333,7 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
         )
 
         house = payload["series"]["houseForecast"]
-        slots = [p["timestamp"][11:16] for p in house]
+        slots = [p["slot"] for p in house]
         # No hole at 10:00: every slot from 09:45 to 10:30 is present exactly once.
         self.assertEqual(slots, ["09:45", "10:00", "10:15", "10:30"])
         # 09:45 from the recorder; 10:00 summed from its own composition, base plus
@@ -375,7 +373,7 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
         series = payload["series"]
         for key in ("actual", "houseActual", "gridActual", "batteryActual"):
             self.assertEqual(
-                [p["timestamp"][11:16] for p in series[key]], ["09:45"], key
+                [p["slot"] for p in series[key]], ["09:45"], key
             )
         self.assertEqual([p["slot"] for p in series["batterySocActual"]], ["09:45"])
 
@@ -545,7 +543,6 @@ class TestInspectorForecastComposition(_InspectorHarness):
         # with nothing scheduled is all base.
         self.assertEqual([p["unmeasuredWh"] for p in breakdown], [400.0, 500.0])
         self.assertEqual(breakdown[1]["appliances"], [])
-        self.assertTrue(payload["availability"]["hasHouseForecastBreakdown"])
 
     def test_the_slot_in_progress_is_itemised_from_the_currentSlot_entry(self):
         """The one slot the planner schedules into that is not in the series.
@@ -684,7 +681,7 @@ class TestInspectorForecastComposition(_InspectorHarness):
         payload = await self._inspect(self._service(), TODAY)
 
         forecast_by_slot = {
-            p["timestamp"][11:16]: p["valueWh"] for p in payload["series"]["houseForecast"]
+            p["slot"]: p["valueWh"] for p in payload["series"]["houseForecast"]
         }
         for point in payload["series"]["houseForecastBreakdown"]:
             self.assertAlmostEqual(
@@ -709,7 +706,7 @@ class TestInspectorForecastComposition(_InspectorHarness):
         )
 
         forecast_by_slot = {
-            p["timestamp"][11:16]: p["valueWh"]
+            p["slot"]: p["valueWh"]
             for p in payload["series"]["houseForecast"]
         }
         breakdown = {p["slot"]: p for p in payload["series"]["houseForecastBreakdown"]}
@@ -738,7 +735,7 @@ class TestInspectorForecastComposition(_InspectorHarness):
         )
 
         house = {
-            p["timestamp"][11:16]: p["valueWh"]
+            p["slot"]: p["valueWh"]
             for p in payload["series"]["houseForecast"]
         }
         self.assertEqual(house["10:00"], 200.0)
@@ -786,7 +783,6 @@ class TestInspectorForecastComposition(_InspectorHarness):
         payload = await self._inspect(self._service(composition=None), TODAY)
 
         self.assertEqual(payload["series"]["houseForecastBreakdown"], [])
-        self.assertFalse(payload["availability"]["hasHouseForecastBreakdown"])
         # The plain forecast figure is untouched — the card just has nothing to
         # itemise.
         self.assertEqual(
