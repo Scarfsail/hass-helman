@@ -165,7 +165,7 @@ price_builder = importlib.import_module(
 )
 span_mod = importlib.import_module("custom_components.helman.recorder_statistics_span")
 recorder_series_mod = importlib.import_module(
-    "custom_components.helman.recorder_hourly_series"
+    "custom_components.helman.recorder_slot_energy"
 )
 
 SOLAR_METER = "sensor.solar_total"

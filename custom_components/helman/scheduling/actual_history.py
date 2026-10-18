@@ -24,10 +24,8 @@ from homeassistant.components.recorder.history import (
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
-from ..recorder_hourly_series import (
-    get_local_current_slot_start,
-    get_today_completed_local_slots,
-)
+from ..slot_grid import get_local_current_slot_start
+from ..today_slot_readers import get_today_completed_local_slots
 
 # States that say nothing about what the entity was doing.
 _UNKNOWN_STATES = {"unknown", "unavailable", ""}

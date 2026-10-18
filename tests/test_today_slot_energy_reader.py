@@ -45,7 +45,11 @@ def _install_import_stubs() -> None:
 
 _install_import_stubs()
 
-from custom_components.helman import recorder_hourly_series  # noqa: E402
+from custom_components.helman import (  # noqa: E402
+    recorder_slot_energy,
+    slot_grid,
+    today_slot_readers,
+)
 
 
 async def _inline_executor_job(func, *args):
@@ -129,30 +133,31 @@ class TodaySlotEnergyReaderTests(unittest.IsolatedAsyncioTestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls._dt_patcher = patch.object(
-            recorder_hourly_series,
-            "dt_util",
-            dt_util,
-        )
-        cls._dt_patcher.start()
+        cls._dt_patchers = [
+            patch.object(recorder_slot_energy, "dt_util", dt_util),
+            patch.object(today_slot_readers, "dt_util", dt_util),
+            patch.object(slot_grid, "dt_util", dt_util),
+        ]
+        for p in cls._dt_patchers:
+            p.start()
 
     @classmethod
     def tearDownClass(cls) -> None:
-        cls._dt_patcher.stop()
+        for p in cls._dt_patchers:
+            p.stop()
 
     def _patches(self, recorder: _Recorder):
+        instance = SimpleNamespace(async_add_executor_job=_inline_executor_job)
         return (
-            patch.object(
-                recorder_hourly_series,
-                "state_changes_during_period",
-                recorder.state_changes_during_period,
+            patch.multiple(
+                recorder_slot_energy,
+                state_changes_during_period=recorder.state_changes_during_period,
+                get_instance=lambda hass: instance,
             ),
-            patch.object(
-                recorder_hourly_series,
-                "get_instance",
-                lambda hass: SimpleNamespace(
-                    async_add_executor_job=_inline_executor_job
-                ),
+            patch.multiple(
+                today_slot_readers,
+                state_changes_during_period=recorder.state_changes_during_period,
+                get_instance=lambda hass: instance,
             ),
         )
 
@@ -173,11 +178,11 @@ class TodaySlotEnergyReaderTests(unittest.IsolatedAsyncioTestCase):
         """The oracle: a whole-day query through the cumulative reader."""
         read_patch, instance_patch = self._patches(recorder)
         with read_patch, instance_patch:
-            return await recorder_hourly_series.query_cumulative_slot_energy_changes(
+            return await recorder_slot_energy.query_cumulative_slot_energy_changes(
                 _make_hass(),
                 ENTITY_ID,
-                local_start=recorder_hourly_series._get_local_day_start(reference_time),
-                local_end=recorder_hourly_series.get_local_current_slot_start(
+                local_start=slot_grid._get_local_day_start(reference_time),
+                local_end=slot_grid.get_local_current_slot_start(
                     reference_time, interval_minutes=15
                 ),
                 interval_minutes=15,
@@ -234,7 +239,7 @@ class TodaySlotEnergyReaderTests(unittest.IsolatedAsyncioTestCase):
         compare each answer with the whole-day read of the same states."""
         states = self._eventful_day()
         warm_recorder = _Recorder(states)
-        reader = recorder_hourly_series.TodaySlotEnergyReader(_make_hass())
+        reader = today_slot_readers.TodaySlotEnergyReader(_make_hass())
 
         reference_time = DAY + timedelta(minutes=15)
         while reference_time < DAY + timedelta(days=1):
@@ -252,7 +257,7 @@ class TodaySlotEnergyReaderTests(unittest.IsolatedAsyncioTestCase):
     async def test_the_late_evening_refresh_reads_only_the_unsettled_tail(self) -> None:
         states = self._eventful_day()
         recorder = _Recorder(states)
-        reader = recorder_hourly_series.TodaySlotEnergyReader(_make_hass())
+        reader = today_slot_readers.TodaySlotEnergyReader(_make_hass())
 
         reference_time = DAY + timedelta(minutes=15)
         while reference_time <= DAY + timedelta(hours=23, minutes=45):
@@ -286,7 +291,7 @@ class TodaySlotEnergyReaderTests(unittest.IsolatedAsyncioTestCase):
         """
         states = self._eventful_day()
         recorder = _Recorder(states)
-        reader = recorder_hourly_series.TodaySlotEnergyReader(_make_hass())
+        reader = today_slot_readers.TodaySlotEnergyReader(_make_hass())
 
         for hours in (1, 2, 3):
             await self._read_incremental(
@@ -337,7 +342,7 @@ class TodaySlotEnergyReaderTests(unittest.IsolatedAsyncioTestCase):
         states.append(_state(DAY + timedelta(hours=23, minutes=43), pre_dip + 0.02))
 
         recorder = _Recorder(states)
-        reader = recorder_hourly_series.TodaySlotEnergyReader(_make_hass())
+        reader = today_slot_readers.TodaySlotEnergyReader(_make_hass())
         for hours, minutes in ((23, 0), (23, 15), (23, 30), (23, 45)):
             reference_time = DAY + timedelta(hours=hours, minutes=minutes)
             warm = await self._read_incremental(reader, recorder, reference_time)
@@ -377,7 +382,7 @@ class TodaySlotEnergyReaderTests(unittest.IsolatedAsyncioTestCase):
         )
 
         recorder = _Recorder(states)
-        reader = recorder_hourly_series.TodaySlotEnergyReader(_make_hass())
+        reader = today_slot_readers.TodaySlotEnergyReader(_make_hass())
         for hours, minutes in ((23, 0), (23, 15), (23, 30), (23, 45)):
             reference_time = DAY + timedelta(hours=hours, minutes=minutes)
             warm = await self._read_incremental(reader, recorder, reference_time)
@@ -401,7 +406,7 @@ class TodaySlotEnergyReaderTests(unittest.IsolatedAsyncioTestCase):
             increment=0.02,
         )
         recorder = _Recorder(states)
-        reader = recorder_hourly_series.TodaySlotEnergyReader(_make_hass())
+        reader = today_slot_readers.TodaySlotEnergyReader(_make_hass())
 
         await self._read_incremental(reader, recorder, DAY + timedelta(hours=23))
         warm = await self._read_incremental(

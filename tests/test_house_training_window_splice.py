@@ -27,7 +27,7 @@ from zoneinfo import ZoneInfo
 
 
 span_mod = importlib.import_module("custom_components.helman.recorder_statistics_span")
-series_mod = importlib.import_module("custom_components.helman.recorder_hourly_series")
+series_mod = importlib.import_module("custom_components.helman.recorder_slot_energy")
 house_module = importlib.import_module(
     "custom_components.helman.training.house_consumption"
 )

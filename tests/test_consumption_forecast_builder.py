@@ -108,7 +108,7 @@ class _RecordingSlotHistory:
 class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
     def _make_builder(self, *, min_history_days: int = 14, training_window_days: int = 56):
         recorder_module = importlib.reload(
-            importlib.import_module("custom_components.helman.recorder_hourly_series")
+            importlib.import_module("custom_components.helman.today_slot_readers")
         )
         consumption_module = importlib.reload(
             importlib.import_module("custom_components.helman.consumption_forecast_builder")
@@ -471,7 +471,7 @@ class ConsumptionForecastBuilderCacheTests(unittest.IsolatedAsyncioTestCase):
 
     def _make_modules(self):
         recorder_module = importlib.reload(
-            importlib.import_module("custom_components.helman.recorder_hourly_series")
+            importlib.import_module("custom_components.helman.today_slot_readers")
         )
         consumption_module = importlib.reload(
             importlib.import_module("custom_components.helman.consumption_forecast_builder")

@@ -14,7 +14,7 @@ from .const import (
     SOLAR_REMAINING_TODAY_ENERGY_ENTITY_ID,
 )
 from .forecast_response import parse_ts
-from .recorder_hourly_series import TodaySlotEnergyReader
+from .today_slot_readers import TodaySlotEnergyReader
 from .slot_grid import SLOTS_PER_DAY, SLOTS_PER_HOUR, day_slots, split_hour_by_weights
 
 _LOGGER = logging.getLogger(__name__)

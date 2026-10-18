@@ -28,9 +28,8 @@ from .const import (
     MAX_FORECAST_DAYS,
 )
 from .forecast_builder import solar_slot_map
-from .recorder_hourly_series import get_local_current_slot_start
 from .scheduling.schedule import EMPTY_SCHEDULE_ACTION
-from .slot_grid import SLOT, advance
+from .slot_grid import SLOT, advance, get_local_current_slot_start
 
 _CANONICAL_SLOT_HOURS = FORECAST_CANONICAL_GRANULARITY_MINUTES / 60
 _LOGGER = logging.getLogger(__name__)

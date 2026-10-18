@@ -27,7 +27,7 @@ models = importlib.import_module(
     "custom_components.helman.solar_bias_correction.models"
 )
 SlotEnergyBatch = importlib.import_module(
-    "custom_components.helman.recorder_hourly_series"
+    "custom_components.helman.recorder_slot_energy"
 ).SlotEnergyBatch
 
 TARGET_DATE = "2026-05-10"

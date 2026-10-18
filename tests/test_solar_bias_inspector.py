@@ -283,7 +283,7 @@ actuals = importlib.import_module(
     "custom_components.helman.solar_bias_correction.actuals"
 )
 recorder_series_mod = importlib.import_module(
-    "custom_components.helman.recorder_hourly_series"
+    "custom_components.helman.recorder_slot_energy"
 )
 
 

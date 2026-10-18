@@ -42,11 +42,11 @@ try:
 except Exception:  # pragma: no cover - Home Assistant API compatibility
     query_hourly_statistics = None  # type: ignore[assignment]
     query_oldest_state_date = None  # type: ignore[assignment]
-from ..recorder_hourly_series import (
-    get_local_current_slot_start,
+from ..recorder_slot_energy import (
     query_cumulative_slot_energy_changes,
     query_cumulative_slot_energy_changes_for_windows,
 )
+from ..slot_grid import get_local_current_slot_start
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -333,7 +333,7 @@ def slot_actuals_from_batched_slot_energy(
     An elapsed day keeps every slot.
 
     ``slot_energy_kwh`` is keyed by UTC slot start and carries kWh, the shape
-    :class:`~custom_components.helman.recorder_hourly_series.SlotEnergyBatch`
+    :class:`~custom_components.helman.recorder_slot_energy.SlotEnergyBatch`
     hands back per entity; the result is ``{"HH:MM": wh}`` like every other
     actuals reader. ``None`` -- no solar meter configured, or a read that
     failed -- gives an empty day, never a day of zeros.

@@ -15,10 +15,9 @@ from ..controllables.spec import (
     spec_for,
 )
 from ..forecast_builder import solar_slot_map
-from ..recorder_hourly_series import get_local_current_slot_start
 from ..scheduling.schedule import ScheduleDocument
 from ..scheduling.slots import SCHEDULE_SLOT_DURATION, format_slot_id, parse_slot_id
-from ..slot_grid import SLOT, advance
+from ..slot_grid import SLOT, advance, get_local_current_slot_start
 from ..slot_grid import floor_to_slot as _canonical_slot_start
 from ._read import ProjectionConfig
 from .ev_charger import (

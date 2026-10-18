@@ -1,6 +1,6 @@
 """Own energy: a meter's reading minus its metered children's.
 
-One definition, :func:`~custom_components.helman.recorder_hourly_series.own_energy_observations`,
+One definition, :func:`~custom_components.helman.shared_meter_fit.own_energy_observations`,
 serves every path that reads a carved or shared meter -- the shared-meter
 split, the house baseline fit and the forecast actuals. These fixtures are the
 two live shapes it exists for: the study breaker with a sub-metered plug, and a
@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 
-series = importlib.import_module("custom_components.helman.recorder_hourly_series")
+series = importlib.import_module("custom_components.helman.shared_meter_fit")
 devices = importlib.import_module("custom_components.helman.controllables.config")
 house_training = importlib.import_module(
     "custom_components.helman.training.house_consumption"

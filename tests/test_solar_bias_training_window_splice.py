@@ -28,7 +28,7 @@ from zoneinfo import ZoneInfo
 
 
 span_mod = importlib.import_module("custom_components.helman.recorder_statistics_span")
-series_mod = importlib.import_module("custom_components.helman.recorder_hourly_series")
+series_mod = importlib.import_module("custom_components.helman.recorder_slot_energy")
 history_mod = importlib.import_module("homeassistant.components.recorder.history")
 actuals_mod = importlib.import_module(
     "custom_components.helman.solar_bias_correction.actuals"

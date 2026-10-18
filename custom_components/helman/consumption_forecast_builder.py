@@ -26,13 +26,19 @@ from .consumption_forecast_profiles import (
 )
 from .consumption_forecast_statistics import ForecastBand
 from .controllables.config import read_carved_meters
-from .recorder_hourly_series import (
-    TodaySlotEnergyReader,
+from .shared_meter_fit import own_energy_changes
+from .slot_grid import (
+    SLOT,
+    SLOT_MINUTES,
+    SLOTS_PER_DAY,
+    advance,
     get_local_current_slot_start,
-    get_today_completed_local_slots,
-    own_energy_changes,
+    slot_starts,
 )
-from .slot_grid import SLOT, SLOT_MINUTES, SLOTS_PER_DAY, advance, slot_starts
+from .today_slot_readers import (
+    TodaySlotEnergyReader,
+    get_today_completed_local_slots,
+)
 
 _LOGGER = logging.getLogger(__name__)
 

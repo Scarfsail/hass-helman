@@ -23,7 +23,7 @@ from types import SimpleNamespace
 coordinator_module = importlib.import_module("custom_components.helman.coordinator")
 tree_builder = importlib.import_module("custom_components.helman.tree_builder")
 recorder_module = importlib.import_module(
-    "custom_components.helman.recorder_hourly_series"
+    "custom_components.helman.appliance_runtime_history"
 )
 appliance_energy_module = importlib.import_module(
     "custom_components.helman.training.appliance_energy"

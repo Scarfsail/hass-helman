@@ -14,7 +14,7 @@ appliance_energy_module = importlib.import_module(
     "custom_components.helman.training.appliance_energy"
 )
 recorder_module = importlib.import_module(
-    "custom_components.helman.recorder_hourly_series"
+    "custom_components.helman.shared_meter_fit"
 )
 
 ApplianceEnergyTrainingJob = appliance_energy_module.ApplianceEnergyTrainingJob

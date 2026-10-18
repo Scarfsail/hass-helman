@@ -55,7 +55,7 @@ _install_import_stubs()
 
 from custom_components.helman import (  # noqa: E402
     battery_actual_history_builder,
-    recorder_hourly_series,
+    today_slot_readers,
 )
 
 
@@ -142,7 +142,7 @@ class TodaySlotBoundaryStateReaderTests(unittest.IsolatedAsyncioTestCase):
             _state(DAY + timedelta(hours=1), 60),
         ]
         recorder = _Recorder(states)
-        reader = recorder_hourly_series.TodaySlotBoundaryStateReader(_make_hass())
+        reader = today_slot_readers.TodaySlotBoundaryStateReader(_make_hass())
         await self._read(reader, recorder, DAY + timedelta(hours=1, minutes=45))
         # Repeat after the tail itself has settled, to check the saved carry too.
         for hours in (2, 3):
@@ -155,7 +155,7 @@ class TodaySlotBoundaryStateReaderTests(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls._dt_patcher = patch.object(
-            recorder_hourly_series,
+            today_slot_readers,
             "dt_util",
             dt_util,
         )
@@ -168,12 +168,12 @@ class TodaySlotBoundaryStateReaderTests(unittest.IsolatedAsyncioTestCase):
     def _patches(self, recorder: _Recorder):
         return (
             patch.object(
-                recorder_hourly_series,
+                today_slot_readers,
                 "state_changes_during_period",
                 recorder.state_changes_during_period,
             ),
             patch.object(
-                recorder_hourly_series,
+                today_slot_readers,
                 "get_instance",
                 lambda hass: SimpleNamespace(
                     async_add_executor_job=_inline_executor_job
@@ -207,7 +207,7 @@ class TodaySlotBoundaryStateReaderTests(unittest.IsolatedAsyncioTestCase):
         """The oracle: a reader that has never seen this day before."""
         recorder = _Recorder(states)
         values = await self._read(
-            recorder_hourly_series.TodaySlotBoundaryStateReader(_make_hass()),
+            today_slot_readers.TodaySlotBoundaryStateReader(_make_hass()),
             recorder,
             reference_time,
             interval_minutes=interval_minutes,
@@ -268,7 +268,7 @@ class TodaySlotBoundaryStateReaderTests(unittest.IsolatedAsyncioTestCase):
         compare each answer with a cold read of the same states."""
         states = self._eventful_day()
         warm_recorder = _Recorder(states)
-        reader = recorder_hourly_series.TodaySlotBoundaryStateReader(_make_hass())
+        reader = today_slot_readers.TodaySlotBoundaryStateReader(_make_hass())
 
         reference_time = DAY + timedelta(minutes=15)
         while reference_time < DAY + timedelta(days=1):
@@ -290,14 +290,14 @@ class TodaySlotBoundaryStateReaderTests(unittest.IsolatedAsyncioTestCase):
         states = self._eventful_day()
         warm_recorder = _Recorder(states)
         cold_recorder = _Recorder(states)
-        reader = recorder_hourly_series.TodaySlotBoundaryStateReader(_make_hass())
+        reader = today_slot_readers.TodaySlotBoundaryStateReader(_make_hass())
         reference_time = DAY + timedelta(minutes=15)
         while reference_time <= DAY + timedelta(hours=23, minutes=45):
             await self._read(reader, warm_recorder, reference_time)
             # The comparison: a reader that keeps nothing, which is what the
             # full-day read did on every refresh.
             await self._read(
-                recorder_hourly_series.TodaySlotBoundaryStateReader(_make_hass()),
+                today_slot_readers.TodaySlotBoundaryStateReader(_make_hass()),
                 cold_recorder,
                 reference_time,
             )
@@ -349,7 +349,7 @@ class TodaySlotBoundaryStateReaderTests(unittest.IsolatedAsyncioTestCase):
         """
         states = self._eventful_day()
         recorder = _Recorder(states)
-        reader = recorder_hourly_series.TodaySlotBoundaryStateReader(_make_hass())
+        reader = today_slot_readers.TodaySlotBoundaryStateReader(_make_hass())
 
         for hours, minutes in ((13, 0), (13, 15), (13, 30), (14, 0)):
             reference_time = DAY + timedelta(hours=hours, minutes=minutes)
@@ -375,7 +375,7 @@ class TodaySlotBoundaryStateReaderTests(unittest.IsolatedAsyncioTestCase):
         """The dropout is at 14:00 and the sensor is back at 15:00."""
         states = self._eventful_day()
         recorder = _Recorder(states)
-        reader = recorder_hourly_series.TodaySlotBoundaryStateReader(_make_hass())
+        reader = today_slot_readers.TodaySlotBoundaryStateReader(_make_hass())
 
         for minutes in range(0, 120, 15):
             reference_time = DAY + timedelta(hours=14, minutes=minutes)
@@ -401,7 +401,7 @@ class TodaySlotBoundaryStateReaderTests(unittest.IsolatedAsyncioTestCase):
             increment=0.1,
         )
         recorder = _Recorder(states)
-        reader = recorder_hourly_series.TodaySlotBoundaryStateReader(_make_hass())
+        reader = today_slot_readers.TodaySlotBoundaryStateReader(_make_hass())
 
         for hours in (11, 12, 13):
             reference_time = DAY + timedelta(hours=hours)
@@ -427,7 +427,7 @@ class TodaySlotBoundaryStateReaderTests(unittest.IsolatedAsyncioTestCase):
             increment=0.1,
         )
         recorder = _Recorder(states)
-        reader = recorder_hourly_series.TodaySlotBoundaryStateReader(_make_hass())
+        reader = today_slot_readers.TodaySlotBoundaryStateReader(_make_hass())
 
         early = await self._read(reader, recorder, DAY + timedelta(hours=12))
         boundary = dt_util.as_utc(DAY + timedelta(hours=11, minutes=45))
@@ -461,7 +461,7 @@ class TodaySlotBoundaryStateReaderTests(unittest.IsolatedAsyncioTestCase):
             increment=0.5,
         )
         recorder = _Recorder(states)
-        reader = recorder_hourly_series.TodaySlotBoundaryStateReader(_make_hass())
+        reader = today_slot_readers.TodaySlotBoundaryStateReader(_make_hass())
 
         early = await self._read(
             reader, recorder, DAY + timedelta(hours=14), interval_minutes=60
@@ -484,7 +484,7 @@ class TodaySlotBoundaryStateReaderTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_failed_read_freezes_nothing(self) -> None:
         states = self._eventful_day()
         recorder = _Recorder(states)
-        reader = recorder_hourly_series.TodaySlotBoundaryStateReader(_make_hass())
+        reader = today_slot_readers.TodaySlotBoundaryStateReader(_make_hass())
 
         recorder.fail_next = True
         with self.assertRaises(RuntimeError):
@@ -506,7 +506,7 @@ class TodaySlotBoundaryStateReaderTests(unittest.IsolatedAsyncioTestCase):
             increment=0.2,
         )
         recorder = _Recorder(states)
-        reader = recorder_hourly_series.TodaySlotBoundaryStateReader(_make_hass())
+        reader = today_slot_readers.TodaySlotBoundaryStateReader(_make_hass())
 
         await self._read(reader, recorder, DAY + timedelta(hours=23))
         warm = await self._read(reader, recorder, DAY + timedelta(days=1, hours=1))
@@ -525,7 +525,7 @@ class TodaySlotBoundaryStateReaderTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_clock_that_stepped_backwards_reads_the_day_again(self) -> None:
         states = self._eventful_day()
         recorder = _Recorder(states)
-        reader = recorder_hourly_series.TodaySlotBoundaryStateReader(_make_hass())
+        reader = today_slot_readers.TodaySlotBoundaryStateReader(_make_hass())
 
         await self._read(reader, recorder, DAY + timedelta(hours=20))
         warm = await self._read(reader, recorder, DAY + timedelta(hours=10))
@@ -537,7 +537,7 @@ class TodaySlotBoundaryStateReaderTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_different_interval_invalidates_the_prefix(self) -> None:
         states = self._eventful_day()
         recorder = _Recorder(states)
-        reader = recorder_hourly_series.TodaySlotBoundaryStateReader(_make_hass())
+        reader = today_slot_readers.TodaySlotBoundaryStateReader(_make_hass())
 
         await self._read(reader, recorder, DAY + timedelta(hours=12))
         warm = await self._read(
@@ -554,7 +554,7 @@ class TodaySlotBoundaryStateReaderTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_second_entity_keeps_its_own_prefix(self) -> None:
         states = self._eventful_day()
         recorder = _Recorder(states)
-        reader = recorder_hourly_series.TodaySlotBoundaryStateReader(_make_hass())
+        reader = today_slot_readers.TodaySlotBoundaryStateReader(_make_hass())
 
         await self._read(reader, recorder, DAY + timedelta(hours=12))
         read_patch, instance_patch = self._patches(recorder)
@@ -577,7 +577,7 @@ class DstTests(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self) -> None:
         self._dt_patcher = patch.object(
-            recorder_hourly_series, "dt_util", dt_util
+            today_slot_readers, "dt_util", dt_util
         )
         self._dt_patcher.start()
         self.addCleanup(self._dt_patcher.stop)
@@ -594,7 +594,7 @@ class DstTests(unittest.IsolatedAsyncioTestCase):
             increment=0.05,
         )
         recorder = _Recorder(states)
-        reader = recorder_hourly_series.TodaySlotBoundaryStateReader(_make_hass())
+        reader = today_slot_readers.TodaySlotBoundaryStateReader(_make_hass())
         tests = TodaySlotBoundaryStateReaderTests()
 
         cursor_utc = dt_util.as_utc(day) + timedelta(minutes=15)
@@ -627,7 +627,7 @@ class SharedReaderAcrossConsumersTests(unittest.IsolatedAsyncioTestCase):
     """
 
     def setUp(self) -> None:
-        for module in (recorder_hourly_series, battery_actual_history_builder):
+        for module in (today_slot_readers, battery_actual_history_builder):
             patcher = patch.object(module, "dt_util", dt_util)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -642,7 +642,7 @@ class SharedReaderAcrossConsumersTests(unittest.IsolatedAsyncioTestCase):
             increment=0.05,
         )
         recorder = _Recorder(states)
-        reader = recorder_hourly_series.TodaySlotBoundaryStateReader(_make_hass())
+        reader = today_slot_readers.TodaySlotBoundaryStateReader(_make_hass())
         tests = TodaySlotBoundaryStateReaderTests()
         read_patch, instance_patch = tests._patches(recorder)
 
