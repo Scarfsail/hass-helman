@@ -106,7 +106,7 @@ async def read_states(
     start: datetime,
     end: datetime,
     *,
-    include_start_state: bool = False,
+    include_start_state: bool = True,
     no_attributes: bool = True,
 ) -> dict[str, list[Any]]:
     """Read recorder states for multiple entity IDs over [start, end].

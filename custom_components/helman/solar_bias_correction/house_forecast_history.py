@@ -39,6 +39,7 @@ async def load_house_forecast_points_for_day(
         [HOUSE_FORECAST_CURRENT_ENTITY],
         day_start_local,
         day_end_local,
+        include_start_state=True,
         no_attributes=True,
     )
     states = states_by_entity.get(HOUSE_FORECAST_CURRENT_ENTITY) or []

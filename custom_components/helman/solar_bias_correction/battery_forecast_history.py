@@ -90,6 +90,7 @@ async def load_battery_forecast_points_for_day(
         entity_ids,
         day_start_local,
         day_end_local,
+        include_start_state=True,
         no_attributes=True,
     )
     if not states_by_entity:

@@ -2107,11 +2107,14 @@ class SolarInspector:
             return {}
         local_start = datetime.combine(target_date, time(0, 0), tzinfo=local_tz)
         local_end = local_start + timedelta(days=1)
-        start_utc = dt_util.as_utc(local_start)
-        end_utc = dt_util.as_utc(local_end)
         try:
             states_by_entity = await read_states(
-                self._hass, list(entity_ids), local_start, local_end, no_attributes=True
+                self._hass,
+                list(entity_ids),
+                local_start,
+                local_end,
+                include_start_state=True,
+                no_attributes=True,
             )
         except Exception:
             # Named, because one read now carries the SoC sensor and both bound

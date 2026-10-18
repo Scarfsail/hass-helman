@@ -87,11 +87,14 @@ class RecorderStatesTests(unittest.IsolatedAsyncioTestCase):
         st = SimpleNamespace(state="1", last_updated=t1)
         fake_history = {"sensor.test_entity": [st]}
 
+        captured_kwargs: dict[str, object] = {}
+
         class _FakeRecorder:
             async def async_add_executor_job(self, func, *args):
                 return func(*args)
 
             def get_significant_states(self, *args, **kwargs):
+                captured_kwargs.update(kwargs)
                 return fake_history
 
         hass = SimpleNamespace()
@@ -103,3 +106,4 @@ class RecorderStatesTests(unittest.IsolatedAsyncioTestCase):
             res = await read_states(hass, ["sensor.TEST_ENTITY", "sensor.missing"], t1, t2)
             self.assertEqual(res["sensor.TEST_ENTITY"], [st])
             self.assertEqual(res["sensor.missing"], [])
+            self.assertTrue(captured_kwargs.get("include_start_time_state"))
