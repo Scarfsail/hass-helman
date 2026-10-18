@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable, Iterator
+from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from functools import partial
 from typing import Any
@@ -9,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from homeassistant.util import dt as dt_util
 
+from ..recorder_states import numeric_timeline
 from ..slot_grid import (
     SLOT,
     SLOT_LABELS,
@@ -25,13 +27,66 @@ from ..solar_bias_correction.models import (
     SolarBiasHouseBreakdownPoint,
     SolarBiasImpactPoint,
     SolarBiasInspectorPoint,
+    SolarBiasInspectorSeries,
+    SolarBiasInspectorTotals,
     SolarBiasMoneyPoint,
     SolarBiasMoneyTotals,
     SolarBiasPricePoint,
     SolarBiasProfile,
 )
+from ..solar_bias_correction.statistics_day import StatisticsDay
 
 _LOGGER = logging.getLogger(__name__)
+
+
+@dataclass
+class DayMeters:
+    reads_statistics: bool
+    slot_energy_by_entity: dict[str, dict[datetime, float]]
+    actuals_by_slot: dict[str, float]
+    statistics_day: StatisticsDay
+    breakdown_consumers_for_day: list[dict]
+    solar_meter_entity_id: str | None
+    meter_entity_ids: list[str]
+
+
+@dataclass
+class DaySolar:
+    raw_points: list[dict[str, Any]]
+    corrected_points: list[dict[str, Any]]
+    actual_points: list[SolarBiasInspectorPoint]
+    invalidated_points: list[SolarBiasInspectorPoint]
+    factors: list[SolarBiasFactorPoint]
+    has_profile: bool
+
+
+@dataclass
+class DayForecastAndActualSeries:
+    house_forecast_points: list[dict]
+    house_actual_points: list[dict]
+    house_actual_breakdown_points: list[dict]
+    house_forecast_breakdown_points: list[SolarBiasHouseBreakdownPoint]
+    battery_soc_forecast_points: list[dict]
+    battery_soc_actual_points: list[dict]
+    grid_forecast_points: list[dict]
+    grid_actual_series: tuple[list[dict], list[dict], list[dict]]
+    battery_forecast_points: list[dict]
+    battery_actual_points: list[dict]
+    grid_import_forecast_points: list[dict]
+    grid_export_forecast_points: list[dict]
+    recorded_import_price_points: list[dict]
+    recorded_export_price_points: list[dict]
+    numeric_history_by_entity: dict[str, dict[str, float]]
+    bounds_entity_ids: tuple[str | None, str | None]
+
+
+@dataclass
+class DayPriceRails:
+    import_price_by_slot: dict[str, float]
+    export_price_by_slot: dict[str, float]
+    price_unit: str | None
+    money_actual_points: list[SolarBiasMoneyPoint]
+    money_forecast_points: list[SolarBiasMoneyPoint]
 
 
 def _consumer_own_energy(
@@ -282,24 +337,9 @@ def _numeric_history_by_slot(
     a hole. Slots before the entity's first reading are absent, as are slots the
     clock has not reached yet.
     """
-    if not states:
-        return {}
-    timeline: list[tuple[datetime, float]] = []
-    for state in states:
-        raw = getattr(state, "state", None)
-        try:
-            value = float(raw)
-        except (TypeError, ValueError):
-            continue
-        ts = getattr(state, "last_changed", None) or getattr(
-            state, "last_updated", None
-        )
-        if ts is None:
-            continue
-        timeline.append((dt_util.as_local(ts), value))
+    timeline = numeric_timeline(states)
     if not timeline:
         return {}
-    timeline.sort(key=lambda pair: pair[0])
 
     local_now = datetime.now(local_tz)
     is_today = target_date == local_now.date()
@@ -316,25 +356,6 @@ def _numeric_history_by_slot(
             continue
         by_slot[f"{slot_start.hour:02d}:{slot_start.minute:02d}"] = current
     return by_slot
-
-
-async def _get_significant_states_safe(hass, start_utc, end_utc, entity_ids):
-    """Wrapper around get_significant_states that handles import failures."""
-    try:
-        from homeassistant.components.recorder import get_instance
-        from homeassistant.components.recorder.history import get_significant_states
-    except Exception:  # noqa: BLE001 - the recorder need not be there
-        return {}
-    return await get_instance(hass).async_add_executor_job(
-        partial(
-            get_significant_states,
-            hass,
-            start_utc,
-            end_utc,
-            entity_ids,
-            significant_changes_only=False,
-        )
-    )
 
 
 def _house_forecast_points_from_snapshot(
@@ -1087,6 +1108,49 @@ def _filter_battery_forecast_future(
     return points
 
 
+def _merge_battery_forecast_future(
+    battery_forecast_series: tuple[
+        list[dict], list[dict], list[dict], list[dict], list[dict]
+    ],
+    battery_snapshot: dict | None,
+    *,
+    target_date: date,
+    local_now: datetime,
+    timezone: ZoneInfo,
+) -> tuple[list[dict], list[dict], list[dict], list[dict], list[dict]]:
+    """Merge future battery and grid forecasts into recorded series."""
+    (
+        soc_points,
+        grid_points,
+        batt_points,
+        import_points,
+        export_points,
+    ) = (list(s) for s in battery_forecast_series)
+    soc_points += _filter_battery_soc_future(
+        battery_snapshot,
+        target_date=target_date,
+        local_now=local_now,
+        timezone=timezone,
+    )
+    future_net, future_import, future_export = _filter_grid_forecast_future(
+        battery_snapshot,
+        target_date=target_date,
+        local_now=local_now,
+        timezone=timezone,
+    )
+    grid_points += future_net
+    import_points += future_import
+    export_points += future_export
+    batt_points += _filter_battery_forecast_future(
+        battery_snapshot,
+        target_date=target_date,
+        local_now=local_now,
+        timezone=timezone,
+    )
+    return soc_points, grid_points, batt_points, import_points, export_points
+
+
+
 def _inspector_points_from_raw(raw: list[dict]) -> list[SolarBiasInspectorPoint]:
     return [
         SolarBiasInspectorPoint(timestamp=p["timestamp"], value_wh=float(p["wh"]))
@@ -1101,3 +1165,161 @@ def _battery_soc_points_from_raw(raw: list[dict]) -> list[BatterySocPoint]:
         for p in raw
         if "slot" in p and "pct" in p
     ]
+
+
+def _assemble_house_forecast_points(
+    house_forecast_history_points: list[dict],
+    current_slot_points: list[dict],
+    snapshot: dict | None,
+    target_date: date,
+    *,
+    current_slot_start: datetime | None,
+    next_slot: datetime | None,
+    need_past: bool,
+    need_future: bool,
+) -> list[dict]:
+    points: list[dict] = []
+    if need_past:
+        points = _points_before(
+            house_forecast_history_points,
+            cutoff=current_slot_start if current_slot_points else next_slot,
+        )
+    points += current_slot_points
+    if need_future:
+        points += _house_forecast_points_from_snapshot(
+            snapshot,
+            target_date,
+            next_slot=next_slot,
+        )
+    return points
+
+
+def _build_day_house_forecast(
+    composition: dict | None,
+    scheduled_consumers: list[dict],
+    target_date: date,
+    *,
+    current_slot_start: datetime | None,
+    next_slot: datetime | None,
+    breakdown_consumers: list[dict],
+    house_forecast_history_points: list[dict],
+    snapshot: dict | None,
+    need_past: bool,
+    need_future: bool,
+) -> tuple[list[dict], list[SolarBiasHouseBreakdownPoint]]:
+    breakdown_points: list[SolarBiasHouseBreakdownPoint] = []
+    if need_future:
+        breakdown_points = _build_house_forecast_breakdown(
+            composition,
+            scheduled_consumers,
+            target_date,
+            next_slot=next_slot,
+            metered_by_entity=breakdown_consumers,
+        )
+    current_slot_points = _house_forecast_total_for_slot(
+        breakdown_points, slot_start=current_slot_start
+    )
+    house_forecast_points = _assemble_house_forecast_points(
+        house_forecast_history_points,
+        current_slot_points,
+        snapshot,
+        target_date,
+        current_slot_start=current_slot_start,
+        next_slot=next_slot,
+        need_past=need_past,
+        need_future=need_future,
+    )
+    return house_forecast_points, breakdown_points
+
+
+def _compose_inspector_series(
+    solar: DaySolar,
+    series: DayForecastAndActualSeries,
+    price_rails: DayPriceRails,
+    drawn_actual_points: list[SolarBiasInspectorPoint],
+    drawn_invalidated_points: list[SolarBiasInspectorPoint],
+    drawn_house_actual_points: list[dict],
+    drawn_house_actual_breakdown_points: list[dict],
+    drawn_battery_soc_actual_points: list[dict],
+    drawn_grid_actual_points: list[dict],
+    drawn_battery_actual_points: list[dict],
+    drawn_money_actual_points: list[SolarBiasMoneyPoint],
+) -> SolarBiasInspectorSeries:
+    return SolarBiasInspectorSeries(
+        raw=_inspector_points(solar.raw_points),
+        corrected=_inspector_points(solar.corrected_points),
+        actual=drawn_actual_points,
+        invalidated=drawn_invalidated_points,
+        factors=solar.factors,
+        impact=_impact_points_for_day(
+            solar.raw_points,
+            solar.corrected_points,
+        ),
+        house_forecast=_inspector_points_from_raw(series.house_forecast_points),
+        house_actual=_inspector_points_from_raw(drawn_house_actual_points),
+        house_actual_breakdown=drawn_house_actual_breakdown_points,
+        house_forecast_breakdown=series.house_forecast_breakdown_points,
+        battery_soc_forecast=_battery_soc_points_from_raw(
+            series.battery_soc_forecast_points
+        ),
+        battery_soc_actual=_battery_soc_points_from_raw(
+            drawn_battery_soc_actual_points
+        ),
+        grid_forecast=_inspector_points_from_raw(series.grid_forecast_points),
+        grid_actual=_inspector_points_from_raw(drawn_grid_actual_points),
+        battery_forecast=_inspector_points_from_raw(series.battery_forecast_points),
+        battery_actual=_inspector_points_from_raw(drawn_battery_actual_points),
+        import_price=_price_points(price_rails.import_price_by_slot),
+        export_price=_price_points(price_rails.export_price_by_slot),
+        money_actual=drawn_money_actual_points,
+        money_forecast=price_rails.money_forecast_points,
+    )
+
+
+def _compose_inspector_totals(
+    solar: DaySolar,
+    series: DayForecastAndActualSeries,
+    price_rails: DayPriceRails,
+    actuals_by_slot: dict[str, float],
+    grid_actual_points: list[dict],
+) -> SolarBiasInspectorTotals:
+    return SolarBiasInspectorTotals(
+        raw_wh=_sum_point_values(solar.raw_points) if solar.raw_points else None,
+        corrected_wh=(
+            _sum_point_values(solar.corrected_points) if solar.corrected_points else None
+        ),
+        actual_wh=sum(actuals_by_slot.values()) if actuals_by_slot else None,
+        house_forecast_wh=(
+            sum(p["wh"] for p in series.house_forecast_points)
+            if series.house_forecast_points
+            else None
+        ),
+        house_actual_wh=(
+            sum(p["wh"] for p in series.house_actual_points)
+            if series.house_actual_points
+            else None
+        ),
+        grid_forecast_wh=(
+            sum(p["wh"] for p in series.grid_forecast_points)
+            if series.grid_forecast_points
+            else None
+        ),
+        grid_actual_wh=(
+            sum(p["wh"] for p in grid_actual_points)
+            if grid_actual_points
+            else None
+        ),
+        battery_forecast_wh=(
+            sum(p["wh"] for p in series.battery_forecast_points)
+            if series.battery_forecast_points
+            else None
+        ),
+        battery_actual_wh=(
+            sum(p["wh"] for p in series.battery_actual_points)
+            if series.battery_actual_points
+            else None
+        ),
+        money_actual=_money_totals(price_rails.money_actual_points),
+        money_forecast=_money_totals(price_rails.money_forecast_points),
+    )
+

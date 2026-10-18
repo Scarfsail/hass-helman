@@ -1,22 +1,14 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta
-from functools import partial
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from homeassistant.core import HomeAssistant
-from homeassistant.util import dt as dt_util
 
+from ..recorder_states import numeric_timeline, read_states
 from ..slot_grid import SLOT_MINUTES, day_slots
 from .forecast_slot_sampling import resolve_forecast_slot_values
-
-try:
-    from homeassistant.components.recorder import get_instance
-    from homeassistant.components.recorder.history import get_significant_states
-except Exception:  # pragma: no cover
-    get_instance = None  # type: ignore[assignment]
-    get_significant_states = None  # type: ignore[assignment]
 
 HOUSE_FORECAST_CURRENT_ENTITY = "sensor.helman_house_consumption_forecast_current"
 
@@ -38,23 +30,17 @@ async def load_house_forecast_points_for_day(
     Returns a list of {"timestamp": ISO local time, "wh": float}.
     Empty list if no recorder data for the day.
     """
-    if get_significant_states is None or get_instance is None:
-        return []
     local_tz = ZoneInfo(str(hass.config.time_zone))
     day_start_local = datetime.combine(target_date, time(0, 0), tzinfo=local_tz)
     day_end_local = day_start_local + timedelta(days=1)
-    start_utc = dt_util.as_utc(day_start_local)
-    end_utc = dt_util.as_utc(day_end_local)
 
-    states_by_entity = await get_instance(hass).async_add_executor_job(
-        partial(
-            get_significant_states,
-            hass,
-            start_utc,
-            end_utc,
-            [HOUSE_FORECAST_CURRENT_ENTITY],
-            significant_changes_only=False,
-        )
+    states_by_entity = await read_states(
+        hass,
+        [HOUSE_FORECAST_CURRENT_ENTITY],
+        day_start_local,
+        day_end_local,
+        include_start_state=True,
+        no_attributes=True,
     )
     states = states_by_entity.get(HOUSE_FORECAST_CURRENT_ENTITY) or []
     if not states:
@@ -62,20 +48,9 @@ async def load_house_forecast_points_for_day(
 
     # Build a list of (instant_local, value_w) pairs. Non-numeric rows are kept
     # as hold-breakers -- see :func:`resolve_forecast_slot_values` for why.
-    timeline: list[tuple[datetime, float | None]] = []
-    for state in states:
-        raw = getattr(state, "state", None)
-        try:
-            value_w: float | None = float(raw)
-        except (TypeError, ValueError):
-            value_w = None
-        ts = getattr(state, "last_changed", None) or getattr(state, "last_updated", None)
-        if ts is None:
-            continue
-        timeline.append((dt_util.as_local(ts), value_w))
+    timeline = numeric_timeline(states, keep_non_numeric=True)
     if not timeline:
         return []
-    timeline.sort(key=lambda pair: pair[0])
 
     slot_starts = day_slots(target_date, tzinfo=local_tz, wall_clock=True)
 

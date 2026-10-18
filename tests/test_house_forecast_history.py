@@ -63,8 +63,7 @@ class HouseForecastHistoryTests(unittest.IsolatedAsyncioTestCase):
         ]
         fake_result = {"sensor.helman_house_consumption_forecast_current": states}
         hass = SimpleNamespace(config=SimpleNamespace(time_zone="Europe/Prague"))
-        with patch.object(house_forecast_history, "get_significant_states", lambda *a, **kw: fake_result), \
-             patch.object(house_forecast_history, "get_instance", return_value=_FakeInstance()):
+        with patch.object(house_forecast_history, "read_states", AsyncMock(return_value=fake_result)):
             points = await house_forecast_history.load_house_forecast_points_for_day(hass, target)
         self.assertEqual(len(points), 96)
         # First slot: 800 W → 800 / 4 = 200 Wh
@@ -89,8 +88,7 @@ class HouseForecastHistoryTests(unittest.IsolatedAsyncioTestCase):
         ]
         fake_result = {"sensor.helman_house_consumption_forecast_current": states}
         hass = SimpleNamespace(config=SimpleNamespace(time_zone="Europe/Prague"))
-        with patch.object(house_forecast_history, "get_significant_states", lambda *a, **kw: fake_result), \
-             patch.object(house_forecast_history, "get_instance", return_value=_FakeInstance()):
+        with patch.object(house_forecast_history, "read_states", AsyncMock(return_value=fake_result)):
             points = await house_forecast_history.load_house_forecast_points_for_day(hass, target)
         by_slot = {p["timestamp"][11:16]: p["wh"] for p in points}
         self.assertAlmostEqual(by_slot["10:00"], 200.0, places=3)
@@ -106,8 +104,7 @@ class HouseForecastHistoryTests(unittest.IsolatedAsyncioTestCase):
         ]
         fake_result = {"sensor.helman_house_consumption_forecast_current": states}
         hass = SimpleNamespace(config=SimpleNamespace(time_zone="Europe/Prague"))
-        with patch.object(house_forecast_history, "get_significant_states", lambda *a, **kw: fake_result), \
-             patch.object(house_forecast_history, "get_instance", return_value=_FakeInstance()):
+        with patch.object(house_forecast_history, "read_states", AsyncMock(return_value=fake_result)):
             points = await house_forecast_history.load_house_forecast_points_for_day(hass, target)
         by_slot = {p["timestamp"][11:16]: p["wh"] for p in points}
         self.assertAlmostEqual(by_slot["10:15"], 200.0, places=3)
@@ -125,8 +122,7 @@ class HouseForecastHistoryTests(unittest.IsolatedAsyncioTestCase):
         ]
         fake_result = {"sensor.helman_house_consumption_forecast_current": states}
         hass = SimpleNamespace(config=SimpleNamespace(time_zone="Europe/Prague"))
-        with patch.object(house_forecast_history, "get_significant_states", lambda *a, **kw: fake_result), \
-             patch.object(house_forecast_history, "get_instance", return_value=_FakeInstance()):
+        with patch.object(house_forecast_history, "read_states", AsyncMock(return_value=fake_result)):
             points = await house_forecast_history.load_house_forecast_points_for_day(hass, target)
         by_slot = {p["timestamp"][11:16]: p["wh"] for p in points}
         # Held at 200 Wh right up to the unavailable row.
@@ -150,8 +146,7 @@ class HouseForecastHistoryTests(unittest.IsolatedAsyncioTestCase):
         ]
         fake_result = {"sensor.helman_house_consumption_forecast_current": states}
         hass = SimpleNamespace(config=SimpleNamespace(time_zone="Europe/Prague"))
-        with patch.object(house_forecast_history, "get_significant_states", lambda *a, **kw: fake_result), \
-             patch.object(house_forecast_history, "get_instance", return_value=_FakeInstance()):
+        with patch.object(house_forecast_history, "read_states", AsyncMock(return_value=fake_result)):
             points = await house_forecast_history.load_house_forecast_points_for_day(hass, target)
         by_slot = {p["timestamp"][11:16]: p["wh"] for p in points}
         self.assertAlmostEqual(by_slot["10:15"], 200.0, places=3)
@@ -162,8 +157,7 @@ class HouseForecastHistoryTests(unittest.IsolatedAsyncioTestCase):
     async def test_returns_empty_when_no_states(self):
         target = date(2026, 5, 9)
         hass = SimpleNamespace(config=SimpleNamespace(time_zone="Europe/Prague"))
-        with patch.object(house_forecast_history, "get_significant_states", lambda *a, **kw: {}), \
-             patch.object(house_forecast_history, "get_instance", return_value=_FakeInstance()):
+        with patch.object(house_forecast_history, "read_states", AsyncMock(return_value={})):
             points = await house_forecast_history.load_house_forecast_points_for_day(hass, target)
         self.assertEqual(points, [])
 

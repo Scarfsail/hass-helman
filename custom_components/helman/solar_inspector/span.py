@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from ..device_reports.dataset import price_hourly_series
 from ..solar_bias_correction.statistics_day import finite_mean
-from ..span_buckets import add_months, bucket_key
+from ..span_buckets import add_months, bucket_key, bucket_keys
+from .day import _consumer_own_energy, _round_kwh, _round_wh
 
 #: How many buckets one span read may return, per bucket size.
 _MAX_AGGREGATE_BUCKETS = {"day": 366, "month": 13}
@@ -24,6 +26,42 @@ def _trim_span_to_cap(start_date: date, end_date: date, bucket: str) -> date:
     if bucket == "day":
         return max(start_date, end_date - timedelta(days=cap - 1))
     return max(start_date, add_months(end_date.replace(day=1), -(cap - 1)))
+
+
+def _resolve_span_bounds(
+    raw_start_date: str,
+    raw_end_date: str,
+    bucket: str,
+    local_tz: ZoneInfo,
+    local_now: datetime,
+) -> tuple[str, date, date, datetime, datetime, datetime | None]:
+    """Snap bucket edges, trim to cap and calculate local start/end and tail start."""
+    valid_bucket = bucket if bucket in _MAX_AGGREGATE_BUCKETS else "day"
+    start_date = date.fromisoformat(raw_start_date)
+    end_date = date.fromisoformat(raw_end_date)
+
+    if valid_bucket == "month":
+        start_date = start_date.replace(day=1)
+        end_date = _last_day_of_month(end_date)
+    end_date = min(end_date, local_now.date())
+    if end_date < start_date:
+        local_start = datetime.combine(start_date, time(0, 0), tzinfo=local_tz)
+        local_end = datetime.combine(end_date + timedelta(days=1), time(0, 0), tzinfo=local_tz)
+        return valid_bucket, start_date, end_date, local_start, local_end, None
+
+    start_date = _trim_span_to_cap(start_date, end_date, valid_bucket)
+    local_start = datetime.combine(start_date, time(0, 0), tzinfo=local_tz)
+    local_end = datetime.combine(end_date + timedelta(days=1), time(0, 0), tzinfo=local_tz)
+
+    tail_start = None
+    if end_date == local_now.date():
+        newest_bucket_start = end_date if valid_bucket == "day" else end_date.replace(day=1)
+        tail_start = max(
+            local_start,
+            datetime.combine(newest_bucket_start, time(0, 0), tzinfo=local_tz),
+        )
+
+    return valid_bucket, start_date, end_date, local_start, local_end, tail_start
 
 
 def _energy_by_bucket(
@@ -137,29 +175,19 @@ def _money_by_bucket(
     None where nothing in the bucket could be priced, and the kWh each side
     priced beside it.
     """
-    cost: dict[str, float] = {}
-    gain: dict[str, float] = {}
-    cost_kwh: dict[str, float] = {}
-    gain_kwh: dict[str, float] = {}
+    def key_for(utc_hour: datetime) -> str:
+        return bucket_key(utc_hour, bucket, local_tz)
 
-    for utc_hour, kwh in import_kwh_by_hour.items():
-        rate = import_rate.get(utc_hour)
-        if rate is None:
-            continue
-        key = bucket_key(utc_hour, bucket, local_tz)
-        cost[key] = cost.get(key, 0.0) + kwh * rate
-        cost_kwh[key] = cost_kwh.get(key, 0.0) + kwh
-
-    for utc_hour, kwh in export_kwh_by_hour.items():
-        rate = export_rate.get(utc_hour)
-        if rate is None:
-            continue
-        key = bucket_key(utc_hour, bucket, local_tz)
-        gain[key] = gain.get(key, 0.0) + kwh * rate
-        gain_kwh[key] = gain_kwh.get(key, 0.0) + kwh
+    cost = price_hourly_series(import_kwh_by_hour, import_rate, key_fn=key_for)
+    gain = price_hourly_series(export_kwh_by_hour, export_rate, key_fn=key_for)
 
     return {
-        key: (cost.get(key), gain.get(key), cost_kwh.get(key), gain_kwh.get(key))
+        key: (
+            cost[key].amount if key in cost else None,
+            gain[key].amount if key in gain else None,
+            cost[key].priced_kwh if key in cost else None,
+            gain[key].priced_kwh if key in gain else None,
+        )
         for key in cost.keys() | gain.keys()
     }
 
@@ -230,5 +258,91 @@ def _bucket_house_breakdown(
         "unmeasuredWh": round(max(0.0, float(house_wh) - measured_sum), 4),
         "appliances": appliances,
     }
+
+
+def _fold_span_aggregates_days(
+    history: Any,
+    meters: Any,
+    soc_entity: str | None,
+    house_forecast_entity: str | None,
+    breakdown_consumers: list[dict],
+    start_date: date,
+    end_date: date,
+    bucket: str,
+    local_tz: ZoneInfo,
+    *,
+    house_forecast: bool,
+) -> list[dict[str, Any]]:
+    """Fold energy series, SoC, house forecast, and money into span bucket rows."""
+    solar_kwh = _energy_by_bucket(history.energy_for(meters.solar), bucket, local_tz)
+    imported_kwh = _energy_by_bucket(
+        history.energy_for(meters.grid_import), bucket, local_tz
+    )
+    exported_kwh = _energy_by_bucket(
+        history.energy_for(meters.grid_export), bucket, local_tz
+    )
+    house_kwh = _energy_by_bucket(history.energy_for(meters.house), bucket, local_tz)
+    charged_kwh = _energy_by_bucket(
+        history.energy_for(meters.battery_charge), bucket, local_tz
+    )
+    discharged_kwh = _energy_by_bucket(
+        history.energy_for(meters.battery_discharge), bucket, local_tz
+    )
+    soc_by_bucket = _soc_bounds_by_bucket(
+        history.rows_for(soc_entity), bucket, local_tz
+    )
+    house_forecast_kwh = _house_forecast_by_bucket(
+        history.rows_for(house_forecast_entity), bucket, local_tz
+    )
+    consumer_kwh_by_entity = {
+        consumer["energy_entity_id"]: _energy_by_bucket(
+            _consumer_own_energy(
+                consumer, history.energy_kwh, slot=timedelta(hours=1)
+            ),
+            bucket,
+            local_tz,
+        )
+        for consumer in breakdown_consumers
+    }
+    money_by_bucket = _money_by_bucket(
+        history.energy_for(meters.grid_import),
+        history.energy_for(meters.grid_export),
+        history.import_rate,
+        history.export_rate,
+        bucket=bucket,
+        local_tz=local_tz,
+    )
+
+    days: list[dict[str, Any]] = []
+    for key in bucket_keys(start_date, end_date, bucket):
+        min_pct, max_pct = soc_by_bucket.get(key, (None, None))
+        cost, gain, cost_kwh, gain_kwh = money_by_bucket.get(
+            key, (None, None, None, None)
+        )
+        row: dict[str, Any] = {
+            "date": key,
+            "solarWh": _round_wh(solar_kwh.get(key)),
+            "gridImportKwh": _round_kwh(imported_kwh.get(key)),
+            "gridExportKwh": _round_kwh(exported_kwh.get(key)),
+            "batteryMinSocPct": min_pct,
+            "batteryMaxSocPct": max_pct,
+            "houseWh": _round_wh(house_kwh.get(key)),
+            "batteryChargeWh": _round_wh(charged_kwh.get(key)),
+            "batteryDischargeWh": _round_wh(discharged_kwh.get(key)),
+            "moneyCost": None if cost is None else round(cost, 3),
+            "moneyGain": None if gain is None else round(gain, 3),
+            "moneyCostKwh": _round_kwh(cost_kwh),
+            "moneyGainKwh": _round_kwh(gain_kwh),
+            "houseBreakdown": _bucket_house_breakdown(
+                breakdown_consumers,
+                consumer_kwh_by_entity,
+                key,
+                _round_wh(house_kwh.get(key)),
+            ),
+        }
+        if house_forecast:
+            row["houseForecastWh"] = _round_wh(house_forecast_kwh.get(key))
+        days.append(row)
+    return days
 
 
