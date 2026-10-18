@@ -31,7 +31,7 @@ function slotLabel(minutes: number): string {
 async function mountInspector(page: Page): Promise<void> {
     await page.evaluate(() => {
         const date = "2026-07-18";
-        const corrected: Array<{ timestamp: string; valueWh: number }> = [];
+        const corrected: Array<{ slot: string; valueWh: number }> = [];
         const impact: Array<{
             slot: string;
             rawWh: number | null;
@@ -44,7 +44,7 @@ async function mountInspector(page: Page): Promise<void> {
             const mm = String(m % 60).padStart(2, "0");
             // A gentle midday bump so the chart has something to draw.
             const v = Math.max(0, 400 - Math.abs(m - 720) / 2);
-            corrected.push({ timestamp: `${date}T${hh}:${mm}:00`, valueWh: v });
+            corrected.push({ slot: `${hh}:${mm}`, valueWh: v });
             impact.push({
                 slot: `${hh}:${mm}`,
                 rawWh: v,
@@ -90,19 +90,8 @@ async function mountInspector(page: Page): Promise<void> {
                 batteryForecastWh: null,
                 batteryActualWh: null,
             },
-            availability: { hasRawForecast: false,
-                hasCorrectedForecast: true,
-                hasActuals: false,
-                hasInvalidated: false,
+            availability: {
                 hasProfile: true,
-                hasHouseForecast: false,
-                hasHouseActual: false,
-                hasBatterySocForecast: false,
-                hasBatterySocActual: false,
-                hasGridForecast: false,
-                hasGridActual: false,
-                hasBatteryForecast: false,
-                hasBatteryActual: false,
             },
             batterySocBounds: [],
             trainingExplainability: null,
@@ -275,10 +264,10 @@ test.describe("solar inspector selection on a partly forecast day", () => {
                 Number(label.slice(0, 2)) * 60 + Number(label.slice(3, 5));
             // Forecast and impact from noon on; the morning keeps actuals only.
             payload.series.actual = payload.series.corrected.filter(
-                (p: any) => minutesOf(p.timestamp.slice(11, 16)) < 720,
+                (p: any) => minutesOf(p.slot) < 720,
             );
             payload.series.corrected = payload.series.corrected.filter(
-                (p: any) => minutesOf(p.timestamp.slice(11, 16)) >= 720,
+                (p: any) => minutesOf(p.slot) >= 720,
             );
             payload.series.impact = payload.series.impact.filter(
                 (p: any) => minutesOf(p.slot) >= 720,

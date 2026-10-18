@@ -20,7 +20,7 @@ async function punchHouseActualHole(page: Page, slots: string[]): Promise<void> 
         const el = document.querySelector("helman-solar-inspector") as any;
         const payload = JSON.parse(JSON.stringify(el._payload));
         payload.series.houseActual = payload.series.houseActual.filter(
-            (p: { timestamp: string }) => !wanted.includes(p.timestamp.slice(11, 16)),
+            (p: { slot: string }) => !wanted.includes(p.slot),
         );
         // The harness's day fixture carries no day totals (they are a backend
         // figure, not derived from the series here); the totals chip renders

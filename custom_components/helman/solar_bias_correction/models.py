@@ -155,7 +155,7 @@ class SolarBiasAdjustmentResult:
 
 @dataclass
 class SolarBiasInspectorPoint:
-    timestamp: str
+    slot: str
     value_wh: float
 
 
@@ -386,23 +386,7 @@ class SolarBiasInspectorTotals:
 
 @dataclass
 class SolarBiasInspectorAvailability:
-    has_raw_forecast: bool
-    has_corrected_forecast: bool
-    has_actuals: bool
     has_profile: bool
-    has_invalidated: bool = False
-    has_house_forecast: bool = False
-    has_house_actual: bool = False
-    has_house_actual_breakdown: bool = False
-    has_house_forecast_breakdown: bool = False
-    has_battery_soc_forecast: bool = False
-    has_battery_soc_actual: bool = False
-    has_grid_forecast: bool = False
-    has_grid_actual: bool = False
-    has_battery_forecast: bool = False
-    has_battery_actual: bool = False
-    has_import_price: bool = False
-    has_export_price: bool = False
 
 
 @dataclass
@@ -528,23 +512,7 @@ def inspector_day_to_payload(day: SolarBiasInspectorDay) -> dict[str, Any]:
             "moneyForecast": _money_totals_payload(day.totals.money_forecast),
         },
         "availability": {
-            "hasRawForecast": day.availability.has_raw_forecast,
-            "hasCorrectedForecast": day.availability.has_corrected_forecast,
-            "hasActuals": day.availability.has_actuals,
             "hasProfile": day.availability.has_profile,
-            "hasInvalidated": day.availability.has_invalidated,
-            "hasHouseForecast": day.availability.has_house_forecast,
-            "hasHouseActual": day.availability.has_house_actual,
-            "hasHouseActualBreakdown": day.availability.has_house_actual_breakdown,
-            "hasHouseForecastBreakdown": day.availability.has_house_forecast_breakdown,
-            "hasBatterySocForecast": day.availability.has_battery_soc_forecast,
-            "hasBatterySocActual": day.availability.has_battery_soc_actual,
-            "hasGridForecast": day.availability.has_grid_forecast,
-            "hasGridActual": day.availability.has_grid_actual,
-            "hasBatteryForecast": day.availability.has_battery_forecast,
-            "hasBatteryActual": day.availability.has_battery_actual,
-            "hasImportPrice": day.availability.has_import_price,
-            "hasExportPrice": day.availability.has_export_price,
         },
         "priceUnit": day.price_unit,
         "batterySocBounds": [
@@ -558,7 +526,7 @@ def inspector_day_to_payload(day: SolarBiasInspectorDay) -> dict[str, Any]:
 
 
 def _inspector_point_payload(point: SolarBiasInspectorPoint) -> dict[str, Any]:
-    return {"timestamp": point.timestamp, "valueWh": point.value_wh}
+    return {"slot": point.slot, "valueWh": point.value_wh}
 
 
 def _money_point_payload(point: SolarBiasMoneyPoint) -> dict[str, Any]:

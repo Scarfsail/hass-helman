@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-
 import asyncio
-from typing import Any
+from datetime import datetime
 from types import SimpleNamespace
+from typing import Any
 
 
 class DummyStore:
@@ -390,7 +389,9 @@ class FakeExecutor:
         self.restore_calls: list[str] = []
         self.reconcile_error: Exception | None = None
         self.restore_error: Exception | None = None
-        from custom_components.helman.scheduling.runtime_status import ScheduleExecutionStatus
+        from custom_components.helman.scheduling.runtime_status import (
+            ScheduleExecutionStatus,
+        )
         self.execution_status = ScheduleExecutionStatus()
         self.get_status_calls = 0
 
@@ -520,3 +521,94 @@ def _bias_service_config(
             "battery": {"entities": battery_entities},
         },
     }
+
+
+class FakeInspectorLiveSources:
+    """Fake implementing InspectorLiveSources protocol for inspector tests."""
+
+    def __init__(
+        self,
+        *,
+        canonical_solar_forecast: Any = None,
+        battery_forecast: Any = None,
+        house_forecast_snapshot: Any = None,
+        house_forecast_composition: Any = None,
+        house_device_consumers: Any = None,
+        battery_soc_bounds: Any = None,
+        grid_price_snapshot: Any = None,
+    ) -> None:
+        self._canonical_solar_forecast = canonical_solar_forecast
+        self._battery_forecast = battery_forecast
+        self._house_forecast_snapshot = house_forecast_snapshot
+        self._house_forecast_composition = house_forecast_composition
+        self._house_device_consumers = house_device_consumers
+        self._battery_soc_bounds = battery_soc_bounds
+        self._grid_price_snapshot = grid_price_snapshot
+
+    async def canonical_solar_forecast(
+        self, *, reference_time: datetime
+    ) -> dict[str, Any] | None:
+        target = self._canonical_solar_forecast
+        if target is None:
+            return None
+        if callable(target):
+            try:
+                res = target(reference_time=reference_time)
+            except TypeError:
+                res = target()
+        else:
+            res = target
+        if asyncio.iscoroutine(res):
+            return await res
+        return res
+
+    async def battery_forecast(self) -> dict[str, Any] | None:
+        target = self._battery_forecast
+        if target is None:
+            return None
+        res = target() if callable(target) else target
+        if asyncio.iscoroutine(res):
+            return await res
+        return res
+
+    def house_forecast_snapshot(self) -> dict[str, Any] | None:
+        target = self._house_forecast_snapshot
+        if target is None:
+            return None
+        return target() if callable(target) else target
+
+    def house_forecast_composition(self) -> dict[str, Any] | None:
+        target = self._house_forecast_composition
+        if target is None:
+            return None
+        return target() if callable(target) else target
+
+    async def house_device_consumers(self) -> list[dict[str, Any]]:
+        target = self._house_device_consumers
+        if target is None:
+            return []
+        res = target() if callable(target) else target
+        if asyncio.iscoroutine(res):
+            return await res
+        return res
+
+    def battery_soc_bounds(self) -> tuple[float, float] | None:
+        target = self._battery_soc_bounds
+        if target is None:
+            return None
+        return target() if callable(target) else target
+
+    def grid_price_snapshot(
+        self, reference_time: datetime | None = None
+    ) -> dict[str, Any]:
+        target = self._grid_price_snapshot
+        if target is None:
+            return {}
+        if callable(target):
+            try:
+                res = target(reference_time=reference_time)
+            except TypeError:
+                res = target()
+            return res or {}
+        return target or {}
+

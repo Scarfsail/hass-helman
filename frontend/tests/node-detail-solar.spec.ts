@@ -267,7 +267,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             },
         };
         // The inspector's own day read, so its embeds draw the day they show.
-        const wh = (rows: Array<{ timestamp: string; value: number }>) => rows.filter((row) => row.timestamp.startsWith("2026-10-21")).map((row) => ({ timestamp: row.timestamp, valueWh: row.value }));
+        const wh = (rows: Array<{ timestamp: string; value: number }>) => rows.filter((row) => row.timestamp.startsWith("2026-10-21")).map((row) => ({ slot: row.timestamp.slice(11, 16), valueWh: row.value }));
         const sum = (rows: Array<{ valueWh: number }>) => rows.reduce((total, row) => total + row.valueWh, 0);
         const series = { raw: wh(points.raw), corrected: wh(points.adjusted), actual: wh(points.actual) };
         const inspectorDay = window.__inspectorDay({ date: "2026-10-21", timezone: "UTC", dataGranularityMinutes: 15, status: "applied", effectiveVariant: "adjusted",
@@ -281,11 +281,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 houseForecastWh: null, houseActualWh: null, gridForecastWh: null, gridActualWh: null,
                 batteryForecastWh: null, batteryActualWh: null, moneyActual: null, moneyForecast: null,
             },
-            availability: { hasRawForecast: true, hasCorrectedForecast: true, hasActuals: true, hasInvalidated: false, hasProfile: false,
-                hasHouseForecast: false, hasHouseActual: false, hasBatterySocForecast: false, hasBatterySocActual: false,
-                hasGridForecast: false, hasGridActual: false, hasBatteryForecast: false, hasBatteryActual: false,
-                hasImportPrice: false, hasExportPrice: false,
-            },
+            availability: { hasProfile: false },
             batterySocBounds: [], priceUnit: null, trainingExplainability: null,
         });
         const inverter = window.__inverterOverview();

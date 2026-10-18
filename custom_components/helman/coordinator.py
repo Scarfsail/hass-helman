@@ -1,41 +1,36 @@
 from __future__ import annotations
 
-from copy import deepcopy
 import asyncio
 import functools
 import logging
 import time
-from collections.abc import Collection, Mapping
-from dataclasses import dataclass
 from collections import OrderedDict, deque
+from collections.abc import Callable, Collection, Coroutine, Mapping, Sequence
+from copy import deepcopy
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from statistics import median
-from typing import TYPE_CHECKING, Any, Callable, Coroutine, Sequence
+from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.start import async_at_started
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import (
     async_track_time_change,
     async_track_time_interval,
 )
-
+from homeassistant.helpers.start import async_at_started
 from homeassistant.util import dt as dt_util
 
-from .config_read import read_mapping
-from .config_path import get as config_value
-from .consumption_forecast_builder import read_house_forecast_request
-from .grid_price_forecast_builder import (
-    read_grid_sell_price_entity_id,
+from .appliance_runtime_history import (
+    ApplianceRuntimeHistoryReader,
+    ApplianceRuntimeRequest,
 )
-from .battery_state import read_battery_entities
-from .forecast_builder import read_solar_forecast_entities
-
+from .appliances.climate_appliance import ClimateApplianceRuntime
 from .appliances.config import build_appliances_runtime_registry
-from .appliances.dto import ApplianceMetadataResponseDict
-from .appliances.dto import build_appliances_response
+from .appliances.dto import ApplianceMetadataResponseDict, build_appliances_response
 from .appliances.forecast_integration import build_adjusted_house_forecast
+from .appliances.generic_appliance import GenericApplianceRuntime
 from .appliances.projection_builder import (
     ApplianceProjectionPlan,
     build_appliance_projection_plan,
@@ -47,8 +42,8 @@ from .appliances.projection_response import (
     build_appliance_projections_response,
     build_empty_appliance_projections_response,
 )
-from .appliances.state import AppliancesRuntimeRegistry
 from .appliances.registry_holder import AppliancesRegistryHolder
+from .appliances.state import AppliancesRuntimeRegistry
 from .automation.compute_inputs import (
     ComputeInputs,
     CustomConditionGroupResult,
@@ -79,18 +74,20 @@ from .automation.ownership import (
 )
 from .automation.snapshot import OptimizationContext, OptimizationSnapshot
 from .automation.triggers import AutomationTriggerCoordinator
-from .appliances.climate_appliance import ClimateApplianceRuntime
 from .battery_capacity_forecast_builder import BatteryCapacityForecastBuilder
 from .battery_forecast_response import build_battery_forecast_response
 from .battery_state import (
     describe_battery_entity_config_issue,
     describe_battery_live_state_issue,
+    read_battery_entities,
     read_battery_entity_config,
     read_battery_forecast_settings,
     read_battery_live_state,
     read_battery_soc_bounds,
     read_battery_soc_bounds_config,
 )
+from .config_path import get as config_value
+from .config_read import read_mapping
 from .const import (
     AUTOMATION_CONDITION_PLAN_FRESHNESS_SECONDS,
     BATTERY_CAPACITY_FORECAST_CACHE_TTL_SECONDS,
@@ -108,12 +105,16 @@ from .const import (
     MAX_FORECAST_DAYS,
     PRODUCTION_TOTAL_ENTITY_ID,
     SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
-    SCHEDULE_SLOT_MINUTES,
     SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
-    SCHEDULE_ACTION_STOP_EXPORT,
+    SCHEDULE_SLOT_MINUTES,
 )
 from .consumption_forecast_builder import (
     ConsumptionForecastBuilder,
+    read_house_forecast_request,
+)
+from .consumption_forecast_profiles import (
+    HouseConsumptionProfile,
+    profile_from_dict,
 )
 from .controllables.config import (
     entity_friendly_name,
@@ -122,7 +123,6 @@ from .controllables.config import (
     own_meter,
     peek_controllable_id,
     read_carved_meters,
-    read_schedulable_consumers,
     read_shared_meters,
     running_active_states,
     running_signal,
@@ -132,15 +132,6 @@ from .controllables.spec import (
     CONTROLLABLE_KIND_GENERIC,
     spec_for,
 )
-from .consumption_forecast_profiles import (
-    HouseConsumptionProfile,
-    profile_from_dict,
-)
-from .forecast_builder import SolarForecastBuilder
-from .grid_flow_forecast_builder import build_grid_flow_forecast_snapshot
-from .grid_flow_forecast_response import build_grid_flow_forecast_response
-from .grid_price_forecast_builder import GridPriceForecastBuilder
-from .grid_price_forecast_response import build_grid_price_forecast_response
 from .device_reports.dataset import (
     DeviceDataset,
     build_device_dataset,
@@ -148,20 +139,27 @@ from .device_reports.dataset import (
     find_house_node,
 )
 from .device_reports.reports import ReportQuery, build_report
+from .forecast_builder import SolarForecastBuilder, read_solar_forecast_entities
+from .grid_flow_forecast_builder import build_grid_flow_forecast_snapshot
+from .grid_flow_forecast_response import build_grid_flow_forecast_response
+from .grid_price_forecast_builder import (
+    GridPriceForecastBuilder,
+    read_grid_sell_price_entity_id,
+)
+from .grid_price_forecast_response import build_grid_price_forecast_response
 from .house_device_consumers import extract_house_device_consumers
 from .house_forecast_response import build_house_forecast_response
+from .node_details.inverter import run_mode_condition
 from .point_forecast_response import build_solar_forecast_response
-from .power_reading import power_unit_factor
 from .power_polarity import is_power_inverted, watts_for_value_type
-from .solar_bias_correction.response import build_bias_correction_payload
-from .appliance_runtime_history import (
-    ApplianceRuntimeHistoryReader,
-    ApplianceRuntimeRequest,
+from .power_reading import power_unit_factor
+from .scheduling.action_resolution import resolve_executed_schedule_action
+from .scheduling.actual_history import ActualHistorySlot, build_entity_actual_histories
+from .scheduling.normal_state import (
+    build_controllable_entities,
 )
-from .slot_grid import get_local_current_slot_start
-from .today_slot_readers import (
-    TodaySlotBoundaryStateReader,
-    TodaySlotEnergyReader,
+from .scheduling.runtime_status import (
+    schedule_execution_status_to_dict,
 )
 from .scheduling.schedule import (
     ScheduleActionSetBy,
@@ -178,37 +176,33 @@ from .scheduling.schedule import (
     format_slot_id,
     inverter_action,
     materialize_schedule_slots,
-    prune_expired_slots,
     normalize_schedule_document_for_registry,
     normalize_slot_patch_request,
+    prune_expired_slots,
     read_schedule_control_config,
     schedule_document_from_dict,
     schedule_document_to_dict,
     slot_to_dict,
     strip_candidate_actions,
     with_slot_set_by,
-    validate_slot_patch_request,
-)
-from .appliances.generic_appliance import GenericApplianceRuntime
-from .scheduling.runtime_status import (
-    schedule_execution_status_to_dict,
-)
-from .scheduling.action_resolution import resolve_executed_schedule_action
-from .scheduling.actual_history import ActualHistorySlot, build_entity_actual_histories
-from .scheduling.normal_state import (
-    build_controllable_entities,
 )
 from .scheduling.schedule_executor import (
     ScheduleExecutor,
     ScheduleExecutorDependencies,
 )
 from .shared_meter_split import split_own_power
-from .slot_grid import SLOT, SLOT_MINUTES
+from .slot_grid import SLOT, SLOT_MINUTES, get_local_current_slot_start
 from .solar_bias_correction.models import read_bias_config
-from .visualization import read_visualization
+from .solar_bias_correction.response import build_bias_correction_payload
 from .solar_bias_correction.service import SolarBiasCorrectionService
 from .solar_bias_correction.service import health_for as solar_bias_health_for
+from .solar_inspector.service import SolarInspector
+from .span_history_model import SpanMeters, read_span_meters, recorder_tail_start
 from .storage import HelmanStorage, TrainingArtifactsStore
+from .today_slot_readers import (
+    TodaySlotBoundaryStateReader,
+    TodaySlotEnergyReader,
+)
 from .training.appliance_energy import (
     ApplianceEnergyTrainingJob,
     ApplianceEnergyTrainingRequest,
@@ -223,10 +217,14 @@ from .training.house_consumption import (
     HouseTrainingRequest,
 )
 from .training.house_consumption import health_for as house_consumption_health_for
-from .span_history_model import SpanMeters, recorder_tail_start, read_span_meters
 from .tree_builder import HelmanTreeBuilder, TreeIndex
-from .node_details.inverter import run_mode_condition
-from .vendors import DeviceTelemetry, INVERTER_TELEMETRY_KEY, resolve_vendor_config, resolve_vendor_telemetry
+from .vendors import (
+    INVERTER_TELEMETRY_KEY,
+    DeviceTelemetry,
+    resolve_vendor_config,
+    resolve_vendor_telemetry,
+)
+from .visualization import read_visualization
 
 _LOGGER = logging.getLogger(__name__)
 # Sentinel distinguishing "battery live state not supplied" from "supplied as
@@ -345,7 +343,7 @@ def _stored_training_job_status(
     is_stale: bool | None
     try:
         live_fingerprint = read_live_fingerprint()
-    except Exception:  # noqa: BLE001 - the status must survive a broken job
+    except Exception:
         _LOGGER.debug(
             "Could not read the live %s fingerprint", job_id, exc_info=True
         )
@@ -530,21 +528,27 @@ def _build_house_profile_health(snapshot: dict[str, Any]) -> tuple[str, str] | N
     if last_outcome == "insufficient_history":
         return (
             "house_profile_insufficient_history",
-            "Not enough recorder history to fit a house consumption profile: "
-            f"{snapshot.get('historyDaysAvailable')} days available, "
-            f"{snapshot.get('requiredHistoryDays')} required.",
+            (
+                "Not enough recorder history to fit a house consumption profile: "
+                f"{snapshot.get('historyDaysAvailable')} days available, "
+                f"{snapshot.get('requiredHistoryDays')} required."
+            ),
         )
     if last_outcome == "entity_missing":
         return (
             "house_profile_entity_missing",
-            "The configured house total energy entity no longer exists; "
-            "the house consumption profile cannot be refitted.",
+            (
+                "The configured house total energy entity no longer exists; "
+                "the house consumption profile cannot be refitted."
+            ),
         )
     if last_outcome == "training_failed":
         return (
             "house_profile_training_failed",
-            "House consumption profile training failed. Check the Home "
-            "Assistant log.",
+            (
+                "House consumption profile training failed. Check the Home "
+                "Assistant log."
+            ),
         )
     return None
 
@@ -905,6 +909,7 @@ class HelmanCoordinator:
         self._appliances_registry = AppliancesRegistryHolder(self._hass, lambda: self._active_config)
         self._solar_bias_store: Any = None
         self._solar_bias_service: SolarBiasCorrectionService | None = None
+        self._solar_inspector: SolarInspector | None = None
         self._training_artifacts_store: TrainingArtifactsStore | None = None
         self._training_batch: TrainingBatch | None = None
         # The fitted house consumption model the forecast is assembled from,
@@ -956,7 +961,7 @@ class HelmanCoordinator:
     def config(self) -> dict:
         return self._active_config
 
-    def record_run_explanation(self, explanation: "RunExplanation | None") -> None:
+    def record_run_explanation(self, explanation: RunExplanation | None) -> None:
         """Merge one successful run's condition record into the book.
 
         Called only from the optimizer loop's success path — a failed run never
@@ -1059,9 +1064,8 @@ class HelmanCoordinator:
                     getattr(sensor, "entity_id", "<unknown>"),
                 )
         hcfc_sensor = self._house_consumption_forecast_current_sensor
-        if hcfc_sensor is not None:
-            if getattr(hcfc_sensor, "hass", None) is not None:
-                hcfc_sensor.async_write_ha_state()
+        if hcfc_sensor is not None and getattr(hcfc_sensor, "hass", None) is not None:
+            hcfc_sensor.async_write_ha_state()
         # The two current-slot forecast entities ride the same slot-aligned
         # beat, which is what makes their recorded history a stair-step of what
         # was believed about each slot before it began.
@@ -1129,16 +1133,14 @@ class HelmanCoordinator:
             self._hass,
             self._solar_bias_store,
             bias_config,
-            config=self._active_config,
-            canonical_solar_forecast_provider=self._async_get_canonical_solar_forecast,
-            battery_forecast_provider=self._async_get_battery_forecast_snapshot,
-            house_forecast_snapshot_provider=self._get_adjusted_house_forecast_snapshot,
-            house_forecast_composition_provider=self._get_house_forecast_composition,
-            house_device_consumers_provider=self._get_house_device_consumers,
-            battery_soc_bounds_provider=self._get_battery_soc_bounds,
-            grid_price_snapshot_provider=self.grid_price_snapshot,
         )
         await self._solar_bias_service.async_setup()
+        self._solar_inspector = SolarInspector(
+            self._hass,
+            config=self._active_config,
+            live_sources=self,
+            bias_service=self._solar_bias_service,
+        )
         self._training_artifacts_store = TrainingArtifactsStore(self._hass)
         await self._training_artifacts_store.async_load()
         # Unconditionally, outside any bias enable gate: with bias correction
@@ -1445,7 +1447,7 @@ class HelmanCoordinator:
         tree = await self.get_device_tree()
         if find_house_node(tree) is None:
             return {"unavailable": "no_house_node"}
-        service = self._solar_bias_service
+        service = self._solar_inspector
         meters = read_span_meters(self._active_config)
         if meters.house is None:
             return {"unavailable": "no_house_meter"}
@@ -1649,6 +1651,32 @@ class HelmanCoordinator:
     @property
     def solar_bias_service(self) -> SolarBiasCorrectionService | None:
         return self._solar_bias_service
+
+    @property
+    def solar_inspector(self) -> SolarInspector | None:
+        return self._solar_inspector
+
+    async def canonical_solar_forecast(
+        self, *, reference_time: datetime
+    ) -> dict[str, Any] | None:
+        return await self._async_get_canonical_solar_forecast(
+            reference_time=reference_time
+        )
+
+    async def battery_forecast(self) -> dict[str, Any] | None:
+        return await self._async_get_battery_forecast_snapshot()
+
+    def house_forecast_snapshot(self) -> dict[str, Any] | None:
+        return self._get_adjusted_house_forecast_snapshot()
+
+    def house_forecast_composition(self) -> dict[str, Any] | None:
+        return self._get_house_forecast_composition()
+
+    async def house_device_consumers(self) -> list[dict[str, Any]]:
+        return await self._get_house_device_consumers()
+
+    def battery_soc_bounds(self) -> tuple[float, float] | None:
+        return self._get_battery_soc_bounds()
 
     def build_training_status(self) -> dict[str, Any]:
         """Every training job's status, for the config editor's Training tab.
@@ -3117,11 +3145,11 @@ class HelmanCoordinator:
         *,
         reference_time: datetime | None = None,
         reason: str | None = None,
-    ) -> "AutomationRunResult":
+    ) -> AutomationRunResult:
         from .automation.pipeline import (
             AutomationRunFailure,
-            AutomationRunResult,
             AutomationRunner,
+            AutomationRunResult,
         )
 
         automation_config = read_automation_config(self._active_config)
@@ -4039,7 +4067,7 @@ class HelmanCoordinator:
         return results
 
     async def _ensure_optimizer_condition_checkers(
-        self, key: tuple[str, int], group: "ConditionGroup"
+        self, key: tuple[str, int], group: ConditionGroup
     ) -> tuple[tuple[Any, ...], tuple[tuple[str, ...], ...]]:
         """One checker per ``custom`` entry, and the entities each entry reads.
 

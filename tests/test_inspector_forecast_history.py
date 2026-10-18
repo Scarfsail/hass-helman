@@ -1,17 +1,12 @@
 from __future__ import annotations
-import sys
-import types
-from _fakes import _bias_service_config
-
-
-from _fakes import DummyStore as _DummyStore
 
 import unittest
 from datetime import date, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-
+from _fakes import DummyStore as _DummyStore
+from _fakes import FakeInspectorLiveSources, _bias_service_config
 
 NOW = "2026-05-11T10:07:00+02:00"
 TODAY = "2026-05-11"
@@ -21,17 +16,20 @@ PAST_DAY = "2026-05-10"
 
 
 
-import importlib  # noqa: E402
+import importlib
 
 service_mod = importlib.import_module(
-    "custom_components.helman.solar_bias_correction.service"
+    "custom_components.helman.solar_inspector.service"
+)
+day_mod = importlib.import_module(
+    "custom_components.helman.solar_inspector.day"
 )
 models = importlib.import_module("custom_components.helman.solar_bias_correction.models")
 SlotEnergyBatch = importlib.import_module(
     "custom_components.helman.recorder_slot_energy"
 ).SlotEnergyBatch
 
-from zoneinfo import ZoneInfo  # noqa: E402
+from zoneinfo import ZoneInfo
 
 PRAGUE = ZoneInfo("Europe/Prague")
 
@@ -78,7 +76,8 @@ NEXT_SLOT = datetime.fromisoformat(f"{TODAY}T10:15:00+02:00")
 def _pinned_slot_helpers():
     return (
         patch.object(service_mod, "_current_slot_start", lambda _now: CURRENT_SLOT),
-        patch.object(service_mod, "_next_slot_boundary", lambda _now: NEXT_SLOT),
+        patch.object(day_mod, "_current_slot_start", lambda _now: CURRENT_SLOT),
+        patch.object(day_mod, "_next_slot_boundary", lambda _now: NEXT_SLOT),
     )
 
 
@@ -134,14 +133,16 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
             bus=SimpleNamespace(async_fire=lambda *a, **kw: None),
         )
 
-        async def _battery_forecast_provider():
+        async def _battery_forecast():
             return snapshot
 
-        service = service_mod.SolarBiasCorrectionService(
+        service = service_mod.SolarInspector(
             hass,
             _DummyStore(),
             _make_cfg(),
-            battery_forecast_provider=_battery_forecast_provider,
+            live_sources=FakeInspectorLiveSources(
+                battery_forecast=_battery_forecast,
+            ),
             config=_bias_service_config(_make_cfg(), soc="sensor.battery_soc"),
         )
         service._profile = models.SolarBiasProfile(factors={}, omitted_slots=[])
@@ -171,7 +172,7 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
         battery_actual=None,
         archived_points=None,
     ):
-        current_slot, next_slot = _pinned_slot_helpers()
+        current_slot, day_current_slot, next_slot = _pinned_slot_helpers()
         old_now = service_mod.dt_util.now
         # The day's solar actuals are the meter batch's solar column, so a test
         # that wants actuals seeds them there rather than stubbing a read of
@@ -186,7 +187,7 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
         }
         try:
             service_mod.dt_util.now = lambda: datetime.fromisoformat(NOW)
-            with current_slot, next_slot, patch.object(
+            with current_slot, day_current_slot, next_slot, patch.object(
                 service,
                 "_load_slot_energy_kwh_for_entities",
                 # Non-empty so an elapsed day with no stated purge horizon stays
@@ -250,8 +251,6 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
         grid = payload["series"]["gridForecast"]
         self.assertEqual([p["slot"] for p in soc], ["00:00", "23:45"])
         self.assertEqual([p["valueWh"] for p in grid], [-100.0, 250.0])
-        self.assertTrue(payload["availability"]["hasBatterySocForecast"])
-        self.assertTrue(payload["availability"]["hasGridForecast"])
 
     async def test_today_joins_the_recorder_to_the_live_snapshot_without_overlap(self):
         # Now is 10:07, so the current slot is 10:00 and the snapshot starts at 10:15.
@@ -306,7 +305,7 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
             {"timestamp": f"{TODAY}T10:15:00+02:00", "wh": 999.0},
             {"timestamp": f"{TODAY}T10:30:00+02:00", "wh": 999.0},
         ]
-        service._house_forecast_snapshot_provider = lambda: {
+        service._live_sources._house_forecast_snapshot = lambda: {
             "status": "available",
             "series": [
                 {"timestamp": f"{TODAY}T10:15:00+02:00", "nonDeferrable": {"value": 0.4}},
@@ -314,7 +313,7 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
             ],
         }
         service._house_scheduled_consumers = lambda: SCHEDULED_CONSUMERS
-        service._house_forecast_composition_provider = lambda: {
+        service._live_sources._house_forecast_composition = lambda: {
             "original_house_forecast": {
                 "status": "available",
                 "currentSlot": {
@@ -334,7 +333,7 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
         )
 
         house = payload["series"]["houseForecast"]
-        slots = [p["timestamp"][11:16] for p in house]
+        slots = [p["slot"] for p in house]
         # No hole at 10:00: every slot from 09:45 to 10:30 is present exactly once.
         self.assertEqual(slots, ["09:45", "10:00", "10:15", "10:30"])
         # 09:45 from the recorder; 10:00 summed from its own composition, base plus
@@ -374,7 +373,7 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
         series = payload["series"]
         for key in ("actual", "houseActual", "gridActual", "batteryActual"):
             self.assertEqual(
-                [p["timestamp"][11:16] for p in series[key]], ["09:45"], key
+                [p["slot"] for p in series[key]], ["09:45"], key
             )
         self.assertEqual([p["slot"] for p in series["batterySocActual"]], ["09:45"])
 
@@ -396,7 +395,7 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
         appliances twice and push the demand stack above production.
         """
         service = self._service(_snapshot())
-        service._house_forecast_snapshot_provider = lambda: {
+        service._live_sources._house_forecast_snapshot = lambda: {
             "status": "available",
             "series": [
                 {
@@ -506,14 +505,14 @@ class TestInspectorForecastComposition(_InspectorHarness):
 
     def _service(self, snapshot=None, *, composition=..., consumers=None):
         service = super()._service(snapshot or _snapshot())
-        service._house_forecast_snapshot_provider = lambda: ADJUSTED_HOUSE_FORECAST
+        service._live_sources._house_forecast_snapshot = lambda: ADJUSTED_HOUSE_FORECAST
         service._house_scheduled_consumers = lambda: SCHEDULED_CONSUMERS if consumers is None else consumers
         if composition is ...:
             composition = {
                 "original_house_forecast": ORIGINAL_HOUSE_FORECAST,
                 "demand_points": DEMAND_POINTS,
             }
-        service._house_forecast_composition_provider = lambda: composition
+        service._live_sources._house_forecast_composition = lambda: composition
         return service
 
     async def test_a_future_slot_is_itemised_per_scheduled_appliance(self):
@@ -544,7 +543,6 @@ class TestInspectorForecastComposition(_InspectorHarness):
         # with nothing scheduled is all base.
         self.assertEqual([p["unmeasuredWh"] for p in breakdown], [400.0, 500.0])
         self.assertEqual(breakdown[1]["appliances"], [])
-        self.assertTrue(payload["availability"]["hasHouseForecastBreakdown"])
 
     def test_the_slot_in_progress_is_itemised_from_the_currentSlot_entry(self):
         """The one slot the planner schedules into that is not in the series.
@@ -683,7 +681,7 @@ class TestInspectorForecastComposition(_InspectorHarness):
         payload = await self._inspect(self._service(), TODAY)
 
         forecast_by_slot = {
-            p["timestamp"][11:16]: p["valueWh"] for p in payload["series"]["houseForecast"]
+            p["slot"]: p["valueWh"] for p in payload["series"]["houseForecast"]
         }
         for point in payload["series"]["houseForecastBreakdown"]:
             self.assertAlmostEqual(
@@ -708,7 +706,7 @@ class TestInspectorForecastComposition(_InspectorHarness):
         )
 
         forecast_by_slot = {
-            p["timestamp"][11:16]: p["valueWh"]
+            p["slot"]: p["valueWh"]
             for p in payload["series"]["houseForecast"]
         }
         breakdown = {p["slot"]: p for p in payload["series"]["houseForecastBreakdown"]}
@@ -737,7 +735,7 @@ class TestInspectorForecastComposition(_InspectorHarness):
         )
 
         house = {
-            p["timestamp"][11:16]: p["valueWh"]
+            p["slot"]: p["valueWh"]
             for p in payload["series"]["houseForecast"]
         }
         self.assertEqual(house["10:00"], 200.0)
@@ -785,7 +783,6 @@ class TestInspectorForecastComposition(_InspectorHarness):
         payload = await self._inspect(self._service(composition=None), TODAY)
 
         self.assertEqual(payload["series"]["houseForecastBreakdown"], [])
-        self.assertFalse(payload["availability"]["hasHouseForecastBreakdown"])
         # The plain forecast figure is untouched — the card just has nothing to
         # itemise.
         self.assertEqual(
@@ -804,9 +801,8 @@ class TestInspectorForecastComposition(_InspectorHarness):
 
         def _composition():
             reads.append("read")
-            return None
 
-        service._house_forecast_composition_provider = _composition
+        service._live_sources._house_forecast_composition = _composition
         payload = await self._inspect(service, PAST_DAY)
 
         self.assertEqual(reads, [])

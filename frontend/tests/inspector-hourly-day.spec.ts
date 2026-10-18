@@ -24,12 +24,12 @@ const DAY = "2025-06-11";
  */
 async function mountInspector(page: Page, granularity: number): Promise<void> {
     await page.evaluate(({ date, granularity }) => {
-        const actual: Array<{ timestamp: string; valueWh: number }> = [];
+        const actual: Array<{ slot: string; valueWh: number }> = [];
         for (let m = 0; m < 1440; m += granularity) {
             const hh = String(Math.floor(m / 60)).padStart(2, "0");
             const mm = String(m % 60).padStart(2, "0");
             actual.push({
-                timestamp: `${date}T${hh}:${mm}:00`,
+                slot: `${hh}:${mm}`,
                 valueWh: Math.max(0, 400 - Math.abs(m - 720) / 2),
             });
         }
@@ -52,11 +52,8 @@ async function mountInspector(page: Page, granularity: number): Promise<void> {
                 gridForecastWh: null, gridActualWh: null,
                 batteryForecastWh: null, batteryActualWh: null,
             },
-            availability: { hasRawForecast: false, hasCorrectedForecast: false, hasActuals: true,
-                hasInvalidated: false, hasProfile: true, hasHouseForecast: false,
-                hasHouseActual: false, hasBatterySocForecast: false, hasBatterySocActual: false,
-                hasGridForecast: false, hasGridActual: false, hasBatteryForecast: false,
-                hasBatteryActual: false,
+            availability: {
+                hasProfile: true,
             },
             batterySocBounds: [],
             trainingExplainability: null,
@@ -153,9 +150,9 @@ test.describe("a day drawn from hourly statistics", () => {
             const el = document.querySelector("helman-solar-inspector") as any;
             const view = el._viewForSlot(el._payload);
             const points = view.series.actual;
-            return points[points.length - 1]?.timestamp ?? null;
+            return points[points.length - 1]?.slot ?? null;
         });
-        expect(lastSlot).toContain("T23:00");
+        expect(lastSlot).toBe("23:00");
     });
 
     test("draws its actuals with no forecast at all", async ({ page }) => {

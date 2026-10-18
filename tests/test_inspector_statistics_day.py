@@ -24,22 +24,19 @@ style of ``test_inspector_span_aggregates.py``.
 """
 
 from __future__ import annotations
-from _fakes import _bias_service_config
-
-
-from _fakes import DummyStore as _DummyStore
 
 import asyncio
 import unittest
-import pytest
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
+
+import pytest
+from _fakes import DummyStore as _DummyStore
+from _fakes import FakeInspectorLiveSources, _bias_service_config
 from homeassistant.components import recorder
 from homeassistant.util import dt as dt_util
-
-
 
 #: What the fake recorder hands back for ``period="hour"``, keyed by statistic id.
 STATISTICS_ROWS: dict[str, list[dict]] = {}
@@ -82,7 +79,8 @@ NOW = datetime(2026, 5, 25, 10, 0, tzinfo=PRAGUE)
 RECORDER_STUB = SimpleNamespace(async_add_executor_job=_run_in_executor)
 
 import importlib
-service_mod = importlib.import_module("custom_components.helman.solar_bias_correction.service")
+
+service_mod = importlib.import_module("custom_components.helman.solar_inspector.service")
 models = importlib.import_module("custom_components.helman.solar_bias_correction.models")
 recorder_series_mod = importlib.import_module("custom_components.helman.recorder_slot_energy")
 span_mod = importlib.import_module("custom_components.helman.recorder_statistics_span")
@@ -200,10 +198,11 @@ def _make_service(*, with_consumers: bool = False):
         daily_energy_entity_ids=["sensor.solar_today"],
         total_energy_entity_id=SOLAR_METER,
     )
-    service = service_mod.SolarBiasCorrectionService(
+    service = service_mod.SolarInspector(
         hass,
         _DummyStore(),
         cfg,
+        live_sources=FakeInspectorLiveSources(),
         config=_bias_service_config(
             cfg,
             house=HOUSE_METER,
@@ -218,7 +217,7 @@ def _make_service(*, with_consumers: bool = False):
         async def _device_consumers():
             return [{"energy_entity_id": WASHER_METER, "label": "Washer"}]
 
-        service._house_device_consumers_provider = _device_consumers
+        service._live_sources._house_device_consumers = _device_consumers
     return service
 
 
@@ -257,7 +256,7 @@ class TestSourceChoice(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["dataGranularityMinutes"], 60)
         self.assertEqual(
             payload["series"]["actual"],
-            [{"timestamp": f"{PURGED_DAY}T08:00:00+02:00", "valueWh": 1500.0}],
+            [{"slot": "08:00", "valueWh": 1500.0}],
         )
 
     async def test_the_day_the_purge_cuts_through_goes_wholly_to_statistics(self):
@@ -363,14 +362,14 @@ class TestMeasuredSeries(unittest.IsolatedAsyncioTestCase):
         first = f"{PURGED_DAY}T08:00:00+02:00"
 
         self.assertEqual(
-            [(p["timestamp"], p["valueWh"]) for p in series["actual"]],
-            [(first, 2000.0), (f"{PURGED_DAY}T09:00:00+02:00", 3000.0)],
+            [(p["slot"], p["valueWh"]) for p in series["actual"]],
+            [("08:00", 2000.0), ("09:00", 3000.0)],
         )
-        self.assertEqual(series["houseActual"], [{"timestamp": first, "valueWh": 500.0}])
+        self.assertEqual(series["houseActual"], [{"slot": "08:00", "valueWh": 500.0}])
         # Net grid is positive when exporting: 1.0 kWh out against 0.25 kWh in.
-        self.assertEqual(series["gridActual"], [{"timestamp": first, "valueWh": 750.0}])
+        self.assertEqual(series["gridActual"], [{"slot": "08:00", "valueWh": 750.0}])
         # Net battery is positive when charging: 0.5 kWh in against 0.125 out.
-        self.assertEqual(series["batteryActual"], [{"timestamp": first, "valueWh": 375.0}])
+        self.assertEqual(series["batteryActual"], [{"slot": "08:00", "valueWh": 375.0}])
         self.assertEqual(payload["totals"]["actualWh"], 5000.0)
 
     async def test_a_measurement_is_read_as_its_hourly_mean(self):
@@ -394,7 +393,7 @@ class TestMeasuredSeries(unittest.IsolatedAsyncioTestCase):
         # The sensor publishes watts, so an hour's mean W *is* that hour's Wh.
         self.assertEqual(
             payload["series"]["houseForecast"],
-            [{"timestamp": f"{PURGED_DAY}T08:00:00+02:00", "valueWh": 800.0}],
+            [{"slot": "08:00", "valueWh": 800.0}],
         )
 
     async def test_the_battery_forecast_series_come_back_hourly_from_statistics(self):
@@ -438,11 +437,11 @@ class TestMeasuredSeries(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             payload["series"]["gridForecast"],
-            [{"timestamp": f"{PURGED_DAY}T08:00:00+02:00", "valueWh": 750.0}],
+            [{"slot": "08:00", "valueWh": 750.0}],
         )
         self.assertEqual(
             payload["series"]["batteryForecast"],
-            [{"timestamp": f"{PURGED_DAY}T08:00:00+02:00", "valueWh": 1200.0}],
+            [{"slot": "08:00", "valueWh": 1200.0}],
         )
         # Forecast and actual are the same quantity at the same scale: an hour
         # where they are equal produces equal day totals.
@@ -450,8 +449,6 @@ class TestMeasuredSeries(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             payload["totals"]["gridForecastWh"], payload["totals"]["gridActualWh"]
         )
-        self.assertTrue(payload["availability"]["hasBatterySocForecast"])
-        self.assertTrue(payload["availability"]["hasGridForecast"])
 
     async def test_a_price_rail_holds_its_hourly_rate_across_the_hour(self):
         # Emitted at ``HH:00`` alone the rail would come back three-quarters
@@ -595,22 +592,21 @@ class TestSolarForecastFromStatistics(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(payload["dataGranularityMinutes"], 60)
         self.assertEqual(
-            [(p["timestamp"], p["valueWh"]) for p in payload["series"]["raw"]],
+            [(p["slot"], p["valueWh"]) for p in payload["series"]["raw"]],
             [
-                (f"{PURGED_DAY}T08:00:00+02:00", 500.0),
-                (f"{PURGED_DAY}T08:15:00+02:00", 500.0),
-                (f"{PURGED_DAY}T08:30:00+02:00", 500.0),
-                (f"{PURGED_DAY}T08:45:00+02:00", 500.0),
-                (f"{PURGED_DAY}T09:00:00+02:00", 800.0),
-                (f"{PURGED_DAY}T09:15:00+02:00", 800.0),
-                (f"{PURGED_DAY}T09:30:00+02:00", 800.0),
-                (f"{PURGED_DAY}T09:45:00+02:00", 800.0),
+                ("08:00", 500.0),
+                ("08:15", 500.0),
+                ("08:30", 500.0),
+                ("08:45", 500.0),
+                ("09:00", 800.0),
+                ("09:15", 800.0),
+                ("09:30", 800.0),
+                ("09:45", 800.0),
             ],
         )
         # The hour's forecast energy is its four slots summed, not a quarter of
         # the mean and not four times it.
         self.assertEqual(payload["totals"]["rawWh"], 4 * 500.0 + 4 * 800.0)
-        self.assertTrue(payload["availability"]["hasRawForecast"])
 
     async def test_the_back_fill_wrote_nothing_leaves_an_actuals_only_day(self):
         # No forecast rows for the day: not an error, not an empty day -- just a
@@ -619,11 +615,8 @@ class TestSolarForecastFromStatistics(unittest.IsolatedAsyncioTestCase):
 
         payload = await _purged_day()
 
-        self.assertFalse(payload["availability"]["hasRawForecast"])
-        self.assertFalse(payload["availability"]["hasCorrectedForecast"])
         self.assertIsNone(payload["totals"]["rawWh"])
-        # ``hasActuals`` alone is what keeps the chart drawing.
-        self.assertTrue(payload["availability"]["hasActuals"])
+        self.assertEqual(len(payload["series"]["actual"]), 1)
 
 
 class TestWhatStatisticsCannotBringBack(unittest.IsolatedAsyncioTestCase):
@@ -634,7 +627,6 @@ class TestWhatStatisticsCannotBringBack(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(payload["dataGranularityMinutes"], 60)
         self.assertEqual(payload["series"]["actual"], [])
-        self.assertFalse(payload["availability"]["hasActuals"])
 
 
 def _solar_meter_batch(by_slot_wh: dict[str, float]):

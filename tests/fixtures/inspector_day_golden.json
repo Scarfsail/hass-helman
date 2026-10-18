@@ -1,0 +1,194 @@
+{
+  "date": "2026-04-25",
+  "timezone": "Europe/Prague",
+  "dataGranularityMinutes": 15,
+  "status": "applied",
+  "effectiveVariant": "adjusted",
+  "trainedAt": "2026-04-25T03:00:00+02:00",
+  "range": {
+    "minDate": "2026-04-01",
+    "maxDate": "2026-04-25",
+    "canGoPrevious": true,
+    "canGoNext": false,
+    "isToday": true,
+    "isFuture": false
+  },
+  "series": {
+    "raw": [
+      {
+        "slot": "08:00",
+        "valueWh": 25.0
+      },
+      {
+        "slot": "08:15",
+        "valueWh": 25.0
+      },
+      {
+        "slot": "08:30",
+        "valueWh": 25.0
+      },
+      {
+        "slot": "08:45",
+        "valueWh": 25.0
+      },
+      {
+        "slot": "09:00",
+        "valueWh": 50.0
+      },
+      {
+        "slot": "09:15",
+        "valueWh": 50.0
+      },
+      {
+        "slot": "09:30",
+        "valueWh": 50.0
+      },
+      {
+        "slot": "09:45",
+        "valueWh": 50.0
+      }
+    ],
+    "corrected": [
+      {
+        "slot": "08:00",
+        "valueWh": 37.5
+      },
+      {
+        "slot": "08:15",
+        "valueWh": 25.0
+      },
+      {
+        "slot": "08:30",
+        "valueWh": 25.0
+      },
+      {
+        "slot": "08:45",
+        "valueWh": 25.0
+      },
+      {
+        "slot": "09:00",
+        "valueWh": 25.0
+      },
+      {
+        "slot": "09:15",
+        "valueWh": 50.0
+      },
+      {
+        "slot": "09:30",
+        "valueWh": 50.0
+      },
+      {
+        "slot": "09:45",
+        "valueWh": 50.0
+      }
+    ],
+    "actual": [
+      {
+        "slot": "08:00",
+        "valueWh": 90.0
+      }
+    ],
+    "invalidated": [],
+    "factors": [
+      {
+        "slot": "08:00",
+        "factor": 1.5
+      },
+      {
+        "slot": "09:00",
+        "factor": 0.5
+      }
+    ],
+    "impact": [
+      {
+        "slot": "08:00",
+        "rawWh": 25.0,
+        "correctedWh": 37.5,
+        "impactWh": 12.5,
+        "factor": 1.5
+      },
+      {
+        "slot": "08:15",
+        "rawWh": 25.0,
+        "correctedWh": 25.0,
+        "impactWh": 0.0,
+        "factor": 1.0
+      },
+      {
+        "slot": "08:30",
+        "rawWh": 25.0,
+        "correctedWh": 25.0,
+        "impactWh": 0.0,
+        "factor": 1.0
+      },
+      {
+        "slot": "08:45",
+        "rawWh": 25.0,
+        "correctedWh": 25.0,
+        "impactWh": 0.0,
+        "factor": 1.0
+      },
+      {
+        "slot": "09:00",
+        "rawWh": 50.0,
+        "correctedWh": 25.0,
+        "impactWh": -25.0,
+        "factor": 0.5
+      },
+      {
+        "slot": "09:15",
+        "rawWh": 50.0,
+        "correctedWh": 50.0,
+        "impactWh": 0.0,
+        "factor": 1.0
+      },
+      {
+        "slot": "09:30",
+        "rawWh": 50.0,
+        "correctedWh": 50.0,
+        "impactWh": 0.0,
+        "factor": 1.0
+      },
+      {
+        "slot": "09:45",
+        "rawWh": 50.0,
+        "correctedWh": 50.0,
+        "impactWh": 0.0,
+        "factor": 1.0
+      }
+    ],
+    "houseForecast": [],
+    "houseActual": [],
+    "houseActualBreakdown": [],
+    "houseForecastBreakdown": [],
+    "batterySocForecast": [],
+    "batterySocActual": [],
+    "gridForecast": [],
+    "gridActual": [],
+    "batteryForecast": [],
+    "batteryActual": [],
+    "importPrice": [],
+    "exportPrice": [],
+    "moneyActual": [],
+    "moneyForecast": []
+  },
+  "totals": {
+    "rawWh": 300.0,
+    "correctedWh": 287.5,
+    "actualWh": 90.0,
+    "houseForecastWh": null,
+    "houseActualWh": null,
+    "gridForecastWh": null,
+    "gridActualWh": null,
+    "batteryForecastWh": null,
+    "batteryActualWh": null,
+    "moneyActual": null,
+    "moneyForecast": null
+  },
+  "availability": {
+    "hasProfile": true
+  },
+  "priceUnit": null,
+  "batterySocBounds": [],
+  "trainingExplainability": null
+}

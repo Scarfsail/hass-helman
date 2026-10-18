@@ -40,6 +40,13 @@ export interface DayAggregateRow {
         unmeasuredWh: number;
         appliances: ApplianceComponent[];
     } | null;
+    /** Gross house source mix energy-weighted over the bucket's hours. */
+    houseSourceMix?: {
+        solar: number;
+        battery: number;
+        grid: number;
+        unattributed: number;
+    } | null;
 }
 
 export interface DayAggregatesPayload {

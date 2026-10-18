@@ -4,7 +4,7 @@ import logging
 
 import voluptuous as vol
 from homeassistant.components import websocket_api
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 
 from ..ws_common import get_coordinator, validate_dates
 
@@ -27,7 +27,7 @@ async def ws_get_solar_bias_inspector(
     if not validate_dates(connection, msg, raw_date):
         return
 
-    service = _get_solar_bias_service(hass, connection, msg)
+    service = _get_solar_inspector(hass, connection, msg)
     if service is None:
         return
 
@@ -84,7 +84,7 @@ async def ws_get_solar_bias_day_aggregates(
     if not validate_dates(connection, msg, raw_start, raw_end):
         return
 
-    service = _get_solar_bias_service(hass, connection, msg)
+    service = _get_solar_inspector(hass, connection, msg)
     if service is None:
         return
 
@@ -108,7 +108,7 @@ async def ws_get_solar_bias_day_aggregates(
     connection.send_result(msg["id"], payload)
 
 
-def _get_solar_bias_service(
+def _get_solar_inspector(
     hass: HomeAssistant,
     connection: websocket_api.ActiveConnection,
     msg: dict,
@@ -117,8 +117,8 @@ def _get_solar_bias_service(
     if coordinator is None:
         return None
 
-    service = coordinator.solar_bias_service
-    if service is None:
+    inspector = getattr(coordinator, "solar_inspector", None)
+    if inspector is None:
         connection.send_error(
             msg["id"],
             "not_loaded",
@@ -126,4 +126,7 @@ def _get_solar_bias_service(
         )
         return None
 
-    return service
+    return inspector
+
+
+_get_solar_bias_service = _get_solar_inspector

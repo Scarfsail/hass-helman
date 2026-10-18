@@ -23,14 +23,14 @@ const DAY = "2026-07-18";
  */
 async function mountInspector(page: Page, slotMinutes: number): Promise<void> {
     await page.evaluate(({ date, slot }) => {
-        const corrected: Array<{ timestamp: string; valueWh: number }> = [];
+        const corrected: Array<{ slot: string; valueWh: number }> = [];
         const impact: InspectorPayload["series"]["impact"] = [];
         const soc: Array<{ slot: string; pct: number }> = [];
         for (let m = 0; m < 1440; m += 15) {
             const hh = String(Math.floor(m / 60)).padStart(2, "0");
             const mm = String(m % 60).padStart(2, "0");
             const v = Math.max(0, 400 - Math.abs(m - 720) / 2);
-            corrected.push({ timestamp: `${date}T${hh}:${mm}:00`, valueWh: v });
+            corrected.push({ slot: `${hh}:${mm}`, valueWh: v });
             soc.push({ slot: `${hh}:${mm}`, pct: 40 });
             impact.push({ slot: `${hh}:${mm}`, rawWh: v, correctedWh: v, impactWh: 0, factor: 1 });
         }
@@ -52,11 +52,8 @@ async function mountInspector(page: Page, slotMinutes: number): Promise<void> {
                 gridForecastWh: null, gridActualWh: null,
                 batteryForecastWh: null, batteryActualWh: null,
             },
-            availability: { hasRawForecast: false, hasCorrectedForecast: true, hasActuals: false,
-                hasInvalidated: false, hasProfile: true, hasHouseForecast: false,
-                hasHouseActual: false, hasBatterySocForecast: true, hasBatterySocActual: false,
-                hasGridForecast: false, hasGridActual: false, hasBatteryForecast: false,
-                hasBatteryActual: false,
+            availability: {
+                hasProfile: true,
             },
             batterySocBounds: [],
             trainingExplainability: null,

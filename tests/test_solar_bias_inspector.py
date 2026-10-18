@@ -1,18 +1,13 @@
 from __future__ import annotations
-from unittest.mock import patch, AsyncMock
-from zoneinfo import ZoneInfo
-from _fakes import _bias_service_config
-
-
-from _fakes import DummyStore as _DummyStore
 
 import asyncio
 import importlib
-
-import pytest
 from datetime import date, datetime, time, timezone
 from types import SimpleNamespace
 
+import pytest
+from _fakes import DummyStore as _DummyStore
+from _fakes import FakeInspectorLiveSources, _bias_service_config
 
 models = importlib.import_module("custom_components.helman.solar_bias_correction.models")
 
@@ -30,19 +25,19 @@ def test_inspector_day_serializes_frontend_contract():
             series=models.SolarBiasInspectorSeries(
                 raw=[
                     models.SolarBiasInspectorPoint(
-                        timestamp="2026-04-25T08:00:00+02:00",
+                        slot="08:00",
                         value_wh=420.0,
                     )
                 ],
                 corrected=[
                     models.SolarBiasInspectorPoint(
-                        timestamp="2026-04-25T08:00:00+02:00",
+                        slot="08:00",
                         value_wh=510.0,
                     )
                 ],
                 actual=[
                     models.SolarBiasInspectorPoint(
-                        timestamp="2026-04-25T08:00:00+02:00",
+                        slot="08:00",
                         value_wh=480.0,
                     )
                 ],
@@ -54,9 +49,6 @@ def test_inspector_day_serializes_frontend_contract():
                 actual_wh=480.0,
             ),
             availability=models.SolarBiasInspectorAvailability(
-                has_raw_forecast=True,
-                has_corrected_forecast=True,
-                has_actuals=True,
                 has_profile=True,
             ),
             is_today=True,
@@ -80,9 +72,9 @@ def test_inspector_day_serializes_frontend_contract():
             "isFuture": False,
         },
         "series": {
-            "raw": [{"timestamp": "2026-04-25T08:00:00+02:00", "valueWh": 420.0}],
-            "corrected": [{"timestamp": "2026-04-25T08:00:00+02:00", "valueWh": 510.0}],
-            "actual": [{"timestamp": "2026-04-25T08:00:00+02:00", "valueWh": 480.0}],
+            "raw": [{"slot": "08:00", "valueWh": 420.0}],
+            "corrected": [{"slot": "08:00", "valueWh": 510.0}],
+            "actual": [{"slot": "08:00", "valueWh": 480.0}],
             "invalidated": [],
             "factors": [{"slot": "08:00", "factor": 1.21}],
             "impact": [],
@@ -115,23 +107,7 @@ def test_inspector_day_serializes_frontend_contract():
             "moneyForecast": None,
         },
         "availability": {
-            "hasRawForecast": True,
-            "hasCorrectedForecast": True,
-            "hasActuals": True,
             "hasProfile": True,
-            "hasInvalidated": False,
-            "hasHouseForecast": False,
-            "hasHouseActual": False,
-            "hasHouseActualBreakdown": False,
-            "hasHouseForecastBreakdown": False,
-            "hasBatterySocForecast": False,
-            "hasBatterySocActual": False,
-            "hasGridForecast": False,
-            "hasGridActual": False,
-            "hasBatteryForecast": False,
-            "hasBatteryActual": False,
-            "hasImportPrice": False,
-            "hasExportPrice": False,
         },
         "priceUnit": None,
         "batterySocBounds": [],
@@ -156,9 +132,6 @@ def test_inspector_day_serializes_battery_soc_bounds():
                 raw_wh=None, corrected_wh=None, actual_wh=None
             ),
             availability=models.SolarBiasInspectorAvailability(
-                has_raw_forecast=False,
-                has_corrected_forecast=False,
-                has_actuals=False,
                 has_profile=True,
             ),
             is_today=True,
@@ -207,9 +180,6 @@ def test_inspector_day_serializes_impact_and_training_explainability():
                 actual_wh=None,
             ),
             availability=models.SolarBiasInspectorAvailability(
-                has_raw_forecast=False,
-                has_corrected_forecast=False,
-                has_actuals=False,
                 has_profile=True,
             ),
             is_today=True,
@@ -358,7 +328,10 @@ def test_load_actuals_for_day_uses_existing_slot_actual_reader():
     assert result == {"08:00": 120.0, "08:15": 80.0}
 
 
-service_mod = importlib.import_module("custom_components.helman.solar_bias_correction.service")
+service_mod = importlib.import_module("custom_components.helman.solar_inspector.service")
+bias_service_mod = importlib.import_module("custom_components.helman.solar_bias_correction.service")
+trainer_mod = importlib.import_module("custom_components.helman.solar_bias_correction.trainer")
+compute_fingerprint = trainer_mod.compute_fingerprint
 
 
 def _recorded_points_of(points: list[dict]):
@@ -392,12 +365,15 @@ def _make_service(canonical_provider=None, recorded=None):
         async_add_executor_job=_executor_job,
     )
     service_mod.load_archived_forecast_points = _recorded_points_of(recorded or [])
-    return service_mod.SolarBiasCorrectionService(
+    return service_mod.SolarInspector(
         hass,
         _DummyStore(),
         _make_cfg(),
-        canonical_solar_forecast_provider=canonical_provider,
-     config=_bias_service_config(_make_cfg()),)
+        live_sources=FakeInspectorLiveSources(
+            canonical_solar_forecast=canonical_provider,
+        ),
+        config=_bias_service_config(_make_cfg()),
+    )
 
 
 def _canonical_provider(raw_points, corrected_points=None):
@@ -440,7 +416,7 @@ def test_inspector_day_applies_current_profile_and_totals():
     )
     service._metadata = models.SolarBiasMetadata(
         trained_at="2026-04-25T03:00:00+02:00",
-        training_config_fingerprint=service_mod.compute_fingerprint(_make_cfg()),
+        training_config_fingerprint=compute_fingerprint(_make_cfg()),
         usable_days=12,
         dropped_days=[],
         factor_min=0.5,
@@ -465,50 +441,34 @@ def test_inspector_day_applies_current_profile_and_totals():
     assert payload["status"] == "applied"
     assert payload["effectiveVariant"] == "adjusted"
     assert payload["availability"] == {
-        "hasRawForecast": True,
-        "hasCorrectedForecast": True,
-        "hasActuals": True,
         "hasProfile": True,
-        "hasInvalidated": False,
-        "hasHouseForecast": False,
-        "hasHouseActual": False,
-        "hasHouseActualBreakdown": False,
-        "hasHouseForecastBreakdown": False,
-        "hasBatterySocForecast": False,
-        "hasBatterySocActual": False,
-        "hasGridForecast": False,
-        "hasGridActual": False,
-        "hasBatteryForecast": False,
-        "hasBatteryActual": False,
-        "hasImportPrice": False,
-        "hasExportPrice": False,
     }
     assert payload["series"]["raw"] == [
-        {"timestamp": "2026-04-25T08:00:00+02:00", "valueWh": 25.0},
-        {"timestamp": "2026-04-25T08:15:00+02:00", "valueWh": 25.0},
-        {"timestamp": "2026-04-25T08:30:00+02:00", "valueWh": 25.0},
-        {"timestamp": "2026-04-25T08:45:00+02:00", "valueWh": 25.0},
-        {"timestamp": "2026-04-25T09:00:00+02:00", "valueWh": 50.0},
-        {"timestamp": "2026-04-25T09:15:00+02:00", "valueWh": 50.0},
-        {"timestamp": "2026-04-25T09:30:00+02:00", "valueWh": 50.0},
-        {"timestamp": "2026-04-25T09:45:00+02:00", "valueWh": 50.0},
+        {"slot": "08:00", "valueWh": 25.0},
+        {"slot": "08:15", "valueWh": 25.0},
+        {"slot": "08:30", "valueWh": 25.0},
+        {"slot": "08:45", "valueWh": 25.0},
+        {"slot": "09:00", "valueWh": 50.0},
+        {"slot": "09:15", "valueWh": 50.0},
+        {"slot": "09:30", "valueWh": 50.0},
+        {"slot": "09:45", "valueWh": 50.0},
     ]
     # Every slot here has elapsed, so the whole curve comes from the archive and
     # is corrected by applying the current profile -- exactly as the same day
     # will be drawn tomorrow. The snapshot's own correctedPoints cover only the
     # slots the clock has not reached, of which this day has none.
     assert payload["series"]["corrected"] == [
-        {"timestamp": "2026-04-25T08:00:00+02:00", "valueWh": 37.5},
-        {"timestamp": "2026-04-25T08:15:00+02:00", "valueWh": 25.0},
-        {"timestamp": "2026-04-25T08:30:00+02:00", "valueWh": 25.0},
-        {"timestamp": "2026-04-25T08:45:00+02:00", "valueWh": 25.0},
-        {"timestamp": "2026-04-25T09:00:00+02:00", "valueWh": 25.0},
-        {"timestamp": "2026-04-25T09:15:00+02:00", "valueWh": 50.0},
-        {"timestamp": "2026-04-25T09:30:00+02:00", "valueWh": 50.0},
-        {"timestamp": "2026-04-25T09:45:00+02:00", "valueWh": 50.0},
+        {"slot": "08:00", "valueWh": 37.5},
+        {"slot": "08:15", "valueWh": 25.0},
+        {"slot": "08:30", "valueWh": 25.0},
+        {"slot": "08:45", "valueWh": 25.0},
+        {"slot": "09:00", "valueWh": 25.0},
+        {"slot": "09:15", "valueWh": 50.0},
+        {"slot": "09:30", "valueWh": 50.0},
+        {"slot": "09:45", "valueWh": 50.0},
     ]
     assert payload["series"]["actual"] == [
-        {"timestamp": "2026-04-25T08:00:00+02:00", "valueWh": 90.0}
+        {"slot": "08:00", "valueWh": 90.0}
     ]
     assert payload["series"]["factors"] == [
         {"slot": "08:00", "factor": 1.5},
@@ -552,7 +512,7 @@ def test_inspector_day_today_preserves_15min_granularity():
     )
     service._metadata = models.SolarBiasMetadata(
         trained_at="2026-04-25T03:00:00+02:00",
-        training_config_fingerprint=service_mod.compute_fingerprint(_make_cfg()),
+        training_config_fingerprint=compute_fingerprint(_make_cfg()),
         usable_days=12,
         dropped_days=[],
         factor_min=0.8,
@@ -575,16 +535,16 @@ def test_inspector_day_today_preserves_15min_granularity():
         service_mod.dt_util.now = old_now
 
     assert payload["series"]["raw"] == [
-        {"timestamp": "2026-04-25T16:00:00+02:00", "valueWh": 600.0},
-        {"timestamp": "2026-04-25T16:15:00+02:00", "valueWh": 600.0},
-        {"timestamp": "2026-04-25T16:30:00+02:00", "valueWh": 600.0},
-        {"timestamp": "2026-04-25T16:45:00+02:00", "valueWh": 600.0},
+        {"slot": "16:00", "valueWh": 600.0},
+        {"slot": "16:15", "valueWh": 600.0},
+        {"slot": "16:30", "valueWh": 600.0},
+        {"slot": "16:45", "valueWh": 600.0},
     ]
     assert payload["series"]["corrected"] == [
-        {"timestamp": "2026-04-25T16:00:00+02:00", "valueWh": 600.0},
-        {"timestamp": "2026-04-25T16:15:00+02:00", "valueWh": 480.0},
-        {"timestamp": "2026-04-25T16:30:00+02:00", "valueWh": 540.0},
-        {"timestamp": "2026-04-25T16:45:00+02:00", "valueWh": 600.0},
+        {"slot": "16:00", "valueWh": 600.0},
+        {"slot": "16:15", "valueWh": 480.0},
+        {"slot": "16:30", "valueWh": 540.0},
+        {"slot": "16:45", "valueWh": 600.0},
     ]
 
     impact = payload["series"]["impact"]
@@ -607,7 +567,7 @@ def test_inspector_day_impact_factor_is_none_when_raw_is_zero():
     service._profile = models.SolarBiasProfile(factors={}, omitted_slots=[])
     service._metadata = models.SolarBiasMetadata(
         trained_at="2026-04-25T03:00:00+02:00",
-        training_config_fingerprint=service_mod.compute_fingerprint(_make_cfg()),
+        training_config_fingerprint=compute_fingerprint(_make_cfg()),
         usable_days=12,
         dropped_days=[],
         factor_min=None,
@@ -641,7 +601,7 @@ def test_inspector_day_uses_trained_usable_days_for_previous_range():
     service._cfg.max_training_window_days = 20
     service._metadata = models.SolarBiasMetadata(
         trained_at="2026-04-25T03:00:00+02:00",
-        training_config_fingerprint=service_mod.compute_fingerprint(service._cfg),
+        training_config_fingerprint=compute_fingerprint(service._cfg),
         usable_days=15,
         dropped_days=[],
         factor_min=None,
@@ -712,10 +672,10 @@ def test_inspector_day_splices_today_at_the_current_slot():
     # onward has not, so it comes from the snapshot. No slot is repeated and
     # none is lost across the seam.
     assert payload["series"]["raw"] == [
-        {"timestamp": "2026-04-25T09:00:00+02:00", "valueWh": 100.0},
-        {"timestamp": "2026-04-25T10:00:00+02:00", "valueWh": 200.0},
-        {"timestamp": "2026-04-25T10:15:00+02:00", "valueWh": 300.0},
-        {"timestamp": "2026-04-25T11:00:00+02:00", "valueWh": 400.0},
+        {"slot": "09:00", "valueWh": 100.0},
+        {"slot": "10:00", "valueWh": 200.0},
+        {"slot": "10:15", "valueWh": 300.0},
+        {"slot": "11:00", "valueWh": 400.0},
     ]
 
 
@@ -750,7 +710,7 @@ def test_inspector_day_leaves_a_hole_where_today_was_never_archived():
         service_mod.dt_util.now = old_now
 
     assert payload["series"]["raw"] == [
-        {"timestamp": "2026-04-25T10:15:00+02:00", "valueWh": 300.0}
+        {"slot": "10:15", "valueWh": 300.0}
     ]
 
 
@@ -771,7 +731,6 @@ def test_inspector_day_without_profile_keeps_corrected_equal_to_raw():
 
     assert payload["effectiveVariant"] == "raw"
     assert payload["availability"]["hasProfile"] is False
-    assert payload["availability"]["hasCorrectedForecast"] is True
     assert payload["series"]["corrected"] == payload["series"]["raw"]
     assert payload["series"]["factors"] == []
 
@@ -788,7 +747,7 @@ def test_inspector_day_stale_profile_shows_factors_but_uses_raw_variant():
     )
     service._metadata = models.SolarBiasMetadata(
         trained_at="2026-04-25T03:00:00+02:00",
-        training_config_fingerprint=service_mod.compute_fingerprint(_make_cfg()),
+        training_config_fingerprint=compute_fingerprint(_make_cfg()),
         usable_days=12,
         dropped_days=[],
         factor_min=2.0,
@@ -833,7 +792,7 @@ def test_inspector_day_training_failed_preserved_profile_remains_adjusted():
     )
     service._metadata = models.SolarBiasMetadata(
         trained_at="2026-04-25T03:00:00+02:00",
-        training_config_fingerprint=service_mod.compute_fingerprint(_make_cfg()),
+        training_config_fingerprint=compute_fingerprint(_make_cfg()),
         usable_days=12,
         dropped_days=[],
         factor_min=2.0,
@@ -860,7 +819,7 @@ def test_inspector_day_training_failed_preserved_profile_remains_adjusted():
     assert payload["availability"]["hasProfile"] is True
     assert payload["series"]["factors"] == [{"slot": "08:00", "factor": 2.0}]
     assert payload["series"]["corrected"] == [
-        {"timestamp": "2026-04-25T08:00:00+02:00", "valueWh": 200.0}
+        {"slot": "08:00", "valueWh": 200.0}
     ]
 
 
@@ -872,7 +831,7 @@ def test_inspector_day_routes_invalidated_actual_points_out_of_actual_series():
     )
     service._metadata = models.SolarBiasMetadata(
         trained_at="2026-04-25T03:00:00+02:00",
-        training_config_fingerprint=service_mod.compute_fingerprint(_make_cfg()),
+        training_config_fingerprint=compute_fingerprint(_make_cfg()),
         usable_days=12,
         dropped_days=[],
         factor_min=0.5,
@@ -906,19 +865,18 @@ def test_inspector_day_routes_invalidated_actual_points_out_of_actual_series():
         service_mod.dt_util.now = old_now
 
     assert payload["series"]["actual"] == [
-        {"timestamp": "2026-04-24T09:00:00+02:00", "valueWh": 60.0}
+        {"slot": "09:00", "valueWh": 60.0}
     ]
     assert payload["series"]["invalidated"] == [
-        {"timestamp": "2026-04-24T08:00:00+02:00", "valueWh": 40.0},
-        {"timestamp": "2026-04-24T08:15:00+02:00", "valueWh": 50.0},
+        {"slot": "08:00", "valueWh": 40.0},
+        {"slot": "08:15", "valueWh": 50.0},
     ]
-    assert payload["availability"]["hasInvalidated"] is True
     assert (
         payload["series"]["actual"] + payload["series"]["invalidated"]
         == [
-            {"timestamp": "2026-04-24T09:00:00+02:00", "valueWh": 60.0},
-            {"timestamp": "2026-04-24T08:00:00+02:00", "valueWh": 40.0},
-            {"timestamp": "2026-04-24T08:15:00+02:00", "valueWh": 50.0},
+            {"slot": "09:00", "valueWh": 60.0},
+            {"slot": "08:00", "valueWh": 40.0},
+            {"slot": "08:15", "valueWh": 50.0},
         ]
     )
 
@@ -931,7 +889,7 @@ def test_inspector_day_keeps_before_first_forecast_slot_actual_in_actual_series(
     )
     service._metadata = models.SolarBiasMetadata(
         trained_at="2026-04-25T03:00:00+02:00",
-        training_config_fingerprint=service_mod.compute_fingerprint(_make_cfg()),
+        training_config_fingerprint=compute_fingerprint(_make_cfg()),
         usable_days=12,
         dropped_days=[],
         factor_min=0.5,
@@ -965,10 +923,10 @@ def test_inspector_day_keeps_before_first_forecast_slot_actual_in_actual_series(
         service_mod.dt_util.now = old_now
 
     assert payload["series"]["actual"] == [
-        {"timestamp": "2026-04-24T07:45:00+02:00", "valueWh": 30.0}
+        {"slot": "07:45", "valueWh": 30.0}
     ]
     assert payload["series"]["invalidated"] == [
-        {"timestamp": "2026-04-24T08:00:00+02:00", "valueWh": 40.0}
+        {"slot": "08:00", "valueWh": 40.0}
     ]
 
 
@@ -980,7 +938,7 @@ def test_inspector_day_without_date_invalidations_keeps_invalidated_series_empty
     )
     service._metadata = models.SolarBiasMetadata(
         trained_at="2026-04-25T03:00:00+02:00",
-        training_config_fingerprint=service_mod.compute_fingerprint(_make_cfg()),
+        training_config_fingerprint=compute_fingerprint(_make_cfg()),
         usable_days=12,
         dropped_days=[],
         factor_min=0.5,
@@ -1014,12 +972,11 @@ def test_inspector_day_without_date_invalidations_keeps_invalidated_series_empty
         service_mod.dt_util.now = old_now
 
     assert payload["series"]["actual"] == [
-        {"timestamp": "2026-04-25T08:00:00+02:00", "valueWh": 40.0},
-        {"timestamp": "2026-04-25T08:15:00+02:00", "valueWh": 50.0},
-        {"timestamp": "2026-04-25T09:00:00+02:00", "valueWh": 60.0},
+        {"slot": "08:00", "valueWh": 40.0},
+        {"slot": "08:15", "valueWh": 50.0},
+        {"slot": "09:00", "valueWh": 60.0},
     ]
     assert payload["series"]["invalidated"] == []
-    assert payload["availability"]["hasInvalidated"] is False
 
 
 def test_inspector_day_does_not_show_invalidated_series_for_today_or_future():
@@ -1030,7 +987,7 @@ def test_inspector_day_does_not_show_invalidated_series_for_today_or_future():
     )
     service._metadata = models.SolarBiasMetadata(
         trained_at="2026-04-25T03:00:00+02:00",
-        training_config_fingerprint=service_mod.compute_fingerprint(_make_cfg()),
+        training_config_fingerprint=compute_fingerprint(_make_cfg()),
         usable_days=12,
         dropped_days=[],
         factor_min=0.5,
@@ -1070,15 +1027,13 @@ def test_inspector_day_does_not_show_invalidated_series_for_today_or_future():
         service_mod.dt_util.now = old_now
 
     assert today_payload["series"]["invalidated"] == []
-    assert today_payload["availability"]["hasInvalidated"] is False
     assert today_payload["series"]["actual"] == [
-        {"timestamp": "2026-04-25T08:00:00+02:00", "valueWh": 40.0},
-        {"timestamp": "2026-04-25T08:15:00+02:00", "valueWh": 50.0},
-        {"timestamp": "2026-04-25T09:00:00+02:00", "valueWh": 60.0},
+        {"slot": "08:00", "valueWh": 40.0},
+        {"slot": "08:15", "valueWh": 50.0},
+        {"slot": "09:00", "valueWh": 60.0},
     ]
     assert future_payload["series"]["actual"] == []
     assert future_payload["series"]["invalidated"] == []
-    assert future_payload["availability"]["hasInvalidated"] is False
 
 
 def test_inspector_day_returns_selected_day_impact_and_training_explainability():
@@ -1102,7 +1057,7 @@ def test_inspector_day_returns_selected_day_impact_and_training_explainability()
     )
     service._metadata = models.SolarBiasMetadata(
         trained_at="2026-04-25T03:00:00+02:00",
-        training_config_fingerprint=service_mod.compute_fingerprint(_make_cfg()),
+        training_config_fingerprint=compute_fingerprint(_make_cfg()),
         usable_days=12,
         dropped_days=[],
         factor_min=0.5,
@@ -1158,8 +1113,27 @@ def test_inspector_day_returns_selected_day_impact_and_training_explainability()
 
 
 def test_service_saves_training_explainability_after_training():
-    service = _make_service()
-    service._cfg.min_history_days = 1
+    cfg = _make_cfg()
+    cfg.min_history_days = 1
+    store = _DummyStore()
+
+    async def _executor_job(func, *args):
+        return func(*args)
+
+    hass = SimpleNamespace(
+        config=SimpleNamespace(time_zone="Europe/Prague"),
+        bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None),
+        async_add_executor_job=_executor_job,
+    )
+    bias_service = bias_service_mod.SolarBiasCorrectionService(hass, store, cfg)
+    service = service_mod.SolarInspector(
+        hass,
+        store,
+        cfg,
+        live_sources=FakeInspectorLiveSources(),
+        bias_service=bias_service,
+        config=_bias_service_config(cfg),
+    )
     sample = models.TrainerSample(
         date="2026-04-24",
         forecast_wh=1000.0,
@@ -1174,22 +1148,24 @@ def test_service_saves_training_explainability_after_training():
             slot_actuals_by_date={"2026-04-24": {"12:00": 1200.0}}
         )
 
-    old_samples = service_mod.load_trainer_samples
-    old_actuals_window = service_mod.load_actuals_window
-    old_now = service_mod.dt_util.now
+    old_samples = bias_service_mod.load_trainer_samples
+    old_actuals_window = bias_service_mod.load_actuals_window
+    old_now = bias_service_mod.dt_util.now
     try:
-        service_mod.load_trainer_samples = fake_samples
-        service_mod.load_actuals_window = fake_actuals_window
-        service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T03:00:00+02:00")
-        asyncio.run(service.async_train())
+        bias_service_mod.load_trainer_samples = fake_samples
+        bias_service_mod.load_actuals_window = fake_actuals_window
+        bias_service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T03:00:00+02:00")
+        asyncio.run(bias_service.async_train())
     finally:
-        service_mod.load_trainer_samples = old_samples
-        service_mod.load_actuals_window = old_actuals_window
-        service_mod.dt_util.now = old_now
+        bias_service_mod.load_trainer_samples = old_samples
+        bias_service_mod.load_actuals_window = old_actuals_window
+        bias_service_mod.dt_util.now = old_now
 
-    saved = service._store.saved
+    saved = store.saved
     assert saved["trainingExplainability"]["aggregationMethod"] == "ratio_of_sums"
     assert saved["trainingExplainability"]["slots"]["12:00"]["rows"][0]["status"] == "included"
+    assert service._explainability is not None
+    assert service._explainability.slots["12:00"].rows[0].status == "included"
 
 
 def _install_fake_statistics_reader(reads, by_entity):
@@ -1375,3 +1351,23 @@ def test_day_aggregates_stop_at_today_and_cap_the_span():
     assert len(days) == service_mod._MAX_AGGREGATE_BUCKETS["day"]
     assert days[-1] == "2026-04-25"
     assert future_only["days"] == []
+
+
+def test_inspector_points_from_raw_collapses_duplicate_dst_fallback_slots():
+    day_mod = importlib.import_module("custom_components.helman.solar_inspector.day")
+    raw = [
+        {"timestamp": "2026-10-25T02:00:00+02:00", "wh": 100.0},
+        {"timestamp": "2026-10-25T02:15:00+02:00", "wh": 120.0},
+        {"timestamp": "2026-10-25T02:00:00+01:00", "wh": 150.0},
+        {"timestamp": "2026-10-25T02:15:00+01:00", "wh": 220.0},
+        {"slot": "01:45", "wh": 90.0},
+    ]
+
+    expected = [
+        models.SolarBiasInspectorPoint(slot="01:45", value_wh=90.0),
+        models.SolarBiasInspectorPoint(slot="02:00", value_wh=250.0),
+        models.SolarBiasInspectorPoint(slot="02:15", value_wh=340.0),
+    ]
+    assert day_mod._inspector_points_from_raw(raw) == expected
+    assert day_mod._inspector_points(raw) == expected
+

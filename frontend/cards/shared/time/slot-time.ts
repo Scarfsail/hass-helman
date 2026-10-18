@@ -25,12 +25,3 @@ export function formatClock(minutes: number, { endOfDay = "24:00" }: { endOfDay?
     return value === 1440 ? endOfDay : minutesToSlot(value);
 }
 
-export function timestampMinutes(timestamp: string): number | null {
-    const match = /T(\d{2}:\d{2})/.exec(timestamp);
-    return match ? slotMinutes(match[1]) : null;
-}
-
-/** The HH:MM key shared by timestamped series and time-of-day slots. */
-export function slotKey(timestamp: string): string {
-    return timestamp.slice(11, 16);
-}

@@ -62,10 +62,10 @@ declare global {
  */
 async function mountInspector(page: Page): Promise<void> {
     await page.evaluate(({ date, slot }) => {
-        const corrected: Array<{ timestamp: string; valueWh: number }> = [];
-        const actual: Array<{ timestamp: string; valueWh: number }> = [];
-        const houseForecast: Array<{ timestamp: string; valueWh: number }> = [];
-        const gridForecast: Array<{ timestamp: string; valueWh: number }> = [];
+        const corrected: Array<{ slot: string; valueWh: number }> = [];
+        const actual: Array<{ slot: string; valueWh: number }> = [];
+        const houseForecast: Array<{ slot: string; valueWh: number }> = [];
+        const gridForecast: Array<{ slot: string; valueWh: number }> = [];
         const soc: Array<{ slot: string; pct: number }> = [];
         const importPrice: Array<{ slot: string; value: number }> = [];
         const exportPrice: Array<{ slot: string; value: number }> = [];
@@ -74,17 +74,16 @@ async function mountInspector(page: Page): Promise<void> {
         for (let m = 0; m < 1440; m += 15) {
             const hh = String(Math.floor(m / 60)).padStart(2, "0");
             const mm = String(m % 60).padStart(2, "0");
-            const stamp = `${date}T${hh}:${mm}:00`;
             const label = `${hh}:${mm}`;
             const v = Math.max(0, 400 - Math.abs(m - 720) / 2);
-            corrected.push({ timestamp: stamp, valueWh: v });
-            houseForecast.push({ timestamp: stamp, valueWh: 120 });
-            gridForecast.push({ timestamp: stamp, valueWh: 60 });
+            corrected.push({ slot: label, valueWh: v });
+            houseForecast.push({ slot: label, valueWh: 120 });
+            gridForecast.push({ slot: label, valueWh: 60 });
             soc.push({ slot: label, pct: 40 + (m % 300) / 10 });
             importPrice.push({ slot: label, value: 4 + (m % 120) / 60 });
             exportPrice.push({ slot: label, value: 1.5 });
             if (m < 720) {
-                actual.push({ timestamp: stamp, valueWh: v * 0.9 });
+                actual.push({ slot: label, valueWh: v * 0.9 });
                 moneyActual.push({ slot: label, cost: 0.4, gain: 0.1 });
             } else {
                 moneyForecast.push({ slot: label, cost: 0.3, gain: 0.2 });
@@ -110,11 +109,8 @@ async function mountInspector(page: Page): Promise<void> {
                 gridForecastWh: null, gridActualWh: null,
                 batteryForecastWh: null, batteryActualWh: null,
             },
-            availability: { hasRawForecast: false, hasCorrectedForecast: true, hasActuals: true,
-                hasInvalidated: false, hasProfile: true, hasHouseForecast: true,
-                hasHouseActual: false, hasBatterySocForecast: true, hasBatterySocActual: false,
-                hasGridForecast: true, hasGridActual: false, hasBatteryForecast: false,
-                hasBatteryActual: false,
+            availability: {
+                hasProfile: true,
             },
             batterySocBounds: [],
             trainingExplainability: null,

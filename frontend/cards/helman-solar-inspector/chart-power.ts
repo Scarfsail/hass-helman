@@ -1,5 +1,5 @@
-import { timestampMinutes } from "../shared/time/slot-time";
-export type PowerPoint = { timestamp: string; valueWh: number };
+import { slotMinutes } from "../shared/time/slot-time";
+export type PowerPoint = { slot: string; valueWh: number };
 export type ChartEntry<TPoint extends PowerPoint = PowerPoint> = {
   point: TPoint;
   minutes: number;
@@ -15,7 +15,7 @@ export function toAveragePower<TPoint extends PowerPoint>(
   options: AveragePowerOptions = {},
 ): ChartEntry<TPoint>[] {
   const parsed = points
-    .map((point) => ({ point, minutes: timestampMinutes(point.timestamp) }))
+    .map((point) => ({ point, minutes: slotMinutes(point.slot) }))
     .filter(
       (entry): entry is { point: TPoint; minutes: number } =>
         entry.minutes !== null && Number.isFinite(entry.point.valueWh),

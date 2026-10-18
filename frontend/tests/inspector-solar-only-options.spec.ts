@@ -85,10 +85,8 @@ async function seedEverySeries(page: Page): Promise<void> {
         const payload = JSON.parse(JSON.stringify(el._payload));
         const hours = Array.from({ length: 24 }, (_, hour) =>
             `${String(hour).padStart(2, "0")}:00`);
-        // Stamped, not slot-labelled: the power series are bucketed off their
-        // timestamps, so a slot-labelled point would leave the stacks empty.
         const wh = (valueWh: number) =>
-            hours.map((slot) => ({ timestamp: `${payload.date}T${slot}:00`, valueWh }));
+            hours.map((slot) => ({ slot, valueWh }));
         const pct = (value: number) => hours.map((slot) => ({ slot, pct: value }));
         payload.series.corrected = wh(500);
         payload.series.raw = wh(400);
@@ -109,16 +107,6 @@ async function seedEverySeries(page: Page): Promise<void> {
         payload.totals.gridActualWh = -2880;
         payload.totals.batteryForecastWh = -1920;
         payload.totals.batteryActualWh = -2160;
-        payload.availability.hasRawForecast = true;
-        payload.availability.hasActuals = true;
-        payload.availability.hasHouseForecast = true;
-        payload.availability.hasHouseActual = true;
-        payload.availability.hasBatterySocForecast = true;
-        payload.availability.hasBatterySocActual = true;
-        payload.availability.hasGridForecast = true;
-        payload.availability.hasGridActual = true;
-        payload.availability.hasBatteryForecast = true;
-        payload.availability.hasBatteryActual = true;
         el._payload = payload;
         el.requestUpdate();
     });
@@ -420,7 +408,6 @@ test("an actual-only pair places no chip for the forecast it dropped", async ({ 
         const el = root?.host as any;
         const payload = JSON.parse(JSON.stringify(el._payload));
         payload.series.houseActual = [];
-        payload.availability.hasHouseActual = false;
         el._payload = payload;
         el.requestUpdate();
         await el.updateComplete;
@@ -472,7 +459,6 @@ async function seedHouseBreakdown(page: Page): Promise<void> {
             });
         }
         payload.series.houseActualBreakdown = slots;
-        payload.availability.hasHouseActualBreakdown = true;
         el._payload = payload;
         el.requestUpdate();
         await el.updateComplete;
@@ -617,7 +603,7 @@ test("a solar series that is allowed but not drawn does not crop the day", async
         const el = root?.host as any;
         const payload = JSON.parse(JSON.stringify(el._payload));
         payload.series.raw = Array.from({ length: 24 }, (_, hour) => ({
-            timestamp: `${payload.date}T${String(hour).padStart(2, "0")}:00:00`,
+            slot: `${String(hour).padStart(2, "0")}:00`,
             valueWh: hour >= 9 && hour < 15 ? 400 : 0,
         }));
         el._payload = payload;
@@ -757,7 +743,7 @@ test("the house embed's slot detail carries the forecast error", async ({ page }
         const el = root?.host as any;
         const payload = JSON.parse(JSON.stringify(el._payload));
         const quarters = (valueWh: number) => Array.from({ length: 96 }, (_, i) => ({
-            timestamp: `${payload.date}T${String(Math.floor(i / 4)).padStart(2, "0")}:${String((i % 4) * 15).padStart(2, "0")}:00`,
+            slot: `${String(Math.floor(i / 4)).padStart(2, "0")}:${String((i % 4) * 15).padStart(2, "0")}`,
             valueWh,
         }));
         payload.series.houseForecast = quarters(75);
@@ -849,9 +835,6 @@ test("the house embed draws a day that has house data but no solar", async ({ pa
             const el = root?.host as any;
             const payload = JSON.parse(JSON.stringify(el._payload));
             for (const key of ["raw", "corrected", "actual", "invalidated"]) payload.series[key] = [];
-            Object.assign(payload.availability, {
-                hasRawForecast: false, hasCorrectedForecast: false, hasActuals: false, hasInvalidated: false,
-            });
             el._payload = payload;
             el.requestUpdate();
             await el.updateComplete;
@@ -949,10 +932,9 @@ test("the popup quotes an invalidated solar slot as measured", async ({ page }) 
         }).__inspectorRoot();
         const el = root?.host as any;
         const payload = JSON.parse(JSON.stringify(el._payload));
-        const moved = payload.series.actual.filter((p: any) => p.timestamp.slice(11, 16) === "12:00");
-        payload.series.actual = payload.series.actual.filter((p: any) => p.timestamp.slice(11, 16) !== "12:00");
+        const moved = payload.series.actual.filter((p: any) => p.slot === "12:00");
+        payload.series.actual = payload.series.actual.filter((p: any) => p.slot !== "12:00");
         payload.series.invalidated = moved;
-        payload.availability.hasInvalidated = true;
         el._payload = payload;
         el.requestUpdate();
         await el.updateComplete;

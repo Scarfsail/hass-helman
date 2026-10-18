@@ -59,15 +59,9 @@ from zoneinfo import ZoneInfo
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from ..recorder_states import numeric_timeline, read_states
 from ..slot_grid import SLOT_MINUTES, SLOTS_PER_HOUR, day_slots
 from .forecast_slot_sampling import resolve_forecast_slot_values
-
-try:
-    from homeassistant.components.recorder import get_instance
-    from homeassistant.components.recorder.history import get_significant_states
-except Exception:  # pragma: no cover - Home Assistant API compatibility
-    get_instance = None  # type: ignore[assignment]
-    get_significant_states = None  # type: ignore[assignment]
 
 try:
     from ..recorder_statistics_span import (
@@ -105,8 +99,6 @@ async def load_forecast_slots_for_window(
     A day the sensor was not publishing on simply does not appear, which the
     trainer already treats as "no sample for this day".
     """
-    if get_significant_states is None or get_instance is None:
-        return {}
     if last_date < first_date:
         return {}
 
@@ -329,47 +321,13 @@ async def _load_timeline(
     no row of its own until the value next moves, and without the synthesised
     boundary state every slot before that move would read as missing.
     """
-    recorder = get_instance(hass)
-    if recorder is None:
-        # No recorder instance: early setup, or a test standing the rest of the
-        # integration up without one. No history to read is not an error.
-        return []
-    states_by_entity = await recorder.async_add_executor_job(
-        partial(
-            get_significant_states,
-            hass,
-            dt_util.as_utc(window_start),
-            dt_util.as_utc(window_end),
-            [SOLAR_FORECAST_CURRENT_ENTITY],
-            include_start_time_state=True,
-            significant_changes_only=False,
-            # Only the state and its timestamp are read; this entity carries no
-            # attributes worth materialising across a month of rows.
-            no_attributes=True,
-        )
+    states_by_entity = await read_states(
+        hass,
+        [SOLAR_FORECAST_CURRENT_ENTITY],
+        window_start,
+        window_end,
+        include_start_state=True,
+        no_attributes=True,
     )
-    states = _states_for_entity(states_by_entity)
-    timeline: list[tuple[datetime, float | None]] = []
-    for state in states:
-        try:
-            value_wh: float | None = float(getattr(state, "state", None))
-        except (TypeError, ValueError):
-            value_wh = None
-        stamp = getattr(state, "last_updated", None) or getattr(
-            state, "last_changed", None
-        )
-        if stamp is None:
-            continue
-        timeline.append((dt_util.as_local(stamp), value_wh))
-    timeline.sort(key=lambda pair: pair[0])
-    return timeline
-
-
-def _states_for_entity(states_by_entity: Any) -> list[Any]:
-    if not isinstance(states_by_entity, dict):
-        return []
-    return (
-        states_by_entity.get(SOLAR_FORECAST_CURRENT_ENTITY)
-        or states_by_entity.get(SOLAR_FORECAST_CURRENT_ENTITY.lower())
-        or []
-    )
+    states = states_by_entity.get(SOLAR_FORECAST_CURRENT_ENTITY) or []
+    return numeric_timeline(states, keep_non_numeric=True)

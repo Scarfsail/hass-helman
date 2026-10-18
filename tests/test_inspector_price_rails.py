@@ -11,29 +11,20 @@ any single source can be blamed for.
 """
 
 from __future__ import annotations
-import sys
-import types
-from _fakes import _bias_service_config
 
-
-from _fakes import DummyStore as _DummyStore
-
+import importlib
 import unittest
-
-import pytest
 from datetime import date, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 from zoneinfo import ZoneInfo
 
-
-
-
-
-import importlib  # noqa: E402
+import pytest
+from _fakes import DummyStore as _DummyStore
+from _fakes import FakeInspectorLiveSources, _bias_service_config
 
 service_mod = importlib.import_module(
-    "custom_components.helman.solar_bias_correction.service"
+    "custom_components.helman.solar_inspector.service"
 )
 models = importlib.import_module(
     "custom_components.helman.solar_bias_correction.models"
@@ -477,7 +468,7 @@ class TestLoadRecordedPriceRails(unittest.IsolatedAsyncioTestCase):
             config=SimpleNamespace(time_zone="Europe/Prague"),
             bus=SimpleNamespace(async_fire=lambda *a, **kw: None),
         )
-        return service_mod.SolarBiasCorrectionService(hass, _DummyStore(), _make_cfg(), config=_bias_service_config(_make_cfg()),)
+        return service_mod.SolarInspector(hass, _DummyStore(), _make_cfg(), config=_bias_service_config(_make_cfg()),)
 
     def _history(self, by_slot):
         return self.span.PriceHistory(by_slot=by_slot)
@@ -574,7 +565,7 @@ class TestRecordedRailAcrossAnOutage(unittest.IsolatedAsyncioTestCase):
             async def async_add_executor_job(func, *args):
                 return func(*args)
 
-        service = service_mod.SolarBiasCorrectionService(
+        service = service_mod.SolarInspector(
             SimpleNamespace(
                 config=SimpleNamespace(time_zone="Europe/Prague"),
                 bus=SimpleNamespace(async_fire=lambda *a, **kw: None),
@@ -649,13 +640,15 @@ class _PayloadCase(unittest.IsolatedAsyncioTestCase):
             bus=SimpleNamespace(async_fire=lambda *a, **kw: None),
             states=SimpleNamespace(get=states.get),
         )
-        service = service_mod.SolarBiasCorrectionService(
+        service = service_mod.SolarInspector(
             hass,
             _DummyStore(),
             _make_cfg(),
-
-            grid_price_snapshot_provider=lambda: price_snapshot or {},
-         config=_bias_service_config(_make_cfg() ,price=import_config),)
+            live_sources=FakeInspectorLiveSources(
+                grid_price_snapshot=lambda: price_snapshot or {},
+            ),
+            config=_bias_service_config(_make_cfg(), price=import_config),
+        )
         service._profile = models.SolarBiasProfile(factors={}, omitted_slots=[])
         service._metadata = models.SolarBiasMetadata(
             trained_at="2026-05-01T03:00:00+02:00",
@@ -737,8 +730,6 @@ class TestTodayJoinsRecorderAndLiveFeed(_PayloadCase):
         self.assertEqual(by_slot["10:00"], 5.0)
         self.assertEqual(by_slot["10:15"], 9.0)
         self.assertEqual(self._by_slot(export_rail)["10:15"], 1.5)
-        self.assertTrue(payload["availability"]["hasImportPrice"])
-        self.assertTrue(payload["availability"]["hasExportPrice"])
 
 
 class TestTodaysExportFeedStopsAtTheClock(_PayloadCase):
@@ -872,7 +863,6 @@ class TestPartiallyCoveredDayFallsBackPerSlot(_PayloadCase):
         # Export has no config to fall back on -- a spot price is not derivable --
         # so it stays absent rather than being invented.
         self.assertEqual(payload["series"]["exportPrice"], [])
-        self.assertFalse(payload["availability"]["hasExportPrice"])
 
 
 class TestUnconfiguredSides(_PayloadCase):
@@ -881,16 +871,13 @@ class TestUnconfiguredSides(_PayloadCase):
         payload = await self._payload(service, PAST_DAY, recorded={})
 
         self.assertEqual(len(payload["series"]["importPrice"]), 96)
-        self.assertTrue(payload["availability"]["hasImportPrice"])
         self.assertEqual(payload["series"]["exportPrice"], [])
-        self.assertFalse(payload["availability"]["hasExportPrice"])
 
     async def test_no_import_windows_and_no_history_leaves_the_rail_empty(self):
         service = self._make_service(import_config=None)
         payload = await self._payload(service, PAST_DAY, recorded={})
 
         self.assertEqual(payload["series"]["importPrice"], [])
-        self.assertFalse(payload["availability"]["hasImportPrice"])
         self.assertIsNone(payload["priceUnit"])
 
     async def test_an_elapsed_day_takes_the_unit_off_helmans_export_sensor(self):

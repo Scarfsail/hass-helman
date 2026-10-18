@@ -1,4 +1,5 @@
-import type { DayAggregateRow, DayAggregatesPayload, HelmanCommands } from "./shared/data/helman-commands";
+import { type DayAggregateRow, type DayAggregatesPayload, type HelmanCommands, callHelman } from "./shared/data/helman-commands";
+import type { HomeAssistant } from "../types/ha";
 import type { JsonObject, ValidationReport } from "./shared/config/types";
 export type { ConfigDocument } from "./shared/config/types";
 export type { InspectorPayload } from "./helman-solar-inspector/helman-solar-inspector";
@@ -1313,3 +1314,13 @@ export interface EnergyImportPreview {
   }[];
   validation: ValidationReport;
 }
+
+export type GetDayAggregatesRequest = HelmanCommands["helman/solar_bias/day_aggregates"]["req"];
+
+export async function fetchDayAggregates(
+  hass: HomeAssistant,
+  request: GetDayAggregatesRequest,
+): Promise<DayAggregatesPayload> {
+  return callHelman(hass, "helman/solar_bias/day_aggregates", request);
+}
+
