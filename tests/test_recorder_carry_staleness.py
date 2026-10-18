@@ -67,7 +67,11 @@ def _install_import_stubs() -> None:
 
 _install_import_stubs()
 
-from custom_components.helman import recorder_hourly_series  # noqa: E402
+from custom_components.helman import (  # noqa: E402
+    recorder_slot_energy,
+    slot_grid,
+    today_slot_readers,
+)
 
 
 async def _inline_executor_job(func, *args):
@@ -165,50 +169,54 @@ def _make_hass() -> SimpleNamespace:
 
 
 class _RecorderPatchMixin:
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._dt_patchers = [
+            patch.object(recorder_slot_energy, "dt_util", dt_util),
+            patch.object(today_slot_readers, "dt_util", dt_util),
+            patch.object(slot_grid, "dt_util", dt_util),
+        ]
+        for p in cls._dt_patchers:
+            p.start()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        for p in cls._dt_patchers:
+            p.stop()
+
     def _patches(self, recorder: _Recorder):
+        instance = SimpleNamespace(async_add_executor_job=_inline_executor_job)
         return (
-            patch.object(
-                recorder_hourly_series,
-                "state_changes_during_period",
-                recorder.state_changes_during_period,
+            patch.multiple(
+                recorder_slot_energy,
+                state_changes_during_period=recorder.state_changes_during_period,
+                get_instance=lambda hass: instance,
             ),
-            patch.object(
-                recorder_hourly_series,
-                "get_instance",
-                lambda hass: SimpleNamespace(
-                    async_add_executor_job=_inline_executor_job
-                ),
+            patch.multiple(
+                today_slot_readers,
+                state_changes_during_period=recorder.state_changes_during_period,
+                get_instance=lambda hass: instance,
             ),
         )
 
     def _batch_patches(self, recorder: _BatchRecorder):
+        instance = SimpleNamespace(async_add_executor_job=_inline_executor_job)
         return (
-            patch.object(
-                recorder_hourly_series,
-                "get_significant_states",
-                recorder.get_significant_states,
+            patch.multiple(
+                recorder_slot_energy,
+                get_significant_states=recorder.get_significant_states,
+                get_instance=lambda hass: instance,
             ),
-            patch.object(
-                recorder_hourly_series,
-                "get_instance",
-                lambda hass: SimpleNamespace(
-                    async_add_executor_job=_inline_executor_job
-                ),
+            patch.multiple(
+                today_slot_readers,
+                get_significant_states=recorder.get_significant_states,
+                get_instance=lambda hass: instance,
             ),
         )
 
 
 class GapDropsRatherThanZeroesTests(_RecorderPatchMixin, unittest.IsolatedAsyncioTestCase):
     """The core case: a two-hour recorder outage in the middle of a normal day."""
-
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls._dt_patcher = patch.object(recorder_hourly_series, "dt_util", dt_util)
-        cls._dt_patcher.start()
-
-    @classmethod
-    def tearDownClass(cls) -> None:
-        cls._dt_patcher.stop()
 
     @staticmethod
     def _day_with_a_gap() -> list[SimpleNamespace]:
@@ -241,7 +249,7 @@ class GapDropsRatherThanZeroesTests(_RecorderPatchMixin, unittest.IsolatedAsynci
         read_patch, instance_patch = self._patches(recorder)
 
         with read_patch, instance_patch:
-            changes = await recorder_hourly_series.query_cumulative_slot_energy_changes(
+            changes = await recorder_slot_energy.query_cumulative_slot_energy_changes(
                 _make_hass(),
                 ENTITY_ID,
                 local_start=DAY,
@@ -291,15 +299,6 @@ class GapDropsRatherThanZeroesTests(_RecorderPatchMixin, unittest.IsolatedAsynci
 class QuietOnChangeMeterTests(_RecorderPatchMixin, unittest.IsolatedAsyncioTestCase):
     """Decision 5: staleness alone must not condemn a genuinely quiet meter."""
 
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls._dt_patcher = patch.object(recorder_hourly_series, "dt_util", dt_util)
-        cls._dt_patcher.start()
-
-    @classmethod
-    def tearDownClass(cls) -> None:
-        cls._dt_patcher.stop()
-
     async def test_a_quiet_stretch_with_no_change_keeps_its_zero_slots(self) -> None:
         # An on-change meter: it reports at 09:00, says nothing for two hours
         # because the house drew nothing, and reports the SAME value at 11:07.
@@ -313,7 +312,7 @@ class QuietOnChangeMeterTests(_RecorderPatchMixin, unittest.IsolatedAsyncioTestC
         read_patch, instance_patch = self._patches(recorder)
 
         with read_patch, instance_patch:
-            changes = await recorder_hourly_series.query_cumulative_slot_energy_changes(
+            changes = await recorder_slot_energy.query_cumulative_slot_energy_changes(
                 _make_hass(),
                 ENTITY_ID,
                 local_start=DAY,
@@ -334,15 +333,6 @@ class QuietOnChangeMeterTests(_RecorderPatchMixin, unittest.IsolatedAsyncioTestC
 class LookbackCatchesAPreWindowGapTests(_RecorderPatchMixin, unittest.IsolatedAsyncioTestCase):
     """Decision 4: a gap starting before the query window is still caught."""
 
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls._dt_patcher = patch.object(recorder_hourly_series, "dt_util", dt_util)
-        cls._dt_patcher.start()
-
-    @classmethod
-    def tearDownClass(cls) -> None:
-        cls._dt_patcher.stop()
-
     async def test_a_gap_beginning_before_the_window_start_is_still_distrusted(
         self,
     ) -> None:
@@ -360,7 +350,7 @@ class LookbackCatchesAPreWindowGapTests(_RecorderPatchMixin, unittest.IsolatedAs
         read_patch, instance_patch = self._patches(recorder)
 
         with read_patch, instance_patch:
-            changes = await recorder_hourly_series.query_cumulative_slot_energy_changes(
+            changes = await recorder_slot_energy.query_cumulative_slot_energy_changes(
                 _make_hass(),
                 ENTITY_ID,
                 local_start=window_start,
@@ -385,15 +375,6 @@ class LookbackCatchesAPreWindowGapTests(_RecorderPatchMixin, unittest.IsolatedAs
 class ResumedReadMatchesColdReadTests(_RecorderPatchMixin, unittest.IsolatedAsyncioTestCase):
     """Decision 3: a resumed TodaySlotEnergyReader read must judge staleness
     exactly as a fresh, cold read of the same data would."""
-
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls._dt_patcher = patch.object(recorder_hourly_series, "dt_util", dt_util)
-        cls._dt_patcher.start()
-
-    @classmethod
-    def tearDownClass(cls) -> None:
-        cls._dt_patcher.stop()
 
     @staticmethod
     def _day_with_a_gap() -> list[SimpleNamespace]:
@@ -420,7 +401,7 @@ class ResumedReadMatchesColdReadTests(_RecorderPatchMixin, unittest.IsolatedAsyn
     ) -> None:
         states = self._day_with_a_gap()
         warm_recorder = _Recorder(states)
-        reader = recorder_hourly_series.TodaySlotEnergyReader(_make_hass())
+        reader = today_slot_readers.TodaySlotEnergyReader(_make_hass())
 
         reference_time = DAY + timedelta(minutes=15)
         while reference_time <= DAY + timedelta(hours=13):
@@ -435,11 +416,11 @@ class ResumedReadMatchesColdReadTests(_RecorderPatchMixin, unittest.IsolatedAsyn
             cold_recorder = _Recorder(states)
             read_patch, instance_patch = self._patches(cold_recorder)
             with read_patch, instance_patch:
-                cold = await recorder_hourly_series.query_cumulative_slot_energy_changes(
+                cold = await recorder_slot_energy.query_cumulative_slot_energy_changes(
                     _make_hass(),
                     ENTITY_ID,
-                    local_start=recorder_hourly_series._get_local_day_start(reference_time),
-                    local_end=recorder_hourly_series.get_local_current_slot_start(
+                    local_start=slot_grid._get_local_day_start(reference_time),
+                    local_end=slot_grid.get_local_current_slot_start(
                         reference_time, interval_minutes=15
                     ),
                     interval_minutes=15,
@@ -481,20 +462,11 @@ def _quiet_meter_states() -> list[SimpleNamespace]:
 class QuietMeterInALiveBatchTests(_RecorderPatchMixin, unittest.IsolatedAsyncioTestCase):
     """Issue #208: a meter quiet inside a live recorder keeps its zero slots."""
 
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls._dt_patcher = patch.object(recorder_hourly_series, "dt_util", dt_util)
-        cls._dt_patcher.start()
-
-    @classmethod
-    def tearDownClass(cls) -> None:
-        cls._dt_patcher.stop()
-
     async def _read(self, states_by_entity: dict[str, list[SimpleNamespace]]):
         recorder = _BatchRecorder(states_by_entity)
         read_patch, instance_patch = self._batch_patches(recorder)
         with read_patch, instance_patch:
-            return await recorder_hourly_series.query_cumulative_slot_energy_changes_for_entities(
+            return await recorder_slot_energy.query_cumulative_slot_energy_changes_for_entities(
                 _make_hass(),
                 list(states_by_entity),
                 local_start=DAY,
@@ -599,15 +571,6 @@ class SolarPathBorrowsTheBatchTraceTests(
     the case a batch cannot cover, and #208's 04:00-06:00 stretch is it.
     """
 
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls._dt_patcher = patch.object(recorder_hourly_series, "dt_util", dt_util)
-        cls._dt_patcher.start()
-
-    @classmethod
-    def tearDownClass(cls) -> None:
-        cls._dt_patcher.stop()
-
     @staticmethod
     def _predawn_solar_states() -> list[SimpleNamespace]:
         """A daily solar meter: flat at 0.0 overnight, first light at 06:00."""
@@ -623,7 +586,7 @@ class SolarPathBorrowsTheBatchTraceTests(
         recorder = _Recorder(self._predawn_solar_states())
         read_patch, instance_patch = self._patches(recorder)
         with read_patch, instance_patch:
-            return await recorder_hourly_series.query_cumulative_slot_energy_changes(
+            return await recorder_slot_energy.query_cumulative_slot_energy_changes(
                 _make_hass(),
                 ENTITY_ID,
                 local_start=DAY,

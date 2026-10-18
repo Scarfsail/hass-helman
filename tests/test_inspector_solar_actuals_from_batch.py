@@ -32,7 +32,7 @@ UTC = timezone.utc
 import importlib  # noqa: E402
 
 recorder_series = importlib.import_module(
-    "custom_components.helman.recorder_hourly_series"
+    "custom_components.helman.recorder_slot_energy"
 )
 actuals = importlib.import_module(
     "custom_components.helman.solar_bias_correction.actuals"

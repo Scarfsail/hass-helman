@@ -84,7 +84,7 @@ from .statistics_day import (
 from .trainer import compute_fingerprint, train
 
 if TYPE_CHECKING:
-    from ..recorder_hourly_series import SlotEnergyBatch
+    from ..recorder_slot_energy import SlotEnergyBatch
     from ..storage import SolarBiasCorrectionStore
 
 _LOGGER = logging.getLogger(__name__)
@@ -1683,7 +1683,7 @@ class SolarBiasCorrectionService:
         DB executor thread, so a read per meter is a serial round-trip per meter no
         matter how the awaits are arranged.
         """
-        from ..recorder_hourly_series import (
+        from ..recorder_slot_energy import (
             query_cumulative_slot_energy_changes_for_entities,
         )
 
@@ -1761,7 +1761,7 @@ class SolarBiasCorrectionService:
         """
         # Imported here: the recorder module needs Home Assistant's recorder,
         # which this module's import-time tests stub out.
-        from ..recorder_hourly_series import own_energy_changes
+        from ..shared_meter_fit import own_energy_changes
 
         return own_energy_changes(
             energy_by_entity.get(consumer["energy_entity_id"]) or {},

@@ -154,12 +154,14 @@ from .point_forecast_response import build_solar_forecast_response
 from .power_reading import power_unit_factor
 from .power_polarity import is_power_inverted, watts_for_value_type
 from .solar_bias_correction.response import build_bias_correction_payload
-from .recorder_hourly_series import (
+from .appliance_runtime_history import (
     ApplianceRuntimeHistoryReader,
     ApplianceRuntimeRequest,
+)
+from .slot_grid import get_local_current_slot_start
+from .today_slot_readers import (
     TodaySlotBoundaryStateReader,
     TodaySlotEnergyReader,
-    get_local_current_slot_start,
 )
 from .scheduling.schedule import (
     ScheduleActionSetBy,
@@ -4174,7 +4176,7 @@ class HelmanCoordinator:
     ) -> list[dict[str, Any]]:
         # Deferred import: keeps the recorder-history module out of coordinator's
         # top-level imports so test harnesses that stub the battery builder (and
-        # only partially stub recorder_hourly_series) still import the coordinator.
+        # only partially stub today_slot_readers) still import the coordinator.
         from .battery_actual_history_builder import build_battery_actual_history
 
         try:

@@ -29,8 +29,8 @@ TZ = ZoneInfo("Europe/Prague")
 UTC = timezone.utc
 
 
-from custom_components.helman import recorder_hourly_series  # noqa: E402
-from custom_components.helman.recorder_hourly_series import (  # noqa: E402
+from custom_components.helman import appliance_runtime_history  # noqa: E402
+from custom_components.helman.appliance_runtime_history import (  # noqa: E402
     ApplianceRuntimeHistoryReader,
     ApplianceRuntimeRequest,
 )
@@ -114,12 +114,12 @@ class _ReaderHarness(unittest.IsolatedAsyncioTestCase):
     async def _query(self, reader, recorder, requests, *, at):
         with (
             patch.object(
-                recorder_hourly_series,
+                appliance_runtime_history,
                 "get_significant_states",
                 recorder.get_significant_states,
             ),
             patch.object(
-                recorder_hourly_series,
+                appliance_runtime_history,
                 "get_instance",
                 lambda hass: SimpleNamespace(
                     async_add_executor_job=_inline_executor_job

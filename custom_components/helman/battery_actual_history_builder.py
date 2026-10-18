@@ -5,7 +5,7 @@ from typing import Any
 
 from homeassistant.util import dt as dt_util
 
-from .recorder_hourly_series import (
+from .today_slot_readers import (
     TodaySlotBoundaryStateReader,
     get_today_completed_local_slots,
 )

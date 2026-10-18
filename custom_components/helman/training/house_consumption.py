@@ -16,7 +16,7 @@ from ..consumption_forecast_profiles import (
     profile_to_dict,
     rows_to_dict,
 )
-from ..recorder_hourly_series import own_energy_changes
+from ..shared_meter_fit import own_energy_changes
 from ..recorder_statistics_span import query_spliced_hourly_energy
 from ..storage import TrainingArtifactsStore
 

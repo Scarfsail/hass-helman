@@ -85,7 +85,7 @@ def _statistics_during_period(hass, start, end, statistic_ids, period, *args, **
 def _recorder(monkeypatch):
     from homeassistant.components.recorder import history, statistics
     from homeassistant.util import dt as dt_util
-    from custom_components.helman import recorder_hourly_series as series_mod
+    from custom_components.helman import today_slot_readers as series_mod
 
     monkeypatch.setattr(span_mod, "get_instance", _get_instance)
     monkeypatch.setattr(span_mod, "statistics_during_period", _statistics_during_period)

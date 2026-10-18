@@ -23,7 +23,7 @@ METER = "sensor.solar_total_energy"
 
 
 
-from custom_components.helman import recorder_hourly_series  # noqa: E402
+from custom_components.helman import recorder_slot_energy  # noqa: E402
 
 
 class _FakeState:
@@ -105,13 +105,13 @@ class ChunkedWindowReadTests(unittest.IsolatedAsyncioTestCase):
         hass = SimpleNamespace(states=SimpleNamespace(get=lambda entity_id: None))
         extra = {} if chunk_size is None else {"max_windows_per_read": chunk_size}
         with patch.object(
-            recorder_hourly_series,
+            recorder_slot_energy,
             "state_changes_during_period",
             recorder.state_changes_during_period,
         ), patch.object(
-            recorder_hourly_series, "get_instance", lambda hass: recorder
+            recorder_slot_energy, "get_instance", lambda hass: recorder
         ):
-            return await recorder_hourly_series.query_cumulative_slot_energy_changes_for_windows(
+            return await recorder_slot_energy.query_cumulative_slot_energy_changes_for_windows(
                 hass,
                 METER,
                 windows,
@@ -123,15 +123,15 @@ class ChunkedWindowReadTests(unittest.IsolatedAsyncioTestCase):
         hass = SimpleNamespace(states=SimpleNamespace(get=lambda entity_id: None))
         results = []
         with patch.object(
-            recorder_hourly_series,
+            recorder_slot_energy,
             "state_changes_during_period",
             recorder.state_changes_during_period,
         ), patch.object(
-            recorder_hourly_series, "get_instance", lambda hass: recorder
+            recorder_slot_energy, "get_instance", lambda hass: recorder
         ):
             for local_start, local_end in windows:
                 results.append(
-                    await recorder_hourly_series.query_cumulative_slot_energy_changes(
+                    await recorder_slot_energy.query_cumulative_slot_energy_changes(
                         hass,
                         METER,
                         local_start=local_start,

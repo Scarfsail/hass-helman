@@ -42,7 +42,10 @@ models = importlib.import_module(
 )
 
 recorder_series_mod = importlib.import_module(
-    "custom_components.helman.recorder_hourly_series"
+    "custom_components.helman.recorder_slot_energy"
+)
+today_readers_mod = importlib.import_module(
+    "custom_components.helman.today_slot_readers"
 )
 span_mod = importlib.import_module(
     "custom_components.helman.recorder_statistics_span"
@@ -53,6 +56,7 @@ span_mod = importlib.import_module(
 def _recorder_bindings(monkeypatch):
     monkeypatch.setattr(recorder, "get_instance", lambda hass: SimpleNamespace(async_add_executor_job=_run_in_executor_now))
     monkeypatch.setattr(recorder_series_mod, "get_instance", lambda hass: recorder.get_instance(hass))
+    monkeypatch.setattr(today_readers_mod, "get_instance", lambda hass: recorder.get_instance(hass))
     monkeypatch.setattr(span_mod, "get_instance", lambda hass: recorder.get_instance(hass))
 
 
@@ -65,7 +69,7 @@ def _counting_queries():
     which is what "the solar meter is read once *in total*" has to be counted
     against, since a duplicate read need not come from the same module as the
     batch. Reads reach the recorder under two names from several modules, some
-    binding them at import time (``recorder_hourly_series``) and some at call
+    binding them at import time (``recorder_slot_energy``) and some at call
     time (the inspector's own numeric history), so both names are replaced in
     both places.
     """
@@ -88,6 +92,10 @@ def _counting_queries():
         reads.clear()
     with patch.multiple(
         recorder_series_mod,
+        get_significant_states=_batched,
+        state_changes_during_period=_per_entity,
+    ), patch.multiple(
+        today_readers_mod,
         get_significant_states=_batched,
         state_changes_during_period=_per_entity,
     ), patch.multiple(
@@ -428,6 +436,10 @@ class TestPriceRailsCostOneReadPerTier(unittest.IsolatedAsyncioTestCase):
             get_significant_states=_raw,
         ), patch.multiple(
             recorder_series_mod,
+            state_changes_during_period=_probe,
+            get_significant_states=_raw,
+        ), patch.multiple(
+            today_readers_mod,
             state_changes_during_period=_probe,
             get_significant_states=_raw,
         ), patch.object(

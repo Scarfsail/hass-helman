@@ -1,6 +1,6 @@
 """Hourly long-term statistics for a span of days, in one recorder read plus a tail.
 
-The sibling :mod:`recorder_hourly_series` reads raw states, which is the right
+The sibling :mod:`recorder_slot_energy` reads raw states, which is the right
 grain for a single day: it sees every meter tick and can unwrap a counter that
 resets at midnight. It is the wrong grain for a month or a year. A year of raw
 state changes for a handful of fast-updating meters is millions of rows to end
@@ -28,7 +28,7 @@ plausible-looking numbers rather than an error:
   ``StatisticsRow["sum"]`` is corrupted by the same accounting and is no safer.
   Per-hour energy here is instead the difference between consecutive
   ``state`` readings, run through
-  :func:`~.recorder_hourly_series.unwrap_cumulative_energy_series` so that this
+  :func:`~.energy_unwrap.unwrap_cumulative_energy_series` so that this
   integration applies one reset convention everywhere rather than inheriting a
   second one from the statistics compiler. That function's glitch suppression is
   sized for the samples it is given, which is why :data:`_REBOUND_WINDOW` is
@@ -99,7 +99,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
-from .recorder_hourly_series import query_cumulative_slot_energy_changes
+from .recorder_slot_energy import query_cumulative_slot_energy_changes
 from .slot_grid import SLOT_MINUTES, slot_starts
 from .span_buckets import add_months
 
@@ -697,7 +697,7 @@ async def query_spliced_hourly_energy(
 ) -> dict[str, dict[datetime, float]]:
     """Hourly energy over a window that outlives the raw states, per entity.
 
-    Same shape as :func:`~.recorder_hourly_series.query_cumulative_slot_energy_changes`
+    Same shape as :func:`~.recorder_slot_energy.query_cumulative_slot_energy_changes`
     -- ``{hour_start: kwh}``, keyed by the hour's UTC instant -- for callers that
     ask for more history than ``purge_keep_days`` leaves behind. A trainer
     configured for 56 days reads eight from raw states on a stock recorder and
@@ -908,7 +908,7 @@ async def query_price_history(
 
     * **Raw recorder states win wherever they exist.** They are the finest thing
       the recorder holds and they are sampled with the rate convention
-      :func:`~.recorder_hourly_series.query_slot_boundary_state_values_for_entities`
+      :func:`~.today_slot_readers.query_slot_boundary_state_values_for_entities`
       already applies to a rail: the first write inside a slot, else the value
       carried forward into it -- subject to the trust rule below, which is what
       keeps a carry from spanning an outage.
@@ -1015,7 +1015,7 @@ async def query_price_history(
         hass, unique_ids, local_start=local_start, local_end=local_end, local_tz=local_tz
     )
     if raw_start is not None and raw_start < local_end:
-        from .recorder_hourly_series import (
+        from .today_slot_readers import (
             query_slot_boundary_state_values_for_entities,
         )
 
@@ -1708,7 +1708,7 @@ def _hourly_energy_kwh(
     Hours whose reading is missing are skipped rather than treated as zero: a
     meter with no reading has not told us it produced nothing.
     """
-    from .recorder_hourly_series import unwrap_cumulative_energy_series
+    from .energy_unwrap import unwrap_cumulative_energy_series
 
     samples: list[tuple[datetime, float]] = []
     for utc_hour, row in by_hour.items():

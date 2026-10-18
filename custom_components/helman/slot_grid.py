@@ -43,6 +43,9 @@ def floor_to_slot(
     return dt_util.as_local(slot_start_utc)
 
 
+get_local_current_slot_start = floor_to_slot
+
+
 def _get_local_day_start(reference_time: datetime) -> datetime:
     local_reference = dt_util.as_local(reference_time)
     tzinfo = local_reference.tzinfo
@@ -54,6 +57,9 @@ def _get_local_day_start(reference_time: datetime) -> datetime:
         time.min,
         tzinfo=tzinfo,
     )
+
+
+get_local_day_start = _get_local_day_start
 
 
 def _validate_interval_minutes(interval_minutes: int) -> int:
@@ -91,6 +97,9 @@ def slot_starts(
         result.append(cursor if utc else dt_util.as_local(cursor))
         cursor += timedelta(minutes=interval_minutes)
     return result
+
+
+_build_local_slot_starts_until = slot_starts
 
 
 def day_slots(

@@ -200,7 +200,7 @@ class TestDateScopedBoundarySampler(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self):
         self.recorder = importlib.import_module(
-            "custom_components.helman.recorder_hourly_series"
+            "custom_components.helman.today_slot_readers"
         )
 
     async def _sample(self, states, *, local_start, local_end):
@@ -363,7 +363,7 @@ class TestBatchedBoundarySampler(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self):
         self.recorder = importlib.import_module(
-            "custom_components.helman.recorder_hourly_series"
+            "custom_components.helman.today_slot_readers"
         )
 
     async def _sample(self, history, entity_ids):
@@ -558,7 +558,7 @@ class TestRecordedRailAcrossAnOutage(unittest.IsolatedAsyncioTestCase):
             "custom_components.helman.recorder_statistics_span"
         )
         self.recorder = importlib.import_module(
-            "custom_components.helman.recorder_hourly_series"
+            "custom_components.helman.today_slot_readers"
         )
 
     async def _rail(self, states, *, recording_start):

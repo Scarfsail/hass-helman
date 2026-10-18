@@ -13,7 +13,7 @@ from .forecast_series_fields import (
     BATTERY_PUBLIC_SERIES_FIELDS,
     project_series_fields,
 )
-from .recorder_hourly_series import get_local_current_slot_start
+from .slot_grid import get_local_current_slot_start
 
 _DROP_FIELDS = {
     "sourceGranularityMinutes",

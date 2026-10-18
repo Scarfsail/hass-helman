@@ -43,7 +43,7 @@ def _install_import_stubs() -> None:
 
 
 _install_import_stubs()
-from custom_components.helman import battery_forecast_response, recorder_hourly_series  # noqa: E402
+from custom_components.helman import battery_forecast_response, slot_grid  # noqa: E402
 
 
 def _make_series_entry(
@@ -234,7 +234,7 @@ class BatteryForecastResponseTests(unittest.TestCase):
             dt_util,
         )
         cls._recorder_dt_patcher = patch.object(
-            recorder_hourly_series,
+            slot_grid,
             "dt_util",
             dt_util,
         )
