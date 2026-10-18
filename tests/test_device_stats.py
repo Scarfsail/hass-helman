@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 
 device_stats = importlib.import_module("custom_components.helman.training.device_stats")
 recorder_module = importlib.import_module(
-    "custom_components.helman.recorder_hourly_series"
+    "custom_components.helman.shared_meter_fit"
 )
 
 UTC = timezone.utc

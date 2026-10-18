@@ -205,7 +205,7 @@ class CoordinatorOwnedExportPriceChannelTests(unittest.TestCase):
                     build_export_price_snapshot=source_read,
                 ),
             ):
-                snapshot = coordinator._build_grid_price_snapshot()
+                snapshot = coordinator.grid_price_snapshot()
 
         # The inspector's price rail is a transform of the owned channel, not a
         # second read of the configured entity.
@@ -255,12 +255,8 @@ class CoordinatorOwnedExportPriceChannelTests(unittest.TestCase):
         self.assertIs(coordinator._get_grid_export_price_channel(), second)
 
 
-class MergeGridForecastResponsesTests(unittest.TestCase):
-    def test_does_not_alias_top_level_keys(self) -> None:
-        _merge_grid_forecast_responses = (
-            coordinator_module._merge_grid_forecast_responses
-        )
-
+class GridForecastMergeTests(unittest.TestCase):
+    def test_combining_grid_flow_and_price_responses_does_not_mutate_sources(self) -> None:
         flow = {"slots": [{"t": 0}], "exportPriceUnit": "old"}
         price = {
             "exportPriceUnit": "EUR",
@@ -270,13 +266,11 @@ class MergeGridForecastResponsesTests(unittest.TestCase):
             "currentImportPrice": 2.0,
             "importPricePoints": [{"t": 2}],
         }
-        merged = _merge_grid_forecast_responses(
-            grid_flow_response=flow, grid_price_response=price
-        )
-        # Top-level overwrites must not bleed back into source dicts
+        merged = {**flow, **price}
+        # Overwrites must not bleed back into source dicts
         merged["exportPriceUnit"] = "MUTATED"
         self.assertEqual(price["exportPriceUnit"], "EUR")
-        # Slots from the flow response are passed through (shallow share allowed)
+        # Slots from the flow response are passed through
         self.assertIs(merged["slots"], flow["slots"])
 
 

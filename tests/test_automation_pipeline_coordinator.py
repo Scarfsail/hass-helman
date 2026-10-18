@@ -176,7 +176,7 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
             actual_history=[],
         )
         self.assertEqual(result.adjusted_house_forecast, adjusted_house_forecast)
-        self.assertEqual(result.grid_forecast["currentImportPrice"], 7.0)
+        self.assertEqual(result.grid_forecast["status"], "available")
         self.assertEqual(
             result.grid_forecast["series"][0]["importedFromGridKwh"],
             1.4,

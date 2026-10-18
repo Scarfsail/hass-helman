@@ -10,9 +10,10 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
+from .. import shared_meter_fit as recorder
 from ..const import DEFAULT_HISTORY_LOOKBACK_DAYS
 from ..controllables.config import running_active_states
-from .. import recorder_hourly_series as recorder
+from ..recorder_slot_energy import _states_within
 from ..storage import TrainingArtifactsStore
 from .device_stats import local_midnights, member_record, metered_record
 
@@ -170,7 +171,7 @@ class ApplianceEnergyTrainingJob:
     fitted once for all of them, minus any sub-meters behind it: its history
     teaches each member's power, and its own energy is split among whichever
     were running in the ratio of those — see
-    :func:`..recorder_hourly_series._estimate_shared_meter_hourly_energy_kwh`.
+    :func:`..shared_meter_fit._estimate_shared_meter_hourly_energy_kwh`.
     Every shared meter is fitted, because the live share sensors split by the
     same weights; they are stored flat, by member id, under
     ``shared_meter_weights``. A device with its own meter is the same
@@ -456,7 +457,7 @@ class _Histories:
     def states(self, entity_id: str, start: datetime) -> list[Any]:
         """The rows a read of ``entity_id`` from ``start`` alone would return."""
         states, instants, _unit, read_start = self._read(entity_id)
-        return recorder._states_within(
+        return _states_within(
             states, instants, start, self._window_end, query_start=read_start
         )
 

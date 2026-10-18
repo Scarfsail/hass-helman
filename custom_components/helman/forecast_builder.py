@@ -8,44 +8,56 @@ from zoneinfo import ZoneInfo
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
-from .config_read import read_entity_id, read_mapping
+from .config_read import read_entity_id, read_float, read_mapping
 from .const import (
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
     SOLAR_REMAINING_TODAY_ENERGY_ENTITY_ID,
 )
-from .grid_price_forecast_builder import GridPriceForecastBuilder
-from .recorder_hourly_series import TodaySlotEnergyReader
+from .forecast_response import parse_ts
+from .today_slot_readers import TodaySlotEnergyReader
 from .slot_grid import SLOTS_PER_DAY, SLOTS_PER_HOUR, day_slots, split_hour_by_weights
 
 _LOGGER = logging.getLogger(__name__)
 
-class HelmanForecastBuilder:
+
+def solar_slot_map(solar_forecast: dict[str, Any]) -> dict[datetime, float]:
+    """Map canonical solar points onto {local slot start datetime: value in Wh}."""
+    points = solar_forecast.get("points")
+    if not isinstance(points, list):
+        return {}
+
+    by_slot: dict[datetime, float] = {}
+    for point in points:
+        if not isinstance(point, dict):
+            continue
+        timestamp = parse_ts(point.get("timestamp"))
+        value = read_float(point.get("value"))
+        if timestamp is None or value is None:
+            continue
+        slot_start = dt_util.as_local(timestamp)
+        by_slot[slot_start] = by_slot.get(slot_start, 0.0) + value
+
+    return by_slot
+
+
+class SolarForecastBuilder:
     def __init__(
         self,
         hass: HomeAssistant,
         config: dict,
         slot_history: TodaySlotEnergyReader,
         *,
-        export_price_snapshot: dict[str, Any],
+        export_price_snapshot: dict[str, Any] | None = None,
     ) -> None:
         self._hass = hass
         self._config = config
         self._slot_history = slot_history
-        self._local_tz = ZoneInfo(str(hass.config.time_zone))
-        # Handed in, never read here: the coordinator owns the one ingestion of
-        # the configured sell-price entity and every consumer -- this refresh
-        # included -- is served from that single result.
-        self._export_price_snapshot = export_price_snapshot
+        tz_name = getattr(getattr(hass, "config", None), "time_zone", None) or "UTC"
+        self._local_tz = ZoneInfo(str(tz_name))
 
     async def build(self, reference_time: datetime | None = None) -> dict[str, Any]:
         effective_reference_time = reference_time or datetime.now(self._local_tz)
-        return {
-            "solar": await self._build_solar_forecast(effective_reference_time),
-            "grid": GridPriceForecastBuilder(self._hass, self._config).build(
-                reference_time=effective_reference_time,
-                export_snapshot=self._export_price_snapshot,
-            ),
-        }
+        return await self._build_solar_forecast(effective_reference_time)
 
     async def _build_solar_forecast(self, reference_time: datetime) -> dict[str, Any]:
         daily_entity_ids = read_solar_forecast_entities(self._config)[:8]
@@ -327,3 +339,6 @@ def read_solar_forecast_entities(config: dict[str, Any]) -> list[str]:
     if not isinstance(raw, list):
         return []
     return [entity for value in raw if (entity := read_entity_id(value)) is not None]
+
+
+HelmanForecastBuilder = SolarForecastBuilder

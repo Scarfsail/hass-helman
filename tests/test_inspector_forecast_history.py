@@ -28,7 +28,7 @@ service_mod = importlib.import_module(
 )
 models = importlib.import_module("custom_components.helman.solar_bias_correction.models")
 SlotEnergyBatch = importlib.import_module(
-    "custom_components.helman.recorder_hourly_series"
+    "custom_components.helman.recorder_slot_energy"
 ).SlotEnergyBatch
 
 from zoneinfo import ZoneInfo  # noqa: E402

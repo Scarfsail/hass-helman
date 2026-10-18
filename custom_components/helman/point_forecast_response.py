@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-from copy import deepcopy
-from datetime import datetime
 from typing import Any
 
-from homeassistant.util import dt as dt_util
+from .forecast_response import envelope, read_entries, slice_to_horizon
 
-from .config_read import parse_timestamp, read_float
-from .const import (
-    FORECAST_CANONICAL_GRANULARITY_MINUTES,
-)
-from .slot_grid import expand_points_to_grid
+_DROP_FIELDS = {
+    "rawPoints",
+    "correctedPoints",
+    "points",
+    "actualHistory",
+    "resolution",
+    "horizonHours",
+}
 
 
 def build_solar_forecast_response(
@@ -19,121 +20,35 @@ def build_solar_forecast_response(
     forecast_days: int,
     corrected_points: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    internal_fields = {"raw" + "Points", "corrected" + "Points"}
-    public_snapshot = {
-        key: deepcopy(value)
-        for key, value in snapshot.items()
-        if key not in internal_fields
-    }
-    response = _build_point_forecast_response(
-        public_snapshot,
-        forecast_days=forecast_days,
-        aggregation_mode="sum",
-        include_actual_history=True,
-    )
-    if corrected_points:
-        response["adjustedPoints"] = _build_points(
-            corrected_points,
-            aggregation_mode="sum",
-            target_count=_target_count(forecast_days),
-        )
-    return response
+    """Format the canonical solar snapshot for the public response.
 
-
-def build_price_channel_response(
-    snapshot: dict[str, Any],
-    *,
-    forecast_days: int,
-    unit_field: str,
-    current_price_field: str,
-    points_field: str,
-) -> dict[str, Any]:
-    response = _build_point_forecast_response(
-        snapshot,
-        forecast_days=forecast_days,
-        aggregation_mode="average",
-        include_actual_history=False,
-    )
-    return {
-        unit_field: response.get("unit"),
-        current_price_field: response.get("currentPrice"),
-        points_field: response.get("points", []),
-    }
-
-
-def _target_count(forecast_days: int) -> int:
-    return forecast_days * 24 * 60 // FORECAST_CANONICAL_GRANULARITY_MINUTES
-
-
-def _build_point_forecast_response(
-    snapshot: dict[str, Any],
-    *,
-    forecast_days: int,
-    aggregation_mode: str,
-    include_actual_history: bool,
-) -> dict[str, Any]:
-    response = {
-        key: deepcopy(value)
-        for key, value in snapshot.items()
-        if key not in {"points", "actualHistory", "resolution", "horizonHours"}
-    }
-
-    response["points"] = _build_points(
-        snapshot.get("points"),
-        aggregation_mode=aggregation_mode,
-        target_count=_target_count(forecast_days),
-    )
-    if include_actual_history:
-        response["actualHistory"] = _expand_points(
-            snapshot.get("actualHistory"), expansion_mode="split"
-        )
-    return response
-
-
-def _build_points(
-    raw_points: Any,
-    *,
-    aggregation_mode: str,
-    target_count: int,
-) -> list[dict[str, Any]]:
-    """The snapshot's points on the canonical grid, clipped to the horizon.
-
-    ``_expand_points`` still matters: a feed publishing coarser than canonical
-    (an hourly solar or price series) is split or repeated down onto the grid.
-    Only the reverse direction -- rolling canonical buckets up into a coarser
-    response -- is gone.
+    The response exposes the raw curve as ``points`` and the bias-adjusted
+    curve as ``adjustedPoints`` when one is active.
     """
-    if target_count <= 0:
-        return []
-    return _expand_points(
-        raw_points,
-        expansion_mode="split" if aggregation_mode == "sum" else "repeat",
-    )[:target_count]
+    response = envelope(snapshot, drop=_DROP_FIELDS)
 
-
-def _expand_points(
-    raw_points: Any,
-    *,
-    expansion_mode: str,
-) -> list[dict[str, Any]]:
-    return expand_points_to_grid(_read_points(raw_points), expansion_mode=expansion_mode)
-
-
-def _read_points(raw_points: Any) -> list[tuple[datetime, float]]:
+    raw_points = snapshot.get("rawPoints")
     if not isinstance(raw_points, list):
-        return []
+        raw_points = snapshot.get("points")
 
-    points: list[tuple[datetime, float]] = []
-    for point in raw_points:
-        if not isinstance(point, dict):
-            continue
+    response["points"] = slice_to_horizon(
+        read_entries(raw_points),
+        forecast_days=forecast_days,
+    )
 
-        timestamp = parse_timestamp(point.get("timestamp"))
-        value = read_float(point.get("value"))
-        if timestamp is None or value is None:
-            continue
+    adjusted = corrected_points
+    if adjusted is None and snapshot.get("rawPoints") is not None:
+        # Internally, snapshot["points"] is the series consumers use (the adjusted
+        # curve when active). If it differs from rawPoints, it is the adjusted series.
+        candidate_adjusted = snapshot.get("points")
+        if candidate_adjusted != snapshot.get("rawPoints"):
+            adjusted = candidate_adjusted
 
-        points.append((dt_util.as_local(timestamp), value))
+    if adjusted:
+        response["adjustedPoints"] = slice_to_horizon(
+            read_entries(adjusted),
+            forecast_days=forecast_days,
+        )
 
-    points.sort(key=lambda item: dt_util.as_utc(item[0]))
-    return points
+    response["actualHistory"] = read_entries(snapshot.get("actualHistory"))
+    return response

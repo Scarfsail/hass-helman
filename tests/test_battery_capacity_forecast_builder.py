@@ -113,7 +113,7 @@ _install_import_stubs()
 from custom_components.helman import (  # noqa: E402
     battery_capacity_forecast_builder,
     battery_forecast_response,
-    recorder_hourly_series,
+    slot_grid,
 )
 # The builder no longer imports this itself — it only ever asks whether the
 # battery is configured — so the tests take it from where it lives.
@@ -123,8 +123,8 @@ from custom_components.helman.battery_state import BatteryEntityConfig  # noqa: 
 class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
     def _make_builder(self):
         _install_import_stubs()
-        recorder_module = importlib.reload(
-            importlib.import_module("custom_components.helman.recorder_hourly_series")
+        slot_grid_module = importlib.reload(
+            importlib.import_module("custom_components.helman.slot_grid")
         )
         module = importlib.reload(
             importlib.import_module(
@@ -132,7 +132,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         module.dt_util = dt_util
-        recorder_module.dt_util = dt_util
+        slot_grid_module.dt_util = dt_util
         return module, module.BatteryCapacityForecastBuilder({})
 
     async def test_build_is_canonical_quarter_hour_and_uses_slot_values(self) -> None:
@@ -172,7 +172,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ),
             patch.object(module, "dt_util", dt_util),
-            patch.object(recorder_hourly_series, "dt_util", dt_util),
+            patch.object(slot_grid, "dt_util", dt_util),
         ):
             payload = builder.build_with_history(
                 live_state=module.BatteryLiveState(
@@ -242,7 +242,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ),
             patch.object(module, "dt_util", dt_util),
-            patch.object(recorder_hourly_series, "dt_util", dt_util),
+            patch.object(slot_grid, "dt_util", dt_util),
         ):
             payload = builder.build_with_history(
                 live_state=module.BatteryLiveState(
@@ -300,7 +300,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ),
             patch.object(module, "dt_util", dt_util),
-            patch.object(recorder_hourly_series, "dt_util", dt_util),
+            patch.object(slot_grid, "dt_util", dt_util),
         ):
             return builder.build_with_history(
                 live_state=module.BatteryLiveState(
@@ -360,8 +360,12 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         )
         solar_forecast = _make_solar_forecast(
             {
-                datetime(2026, 3, 20, 21, 0, tzinfo=TZ): 400.0,
-                datetime(2026, 3, 20, 22, 0, tzinfo=TZ): 800.0,
+                datetime(2026, 3, 20, 21, minute, tzinfo=TZ): 100.0
+                for minute in (0, 15, 30, 45)
+            }
+            | {
+                datetime(2026, 3, 20, 22, minute, tzinfo=TZ): 200.0
+                for minute in (0, 15, 30, 45)
             }
         )
 
@@ -387,7 +391,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ),
             patch.object(module, "dt_util", dt_util),
-            patch.object(recorder_hourly_series, "dt_util", dt_util),
+            patch.object(slot_grid, "dt_util", dt_util),
         ):
             payload = builder.build_with_history(
                 live_state=module.BatteryLiveState(
@@ -448,7 +452,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ),
             patch.object(module, "dt_util", dt_util),
-            patch.object(recorder_hourly_series, "dt_util", dt_util),
+            patch.object(slot_grid, "dt_util", dt_util),
         ):
             payload = builder.build_with_history(
                 live_state=module.BatteryLiveState(
@@ -516,7 +520,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ),
             patch.object(module, "dt_util", dt_util),
-            patch.object(recorder_hourly_series, "dt_util", dt_util),
+            patch.object(slot_grid, "dt_util", dt_util),
         ):
             payload = builder.build_with_history(
                 live_state=module.BatteryLiveState(
@@ -593,7 +597,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ),
             patch.object(module, "dt_util", dt_util),
-            patch.object(recorder_hourly_series, "dt_util", dt_util),
+            patch.object(slot_grid, "dt_util", dt_util),
         ):
             payload = builder.build_with_history(
                 live_state=module.BatteryLiveState(
@@ -665,7 +669,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ),
             patch.object(module, "dt_util", dt_util),
-            patch.object(recorder_hourly_series, "dt_util", dt_util),
+            patch.object(slot_grid, "dt_util", dt_util),
         ):
             payload = builder.build_with_history(
                 live_state=module.BatteryLiveState(
@@ -732,7 +736,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ),
             patch.object(module, "dt_util", dt_util),
-            patch.object(recorder_hourly_series, "dt_util", dt_util),
+            patch.object(slot_grid, "dt_util", dt_util),
         ):
             payload = builder.build_with_history(
                 live_state=module.BatteryLiveState(
@@ -805,7 +809,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ),
             patch.object(module, "dt_util", dt_util),
-            patch.object(recorder_hourly_series, "dt_util", dt_util),
+            patch.object(slot_grid, "dt_util", dt_util),
         ):
             payload = builder.build_with_history(
                 live_state=module.BatteryLiveState(
@@ -886,7 +890,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ),
             patch.object(module, "dt_util", dt_util),
-            patch.object(recorder_hourly_series, "dt_util", dt_util),
+            patch.object(slot_grid, "dt_util", dt_util),
             patch.object(battery_forecast_response, "dt_util", dt_util),
         ):
             payload = builder.build_with_history(
@@ -966,7 +970,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ),
             patch.object(module, "dt_util", dt_util),
-            patch.object(recorder_hourly_series, "dt_util", dt_util),
+            patch.object(slot_grid, "dt_util", dt_util),
         ):
             payload = builder.build_with_history(
                 live_state=module.BatteryLiveState(
@@ -1037,7 +1041,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ),
             patch.object(module, "dt_util", dt_util),
-            patch.object(recorder_hourly_series, "dt_util", dt_util),
+            patch.object(slot_grid, "dt_util", dt_util),
         ):
             payload = builder.build_with_history(
                 live_state=module.BatteryLiveState(
@@ -1112,7 +1116,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ),
             patch.object(module, "dt_util", dt_util),
-            patch.object(recorder_hourly_series, "dt_util", dt_util),
+            patch.object(slot_grid, "dt_util", dt_util),
         ):
             payload = builder.build_with_history(
                 live_state=module.BatteryLiveState(
@@ -1187,7 +1191,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ),
             patch.object(module, "dt_util", dt_util),
-            patch.object(recorder_hourly_series, "dt_util", dt_util),
+            patch.object(slot_grid, "dt_util", dt_util),
         ):
             payload = builder.build_with_history(
                 live_state=module.BatteryLiveState(
@@ -1262,7 +1266,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ),
             patch.object(module, "dt_util", dt_util),
-            patch.object(recorder_hourly_series, "dt_util", dt_util),
+            patch.object(slot_grid, "dt_util", dt_util),
         ):
             payload = builder.build_with_history(
                 live_state=module.BatteryLiveState(
@@ -1333,7 +1337,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ),
             patch.object(module, "dt_util", dt_util),
-            patch.object(recorder_hourly_series, "dt_util", dt_util),
+            patch.object(slot_grid, "dt_util", dt_util),
         ):
             payload = builder.build_with_history(
                 live_state=module.BatteryLiveState(
@@ -1410,7 +1414,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ),
             patch.object(module, "dt_util", dt_util),
-            patch.object(recorder_hourly_series, "dt_util", dt_util),
+            patch.object(slot_grid, "dt_util", dt_util),
         ):
             payload = builder.build_with_history(
                 live_state=module.BatteryLiveState(
@@ -1441,19 +1445,16 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("baselineSocPct", payload["series"][0])
 
 
-    def test_solar_slot_expansion_skips_inner_loop_when_divisor_is_one(self) -> None:
+    def test_solar_slot_map_preserves_canonical_points(self) -> None:
         from datetime import timedelta
+        from custom_components.helman.forecast_builder import solar_slot_map
 
-        module, builder = self._make_builder()
-
-        # 5-min granularity input → split_factor = 1 (finer than canonical 15 min)
         base = datetime(2026, 5, 10, 12, 0, tzinfo=TZ)
         points = [
-            {"timestamp": (base + timedelta(minutes=5 * i)).isoformat(), "value": 1.0}
+            {"timestamp": (base + timedelta(minutes=15 * i)).isoformat(), "value": 1.0}
             for i in range(4)
         ]
-        result = builder._build_solar_slot_map({"points": points})
-        # 4 input points, divisor=1 → 4 output keys, value preserved
+        result = solar_slot_map({"points": points})
         assert len(result) == 4
         assert all(v == 1.0 for v in result.values())
 

@@ -354,7 +354,7 @@ async def _hourly_energy(
     Imported here, like :mod:`.day_stats` does, so loading the node details
     needs no recorder.
     """
-    from ..recorder_hourly_series import query_cumulative_slot_energy_changes_for_windows
+    from ..recorder_slot_energy import query_cumulative_slot_energy_changes_for_windows
 
     return await query_cumulative_slot_energy_changes_for_windows(
         hass, entity_id, windows, interval_minutes=60

@@ -43,40 +43,47 @@ def _install_import_stubs() -> None:
 
 _install_import_stubs()
 
-from custom_components.helman import recorder_hourly_series  # noqa: E402
+from custom_components.helman import (  # noqa: E402
+    appliance_runtime_history,
+    recorder_slot_energy,
+    shared_meter_fit,
+    slot_grid,
+    today_slot_readers,
+)
 
 
 class ForecastRecorderSlotTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls._dt_patcher = patch.object(
-            recorder_hourly_series,
-            "dt_util",
-            dt_util,
-        )
-        cls._dt_patcher.start()
+        cls._dt_patchers = [
+            patch.object(slot_grid, "dt_util", dt_util),
+            patch.object(today_slot_readers, "dt_util", dt_util),
+        ]
+        for p in cls._dt_patchers:
+            p.start()
 
     @classmethod
     def tearDownClass(cls) -> None:
-        cls._dt_patcher.stop()
+        for p in cls._dt_patchers:
+            p.stop()
 
     def test_get_local_current_slot_start_floors_to_interval(self) -> None:
         self.assertEqual(
-            recorder_hourly_series.get_local_current_slot_start(
+            slot_grid.get_local_current_slot_start(
                 datetime(2026, 3, 20, 21, 7, tzinfo=TZ),
                 interval_minutes=15,
             ).isoformat(),
             "2026-03-20T21:00:00+01:00",
         )
         self.assertEqual(
-            recorder_hourly_series.get_local_current_slot_start(
+            slot_grid.get_local_current_slot_start(
                 datetime(2026, 3, 20, 21, 29, tzinfo=TZ),
                 interval_minutes=15,
             ).isoformat(),
             "2026-03-20T21:15:00+01:00",
         )
         self.assertEqual(
-            recorder_hourly_series.get_local_current_slot_start(
+            slot_grid.get_local_current_slot_start(
                 datetime(2026, 3, 20, 21, 59, tzinfo=TZ),
                 interval_minutes=60,
             ).isoformat(),
@@ -84,7 +91,7 @@ class ForecastRecorderSlotTests(unittest.TestCase):
         )
 
     def test_get_today_completed_local_slots_excludes_current_slot(self) -> None:
-        slots = recorder_hourly_series.get_today_completed_local_slots(
+        slots = today_slot_readers.get_today_completed_local_slots(
             datetime(2026, 3, 20, 21, 7, tzinfo=TZ),
             interval_minutes=15,
         )
@@ -94,7 +101,7 @@ class ForecastRecorderSlotTests(unittest.TestCase):
         self.assertEqual(slots[-1].isoformat(), "2026-03-20T20:45:00+01:00")
 
     def test_get_today_completed_local_slot_boundaries_include_current_slot(self) -> None:
-        boundaries = recorder_hourly_series.get_today_completed_local_slot_boundaries(
+        boundaries = today_slot_readers.get_today_completed_local_slot_boundaries(
             datetime(2026, 3, 20, 21, 7, tzinfo=TZ),
             interval_minutes=15,
         )
@@ -103,7 +110,7 @@ class ForecastRecorderSlotTests(unittest.TestCase):
         self.assertEqual(boundaries[-1].isoformat(), "2026-03-20T21:00:00+01:00")
 
     def test_build_local_slot_starts_until_skips_spring_forward_gap(self) -> None:
-        slots = recorder_hourly_series._build_local_slot_starts_until(
+        slots = slot_grid._build_local_slot_starts_until(
             datetime(2026, 3, 29, 0, 0, tzinfo=TZ),
             datetime(2026, 3, 30, 0, 0, tzinfo=TZ),
             interval_minutes=15,
@@ -129,7 +136,7 @@ class ForecastRecorderSlotTests(unittest.TestCase):
             ),
         ]
 
-        samples = recorder_hourly_series._sample_state_values_at_boundaries(
+        samples = today_slot_readers._sample_state_values_at_boundaries(
             states,
             boundaries,
         )
@@ -150,18 +157,18 @@ class ForecastRecorderSlotTests(unittest.TestCase):
             datetime(2026, 3, 20, 10, 45, tzinfo=UTC),
         ]
         samples = {
-            boundaries[0]: recorder_hourly_series._BoundarySample(
+            boundaries[0]: recorder_slot_energy._BoundarySample(
                 value_kwh=1.0, observed_at=boundaries[0]
             ),
-            boundaries[1]: recorder_hourly_series._BoundarySample(
+            boundaries[1]: recorder_slot_energy._BoundarySample(
                 value_kwh=1.25, observed_at=boundaries[1]
             ),
-            boundaries[2]: recorder_hourly_series._BoundarySample(
+            boundaries[2]: recorder_slot_energy._BoundarySample(
                 value_kwh=1.2, observed_at=boundaries[2]
             ),
         }
 
-        changes = recorder_hourly_series._build_slot_energy_changes_from_boundaries(
+        changes = recorder_slot_energy._build_slot_energy_changes_from_boundaries(
             boundaries,
             samples,
         )
@@ -188,7 +195,7 @@ class ForecastRecorderSlotTests(unittest.TestCase):
             ),
         ]
 
-        intervals = recorder_hourly_series._build_active_state_intervals(
+        intervals = appliance_runtime_history._build_active_state_intervals(
             states=states,
             window_start=datetime(2026, 3, 20, 10, 0, tzinfo=UTC),
             window_end=datetime(2026, 3, 20, 11, 0, tzinfo=UTC),
@@ -253,7 +260,7 @@ class ForecastRecorderSlotTests(unittest.TestCase):
 
         # A lone device's estimate is the shared split with itself as the only
         # member, which hands it all of its meter's energy.
-        fit = recorder_hourly_series._estimate_shared_meter_hourly_energy_kwh(
+        fit = shared_meter_fit._estimate_shared_meter_hourly_energy_kwh(
             {"only": (entity_states, ("heat", "cool"))},
             energy_states,
             datetime(2026, 3, 20, 10, 0, tzinfo=UTC),
@@ -283,7 +290,7 @@ class ForecastRecorderSlotTests(unittest.TestCase):
             )
             for value, hour in readings
         ]
-        return recorder_hourly_series._estimate_shared_meter_hourly_energy_kwh(
+        return shared_meter_fit._estimate_shared_meter_hourly_energy_kwh(
             {
                 key: (
                     [
@@ -398,7 +405,7 @@ class ForecastRecorderSlotTests(unittest.TestCase):
         ]
 
         def _fit(previous_weights=None):
-            return recorder_hourly_series._estimate_shared_meter_hourly_energy_kwh(
+            return shared_meter_fit._estimate_shared_meter_hourly_energy_kwh(
                 members,
                 energy_states,
                 _at(10),
@@ -431,7 +438,7 @@ class CumulativeSlotEnergyAttributeJoinTests(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls._dt_patcher = patch.object(
-            recorder_hourly_series,
+            recorder_slot_energy,
             "dt_util",
             dt_util,
         )
@@ -456,17 +463,17 @@ class CumulativeSlotEnergyAttributeJoinTests(unittest.IsolatedAsyncioTestCase):
         )
         with (
             patch.object(
-                recorder_hourly_series,
+                recorder_slot_energy,
                 "state_changes_during_period",
                 _fake_state_changes_during_period,
             ),
             patch.object(
-                recorder_hourly_series,
+                recorder_slot_energy,
                 "get_instance",
                 lambda hass: recorder,
             ),
         ):
-            changes = await recorder_hourly_series.query_cumulative_slot_energy_changes(
+            changes = await recorder_slot_energy.query_cumulative_slot_energy_changes(
                 hass,
                 "sensor.house_energy",
                 local_start=self.LOCAL_START,
@@ -543,7 +550,7 @@ class ActiveEnergyEstimateAttributeJoinTests(unittest.IsolatedAsyncioTestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls._dt_patcher = patch.object(
-            recorder_hourly_series,
+            shared_meter_fit,
             "dt_util",
             dt_util,
         )
@@ -580,26 +587,26 @@ class ActiveEnergyEstimateAttributeJoinTests(unittest.IsolatedAsyncioTestCase):
             states=SimpleNamespace(get=lambda entity_id: live_energy_state)
         )
         recorder = SimpleNamespace(async_add_executor_job=_run_now)
-        window = recorder_hourly_series._lookback_window(self.REFERENCE_TIME, 1)
+        window = shared_meter_fit._lookback_window(self.REFERENCE_TIME, 1)
         with (
             patch.object(
-                recorder_hourly_series,
+                shared_meter_fit,
                 "state_changes_during_period",
                 _fake_state_changes_during_period,
             ),
             patch.object(
-                recorder_hourly_series,
+                shared_meter_fit,
                 "get_instance",
                 lambda hass: recorder,
             ),
         ):
-            entity_states, _unit = await recorder_hourly_series.read_entity_history(
+            entity_states, _unit = await shared_meter_fit.read_entity_history(
                 hass, self.ENTITY_ID, *window, meter=False
             )
-            meter_states, unit = await recorder_hourly_series.read_entity_history(
+            meter_states, unit = await shared_meter_fit.read_entity_history(
                 hass, self.ENERGY_ENTITY_ID, *window, meter=True
             )
-        estimate = recorder_hourly_series._estimate_shared_meter_hourly_energy_kwh(
+        estimate = shared_meter_fit._estimate_shared_meter_hourly_energy_kwh(
             {"only": (entity_states, ("heat", "cool"))},
             meter_states,
             *window,

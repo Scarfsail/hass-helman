@@ -43,7 +43,8 @@ def _install_import_stubs() -> None:
     dt_mod.parse_datetime = datetime.fromisoformat
     util_pkg.dt = dt_mod
 
-    sys.modules.pop("custom_components.helman.recorder_hourly_series", None)
+    sys.modules.pop("custom_components.helman.today_slot_readers", None)
+    sys.modules.pop("custom_components.helman.slot_grid", None)
     sys.modules.pop("custom_components.helman.scheduling.actual_history", None)
 
 

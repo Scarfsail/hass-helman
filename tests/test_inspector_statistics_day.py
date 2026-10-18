@@ -84,7 +84,7 @@ RECORDER_STUB = SimpleNamespace(async_add_executor_job=_run_in_executor)
 import importlib
 service_mod = importlib.import_module("custom_components.helman.solar_bias_correction.service")
 models = importlib.import_module("custom_components.helman.solar_bias_correction.models")
-recorder_series_mod = importlib.import_module("custom_components.helman.recorder_hourly_series")
+recorder_series_mod = importlib.import_module("custom_components.helman.recorder_slot_energy")
 span_mod = importlib.import_module("custom_components.helman.recorder_statistics_span")
 
 

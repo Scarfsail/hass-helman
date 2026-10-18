@@ -98,9 +98,18 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
             ],
         }
         canonical_grid_price = {
-            "importPricePoints": [
-                {"timestamp": "2026-03-20T21:15:00+01:00", "value": 1.0}
-            ]
+            "import": {
+                "unit": "CZK/kWh",
+                "currentPrice": 7.0,
+                "points": [
+                    {"timestamp": "2026-03-20T21:15:00+01:00", "value": 1.0}
+                ],
+            },
+            "export": {
+                "unit": "CZK/kWh",
+                "currentPrice": 2.5,
+                "points": [],
+            },
         }
 
         with (
@@ -120,8 +129,8 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
                 return_value=canonical_solar,
             ),
             patch.object(
-                coordinator_module,
-                "build_grid_price_forecast_response",
+                coordinator,
+                "grid_price_snapshot",
                 return_value=canonical_grid_price,
             ),
         ):
@@ -379,9 +388,9 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
             ),
             patch.object(
                 coordinator_module,
-                "HelmanForecastBuilder",
+                "SolarForecastBuilder",
                 return_value=SimpleNamespace(
-                    build=AsyncMock(return_value=raw_forecast)
+                    build=AsyncMock(return_value=raw_forecast["solar"])
                 ),
             ),
         ):
@@ -405,7 +414,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
         coordinator._async_refresh_automation_input_bundle.assert_awaited_once_with(
             reference_time=REFERENCE_TIME,
             house_forecast=snapshot,
-            raw_forecast=raw_forecast,
+            raw_forecast=raw_forecast["solar"],
         )
 
 

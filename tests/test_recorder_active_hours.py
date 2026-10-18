@@ -36,7 +36,7 @@ def _install_import_stubs() -> None:
 
     # A sibling automation test may have installed a fake recorder module; drop it
     # so the real module (with the helper under test) is imported.
-    sys.modules.pop("custom_components.helman.recorder_hourly_series", None)
+    sys.modules.pop("custom_components.helman.appliance_runtime_history", None)
 
 
 _install_import_stubs()
@@ -53,7 +53,7 @@ def _as_utc(value: datetime) -> datetime:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
 
-from custom_components.helman.recorder_hourly_series import (  # noqa: E402
+from custom_components.helman.appliance_runtime_history import (  # noqa: E402
     _bucket_interval_hours_by_local_date,
 )
 
