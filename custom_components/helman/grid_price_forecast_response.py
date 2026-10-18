@@ -3,7 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-from .point_forecast_response import build_price_channel_response
+from .forecast_response import read_entries, slice_to_horizon
 
 _PRICE_CHANNEL_FIELDS = (
     ("export", "exportPriceUnit", "currentExportPrice", "exportPricePoints"),
@@ -24,14 +24,12 @@ def build_grid_price_forecast_response(
         current_price_field,
         points_field,
     ) in _PRICE_CHANNEL_FIELDS:
-        response.update(
-            build_price_channel_response(
-                _read_channel(snapshot.get(channel_key)),
-                forecast_days=forecast_days,
-                unit_field=unit_field,
-                current_price_field=current_price_field,
-                points_field=points_field,
-            )
+        channel = _read_channel(snapshot.get(channel_key))
+        response[unit_field] = channel.get("unit")
+        response[current_price_field] = channel.get("currentPrice")
+        response[points_field] = slice_to_horizon(
+            read_entries(channel.get("points")),
+            forecast_days=forecast_days,
         )
 
     return response

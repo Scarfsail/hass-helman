@@ -79,7 +79,13 @@ class GridPriceForecastBuilderTests(unittest.TestCase):
             snapshot["export"]["points"],
             [
                 {"timestamp": "2026-03-20T21:00:00+01:00", "value": 100.0},
+                {"timestamp": "2026-03-20T21:15:00+01:00", "value": 100.0},
+                {"timestamp": "2026-03-20T21:30:00+01:00", "value": 100.0},
+                {"timestamp": "2026-03-20T21:45:00+01:00", "value": 100.0},
                 {"timestamp": "2026-03-20T22:00:00+01:00", "value": 120.0},
+                {"timestamp": "2026-03-20T22:15:00+01:00", "value": 120.0},
+                {"timestamp": "2026-03-20T22:30:00+01:00", "value": 120.0},
+                {"timestamp": "2026-03-20T22:45:00+01:00", "value": 120.0},
             ],
         )
 
@@ -180,16 +186,19 @@ class GridPriceForecastBuilderTests(unittest.TestCase):
                 "2026-03-20T22:00:00+01:00": 120.0,
             },
         )
-        # One reading, two renderings: the published map and the forecast
-        # points carry the same instants and the same numbers.
+        # Schedule preserves source entries; points expands hourly entries
+        # to the canonical 15-minute grid using repeat mode.
+        expected_values = [
+            val for val in channel["schedule"].values() for _ in range(4)
+        ]
         self.assertEqual(
             [point["value"] for point in channel["points"]],
-            list(channel["schedule"].values()),
+            expected_values,
         )
-        self.assertEqual(
-            [point["timestamp"] for point in channel["points"]],
-            list(channel["schedule"].keys()),
-        )
+        self.assertEqual(len(channel["points"]), 16)
+        self.assertEqual(channel["points"][0]["timestamp"], "2026-03-20T19:00:00+01:00")
+        self.assertEqual(channel["points"][1]["timestamp"], "2026-03-20T19:15:00+01:00")
+        self.assertEqual(channel["points"][-1]["timestamp"], "2026-03-20T22:45:00+01:00")
 
     def test_export_ingestion_reports_nothing_when_unconfigured(self) -> None:
         module, builder = self._make_builder(config={})

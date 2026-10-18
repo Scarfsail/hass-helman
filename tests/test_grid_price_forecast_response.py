@@ -31,15 +31,15 @@ def _install_import_stubs() -> None:
 _install_import_stubs()
 
 from custom_components.helman import (  # noqa: E402
+    forecast_response,
     grid_price_forecast_response,
-    point_forecast_response,
 )
 
 
 class GridPriceForecastResponseTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls._dt_patcher = patch.object(point_forecast_response, "dt_util", dt_util)
+        cls._dt_patcher = patch.object(forecast_response, "dt_util", dt_util)
         cls._dt_patcher.start()
 
     @classmethod
@@ -59,7 +59,31 @@ class GridPriceForecastResponseTests(unittest.TestCase):
                             "value": 100.0,
                         },
                         {
+                            "timestamp": "2026-03-20T21:15:00+01:00",
+                            "value": 100.0,
+                        },
+                        {
+                            "timestamp": "2026-03-20T21:30:00+01:00",
+                            "value": 100.0,
+                        },
+                        {
+                            "timestamp": "2026-03-20T21:45:00+01:00",
+                            "value": 100.0,
+                        },
+                        {
                             "timestamp": "2026-03-20T22:00:00+01:00",
+                            "value": 120.0,
+                        },
+                        {
+                            "timestamp": "2026-03-20T22:15:00+01:00",
+                            "value": 120.0,
+                        },
+                        {
+                            "timestamp": "2026-03-20T22:30:00+01:00",
+                            "value": 120.0,
+                        },
+                        {
+                            "timestamp": "2026-03-20T22:45:00+01:00",
                             "value": 120.0,
                         },
                     ],

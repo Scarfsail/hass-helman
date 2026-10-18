@@ -10,7 +10,6 @@ from homeassistant.core import HomeAssistant
 from .const import (
     DOMAIN,
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
-    MAX_FORECAST_DAYS,
 )
 
 #: The Energy dashboard's ``wh_hours`` map is keyed by the hour, so this module
@@ -28,15 +27,11 @@ async def async_get_solar_forecast(
     if config_entry is None or config_entry.domain != DOMAIN:
         return None
 
-    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
+    coordinator = getattr(config_entry, "runtime_data", None) or hass.data.get(DOMAIN, {}).get("coordinator")
     if coordinator is None:
         return None
 
-    forecast = await coordinator.get_forecast(forecast_days=MAX_FORECAST_DAYS)
-    solar_forecast = forecast.get("solar", {})
-    points = solar_forecast.get("adjustedPoints")
-    if not isinstance(points, list):
-        points = solar_forecast.get("points")
+    points = coordinator.get_corrected_solar_forecast_points()
     return {"wh_hours": dict(_to_hourly(points))}
 
 

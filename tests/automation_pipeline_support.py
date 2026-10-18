@@ -102,12 +102,16 @@ def _make_schedule_document(*, execution_enabled: bool = True) -> ScheduleDocume
 
 def _make_grid_price_response() -> dict[str, object]:
     return {
-        "exportPriceUnit": "CZK/kWh",
-        "currentExportPrice": 2.5,
-        "exportPricePoints": [{"timestamp": CURRENT_SLOT_ID, "value": 2.5}],
-        "importPriceUnit": "CZK/kWh",
-        "currentImportPrice": 7.0,
-        "importPricePoints": [{"timestamp": CURRENT_SLOT_ID, "value": 7.0}],
+        "export": {
+            "unit": "CZK/kWh",
+            "currentPrice": 2.5,
+            "points": [{"timestamp": CURRENT_SLOT_ID, "value": 2.5}],
+        },
+        "import": {
+            "unit": "CZK/kWh",
+            "currentPrice": 7.0,
+            "points": [{"timestamp": CURRENT_SLOT_ID, "value": 7.0}],
+        },
     }
 
 

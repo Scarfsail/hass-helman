@@ -14,6 +14,7 @@ from ..controllables.spec import (
     CONTROLLABLE_KIND_EV_CHARGER,
     spec_for,
 )
+from ..forecast_builder import solar_slot_map
 from ..recorder_hourly_series import get_local_current_slot_start
 from ..scheduling.schedule import ScheduleDocument
 from ..scheduling.slots import SCHEDULE_SLOT_DURATION, format_slot_id, parse_slot_id
@@ -119,7 +120,7 @@ def build_projection_input_bundle(
     if current_house_kwh is None:
         return None
 
-    solar_by_slot_wh = _build_solar_slot_map(solar_forecast)
+    solar_by_slot_wh = solar_slot_map(solar_forecast)
     if not solar_by_slot_wh:
         return None
 
@@ -802,68 +803,8 @@ def _build_house_series_map(house_forecast: dict[str, Any]) -> dict[datetime, fl
     return by_slot
 
 
-def _build_solar_slot_map(solar_forecast: dict[str, Any]) -> dict[datetime, float]:
-    points = solar_forecast.get("adjustedPoints")
-    if not isinstance(points, list):
-        points = solar_forecast.get("correctedPoints")
-    if not isinstance(points, list):
-        points = solar_forecast.get("points")
-    if not isinstance(points, list):
-        return {}
-
-    parsed_points: list[tuple[datetime, float]] = []
-    for point in points:
-        if not isinstance(point, dict):
-            continue
-        timestamp = parse_timestamp(point.get("timestamp"))
-        value = read_float(point.get("value"))
-        if timestamp is None or value is None:
-            continue
-        parsed_points.append((dt_util.as_local(timestamp), value))
-
-    if not parsed_points:
-        return {}
-
-    parsed_points.sort(key=lambda item: dt_util.as_utc(item[0]))
-    split_factor = _get_solar_point_split_factor(parsed_points)
-    divisor = split_factor if split_factor > 0 else 1
-    by_slot: dict[datetime, float] = {}
-
-    for slot_start, value in parsed_points:
-        slot_value = value / divisor
-        for split_index in range(divisor):
-            expanded_slot_start = advance(slot_start, slot_count=split_index)
-            by_slot[expanded_slot_start] = by_slot.get(expanded_slot_start, 0.0) + slot_value
-
-    return by_slot
-
-
 def _read_house_entry_value(entry: dict[str, Any]) -> float | None:
     non_deferrable = entry.get("nonDeferrable")
     if not isinstance(non_deferrable, dict):
         return None
     return read_float(non_deferrable.get("value"))
-
-
-def _get_solar_point_split_factor(points: list[tuple[datetime, float]]) -> int:
-    if len(points) < 2:
-        return 1
-
-    candidate_intervals: list[int] = []
-    for index in range(1, len(points)):
-        delta_seconds = (
-            dt_util.as_utc(points[index][0]) - dt_util.as_utc(points[index - 1][0])
-        ).total_seconds()
-        if delta_seconds <= 0:
-            continue
-        candidate_intervals.append(int(round(delta_seconds / 60)))
-
-    if not candidate_intervals:
-        return 1
-
-    interval_minutes = min(candidate_intervals)
-    if interval_minutes < FORECAST_CANONICAL_GRANULARITY_MINUTES:
-        return 1
-    if interval_minutes % FORECAST_CANONICAL_GRANULARITY_MINUTES != 0:
-        return 1
-    return interval_minutes // FORECAST_CANONICAL_GRANULARITY_MINUTES

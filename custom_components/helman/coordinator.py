@@ -136,7 +136,7 @@ from .consumption_forecast_profiles import (
     HouseConsumptionProfile,
     profile_from_dict,
 )
-from .forecast_builder import HelmanForecastBuilder
+from .forecast_builder import SolarForecastBuilder
 from .grid_flow_forecast_builder import build_grid_flow_forecast_snapshot
 from .grid_flow_forecast_response import build_grid_flow_forecast_response
 from .grid_price_forecast_builder import GridPriceForecastBuilder
@@ -547,45 +547,22 @@ def _build_house_profile_health(snapshot: dict[str, Any]) -> tuple[str, str] | N
     return None
 
 
-def _merge_grid_forecast_responses(
-    *,
-    grid_flow_response: dict[str, Any],
-    grid_price_response: dict[str, Any],
-) -> dict[str, Any]:
-    return {
-        **grid_flow_response,
-        "exportPriceUnit": grid_price_response.get("exportPriceUnit"),
-        "currentExportPrice": grid_price_response.get("currentExportPrice"),
-        "exportPricePoints": list(grid_price_response.get("exportPricePoints", [])),
-        "importPriceUnit": grid_price_response.get("importPriceUnit"),
-        "currentImportPrice": grid_price_response.get("currentImportPrice"),
-        "importPricePoints": list(grid_price_response.get("importPricePoints", [])),
-    }
+def _adopt_stored_solar_forecast(raw_snapshot: Any) -> dict[str, Any] | None:
+    """Tolerantly adopt a persisted solar snapshot from storage.
 
-
-def _build_grid_forecast_snapshot_with_prices(
-    *,
-    battery_forecast: dict[str, Any],
-    grid_price_forecast: dict[str, Any],
-) -> dict[str, Any]:
-    return _merge_grid_forecast_responses(
-        grid_flow_response=build_grid_flow_forecast_snapshot(battery_forecast),
-        grid_price_response=grid_price_forecast,
-    )
-
-
-def _build_price_channel_snapshot(
-    *,
-    grid_price_forecast: dict[str, Any],
-    unit_field: str,
-    current_price_field: str,
-    points_field: str,
-) -> dict[str, Any]:
-    return {
-        "unit": grid_price_forecast.get(unit_field),
-        "currentPrice": grid_price_forecast.get(current_price_field),
-        "points": list(grid_price_forecast.get(points_field, [])),
-    }
+    In canonical form, points is the series consumers use and rawPoints is the
+    untouched record. If either is missing, it is populated from the other.
+    """
+    if not isinstance(raw_snapshot, dict):
+        return None
+    snapshot = deepcopy(raw_snapshot)
+    points = snapshot.get("points")
+    raw_points = snapshot.get("rawPoints")
+    if isinstance(raw_points, list) and not isinstance(points, list):
+        snapshot["points"] = deepcopy(raw_points)
+    elif isinstance(points, list) and not isinstance(raw_points, list):
+        snapshot["rawPoints"] = deepcopy(points)
+    return snapshot
 
 
 def _iter_local_solar_points(
@@ -811,7 +788,7 @@ class HelmanCoordinator:
             ),
         ]
         self._cached_solar_forecast: dict[str, Any] | None = None
-        #: (slot start, snapshot) for `_build_grid_price_snapshot`'s per-slot hold.
+        #: (slot start, snapshot) for `grid_price_snapshot`'s per-slot hold.
         self._grid_price_snapshot_cache: tuple[datetime, dict[str, Any]] | None = None
         self._cached_battery_forecast: dict | None = None
         self._cached_battery_forecast_expires_at: datetime | None = None
@@ -1157,7 +1134,7 @@ class HelmanCoordinator:
             house_forecast_composition_provider=self._get_house_forecast_composition,
             house_device_consumers_provider=self._get_house_device_consumers,
             battery_soc_bounds_provider=self._get_battery_soc_bounds,
-            grid_price_snapshot_provider=self._build_grid_price_snapshot,
+            grid_price_snapshot_provider=self.grid_price_snapshot,
         )
         await self._solar_bias_service.async_setup()
         self._training_artifacts_store = TrainingArtifactsStore(self._hass)
@@ -1234,7 +1211,9 @@ class HelmanCoordinator:
         # refresh below completes. Only a snapshot that answers a *different*
         # question (entity, window, fingerprint) is thrown away.
         self._cached_forecast = self._storage.forecast_snapshot
-        self._cached_solar_forecast = self._storage.solar_forecast_snapshot
+        self._cached_solar_forecast = _adopt_stored_solar_forecast(
+            self._storage.solar_forecast_snapshot
+        )
         request = read_house_forecast_request(self._active_config)
         total_energy_entity_id = request.total_energy_entity_id
         training_window_days = request.training_window_days
@@ -1624,8 +1603,10 @@ class HelmanCoordinator:
         except GridImportPriceConfigError:
             return None
 
-    def _build_grid_price_snapshot(self) -> dict[str, Any]:
-        """Both price channels as of right now, points running forward from here.
+    def grid_price_snapshot(
+        self, reference_time: datetime | None = None
+    ) -> dict[str, Any]:
+        """Both price channels as of reference_time, points running forward from here.
 
         Built on demand rather than read off the last refresh, for the same
         reason ``async_get_forecast`` builds its own: the points and the "price
@@ -1639,9 +1620,9 @@ class HelmanCoordinator:
         change, so the freshness the docstring above demands is exactly what
         the cache key preserves.
         """
-        reference_time = dt_util.now()
+        effective_reference_time = reference_time or dt_util.now()
         slot_start = get_local_current_slot_start(
-            reference_time,
+            effective_reference_time,
             interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
         )
         cached = self._grid_price_snapshot_cache
@@ -1651,11 +1632,13 @@ class HelmanCoordinator:
             self._hass,
             self._active_config,
         ).build(
-            reference_time=reference_time,
+            reference_time=effective_reference_time,
             export_snapshot=self._get_grid_export_price_channel(),
         )
         self._grid_price_snapshot_cache = (slot_start, snapshot)
         return snapshot
+
+    _build_grid_price_snapshot = grid_price_snapshot
 
     @property
     def training_batch(self) -> TrainingBatch | None:
@@ -2234,14 +2217,7 @@ class HelmanCoordinator:
         # than a second read of the source -- it carries the source's own
         # timestamps, which no reference time reshapes. Only the grid half:
         # HelmanForecastBuilder would also run the solar half's same-day
-        # recorder scan, and a read has no use for it.
-        raw_grid_price_forecast = GridPriceForecastBuilder(
-            self._hass,
-            self._active_config,
-        ).build(
-            reference_time=request_now,
-            export_snapshot=self._get_grid_export_price_channel(),
-        )
+        raw_grid_price_forecast = self.grid_price_snapshot(request_now)
         canonical_house_forecast = await self._async_get_canonical_house_forecast(
             reference_time=request_now
         )
@@ -2271,13 +2247,11 @@ class HelmanCoordinator:
         canonical_grid_flow_forecast = build_grid_flow_forecast_snapshot(
             canonical_battery_forecast
         )
-        result["grid"] = _merge_grid_forecast_responses(
-            grid_flow_response=build_grid_flow_forecast_response(
-                canonical_grid_flow_forecast,
-                forecast_days=forecast_days,
-            ),
-            grid_price_response=grid_price_response,
+        grid_flow_response = build_grid_flow_forecast_response(
+            canonical_grid_flow_forecast,
+            forecast_days=forecast_days,
         )
+        result["grid"] = {**grid_flow_response, **grid_price_response}
         result["battery_capacity"] = build_battery_forecast_response(
             canonical_battery_forecast,
             forecast_days=forecast_days,
@@ -3591,19 +3565,20 @@ class HelmanCoordinator:
                 last_outcome=self._house_profile_last_outcome,
                 forecast_days=MAX_FORECAST_DAYS,
             )
-            # One HelmanForecastBuilder.build() per refresh: its solar half
-            # feeds the canonical snapshot, its grid half the automation bundle.
-            raw_forecast = await HelmanForecastBuilder(
+            # One SolarForecastBuilder.build() per refresh: its solar half
+            # feeds the canonical snapshot.
+            raw_solar_forecast = await SolarForecastBuilder(
                 self._hass,
                 self._active_config,
                 self._slot_history,
-                # The refresh beat is the export channel's ingestion beat: read
-                # the source once here, then serve the same result to the
-                # snapshot, the automation bundle and the published sensor.
-                export_price_snapshot=self._ingest_grid_export_price(),
             ).build(reference_time=request_now)
+            # The refresh beat is the export channel's ingestion beat: read
+            # the source once here, then serve the same result to the
+            # snapshot, the automation bundle and the published sensor.
+            self._ingest_grid_export_price()
+            grid_price_snapshot = self.grid_price_snapshot(request_now)
             solar_snapshot = self._build_canonical_solar_forecast(
-                raw_forecast["solar"],
+                raw_solar_forecast,
                 reference_time=request_now,
             )
             solar_degraded = self._is_degraded_solar_rebuild(
@@ -3641,8 +3616,8 @@ class HelmanCoordinator:
             # The builder is the one authority on what a price is, so the
             # published sensor republishes what it just computed rather than
             # deriving the rate a second time.
-            self._absorb_grid_import_price(raw_forecast.get("grid"))
-            self._absorb_grid_export_price(raw_forecast.get("grid"))
+            self._absorb_grid_import_price(grid_price_snapshot)
+            self._absorb_grid_export_price(grid_price_snapshot)
             self._publish_solar_forecast_entities(reason=reason)
         except Exception:
             _LOGGER.exception("Error refreshing house consumption forecast")
@@ -3654,7 +3629,7 @@ class HelmanCoordinator:
         bundle_ready = await self._async_refresh_automation_input_bundle(
             reference_time=request_now,
             house_forecast=house_snapshot,
-            raw_forecast=raw_forecast,
+            raw_forecast=raw_solar_forecast,
         )
         return _ForecastRefreshResult(
             forecast_refreshed=not solar_degraded,
@@ -3755,17 +3730,22 @@ class HelmanCoordinator:
             reference_time=reference_time
         )
         if solar_forecast is None:
-            solar_forecast = build_solar_forecast_response(
-                raw_forecast["solar"],
-                forecast_days=MAX_FORECAST_DAYS,
+            raw_solar = (
+                raw_forecast.get("solar")
+                if isinstance(raw_forecast, dict) and "solar" in raw_forecast
+                else raw_forecast
             )
+            if isinstance(raw_solar, dict):
+                solar_forecast = build_solar_forecast_response(
+                    raw_solar,
+                    forecast_days=MAX_FORECAST_DAYS,
+                )
+            else:
+                solar_forecast = {"status": "unavailable", "points": []}
         return AutomationInputBundle(
             original_house_forecast=deepcopy(house_forecast),
             solar_forecast=_build_corrected_solar_forecast_view(solar_forecast),
-            grid_price_forecast=build_grid_price_forecast_response(
-                raw_forecast["grid"],
-                forecast_days=MAX_FORECAST_DAYS,
-            ),
+            grid_price_forecast=self.grid_price_snapshot(reference_time),
             when_active_hourly_energy_kwh_by_appliance_id=(
                 self._resolve_when_active_hourly_energy_kwh_by_appliance_id()
             ),
@@ -4344,10 +4324,7 @@ class HelmanCoordinator:
         grid_forecast = (
             None
             if grid_price_forecast is None
-            else _build_grid_forecast_snapshot_with_prices(
-                battery_forecast=battery_forecast,
-                grid_price_forecast=grid_price_forecast,
-            )
+            else build_grid_flow_forecast_snapshot(battery_forecast)
         )
         return _ForecastRebuildSnapshot(
             adjusted_house_forecast=adjusted_house_forecast,
@@ -4498,17 +4475,11 @@ class HelmanCoordinator:
                 now=reference_time,
                 battery_state=battery_state,
                 solar_forecast=deepcopy(input_bundle.solar_forecast),
-                import_price_forecast=_build_price_channel_snapshot(
-                    grid_price_forecast=input_bundle.grid_price_forecast,
-                    unit_field="importPriceUnit",
-                    current_price_field="currentImportPrice",
-                    points_field="importPricePoints",
+                import_price_forecast=deepcopy(
+                    input_bundle.grid_price_forecast.get("import", {})
                 ),
-                export_price_forecast=_build_price_channel_snapshot(
-                    grid_price_forecast=input_bundle.grid_price_forecast,
-                    unit_field="exportPriceUnit",
-                    current_price_field="currentExportPrice",
-                    points_field="exportPricePoints",
+                export_price_forecast=deepcopy(
+                    input_bundle.grid_price_forecast.get("export", {})
                 ),
                 appliance_registry=self._pinned_appliances_registry(compute_inputs),
                 when_active_hourly_energy_kwh_by_appliance_id=deepcopy(
