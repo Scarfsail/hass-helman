@@ -25,7 +25,9 @@ exercised, in the style of ``test_inspector_span_aggregates.py``.
 
 from __future__ import annotations
 
+import asyncio
 import unittest
+import unittest.mock
 import pytest
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -391,6 +393,68 @@ class TestWalk(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(IMPORTS, [])
         # Nothing written, so nothing to wait for or forget.
         self.assertEqual(FLUSHES, [])
+
+    async def test_an_unconfigured_source_with_no_history_is_reprobed_on_next_start(self):
+        # D6: latch done only when history is exhausted AND found_any is True.
+        # An unconfigured or excluded sell-price entity has no history, so found_any
+        # is False. It is re-probed on the next start rather than permanently latched done.
+        _reset([])
+
+        await _run()
+
+        self.assertEqual(len(HISTORY_CALLS), 1)
+        self.assertFalse(STORED[backfill._STORAGE_KEY]["done"])
+        self.assertIsNone(STORED[backfill._STORAGE_KEY]["oldest_hour"])
+
+        # Second start: because done was not latched and no history was found,
+        # it probes again from the ownership boundary rather than walking backward.
+        await _run()
+
+        self.assertEqual(len(HISTORY_CALLS), 2)
+        self.assertEqual(HISTORY_CALLS[1], HISTORY_CALLS[0])
+        self.assertFalse(STORED[backfill._STORAGE_KEY]["done"])
+        self.assertIsNone(STORED[backfill._STORAGE_KEY]["oldest_hour"])
+
+    async def test_cancel_mid_walk_resumes_from_stored_cursor(self):
+        # Walk covers several chunks; cancelling mid-walk saves the completed chunk's
+        # cursor, and resuming continues backward from that cursor.
+        oldest = CURRENT_HOUR - timedelta(days=20)
+        _reset(
+            [
+                (oldest + timedelta(hours=index), "2.0")
+                for index in range(0, 24 * 20, 6)
+            ]
+        )
+
+        call_count = 0
+        original_chunk_statistics = backfill._chunk_statistics
+
+        async def _cancelling_chunk_statistics(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                raise asyncio.CancelledError()
+            return await original_chunk_statistics(*args, **kwargs)
+
+        with unittest.mock.patch.object(
+            backfill, "_chunk_statistics", _cancelling_chunk_statistics
+        ):
+            with self.assertRaises(asyncio.CancelledError):
+                await _run()
+
+        # The first chunk committed and stored its cursor before chunk 2 was cancelled
+        stored_doc = STORED[backfill._STORAGE_KEY]
+        self.assertFalse(stored_doc["done"])
+        recorded_cursor = datetime.fromisoformat(stored_doc["oldest_hour"])
+        self.assertEqual(recorded_cursor, CURRENT_HOUR - timedelta(days=7))
+
+        # Second run resumes from the recorded cursor
+        HISTORY_CALLS.clear()
+        await _run()
+
+        self.assertEqual(HISTORY_CALLS[0][1], recorded_cursor)
+        self.assertTrue(STORED[backfill._STORAGE_KEY]["done"])
+
 
 
 class TestMonthCacheInvalidation(unittest.IsolatedAsyncioTestCase):

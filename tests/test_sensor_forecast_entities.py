@@ -771,28 +771,33 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
 
         started: list[object] = []
         coordinator = make_coordinator()
-        coordinator._grid_export_price_backfill_started = False
+        job = next(
+            j
+            for j in coordinator._backfill_jobs
+            if j.name == "helman_grid_export_price_backfill"
+        )
         coordinator._get_grid_sell_price_entity_id = lambda: "sensor.spot_sell_price"
-        coordinator._hass = SimpleNamespace(
-            async_create_background_task=lambda coro, name: (
-                coro.close(), started.append(name)
-            )[1],
+        coordinator._hass.async_create_background_task = (
+            lambda coro, name: (coro.close(), started.append(name))[1]
         )
 
         # A price with no unit: nothing starts.
         coordinator._absorb_grid_export_price(
             {"export": {"status": "partial", "currentPrice": 2.5}}
         )
-        coordinator._maybe_start_grid_export_price_backfill()
+        coordinator._maybe_start_backfill_jobs()
         self.assertEqual(started, [])
-        self.assertFalse(coordinator._grid_export_price_backfill_started)
+        self.assertFalse(job.started)
 
         # The next beat carries both, and the walk begins.
         coordinator._absorb_grid_export_price(
             {"export": {"status": "partial", "unit": "CZK/kWh", "currentPrice": 2.5}}
         )
-        coordinator._maybe_start_grid_export_price_backfill()
+        coordinator._maybe_start_backfill_jobs()
         self.assertEqual(len(started), 1)
+        self.assertTrue(job.started)
+        self.assertEqual(started[0], "helman_grid_export_price_backfill")
+
 
 
 if __name__ == "__main__":

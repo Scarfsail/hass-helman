@@ -1,8 +1,9 @@
-from __future__ import annotations
-
+import asyncio
 import unittest
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock, Mock, patch
 from zoneinfo import ZoneInfo
 
 
@@ -176,5 +177,103 @@ class MetadataTests(unittest.TestCase):
         self.assertIs(meta["has_sum"], False)
 
 
+class TestSolarForecastBackfillWalk(unittest.IsolatedAsyncioTestCase):
+    async def test_cancel_mid_walk_resumes_from_stored_cursor(self):
+        stored: dict[str, Any] = {}
+
+        class _FakeStore:
+            def __init__(self, hass, version, key):
+                self.key = key
+
+            async def async_load(self):
+                return stored.get(self.key)
+
+            async def async_save(self, doc):
+                stored[self.key] = doc
+
+        start_cursor = datetime(2026, 5, 20, 10, 0, tzinfo=timezone.utc)
+        calls: list[tuple[datetime, datetime]] = []
+        call_count = 0
+
+        async def _chunk_with_cancel(hass, source, *, utc_start, utc_end, timezone):
+            nonlocal call_count
+            calls.append((utc_start, utc_end))
+            call_count += 1
+            if call_count == 2:
+                raise asyncio.CancelledError()
+            return [
+                mod.StatisticData(
+                    start=utc_start,
+                    mean=100.0,
+                    min=100.0,
+                    max=100.0,
+                )
+            ]
+
+        hass = SimpleNamespace(config=SimpleNamespace(time_zone="Europe/Prague"))
+
+        with patch("homeassistant.helpers.storage.Store", _FakeStore), patch(
+            "custom_components.helman.statistics_backfill.first_compiled_hour",
+            AsyncMock(return_value=start_cursor),
+        ), patch(
+            "custom_components.helman.statistics_backfill.span_mod.async_forget_imported_statistics",
+            AsyncMock(),
+        ), patch.object(
+            mod, "_chunk_statistics", _chunk_with_cancel
+        ), patch.object(
+            mod, "async_import_statistics", Mock()
+        ), patch.object(
+            mod, "_CHUNK_PAUSE_SECONDS", 0
+        ):
+            with self.assertRaises(asyncio.CancelledError):
+                await mod.async_backfill_solar_forecast_statistics(
+                    hass, source_entity_id="sensor.solar_source"
+                )
+
+        stored_doc = stored[mod._STORAGE_KEY]
+        self.assertFalse(stored_doc["done"])
+        recorded_cursor = datetime.fromisoformat(stored_doc["oldest_hour"])
+        self.assertEqual(recorded_cursor, start_cursor - mod._CHUNK)
+
+        # Now resume without cancellation (resumed chunk has data, subsequent chunk is exhausted)
+        resume_calls = 0
+
+        async def _chunk_resume(hass, source, *, utc_start, utc_end, timezone):
+            nonlocal resume_calls
+            calls.append((utc_start, utc_end))
+            resume_calls += 1
+            if resume_calls == 1:
+                return [
+                    mod.StatisticData(
+                        start=utc_start,
+                        mean=100.0,
+                        min=100.0,
+                        max=100.0,
+                    )
+                ]
+            return None
+
+        calls.clear()
+        with patch("homeassistant.helpers.storage.Store", _FakeStore), patch(
+            "custom_components.helman.statistics_backfill.span_mod.async_forget_imported_statistics",
+            AsyncMock(),
+        ), patch.object(
+            mod, "_chunk_statistics", _chunk_resume
+        ), patch.object(
+            mod, "async_import_statistics", Mock()
+        ), patch.object(
+            mod, "_CHUNK_PAUSE_SECONDS", 0
+        ):
+            await mod.async_backfill_solar_forecast_statistics(
+                hass, source_entity_id="sensor.solar_source"
+            )
+
+        # Resumed from the stored cursor
+        self.assertEqual(calls[0][1], recorded_cursor)
+        # Done is latched because chunk 1 had data and this chunk is exhausted
+        self.assertTrue(stored[mod._STORAGE_KEY]["done"])
+
+
 if __name__ == "__main__":
     unittest.main()
+
