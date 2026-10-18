@@ -1,16 +1,8 @@
 from __future__ import annotations
-from _ha_stubs import stub_module
-from pathlib import Path
-import pytest
-import sys
-import types
-from _fakes import _bias_service_config
 
-
-import importlib
 import asyncio
+import importlib
 from datetime import datetime
-
 
 # Tests for SolarBiasCorrectionStore (TDD: start with failing tests)
 
@@ -342,7 +334,7 @@ def test_serialize_state_writes_version_2(monkeypatch):
         type("Hass", (), {"bus": type("Bus", (), {"async_fire": lambda *args, **kwargs: None})()})(),
         _DummyStore(),
         cfg,
-     config=_bias_service_config(cfg),)
+    )
     service._profile = models_mod.SolarBiasProfile(
         factors={"08:00": 1.12},
         omitted_slots=["08:15"],
@@ -477,7 +469,7 @@ def test_async_train_saves_version_2_payload(monkeypatch):
             (),
             {"bus": type("Bus", (), {"async_fire": lambda *args, **kwargs: None})()},
         )()
-        service = service_mod.SolarBiasCorrectionService(hass, store, cfg, config=_bias_service_config(cfg),)
+        service = service_mod.SolarBiasCorrectionService(hass, store, cfg)
 
         async def _samples(*args, **kwargs):
             return ["sample"]

@@ -1,17 +1,11 @@
 from __future__ import annotations
-from pathlib import Path
-import sys
-import types
-from _fakes import _bias_service_config
-
-
-from _fakes import DummyStore as _DummyStore
 
 import asyncio
 import importlib
 from types import SimpleNamespace
 
 import pytest
+from _fakes import DummyStore as _DummyStore
 
 models = importlib.import_module("custom_components.helman.solar_bias_correction.models")
 service_mod = importlib.import_module("custom_components.helman.solar_bias_correction.service")
@@ -30,8 +24,6 @@ def _stub_training_inputs(monkeypatch):
 
     for name, replacement in (
         ("load_actuals_window", empty_window),
-        ("load_actuals_for_day", empty_day),
-        ("load_archived_forecast_points", empty_points),
         ("load_trainer_samples", empty_points),
     ):
         monkeypatch.setattr(service_mod, name, replacement)
@@ -74,7 +66,7 @@ def test_training_failed_with_preserved_profile_keeps_adjusted_variant():
         _make_hass(),
         _DummyStore(),
         _make_cfg(),
-     config=_bias_service_config(_make_cfg()),)
+     )
     service._profile = models.SolarBiasProfile(factors={"12:00": 2.0}, omitted_slots=[])
     service._metadata = models.SolarBiasMetadata(
         trained_at="2026-04-24T03:00:00+02:00",
@@ -105,7 +97,7 @@ def test_training_failed_without_profile_falls_back_to_raw():
         _make_hass(),
         _DummyStore(),
         _make_cfg(),
-     config=_bias_service_config(_make_cfg()),)
+     )
     service._metadata = models.SolarBiasMetadata(
         trained_at="2026-04-24T03:00:00+02:00",
         training_config_fingerprint=service_mod.compute_fingerprint(_make_cfg()),
@@ -134,7 +126,7 @@ def test_missing_profile_is_not_usable():
         _make_hass(),
         _DummyStore(),
         _make_cfg(),
-     config=_bias_service_config(_make_cfg()),)
+     )
     service._metadata = models.SolarBiasMetadata(
         trained_at="2026-04-24T03:00:00+02:00",
         training_config_fingerprint=service_mod.compute_fingerprint(_make_cfg()),
@@ -156,7 +148,7 @@ def test_insufficient_history_profile_is_not_usable():
         _make_hass(),
         _DummyStore(),
         _make_cfg(),
-     config=_bias_service_config(_make_cfg()),)
+     )
     service._profile = models.SolarBiasProfile(
         factors={},
         omitted_slots=["00:00", "00:15"],
@@ -182,7 +174,7 @@ def test_runtime_profile_is_usable():
         _make_hass(),
         _DummyStore(),
         _make_cfg(),
-     config=_bias_service_config(_make_cfg()),)
+     )
     service._profile = models.SolarBiasProfile(
         factors={"12:00": 2.0},
         omitted_slots=["11:30"],
@@ -210,7 +202,7 @@ def test_get_status_payload_includes_invalidated_slot_count():
         _make_hass(),
         _DummyStore(),
         _make_cfg(),
-     config=_bias_service_config(_make_cfg()),)
+     )
     service._metadata = models.SolarBiasMetadata(
         trained_at="2026-04-24T03:00:00+02:00",
         training_config_fingerprint=service_mod.compute_fingerprint(_make_cfg()),
@@ -244,11 +236,7 @@ def test_get_status_payload_reports_slot_invalidation_enabled():
         _make_cfg(
             slot_invalidation_max_battery_soc_percent=97.0,
         ),
-        config=_bias_service_config(
-            _make_cfg(
-                slot_invalidation_max_battery_soc_percent=97.0,
-            )
-        ),
+        
     )
 
     old_now = service_mod.dt_util.now
@@ -292,7 +280,7 @@ def test_reloaded_insufficient_history_payload_keeps_profile_unavailable():
             _make_hass(),
             store,
             _make_cfg(),
-         config=_bias_service_config(_make_cfg()),)
+         )
         await service.async_setup()
 
         assert not service._has_usable_profile()
@@ -317,7 +305,7 @@ def test_failed_first_training_does_not_persist_phantom_profile_after_reload():
             _make_hass(),
             store,
             _make_cfg(),
-         config=_bias_service_config(_make_cfg()),)
+         )
 
         old_now = service_mod.dt_util.now
         old_samples = service_mod.load_trainer_samples
@@ -347,7 +335,7 @@ def test_failed_first_training_does_not_persist_phantom_profile_after_reload():
             _make_hass(),
             store,
             _make_cfg(),
-         config=_bias_service_config(_make_cfg()),)
+         )
         await reloaded.async_setup()
 
         assert store.saved_payloads[-1]["profile"] is None
@@ -382,7 +370,7 @@ def test_insufficient_history_placeholder_is_not_preserved_after_failed_retrain(
             _make_hass(),
             store,
             _make_cfg(),
-         config=_bias_service_config(_make_cfg()),)
+         )
 
         service._profile = models.SolarBiasProfile(
             factors={},
@@ -429,7 +417,7 @@ def test_insufficient_history_placeholder_is_not_preserved_after_failed_retrain(
             _make_hass(),
             store,
             _make_cfg(),
-         config=_bias_service_config(_make_cfg()),)
+         )
         await reloaded.async_setup()
 
         assert payload["status"] == "training_failed"
@@ -466,7 +454,7 @@ def test_failed_retrain_keeps_original_trained_at_for_preserved_profile():
             _make_hass(),
             store,
             _make_cfg(),
-         config=_bias_service_config(_make_cfg()),)
+         )
         service._profile = models.SolarBiasProfile(
             factors={"12:00": 2.0},
             omitted_slots=[],
@@ -522,7 +510,7 @@ def test_failed_retrain_keeps_original_trained_at_for_preserved_profile():
         )
         reloaded = service_mod.SolarBiasCorrectionService(
             _make_hass(), store, _make_cfg()
-        , config=_bias_service_config(_make_cfg()),)
+        , )
         await reloaded.async_setup()
         reloaded_status = _status_payload(reloaded)
         assert reloaded_status["lastAttemptAt"] == "2026-04-25T03:00:00+02:00"
@@ -564,7 +552,7 @@ def test_a_legacy_metadata_document_loads_without_an_attempt_time():
         }
         service = service_mod.SolarBiasCorrectionService(
             _make_hass(), store, _make_cfg()
-        , config=_bias_service_config(_make_cfg()),)
+        , )
         await service.async_setup()
 
         status = _status_payload(service)
@@ -608,7 +596,7 @@ def test_async_train_uses_configured_max_training_window_days_for_actuals():
             _make_hass(),
             _SavingStore(),
             cfg,
-         config=_bias_service_config(cfg),)
+         )
 
         old_now = service_mod.dt_util.now
         old_samples = service_mod.load_trainer_samples
@@ -680,7 +668,7 @@ def test_async_train_save_failure_keeps_previous_profile_active():
             _make_hass(),
             store,
             _make_cfg(),
-         config=_bias_service_config(_make_cfg()),)
+         )
         service._profile = models.SolarBiasProfile(factors={"12:00": 2.0}, omitted_slots=[])
         service._metadata = models.SolarBiasMetadata(
             trained_at="2026-04-23T03:00:00+02:00",
@@ -781,7 +769,7 @@ def test_async_train_runs_the_fit_on_the_executor():
             bus=SimpleNamespace(async_fire=lambda *args, **kwargs: None),
             async_add_executor_job=_executor_job,
         )
-        service = service_mod.SolarBiasCorrectionService(hass, _Store(), _make_cfg(), config=_bias_service_config(_make_cfg()),)
+        service = service_mod.SolarBiasCorrectionService(hass, _Store(), _make_cfg(), )
 
         old_now = service_mod.dt_util.now
         old_samples = service_mod.load_trainer_samples

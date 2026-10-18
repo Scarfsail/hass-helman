@@ -1,21 +1,14 @@
 from __future__ import annotations
 
-from _fakes import FakeHass as SharedFakeHass
-
-from _fakes import FakeConnection as SharedFakeConnection
-
 import importlib
-import sys
-import types
 import unittest
-from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from _ha_stubs import stub_module
+from _fakes import FakeConnection as SharedFakeConnection
+from _fakes import FakeHass as SharedFakeHass
 
-
-from custom_components.helman.const import DOMAIN  # noqa: E402
+from custom_components.helman.const import DOMAIN
 
 
 class FakeConnection(SharedFakeConnection):
@@ -51,7 +44,7 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
                 [(1, "not_loaded", "Helman coordinator not available")],
             ),
             (
-                SimpleNamespace(solar_bias_service=None),
+                SimpleNamespace(solar_inspector=None),
                 [
                     (
                         1,
@@ -84,7 +77,7 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         service = SimpleNamespace(
             async_get_inspector_day=AsyncMock(return_value=payload)
         )
-        coordinator = SimpleNamespace(solar_bias_service=service)
+        coordinator = SimpleNamespace(solar_inspector=service)
         connection = FakeConnection()
 
         await self.solar_bias_ws.ws_get_solar_bias_inspector.__wrapped__(
@@ -106,7 +99,7 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         service = SimpleNamespace(
             async_get_inspector_day=AsyncMock(return_value=payload)
         )
-        coordinator = SimpleNamespace(solar_bias_service=service)
+        coordinator = SimpleNamespace(solar_inspector=service)
         connection = FakeConnection(is_admin=False)
 
         await self.solar_bias_ws.ws_get_solar_bias_inspector.__wrapped__(
@@ -123,7 +116,7 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         for raw_date in ("04/25/2026", "20260425", "2026-W17-6"):
             with self.subTest(raw_date=raw_date):
                 service = SimpleNamespace(async_get_inspector_day=AsyncMock())
-                coordinator = SimpleNamespace(solar_bias_service=service)
+                coordinator = SimpleNamespace(solar_inspector=service)
                 connection = FakeConnection()
 
                 await self.solar_bias_ws.ws_get_solar_bias_inspector.__wrapped__(
@@ -147,7 +140,7 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         service = SimpleNamespace(
             async_get_span_aggregates=AsyncMock(return_value=payload)
         )
-        coordinator = SimpleNamespace(solar_bias_service=service)
+        coordinator = SimpleNamespace(solar_inspector=service)
         connection = FakeConnection()
 
         await self.solar_bias_ws.ws_get_solar_bias_day_aggregates.__wrapped__(
@@ -175,7 +168,7 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         service = SimpleNamespace(
             async_get_span_aggregates=AsyncMock(return_value=payload)
         )
-        coordinator = SimpleNamespace(solar_bias_service=service)
+        coordinator = SimpleNamespace(solar_inspector=service)
         connection = FakeConnection()
 
         await self.solar_bias_ws.ws_get_solar_bias_day_aggregates.__wrapped__(
@@ -204,7 +197,7 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         service = SimpleNamespace(
             async_get_span_aggregates=AsyncMock(return_value=payload)
         )
-        coordinator = SimpleNamespace(solar_bias_service=service)
+        coordinator = SimpleNamespace(solar_inspector=service)
         connection = FakeConnection()
 
         await self.solar_bias_ws.ws_get_solar_bias_day_aggregates.__wrapped__(
@@ -235,7 +228,7 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         service = SimpleNamespace(
             async_get_span_aggregates=AsyncMock(return_value=payload)
         )
-        coordinator = SimpleNamespace(solar_bias_service=service)
+        coordinator = SimpleNamespace(solar_inspector=service)
         connection = FakeConnection()
 
         await self.solar_bias_ws.ws_get_solar_bias_day_aggregates.__wrapped__(
@@ -257,7 +250,7 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_day_aggregates_rejects_invalid_dates(self) -> None:
         service = SimpleNamespace(async_get_span_aggregates=AsyncMock())
-        coordinator = SimpleNamespace(solar_bias_service=service)
+        coordinator = SimpleNamespace(solar_inspector=service)
         connection = FakeConnection()
 
         await self.solar_bias_ws.ws_get_solar_bias_day_aggregates.__wrapped__(

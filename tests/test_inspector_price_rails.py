@@ -11,29 +11,20 @@ any single source can be blamed for.
 """
 
 from __future__ import annotations
-import sys
-import types
-from _fakes import _bias_service_config
 
-
-from _fakes import DummyStore as _DummyStore
-
+import importlib
 import unittest
-
-import pytest
 from datetime import date, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 from zoneinfo import ZoneInfo
 
-
-
-
-
-import importlib  # noqa: E402
+import pytest
+from _fakes import DummyStore as _DummyStore
+from _fakes import FakeInspectorLiveSources, _bias_service_config
 
 service_mod = importlib.import_module(
-    "custom_components.helman.solar_bias_correction.service"
+    "custom_components.helman.solar_inspector.service"
 )
 models = importlib.import_module(
     "custom_components.helman.solar_bias_correction.models"
@@ -477,7 +468,7 @@ class TestLoadRecordedPriceRails(unittest.IsolatedAsyncioTestCase):
             config=SimpleNamespace(time_zone="Europe/Prague"),
             bus=SimpleNamespace(async_fire=lambda *a, **kw: None),
         )
-        return service_mod.SolarBiasCorrectionService(hass, _DummyStore(), _make_cfg(), config=_bias_service_config(_make_cfg()),)
+        return service_mod.SolarInspector(hass, _DummyStore(), _make_cfg(), config=_bias_service_config(_make_cfg()),)
 
     def _history(self, by_slot):
         return self.span.PriceHistory(by_slot=by_slot)
@@ -574,7 +565,7 @@ class TestRecordedRailAcrossAnOutage(unittest.IsolatedAsyncioTestCase):
             async def async_add_executor_job(func, *args):
                 return func(*args)
 
-        service = service_mod.SolarBiasCorrectionService(
+        service = service_mod.SolarInspector(
             SimpleNamespace(
                 config=SimpleNamespace(time_zone="Europe/Prague"),
                 bus=SimpleNamespace(async_fire=lambda *a, **kw: None),
@@ -649,13 +640,15 @@ class _PayloadCase(unittest.IsolatedAsyncioTestCase):
             bus=SimpleNamespace(async_fire=lambda *a, **kw: None),
             states=SimpleNamespace(get=states.get),
         )
-        service = service_mod.SolarBiasCorrectionService(
+        service = service_mod.SolarInspector(
             hass,
             _DummyStore(),
             _make_cfg(),
-
-            grid_price_snapshot_provider=lambda: price_snapshot or {},
-         config=_bias_service_config(_make_cfg() ,price=import_config),)
+            live_sources=FakeInspectorLiveSources(
+                grid_price_snapshot=lambda: price_snapshot or {},
+            ),
+            config=_bias_service_config(_make_cfg(), price=import_config),
+        )
         service._profile = models.SolarBiasProfile(factors={}, omitted_slots=[])
         service._metadata = models.SolarBiasMetadata(
             trained_at="2026-05-01T03:00:00+02:00",

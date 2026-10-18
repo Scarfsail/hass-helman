@@ -9,11 +9,6 @@ dataset tests' business.
 
 from __future__ import annotations
 
-from _fakes import _bias_service_config
-from tests._fakes import make_coordinator
-
-from _fakes import FakeConnection
-
 import asyncio
 import importlib
 import unittest
@@ -23,8 +18,10 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
+import voluptuous as vol
+from _fakes import FakeConnection, _bias_service_config
 
-import voluptuous as vol  # noqa: E402
+from tests._fakes import make_coordinator
 
 coordinator_module = importlib.import_module("custom_components.helman.coordinator")
 websockets_module = importlib.import_module("custom_components.helman.websockets")
@@ -142,7 +139,7 @@ class DeviceReportTestCase(unittest.IsolatedAsyncioTestCase):
         )
         self.coordinator._cached_tree = TREE
         self.coordinator._device_datasets = OrderedDict()
-        self.coordinator._solar_bias_service = FakeService()
+        self.coordinator._solar_inspector = FakeService()
         self.hass = SimpleNamespace(
             config=SimpleNamespace(time_zone="Europe/Prague"),
             data={const.DOMAIN: {"coordinator": self.coordinator}},

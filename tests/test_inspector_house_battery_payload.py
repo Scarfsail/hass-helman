@@ -1,27 +1,17 @@
 from __future__ import annotations
-import asyncio
-import sys
-import types
-from _fakes import _bias_service_config
 
-
-from _fakes import DummyStore as _DummyStore
-
+import importlib
 import unittest
-
-import pytest
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-
-
-
-
-import importlib  # noqa: E402
+import pytest
+from _fakes import DummyStore as _DummyStore
+from _fakes import FakeInspectorLiveSources, _bias_service_config
 
 service_mod = importlib.import_module(
-    "custom_components.helman.solar_bias_correction.service"
+    "custom_components.helman.solar_inspector.service"
 )
 models = importlib.import_module(
     "custom_components.helman.solar_bias_correction.models"
@@ -98,13 +88,26 @@ async def _inspector_payload(
         bus=SimpleNamespace(async_fire=lambda *a, **kw: None),
         data={},
     )
-    carved = service_kwargs.pop("house_deferrable_consumers_provider", lambda: [])()
+    carved = service_kwargs.pop("house_deferrable_consumers_provider", list)()
     bounds = service_kwargs.pop("battery_soc_bounds_entity_id_provider", lambda: None)()
-    service = service_mod.SolarBiasCorrectionService(
+    device_consumers = (
+        service_kwargs.pop("house_device_consumers", None)
+        or service_kwargs.pop("house_device_consumers_provider", None)
+    )
+    soc_bounds = (
+        service_kwargs.pop("battery_soc_bounds", None)
+        or service_kwargs.pop("battery_soc_bounds_provider", None)
+    )
+    live_sources = FakeInspectorLiveSources(
+        battery_forecast=_battery_forecast_provider,
+        house_device_consumers=device_consumers,
+        battery_soc_bounds=soc_bounds,
+    )
+    service = service_mod.SolarInspector(
         hass,
         _DummyStore(),
         _make_cfg(),
-        battery_forecast_provider=_battery_forecast_provider,
+        live_sources=live_sources,
         **service_kwargs,
         config=_bias_service_config(
             _make_cfg(),

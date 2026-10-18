@@ -1,0 +1,42 @@
+{
+  "bucket": "day",
+  "currency": null,
+  "days": [
+    {
+      "date": "2026-04-23",
+      "solarWh": 4000.0,
+      "gridImportKwh": 1.25,
+      "gridExportKwh": null,
+      "batteryMinSocPct": 41.0,
+      "batteryMaxSocPct": 88.0,
+      "houseWh": 2000.0,
+      "batteryChargeWh": 4000.0,
+      "batteryDischargeWh": null,
+      "moneyCost": null,
+      "moneyGain": null,
+      "moneyCostKwh": null,
+      "moneyGainKwh": null,
+      "houseBreakdown": null
+    },
+    {
+      "date": "2026-04-24",
+      "solarWh": 3000.0,
+      "gridImportKwh": null,
+      "gridExportKwh": 0.75,
+      "batteryMinSocPct": 30.0,
+      "batteryMaxSocPct": 30.0,
+      "houseWh": null,
+      "batteryChargeWh": null,
+      "batteryDischargeWh": 1000.0,
+      "moneyCost": null,
+      "moneyGain": null,
+      "moneyCostKwh": null,
+      "moneyGainKwh": null,
+      "houseBreakdown": null
+    }
+  ],
+  "range": {
+    "minDate": "2026-04-01",
+    "maxDate": "2026-10-18"
+  }
+}
