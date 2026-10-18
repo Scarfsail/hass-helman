@@ -191,13 +191,6 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["series"]["batterySocActual"][0]["slot"], "00:00")
         self.assertAlmostEqual(payload["series"]["batterySocActual"][0]["pct"], 88.0)
 
-        # availability
-        self.assertTrue(payload["availability"]["hasHouseForecast"])
-        self.assertTrue(payload["availability"]["hasHouseActual"])
-        self.assertTrue(payload["availability"]["hasBatterySocActual"])
-        # no forecast archive wired in → past days have no battery SoC forecast
-        self.assertFalse(payload["availability"]["hasBatterySocForecast"])
-
         # totals
         self.assertEqual(payload["totals"]["houseForecastWh"], 200.0)
         self.assertEqual(payload["totals"]["houseActualWh"], 180.0)
@@ -251,7 +244,6 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
         # Base plus appliances reconciles with the plain house actual figure.
         total = slot["unmeasuredWh"] + sum(a["wh"] for a in slot["appliances"])
         self.assertEqual(total, payload["series"]["houseActual"][0]["valueWh"])
-        self.assertTrue(payload["availability"]["hasHouseActualBreakdown"])
 
     async def test_house_actual_breakdown_merges_device_tree_consumers(self):
         # Deferrable appliances lead; device-tree consumers fill in the rest, and
@@ -367,7 +359,6 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
         payload = await _inspector_payload()
 
         self.assertEqual(payload["series"]["houseActualBreakdown"], [])
-        self.assertFalse(payload["availability"]["hasHouseActualBreakdown"])
 
     async def test_battery_soc_bounds_fall_back_to_live_values_per_slot(self):
         payload = await _inspector_payload(
@@ -429,7 +420,7 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
         actual = payload["series"]["actual"]
         self.assertEqual(len(actual), 1)
         self.assertEqual(actual[0]["valueWh"], 250.0)
-        self.assertTrue(actual[0]["timestamp"].endswith("T09:00:00+02:00"))
+        self.assertEqual(actual[0]["slot"], "09:00")
         # The series the batch owed are the ones that went missing.
         self.assertEqual(payload["series"]["houseActualBreakdown"], [])
 
@@ -451,4 +442,3 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(bounds), 96)
         self.assertEqual(bounds[0], {"slot": "00:00", "minPct": 10.0, "maxPct": 95.0})
         self.assertEqual(payload["series"]["batterySocActual"], [])
-        self.assertFalse(payload["availability"]["hasBatterySocActual"])

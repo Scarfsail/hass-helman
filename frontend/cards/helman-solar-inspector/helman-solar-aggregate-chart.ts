@@ -14,7 +14,7 @@ import { accumulateBands, clampToSign, stackSlots, type StackBand, type StackLay
 /** The chart reads the measured composition and totals from each bucket. */
 export type SpanAggregateRow = Pick<DayAggregateRow,
     "date" | "solarWh" | "gridImportKwh" | "gridExportKwh" | "batteryMinSocPct" | "batteryMaxSocPct"
-    | "houseWh" | "batteryChargeWh" | "batteryDischargeWh" | "moneyCost" | "moneyGain" | "houseBreakdown">;
+    | "houseWh" | "batteryChargeWh" | "batteryDischargeWh" | "moneyCost" | "moneyGain" | "houseBreakdown" | "houseSourceMix">;
 
 /**
  * How far the inspector may be navigated, in either direction.

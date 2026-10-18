@@ -24,8 +24,8 @@ async function mountInspector(page: Page, slotMinutes: number): Promise<void> {
 
     await page.evaluate(({ date, slot, chargeFrom, chargeUntil }) => {
         const socForecast: Array<{ slot: string; pct: number }> = [];
-        const batteryForecast: Array<{ timestamp: string; valueWh: number }> = [];
-        const corrected: Array<{ timestamp: string; valueWh: number }> = [];
+        const batteryForecast: Array<{ slot: string; valueWh: number }> = [];
+        const corrected: Array<{ slot: string; valueWh: number }> = [];
         const impact: InspectorPayload["series"]["impact"] = [];
         let pct = 40;
         for (let m = 0; m < 1440; m += 15) {
@@ -33,7 +33,7 @@ async function mountInspector(page: Page, slotMinutes: number): Promise<void> {
             const mm = String(m % 60).padStart(2, "0");
             const charging = m >= chargeFrom && m < chargeUntil;
             corrected.push({
-                timestamp: `${date}T${hh}:${mm}:00`,
+                slot: `${hh}:${mm}`,
                 valueWh: Math.max(0, 400 - Math.abs(m - 720) / 2),
             });
             // A slot only counts as selectable once the impact series names it.
@@ -43,7 +43,7 @@ async function mountInspector(page: Page, slotMinutes: number): Promise<void> {
             if (charging) pct += 5;
             socForecast.push({ slot: `${hh}:${mm}`, pct });
             batteryForecast.push({
-                timestamp: `${date}T${hh}:${mm}:00`,
+                slot: `${hh}:${mm}`,
                 valueWh: charging ? 500 : 0,
             });
         }
@@ -65,11 +65,8 @@ async function mountInspector(page: Page, slotMinutes: number): Promise<void> {
                 gridForecastWh: null, gridActualWh: null,
                 batteryForecastWh: null, batteryActualWh: null,
             },
-            availability: { hasRawForecast: false, hasCorrectedForecast: true, hasActuals: false,
-                hasInvalidated: false, hasProfile: true, hasHouseForecast: false,
-                hasHouseActual: false, hasBatterySocForecast: true, hasBatterySocActual: false,
-                hasGridForecast: false, hasGridActual: false, hasBatteryForecast: true,
-                hasBatteryActual: false,
+            availability: {
+                hasProfile: true,
             },
             batterySocBounds: [],
             trainingExplainability: null,

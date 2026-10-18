@@ -194,7 +194,7 @@ export class HelmanSolarMoneyStrip extends LitElement {
         const slot = this._slotSpan();
         const cells = new Map<number, MoneyCell>();
         const add = (points: readonly MoneyPoint[], wantElapsed: boolean) => {
-            for (const point of points ?? []) {
+            for (const point of points) {
                 const minutes = slotMinutes(point.slot);
                 if (minutes === null) continue;
                 // Each slot is claimed by exactly one vintage, so the two can

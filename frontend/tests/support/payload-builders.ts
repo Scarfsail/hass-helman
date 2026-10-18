@@ -23,7 +23,7 @@ export function inspectorDay(overrides: InspectorDayOverrides = {}): InspectorPa
         range: { minDate: "", maxDate: "", canGoPrevious: false, canGoNext: false, isToday: false, isFuture: false, ...range },
         series: { raw: [], corrected: [], actual: [], invalidated: [], factors: [], impact: [], houseForecast: [], houseActual: [], houseActualBreakdown: [], houseForecastBreakdown: [], batterySocForecast: [], batterySocActual: [], gridForecast: [], gridActual: [], batteryForecast: [], batteryActual: [], importPrice: [], exportPrice: [], moneyActual: [], moneyForecast: [], ...series },
         totals: { rawWh: null, correctedWh: null, actualWh: null, houseForecastWh: null, houseActualWh: null, gridForecastWh: null, gridActualWh: null, batteryForecastWh: null, batteryActualWh: null, moneyActual: null, moneyForecast: null, ...totals },
-        availability: { hasRawForecast: false, hasCorrectedForecast: false, hasActuals: false, hasInvalidated: false, hasProfile: false, hasHouseForecast: false, hasHouseActual: false, hasHouseActualBreakdown: false, hasHouseForecastBreakdown: false, hasBatterySocForecast: false, hasBatterySocActual: false, hasGridForecast: false, hasGridActual: false, hasBatteryForecast: false, hasBatteryActual: false, hasImportPrice: false, hasExportPrice: false, ...availability },
+        availability: { hasProfile: false, ...availability },
         batterySocBounds: [], priceUnit: null, trainingExplainability: null,
         ...rest,
     };

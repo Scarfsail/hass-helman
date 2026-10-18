@@ -26,8 +26,8 @@ async function mountInspector(page: Page, gap: boolean): Promise<void> {
     await page.evaluate(({ date, withGap, gapFrom, gapUntil }) => {
         const socForecast: Array<{ slot: string; pct: number }> = [];
         const socActual: Array<{ slot: string; pct: number }> = [];
-        const corrected: Array<{ timestamp: string; valueWh: number }> = [];
-        const actual: Array<{ timestamp: string; valueWh: number }> = [];
+        const corrected: Array<{ slot: string; valueWh: number }> = [];
+        const actual: Array<{ slot: string; valueWh: number }> = [];
         const impact: InspectorPayload["series"]["impact"] = [];
         for (let m = 0; m < 1440; m += 15) {
             const hh = String(Math.floor(m / 60)).padStart(2, "0");
@@ -37,9 +37,8 @@ async function mountInspector(page: Page, gap: boolean): Promise<void> {
             // A forecast and an actual across the whole day: the card needs a
             // chart to draw a body at all, and the strip's measured/forecast
             // seam -- which is what the dashed line is traced over -- follows
-            // how far the actuals reach.
-            corrected.push({ timestamp: `${date}T${slot}:00`, valueWh: 100 });
-            actual.push({ timestamp: `${date}T${slot}:00`, valueWh: 90 });
+            corrected.push({ slot, valueWh: 100 });
+            actual.push({ slot, valueWh: 90 });
             // Measured across the whole day, so the dashed forecast line is
             // drawn over every slot -- it only traces the measured part.
             socActual.push({ slot, pct: 50 });
@@ -66,11 +65,8 @@ async function mountInspector(page: Page, gap: boolean): Promise<void> {
                 gridForecastWh: null, gridActualWh: null,
                 batteryForecastWh: null, batteryActualWh: null,
             },
-            availability: { hasRawForecast: false, hasCorrectedForecast: true, hasActuals: true,
-                hasInvalidated: false, hasProfile: true, hasHouseForecast: false,
-                hasHouseActual: false, hasBatterySocForecast: true, hasBatterySocActual: true,
-                hasGridForecast: false, hasGridActual: false, hasBatteryForecast: false,
-                hasBatteryActual: false,
+            availability: {
+                hasProfile: true,
             },
             batterySocBounds: [],
             trainingExplainability: null,

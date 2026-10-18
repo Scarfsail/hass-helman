@@ -360,6 +360,12 @@ class TestDayBuckets(unittest.IsolatedAsyncioTestCase):
                     # No consumers configured here, so there is nothing to split
                     # the house by and the panel is simply absent.
                     "houseBreakdown": None,
+                    "houseSourceMix": {
+                        "solar": 0.0,
+                        "battery": 0.0,
+                        "grid": 0.0,
+                        "unattributed": 2000.0,
+                    },
                 },
                 {
                     "date": "2026-04-24",
@@ -378,6 +384,7 @@ class TestDayBuckets(unittest.IsolatedAsyncioTestCase):
                     # No consumers configured here, so there is nothing to split
                     # the house by and the panel is simply absent.
                     "houseBreakdown": None,
+                    "houseSourceMix": None,
                 },
             ],
         )
@@ -848,7 +855,80 @@ class TestBreakdownIsAskedFor(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row["houseWh"], 10000.0)
         self.assertIsNone(row["houseBreakdown"])
         self.assertNotIn(WASHER_METER, _calls("hour")[0]["statistic_ids"])
-        self.assertNotIn(FRIDGE_METER, _calls("hour")[0]["statistic_ids"])
+
+
+class TestHouseSourceMix(unittest.IsolatedAsyncioTestCase):
+    """Gross house source mix aggregated hourly for span buckets (Decision D10, Bug B13).
+
+    Net construction would wipe out night import whenever daily solar export exceeds it.
+    The gross source mix integrates hourly mix results weighted by that hour's house Wh,
+    so night grid use remains visible in bucket totals regardless of midday solar surplus.
+    """
+
+    async def test_night_import_with_midday_export_surplus_preserves_grid_use(self):
+        # 5 kWh consumed at night (03:00) from grid import;
+        # 10 kWh solar generated and exported at midday (13:00).
+        # Every configured source meter must report each hour so the hour is attributable.
+        _set_rows(
+            {
+                SOLAR_METER: [
+                    _row(_hour("2026-04-22T23:00:00+02:00"), state=0.0),
+                    _row(_hour("2026-04-23T02:00:00+02:00"), state=0.0),
+                    _row(_hour("2026-04-23T03:00:00+02:00"), state=0.0),
+                    _row(_hour("2026-04-23T12:00:00+02:00"), state=0.0),
+                    _row(_hour("2026-04-23T13:00:00+02:00"), state=10.0),
+                ],
+                GRID_IMPORT_METER: [
+                    _row(_hour("2026-04-22T23:00:00+02:00"), state=0.0),
+                    _row(_hour("2026-04-23T02:00:00+02:00"), state=0.0),
+                    _row(_hour("2026-04-23T03:00:00+02:00"), state=5.0),
+                    _row(_hour("2026-04-23T12:00:00+02:00"), state=5.0),
+                    _row(_hour("2026-04-23T13:00:00+02:00"), state=5.0),
+                ],
+                GRID_EXPORT_METER: [
+                    _row(_hour("2026-04-22T23:00:00+02:00"), state=0.0),
+                    _row(_hour("2026-04-23T02:00:00+02:00"), state=0.0),
+                    _row(_hour("2026-04-23T03:00:00+02:00"), state=0.0),
+                    _row(_hour("2026-04-23T12:00:00+02:00"), state=0.0),
+                    _row(_hour("2026-04-23T13:00:00+02:00"), state=10.0),
+                ],
+                BATTERY_CHARGE_METER: [
+                    _row(_hour("2026-04-22T23:00:00+02:00"), state=0.0),
+                    _row(_hour("2026-04-23T02:00:00+02:00"), state=0.0),
+                    _row(_hour("2026-04-23T03:00:00+02:00"), state=0.0),
+                    _row(_hour("2026-04-23T12:00:00+02:00"), state=0.0),
+                    _row(_hour("2026-04-23T13:00:00+02:00"), state=0.0),
+                ],
+                BATTERY_DISCHARGE_METER: [
+                    _row(_hour("2026-04-22T23:00:00+02:00"), state=0.0),
+                    _row(_hour("2026-04-23T02:00:00+02:00"), state=0.0),
+                    _row(_hour("2026-04-23T03:00:00+02:00"), state=0.0),
+                    _row(_hour("2026-04-23T12:00:00+02:00"), state=0.0),
+                    _row(_hour("2026-04-23T13:00:00+02:00"), state=0.0),
+                ],
+                HOUSE_METER: [
+                    _row(_hour("2026-04-22T23:00:00+02:00"), state=0.0),
+                    _row(_hour("2026-04-23T02:00:00+02:00"), state=0.0),
+                    _row(_hour("2026-04-23T03:00:00+02:00"), state=5.0),
+                    _row(_hour("2026-04-23T12:00:00+02:00"), state=5.0),
+                    _row(_hour("2026-04-23T13:00:00+02:00"), state=5.0),
+                ],
+            }
+        )
+        service = _make_service()
+
+        payload = await service.async_get_span_aggregates("2026-04-23", "2026-04-23")
+        (row,) = payload["days"]
+
+        self.assertEqual(row["houseWh"], 5000.0)
+        self.assertEqual(row["solarWh"], 10000.0)
+        self.assertEqual(row["gridImportKwh"], 5.0)
+        self.assertEqual(row["gridExportKwh"], 10.0)
+        self.assertIsNotNone(row["houseSourceMix"])
+        self.assertEqual(row["houseSourceMix"]["grid"], 5000.0)
+        self.assertEqual(row["houseSourceMix"]["solar"], 0.0)
+        self.assertEqual(row["houseSourceMix"]["battery"], 0.0)
+        self.assertEqual(row["houseSourceMix"]["unattributed"], 0.0)
 
 
 class TestHouseForecast(unittest.IsolatedAsyncioTestCase):

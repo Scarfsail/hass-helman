@@ -74,10 +74,10 @@ async function mountInspector(
 ): Promise<void> {
     await page.evaluate((opts) => {
         const date = "2026-07-18";
-        const corrected: Array<{ timestamp: string; valueWh: number }> = [];
-        const houseActual: Array<{ timestamp: string; valueWh: number }> = [];
-        const gridActual: Array<{ timestamp: string; valueWh: number }> = [];
-        const batteryActual: Array<{ timestamp: string; valueWh: number }> = [];
+        const corrected: Array<{ slot: string; valueWh: number }> = [];
+        const houseActual: Array<{ slot: string; valueWh: number }> = [];
+        const gridActual: Array<{ slot: string; valueWh: number }> = [];
+        const batteryActual: Array<{ slot: string; valueWh: number }> = [];
         const houseActualBreakdown: Array<{
             slot: string;
             unmeasuredWh: number;
@@ -91,7 +91,7 @@ async function mountInspector(
                 controllableIds: string[];
             }>;
         }> = [];
-        const houseForecast: Array<{ timestamp: string; valueWh: number }> = [];
+        const houseForecast: Array<{ slot: string; valueWh: number }> = [];
         const houseForecastBreakdown: typeof houseActualBreakdown = [];
         const impact: Array<{
             slot: string;
@@ -106,17 +106,17 @@ async function mountInspector(
             const hh = String(Math.floor(m / 60)).padStart(2, "0");
             const mm = String(m % 60).padStart(2, "0");
             const v = Math.max(0, 400 - Math.abs(m - 720) / 2);
-            corrected.push({ timestamp: `${date}T${hh}:${mm}:00`, valueWh: v });
+            corrected.push({ slot: `${hh}:${mm}`, valueWh: v });
             const measured =
                 opts.actualsUntilMinutes === undefined || m < opts.actualsUntilMinutes;
             if (measured) {
-                houseActual.push({ timestamp: `${date}T${hh}:${mm}:00`, valueWh: slotTotal });
+                houseActual.push({ slot: `${hh}:${mm}`, valueWh: slotTotal });
             }
             if (opts.gridWh !== undefined && measured) {
-                gridActual.push({ timestamp: `${date}T${hh}:${mm}:00`, valueWh: opts.gridWh });
+                gridActual.push({ slot: `${hh}:${mm}`, valueWh: opts.gridWh });
             }
             if (opts.batteryWh !== undefined && measured) {
-                batteryActual.push({ timestamp: `${date}T${hh}:${mm}:00`, valueWh: opts.batteryWh });
+                batteryActual.push({ slot: `${hh}:${mm}`, valueWh: opts.batteryWh });
             }
             if (opts.withBreakdown && measured) {
                 houseActualBreakdown.push({
@@ -134,7 +134,7 @@ async function mountInspector(
             if (opts.forecast) {
                 const fc = opts.forecast;
                 houseForecast.push({
-                    timestamp: `${date}T${hh}:${mm}:00`,
+                    slot: `${hh}:${mm}`,
                     valueWh: fc.baseWh + fc.appliances.reduce((sum, a) => sum + a.wh, 0),
                 });
                 if (m >= (fc.breakdownFromMinutes ?? 0)) {
@@ -202,21 +202,8 @@ async function mountInspector(
                 batteryForecastWh: null,
                 batteryActualWh: null,
             },
-            availability: { hasRawForecast: false,
-                hasCorrectedForecast: true,
-                hasActuals: false,
-                hasInvalidated: false,
+            availability: {
                 hasProfile: true,
-                hasHouseForecast: !!opts.forecast,
-                hasHouseActual: true,
-                hasHouseActualBreakdown: opts.withBreakdown,
-                hasHouseForecastBreakdown: !!opts.forecast,
-                hasBatterySocForecast: false,
-                hasBatterySocActual: false,
-                hasGridForecast: false,
-                hasGridActual: false,
-                hasBatteryForecast: false,
-                hasBatteryActual: false,
             },
             batterySocBounds: [],
             trainingExplainability: null,

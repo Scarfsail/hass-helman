@@ -7,7 +7,7 @@ async function mountInspector(page: Page): Promise<void> {
 
     await page.evaluate(() => {
         const date = "2026-07-18";
-        const corrected: Array<{ timestamp: string; valueWh: number }> = [];
+        const corrected: Array<{ slot: string; valueWh: number }> = [];
         const impact: InspectorPayload["series"]["impact"] = [];
         const batterySocForecast: Array<{ slot: string; pct: number }> = [];
         const importPrice: Array<{ slot: string; value: number }> = [];
@@ -17,7 +17,7 @@ async function mountInspector(page: Page): Promise<void> {
             const hour = String(Math.floor(minutes / 60)).padStart(2, "0");
             const minute = String(minutes % 60).padStart(2, "0");
             const slot = `${hour}:${minute}`;
-            corrected.push({ timestamp: `${date}T${slot}:00`, valueWh: 100 });
+            corrected.push({ slot, valueWh: 100 });
             impact.push({ slot, rawWh: 0, correctedWh: 0, impactWh: 0, factor: 1 });
             batterySocForecast.push({ slot, pct: 50 });
             importPrice.push({ slot, value: 4 });
@@ -39,11 +39,8 @@ async function mountInspector(page: Page): Promise<void> {
                 houseActualWh: null, gridForecastWh: null, gridActualWh: null,
                 batteryForecastWh: null, batteryActualWh: null, moneyActual: null, moneyForecast: null,
             },
-            availability: { hasRawForecast: false, hasCorrectedForecast: true, hasActuals: false,
-                hasInvalidated: false, hasProfile: true, hasHouseForecast: false,
-                hasHouseActual: false, hasBatterySocForecast: true, hasBatterySocActual: false,
-                hasGridForecast: false, hasGridActual: false, hasBatteryForecast: false,
-                hasBatteryActual: false, hasImportPrice: true, hasExportPrice: true,
+            availability: {
+                hasProfile: true,
             },
             priceUnit: "CZK/kWh",
             batterySocBounds: [],

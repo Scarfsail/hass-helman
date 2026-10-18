@@ -273,7 +273,7 @@ class TestRunningSlotSplit(unittest.IsolatedAsyncioTestCase):
             [p["slot"] for p in payload["series"]["moneyActual"]], ["09:45"]
         )
         self.assertEqual(
-            [p["timestamp"][11:16] for p in payload["series"]["gridActual"]],
+            [p["slot"] for p in payload["series"]["gridActual"]],
             ["09:45"],
         )
         # Summed: the running slot counts, exactly as it does for gridActualWh.

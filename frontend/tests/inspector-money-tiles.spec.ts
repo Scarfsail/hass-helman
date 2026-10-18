@@ -46,13 +46,13 @@ async function mountInspector(
 
     await page.evaluate(({ date, money, totals }) => {
         const impact: InspectorPayload["series"]["impact"] = [];
-        const corrected: Array<{ timestamp: string; valueWh: number }> = [];
+        const corrected: Array<{ slot: string; valueWh: number }> = [];
         for (let m = 0; m < 1440; m += 15) {
             const hh = String(Math.floor(m / 60)).padStart(2, "0");
             const mm = String(m % 60).padStart(2, "0");
             // A slot only becomes selectable once the impact series names it.
             impact.push({ slot: `${hh}:${mm}`, rawWh: 0, correctedWh: 0, impactWh: 0, factor: 1 });
-            corrected.push({ timestamp: `${date}T${hh}:${mm}:00`, valueWh: 100 });
+            corrected.push({ slot: `${hh}:${mm}`, valueWh: 100 });
         }
         const payload = window.__inspectorDay({ date,
             timezone: "UTC",
@@ -77,11 +77,8 @@ async function mountInspector(
                 moneyActual: totals,
                 moneyForecast: null,
             },
-            availability: { hasRawForecast: false, hasCorrectedForecast: true, hasActuals: false,
-                hasInvalidated: false, hasProfile: true, hasHouseForecast: false,
-                hasHouseActual: false, hasBatterySocForecast: false, hasBatterySocActual: false,
-                hasGridForecast: false, hasGridActual: false, hasBatteryForecast: false,
-                hasBatteryActual: false, hasImportPrice: false, hasExportPrice: false,
+            availability: {
+                hasProfile: true,
             },
             priceUnit: "CZK/kWh",
             batterySocBounds: [],

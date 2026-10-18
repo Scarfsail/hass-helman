@@ -4,9 +4,10 @@ from datetime import date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from ..device_reports.dataset import price_hourly_series
+from ..device_reports.dataset import _UNATTRIBUTED_HOUR, _hourly_mix, price_hourly_series
 from ..solar_bias_correction.statistics_day import finite_mean
 from ..span_buckets import add_months, bucket_key, bucket_keys
+from ..span_history_model import period_hours
 from .day import _consumer_own_energy, _round_kwh, _round_wh
 
 #: How many buckets one span read may return, per bucket size.
@@ -260,6 +261,33 @@ def _bucket_house_breakdown(
     }
 
 
+def _house_source_mix_by_bucket(
+    history: Any,
+    bucket: str,
+    local_tz: ZoneInfo,
+) -> dict[str, dict[str, float]]:
+    """Each bucket's gross house source mix as the energy-weighted sum of hourly mixes."""
+    if not history.meters.house:
+        return {}
+    hours = period_hours(history.local_start, history.local_end)
+    mix, _ = _hourly_mix(history, hours)
+    bucket_mix: dict[str, dict[str, float]] = {}
+    house_series = history.energy_for(history.meters.house)
+    for hour in hours:
+        h_kwh = max(0.0, house_series.get(hour, 0.0))
+        if h_kwh <= 0.0:
+            continue
+        hour_mix = mix.get(hour, _UNATTRIBUTED_HOUR)
+        key = bucket_key(hour, bucket, local_tz)
+        if key not in bucket_mix:
+            bucket_mix[key] = {"solar": 0.0, "battery": 0.0, "grid": 0.0, "unattributed": 0.0}
+        bucket_mix[key]["solar"] += h_kwh * hour_mix.solar
+        bucket_mix[key]["battery"] += h_kwh * hour_mix.battery
+        bucket_mix[key]["grid"] += h_kwh * hour_mix.grid
+        bucket_mix[key]["unattributed"] += h_kwh * hour_mix.unattributed
+    return bucket_mix
+
+
 def _fold_span_aggregates_days(
     history: Any,
     meters: Any,
@@ -312,6 +340,7 @@ def _fold_span_aggregates_days(
         bucket=bucket,
         local_tz=local_tz,
     )
+    source_mix_by_bucket = _house_source_mix_by_bucket(history, bucket, local_tz)
 
     days: list[dict[str, Any]] = []
     for key in bucket_keys(start_date, end_date, bucket):
@@ -319,6 +348,25 @@ def _fold_span_aggregates_days(
         cost, gain, cost_kwh, gain_kwh = money_by_bucket.get(
             key, (None, None, None, None)
         )
+        house_energy = house_kwh.get(key)
+        bm = source_mix_by_bucket.get(key)
+        if house_energy is not None and bm is not None:
+            house_source_mix = {
+                "solar": _round_wh(bm["solar"]),
+                "battery": _round_wh(bm["battery"]),
+                "grid": _round_wh(bm["grid"]),
+                "unattributed": _round_wh(bm["unattributed"]),
+            }
+        elif house_energy is not None:
+            house_source_mix = {
+                "solar": 0.0,
+                "battery": 0.0,
+                "grid": 0.0,
+                "unattributed": _round_wh(house_energy),
+            }
+        else:
+            house_source_mix = None
+
         row: dict[str, Any] = {
             "date": key,
             "solarWh": _round_wh(solar_kwh.get(key)),
@@ -326,18 +374,19 @@ def _fold_span_aggregates_days(
             "gridExportKwh": _round_kwh(exported_kwh.get(key)),
             "batteryMinSocPct": min_pct,
             "batteryMaxSocPct": max_pct,
-            "houseWh": _round_wh(house_kwh.get(key)),
+            "houseWh": _round_wh(house_energy),
             "batteryChargeWh": _round_wh(charged_kwh.get(key)),
             "batteryDischargeWh": _round_wh(discharged_kwh.get(key)),
             "moneyCost": None if cost is None else round(cost, 3),
             "moneyGain": None if gain is None else round(gain, 3),
             "moneyCostKwh": _round_kwh(cost_kwh),
             "moneyGainKwh": _round_kwh(gain_kwh),
+            "houseSourceMix": house_source_mix,
             "houseBreakdown": _bucket_house_breakdown(
                 breakdown_consumers,
                 consumer_kwh_by_entity,
                 key,
-                _round_wh(house_kwh.get(key)),
+                _round_wh(house_energy),
             ),
         }
         if house_forecast:

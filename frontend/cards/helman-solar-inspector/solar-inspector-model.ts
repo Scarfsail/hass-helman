@@ -1,4 +1,4 @@
-export type InspectorPoint = { timestamp: string; valueWh: number };
+export type InspectorPoint = { slot: string; valueWh: number };
 export type ApplianceComponent = {
   /**
    * The device's energy stat, or null for a scheduled appliance with no meter

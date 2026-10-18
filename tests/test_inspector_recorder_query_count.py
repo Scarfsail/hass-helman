@@ -288,7 +288,7 @@ class TestInspectorIssuesOneCumulativeEnergyQuery(unittest.IsolatedAsyncioTestCa
             payload["series"]["actual"],
             [
                 {
-                    "timestamp": "2026-05-10T08:00:00+02:00",
+                    "slot": "08:00",
                     "valueWh": 250.0,
                 }
             ],
