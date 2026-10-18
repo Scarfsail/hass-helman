@@ -147,6 +147,24 @@ class TestBackfillCursorStore(unittest.IsolatedAsyncioTestCase):
             },
         )
 
+        with patch("homeassistant.helpers.storage.Store", _FakeStore):
+            store = mod.BackfillCursorStore(hass, "test_key")
+            await store.async_record(
+                source_entity_id="sensor.source",
+                oldest_hour=None,
+                done=False,
+            )
+
+        self.assertEqual(
+            saved["test_key"],
+            {
+                "version": 1,
+                "source": "sensor.source",
+                "oldest_hour": None,
+                "done": False,
+            },
+        )
+
 
 class TestFirstCompiledHour(unittest.IsolatedAsyncioTestCase):
     """The 3-step month -> day -> hour probe for compiler boundary."""
@@ -479,6 +497,7 @@ class TestAsyncWalkBackward(unittest.IsolatedAsyncioTestCase):
 
         # done MUST be False because found_any is False (D6 rule)
         self.assertFalse(stored["test_store"]["done"])
+        self.assertIsNone(stored["test_store"]["oldest_hour"])
 
         # Scenario 2: Source has data in chunk 1, then exhausted in chunk 2
         calls = 0
@@ -522,7 +541,61 @@ class TestAsyncWalkBackward(unittest.IsolatedAsyncioTestCase):
 
         # done MUST be True because data was found in chunk 1 and chunk 2 was exhausted
         self.assertTrue(stored["test_store"]["done"])
+        self.assertIsNotNone(stored["test_store"]["oldest_hour"])
         import_mock.assert_called_once()
+
+    async def test_empty_walk_reprobes_from_compiled_boundary_on_next_start(self):
+        stored: dict[str, Any] = {}
+
+        class _FakeStore:
+            def __init__(self, hass, version, key):
+                self.key = key
+
+            async def async_load(self):
+                return stored.get(self.key)
+
+            async def async_save(self, doc):
+                stored[self.key] = doc
+
+        start_cursor = datetime(2026, 5, 20, 10, 0, tzinfo=timezone.utc)
+        hass = SimpleNamespace()
+        calls: list[tuple[datetime, datetime]] = []
+
+        async def _empty_chunk(start, end):
+            calls.append((start, end))
+            return None
+
+        with patch("homeassistant.helpers.storage.Store", _FakeStore), patch(
+            "custom_components.helman.statistics_backfill.first_compiled_hour",
+            AsyncMock(return_value=start_cursor),
+        ):
+            store = mod.BackfillCursorStore(hass, "test_store")
+            await mod.async_walk_backward(
+                hass,
+                store=store,
+                source_entity_id="sensor.unconfigured",
+                target_entity_id="sensor.target",
+                metadata=mod.mean_metadata("sensor.target", unit=None, unit_class=None),
+                read_chunk=_empty_chunk,
+                log_name="test",
+                pause_seconds=0,
+            )
+            self.assertEqual(len(calls), 1)
+            self.assertIsNone(stored["test_store"]["oldest_hour"])
+
+            # Second walk resumes: because oldest_hour was None, it probes again from start_cursor
+            await mod.async_walk_backward(
+                hass,
+                store=store,
+                source_entity_id="sensor.unconfigured",
+                target_entity_id="sensor.target",
+                metadata=mod.mean_metadata("sensor.target", unit=None, unit_class=None),
+                read_chunk=_empty_chunk,
+                log_name="test",
+                pause_seconds=0,
+            )
+            self.assertEqual(len(calls), 2)
+            self.assertEqual(calls[1], calls[0])
 
     async def test_walk_propagates_cancellation_error(self):
         store = Mock(spec=mod.BackfillCursorStore)

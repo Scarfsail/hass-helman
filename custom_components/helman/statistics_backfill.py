@@ -88,12 +88,12 @@ class BackfillCursorStore:
             return None
 
     async def async_record(
-        self, *, source_entity_id: str, oldest_hour: datetime, done: bool
+        self, *, source_entity_id: str, oldest_hour: datetime | None, done: bool
     ) -> None:
         self._document = {
             "version": _STORAGE_VERSION,
             "source": source_entity_id,
-            "oldest_hour": oldest_hour.isoformat(),
+            "oldest_hour": oldest_hour.isoformat() if oldest_hour is not None else None,
             "done": done,
         }
         await self._store.async_save(self._document)
@@ -323,12 +323,13 @@ async def async_walk_backward(
         if store.done_for(source_entity_id):
             return
 
-        cursor = store.oldest_hour_for(source_entity_id) or await first_compiled_hour(
+        resumed_cursor = store.oldest_hour_for(source_entity_id)
+        cursor = resumed_cursor or await first_compiled_hour(
             hass, target_entity_id
         )
         floor = dt_util.as_utc(dt_util.now()) - _MAX_SPAN
         written = 0
-        found_any = False
+        found_any = resumed_cursor is not None
 
         while cursor > floor:
             chunk_start = max(cursor - _CHUNK, floor)
@@ -343,7 +344,7 @@ async def async_walk_backward(
             cursor = chunk_start
             await store.async_record(
                 source_entity_id=source_entity_id,
-                oldest_hour=cursor,
+                oldest_hour=cursor if found_any else None,
                 done=exhausted and found_any,
             )
             if exhausted:

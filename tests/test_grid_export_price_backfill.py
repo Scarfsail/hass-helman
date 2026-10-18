@@ -404,12 +404,16 @@ class TestWalk(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(HISTORY_CALLS), 1)
         self.assertFalse(STORED[backfill._STORAGE_KEY]["done"])
+        self.assertIsNone(STORED[backfill._STORAGE_KEY]["oldest_hour"])
 
-        # Second start: because done was not latched, it probes again.
+        # Second start: because done was not latched and no history was found,
+        # it probes again from the ownership boundary rather than walking backward.
         await _run()
 
         self.assertEqual(len(HISTORY_CALLS), 2)
+        self.assertEqual(HISTORY_CALLS[1], HISTORY_CALLS[0])
         self.assertFalse(STORED[backfill._STORAGE_KEY]["done"])
+        self.assertIsNone(STORED[backfill._STORAGE_KEY]["oldest_hour"])
 
     async def test_cancel_mid_walk_resumes_from_stored_cursor(self):
         # Walk covers several chunks; cancelling mid-walk saves the completed chunk's
