@@ -1356,17 +1356,18 @@ def test_day_aggregates_stop_at_today_and_cap_the_span():
 def test_inspector_points_from_raw_collapses_duplicate_dst_fallback_slots():
     day_mod = importlib.import_module("custom_components.helman.solar_inspector.day")
     raw = [
-        {"timestamp": "2026-10-25T02:00:00+02:00", "wh": 110.0},
+        {"timestamp": "2026-10-25T02:00:00+02:00", "wh": 100.0},
         {"timestamp": "2026-10-25T02:15:00+02:00", "wh": 120.0},
-        {"timestamp": "2026-10-25T02:00:00+01:00", "wh": 210.0},
+        {"timestamp": "2026-10-25T02:00:00+01:00", "wh": 150.0},
         {"timestamp": "2026-10-25T02:15:00+01:00", "wh": 220.0},
         {"slot": "01:45", "wh": 90.0},
     ]
 
-    points = day_mod._inspector_points_from_raw(raw)
-
-    assert points == [
+    expected = [
         models.SolarBiasInspectorPoint(slot="01:45", value_wh=90.0),
-        models.SolarBiasInspectorPoint(slot="02:00", value_wh=210.0),
-        models.SolarBiasInspectorPoint(slot="02:15", value_wh=220.0),
+        models.SolarBiasInspectorPoint(slot="02:00", value_wh=250.0),
+        models.SolarBiasInspectorPoint(slot="02:15", value_wh=340.0),
     ]
+    assert day_mod._inspector_points_from_raw(raw) == expected
+    assert day_mod._inspector_points(raw) == expected
+

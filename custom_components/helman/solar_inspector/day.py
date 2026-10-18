@@ -205,7 +205,7 @@ def _inspector_points(raw_points: list[dict[str, Any]]) -> list[SolarBiasInspect
             value_wh = float(point.get("value", point.get("wh", point.get("value_wh", 0))))
         except (TypeError, ValueError):
             continue
-        by_slot[slot] = value_wh
+        by_slot[slot] = by_slot.get(slot, 0.0) + value_wh
     return [SolarBiasInspectorPoint(slot=slot, value_wh=val) for slot, val in sorted(by_slot.items())]
 
 
@@ -1162,7 +1162,7 @@ def _inspector_points_from_raw(raw: list[dict]) -> list[SolarBiasInspectorPoint]
             value_wh = float(value)
         except (TypeError, ValueError):
             continue
-        by_slot[slot] = value_wh
+        by_slot[slot] = by_slot.get(slot, 0.0) + value_wh
     return [SolarBiasInspectorPoint(slot=slot, value_wh=val) for slot, val in sorted(by_slot.items())]
 
 
