@@ -108,7 +108,7 @@ def test_index_matches_legacy_collector_outputs():
 def test_unmeasured_entity_id_matches_sensor(node_id):
     hass = SimpleNamespace(states=SimpleNamespace(get=lambda _: None))
     sensor = HelmanUnmeasuredPowerSensor(
-        SimpleNamespace(), SimpleNamespace(entry_id="test"), hass, node_id, None
+        SimpleNamespace(entry_id="test"), hass, node_id, None
     )
     assert tree_builder.unmeasured_power_entity_id(node_id) == sensor.entity_id
 
@@ -181,7 +181,7 @@ def test_registry_holder_refresh_is_visible_to_executor_and_retains_unchanged_re
     )
     original = holder.current
     read_registry = (
-        coordinator._schedule_executor._dependencies.read_appliances_registry
+        coordinator.schedule.executor._dependencies.read_appliances_registry
     )
     assert read_registry() is original
     holder.refresh()

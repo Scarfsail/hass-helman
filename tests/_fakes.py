@@ -78,6 +78,29 @@ class FakeServices:
             self._hass.states._states[data["entity_id"]].state = "on"
 
 
+class FakeConfigEntry:
+    """A Helman config entry; ``runtime_data`` is set only when given."""
+
+    def __init__(
+        self, entry_id: str = "helman-entry", *, domain: str = "helman", **attrs: Any
+    ) -> None:
+        self.entry_id = entry_id
+        self.domain = domain
+        for name, value in attrs.items():
+            setattr(self, name, value)
+
+
+class FakeConfigEntries:
+    def __init__(self, entries: list[Any] | None = None) -> None:
+        self.entries = list(entries or [])
+
+    def async_entries(self, domain: str | None = None) -> list[Any]:
+        return [e for e in self.entries if domain is None or e.domain == domain]
+
+    def async_get_entry(self, entry_id: str) -> Any:
+        return next((e for e in self.entries if e.entry_id == entry_id), None)
+
+
 class FakeHass:
     def __init__(self, states: dict[str, FakeState] | None = None) -> None:
         self.data: dict = {}
@@ -85,12 +108,74 @@ class FakeHass:
         self.states = FakeStates(states)
         self.bus = FakeBus()
         self.services = FakeServices(self)
+        self.config_entries = FakeConfigEntries()
 
     def async_create_task(self, coro):
         return asyncio.create_task(coro)
 
     def async_create_background_task(self, coro, name):
         return asyncio.create_task(coro, name=name)
+
+    def verify_event_loop_thread(self, what: str) -> None:
+        """Lets the real dispatcher send; the tests run on the loop."""
+
+
+def loaded_config_entries(coordinator: Any) -> FakeConfigEntries:
+    """Config entries holding one Helman entry loaded with ``coordinator``."""
+    return FakeConfigEntries([FakeConfigEntry(runtime_data=coordinator)])
+
+
+def hass_with_coordinator(coordinator: Any, **attrs: Any) -> FakeHass:
+    """A hass whose loaded Helman entry carries ``coordinator`` as runtime data."""
+    hass = FakeHass()
+    hass.config_entries = loaded_config_entries(coordinator)
+    for name, value in attrs.items():
+        setattr(hass, name, value)
+    return hass
+
+
+def capture_signal(hass: Any, signal: str, entry_id: str = "helman-entry") -> list:
+    """Record every payload sent on this entry's ``signal``, through the real dispatcher."""
+    from homeassistant.core import callback
+    from homeassistant.helpers.dispatcher import async_dispatcher_connect
+
+    from custom_components.helman.const import entry_signal
+
+    sent: list = []
+    async_dispatcher_connect(
+        hass, entry_signal(signal, entry_id), callback(lambda payload: sent.append(payload))
+    )
+    return sent
+
+
+def hold_pipeline(coordinator: Any, pipeline: Any) -> None:
+    """Cache ``pipeline`` for the readers that serve it without a key check."""
+    from datetime import datetime, timezone
+
+    from custom_components.helman.coordinator import (
+        _PipelineCacheEntry,
+        _PipelineCacheKey,
+    )
+
+    # A key no live lookup can equal (no real slot starts in year 1), so the
+    # entry is well-formed for every reader but never a cache hit.
+    never_a_hit = _PipelineCacheKey(
+        slot_start=None,
+        house_generated_at=None,
+        solar_signature=None,
+        schedule_sig=(),
+        appliance_sig=(),
+        effective_sig=None,
+    )
+    coordinator._pipeline_cache = (
+        None
+        if pipeline is None
+        else _PipelineCacheEntry(
+            key=never_a_hit,
+            expires_at=datetime(1, 1, 1, tzinfo=timezone.utc),
+            snapshot=pipeline,
+        )
+    )
 
 
 def make_coordinator(**overrides):
@@ -99,16 +184,123 @@ def make_coordinator(**overrides):
 
     hass = overrides.pop("_hass", None)
     storage = overrides.pop("_storage", None)
+    entry = overrides.pop("_entry", None)
     if hass is None:
         hass = FakeHass()
     if storage is None:
         storage = FakeStorage(
             schedule_document={"executionEnabled": False, "slotMinutes": 15, "slots": {}}
         )
-    coordinator = HelmanCoordinator(hass, storage)
+    if entry is None:
+        entry = FakeConfigEntry()
+    coordinator = HelmanCoordinator(hass, storage, entry)
+    # The schedule lock under its pre-ScheduleService name, for
+    # test_coordinator_schedule_execution.py, which is held unchanged and holds
+    # the lock around the persist call it reaches on the coordinator.
+    coordinator._schedule_lock = coordinator.schedule._lock
     for name, value in overrides.items():
         setattr(coordinator, name, value)
     return coordinator
+
+
+def make_live_tracker(hass: Any, config: dict, *, weights: dict | None = None):
+    """A ``LivePowerTracker`` over ``config``, sending on the default entry's signal.
+
+    ``config`` is read live, so a test may edit it in place afterwards.
+    """
+    from custom_components.helman.live_power import LivePowerTracker
+
+    return LivePowerTracker(
+        hass,
+        FakeConfigEntry().entry_id,
+        read_config=lambda: config,
+        read_shared_meter_weights=lambda: weights or {},
+    )
+
+
+def make_optimization_context(
+    *,
+    now: datetime,
+    battery_state: Any = None,
+    solar_forecast: dict | None = None,
+    import_price_forecast: dict | None = None,
+    export_price_forecast: dict | None = None,
+    appliance_registry: Any = None,
+    when_active_hourly_energy_kwh_by_appliance_id: dict | None = None,
+    runtime_hours_by_appliance_id_by_local_date: dict | None = None,
+    battery_max_charge_power_kw: float | None = None,
+    battery_max_discharge_power_kw: float | None = None,
+    battery_charge_efficiency: float | None = None,
+    battery_discharge_efficiency: float | None = None,
+    day_contexts: dict | None = None,
+    condition_met_by_optimizer_id: dict[str, tuple[bool, ...]] | None = None,
+    custom_condition_results_by_optimizer_id: dict | None = None,
+    appliance_active_by_id: dict[str, bool] | None = None,
+):
+    """An ``OptimizationContext`` from the flat fields an optimizer reads.
+
+    The context holds the run's input bundle, live inputs and battery settings
+    by reference and derives these fields from them; this builds the three
+    containers that derive to the values given. ``condition_met_by_optimizer_id``
+    is folded from the custom results, so a plain per-group map becomes one
+    entry-less group result per bool. The usable capacity is the battery
+    state's own ``nominal_capacity_kwh``.
+    """
+    from custom_components.helman.appliances.state import AppliancesRuntimeRegistry
+    from custom_components.helman.automation.compute_inputs import (
+        ComputeInputs,
+        CustomConditionGroupResult,
+    )
+    from custom_components.helman.automation.input_bundle import AutomationInputBundle
+    from custom_components.helman.automation.snapshot import OptimizationContext
+    from custom_components.helman.battery_state import BatteryForecastSettings
+
+    def kw_to_w(value_kw: float | None) -> float | None:
+        return None if value_kw is None else value_kw * 1000
+
+    custom_results = dict(custom_condition_results_by_optimizer_id or {})
+    for optimizer_id, met_by_group in (condition_met_by_optimizer_id or {}).items():
+        custom_results[optimizer_id] = tuple(
+            CustomConditionGroupResult(index=index, met=met)
+            for index, met in enumerate(met_by_group)
+        )
+    grid_price_forecast = {}
+    if import_price_forecast is not None:
+        grid_price_forecast["import"] = import_price_forecast
+    if export_price_forecast is not None:
+        grid_price_forecast["export"] = export_price_forecast
+    return OptimizationContext(
+        now=now,
+        inputs=AutomationInputBundle(
+            original_house_forecast={},
+            solar_forecast={} if solar_forecast is None else solar_forecast,
+            grid_price_forecast=grid_price_forecast,
+            when_active_hourly_energy_kwh_by_appliance_id=(
+                when_active_hourly_energy_kwh_by_appliance_id or {}
+            ),
+            runtime_hours_by_appliance_id_by_local_date=(
+                runtime_hours_by_appliance_id_by_local_date or {}
+            ),
+        ),
+        live=ComputeInputs(
+            battery_live_state=battery_state,
+            appliances_registry=appliance_registry,
+            custom_condition_results_by_optimizer_id=custom_results,
+            appliance_active_by_id=appliance_active_by_id or {},
+        ),
+        battery=BatteryForecastSettings(
+            charge_efficiency=battery_charge_efficiency,
+            discharge_efficiency=battery_discharge_efficiency,
+            max_charge_power_w=kw_to_w(battery_max_charge_power_kw),
+            max_discharge_power_w=kw_to_w(battery_max_discharge_power_kw),
+        ),
+        appliance_registry=(
+            AppliancesRuntimeRegistry()
+            if appliance_registry is None
+            else appliance_registry
+        ),
+        day_contexts={} if day_contexts is None else day_contexts,
+    )
 
 
 def _valid_config() -> dict:

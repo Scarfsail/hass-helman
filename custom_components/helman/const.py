@@ -31,6 +31,36 @@ DATA_CHANGED_KIND_CONFIG = "config"
 DATA_CHANGED_KIND_SOLAR_BIAS = "solar_bias"
 DATA_CHANGED_KIND_TRAINING = "training"
 
+# Dispatcher signals from the coordinator to its own entities, each suffixed
+# with the config entry id by `entry_signal`. ``SIGNAL_FORECAST_PUBLISHED``
+# carries the refresh reason: the forecast and price sensors read their value
+# off the coordinator, so a publish only tells them to write their state now.
+# ``SIGNAL_LIVE_TICK`` carries one tick's computed values, keyed by the default
+# entity id of the sensor each belongs to.
+SIGNAL_FORECAST_PUBLISHED = f"{DOMAIN}_forecast_published"
+SIGNAL_LIVE_TICK = f"{DOMAIN}_live_tick"
+
+
+def entry_signal(signal: str, entry_id: str) -> str:
+    """``signal`` scoped to one config entry."""
+    return f"{signal}_{entry_id}"
+
+
+#: The forecast refresh ``reason`` for the quarter-hour timer tick, the one
+#: rebuild that lands on a :00/:15/:30/:45 boundary. The five battery/grid
+#: current-slot sensors gate their *republish* on this: an off-beat rebuild that
+#: still produced a full first slot would otherwise re-write the same value
+#: mid-slot, and HA's time-weighted hourly ``mean`` -- what a purged day reads
+#: back -- shifts with every such write.
+#:
+#: This gate does *not* stop a partial value: it guards only the publish signal,
+#: and Home Assistant writes a sensor's state by other routes too
+#: (``async_add_entities``, ``homeassistant.update_entity``, a registry rename),
+#: each reading the accessor directly. The partial-value guard is in
+#: :meth:`HelmanCoordinator.get_battery_forecast_current`, which refuses a first
+#: entry whose ``durationHours`` is short of a full slot.
+SLOT_ALIGNED_REFRESH_REASON = "slot_refresh"
+
 # Version of the stored config document. Bumped when a stored shape changes in
 # a way that needs migrating on load; absent means version 1 (pre-unification).
 CONFIG_DOCUMENT_VERSION = 29
@@ -94,6 +124,8 @@ def house_consumption_phase_entity_id(phase: int) -> str:
 
 
 PRODUCTION_TOTAL_ENTITY_ID = "sensor.helman_house_supply_power"
+BATTERY_TIME_TO_FULL_ENTITY_ID = "sensor.helman_battery_time_to_full"
+BATTERY_TIME_TO_EMPTY_ENTITY_ID = "sensor.helman_battery_time_to_empty"
 #: The import rate Helman itself publishes so the recorder archives it. Nothing
 #: else records what a kilowatt-hour cost, because the rate is computed from the
 #: window config rather than read off an entity; once a slot elapses, this

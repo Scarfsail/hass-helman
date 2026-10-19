@@ -19,7 +19,7 @@ from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
 import voluptuous as vol
-from _fakes import FakeConnection, _bias_service_config
+from _fakes import FakeConnection, _bias_service_config, loaded_config_entries
 
 from tests._fakes import make_coordinator
 
@@ -142,7 +142,8 @@ class DeviceReportTestCase(unittest.IsolatedAsyncioTestCase):
         self.coordinator._solar_inspector = FakeService()
         self.hass = SimpleNamespace(
             config=SimpleNamespace(time_zone="Europe/Prague"),
-            data={const.DOMAIN: {"coordinator": self.coordinator}},
+            data={},
+            config_entries=loaded_config_entries(self.coordinator),
             async_add_executor_job=_executor,
         )
         self.coordinator._hass = self.hass

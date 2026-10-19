@@ -243,7 +243,7 @@ This is not a regression introduced by phasing. It is the **same hazard** the si
 | One optimizer step, shared by every phase | `automation/pipeline.py` — `_run_optimizer_step` |
 | Appliance vs. system bucket membership | `automation/spec.py` — `OptimizerSpec.bucket`; config-level lists on `AutomationConfig.enabled_appliance_optimizers` / `enabled_system_optimizers` |
 | Strip mechanics (whole-run and phase-3 narrowed) | `automation/ownership.py` — `strip_automation_owned_actions` |
-| Recomputing surplus and SoC | `coordinator.py` — `_build_automation_snapshot_from_schedule_pure` |
+| Recomputing surplus and SoC | `forecast/assembly.py` — `build_automation_snapshot` |
 | Reading surplus | `automation/rails.py` |
 | Run triggers | `automation/triggers.py`, `coordinator.py` |
 | Horizon and slot size | `const.py` — `SCHEDULE_HORIZON_HOURS`, `SCHEDULE_SLOT_MINUTES` |

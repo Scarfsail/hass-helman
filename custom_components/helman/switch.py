@@ -19,11 +19,11 @@ from homeassistant.const import STATE_UNAVAILABLE
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
 
-from .const import DOMAIN, EV_CHARGING_UNIQUE_ID_PREFIX
+from .const import EV_CHARGING_UNIQUE_ID_PREFIX
+from .entity import helman_device_info, remove_stale_entities
 from .scheduling.actuation import async_write_vendor_entity
 from .vendors import (
     VendorDevice,
@@ -39,19 +39,18 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    coordinator = hass.data[DOMAIN]["coordinator"]
+    coordinator = entry.runtime_data
     charging_devices = find_charging_devices(hass, coordinator.config)
-    # A device back on Custom, or gone: drop its switch, or a picker would
-    # still offer it.
+    # A device back on Custom, or gone: drop its switch.
     kept = {ev_charging_unique_id(device_id) for device_id, _ in charging_devices}
-    registry = er.async_get(hass)
-    for row in er.async_entries_for_config_entry(registry, entry.entry_id):
-        if (
-            row.domain == "switch"
-            and row.unique_id.startswith(EV_CHARGING_UNIQUE_ID_PREFIX)
-            and row.unique_id not in kept
-        ):
-            registry.async_remove(row.entity_id)
+    remove_stale_entities(
+        hass,
+        entry,
+        "switch",
+        lambda unique_id: (
+            unique_id.startswith(EV_CHARGING_UNIQUE_ID_PREFIX) and unique_id not in kept
+        ),
+    )
     async_add_entities(
         [
             HelmanEvChargingSwitch(entry, device_id, vendor_device)
@@ -75,11 +74,7 @@ class HelmanEvChargingSwitch(SwitchEntity):
         self, entry: ConfigEntry, device_id: str, vendor_device: VendorDevice
     ) -> None:
         # On the one shared Helman device, as every Helman entity is.
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)},
-            name="Helman",
-            entry_type=DeviceEntryType.SERVICE,
-        )
+        self._attr_device_info = helman_device_info(entry)
         self.entity_id = ev_charging_entity_id(device_id)
         self._attr_unique_id = ev_charging_unique_id(device_id)
         name = vendor_device.device.get("name")

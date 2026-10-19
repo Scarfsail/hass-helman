@@ -14,6 +14,7 @@ coordinator_module = importlib.import_module("custom_components.helman.coordinat
 input_bundle_module = importlib.import_module("custom_components.helman.automation.input_bundle")
 config_module = importlib.import_module("custom_components.helman.appliances.config")
 automation_config_module = importlib.import_module("custom_components.helman.automation.config")
+assembly = importlib.import_module("custom_components.helman.forecast.assembly")
 
 
 @pytest.fixture(autouse=True)
@@ -23,7 +24,9 @@ def _clock(monkeypatch):
 
 
 HelmanCoordinator = coordinator_module.HelmanCoordinator
-DeviceSubject = coordinator_module.DeviceSubject
+DeviceSubject = importlib.import_module(
+    "custom_components.helman.training.appliance_energy"
+).DeviceSubject
 OptimizerInstanceConfig = automation_config_module.OptimizerInstanceConfig
 AutomationInputBundle = input_bundle_module.AutomationInputBundle
 build_appliances_runtime_registry = config_module.build_appliances_runtime_registry
@@ -232,7 +235,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
                 ]}
             }
         )
-        coordinator._appliance_energy_estimates = {"living-room-hvac": 0.9}
+        coordinator.training.appliance_energy_estimates = {"living-room-hvac": 0.9}
 
         resolved = (
             coordinator._resolve_when_active_hourly_energy_kwh_by_appliance_id()
@@ -305,7 +308,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
         )
         # living-room-hvac is absent from the stored estimates, which is what a
         # history window that never answered leaves behind.
-        coordinator._appliance_energy_estimates = {"dishwasher": 0.8}
+        coordinator.training.appliance_energy_estimates = {"dishwasher": 0.8}
 
         resolved = (
             coordinator._resolve_when_active_hourly_energy_kwh_by_appliance_id()
@@ -357,14 +360,10 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
             schedule_document={"executionEnabled": False, "slotMinutes": 15, "slots": {}},
             async_save_snapshots=AsyncMock(),
         )
-        coordinator._invalidate_battery_forecast_cache = Mock()
+        coordinator._invalidate_pipeline_cache = Mock()
         coordinator._async_refresh_automation_input_bundle = AsyncMock(return_value=True)
         coordinator._cached_forecast = None
-        coordinator._house_profile = None
-        coordinator._house_profile_trained_at = None
-        coordinator._house_profile_last_outcome = "no_training_yet"
         coordinator._cached_solar_forecast = None
-        coordinator._solar_forecast_sensors = []
         coordinator._slot_history = None
         coordinator._ingest_grid_export_price = Mock(
             return_value={"status": "available", "unit": "CZK/kWh"}
@@ -406,7 +405,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
                 bundle_ready=True,
             ),
         )
-        coordinator._invalidate_battery_forecast_cache.assert_called_once_with()
+        coordinator._invalidate_pipeline_cache.assert_called_once_with()
         coordinator._storage.async_save_snapshots.assert_awaited_once_with(
             house_snapshot=snapshot,
             solar_snapshot=solar_snapshot,
@@ -431,16 +430,9 @@ class RuntimeHistoryRequirementsTests(unittest.TestCase):
     made.
     """
 
-    @staticmethod
-    def _coordinator():
-        coordinator = make_coordinator()
-        coordinator._active_config = {}
-        return coordinator
-
     def test_the_appliance_is_read_from_target_not_params(self) -> None:
         # `target` is identity -- a condition group may never override it --
         # and every other reader takes the appliance from there.
-        coordinator = self._coordinator()
         config = SimpleNamespace(
             enabled=True,
             enabled_appliance_optimizers=[
@@ -457,10 +449,7 @@ class RuntimeHistoryRequirementsTests(unittest.TestCase):
             ],
         )
 
-        with patch.object(
-            coordinator_module, "read_automation_config", return_value=config
-        ):
-            requirements = coordinator._resolve_runtime_history_requirements()
+        requirements = assembly.resolve_runtime_history_requirements(config)
 
         # The skip window plus today, keyed by the appliance that needs it.
         self.assertEqual(requirements, {"pool-filtration": 3})
@@ -469,7 +458,6 @@ class RuntimeHistoryRequirementsTests(unittest.TestCase):
         # Each member runs its own daily-minimum chain against the one shared
         # `max_consecutive_skips`, so each needs its own history -- not just
         # the first member's.
-        coordinator = self._coordinator()
         config = SimpleNamespace(
             enabled=True,
             enabled_appliance_optimizers=[
@@ -487,10 +475,7 @@ class RuntimeHistoryRequirementsTests(unittest.TestCase):
             ],
         )
 
-        with patch.object(
-            coordinator_module, "read_automation_config", return_value=config
-        ):
-            requirements = coordinator._resolve_runtime_history_requirements()
+        requirements = assembly.resolve_runtime_history_requirements(config)
 
         self.assertEqual(requirements, {"ac-living": 3, "ac-bedroom": 3})
 
@@ -502,7 +487,6 @@ class RuntimeHistoryRequirementsTests(unittest.TestCase):
         of skips made the dishwasher read a fortnight too, for days its own
         skip guard can never look at.
         """
-        coordinator = self._coordinator()
         config = SimpleNamespace(
             enabled=True,
             enabled_appliance_optimizers=[
@@ -536,10 +520,7 @@ class RuntimeHistoryRequirementsTests(unittest.TestCase):
             ],
         )
 
-        with patch.object(
-            coordinator_module, "read_automation_config", return_value=config
-        ):
-            requirements = coordinator._resolve_runtime_history_requirements()
+        requirements = assembly.resolve_runtime_history_requirements(config)
 
         self.assertEqual(
             requirements,
@@ -547,17 +528,13 @@ class RuntimeHistoryRequirementsTests(unittest.TestCase):
         )
 
     def test_no_appliance_optimizers_need_no_history(self) -> None:
-        # `_resolve_runtime_history_requirements` walks the appliance bucket
+        # `resolve_runtime_history_requirements` walks the appliance bucket
         # only -- a system-kind optimizer like `charge_hold` cannot land there
         # (config parsing rejects it with `wrong_bucket`), so there is nothing
         # left to filter by kind any more.
-        coordinator = self._coordinator()
         config = SimpleNamespace(enabled=True, enabled_appliance_optimizers=[])
 
-        with patch.object(
-            coordinator_module, "read_automation_config", return_value=config
-        ):
-            self.assertIsNone(coordinator._resolve_runtime_history_requirements())
+        self.assertIsNone(assembly.resolve_runtime_history_requirements(config))
 
 
 class ApplianceRuntimeHistoryResolutionTests(unittest.IsolatedAsyncioTestCase):
@@ -768,9 +745,7 @@ class ApplianceEnergyAdoptionTests(unittest.TestCase):
 
     def _make_coordinator(self, *, section, appliances=None):
         coordinator = make_coordinator()
-        coordinator._training_artifacts_store = SimpleNamespace(
-            appliance_energy=section
-        )
+        coordinator.training.store = SimpleNamespace(appliance_energy=section)
         # The request reads shared meters from the config and the appliances
         # from the registry built off it, so both see the same document.
         coordinator._active_config = {
@@ -798,7 +773,7 @@ class ApplianceEnergyAdoptionTests(unittest.TestCase):
         return coordinator
 
     def _fingerprint_for(self, coordinator):
-        return coordinator._read_appliance_energy_training_request().fingerprint
+        return coordinator.training.read_appliance_request().fingerprint
 
     def test_a_fixed_sharer_of_a_meter_is_in_the_split_but_not_resolved(self) -> None:
         """The request's shared meters come from the tree, fixed children included.
@@ -833,7 +808,7 @@ class ApplianceEnergyAdoptionTests(unittest.TestCase):
             ],
         )
 
-        request = coordinator._read_appliance_energy_training_request()
+        request = coordinator.training.read_appliance_request()
 
         # Every device is a subject: the breaker by its meter, each meterless
         # child by its id, reading its effective meter -- its parent's. Only
@@ -868,22 +843,20 @@ class ApplianceEnergyAdoptionTests(unittest.TestCase):
             "data": {"dishwasher": 0.83},
             "fingerprint": self._fingerprint_for(coordinator),
         }
-        coordinator._training_artifacts_store = SimpleNamespace(
-            appliance_energy=section
-        )
+        coordinator.training.store = SimpleNamespace(appliance_energy=section)
 
-        reason = coordinator._adopt_stored_appliance_energy()
+        reason = coordinator.training.adopt_appliance_energy()
 
         self.assertIsNone(reason)
-        self.assertEqual(coordinator._appliance_energy_estimates, {"dishwasher": 0.83})
+        self.assertEqual(coordinator.training.appliance_energy_estimates, {"dishwasher": 0.83})
 
     def test_no_stored_section_asks_for_a_refit(self) -> None:
         coordinator = self._make_coordinator(section=None)
 
-        reason = coordinator._adopt_stored_appliance_energy()
+        reason = coordinator.training.adopt_appliance_energy()
 
         self.assertEqual(reason, "no_stored_estimates")
-        self.assertEqual(coordinator._appliance_energy_estimates, {})
+        self.assertEqual(coordinator.training.appliance_energy_estimates, {})
 
     def test_stale_fingerprint_refits_but_keeps_serving_the_old_estimates(self) -> None:
         """Unlike the house profile, a stale fingerprint does not blank the map.
@@ -896,10 +869,10 @@ class ApplianceEnergyAdoptionTests(unittest.TestCase):
             section={"data": {"dishwasher": 0.83}, "fingerprint": "stale"}
         )
 
-        reason = coordinator._adopt_stored_appliance_energy()
+        reason = coordinator.training.adopt_appliance_energy()
 
         self.assertEqual(reason, "config_changed")
-        self.assertEqual(coordinator._appliance_energy_estimates, {"dishwasher": 0.83})
+        self.assertEqual(coordinator.training.appliance_energy_estimates, {"dishwasher": 0.83})
 
     def test_junk_values_in_the_stored_map_are_discarded(self) -> None:
         coordinator = self._make_coordinator(
@@ -915,9 +888,9 @@ class ApplianceEnergyAdoptionTests(unittest.TestCase):
             }
         )
 
-        coordinator._adopt_stored_appliance_energy()
+        coordinator.training.adopt_appliance_energy()
 
-        self.assertEqual(coordinator._appliance_energy_estimates, {"dishwasher": 0.83})
+        self.assertEqual(coordinator.training.appliance_energy_estimates, {"dishwasher": 0.83})
 
     def test_the_shared_meter_weights_are_adopted_for_the_live_split(self) -> None:
         # An unlearned member stays None (it takes the others' mean); junk is
@@ -930,10 +903,10 @@ class ApplianceEnergyAdoptionTests(unittest.TestCase):
             }
         )
 
-        coordinator._adopt_stored_appliance_energy()
+        coordinator.training.adopt_appliance_energy()
 
         self.assertEqual(
-            coordinator._shared_meter_weights,
+            coordinator.training.shared_meter_weights,
             {"ac-1": 1.2, "ac-2": None, "ac-3": None},
         )
 
@@ -956,7 +929,7 @@ class ApplianceEnergyAdoptionTests(unittest.TestCase):
             ],
         )
 
-        request = coordinator._read_appliance_energy_training_request()
+        request = coordinator.training.read_appliance_request()
 
         self.assertEqual(
             request.subjects,
@@ -977,7 +950,7 @@ class ApplianceEnergyAdoptionTests(unittest.TestCase):
         """``None`` is what the projection already reads as "use the fixed
         figure", so an untrained appliance degrades rather than disappearing."""
         coordinator = self._make_coordinator(section=None)
-        coordinator._appliance_energy_estimates = {"dishwasher": 0.83}
+        coordinator.training.appliance_energy_estimates = {"dishwasher": 0.83}
         appliances = list(coordinator._appliances_registry.current.appliances)
         untrained = SimpleNamespace(id="never-trained")
         coordinator._iter_projected_history_appliances = (

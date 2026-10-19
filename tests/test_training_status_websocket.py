@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock
 from _fakes import FakeConnection as SharedFakeConnection
 from homeassistant.exceptions import Unauthorized
 
-from tests._fakes import make_coordinator
+from tests._fakes import loaded_config_entries, make_coordinator
 
 coordinator_module = importlib.import_module("custom_components.helman.coordinator")
 training_ws = importlib.import_module("custom_components.helman.training.websocket")
@@ -162,15 +162,14 @@ def _make_coordinator(
 ):
     coordinator = make_coordinator()
     coordinator._solar_bias_service = bias_service or _make_bias_service()
-    coordinator._training_artifacts_store = store or _make_store()
-    coordinator._house_profile = house_profile
-    coordinator._appliance_energy_estimates = appliance_estimates or {}
-    coordinator._shared_meter_weights = {}
+    coordinator.training.store = store or _make_store()
+    coordinator.training.house_profile = house_profile
+    coordinator.training.appliance_energy_estimates = appliance_estimates or {}
     coordinator._active_config = {}
-    coordinator._read_house_training_request = lambda: SimpleNamespace(
+    coordinator.training.read_house_request = lambda: SimpleNamespace(
         config_fingerprint=HOUSE_FP
     )
-    coordinator._read_appliance_energy_training_request = lambda: SimpleNamespace(
+    coordinator.training.read_appliance_request = lambda: SimpleNamespace(
         fingerprint=APPLIANCE_FP
     )
     coordinator._training_batch = batch_module.TrainingBatch(
@@ -188,7 +187,12 @@ def _make_coordinator(
 
 
 def _hass(coordinator) -> SimpleNamespace:
-    return SimpleNamespace(data={const.DOMAIN: {"coordinator": coordinator}})
+    return SimpleNamespace(data={}, config_entries=loaded_config_entries(coordinator))
+
+
+def _reload(hass, coordinator) -> None:
+    """Swap the entry's runtime data, as a reload of the entry does."""
+    hass.config_entries.entries[0].runtime_data = coordinator
 
 
 def _status(coordinator, *, is_admin: bool = True):
@@ -297,7 +301,7 @@ class TrainingStatusTests(unittest.TestCase):
                 )
             )
         )
-        coordinator._shared_meter_weights = {"pump": 2.0}
+        coordinator.training.shared_meter_weights = {"pump": 2.0}
 
         appliance = _job(self._payload(coordinator), "appliance_energy")
 
@@ -525,7 +529,7 @@ class TrainingStatusAfterRealRunsTests(unittest.IsolatedAsyncioTestCase):
         def _raise():
             raise RuntimeError("house config is broken")
 
-        coordinator._read_house_training_request = _raise
+        coordinator.training.read_house_request = _raise
         job = house_module.HouseConsumptionTrainingJob(
             SimpleNamespace(),
             store,
@@ -568,7 +572,7 @@ class TrainingStatusAfterRealRunsTests(unittest.IsolatedAsyncioTestCase):
         def _raise():
             raise RuntimeError("registry is broken")
 
-        coordinator._read_appliance_energy_training_request = _raise
+        coordinator.training.read_appliance_request = _raise
         job = appliance_module.ApplianceEnergyTrainingJob(
             SimpleNamespace(), store, read_request=_raise
         )
@@ -816,12 +820,6 @@ class TrainNowTests(unittest.IsolatedAsyncioTestCase):
         new_store = _make_store()
         new_store._store = old_store._store
         new_coordinator = _make_coordinator(store=new_store)
-        new_coordinator._read_house_forecast_config = lambda: (
-            None,
-            56,
-            14,
-            HOUSE_FP,
-        )
         new_coordinator._async_refresh_forecast = AsyncMock()
         hass = _hass(None)
 
@@ -829,7 +827,7 @@ class TrainNowTests(unittest.IsolatedAsyncioTestCase):
             async def async_train(self_inner):
                 # The new coordinator has already loaded the old empty document
                 # when the superseded coordinator completes its write.
-                hass.data[const.DOMAIN]["coordinator"] = new_coordinator
+                _reload(hass, new_coordinator)
                 await old_store.async_record_appliance_energy(
                     data={"dishwasher": 0.8},
                     fingerprint=APPLIANCE_FP,
@@ -845,12 +843,14 @@ class TrainNowTests(unittest.IsolatedAsyncioTestCase):
             store=old_store,
             appliance_job=_ReloadingApplianceJob(),
         )
-        hass.data[const.DOMAIN]["coordinator"] = old_coordinator
+        _reload(hass, old_coordinator)
 
         connection = await _train_now_with_hass(hass, job="appliance_energy")
 
         self.assertEqual(connection.errors, [])
-        self.assertEqual(new_coordinator._appliance_energy_estimates, {"dishwasher": 0.8})
+        self.assertEqual(
+            new_coordinator.training.appliance_energy_estimates, {"dishwasher": 0.8}
+        )
         self.assertEqual(
             _job(connection.results[0][1]["status"], "appliance_energy")["health"],
             "ok",
@@ -882,7 +882,7 @@ class TrainNowTests(unittest.IsolatedAsyncioTestCase):
         old_service._store = old_store
 
         async def _reloading_train():
-            hass.data[const.DOMAIN]["coordinator"] = new_coordinator
+            _reload(hass, new_coordinator)
             await old_store.async_save({
                 "version": 2,
                 "profile": {"factors": {"12:00": 1.3}, "omitted_slots": []},
@@ -903,7 +903,7 @@ class TrainNowTests(unittest.IsolatedAsyncioTestCase):
 
         old_service.async_train = AsyncMock(side_effect=_reloading_train)
         old_coordinator = _make_coordinator(bias_service=old_service)
-        hass.data[const.DOMAIN]["coordinator"] = old_coordinator
+        _reload(hass, old_coordinator)
 
         connection = await _train_now_with_hass(hass, job="solar_bias")
 

@@ -2,11 +2,11 @@
 
 Four places ask it of a scheduled action: the snapshot reader
 (``is_appliance_action_active``), each executor's driver (``is_enabled``), the
-projection builder (a running action projects demand) and the coordinator's
-projected-history filter. #495 found them equivalent on normalized documents;
-this pins that for every kind over every action the normalizers accept, plus
-the absent action, so collapsing them onto one predicate cannot change an
-answer.
+projection builder (a running action projects demand) and the forecast
+assembly's projected-history filter. #495 found them equivalent on normalized
+documents; this pins that for every kind over every action the normalizers
+accept, plus the absent action, so collapsing them onto one predicate cannot
+change an answer.
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ from custom_components.helman.appliances.schedule import (
     normalize_appliance_schedule_actions,
 )
 from custom_components.helman.appliances.state import AppliancesRuntimeRegistry
-from custom_components.helman.coordinator import HelmanCoordinator
+from custom_components.helman.forecast.assembly import is_projected_history_action_active
 from custom_components.helman.scheduling.schedule import (
     ScheduleDocument,
     format_slot_id,
@@ -161,7 +161,7 @@ class RunningPredicatesAgreeTests(unittest.TestCase):
                     # The history filter asks the same question of history_average
                     # appliances only; a charger has no projection config.
                     self.assertEqual(
-                        HelmanCoordinator._is_projected_history_action_active(
+                        is_projected_history_action_active(
                             appliance=appliance,
                             action=action,
                         ),
@@ -175,7 +175,7 @@ class RunningPredicatesAgreeTests(unittest.TestCase):
             with self.subTest(kind=appliance.kind):
                 self.assertFalse(_projects_demand(appliance, None))
                 self.assertFalse(
-                    HelmanCoordinator._is_projected_history_action_active(
+                    is_projected_history_action_active(
                         appliance=appliance,
                         action=None,
                     )

@@ -29,8 +29,8 @@ from custom_components.helman.automation.day_context import (  # noqa: E402
 from custom_components.helman.automation.optimizers.charge_hold import (  # noqa: E402
     build_charge_hold_optimizer,
 )
+from _fakes import make_optimization_context  # noqa: E402
 from custom_components.helman.automation.snapshot import (  # noqa: E402
-    OptimizationContext,
     OptimizationSnapshot,
 )
 from custom_components.helman.scheduling.schedule import (  # noqa: E402
@@ -158,7 +158,9 @@ def _make_snapshot(
     export_price_points: list[dict[str, object]] | None = None,
 ) -> OptimizationSnapshot:
     battery_state = (
-        types.SimpleNamespace(current_soc=current_soc, max_soc=100.0)
+        types.SimpleNamespace(
+            current_soc=current_soc, max_soc=100.0, nominal_capacity_kwh=10.0
+        )
         if battery_configured
         else None
     )
@@ -171,7 +173,7 @@ def _make_snapshot(
             "series": _surplus_series() if surplus_series is None else surplus_series,
         },
         grid_forecast={"status": "available", "series": []},
-        context=OptimizationContext(
+        context=make_optimization_context(
             now=REFERENCE_TIME,
             battery_state=battery_state,
             solar_forecast={"status": "available", "points": []},
@@ -188,7 +190,6 @@ def _make_snapshot(
             appliance_registry=AppliancesRuntimeRegistry(),
             when_active_hourly_energy_kwh_by_appliance_id={},
             battery_max_charge_power_kw=5.0,
-            battery_usable_capacity_kwh=10.0,
             battery_charge_efficiency=1.0,
             runtime_hours_by_appliance_id_by_local_date={},
             day_contexts=day_contexts,

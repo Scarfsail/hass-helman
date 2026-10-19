@@ -16,11 +16,11 @@ from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
-from .const import DOMAIN, INVERTER_MODE_ENTITY_ID, INVERTER_MODE_UNIQUE_ID
+from .const import INVERTER_MODE_ENTITY_ID, INVERTER_MODE_UNIQUE_ID
+from .entity import helman_device_info, remove_stale_entities
 from .scheduling.schedule import INVERTER_ACTION_KINDS
 from .scheduling.actuation import async_write_vendor_entity
 from .vendors import VendorProfile, find_mode_vendor, resolve_unique_ids
@@ -38,16 +38,13 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    coordinator = hass.data[DOMAIN]["coordinator"]
+    coordinator = entry.runtime_data
     mode_vendor = find_mode_vendor(hass, coordinator.config)
     if mode_vendor is None:
-        # Back on Custom: drop the select, or a picker would still offer it.
-        from homeassistant.helpers import entity_registry as er
-
-        registry = er.async_get(hass)
-        entity_id = registry.async_get_entity_id("select", DOMAIN, INVERTER_MODE_UNIQUE_ID)
-        if entity_id is not None:
-            registry.async_remove(entity_id)
+        # Back on Custom: drop the select.
+        remove_stale_entities(
+            hass, entry, "select", lambda unique_id: unique_id == INVERTER_MODE_UNIQUE_ID
+        )
         return
     profile, vendor_entry = mode_vendor
     async_add_entities(
@@ -75,11 +72,7 @@ class HelmanInverterModeSelect(SelectEntity, RestoreEntity):
         vendor_entry: Any | None,
     ) -> None:
         # On the one shared Helman device, as every Helman sensor is.
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, entry.entry_id)},
-            name="Helman",
-            entry_type=DeviceEntryType.SERVICE,
-        )
+        self._attr_device_info = helman_device_info(entry)
         self.entity_id = INVERTER_MODE_ENTITY_ID
         self._attr_unique_id = INVERTER_MODE_UNIQUE_ID
         self._attr_options = list(INVERTER_ACTION_KINDS)

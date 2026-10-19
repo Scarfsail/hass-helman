@@ -52,7 +52,6 @@ from .schedule import (
     format_slot_id,
     inverter_action,
     parse_slot_id,
-    prune_expired_slots,
     strip_candidate_actions,
 )
 
@@ -64,9 +63,12 @@ _INVERTER_MODE_DESCRIPTION = "Schedule mode"
 
 @dataclass(frozen=True)
 class ScheduleExecutorDependencies:
-    schedule_lock: asyncio.Lock
+    # The pruned document as of the given time, read under the schedule lock and
+    # released before it returns -- the one prune the schedule service owns.
+    read_schedule_document: Callable[[datetime], Awaitable[ScheduleDocument]]
+    # The stored document as it is, lock-free: what the actuation gate reads
+    # the execution flag from on every write.
     load_schedule_document: Callable[[], ScheduleDocument]
-    save_schedule_document: Callable[[ScheduleDocument], Awaitable[None]]
     read_schedule_control_config: Callable[[], ScheduleControlConfig | None]
     read_battery_state: Callable[[], BatteryLiveState | None]
     read_appliances_registry: Callable[[], AppliancesRuntimeRegistry]
@@ -77,7 +79,6 @@ class ScheduleExecutorDependencies:
     check_reality_and_maybe_replan: Callable[[datetime], Awaitable[bool]] | None = (
         None
     )
-    save_pruned_schedule_document: Callable[[ScheduleDocument], Awaitable[None]] | None = None
     announce_schedule_changed: Callable[[], None] | None = None
 
 
@@ -617,10 +618,9 @@ class ScheduleExecutor:
                 return
             # The schedule lock covers the snapshot only: reads, saves and the
             # execution toggle must stay responsive while hardware is slow.
-            async with self._dependencies.schedule_lock:
-                schedule_document = await self._load_pruned_schedule_document_locked(
-                    reference_time=request_now
-                )
+            schedule_document = await self._dependencies.read_schedule_document(
+                request_now
+            )
             await self._async_execute_snapshot(
                 schedule_document=schedule_document,
                 request_now=request_now,
@@ -717,10 +717,9 @@ class ScheduleExecutor:
 
         async with self._execution_lock:
             reference_time = self._now()
-            async with self._dependencies.schedule_lock:
-                schedule_document = await self._load_pruned_schedule_document_locked(
-                    reference_time=reference_time
-                )
+            schedule_document = await self._dependencies.read_schedule_document(
+                reference_time
+            )
             control_config = self._dependencies.read_schedule_control_config()
             if control_config is None:
                 raise ScheduleNotConfiguredError(
@@ -757,28 +756,6 @@ class ScheduleExecutor:
 
     def clear_appliance_memories(self) -> None:
         self._runtime.appliance_memories = {}
-
-    async def _load_pruned_schedule_document_locked(
-        self,
-        *,
-        reference_time: datetime,
-    ) -> ScheduleDocument:
-        schedule_document = self._dependencies.load_schedule_document()
-        pruned_slots = prune_expired_slots(
-            stored_slots=schedule_document.slots,
-            reference_time=reference_time,
-        )
-        pruned_document = ScheduleDocument(
-            execution_enabled=schedule_document.execution_enabled,
-            slots=pruned_slots,
-        )
-        if pruned_document != schedule_document:
-            save_pruned = (
-                self._dependencies.save_pruned_schedule_document
-                or self._dependencies.save_schedule_document
-            )
-            await save_pruned(pruned_document)
-        return pruned_document
 
     def _set_execution_status(self, status: ScheduleExecutionStatus) -> None:
         previous = self._runtime.execution_status

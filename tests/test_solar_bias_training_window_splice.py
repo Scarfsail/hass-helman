@@ -24,8 +24,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-
-
+from tests._fakes import loaded_config_entries
 
 span_mod = importlib.import_module("custom_components.helman.recorder_statistics_span")
 series_mod = importlib.import_module("custom_components.helman.recorder_slot_energy")
@@ -276,7 +275,8 @@ def _make_hass(config: dict | None = None):
     return SimpleNamespace(
         states=SimpleNamespace(get=lambda entity_id: None),
         config=SimpleNamespace(time_zone="Europe/Prague"),
-        data={"helman": {"coordinator": SimpleNamespace(config=config or {})}},
+        data={},
+        config_entries=loaded_config_entries(SimpleNamespace(config=config or {})),
         async_add_executor_job=_executor_job,
     )
 

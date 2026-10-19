@@ -57,7 +57,7 @@ class PhasedRunTests(unittest.IsolatedAsyncioTestCase):
         places the appliance for real before ``charge_hold`` (phase 2) ever
         reads the house.
         """
-        coordinator = _FakeCoordinator(
+        coordinator = _FakeRunDeps(
             # No prior plan whatsoever -- true cold start.
             schedule_document=ScheduleDocument(execution_enabled=True),
             bundle=_make_automation_bundle(),
@@ -90,8 +90,8 @@ class PhasedRunTests(unittest.IsolatedAsyncioTestCase):
             "build_optimizer",
             side_effect=_build_optimizer_side_effect,
         ):
-            result = await AutomationRunner(
-                coordinator=coordinator,
+            result = await _make_runner(
+                coordinator,
                 automation_config=_make_automation_config(*self._optimizers()),
             ).run(reference_time=REFERENCE_TIME)
 
@@ -154,7 +154,7 @@ class PhasedRunTests(unittest.IsolatedAsyncioTestCase):
 
         outputs: list[dict] = []
         for prior_plan in prior_plans:
-            coordinator = _FakeCoordinator(
+            coordinator = _FakeRunDeps(
                 schedule_document=prior_plan,
                 bundle=_make_automation_bundle(),
                 snapshot_factory=_make_snapshot,
@@ -164,8 +164,8 @@ class PhasedRunTests(unittest.IsolatedAsyncioTestCase):
                 "build_optimizer",
                 side_effect=_build_optimizer_side_effect,
             ):
-                result = await AutomationRunner(
-                    coordinator=coordinator,
+                result = await _make_runner(
+                    coordinator,
                     automation_config=_make_automation_config(*self._optimizers()),
                 ).run(reference_time=REFERENCE_TIME)
             self.assertTrue(result.ran_automation)
@@ -231,7 +231,7 @@ class PhasedRunTests(unittest.IsolatedAsyncioTestCase):
         a ``charge_hold``-written action is visible to the appliance
         optimizer re-planning in phase 3 (earlier appliances + phase-2
         inverter plan)."""
-        coordinator = _FakeCoordinator(
+        coordinator = _FakeRunDeps(
             schedule_document=ScheduleDocument(execution_enabled=True),
             bundle=_make_automation_bundle(),
             snapshot_factory=_make_snapshot,
@@ -259,8 +259,8 @@ class PhasedRunTests(unittest.IsolatedAsyncioTestCase):
             "build_optimizer",
             side_effect=_build_optimizer_side_effect,
         ):
-            result = await AutomationRunner(
-                coordinator=coordinator,
+            result = await _make_runner(
+                coordinator,
                 automation_config=_make_automation_config(*self._optimizers()),
             ).run(reference_time=REFERENCE_TIME)
 

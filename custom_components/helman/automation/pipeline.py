@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from homeassistant.util import dt as dt_util
 
@@ -42,9 +42,10 @@ from ..scheduling.schedule import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Awaitable, Callable, Collection, Sequence
 
-    from ..coordinator import HelmanCoordinator
+    from ..scheduling.schedule import ScheduleControlConfig
+    from ..scheduling.schedule_service import ScheduleService
     from .compute_inputs import ComputeInputs
     from .config import OptimizerInstanceConfig
 
@@ -346,15 +347,74 @@ class _OptimizerExecutionError(RuntimeError):
         self.trace = trace
 
 
+class ForecastInputs(Protocol):
+    """What a run reads from the forecast side.
+
+    Every method is lock-free: the runner calls them while holding the schedule
+    lock for its whole run, and ``asyncio.Lock`` is not reentrant.
+    """
+
+    def get_automation_input_bundle(self) -> AutomationInputBundle | None:
+        """A copy of the forecasts the last refresh assembled, or None."""
+
+    async def gather_compute_inputs(
+        self, *, started_at: datetime, include_condition_flags: bool
+    ) -> ComputeInputs:
+        """Read the run-invariant live values (states, recorder) once."""
+
+
+class RunRecorder(Protocol):
+    """Where a run's day bands and condition record are kept. Lock-free."""
+
+    async def async_load_day_context_bands(self) -> dict[tuple[date, str], str]:
+        """The band each (day, optimizer) pair emitted on the previous run."""
+
+    async def async_persist_day_context_bands(
+        self,
+        *,
+        emitted: Mapping[tuple[date, str], str],
+        reference_time: datetime,
+        optimizer_ids: Collection[str],
+    ) -> None:
+        """Write the bands this run emitted, for the next run's hysteresis."""
+
+    def record_run_explanation(self, explanation: RunExplanation | None) -> None:
+        """Merge one successful run's condition record into the book."""
+
+
 class AutomationRunner:
+    """One automation run: plan against the schedule, then persist the plan.
+
+    Holds the schedule lock (:meth:`ScheduleService.locked`) from the first read
+    to the final persist, so nothing it calls under it may take it again:
+    ``forecast`` and ``recorder`` are lock-free, and the only schedule methods
+    used inside are the ones that require the lock (``save``,
+    ``persist_automation_result``). ``build_snapshot`` is
+    :func:`~..forecast.assembly.build_automation_snapshot` bound to the active
+    config; it is pure and runs in ``run_in_executor``. ``read_control_config``
+    is read at the start of :meth:`run`, inside its error boundary, and passed
+    to every snapshot build.
+    """
+
     def __init__(
         self,
         *,
-        coordinator: "HelmanCoordinator",
         automation_config: AutomationConfig,
+        schedule: ScheduleService,
+        forecast: ForecastInputs,
+        recorder: RunRecorder,
+        build_snapshot: Callable[..., OptimizationSnapshot],
+        read_control_config: Callable[[], ScheduleControlConfig | None],
+        run_in_executor: Callable[..., Awaitable[Any]],
     ) -> None:
-        self._coordinator = coordinator
         self._automation_config = automation_config
+        self._schedule = schedule
+        self._forecast = forecast
+        self._recorder = recorder
+        self._build_snapshot = build_snapshot
+        self._read_control_config = read_control_config
+        self._control_config: ScheduleControlConfig | None = None
+        self._run_in_executor = run_in_executor
 
     async def run(
         self,
@@ -372,12 +432,10 @@ class AutomationRunner:
         latest_trace: OptimizerTrace | None = None
         current_stage = "baseline_schedule"
         try:
-            async with self._coordinator._schedule_lock:
-                baseline_schedule_document = (
-                    self._coordinator._build_automation_working_schedule_document_locked(
-                        reference_time=active_reference_time
-                    )
-                )
+            self._control_config = self._read_control_config()
+            async with self._schedule.locked(
+                active_reference_time
+            ) as baseline_schedule_document:
                 schedule_document = strip_automation_owned_actions(
                     baseline_schedule_document
                 )
@@ -413,7 +471,7 @@ class AutomationRunner:
                     )
                     last_result = result
                 else:
-                    input_bundle = self._coordinator.get_automation_input_bundle()
+                    input_bundle = self._forecast.get_automation_input_bundle()
                     if input_bundle is None:
                         result = AutomationRunResult.skipped(reason="inputs_unavailable")
                         return self._finalize_result(
@@ -425,20 +483,21 @@ class AutomationRunner:
                     # Gather the run-invariant live values once; every snapshot
                     # rebuild in this run reuses them instead of re-reading
                     # hass.states / the recorder per optimizer iteration.
-                    compute_inputs = (
-                        await self._coordinator._async_gather_compute_inputs(
-                            started_at=active_reference_time,
-                            include_condition_flags=True,
-                        )
+                    compute_inputs = await self._forecast.gather_compute_inputs(
+                        started_at=active_reference_time,
+                        include_condition_flags=True,
                     )
                     # A bare house: every automation-owned lane is stripped and
                     # nothing has been restored. #272 (P2 of #270) removes the
                     # baseline-restore model entirely — the appliance lanes
                     # this run will place are decided by phase 1 of the loop
                     # below, not read back from the previous run's plan.
-                    initial_snapshot = (
-                        await self._coordinator._build_automation_snapshot_from_schedule_locked(
-                            schedule_document=schedule_document,
+                    # The build carries a full forecast rebuild, so it goes to
+                    # the executor like the loop's own per-iteration rebuilds.
+                    initial_snapshot = await self._run_in_executor(
+                        functools.partial(
+                            self._snapshot_for,
+                            schedule_document,
                             input_bundle=input_bundle,
                             reference_time=active_reference_time,
                             compute_inputs=compute_inputs,
@@ -464,7 +523,7 @@ class AutomationRunner:
                             input_bundle.original_house_forecast
                         ),
                         previous_bands=(
-                            await self._coordinator.async_load_day_context_bands()
+                            await self._recorder.async_load_day_context_bands()
                         ),
                     )
                     # Seeds the resolver for the loop below: every fresh
@@ -508,7 +567,7 @@ class AutomationRunner:
                         current_stage = "day_context_persist"
                         # Back on the event loop, so the store write is legal
                         # here and nowhere inside the loop (#264).
-                        await self._coordinator.async_persist_day_context_bands(
+                        await self._recorder.async_persist_day_context_bands(
                             emitted=execution_result.emitted_day_bands,
                             reference_time=active_reference_time,
                             optimizer_ids={
@@ -522,12 +581,12 @@ class AutomationRunner:
                         # Success path only: a failed loop takes the `except`
                         # branch above and leaves the previous good record
                         # standing rather than clobbering it with a partial one.
-                        self._coordinator.record_run_explanation(
+                        self._recorder.record_run_explanation(
                             execution_result.explanation
                         )
                         current_stage = "final_persist"
                         run_post_write_side_effects = (
-                            await self._coordinator._persist_automation_result_locked(
+                            await self._schedule.persist_automation_result(
                                 automation_result=execution_result.working_schedule_document,
                                 reference_time=active_reference_time,
                             )
@@ -540,9 +599,9 @@ class AutomationRunner:
                         last_result = result
             if run_post_write_side_effects:
                 current_stage = "post_write_side_effects"
-                await self._coordinator._async_run_post_schedule_write_side_effects(
-                    reason="automation_updated",
-                )
+                # Outside the lock: the write is persisted, execution is only
+                # requested.
+                self._schedule.request_reconcile(reason="automation_updated")
             return self._finalize_result(
                 result=result,
                 run_reason=run_reason,
@@ -579,6 +638,31 @@ class AutomationRunner:
                 run_started_at=run_started_at,
             )
 
+    def _snapshot_for(
+        self,
+        schedule_document: ScheduleDocument,
+        *,
+        input_bundle: AutomationInputBundle,
+        reference_time: datetime,
+        compute_inputs: ComputeInputs,
+        day_contexts: dict | None = None,
+    ) -> OptimizationSnapshot:
+        """Pure, hass-free: every live value comes from ``compute_inputs``.
+
+        Built against the registry pinned in ``compute_inputs``, so one run
+        never costs a projection against one version of an appliance and
+        optimizes against another.
+        """
+        return self._build_snapshot(
+            appliances_registry=compute_inputs.appliances_registry,
+            schedule_document=schedule_document,
+            input_bundle=input_bundle,
+            reference_time=reference_time,
+            compute_inputs=compute_inputs,
+            day_contexts=day_contexts,
+            control_config=self._control_config,
+        )
+
     async def _async_execute_optimizer_loop_locked(
         self,
         *,
@@ -588,7 +672,7 @@ class AutomationRunner:
         initial_snapshot: OptimizationSnapshot,
         day_contexts: dict,
         resolve_day_contexts: "Callable[..., dict]",
-        compute_inputs: ComputeInputs | None = None,
+        compute_inputs: ComputeInputs,
     ) -> _PipelineExecutionResult:
         """Run the optimizer loop off the event loop.
 
@@ -598,28 +682,21 @@ class AutomationRunner:
         executor hop and never blocks the event loop. I/O (recorder/states and
         persistence) stays on the loop, before and after this call.
         """
-        if compute_inputs is None:
-            compute_inputs = await self._coordinator._async_gather_compute_inputs(
-                started_at=reference_time,
-                include_condition_flags=True,
-            )
-        control_config = self._coordinator._read_schedule_control_config()
 
         def build_snapshot(doc: ScheduleDocument) -> OptimizationSnapshot:
-            # Pure, hass-free: every live value comes from ``compute_inputs``.
             # #272 (P2 of #270): rebuilt from ``doc`` alone — no more
             # ``demand_schedule_document`` fork, since the phased run never
             # needs to read house demand from a document other than the one
             # it just wrote.
-            return self._coordinator._build_automation_snapshot_from_schedule_pure(
-                schedule_document=doc,
+            return self._snapshot_for(
+                doc,
                 input_bundle=input_bundle,
                 reference_time=reference_time,
-                day_contexts=day_contexts,
                 compute_inputs=compute_inputs,
+                day_contexts=day_contexts,
             )
 
-        return await self._coordinator._hass.async_add_executor_job(
+        return await self._run_in_executor(
             functools.partial(
                 run_optimizer_loop_pure,
                 appliance_optimizers=self._automation_config.enabled_appliance_optimizers,
@@ -627,8 +704,8 @@ class AutomationRunner:
                 schedule_document=schedule_document,
                 initial_snapshot=initial_snapshot,
                 reference_time=reference_time,
-                control_config=control_config,
-                appliance_registry=self._coordinator._appliances_registry.current,
+                control_config=self._control_config,
+                appliance_registry=compute_inputs.appliances_registry,
                 build_snapshot=build_snapshot,
                 resolve_day_contexts=resolve_day_contexts,
             )
@@ -648,7 +725,7 @@ class AutomationRunner:
                 changed=False,
                 actions_stripped=actions_stripped,
             )
-        await self._coordinator._save_schedule_document(cleaned_schedule_document)
+        await self._schedule.save(cleaned_schedule_document)
         return _CleanupOutcome(
             changed=True,
             actions_stripped=actions_stripped,

@@ -1,5 +1,6 @@
 from __future__ import annotations
-from tests._fakes import FakeHass, make_coordinator
+from custom_components.helman.const import SIGNAL_FORECAST_PUBLISHED
+from tests._fakes import FakeConfigEntry, FakeHass, capture_signal, make_coordinator
 
 import importlib
 import asyncio
@@ -137,19 +138,15 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
     async def test_refresh_forecast_persists_canonical_solar_snapshot(self) -> None:
         coordinator_module = self._load_coordinator_module()
         coordinator = make_coordinator()
-        coordinator._hass = SimpleNamespace()
+        coordinator._hass = FakeHass()
         coordinator._active_config = {}
         coordinator._cached_forecast = None
-        coordinator._house_profile = None
-        coordinator._house_profile_trained_at = None
-        coordinator._house_profile_last_outcome = "no_training_yet"
         coordinator._slot_history = None
         coordinator._ingest_grid_export_price = Mock(
             return_value={"status": "available", "currentPrice": 2.5}
         )
         coordinator._cached_solar_forecast = None
-        coordinator._solar_forecast_sensors = []
-        coordinator._invalidate_battery_forecast_cache = Mock()
+        coordinator._invalidate_pipeline_cache = Mock()
         coordinator._async_refresh_automation_input_bundle = AsyncMock(
             return_value=True
         )
@@ -206,61 +203,98 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             solar_snapshot=solar_snapshot,
         )
 
-    async def test_refresh_forecast_republishes_registered_forecast_entities(
-        self,
-    ) -> None:
-        coordinator_module = self._load_coordinator_module()
+    def _publishing_coordinator(self):
+        """A coordinator whose forecast build runs through to the publish."""
         coordinator = make_coordinator()
-        coordinator._hass = SimpleNamespace()
         coordinator._active_config = {}
         coordinator._cached_forecast = None
-        coordinator._house_profile = None
-        coordinator._house_profile_trained_at = None
-        coordinator._house_profile_last_outcome = "no_training_yet"
         coordinator._slot_history = None
         coordinator._ingest_grid_export_price = Mock(
             return_value={"status": "available", "currentPrice": 2.5}
         )
         coordinator._cached_solar_forecast = None
-        coordinator._invalidate_battery_forecast_cache = Mock()
+        coordinator._invalidate_pipeline_cache = Mock()
         coordinator._async_refresh_automation_input_bundle = AsyncMock(
             return_value=True
         )
         coordinator._storage = SimpleNamespace(async_save_snapshots=AsyncMock())
-        forecast_entity = SimpleNamespace(
-            hass=object(),
-            entity_id="sensor.helman_solar_forecast_today",
-            async_write_ha_state=Mock(),
-        )
-        coordinator._solar_forecast_sensors = [forecast_entity]
-
-        builder_instance = SimpleNamespace(
-            build=AsyncMock(return_value={"status": "available"})
-        )
         coordinator._build_canonical_solar_forecast = Mock(
             return_value={"status": "available", "points": [], "rawPoints": []}
         )
-        raw_forecast_builder = SimpleNamespace(
-            build=AsyncMock(return_value={})
-        )
+        return coordinator
 
+    async def _build(self, coordinator, *, reason: str) -> None:
+        coordinator_module = self._load_coordinator_module()
         with (
             patch.object(
                 coordinator_module,
                 "ConsumptionForecastBuilder",
-                return_value=builder_instance,
+                return_value=SimpleNamespace(
+                    build=AsyncMock(return_value={"status": "available"})
+                ),
             ),
             patch.object(
                 coordinator_module,
                 "SolarForecastBuilder",
-                return_value=raw_forecast_builder,
+                return_value=SimpleNamespace(build=AsyncMock(return_value={})),
             ),
         ):
             await coordinator._async_build_forecast_snapshots(
-                reference_time=REFERENCE_TIME, reason="startup"
+                reference_time=REFERENCE_TIME, reason=reason
             )
 
-        forecast_entity.async_write_ha_state.assert_called_once_with()
+    @staticmethod
+    async def _added(sensor, hass):
+        """``sensor`` as the platform leaves it: on ``hass`` and subscribed."""
+        sensor.hass = hass
+        sensor.async_write_ha_state = Mock()
+        await sensor.async_added_to_hass()
+        return sensor
+
+    async def test_refresh_forecast_sends_the_publish_signal_with_its_reason(
+        self,
+    ) -> None:
+        coordinator = self._publishing_coordinator()
+        published = capture_signal(coordinator._hass, SIGNAL_FORECAST_PUBLISHED)
+
+        await self._build(coordinator, reason="startup")
+
+        self.assertEqual(published, ["startup"])
+
+    async def test_the_refresh_warms_the_pipeline_with_the_snapshots_it_built(
+        self,
+    ) -> None:
+        coordinator_module = self._load_coordinator_module()
+        for house_status, warmed in (("available", True), ("unavailable", False)):
+            with self.subTest(house_status=house_status):
+                coordinator = self._publishing_coordinator()
+                coordinator._async_current_pipeline = AsyncMock()
+                house_snapshot = {"status": house_status}
+                with (
+                    patch.object(
+                        coordinator_module,
+                        "ConsumptionForecastBuilder",
+                        return_value=SimpleNamespace(
+                            build=AsyncMock(return_value=house_snapshot)
+                        ),
+                    ),
+                    patch.object(
+                        coordinator_module,
+                        "SolarForecastBuilder",
+                        return_value=SimpleNamespace(build=AsyncMock(return_value={})),
+                    ),
+                ):
+                    await coordinator._async_build_forecast_snapshots(
+                        reference_time=REFERENCE_TIME, reason="startup"
+                    )
+
+                if warmed:
+                    coordinator._async_current_pipeline.assert_awaited_once_with(
+                        REFERENCE_TIME,
+                        in_flight=(house_snapshot, coordinator._cached_solar_forecast),
+                    )
+                else:
+                    coordinator._async_current_pipeline.assert_not_awaited()
 
     async def test_battery_forecast_sensors_publish_only_on_the_slot_aligned_rebuild(
         self,
@@ -270,135 +304,59 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         # would drag HA's time-weighted hourly mean low. The five battery/grid
         # current-slot sensors therefore publish on reason="slot_refresh" alone;
         # the solar entities keep publishing on every refresh.
-        coordinator_module = self._load_coordinator_module()
-
-        def _fresh_coordinator():
-            coordinator = make_coordinator()
-            coordinator._hass = SimpleNamespace()
-            coordinator._active_config = {}
-            coordinator._cached_forecast = None
-            coordinator._house_profile = None
-            coordinator._house_profile_trained_at = None
-            coordinator._house_profile_last_outcome = "no_training_yet"
-            coordinator._slot_history = None
-            coordinator._ingest_grid_export_price = Mock(
-                return_value={"status": "available", "currentPrice": 2.5}
-            )
-            coordinator._cached_solar_forecast = None
-            coordinator._invalidate_battery_forecast_cache = Mock()
-            coordinator._async_refresh_automation_input_bundle = AsyncMock(
-                return_value=True
-            )
-            coordinator._storage = SimpleNamespace(
-                async_save_snapshots=AsyncMock()
-            )
-            coordinator._solar_forecast_sensors = [
-                SimpleNamespace(
-                    hass=object(),
-                    entity_id="sensor.helman_solar_forecast_today",
-                    async_write_ha_state=Mock(),
+        sensor_module = importlib.import_module("custom_components.helman.sensor")
+        entry = FakeConfigEntry()
+        for reason, battery_writes in (("solar_bias_changed", 0), ("slot_refresh", 1)):
+            with self.subTest(reason=reason):
+                coordinator = self._publishing_coordinator()
+                solar = await self._added(
+                    sensor_module.HelmanSolarForecastEnergySensor(
+                        coordinator, entry, "today", day_offset=0
+                    ),
+                    coordinator._hass,
                 )
-            ]
-            coordinator._battery_forecast_current_sensors = [
-                SimpleNamespace(
-                    hass=object(),
-                    entity_id="sensor.helman_grid_export_forecast_current",
-                    async_write_ha_state=Mock(),
+                battery = await self._added(
+                    sensor_module.HelmanGridExportForecastCurrentSensor(coordinator, entry),
+                    coordinator._hass,
                 )
-            ]
-            coordinator._build_canonical_solar_forecast = Mock(
-                return_value={"status": "available", "points": [], "rawPoints": []}
-            )
-            return coordinator
 
-        builder_instance = SimpleNamespace(
-            build=AsyncMock(return_value={"status": "available"})
-        )
-        raw_forecast_builder = SimpleNamespace(
-            build=AsyncMock(return_value={})
-        )
-        with (
-            patch.object(
-                coordinator_module,
-                "ConsumptionForecastBuilder",
-                return_value=builder_instance,
-            ),
-            patch.object(
-                coordinator_module,
-                "SolarForecastBuilder",
-                return_value=raw_forecast_builder,
-            ),
-        ):
-            off_beat = _fresh_coordinator()
-            await off_beat._async_build_forecast_snapshots(
-                reference_time=REFERENCE_TIME, reason="solar_bias_changed"
-            )
-            off_beat._solar_forecast_sensors[0].async_write_ha_state.assert_called_once_with()
-            off_beat._battery_forecast_current_sensors[
-                0
-            ].async_write_ha_state.assert_not_called()
+                await self._build(coordinator, reason=reason)
 
-            on_beat = _fresh_coordinator()
-            await on_beat._async_build_forecast_snapshots(
-                reference_time=REFERENCE_TIME, reason="slot_refresh"
-            )
-            on_beat._battery_forecast_current_sensors[
-                0
-            ].async_write_ha_state.assert_called_once_with()
+                solar.async_write_ha_state.assert_called_once_with()
+                self.assertEqual(battery.async_write_ha_state.call_count, battery_writes)
 
     async def test_refresh_forecast_skips_unadded_forecast_entities(self) -> None:
-        coordinator_module = self._load_coordinator_module()
-        coordinator = make_coordinator()
-        coordinator._hass = SimpleNamespace()
-        coordinator._active_config = {}
-        coordinator._cached_forecast = None
-        coordinator._house_profile = None
-        coordinator._house_profile_trained_at = None
-        coordinator._house_profile_last_outcome = "no_training_yet"
-        coordinator._slot_history = None
-        coordinator._ingest_grid_export_price = Mock(
-            return_value={"status": "available", "currentPrice": 2.5}
+        sensor_module = importlib.import_module("custom_components.helman.sensor")
+        coordinator = self._publishing_coordinator()
+        sensor = sensor_module.HelmanSolarForecastEnergySensor(
+            coordinator, FakeConfigEntry(), "today", day_offset=0
         )
-        coordinator._cached_solar_forecast = None
-        coordinator._invalidate_battery_forecast_cache = Mock()
-        coordinator._async_refresh_automation_input_bundle = AsyncMock(
-            return_value=True
-        )
-        coordinator._storage = SimpleNamespace(async_save_snapshots=AsyncMock())
-        forecast_entity = SimpleNamespace(
-            hass=None,
-            entity_id="sensor.helman_solar_forecast_today",
-            async_write_ha_state=Mock(),
-        )
-        coordinator._solar_forecast_sensors = [forecast_entity]
+        sensor.async_write_ha_state = Mock()
 
-        builder_instance = SimpleNamespace(
-            build=AsyncMock(return_value={"status": "available"})
-        )
-        coordinator._build_canonical_solar_forecast = Mock(
-            return_value={"status": "available", "points": [], "rawPoints": []}
-        )
-        raw_forecast_builder = SimpleNamespace(
-            build=AsyncMock(return_value={})
-        )
+        await self._build(coordinator, reason="startup")
 
-        with (
-            patch.object(
-                coordinator_module,
-                "ConsumptionForecastBuilder",
-                return_value=builder_instance,
-            ),
-            patch.object(
-                coordinator_module,
-                "SolarForecastBuilder",
-                return_value=raw_forecast_builder,
-            ),
-        ):
-            await coordinator._async_build_forecast_snapshots(
-                reference_time=REFERENCE_TIME, reason="startup"
+        sensor.async_write_ha_state.assert_not_called()
+
+    async def test_a_raising_sensor_does_not_stop_the_others_publishing(self) -> None:
+        sensor_module = importlib.import_module("custom_components.helman.sensor")
+        coordinator = self._publishing_coordinator()
+        entry = FakeConfigEntry()
+        first, second = [
+            await self._added(
+                sensor_module.HelmanSolarForecastEnergySensor(
+                    coordinator, entry, key, day_offset=offset
+                ),
+                coordinator._hass,
             )
+            for key, offset in (("today", 0), ("tomorrow", 1))
+        ]
+        first.async_write_ha_state.side_effect = RuntimeError("write failed")
 
-        forecast_entity.async_write_ha_state.assert_not_called()
+        with self.assertLogs("homeassistant.helpers.dispatcher", "ERROR"):
+            await self._build(coordinator, reason="startup")
+
+        first.async_write_ha_state.assert_called_once_with()
+        second.async_write_ha_state.assert_called_once_with()
 
     async def test_get_forecast_serves_previous_slot_snapshots_without_rebuilding(
         self,
@@ -411,7 +369,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         """
         coordinator_module = self._load_coordinator_module()
         coordinator = make_coordinator()
-        coordinator._hass = SimpleNamespace()
+        coordinator._hass = FakeHass()
         coordinator._active_config = {}
         # Both snapshots are from the slot before the one `REFERENCE_TIME`
         # (21:16) falls in.
@@ -435,11 +393,11 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
                 }
             }
         }
-        coordinator._has_matching_forecast_snapshot = Mock(return_value=True)
-        coordinator._invalidate_battery_forecast_cache = Mock()
+        coordinator._invalidate_pipeline_cache = Mock()
         coordinator._async_refresh_forecast = AsyncMock()
-        coordinator._async_get_appliance_forecast_pipeline = AsyncMock(
+        coordinator._async_current_pipeline = AsyncMock(
             return_value=SimpleNamespace(
+                original_house_forecast=coordinator._cached_forecast,
                 adjusted_house_forecast={"status": "available"},
                 battery_forecast={"status": "available", "series": []},
             )
@@ -454,27 +412,21 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["solar"]["points"][0]["value"], 900.5)
         self.assertIs(coordinator._cached_forecast["status"], "available")
 
-    async def test_get_forecast_blanks_house_snapshot_when_fingerprint_changed(
+    async def test_get_forecast_without_a_house_snapshot_reports_it_unavailable(
         self,
     ) -> None:
-        """A config change is not staleness: the old answer must not be served."""
+        """No snapshot -- a first start, or one setup dropped -- is "never built".
+
+        A config change is not staleness: setup drops a persisted snapshot that
+        answers a different question (see the next test), and until the refresh
+        builds one the pipeline runs on the unavailable placeholder.
+        """
         coordinator_module = self._load_coordinator_module()
         coordinator = make_coordinator()
-        coordinator._hass = SimpleNamespace()
-        coordinator._active_config = {}
-        coordinator._cached_forecast = _make_matching_house_snapshot(
-            coordinator_module,
-            config_fingerprint="stale-fingerprint",
-        )
+        coordinator._hass = FakeHass()
+        coordinator._cached_forecast = None
         coordinator._cached_solar_forecast = None
         coordinator._storage = SimpleNamespace(config={})
-        coordinator._house_profile = None
-        coordinator._house_profile_trained_at = None
-        coordinator._house_profile_last_outcome = "no_training_yet"
-        coordinator._slot_history = None
-        coordinator._ingest_grid_export_price = Mock(
-            return_value={"status": "available", "currentPrice": 2.5}
-        )
         coordinator._active_config = {
             "energy_nodes": {
                 "house": {
@@ -482,10 +434,16 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
                 }
             }
         }
-        coordinator._invalidate_battery_forecast_cache = Mock()
-        coordinator._async_refresh_forecast = AsyncMock()
-        coordinator._async_get_appliance_forecast_pipeline = AsyncMock(
+        coordinator._async_prepare_forecast_pipeline_inputs = AsyncMock(
             return_value=SimpleNamespace(
+                schedule_signature=(),
+                appliance_schedule_signature=(),
+                schedule_effective_signature=None,
+            )
+        )
+        coordinator._async_build_appliance_forecast_pipeline = AsyncMock(
+            side_effect=lambda **kwargs: SimpleNamespace(
+                original_house_forecast=kwargs["house_forecast"],
                 adjusted_house_forecast={"status": "unavailable"},
                 battery_forecast={"status": "unavailable", "series": []},
             )
@@ -498,36 +456,46 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         # unavailable status already says so, and a banner on top of it
         # would fire on every card in the seconds after a restart.
         self.assertIs(result["solar"]["staleness"]["isStale"], False)
-        self.assertIsNone(coordinator._cached_forecast)
-        coordinator._invalidate_battery_forecast_cache.assert_called_once_with()
         house_forecast = (
-            coordinator._async_get_appliance_forecast_pipeline.await_args.kwargs[
+            coordinator._async_build_appliance_forecast_pipeline.await_args.kwargs[
                 "house_forecast"
             ]
         )
         self.assertEqual(house_forecast["status"], "unavailable")
-
-        # ...and the next refresh (a config save reloads the entry, which
-        # runs the startup refresh) puts a matching snapshot back.
-        rebuilt = _make_matching_house_snapshot(
-            coordinator_module,
-            config_fingerprint=coordinator_module.read_house_forecast_request(
+        self.assertEqual(
+            house_forecast["configFingerprint"],
+            coordinator_module.read_house_forecast_request(
                 coordinator._active_config
             ).config_fingerprint,
         )
 
-        async def _rebuild(*, reason: str, reference_time=None) -> None:
-            coordinator._cached_forecast = rebuilt
-
-        coordinator._async_refresh_forecast = AsyncMock(side_effect=_rebuild)
-        await coordinator._async_refresh_forecast(reason="startup")
-
-        self.assertIs(
-            await coordinator._async_get_canonical_house_forecast(
-                reference_time=REFERENCE_TIME
-            ),
-            rebuilt,
+    def test_a_snapshot_from_another_config_does_not_match(self) -> None:
+        """What setup drops: a persisted snapshot whose fingerprint has moved."""
+        coordinator_module = self._load_coordinator_module()
+        coordinator = make_coordinator()
+        request = coordinator_module.read_house_forecast_request(
+            {
+                "energy_nodes": {
+                    "house": {
+                        "forecast": {"total_energy_entity_id": "sensor.house_total"}
+                    }
+                }
+            }
         )
+
+        def matches(config_fingerprint: str) -> bool:
+            coordinator._cached_forecast = _make_matching_house_snapshot(
+                coordinator_module, config_fingerprint=config_fingerprint
+            )
+            return coordinator._has_matching_forecast_snapshot(
+                total_energy_entity_id=request.total_energy_entity_id,
+                training_window_days=request.training_window_days,
+                min_history_days=request.min_history_days,
+                config_fingerprint=request.config_fingerprint,
+            )
+
+        self.assertFalse(matches("stale-fingerprint"))
+        self.assertTrue(matches(request.config_fingerprint))
 
     async def test_get_forecast_reports_staleness_for_both_halves(self) -> None:
         """The banner's data: under an hour is healthy, past it is a fault."""
@@ -538,7 +506,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
                     REFERENCE_TIME - timedelta(minutes=age_minutes)
                 ).isoformat()
                 coordinator = make_coordinator()
-                coordinator._hass = SimpleNamespace()
+                coordinator._hass = FakeHass()
                 coordinator._active_config = {}
                 coordinator._cached_forecast = {
                     "status": "available",
@@ -558,12 +526,10 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
                         }
                     }
                 }
-                coordinator._has_matching_forecast_snapshot = Mock(
-                    return_value=True
-                )
-                coordinator._invalidate_battery_forecast_cache = Mock()
-                coordinator._async_get_appliance_forecast_pipeline = AsyncMock(
+                coordinator._invalidate_pipeline_cache = Mock()
+                coordinator._async_current_pipeline = AsyncMock(
                     return_value=SimpleNamespace(
+                        original_house_forecast=coordinator._cached_forecast,
                         adjusted_house_forecast={"status": "available"},
                         battery_forecast={"status": "available", "series": []},
                     )
@@ -662,7 +628,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
     async def test_get_forecast_uses_cached_corrected_points_without_rebuilding_solar_snapshot(self) -> None:
         coordinator_module = self._load_coordinator_module()
         coordinator = make_coordinator()
-        coordinator._hass = SimpleNamespace()
+        coordinator._hass = FakeHass()
         coordinator._active_config = {}
         coordinator._forecast_cache_revision = 0
         coordinator._cached_forecast = {"status": "available"}
@@ -685,9 +651,6 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             },
         }
         coordinator._storage = SimpleNamespace(config={})
-        coordinator._house_profile = None
-        coordinator._house_profile_trained_at = None
-        coordinator._house_profile_last_outcome = "no_training_yet"
         coordinator._slot_history = None
         coordinator._ingest_grid_export_price = Mock(
             return_value={"status": "available", "currentPrice": 2.5}
@@ -701,8 +664,9 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         }
         coordinator._has_compatible_forecast_snapshot = Mock(return_value=True)
         coordinator._async_refresh_forecast_and_request_automation = AsyncMock()
-        coordinator._async_get_appliance_forecast_pipeline = AsyncMock(
+        coordinator._async_current_pipeline = AsyncMock(
             return_value=SimpleNamespace(
+                original_house_forecast=coordinator._cached_forecast,
                 adjusted_house_forecast={"status": "available"},
                 battery_forecast={"status": "available", "series": []},
             )
@@ -794,7 +758,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
     async def test_build_canonical_solar_forecast_keeps_raw_points_and_corrected_points_separate(self) -> None:
         coordinator_module = self._load_coordinator_module()
         coordinator = make_coordinator()
-        coordinator._hass = SimpleNamespace()
+        coordinator._hass = FakeHass()
         coordinator._active_config = {}
 
         raw_points = [
@@ -855,16 +819,12 @@ class DegradedSolarRebuildTests(unittest.IsolatedAsyncioTestCase):
         coordinator._hass = FakeHass()
         coordinator._active_config = {}
         coordinator._cached_forecast = None
-        coordinator._house_profile = None
-        coordinator._house_profile_trained_at = None
-        coordinator._house_profile_last_outcome = "no_training_yet"
         coordinator._slot_history = None
         coordinator._ingest_grid_export_price = Mock(
             return_value={"status": "available", "currentPrice": 2.5}
         )
         coordinator._cached_solar_forecast = cached_solar
-        coordinator._solar_forecast_sensors = []
-        coordinator._invalidate_battery_forecast_cache = Mock()
+        coordinator._invalidate_pipeline_cache = Mock()
         coordinator._async_refresh_automation_input_bundle = AsyncMock(
             return_value=True
         )
@@ -1023,13 +983,13 @@ class DegradedSolarRebuildTests(unittest.IsolatedAsyncioTestCase):
                 }
             }
         }
-        coordinator._has_matching_forecast_snapshot = Mock(return_value=True)
         coordinator._cached_forecast = {
             "status": "available",
             "generatedAt": generated_at,
         }
-        coordinator._async_get_appliance_forecast_pipeline = AsyncMock(
+        coordinator._async_current_pipeline = AsyncMock(
             return_value=SimpleNamespace(
+                original_house_forecast=coordinator._cached_forecast,
                 adjusted_house_forecast={"status": "available"},
                 battery_forecast={"status": "available", "series": []},
             )

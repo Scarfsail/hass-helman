@@ -40,8 +40,8 @@ from custom_components.helman.automation.optimizers.charge_from_grid import (  #
     _build_import_band_timeline,
     build_charge_from_grid_optimizer,
 )
+from _fakes import make_optimization_context  # noqa: E402
 from custom_components.helman.automation.snapshot import (  # noqa: E402
-    OptimizationContext,
     OptimizationSnapshot,
 )
 from custom_components.helman.scheduling.schedule import (  # noqa: E402
@@ -136,7 +136,10 @@ def _make_snapshot(
 ) -> OptimizationSnapshot:
     battery_state = (
         types.SimpleNamespace(
-            current_soc=50.0, min_soc=10.0, max_soc=battery_max_soc
+            current_soc=50.0,
+            min_soc=10.0,
+            max_soc=battery_max_soc,
+            nominal_capacity_kwh=10.0,
         )
         if battery_configured
         else None
@@ -146,7 +149,7 @@ def _make_snapshot(
         adjusted_house_forecast={"status": "available", "series": []},
         battery_forecast={"status": "available", "series": soc_series},
         grid_forecast={"status": "available", "series": []},
-        context=OptimizationContext(
+        context=make_optimization_context(
             now=now,
             battery_state=battery_state,
             solar_forecast={"status": "available", "points": []},
@@ -159,7 +162,6 @@ def _make_snapshot(
             appliance_registry=AppliancesRuntimeRegistry(),
             when_active_hourly_energy_kwh_by_appliance_id={},
             battery_max_charge_power_kw=5.0,
-            battery_usable_capacity_kwh=10.0,
             battery_charge_efficiency=1.0,
             runtime_hours_by_appliance_id_by_local_date={},
             day_contexts=day_contexts or {DAY: _day_context(bands)},
@@ -488,17 +490,23 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
             snapshot,
             context=replace(
                 snapshot.context,
-                battery_state=BatteryLiveState(
-                    current_remaining_energy_kwh=5.0,
-                    current_soc=50.0,
-                    min_soc=10.0,
-                    max_soc=battery_max_soc,
-                    nominal_capacity_kwh=10.0,
-                    min_energy_kwh=1.0,
-                    max_energy_kwh=10.0 * battery_max_soc / 100,
+                live=replace(
+                    snapshot.context.live,
+                    battery_live_state=BatteryLiveState(
+                        current_remaining_energy_kwh=5.0,
+                        current_soc=50.0,
+                        min_soc=10.0,
+                        max_soc=battery_max_soc,
+                        nominal_capacity_kwh=10.0,
+                        min_energy_kwh=1.0,
+                        max_energy_kwh=10.0 * battery_max_soc / 100,
+                    ),
                 ),
-                battery_max_discharge_power_kw=5.0,
-                battery_discharge_efficiency=1.0,
+                battery=replace(
+                    snapshot.context.battery,
+                    max_discharge_power_w=5000.0,
+                    discharge_efficiency=1.0,
+                ),
             ),
         )
         config = _make_config()

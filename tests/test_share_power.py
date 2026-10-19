@@ -5,14 +5,15 @@ the breaker's *own* power — its reading minus its metered children's — split
 among whichever of them are running in the ratio of their learned power (evenly
 before any is learned), and the breaker's remainder is own power minus those
 shares. The tree is built by the real tree builder and the
-split computed by the real coordinator, so the wiring between the two is what
+split computed by the real live tracker, so the wiring between the two is what
 is tested, not a hand-written tree.
 """
 
 from __future__ import annotations
 
 from custom_components.helman.tree_builder import TreeIndex
-from tests._fakes import make_coordinator
+from custom_components.helman.const import SIGNAL_LIVE_TICK
+from tests._fakes import FakeHass, capture_signal, make_live_tracker
 
 import asyncio
 import importlib
@@ -20,7 +21,6 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
-coordinator_module = importlib.import_module("custom_components.helman.coordinator")
 tree_builder = importlib.import_module("custom_components.helman.tree_builder")
 recorder_module = importlib.import_module(
     "custom_components.helman.appliance_runtime_history"
@@ -81,15 +81,7 @@ class _States:
         return SimpleNamespace(state=raw, attributes={})
 
 
-class _Sensor:
-    def __init__(self) -> None:
-        self.values: list[float | None] = []
-
-    def update_value(self, watts: float | None) -> None:
-        self.values.append(watts)
-
-
-def _make_coordinator(
+def _make_tracker(
     states: dict[str, str],
     *,
     metered_child: bool = False,
@@ -105,19 +97,13 @@ def _make_coordinator(
             )
         },
     }
-    hass = SimpleNamespace(states=_States(states))
+    hass = FakeHass()
+    hass.states = _States(states)
     tree = asyncio.run(tree_builder.HelmanTreeBuilder(hass, config).build()).tree
 
-    c = make_coordinator()
-    c._active_config = config
-    c._hass = hass
-    c._cached_tree = tree
-    c._unmeasured_raw_history = {}
-    c._power_sensor_ids = list(TreeIndex.from_tree(tree).power_sensor_ids)
-    c._source_ratio_entity_ids = {}
-    c._shared_meter_weights = dict(weights or {})
-    c._init_buffers(tree, TreeIndex.from_tree(tree))
-    return c
+    tracker = make_live_tracker(hass, config, weights=weights)
+    tracker._init_buffers(tree, TreeIndex.from_tree(tree))
+    return tracker
 
 
 def _tick(c) -> tuple[dict, dict]:
@@ -134,7 +120,7 @@ class SharePowerTests(unittest.TestCase):
         running: tuple[str, ...],
         *,
         extra: dict[str, str] | None = None,
-        **coordinator_options,
+        **tracker_options,
     ):
         states = {
             HOUSE: "3000",
@@ -142,13 +128,13 @@ class SharePowerTests(unittest.TestCase):
             **{f"climate.{room}": "heat" if room in running else "off" for room in ROOMS},
             **(extra or {}),
         }
-        c = _make_coordinator(
-            states, metered_child=HEATER_POWER in states, **coordinator_options
+        c = _make_tracker(
+            states, metered_child=HEATER_POWER in states, **tracker_options
         )
         return c, _tick(c)
 
     def test_power_reading_converts_live_units_before_polarity(self) -> None:
-        c = _make_coordinator({HOUSE: "2.4"})
+        c = _make_tracker({HOUSE: "2.4"})
         for unit, expected in (("kW", 2400), ("KW", 2400), ("kw", 2400), ("MW", 2400000), ("mW", None), ("W", 2.4), ("w", 2.4), (None, 2.4), ("VA", None)):
             with self.subTest(unit=unit):
                 c._hass.states.get = lambda entity_id: SimpleNamespace(
@@ -157,8 +143,8 @@ class SharePowerTests(unittest.TestCase):
                 self.assertEqual(c._read_power_or_none(HOUSE, "negative"), expected)
 
     def test_tick_converts_mixed_units_before_computing_remainder(self) -> None:
-        c = _make_coordinator({HOUSE: "2.4", BREAKER_POWER: "150", HEATER_POWER: "500"})
-        house = c._cached_tree["consumers"][0]
+        c = _make_tracker({HOUSE: "2.4", BREAKER_POWER: "150", HEATER_POWER: "500"})
+        house = c.tree["consumers"][0]
         house["children"] = [
             {"id": "a", "powerSensorId": BREAKER_POWER, "children": []},
             {"id": "b", "powerSensorId": HEATER_POWER, "children": []},
@@ -171,18 +157,13 @@ class SharePowerTests(unittest.TestCase):
                 state.attributes["unit_of_measurement"] = "kW"
             return state
         c._hass.states.get = get
-        c._init_buffers(c._cached_tree, TreeIndex.from_tree(c._cached_tree))
-        c._unmeasured_sensors = {house["id"]: _Sensor()}
-        c._share_sensors = {}
-        c._battery_time_to_full = c._battery_time_to_empty = None
-        c._consumption_total_sensor = c._production_total_sensor = None
-        c._house_consumption_sensors = []
-        c._source_ratio_sensors = {}
+        c._init_buffers(c.tree, TreeIndex.from_tree(c.tree))
         c._source_sensor_ids = []
+        sent = capture_signal(c._hass, SIGNAL_LIVE_TICK)
 
         c._tick(datetime(2026, 9, 26, 12, 0, 0))
 
-        self.assertEqual(c._unmeasured_sensors[house["id"]].values, [1750.0])
+        self.assertEqual(sent[0]["sensor.house_rest"], 1750.0)
 
     def test_no_child_running_leaves_everything_on_the_remainder(self) -> None:
         _c, (remainder, shares) = self._run(())
@@ -267,11 +248,10 @@ class SharePowerTests(unittest.TestCase):
         # No power sensor, so no remainder node: the shares still get a value,
         # and it is unavailable, not a sensor stuck at "unknown".
         c, _ = self._run(("obyvak",))
-        del c._active_config["devices"]["consumers"][0]["consumption"]["power_entity_id"]
-        c._cached_tree = asyncio.run(
-            tree_builder.HelmanTreeBuilder(c._hass, c._active_config).build()
-        ).tree
-        c._init_buffers(c._cached_tree, TreeIndex.from_tree(c._cached_tree))
+        config = c._read_config()
+        del config["devices"]["consumers"][0]["consumption"]["power_entity_id"]
+        tree = asyncio.run(tree_builder.HelmanTreeBuilder(c._hass, config).build()).tree
+        c._init_buffers(tree, TreeIndex.from_tree(tree))
 
         unmeasured, shares = c._compute_derived_powers()
 
@@ -283,18 +263,13 @@ class SharePowerTests(unittest.TestCase):
 
     def test_the_tick_publishes_unavailable_and_records_zero(self) -> None:
         c, _ = self._run(("obyvak",), extra={HEATER_POWER: "unavailable"})
-        c._unmeasured_sensors = {BREAKER: _Sensor()}
-        c._share_sensors = {f"klima-{room}": _Sensor() for room in ROOMS}
-        c._battery_time_to_full = c._battery_time_to_empty = None
-        c._consumption_total_sensor = c._production_total_sensor = None
-        c._house_consumption_sensors = []
-        c._source_ratio_sensors = {}
         c._source_sensor_ids = []
+        sent = capture_signal(c._hass, SIGNAL_LIVE_TICK)
 
         c._tick(datetime(2026, 9, 26, 12, 0, 0))
 
-        self.assertEqual(c._unmeasured_sensors[BREAKER].values, [None])
-        self.assertEqual(c._share_sensors["klima-obyvak"].values, [None])
+        self.assertIsNone(sent[0][REMAINDER])
+        self.assertIsNone(sent[0][_share("obyvak")])
         self.assertEqual(list(c._power_history[_share("obyvak")]), [0.0])
         self.assertEqual(list(c._power_history[REMAINDER]), [0.0])
 
@@ -321,11 +296,13 @@ class RunningPredicateTests(unittest.TestCase):
                             active_states=member.active_states,
                         )
                     )
-                    c = make_coordinator()
-                    c._hass = SimpleNamespace(
-                        states=SimpleNamespace(
-                            get=lambda _entity_id, value=value: SimpleNamespace(state=value)
-                        )
+                    c = make_live_tracker(
+                        SimpleNamespace(
+                            states=SimpleNamespace(
+                                get=lambda _entity_id, value=value: SimpleNamespace(state=value)
+                            )
+                        ),
+                        {},
                     )
                     c._share_running_signals = {"device": (entity_id, activity)}
 

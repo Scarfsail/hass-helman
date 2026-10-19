@@ -19,20 +19,31 @@ from custom_components.helman.node_details import (
 )
 from custom_components.helman.node_details import day_stats
 from custom_components.helman.vendors import PROFILES, DeviceTelemetry
+from custom_components.helman.ws_common import loaded_coordinator
+from tests._fakes import loaded_config_entries
 
 def resolve_detail_telemetry(hass, config):
     return {}
 
 
 async def async_get_node_detail(hass, config, **kwargs):
-    coordinator = getattr(hass, "data", {}).get("helman", {}).get("coordinator")
+    coordinator = loaded_coordinator(hass)
     ctx = NodeDetailContext(
         config=config,
         telemetry=resolve_detail_telemetry(hass, config),
         device_report=getattr(coordinator, "async_device_report", None),
-        house_profile=getattr(coordinator, "house_profile", (None, None)),
+        house_profile=(
+            coordinator.training.served_house_profile
+            if hasattr(coordinator, "training")
+            else (None, None)
+        ),
     )
-    return await get_detail(hass, ctx, **kwargs)
+    # No entity registry here: a Helman sensor is found at the id it is created under.
+    with patch(
+        "custom_components.helman.node_details.battery.helman_entity_id",
+        side_effect=lambda _hass, _domain, _unique_id, fallback: fallback,
+    ):
+        return await get_detail(hass, ctx, **kwargs)
 
 
 PRAGUE = ZoneInfo("Europe/Prague")
@@ -87,7 +98,8 @@ def fake_hass(states, unit="°C"):
                 if entity_id in states
                 else None
             )
-        )
+        ),
+        config_entries=loaded_config_entries(None),
     )
 
 
@@ -350,7 +362,7 @@ def modes_section(history, *, live=None, cfg=None, tele=None):
     ):
         payload = asyncio.run(
             async_get_node_detail(
-                NS(states=NS(get=live_states.get)),
+                NS(states=NS(get=live_states.get), config_entries=loaded_config_entries(None)),
                 config() if cfg is None else cfg,
                 node="inverter",
                 device_id=None,
@@ -627,7 +639,16 @@ def test_websocket_errors_carry_the_registry_code():
         send_result=lambda *args: sent.append(("result", args)),
         send_error=lambda msg_id, code, message: sent.append(("error", code)),
     )
-    hass = NS(data={"helman": {"coordinator": NS(config=config(), vendor_telemetry={}, async_device_report=None, house_profile=(None, None))}})
+    hass = NS(
+        config_entries=loaded_config_entries(
+            NS(
+                config=config(),
+                live=NS(vendor_telemetry={}),
+                async_device_report=None,
+                training=NS(served_house_profile=(None, None)),
+            )
+        )
+    )
 
     asyncio.run(
         websockets_module.ws_get_node_detail.__wrapped__(
@@ -934,7 +955,7 @@ def battery_detail(*, cfg=None, tele=None, states=None, section=None, report=Non
 
     hass = NS(
         states=states or battery_states(),
-        data={"helman": {"coordinator": NS(async_device_report=device_report)}},
+        config_entries=loaded_config_entries(NS(async_device_report=device_report)),
     )
     with patch(
         "test_node_detail.resolve_detail_telemetry",
@@ -1195,7 +1216,7 @@ def solar_detail(*, cfg=None, tele=None, section=None, day_stats_result=None, st
         return report
 
     hass = fake_hass(states or {})
-    hass.data = {"helman": {"coordinator": NS(async_device_report=device_report)}}
+    hass.config_entries = loaded_config_entries(NS(async_device_report=device_report))
     with (
         patch(
             "test_node_detail.resolve_detail_telemetry",
@@ -1530,7 +1551,9 @@ def flows_detail(node, report):
         reports.append((name, query))
         return report
 
-    hass = NS(states={}, data={"helman": {"coordinator": NS(async_device_report=device_report)}})
+    hass = NS(
+        states={}, config_entries=loaded_config_entries(NS(async_device_report=device_report))
+    )
     payload = asyncio.run(
         async_get_node_detail(hass, config(), node=node, device_id=None, section="flows", now=NOW)
     )
@@ -1694,12 +1717,9 @@ def house_detail(
         return report
 
     hass = fake_hass({})
-    hass.data = {
-        "helman": {
-            "coordinator": coordinator
-            or NS(async_device_report=device_report, house_profile=(None, None))
-        }
-    }
+    hass.config_entries = loaded_config_entries(
+        coordinator or NS(async_device_report=device_report)
+    )
     with (
         patch(
             "test_node_detail.resolve_detail_telemetry",
@@ -2048,7 +2068,9 @@ def test_the_learned_profile_is_the_forecasts_base_load_monday_first():
     bands = [ZERO_BAND] * 168
     bands[1 * 24 + 18] = ForecastBand(1.25, 1.0, 1.5)
     profile = NS(history_days=42, non_deferrable=bands)
-    coordinator = NS(house_profile=(profile, "2026-10-10T03:00:00+02:00"))
+    coordinator = NS(
+        training=NS(served_house_profile=(profile, "2026-10-10T03:00:00+02:00"))
+    )
     payload, _ = house_detail(section="pattern", coordinator=coordinator)
 
     learned = payload["profile"]
@@ -2128,7 +2150,7 @@ def ev_detail(
         states[EV_RUN_MODE] = NS(state=run_mode, attributes={}, last_changed=CHARGING_SINCE)
     hass = NS(
         states=NS(get=states.get),
-        data={"helman": {"coordinator": NS(async_device_report=device_report)}},
+        config_entries=loaded_config_entries(NS(async_device_report=device_report)),
     )
     with patch(
         "test_node_detail.resolve_detail_telemetry",
@@ -2363,7 +2385,7 @@ def test_the_charging_stretches_are_read_through_the_one_state_history_read():
     ):
         segment = asyncio.run(
             async_get_node_detail(
-                NS(states=NS(get={EV_RUN_MODE: NS(state="Charging", attributes={}, last_changed=CHARGING_SINCE)}.get)),
+                NS(states=NS(get={EV_RUN_MODE: NS(state="Charging", attributes={}, last_changed=CHARGING_SINCE)}.get), config_entries=loaded_config_entries(None)),
                 ev_config(),
                 node="ev_charger",
                 device_id="garage-ev",

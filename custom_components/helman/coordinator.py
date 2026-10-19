@@ -3,22 +3,19 @@ from __future__ import annotations
 import asyncio
 import functools
 import logging
-import time
-from collections import OrderedDict, deque
+from collections import OrderedDict
 from collections.abc import Callable, Collection, Coroutine, Mapping, Sequence
 from copy import deepcopy
-from dataclasses import dataclass
-from datetime import date, datetime, timedelta, timezone
-from statistics import median
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass, replace
+from datetime import date, datetime, timedelta
+from typing import TYPE_CHECKING, Any, NamedTuple
 from zoneinfo import ZoneInfo
 
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.event import (
-    async_track_time_change,
-    async_track_time_interval,
-)
+from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.helpers.event import async_track_time_change
 from homeassistant.helpers.start import async_at_started
 from homeassistant.util import dt as dt_util
 
@@ -29,12 +26,9 @@ from .appliance_runtime_history import (
 from .appliances.climate_appliance import ClimateApplianceRuntime
 from .appliances.config import build_appliances_runtime_registry
 from .appliances.dto import ApplianceMetadataResponseDict, build_appliances_response
-from .appliances.forecast_integration import build_adjusted_house_forecast
 from .appliances.generic_appliance import GenericApplianceRuntime
 from .appliances.projection_builder import (
     ApplianceProjectionPlan,
-    build_appliance_projection_plan,
-    build_projection_input_bundle,
     read_vehicle_remaining_capacity_kwh_by_vehicle_id,
 )
 from .appliances.projection_response import (
@@ -49,6 +43,7 @@ from .automation.compute_inputs import (
     CustomConditionGroupResult,
     CustomConditionResult,
 )
+from .automation.compute_inputs import condition_met_map as _condition_met_map
 from .automation.condition_trace import (
     ConditionTrace,
     evaluate_traced,
@@ -63,58 +58,41 @@ from .automation.config import (
     read_automation_config,
 )
 from .automation.coverage import AutomationCoverageDict, build_automation_coverage
-from .automation.day_context import DayContext
 from .automation.day_context_store import DayContextStore
 from .automation.explain import ExplanationBook, RunExplanation
 from .automation.input_bundle import AutomationInputBundle
-from .automation.ownership import (
-    has_automation_owned_actions,
-    merge_automation_result,
-    strip_automation_owned_actions,
-)
-from .automation.snapshot import OptimizationContext, OptimizationSnapshot
+from .automation.ownership import has_automation_owned_actions
 from .automation.triggers import AutomationTriggerCoordinator
-from .battery_capacity_forecast_builder import BatteryCapacityForecastBuilder
 from .battery_forecast_response import build_battery_forecast_response
 from .battery_state import (
     describe_battery_entity_config_issue,
     describe_battery_live_state_issue,
-    read_battery_entities,
     read_battery_entity_config,
-    read_battery_forecast_settings,
     read_battery_live_state,
     read_battery_soc_bounds,
     read_battery_soc_bounds_config,
 )
-from .config_path import get as config_value
-from .config_read import read_mapping
 from .const import (
     AUTOMATION_CONDITION_PLAN_FRESHNESS_SECONDS,
     BATTERY_CAPACITY_FORECAST_CACHE_TTL_SECONDS,
-    CONSUMPTION_TOTAL_ENTITY_ID,
     DATA_CHANGED_KIND_PLAN,
     DATA_CHANGED_KIND_SCHEDULE,
     DATA_CHANGED_KIND_SOLAR_BIAS,
     DATA_CHANGED_KIND_TRAINING,
     DEFAULT_FORECAST_DAYS,
-    DEFAULT_HISTORY_LOOKBACK_DAYS,
     EVENT_DATA_CHANGED,
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
     FORECAST_STALE_AFTER_SECONDS,
     HOUSE_FORECAST_MODEL_ID,
     MAX_FORECAST_DAYS,
-    PRODUCTION_TOTAL_ENTITY_ID,
-    SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
-    SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
     SCHEDULE_SLOT_MINUTES,
+    SIGNAL_FORECAST_PUBLISHED,
+    SLOT_ALIGNED_REFRESH_REASON,
+    entry_signal,
 )
 from .consumption_forecast_builder import (
     ConsumptionForecastBuilder,
     read_house_forecast_request,
-)
-from .consumption_forecast_profiles import (
-    HouseConsumptionProfile,
-    profile_from_dict,
 )
 from .controllables.config import (
     entity_friendly_name,
@@ -123,9 +101,7 @@ from .controllables.config import (
     own_meter,
     peek_controllable_id,
     read_carved_meters,
-    read_shared_meters,
     running_active_states,
-    running_signal,
 )
 from .controllables.spec import (
     CONTROLLABLE_KIND_CLIMATE,
@@ -139,6 +115,23 @@ from .device_reports.dataset import (
     find_house_node,
 )
 from .device_reports.reports import ReportQuery, build_report
+from .forecast.assembly import (
+    ApplianceScheduleSignature,
+    BatteryScheduleSignature,
+    EffectiveScheduleSignature,
+    ForecastRebuildSnapshot,
+    ForecastScheduleDocuments,
+    SolarSignature,
+    build_appliance_projection_schedule_signature,
+    build_automation_snapshot,
+    build_battery_forecast_schedule_effective_signature,
+    build_battery_forecast_schedule_signature,
+    build_battery_forecast_solar_signature,
+    build_forecast_rebuild,
+    build_forecast_schedule_documents,
+    is_projected_history_action_active,
+    resolve_runtime_history_requirements,
+)
 from .forecast_builder import SolarForecastBuilder, read_solar_forecast_entities
 from .grid_flow_forecast_builder import build_grid_flow_forecast_snapshot
 from .grid_flow_forecast_response import build_grid_flow_forecast_response
@@ -149,48 +142,25 @@ from .grid_price_forecast_builder import (
 from .grid_price_forecast_response import build_grid_price_forecast_response
 from .house_device_consumers import extract_house_device_consumers
 from .house_forecast_response import build_house_forecast_response
-from .node_details.inverter import run_mode_condition
+from .live_power import LivePowerTracker
 from .point_forecast_response import build_solar_forecast_response
-from .power_polarity import is_power_inverted, watts_for_value_type
-from .power_reading import power_unit_factor
-from .scheduling.action_resolution import resolve_executed_schedule_action
 from .scheduling.actual_history import ActualHistorySlot, build_entity_actual_histories
 from .scheduling.normal_state import (
     build_controllable_entities,
-)
-from .scheduling.runtime_status import (
-    schedule_execution_status_to_dict,
 )
 from .scheduling.schedule import (
     ScheduleActionSetBy,
     ScheduleControlConfig,
     ScheduleDocument,
-    ScheduleError,
-    ScheduleExecutionUnavailableError,
     ScheduleResponseDict,
     ScheduleSlot,
     appliance_actions,
-    apply_slot_patches,
-    build_horizon_start,
     describe_schedule_control_config_issue,
-    format_slot_id,
-    inverter_action,
-    materialize_schedule_slots,
-    normalize_schedule_document_for_registry,
-    normalize_slot_patch_request,
-    prune_expired_slots,
     read_schedule_control_config,
-    schedule_document_from_dict,
-    schedule_document_to_dict,
-    slot_to_dict,
     strip_candidate_actions,
-    with_slot_set_by,
 )
-from .scheduling.schedule_executor import (
-    ScheduleExecutor,
-    ScheduleExecutorDependencies,
-)
-from .shared_meter_split import split_own_power
+from .scheduling.schedule_executor import ScheduleExecutor
+from .scheduling.schedule_service import ScheduleService
 from .slot_grid import SLOT, SLOT_MINUTES, get_local_current_slot_start
 from .solar_bias_correction.models import read_bias_config
 from .solar_bias_correction.response import build_bias_correction_payload
@@ -198,34 +168,20 @@ from .solar_bias_correction.service import SolarBiasCorrectionService
 from .solar_bias_correction.service import health_for as solar_bias_health_for
 from .solar_inspector.service import SolarInspector
 from .span_history_model import SpanMeters, read_span_meters, recorder_tail_start
-from .storage import HelmanStorage, TrainingArtifactsStore
+from .storage import HelmanStorage
 from .today_slot_readers import (
     TodaySlotBoundaryStateReader,
     TodaySlotEnergyReader,
 )
-from .training.appliance_energy import (
-    ApplianceEnergyTrainingJob,
-    ApplianceEnergyTrainingRequest,
-    DeviceSubject,
-    SharedMeter,
-    SharedMeterMember,
-)
 from .training.appliance_energy import health_for as appliance_energy_health_for
+from .training.appliance_energy import read_appliance_energy_training_request
+from .training.artifacts import TrainingArtifacts
 from .training.batch import TrainingBatch
-from .training.house_consumption import (
-    HouseConsumptionTrainingJob,
-    HouseTrainingRequest,
-)
+from .training.house_consumption import HouseTrainingRequest
 from .training.house_consumption import health_for as house_consumption_health_for
 from .training.solar_bias import SolarBiasTrainingJob
 from .tree_builder import HelmanTreeBuilder, TreeIndex
-from .vendors import (
-    INVERTER_TELEMETRY_KEY,
-    DeviceTelemetry,
-    resolve_vendor_config,
-    resolve_vendor_telemetry,
-)
-from .visualization import read_visualization
+from .vendors import resolve_vendor_config
 
 _LOGGER = logging.getLogger(__name__)
 # Sentinel distinguishing "battery live state not supplied" from "supplied as
@@ -242,37 +198,10 @@ _OPEN_DATASET_TTL = timedelta(minutes=5)
 _DEVICE_DATASET_CACHE_SIZE = 8
 _BATTERY_FORECAST_CACHE_SOC_TOLERANCE = 1.0
 _BATTERY_FORECAST_CACHE_ENERGY_TOLERANCE_KWH = 0.1
-# The battery-forecast schedule cache key: the inverter action of every slot.
-# Built from the forecast schedule document, which is already empty when
-# execution is off, so an execution toggle moves this key without it having to
-# carry the flag itself.
-_BatteryForecastScheduleSignature = tuple[tuple[str, str, int | None], ...]
-# How far back the unmeasured remainder looks when smoothing away meter skew.
-# See _smooth_unmeasured for why the raw remainder cannot be published as-is.
-_UNMEASURED_SMOOTHING_WINDOW_S = 15.0
-# When a stored house consumption profile is due for a refit. Long on purpose:
-# the batch runs nightly, so anything under two days is a slipped timer rather
-# than a fault, and the profile keeps being served either way.
-_HOUSE_PROFILE_STALE_AFTER_SECONDS = 48 * 3600
 _FORECAST_STALE_HINT = (
     "Forecast data has not been rebuilt for over an hour. "
     "Check the Home Assistant log for forecast refresh errors."
 )
-#: ``_async_refresh_forecast``'s ``reason`` for the quarter-hour timer tick, the
-#: one rebuild that lands on a :00/:15/:30/:45 boundary. ``_publish_solar_forecast_entities``
-#: gates the five battery/grid current-slot entities' *republish* on this: an
-#: off-beat rebuild that still produced a full first slot would otherwise
-#: re-write the same value mid-slot, and HA's time-weighted hourly ``mean`` --
-#: what a purged day reads back -- shifts with every such write.
-#:
-#: This gate does *not* stop a partial value: it guards only the coordinator's
-#: own publish path, and Home Assistant writes a sensor's state by other routes
-#: too (``async_add_entities``, ``homeassistant.update_entity``, a registry
-#: rename), each reading the accessor directly. The partial-value guard is in
-#: :meth:`HelmanCoordinator.get_battery_forecast_current`, which refuses a first
-#: entry whose ``durationHours`` is short of a full slot.
-_SLOT_ALIGNED_REFRESH_REASON = "slot_refresh"
-
 #: A full canonical forecast slot, in hours. The snapshot's first series entry
 #: is stamped at build time; off the slot-aligned beat it covers only the slot's
 #: remainder, carrying ``durationHours`` short of this with its four energies
@@ -290,7 +219,6 @@ _FORECAST_SLOT_DURATION_TOLERANCE_HOURS = 1 / 3600
 
 if TYPE_CHECKING:
     from .automation.pipeline import AutomationRunResult
-    from .scheduling.forecast_overlay import ScheduleForecastOverlay
 
 #: kWh -> Wh for the battery forecast series. See _battery_forecast_slot_values.
 _BATTERY_FORECAST_KWH_TO_WH = 1000.0
@@ -603,6 +531,21 @@ def _bucket_points_by_local_day(
     return buckets
 
 
+def _forecast_slot_start(moment: datetime) -> datetime:
+    return get_local_current_slot_start(
+        moment, interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES
+    )
+
+
+def _battery_forecast_slot_start(battery_forecast: dict[str, Any]) -> datetime | None:
+    """The forecast slot a battery forecast says it started in, if it says."""
+    started_at_raw = battery_forecast.get("startedAt")
+    if not isinstance(started_at_raw, str):
+        return None
+    started_at = dt_util.parse_datetime(started_at_raw)
+    return None if started_at is None else _forecast_slot_start(started_at)
+
+
 def _build_corrected_solar_forecast_view(
     snapshot: dict[str, Any],
 ) -> dict[str, Any]:
@@ -636,30 +579,29 @@ class _PreparedForecastPipelineInputs:
     forecast_schedule_document: ScheduleDocument
     projection_schedule_document: ScheduleDocument
     live_state: Any
-    schedule_signature: _BatteryForecastScheduleSignature
-    appliance_schedule_signature: tuple[
-        tuple[str, tuple[tuple[str, tuple[tuple[str, object], ...]], ...]],
-        ...,
-    ]
-    schedule_effective_signature: tuple[str, str, int | None, str, str] | None
+    schedule_signature: BatteryScheduleSignature
+    appliance_schedule_signature: ApplianceScheduleSignature
+    schedule_effective_signature: EffectiveScheduleSignature
 
 
 @dataclass(frozen=True)
-class _ForecastScheduleDocuments:
-    forecast_schedule_document: ScheduleDocument
-    projection_schedule_document: ScheduleDocument
+class _PipelineCacheKey:
+    """What a cached pipeline was built from, compared whole on every read."""
+
+    #: The forecast slot the read is in; stored as the slot the battery
+    #: forecast says it started in, None when it carries no ``startedAt``.
+    slot_start: datetime | None
+    house_generated_at: str | None
+    solar_signature: SolarSignature
+    schedule_sig: BatteryScheduleSignature
+    appliance_sig: ApplianceScheduleSignature
+    effective_sig: EffectiveScheduleSignature
 
 
-@dataclass(frozen=True)
-class _ForecastRebuildSnapshot:
-    adjusted_house_forecast: dict[str, Any]
-    battery_forecast: dict[str, Any]
-    projection_plan: ApplianceProjectionPlan
-    grid_forecast: dict[str, Any] | None = None
-    #: The overlay ``battery_forecast`` was simulated from, kept so the
-    #: optimization snapshot can carry it. Re-deriving it downstream is not
-    #: possible: the snapshot's schedule document is the unstripped original.
-    schedule_overlay: ScheduleForecastOverlay | None = None
+class _PipelineCacheEntry(NamedTuple):
+    key: _PipelineCacheKey
+    expires_at: datetime
+    snapshot: _ApplianceForecastPipelineSnapshot
 
 
 @dataclass(frozen=True)
@@ -695,66 +637,41 @@ class _BackfillJob:
 
 class HelmanCoordinator:
 
-    def __init__(self, hass: HomeAssistant, storage: HelmanStorage) -> None:
+    def __init__(
+        self, hass: HomeAssistant, storage: HelmanStorage, entry: ConfigEntry
+    ) -> None:
         self._hass = hass
         self._storage = storage
+        self._entry = entry
+        self._forecast_published_signal = entry_signal(
+            SIGNAL_FORECAST_PUBLISHED, entry.entry_id
+        )
         self._cached_tree: dict | None = None
         self._tree_index: TreeIndex | None = None
-        self._buffer_tree: dict | None = None
         self._unloaded = False
         self._device_datasets: OrderedDict[
             tuple[date, date, ZoneInfo], _CachedDeviceDataset
         ] = OrderedDict()
         self._unsub_listeners: list = []
-        self._battery_time_to_full = None
-        self._battery_time_to_empty = None
-        self._unmeasured_sensors: dict[str, Any] = {}
-        self._unmeasured_raw_history: dict[str, deque] = {}
-        self._consumption_total_sensor = None
-        self._production_total_sensor = None
-        self._house_consumption_sensors: list[Any] = []
-        # The inverter's telemetry the measured house phases compute from,
-        # resolved per tree rebuild in _init_buffers.
-        self._inverter_telemetry: Any = None
-        self._vendor_telemetry: dict[str, DeviceTelemetry] = {}
+        # The sensor platform's add callback and the factories of the entities
+        # the device tree decides the number of, keyed by kind; the entities
+        # built so far are kept per kind and node so a rebuild can diff them.
         self._async_add_entities: Callable | None = None
-        self._unmeasured_sensor_factory: Callable | None = None
-        self._share_sensors: dict[str, Any] = {}
-        self._share_sensor_factory: Callable | None = None
-        self._entry: Any = None
+        self._dynamic_sensor_factories: Mapping[str, Callable] = {}
+        self._dynamic_sensors: dict[str, dict[str, Any]] = {}
         self._removing_entity_ids: set[str] = set()
         # The hardware profiles fill the slots they own here, so nothing
         # downstream knows they exist. `async_setup` re-reads and logs.
         self._active_config: dict[str, Any] = resolve_vendor_config(
             hass, storage.config
         )[0]
-        self._power_sensor_ids: list[str] = []
-        self._source_sensor_ids: list[str] = []
-        self._source_value_types: dict[str, str] = {}
-        # In-memory rolling buffers (oldest first)
-        self._power_history: dict[str, deque[float]] = {}
-        self._source_ratio_sensors: dict[str, Any] = {}
-        # Map: source_power_sensor_id → ratio_sensor_entity_id (derived from the tree in
-        # _init_buffers, independent of when the sensor platform registers the ratio entities).
-        self._source_ratio_entity_ids: dict[str, str] = {}
-        self._solar_forecast_sensors: list[Any] = []
-        # Tick lifecycle
-        self._unsub_tick: Callable[[], None] | None = None
         # House forecast snapshot (persisted + cached)
         self._cached_forecast: dict | None = None
-        self._house_consumption_forecast_current_sensor = None
-        self._solar_forecast_current_sensors: list[Any] = []
-        # The five battery-forecast current-slot entities, published on the same
-        # slot-aligned beat so their recorder history is the archive the retired
-        # BatteryForecastHistoryStore used to keep.
-        self._battery_forecast_current_sensors: list[Any] = []
-        self._grid_import_price_sensor = None
         # The import rate in force right now, refreshed with the forecast
         # snapshots. Nothing else records it, so this is what the published
         # sensor hands the recorder to archive.
         self._grid_import_price_current: float | None = None
         self._grid_import_price_unit: str | None = None
-        self._grid_export_price_sensor = None
         # The export rate in force right now, mirrored off the configured
         # sell-price entity on the same beat. Its own entity typically declares
         # no `state_class`, so this mirror is what gives the rate a long-term
@@ -797,24 +714,14 @@ class HelmanCoordinator:
         self._cached_solar_forecast: dict[str, Any] | None = None
         #: (slot start, snapshot) for `grid_price_snapshot`'s per-slot hold.
         self._grid_price_snapshot_cache: tuple[datetime, dict[str, Any]] | None = None
-        self._cached_battery_forecast: dict | None = None
-        self._cached_battery_forecast_expires_at: datetime | None = None
-        self._cached_battery_forecast_house_generated_at: str | None = None
-        self._cached_battery_forecast_solar_signature: tuple[Any, ...] | None = None
-        self._cached_battery_forecast_schedule_signature: (
-            _BatteryForecastScheduleSignature | None
-        ) = None
-        self._cached_battery_forecast_schedule_effective_signature: (
-            tuple[str, str, int | None, str, str] | None
-        ) = None
-        self._cached_appliance_forecast_pipeline: (
-            _ApplianceForecastPipelineSnapshot | None
-        ) = None
+        #: The appliance/battery pipeline last built, what it was built from and
+        #: until when it may be served. See :meth:`_async_current_pipeline`.
+        self._pipeline_cache: _PipelineCacheEntry | None = None
         #: Serializes appliance/battery pipeline builds so concurrent cache
         #: misses gather history and simulate once instead of once each. Held
         #: across the recheck as well, or the losers would race straight back
         #: into their own build. See
-        #: :meth:`_async_get_appliance_forecast_pipeline`.
+        #: :meth:`_async_current_pipeline`.
         self._appliance_forecast_pipeline_lock = asyncio.Lock()
         #: Bumped by every forecast-cache invalidation. A build that started
         #: before the bump publishes nothing, so a late result can never
@@ -836,10 +743,6 @@ class HelmanCoordinator:
         self._battery_forecast_current_slot: (
             tuple[str, dict[str, float]] | None
         ) = None
-        self._cached_appliance_projection_schedule_signature: tuple[
-            tuple[str, tuple[tuple[str, tuple[tuple[str, object], ...]], ...]],
-            ...,
-        ] | None = None
         self._create_task = getattr(self._hass, "async_create_task", asyncio.create_task)
         self._refresh_tasks: set[asyncio.Task[Any]] = set()
         self._automation_input_bundle: AutomationInputBundle | None = None
@@ -881,55 +784,46 @@ class HelmanCoordinator:
             run_callback=self._async_run_automation_trigger_request,
         )
         self._unsub_forecast_refresh: Callable[[], None] | None = None
-        self._schedule_lock = asyncio.Lock()
-        # Guards execution-flag transitions only; never held while the executor
-        # or hardware is awaited.
-        self._schedule_execution_lock = asyncio.Lock()
-        # Bumped by every flag transition -- enable, disable, and a failed
-        # enable's rollback -- so a failed enable only rolls the flag back when
-        # no newer transition has been made since.
-        self._schedule_execution_generation = 0
-        self._schedule_executor = ScheduleExecutor(
-            hass,
-            ScheduleExecutorDependencies(
-                schedule_lock=self._schedule_lock,
-                load_schedule_document=self._load_schedule_document,
-                save_schedule_document=self._save_schedule_document,
-                save_pruned_schedule_document=self._save_pruned_schedule_document,
-                announce_schedule_changed=lambda: self._fire_data_changed(
-                    DATA_CHANGED_KIND_SCHEDULE
-                ),
-                read_schedule_control_config=self._read_schedule_executor_control_config,
-                read_battery_state=self._read_schedule_executor_battery_state,
-                read_appliances_registry=lambda: self._appliances_registry.current,
-                check_reality_and_maybe_replan=(
-                    self._async_reality_check_and_maybe_replan
-                ),
-            ),
-        )
         self._appliances_registry = AppliancesRegistryHolder(self._hass, lambda: self._active_config)
+        #: The stored schedule, its lock and its executor. See ScheduleService.
+        self.schedule = ScheduleService(
+            hass,
+            storage,
+            self._appliances_registry,
+            read_battery_soc_bounds=self._read_battery_soc_bounds,
+            announce_changed=lambda: self._fire_data_changed(
+                DATA_CHANGED_KIND_SCHEDULE
+            ),
+            read_control_config=self._read_schedule_executor_control_config,
+            read_battery_state=self._read_schedule_executor_battery_state,
+            check_reality_and_maybe_replan=self._async_reality_check_and_maybe_replan,
+        )
         self._solar_bias_store: Any = None
         self._solar_bias_service: SolarBiasCorrectionService | None = None
         self._solar_inspector: SolarInspector | None = None
-        self._training_artifacts_store: TrainingArtifactsStore | None = None
         self._training_batch: TrainingBatch | None = None
-        # The fitted house consumption model the forecast is assembled from,
-        # adopted from the training artifacts store at startup and replaced
-        # whenever the nightly batch refits it. None means "nothing to serve".
-        self._house_profile: HouseConsumptionProfile | None = None
-        self._house_profile_trained_at: str | None = None
-        self._house_profile_last_outcome: str = "no_training_yet"
-        # Per-appliance average hourly energy while running, keyed by appliance
-        # id, adopted from the same store. An appliance missing from the map —
-        # never trained, no usable history, or on a fixed strategy — falls back
-        # to its configured hourly_energy_kwh, which is what the resolvers did
-        # for a failed estimate before this was stored at all.
-        self._appliance_energy_estimates: dict[str, float] = {}
-        # Each shared meter member's learned power in kW, adopted from the same
-        # section: the ratio the live split shares a parent's own power in. A
-        # member missing from it takes the others' mean, so before the first
-        # fit lands the split is even.
-        self._shared_meter_weights: dict[str, float | None] = {}
+        #: The training artifacts store and the house profile, appliance
+        #: estimates and shared-meter weights adopted from it.
+        self.training = TrainingArtifacts(
+            hass,
+            read_house_request=self._read_house_training_request,
+            read_house_fingerprint=lambda: read_house_forecast_request(
+                self._active_config
+            ).config_fingerprint,
+            read_appliance_request=lambda: read_appliance_energy_training_request(
+                self._active_config, self._iter_automation_candidate_appliances()
+            ),
+            training_batch=lambda: self._training_batch,
+            run_when_started=self._run_when_started,
+            on_adopted=self._async_on_training_adopted,
+        )
+        #: The live power tick, its history buffers and the derived live values.
+        self.live = LivePowerTracker(
+            hass,
+            entry.entry_id,
+            read_config=lambda: self._active_config,
+            read_shared_meter_weights=lambda: self.training.shared_meter_weights,
+        )
         # Today's completed slots are immutable, so the reader keeps the ones it
         # has already resolved. It lives here because the forecast builder is
         # rebuilt on every refresh and a cache inside it would never be read.
@@ -948,15 +842,6 @@ class HelmanCoordinator:
         self._forecast_refresh_task: asyncio.Task[Any] | None = None
         self._last_schedule_control_config_issue: str | None = None
         self._last_schedule_battery_state_issue: str | None = None
-        # Mapping: parent_node_id → unmeasured_entity_id (e.g. "house" → "sensor.helman_house_unmeasured_power")
-        self._unmeasured_entity_id_map: dict[str, str] = {}
-        # Mapping: share node id (a meterless child's device id) → its share entity id
-        self._share_entity_id_map: dict[str, str] = {}
-        # Mapping: meterless child id → (running-signal entity, "switch" | "climate")
-        self._share_running_signals: dict[str, tuple[str, str]] = {}
-        self._share_tolerances: dict[str, float | None] = {}
-        # Entity IDs whose values are computed by the tick (not read from hass.states)
-        self._virtual_sensor_ids: set[str] = set()
 
     @property
     def config(self) -> dict:
@@ -1017,103 +902,29 @@ class HelmanCoordinator:
         # moved, and the inspector draws those.
         self._fire_data_changed(DATA_CHANGED_KIND_PLAN)
 
-    def set_sensors(
-        self,
-        battery_time_to_full,
-        battery_time_to_empty,
-        unmeasured_sensors: dict,
-        total_power=None,
-        production_total=None,
-        source_ratio_sensors: dict | None = None,
-        forecast_sensors: list[Any] | None = None,
-        share_sensors: dict | None = None,
-        house_consumption_sensors: list | None = None,
-    ) -> None:
-        """Called from async_setup_entry to register all sensor entities."""
-        self._battery_time_to_full = battery_time_to_full
-        self._battery_time_to_empty = battery_time_to_empty
-        self._unmeasured_sensors = unmeasured_sensors
-        self._share_sensors = share_sensors or {}
-        self._consumption_total_sensor = total_power
-        self._production_total_sensor = production_total
-        self._house_consumption_sensors = list(house_consumption_sensors or [])
-        self._source_ratio_sensors = source_ratio_sensors or {}
-        self._solar_forecast_sensors = list(forecast_sensors or [])
-
     def set_entity_factory(
         self,
-        entry,
         async_add_entities: Callable,
-        unmeasured_sensor_factory: Callable,
-        share_sensor_factory: Callable | None = None,
+        factories: Mapping[str, Callable],
     ) -> None:
-        """Store the async_add_entities callback and sensor factories for dynamic entity management."""
-        self._entry = entry
+        """Take over the entities the device tree decides the number of.
+
+        ``factories`` maps a kind (``unmeasured``, ``share``) to the callable
+        that builds one entity of it from a node. The entities are added here,
+        and added and removed again by every tree rebuild.
+        """
         self._async_add_entities = async_add_entities
-        self._unmeasured_sensor_factory = unmeasured_sensor_factory
-        self._share_sensor_factory = share_sensor_factory
+        self._dynamic_sensor_factories = factories
+        self._sync_derived_sensors()
 
     def _publish_solar_forecast_entities(self, *, reason: str) -> None:
-        for sensor in self._solar_forecast_sensors:
-            if getattr(sensor, "hass", None) is None:
-                continue
-            try:
-                sensor.async_write_ha_state()
-            except Exception:
-                _LOGGER.exception(
-                    "Error publishing solar forecast sensor state: %s",
-                    getattr(sensor, "entity_id", "<unknown>"),
-                )
-        hcfc_sensor = self._house_consumption_forecast_current_sensor
-        if hcfc_sensor is not None and getattr(hcfc_sensor, "hass", None) is not None:
-            hcfc_sensor.async_write_ha_state()
-        # The two current-slot forecast entities ride the same slot-aligned
-        # beat, which is what makes their recorded history a stair-step of what
-        # was believed about each slot before it began.
-        for solar_sensor in self._solar_forecast_current_sensors:
-            if getattr(solar_sensor, "hass", None) is not None:
-                try:
-                    solar_sensor.async_write_ha_state()
-                except Exception:
-                    _LOGGER.exception(
-                        "Error publishing solar forecast sensor state: %s",
-                        getattr(solar_sensor, "entity_id", "<unknown>"),
-                    )
-        # The five battery/grid current-slot forecast entities publish *only* on
-        # the slot-aligned rebuild -- unlike the solar and house sensors above,
-        # which publish on every refresh. An off-beat rebuild re-stamps the
-        # snapshot's first series entry partway through the slot, so its value
-        # covers only the slot's remainder; the raw-state reader passes that
-        # revision over, but HA's time-weighted hourly ``mean`` -- which a purged
-        # day reads back -- would be dragged low by it and the error would
-        # outlive the raw states. See ``_SLOT_ALIGNED_REFRESH_REASON``.
-        if reason == _SLOT_ALIGNED_REFRESH_REASON:
-            for battery_sensor in self._battery_forecast_current_sensors:
-                if getattr(battery_sensor, "hass", None) is not None:
-                    try:
-                        battery_sensor.async_write_ha_state()
-                    except Exception:
-                        _LOGGER.exception(
-                            "Error publishing battery forecast sensor state: %s",
-                            getattr(battery_sensor, "entity_id", "<unknown>"),
-                        )
-        # Published on the same beat, though it is neither solar nor a forecast:
-        # the refresh that feeds this is slot-aligned (:00/:15/:30/:45) and the
-        # import windows align to the same grid, so a price change and its
-        # publication land in the same slot.
-        price_sensor = self._grid_import_price_sensor
-        if price_sensor is not None and getattr(price_sensor, "hass", None) is not None:
-            price_sensor.async_write_ha_state()
-        # The export mirror rides the same beat. Its source entity moves on the
-        # hour and this refresh is slot-aligned, so the mirror lands in the same
-        # slot as the change it copies; the recorder's own hourly mean is time
-        # weighted, so a mirror written at :00 values the whole hour correctly.
-        export_price_sensor = self._grid_export_price_sensor
-        if (
-            export_price_sensor is not None
-            and getattr(export_price_sensor, "hass", None) is not None
-        ):
-            export_price_sensor.async_write_ha_state()
+        """Tell the forecast and price sensors to write their state now.
+
+        The back-fill jobs start right after, on the same beat: a job's first
+        statistics import must not run before its target entity has published a
+        value and a unit.
+        """
+        async_dispatcher_send(self._hass, self._forecast_published_signal, reason)
         self._maybe_start_backfill_jobs()
 
     async def async_setup(self) -> None:
@@ -1143,8 +954,7 @@ class HelmanCoordinator:
             live_sources=self,
             bias_service=self._solar_bias_service,
         )
-        self._training_artifacts_store = TrainingArtifactsStore(self._hass)
-        await self._training_artifacts_store.async_load()
+        await self.training.async_load()
         # Unconditionally, outside any bias enable gate: with bias correction
         # off, a gated batch would never fit the house consumption profile and
         # the house forecast would sit at unavailable forever.
@@ -1154,18 +964,8 @@ class HelmanCoordinator:
                 self._solar_bias_service,
                 on_trained=self._async_on_solar_bias_trained,
             ),
-            house_consumption_job=HouseConsumptionTrainingJob(
-                self._hass,
-                self._training_artifacts_store,
-                read_request=self._read_house_training_request,
-                on_trained=self._async_on_house_profile_trained,
-            ),
-            appliance_energy_job=ApplianceEnergyTrainingJob(
-                self._hass,
-                self._training_artifacts_store,
-                read_request=self._read_appliance_energy_training_request,
-                on_trained=self._async_on_appliance_energy_trained,
-            ),
+            house_consumption_job=self.training.house_consumption_job,
+            appliance_energy_job=self.training.appliance_energy_job,
             on_job_finished=functools.partial(
                 self._fire_data_changed, DATA_CHANGED_KIND_TRAINING
             ),
@@ -1184,9 +984,7 @@ class HelmanCoordinator:
         )
         # After the registry: the stored estimates are keyed on the appliances
         # it holds, so there is nothing to adopt them against before this point.
-        refit_reason = self._adopt_stored_appliance_energy()
-        if refit_reason is not None:
-            self._schedule_appliance_energy_refit(refit_reason)
+        self.training.adopt_appliance_energy()
         self._unsub_listeners.append(
             self._hass.bus.async_listen(
                 "entity_registry_updated", self._on_registry_updated
@@ -1194,12 +992,7 @@ class HelmanCoordinator:
         )
 
         # Build tree upfront to learn which power sensors to track
-        tree = await self.get_device_tree()
-        self._power_sensor_ids = list(self.tree_index.power_sensor_ids)
-        self._source_sensor_ids = list(self.tree_index.source_sensor_ids)
-        self._source_value_types = dict(self.tree_index.source_value_types)
-        self._init_buffers(tree, self.tree_index)
-        self._start_tick()
+        self.live.track(await self.get_device_tree(), self.tree_index)
 
         # House forecast: load persisted snapshot and schedule recurring
         # refreshes. The persisted snapshots are served as-is however old they
@@ -1223,23 +1016,15 @@ class HelmanCoordinator:
             config_fingerprint=config_fingerprint,
         ):
             self._cached_forecast = None
-        # The house profile is loaded against the very same fingerprint, so the
+        # The house profile is checked against the very same fingerprint (the
+        # training request reads it off the same forecast request), so the
         # profile and the snapshot can never disagree about what is stale.
-        # A config save is a restart (ws_save_config -> async_reload ->
-        # async_setup), which is why this one path covers startup and config
-        # save both, and why there is no config-save handler anywhere.
-        refit_reason = self._adopt_stored_house_profile(
-            config_fingerprint=config_fingerprint
-        )
-        if refit_reason is not None:
-            self._schedule_house_profile_refit(refit_reason)
+        self.training.adopt_house_consumption()
         reference_time = dt_util.now()
         self._start_forecast_refresh()
 
-        await self._async_normalize_schedule_document()
-        automation_config = read_automation_config(self._active_config)
-        if automation_config is None:
-            automation_config = AutomationConfig(enabled=False)
+        await self.schedule.async_normalize()
+        automation_config = self._automation_config_or_disabled()
         # Stale automation-owned actions are stripped when automation itself is
         # off. This is independent of execution_enabled: with execution off the
         # optimizers still plan, so their actions stay.
@@ -1247,7 +1032,7 @@ class HelmanCoordinator:
             automation_config.enabled_appliance_optimizers
             or automation_config.enabled_system_optimizers
         ):
-            await self._async_cleanup_automation_owned_actions_if_needed(
+            await self.schedule.cleanup_automation_owned_actions(
                 reference_time=reference_time,
             )
         self._schedule_startup_schedule_execution()
@@ -1265,43 +1050,41 @@ class HelmanCoordinator:
         whether anything is applied is decided inside the reconcile, and
         ultimately by the actuation gate.
         """
-
-        @callback
-        def _start_schedule_execution(_hass: HomeAssistant) -> None:
-            self._create_tracked_refresh_task(self._async_start_schedule_execution())
-
-        self._unsub_listeners.append(
-            async_at_started(self._hass, _start_schedule_execution)
-        )
-
-    async def _async_start_schedule_execution(self) -> None:
-        await self._schedule_executor.async_start()
-        self._schedule_executor.request_reconcile(reason="startup")
+        self._run_when_started(self.schedule.async_start)
 
     def _schedule_startup_forecast_refresh(self) -> None:
         """Build the first forecast once Home Assistant has finished starting.
 
-        Deferred for the same reason as ``_schedule_house_profile_refit``: the
-        solar half reads its points straight off the forecast provider's daily
-        energy entities, and on a cold start that integration has not
-        registered them yet — the build comes back ``unavailable`` with no
-        points a fraction of a second after setup. Until this fires the
+        Deferred for the same reason as the training refits (see
+        ``TrainingArtifacts._schedule_refit``): the solar half reads its points
+        straight off the forecast provider's daily energy entities, and on a
+        cold start that integration has not registered them yet — the build
+        comes back ``unavailable`` with no points a fraction of a second after
+        setup. Until this fires the
         persisted snapshot is served, so the card shows the last known forecast
         rather than nothing.
 
         When Home Assistant is already running — a config save reloads the
         entry — ``async_at_started`` fires immediately, so **G3** is unaffected.
         """
+        self._run_when_started(
+            functools.partial(self._async_refresh_forecast, reason="startup")
+        )
+
+    def _run_when_started(
+        self, factory: Callable[[], Coroutine[Any, Any, Any]]
+    ) -> None:
+        """Run ``factory()`` as a tracked task once Home Assistant has started.
+
+        At once when it already has (a reload), as ``async_at_started`` fires
+        immediately; the listener is dropped on unload either way.
+        """
 
         @callback
-        def _run_startup_refresh(_hass: HomeAssistant) -> None:
-            self._create_tracked_refresh_task(
-                self._async_refresh_forecast(reason="startup")
-            )
+        def _start(_hass: HomeAssistant) -> None:
+            self._create_tracked_refresh_task(factory())
 
-        self._unsub_listeners.append(
-            async_at_started(self._hass, _run_startup_refresh)
-        )
+        self._unsub_listeners.append(async_at_started(self._hass, _start))
 
     @callback
     def _on_registry_updated(self, event) -> None:
@@ -1314,8 +1097,7 @@ class HelmanCoordinator:
         # resolves to. Services copy their config at setup, so the change is
         # applied the way a save applies one: by reloading the entry.
         if (
-            self._entry is not None
-            and resolve_vendor_config(self._hass, self._storage.config)[0]
+            resolve_vendor_config(self._hass, self._storage.config)[0]
             != self._active_config
         ):
             self._hass.config_entries.async_schedule_reload(self._entry.entry_id)
@@ -1344,41 +1126,32 @@ class HelmanCoordinator:
             tree = await self.get_device_tree()
             if self._unloaded:
                 return
-            if tree == self._buffer_tree:
-                self._refresh_inverter_telemetry()
+            if tree == self.live.tree:
+                self.live.refresh_inverter_telemetry()
                 return
-            self._stop_tick()
-            self._power_sensor_ids = list(self.tree_index.power_sensor_ids)
-            self._source_sensor_ids = list(self.tree_index.source_sensor_ids)
-            self._source_value_types = dict(self.tree_index.source_value_types)
-            self._init_buffers(tree, self.tree_index)
-            self._start_tick()
+            self.live.track(tree, self.tree_index)
             if self._unloaded:
                 return
-            await self._sync_derived_sensors(tree)
+            self._sync_derived_sensors()
         except Exception:
             logging.getLogger(__name__).exception(
                 "Error rebuilding Helman subscriptions"
             )
 
-    async def _sync_derived_sensors(self, tree: dict) -> None:
+    def _sync_derived_sensors(self) -> None:
         """Add/remove the unmeasured and share power entities to match the current tree."""
         if self._async_add_entities is None:
             return
-        if self._unmeasured_sensor_factory is not None:
+        wanted = {
+            "unmeasured": {
+                node_id: (parent_sensor_id,)
+                for node_id, parent_sensor_id in self.tree_index.qualifying_nodes.items()
+            },
+            "share": self.tree_index.share_devices,
+        }
+        for kind, factory in self._dynamic_sensor_factories.items():
             self._sync_node_sensors(
-                self._unmeasured_sensors,
-                {
-                    node_id: (parent_sensor_id,)
-                    for node_id, parent_sensor_id in self.tree_index.qualifying_nodes.items()
-                },
-                self._unmeasured_sensor_factory,
-            )
-        if self._share_sensor_factory is not None:
-            self._sync_node_sensors(
-                self._share_sensors,
-                self.tree_index.share_devices,
-                self._share_sensor_factory,
+                self._dynamic_sensors.setdefault(kind, {}), wanted[kind], factory
             )
 
     def _sync_node_sensors(
@@ -1407,10 +1180,6 @@ class HelmanCoordinator:
             new_sensors = {node_id: factory(node_id, *wanted[node_id]) for node_id in to_add}
             sensors.update(new_sensors)
             self._async_add_entities(list(new_sensors.values()))
-
-    @property
-    def vendor_telemetry(self) -> Mapping[str, DeviceTelemetry]:
-        return self._vendor_telemetry
 
     @property
     def tree_index(self) -> TreeIndex:
@@ -1657,7 +1426,14 @@ class HelmanCoordinator:
         )
 
     async def battery_forecast(self) -> dict[str, Any] | None:
-        return await self._async_get_battery_forecast_snapshot()
+        """The battery forecast snapshot, for the solar bias inspector.
+
+        Goes through the pipeline rather than reading the cache directly, so
+        the inspector does not depend on another consumer having called
+        get_forecast() first. Reuses the pipeline cache when it is warm.
+        """
+        pipeline = await self._async_current_pipeline(dt_util.now())
+        return pipeline.battery_forecast
 
     def house_forecast_snapshot(self) -> dict[str, Any] | None:
         return self._get_adjusted_house_forecast_snapshot()
@@ -1682,9 +1458,9 @@ class HelmanCoordinator:
         batch = self._training_batch
         solar = self._solar_bias_service.get_status_payload()
         solar_health = solar_bias_health_for(solar)
-        store = self._training_artifacts_store
-        house = store.house_consumption
-        appliance = store.appliance_energy
+        training = self.training
+        house = training.store.house_consumption
+        appliance = training.store.appliance_energy
         jobs = [
             {
                 **_training_job_status(
@@ -1728,9 +1504,9 @@ class HelmanCoordinator:
                 "house_consumption",
                 house,
                 health=house_consumption_health_for(house),
-                artifact_in_use=self._house_profile is not None,
+                artifact_in_use=training.house_profile is not None,
                 read_live_fingerprint=lambda: (
-                    self._read_house_training_request().config_fingerprint
+                    training.read_house_request().config_fingerprint
                 ),
                 issues=[],
             ),
@@ -1741,14 +1517,14 @@ class HelmanCoordinator:
                     health=appliance_energy_health_for(appliance),
                     # Learned weights drive the live split, and records the
                     # device detail, even when no appliance learns an estimate.
-                    artifact_in_use=bool(self._appliance_energy_estimates)
+                    artifact_in_use=bool(training.appliance_energy_estimates)
                     or any(
                         weight is not None
-                        for weight in self._shared_meter_weights.values()
+                        for weight in training.shared_meter_weights.values()
                     )
                     or bool((appliance or {}).get("devices")),
                     read_live_fingerprint=lambda: (
-                        self._read_appliance_energy_training_request().fingerprint
+                        training.read_appliance_request().fingerprint
                     ),
                     issues=[
                         {"subject": appliance_id, "reason": reason}
@@ -1760,7 +1536,7 @@ class HelmanCoordinator:
                 # The adopted map, not the stored document: it is what
                 # projection and automation actually read. kWh per running
                 # hour, keyed by controllable id.
-                "estimates": dict(self._appliance_energy_estimates),
+                "estimates": dict(training.appliance_energy_estimates),
                 # Every device's usage record, by deviceKey, as stored.
                 "devices": dict((appliance or {}).get("devices") or {}),
             },
@@ -1783,8 +1559,7 @@ class HelmanCoordinator:
         lives under its meter, so such an id is resolved to that meter here;
         a meterless child's id is already its key.
         """
-        store = self._training_artifacts_store
-        section = (store.appliance_energy if store is not None else None) or {}
+        section = self.training.store.appliance_energy or {}
         devices = section.get("devices") or {}
         record = devices.get(device_key)
         if record is None:
@@ -1814,276 +1589,11 @@ class HelmanCoordinator:
             config_fingerprint=config_fingerprint,
         )
 
-    @property
-    def house_profile(self) -> tuple[HouseConsumptionProfile | None, str | None]:
-        """The fitted house profile the forecast serves, and when it was trained."""
-        return self._house_profile, self._house_profile_trained_at
-
-    def _adopt_stored_house_profile(self, *, config_fingerprint: str) -> str | None:
-        """Adopt the stored house profile; return why a refit is due, or None.
-
-        Three cases, and they are not the same case:
-
-        * missing (or unreadable) — nothing to serve, refit;
-        * fingerprint-stale — the stored profile answers a question the user
-          has since changed, so it is blanked to make the change visible;
-        * older than 48 h — keep serving it, a 56-day fit does not become
-          wrong because it missed a night, and refit in the background.
-        """
-        self._house_profile = None
-        self._house_profile_trained_at = None
-        self._house_profile_last_outcome = "no_training_yet"
-
-        store = self._training_artifacts_store
-        section = store.house_consumption if store is not None else None
-        if section is None:
-            return "no_stored_profile"
-
-        last_outcome = section.get("last_outcome")
-        if isinstance(last_outcome, str):
-            self._house_profile_last_outcome = last_outcome
-
-        if section.get("fingerprint") != config_fingerprint:
-            return "config_changed"
-
-        profile = profile_from_dict(section.get("data"))
-        if profile is None:
-            return "unreadable_profile"
-
-        self._house_profile = profile
-        trained_at = section.get("trained_at")
-        self._house_profile_trained_at = (
-            trained_at if isinstance(trained_at, str) else None
-        )
-        if self._is_house_profile_expired(self._house_profile_trained_at):
-            return "profile_expired"
-        return None
-
-    def _schedule_house_profile_refit(self, reason: str) -> None:
-        """Refit the house profile once Home Assistant has finished starting.
-
-        Deferred rather than run here. The fit reads the house energy entity,
-        and on a cold start that entity's own integration may not have
-        registered it yet — the job would see ``hass.states.get()`` return
-        ``None``, record ``entity_missing``, and leave the house forecast
-        unavailable until the next nightly run. Observed in practice: the
-        entity appeared about eighty seconds after setup.
-
-        When Home Assistant is already running — a config save reloads the
-        entry — ``async_at_started`` fires immediately, so **G3** is unaffected.
-
-        Never awaited either way: startup must not block on a multi-day
-        recorder read, and the batch's single flight keeps this from colliding
-        with the nightly run.
-        """
-        if self._training_batch is None:
+    async def _async_on_training_adopted(self, reason: str) -> None:
+        """Rebuild at once once a training job's result has been adopted."""
+        if self._unloaded:
             return
-
-        @callback
-        def _start_house_refit(_hass: HomeAssistant) -> None:
-            if self._training_batch is None:
-                return
-            self._create_tracked_refresh_task(
-                self._training_batch.async_run_house_consumption(reason=reason)
-            )
-
-        self._unsub_listeners.append(
-            async_at_started(self._hass, _start_house_refit)
-        )
-
-    def _read_appliance_energy_training_request(
-        self,
-    ) -> ApplianceEnergyTrainingRequest:
-        """Every consumer device the nightly job learns a record for.
-
-        One subject per device with its own meter, and per meterless child its
-        parent's meter is split among, schedulable or not; the inverter is no
-        consumer. A subject is keyed by the card's ``deviceKey``: its meter, or
-        a meterless child's id. Whether it is ``history_average`` -- and so its
-        lookback -- comes from its appliance runtime, the reader the forecast
-        uses; a device that is not one learns over the default window.
-
-        Shared meters come from the device tree too: a meter owner's meterless
-        children split its own energy, and each runs by its own switch or
-        climate entity — a ``fixed`` or passive child included, since it still
-        runs and so still divides the meter.
-        """
-        shared = read_shared_meters(self._active_config)
-        learners = {
-            appliance.id: appliance
-            for appliance in self._iter_automation_candidate_appliances()
-            if appliance.projection.uses_history_average
-        }
-        subjects: dict[str, DeviceSubject] = {}
-        for device, parent in iter_devices(self._active_config):
-            controllable_id = peek_controllable_id(device)
-            meter = own_meter(device)
-            if meter is not None:
-                key, meterless = meter, False
-            else:
-                parent_meter = own_meter(parent) if parent is not None else None
-                members = shared.get(parent_meter, {}).get("members", ())
-                if controllable_id not in {member[0] for member in members}:
-                    continue
-                key, meter, meterless = controllable_id, parent_meter, True
-            if key in subjects:
-                continue
-            learner = learners.get(controllable_id)
-            consumption = device.get("consumption")
-            power = (
-                consumption.get("power_entity_id")
-                if isinstance(consumption, Mapping)
-                else None
-            )
-            subjects[key] = DeviceSubject(
-                device_key=key,
-                meter=meter,
-                meterless=meterless,
-                controllable_id=controllable_id,
-                # A meterless child's usage is its share of the meter.
-                power_entity_id=(
-                    power.strip()
-                    if not meterless and isinstance(power, str) and power.strip()
-                    else None
-                ),
-                # What the tree builder gives every device's node.
-                power_value_type="default",
-                running_signal=running_signal(device),
-                lookback_days=(
-                    learner.projection.history_lookback_days
-                    if learner is not None
-                    else DEFAULT_HISTORY_LOOKBACK_DAYS
-                ),
-                history_average=learner is not None,
-            )
-        return ApplianceEnergyTrainingRequest(
-            subjects=tuple(subjects.values()),
-            shared_meters={
-                energy_entity_id: SharedMeter(
-                    members=tuple(
-                        SharedMeterMember.for_signal(*member)
-                        for member in meter_shared["members"]
-                    ),
-                    metered_children=tuple(meter_shared["metered_children"]),
-                    tolerance=meter_shared["tolerance"],
-                )
-                for energy_entity_id, meter_shared in shared.items()
-            },
-        )
-
-    def _adopt_stored_appliance_energy(self) -> str | None:
-        """Adopt the stored estimates; return why a refresh is due, or None.
-
-        Mirrors ``_adopt_stored_house_profile``, minus the expiry arm: a
-        30-day average of energy-while-running does not go stale on a clock the
-        way a house profile does, and the nightly run refreshes it anyway. What
-        is left is missing (nothing trained yet) and fingerprint-stale (the
-        appliance set, its entities or a lookback window changed).
-
-        A fingerprint change does **not** blank the estimates the way a stale
-        house profile is blanked. The map is keyed per appliance, so the entries
-        for appliances that did not change are still right, and dropping them
-        would push those appliances onto their fixed fallback for no reason
-        until the refit lands. The same holds for the shared-meter weights,
-        keyed per member.
-        """
-        self._appliance_energy_estimates = {}
-        self._shared_meter_weights = {}
-
-        store = self._training_artifacts_store
-        section = store.appliance_energy if store is not None else None
-        if section is None:
-            # A config with no history_average appliance still refits: the job
-            # records "not_configured" against the current fingerprint, which is
-            # what stops this from rescheduling a refit on every restart.
-            return "no_stored_estimates"
-
-        data = section.get("data")
-        if isinstance(data, dict):
-            self._appliance_energy_estimates = {
-                appliance_id: float(value)
-                for appliance_id, value in data.items()
-                if isinstance(appliance_id, str)
-                and isinstance(value, (int, float))
-                and not isinstance(value, bool)
-                and value > 0
-            }
-
-        weights = section.get("shared_meter_weights")
-        if isinstance(weights, dict):
-            self._shared_meter_weights = {
-                member_id: float(value)
-                if isinstance(value, (int, float))
-                and not isinstance(value, bool)
-                and value >= 0
-                else None
-                for member_id, value in weights.items()
-                if isinstance(member_id, str)
-            }
-
-        request = self._read_appliance_energy_training_request()
-        if section.get("fingerprint") != request.fingerprint:
-            return "config_changed"
-        return None
-
-    def _schedule_appliance_energy_refit(self, reason: str) -> None:
-        """Resolve the estimates once Home Assistant has finished starting.
-
-        Deferred for the same reason as ``_schedule_house_profile_refit``: these
-        reads touch other integrations' entities, which on a cold start may not
-        exist yet — and the estimate would come back empty rather than wrong,
-        silently pinning every appliance to its fixed figure for the day.
-        """
-        if self._training_batch is None:
-            return
-
-        @callback
-        def _start_appliance_energy_refit(_hass: HomeAssistant) -> None:
-            if self._training_batch is None:
-                return
-            self._create_tracked_refresh_task(
-                self._training_batch.async_run_appliance_energy(reason=reason)
-            )
-
-        self._unsub_listeners.append(
-            async_at_started(self._hass, _start_appliance_energy_refit)
-        )
-
-    async def _async_on_appliance_energy_trained(self) -> None:
-        """Adopt what the job just wrote, then rebuild so it is visible.
-
-        Re-read from the store rather than handed the map directly, for the same
-        reason the house profile is: the preserve-the-previous-value-on-failure
-        rule lives in the store, so reading it back is the only way the
-        in-memory state agrees with what a failed run decided.
-        """
-        self._adopt_stored_appliance_energy()
-        await self._async_refresh_forecast(reason="appliance_energy_trained")
-
-    @staticmethod
-    def _is_house_profile_expired(trained_at: str | None) -> bool:
-        trained_at_dt = (
-            dt_util.parse_datetime(trained_at) if isinstance(trained_at, str) else None
-        )
-        if trained_at_dt is None:
-            return True
-        age = (
-            dt_util.as_utc(dt_util.now()) - dt_util.as_utc(trained_at_dt)
-        ).total_seconds()
-        return age > _HOUSE_PROFILE_STALE_AFTER_SECONDS
-
-    async def _async_on_house_profile_trained(self) -> None:
-        """Adopt what the training job just wrote, then rebuild at once.
-
-        Re-read from the store rather than handed the profile directly: the
-        store is where the preserve-the-previous-fit-on-failure rule lives, so
-        reading it back is the only way the in-memory state agrees with what a
-        failed refit decided. Rebuilding here is what makes a fresh profile
-        show up immediately instead of at the next quarter hour.
-        """
-        config_fingerprint = read_house_forecast_request(self._active_config).config_fingerprint
-        self._adopt_stored_house_profile(config_fingerprint=config_fingerprint)
-        await self._async_refresh_forecast(reason="house_profile_trained")
+        await self._async_refresh_forecast(reason=reason)
 
     async def _async_on_solar_bias_trained(self) -> None:
         """Rebuild at once and announce that solar bias has changed."""
@@ -2101,15 +1611,7 @@ class HelmanCoordinator:
         must explicitly re-read persistence once the awaited run completes.
         This reloads house consumption, appliance energy, and solar bias artifacts.
         """
-        if self._training_artifacts_store is None and self._solar_bias_service is None:
-            return
-
-        store = self._training_artifacts_store
-        if store is not None:
-            await store.async_load()
-            config_fingerprint = read_house_forecast_request(self._active_config).config_fingerprint
-            self._adopt_stored_house_profile(config_fingerprint=config_fingerprint)
-            self._adopt_stored_appliance_energy()
+        await self.training.async_reload()
 
         bias_store = self._solar_bias_store
         if bias_store is None and self._solar_bias_service is not None:
@@ -2263,22 +1765,15 @@ class HelmanCoordinator:
         # timestamps, which no reference time reshapes. Only the grid half:
         # HelmanForecastBuilder would also run the solar half's same-day
         raw_grid_price_forecast = self.grid_price_snapshot(request_now)
-        canonical_house_forecast = await self._async_get_canonical_house_forecast(
-            reference_time=request_now
-        )
-        pipeline = await self._async_get_appliance_forecast_pipeline(
-            solar_forecast=_build_corrected_solar_forecast_view(
-                canonical_solar_forecast
-            ),
-            house_forecast=canonical_house_forecast,
-            started_at=request_now,
-        )
+        pipeline = await self._async_current_pipeline(request_now)
         result["house_consumption"] = build_house_forecast_response(
             pipeline.adjusted_house_forecast,
             forecast_days=forecast_days,
         )
-        # Read off the canonical snapshot, not the adjusted view the pipeline
-        # derives from it: the adjusted copy is rebuilt per request.
+        # Read off the canonical snapshot the pipeline was built from, not the
+        # adjusted view it derives from it: the adjusted copy is rebuilt per
+        # build, and a cache hit means the same canonical generatedAt.
+        canonical_house_forecast = pipeline.original_house_forecast
         result["house_consumption"]["staleness"] = _build_forecast_staleness(
             canonical_house_forecast.get("generatedAt"),
             reference_time=request_now,
@@ -2477,47 +1972,40 @@ class HelmanCoordinator:
             return cached_solar_forecast
         return None
 
-    async def _async_get_canonical_house_forecast(
-        self,
-        *,
-        reference_time: datetime,
-    ) -> dict[str, Any]:
+    def _canonical_house_forecast(self) -> dict[str, Any]:
         """The cached house snapshot, however old it is.
 
-        Like the solar half, a pure cache read. A snapshot that no longer
-        matches the current config is not old but wrong, so it is blanked and
-        reported unavailable until the next refresh rebuilds it.
+        Like the solar half, a pure cache read. Without a snapshot -- before the
+        first refresh, with nothing persisted -- the answer is a placeholder
+        payload reporting unavailable. A snapshot held here always answers the
+        current config: setup drops a persisted one that does not (a config
+        save reloads the entry), and every refresh builds against the config
+        this coordinator was set up with.
         """
-        request = read_house_forecast_request(self._active_config)
-        total_energy_entity_id = request.total_energy_entity_id
-        training_window_days = request.training_window_days
-        min_history_days = request.min_history_days
-        config_fingerprint = request.config_fingerprint
-        if self._has_matching_forecast_snapshot(
-            total_energy_entity_id=total_energy_entity_id,
-            training_window_days=training_window_days,
-            min_history_days=min_history_days,
-            config_fingerprint=config_fingerprint,
-        ):
+        if self._cached_forecast is not None:
             return self._cached_forecast
-
-        self._cached_forecast = None
-        self._invalidate_battery_forecast_cache()
+        request = read_house_forecast_request(self._active_config)
         return ConsumptionForecastBuilder._make_payload(
             status="not_configured"
-            if total_energy_entity_id is None
+            if request.total_energy_entity_id is None
             else "unavailable",
-            training_window_days=training_window_days,
-            min_history_days=min_history_days,
-            config_fingerprint=config_fingerprint,
+            training_window_days=request.training_window_days,
+            min_history_days=request.min_history_days,
+            config_fingerprint=request.config_fingerprint,
             source_granularity_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
             forecast_days_available=MAX_FORECAST_DAYS,
-            trained_at=self._house_profile_trained_at,
-            last_outcome=self._house_profile_last_outcome,
+            trained_at=self.training.house_profile_trained_at,
+            last_outcome=self.training.house_profile_last_outcome,
         )
 
     def _read_schedule_control_config(self) -> ScheduleControlConfig | None:
         return read_schedule_control_config(self._active_config)
+
+    def _automation_config_or_disabled(self) -> AutomationConfig:
+        """The stored automation config, or a disabled one when there is none."""
+        return read_automation_config(self._active_config) or AutomationConfig(
+            enabled=False
+        )
 
     def _read_schedule_executor_control_config(self) -> ScheduleControlConfig | None:
         control_config = self._read_schedule_control_config()
@@ -2562,49 +2050,11 @@ class HelmanCoordinator:
             for entity in entities
         }
 
-    async def _async_normalize_schedule_document(self) -> None:
-        self._appliances_registry.refresh()
-        raw_document = self._storage.schedule_document
-        if raw_document is None:
-            return
-
-        try:
-            schedule_document = schedule_document_from_dict(raw_document)
-            schedule_document = normalize_schedule_document_for_registry(
-                schedule_document,
-                appliances_registry=self._appliances_registry.current,
-            )
-        except ScheduleError as err:
-            # The slots are what became incompatible; whether the user had
-            # execution switched on is a preference, not slot data, and losing
-            # it would silently stop the automation after an upgrade.
-            execution_enabled = (
-                raw_document.get("executionEnabled")
-                if isinstance(raw_document, Mapping)
-                else None
-            )
-            _LOGGER.warning(
-                "Resetting persisted schedule slots because they are invalid or "
-                "do not match the configured slot duration (execution stays %s): %s",
-                "on" if execution_enabled is True else "off",
-                err,
-            )
-            await self._save_schedule_document(
-                ScheduleDocument(execution_enabled=execution_enabled is True)
-            )
-            return
-
-        if schedule_document_to_dict(schedule_document) != raw_document:
-            await self._save_schedule_document(schedule_document)
-
-    def _load_schedule_document(self) -> ScheduleDocument:
-        return schedule_document_from_dict(self._storage.schedule_document)
-
     def _fire_data_changed(self, kind: str) -> None:
         """Announce that something the cards draw has been rewritten.
 
         ``async_fire`` is synchronous and non-blocking, so the schedule write
-        sites may call this from inside ``_schedule_lock`` without holding it a
+        sites may call this from inside the schedule lock without holding it a
         moment longer than the dict copy takes.
 
         No coalescing here on purpose: one automation run legitimately produces
@@ -2614,133 +2064,6 @@ class HelmanCoordinator:
         modules that never see this coordinator.
         """
         self._hass.bus.async_fire(EVENT_DATA_CHANGED, {"kind": kind})
-
-    async def _save_schedule_document(
-        self, doc: ScheduleDocument, *, notify: bool = True
-    ) -> None:
-        await self._storage.async_save_schedule_document(schedule_document_to_dict(doc))
-        if notify:
-            self._fire_data_changed(DATA_CHANGED_KIND_SCHEDULE)
-
-    async def _save_pruned_schedule_document(self, doc: ScheduleDocument) -> None:
-        await self._save_schedule_document(doc, notify=False)
-
-    def _build_pruned_schedule_document(
-        self,
-        *,
-        reference_time: datetime,
-    ) -> tuple[ScheduleDocument, ScheduleDocument]:
-        self._appliances_registry.refresh()
-        loaded_document = self._load_schedule_document()
-        schedule_document = normalize_schedule_document_for_registry(
-            loaded_document,
-            appliances_registry=self._appliances_registry.current,
-        )
-        pruned_slots = prune_expired_slots(
-            stored_slots=schedule_document.slots,
-            reference_time=reference_time,
-        )
-        pruned_document = ScheduleDocument(
-            execution_enabled=schedule_document.execution_enabled,
-            slots=pruned_slots,
-        )
-        return loaded_document, pruned_document
-
-    async def _load_pruned_schedule_document_locked(
-        self,
-        *,
-        reference_time: datetime,
-    ) -> ScheduleDocument:
-        loaded_document, pruned_document = self._build_pruned_schedule_document(
-            reference_time=reference_time
-        )
-        if pruned_document != loaded_document:
-            await self._save_pruned_schedule_document(pruned_document)
-        return pruned_document
-
-    def _build_automation_working_schedule_document_locked(
-        self,
-        *,
-        reference_time: datetime,
-    ) -> ScheduleDocument:
-        _loaded_document, pruned_document = self._build_pruned_schedule_document(
-            reference_time=reference_time
-        )
-        return pruned_document
-
-    def _normalize_schedule_document_for_strict_write(
-        self,
-        *,
-        schedule_document: ScheduleDocument,
-        reference_time: datetime,
-    ) -> ScheduleDocument:
-        if not schedule_document.slots:
-            return ScheduleDocument(
-                execution_enabled=schedule_document.execution_enabled,
-                slots={},
-            )
-
-        normalized_slots = normalize_slot_patch_request(
-            slots=[
-                ScheduleSlot(id=slot_id, controllables=actions)
-                for slot_id, actions in schedule_document.slots.items()
-            ],
-            reference_time=reference_time,
-            battery_soc_bounds=self._read_battery_soc_bounds(),
-            appliances_registry=self._appliances_registry.current,
-        )
-        return ScheduleDocument(
-            execution_enabled=schedule_document.execution_enabled,
-            slots=apply_slot_patches(stored_slots={}, slot_patches=normalized_slots),
-        )
-
-    def _build_schedule_response(
-        self,
-        *,
-        schedule_document: ScheduleDocument,
-        reference_time: datetime,
-    ) -> ScheduleResponseDict:
-        response: ScheduleResponseDict = {
-            "executionEnabled": schedule_document.execution_enabled,
-            "slotMinutes": SCHEDULE_SLOT_MINUTES,
-            "slots": [
-                slot_to_dict(slot)
-                for slot in materialize_schedule_slots(
-                    stored_slots=schedule_document.slots,
-                    reference_time=reference_time,
-                )
-            ],
-        }
-        if schedule_document.execution_enabled:
-            current_slot_id = format_slot_id(build_horizon_start(reference_time))
-            execution_status = self._schedule_executor.get_execution_status()
-            if execution_status.active_slot_id == current_slot_id:
-                runtime = schedule_execution_status_to_dict(execution_status)
-                if runtime is not None:
-                    response["runtime"] = runtime
-        return response
-
-    async def _build_current_schedule_response(
-        self,
-        *,
-        reference_time: datetime,
-    ) -> ScheduleResponseDict:
-        async with self._schedule_lock:
-            return self._build_schedule_response(
-                schedule_document=await self._load_pruned_schedule_document_locked(
-                    reference_time=reference_time
-                ),
-                reference_time=reference_time,
-            )
-
-    async def get_schedule(
-        self,
-        *,
-        reference_time: datetime | None = None,
-    ) -> ScheduleResponseDict:
-        return await self._build_current_schedule_response(
-            reference_time=reference_time or dt_util.now()
-        )
 
     def _controllable_sources(self):
         """The refreshed registry and control config everything drivable is read from."""
@@ -2762,12 +2085,10 @@ class HelmanCoordinator:
         this read answers with an empty index instead of failing the card.
         """
         try:
-            automation_config = read_automation_config(self._active_config)
+            automation_config = self._automation_config_or_disabled()
         except AutomationConfigError:
-            automation_config = None
-        return build_automation_coverage(
-            automation_config or AutomationConfig(enabled=False)
-        )
+            automation_config = AutomationConfig(enabled=False)
+        return build_automation_coverage(automation_config)
 
     def get_raw_solar_forecast_points(self) -> list[dict[str, Any]]:
         snapshot = self._cached_solar_forecast or {}
@@ -2793,12 +2114,6 @@ class HelmanCoordinator:
         if not values:
             return None
         return round(sum(values) / 1000.0, 4)
-
-    def register_house_consumption_forecast_current_sensor(self, sensor) -> None:
-        self._house_consumption_forecast_current_sensor = sensor
-
-    def register_solar_forecast_current_sensors(self, sensors) -> None:
-        self._solar_forecast_current_sensors = list(sensors)
 
     def get_solar_forecast_current_wh(self, *, corrected: bool) -> float | None:
         """The current slot's forecast energy in Wh, or None.
@@ -2847,15 +2162,12 @@ class HelmanCoordinator:
                 return None
         return None
 
-    def register_battery_forecast_current_sensors(self, sensors) -> None:
-        self._battery_forecast_current_sensors = list(sensors)
-
     def get_battery_forecast_current(self) -> dict[str, float] | None:
         """The current 15-minute slot's forecast SoC, grid and battery energy.
 
         The figures ``BatteryForecastHistoryStore`` used to archive, read
         straight off the snapshot the rest of the system already acts on
-        (``_cached_appliance_forecast_pipeline.battery_forecast``) — the same
+        (the cached pipeline's ``battery_forecast``) — the same
         move :meth:`get_solar_forecast_current_wh` makes for the solar forecast,
         so the five published entities' recorder history becomes that archive.
 
@@ -2900,7 +2212,7 @@ class HelmanCoordinator:
         worth seeing rather than papering over with a value from earlier in the
         slot.
 
-        The ``slot_refresh`` gate in :meth:`_publish_solar_forecast_entities` is
+        The ``slot_refresh`` gate on the five sensors' publish signal is
         the other half of the guard and stops a different thing: an off-beat
         rebuild that still produced a *full* first slot re-writing that value
         mid-slot. Neither is the whole guard; the ``socPct`` level is dropped
@@ -2937,7 +2249,7 @@ class HelmanCoordinator:
                 *args,
             )
 
-        pipeline = self._cached_appliance_forecast_pipeline
+        pipeline = self._cached_pipeline()
         if pipeline is None:
             refuse("pipeline_cold", "the appliance forecast pipeline has no snapshot yet")
             return None
@@ -3026,9 +2338,6 @@ class HelmanCoordinator:
         )
         return None
 
-    def register_grid_import_price_sensor(self, sensor) -> None:
-        self._grid_import_price_sensor = sensor
-
     def get_grid_import_price_current(self) -> float | None:
         """The import rate in force right now, or None when unconfigured."""
         return self._grid_import_price_current
@@ -3036,9 +2345,6 @@ class HelmanCoordinator:
     def get_grid_import_price_unit(self) -> str | None:
         """The configured currency-per-energy unit of the import price."""
         return self._grid_import_price_unit
-
-    def register_grid_export_price_sensor(self, sensor) -> None:
-        self._grid_export_price_sensor = sensor
 
     def get_grid_export_price_current(self) -> float | None:
         """The export rate in force right now, or None when unconfigured."""
@@ -3065,7 +2371,7 @@ class HelmanCoordinator:
         # this sensor feeds would double-count them against solar in the
         # inspector. Fall back to the unadjusted base load only while the
         # appliance pipeline is cold — never to base + deferrableConsumers.
-        pipeline = self._cached_appliance_forecast_pipeline
+        pipeline = self._cached_pipeline()
         forecast: dict[str, Any] | None = None
         if pipeline is not None and isinstance(
             pipeline.adjusted_house_forecast, dict
@@ -3126,27 +2432,8 @@ class HelmanCoordinator:
 
     async def get_appliance_projections(self) -> ApplianceProjectionsResponseDict:
         self._appliances_registry.refresh()
-        request_now = dt_util.now()
-        canonical_solar_forecast = await self._async_get_canonical_solar_forecast(
-            reference_time=request_now
-        )
-        if canonical_solar_forecast is None:
-            canonical_solar_forecast = {"status": "unavailable", "points": []}
-        canonical_house_forecast = await self._async_get_canonical_house_forecast(
-            reference_time=request_now
-        )
-        if canonical_house_forecast is None:
-            return build_empty_appliance_projections_response(
-                generated_at=request_now.isoformat()
-            )
-
-        plan = await self._async_get_appliance_projection_plan(
-            solar_forecast=_build_corrected_solar_forecast_view(
-                canonical_solar_forecast
-            ),
-            house_forecast=canonical_house_forecast,
-            started_at=request_now,
-        )
+        pipeline = await self._async_current_pipeline(dt_util.now())
+        plan = pipeline.projection_plan
         if not plan.appliances_by_id:
             return build_empty_appliance_projections_response(generated_at=plan.generated_at)
         return build_appliance_projections_response(
@@ -3161,43 +2448,20 @@ class HelmanCoordinator:
         reference_time: datetime | None = None,
         reason: str | None = None,
     ) -> AutomationRunResult:
-        from .automation.pipeline import (
-            AutomationRunFailure,
-            AutomationRunner,
-            AutomationRunResult,
-        )
+        from .automation.pipeline import AutomationRunner
 
-        automation_config = read_automation_config(self._active_config)
-        if automation_config is None:
-            automation_config = AutomationConfig(enabled=False)
-
-        run_started_at = time.perf_counter()
-        try:
-            result = await AutomationRunner(
-                coordinator=self,
-                automation_config=automation_config,
-            ).run(reference_time=reference_time, run_reason=reason)
-        except Exception as err:
-            _LOGGER.exception("Automation runner escaped coordinator boundary")
-            result = AutomationRunResult.failed(
-                reason="runner_failed",
-                failure=AutomationRunFailure(
-                    stage="coordinator",
-                    message=str(err) or err.__class__.__name__,
-                ),
-                duration_ms=max(0, int((time.perf_counter() - run_started_at) * 1000)),
-            )
-            _LOGGER.info(
-                "automation run result trigger=%s outcome=%s ran=%s optimizers=%s duration_ms=%s cleanup_reason=%s cleanup_actions=%s failure_stage=%s",
-                reason or "manual",
-                result.reason or "completed",
-                result.ran_automation,
-                len(result.optimizers),
-                result.duration_ms,
-                None,
-                0,
-                result.failure.stage,
-            )
+        result = await AutomationRunner(
+            automation_config=self._automation_config_or_disabled(),
+            schedule=self.schedule,
+            forecast=self,
+            recorder=self,
+            build_snapshot=functools.partial(
+                build_automation_snapshot,
+                config=self._active_config,
+            ),
+            read_control_config=self._read_schedule_control_config,
+            run_in_executor=self._hass.async_add_executor_job,
+        ).run(reference_time=reference_time, run_reason=reason)
         self._record_automation_run(result)
         return result
 
@@ -3218,35 +2482,9 @@ class HelmanCoordinator:
         set_by: ScheduleActionSetBy | None = None,
     ) -> ScheduleResponseDict:
         request_now = reference_time or dt_util.now()
-        document_changed = False
-        async with self._schedule_lock:
-            schedule_document = await self._load_pruned_schedule_document_locked(
-                reference_time=request_now
-            )
-            normalized_slots = normalize_slot_patch_request(
-                slots=slots,
-                reference_time=request_now,
-                battery_soc_bounds=self._read_battery_soc_bounds(),
-                appliances_registry=self._appliances_registry.current,
-            )
-            stamped_slots = [
-                with_slot_set_by(slot, set_by=set_by) for slot in normalized_slots
-            ]
-            updated_document = ScheduleDocument(
-                execution_enabled=schedule_document.execution_enabled,
-                slots=apply_slot_patches(
-                    stored_slots=schedule_document.slots,
-                    slot_patches=stamped_slots,
-                ),
-            )
-            if updated_document != schedule_document:
-                await self._save_schedule_document(updated_document)
-                document_changed = True
-            response = self._build_schedule_response(
-                schedule_document=updated_document,
-                reference_time=request_now,
-            )
-
+        response, document_changed = await self.schedule.set_slots(
+            slots=slots, reference_time=request_now, set_by=set_by
+        )
         if document_changed:
             await self._async_run_post_schedule_write_side_effects(
                 reason="schedule_updated",
@@ -3266,42 +2504,7 @@ class HelmanCoordinator:
         # No cache invalidation here: the schedule signatures the pipeline read
         # computes cover every slot this write can have touched, so the next
         # card read rebuilds only if the plan it draws actually changed.
-        #
-        # The write is already persisted; execution is only requested, so a
-        # websocket reply or automation run never waits behind hardware. The
-        # worker reads the time and the schedule afresh when it starts.
-        self._schedule_executor.request_reconcile(reason=reason)
-
-    async def _persist_automation_result_locked(
-        self,
-        *,
-        automation_result: ScheduleDocument,
-        reference_time: datetime | None = None,
-    ) -> bool:
-        request_now = reference_time or dt_util.now()
-        latest_document = await self._load_pruned_schedule_document_locked(
-            reference_time=request_now
-        )
-        normalized_automation_result = self._normalize_schedule_document_for_strict_write(
-            schedule_document=ScheduleDocument(
-                execution_enabled=latest_document.execution_enabled,
-                slots=automation_result.slots,
-            ),
-            reference_time=request_now,
-        )
-        merged_document = merge_automation_result(
-            baseline=latest_document,
-            automation_result=normalized_automation_result,
-        )
-        canonical_document = normalize_schedule_document_for_registry(
-            merged_document,
-            appliances_registry=self._appliances_registry.current,
-        )
-        if canonical_document == latest_document:
-            return False
-
-        await self._save_schedule_document(canonical_document)
-        return True
+        self.schedule.request_reconcile(reason=reason)
 
     async def set_schedule_execution(
         self,
@@ -3310,194 +2513,46 @@ class HelmanCoordinator:
         reference_time: datetime | None = None,
     ) -> ScheduleResponseDict:
         request_now = reference_time or dt_util.now()
-
-        # Only the flag transition is serialized. The enable reconcile below is
-        # awaited outside this lock, so a disable issued while hardware is slow
-        # still persists at once.
-        async with self._schedule_execution_lock:
-            async with self._schedule_lock:
-                current_document = await self._load_pruned_schedule_document_locked(
-                    reference_time=request_now
-                )
-                was_enabled = current_document.execution_enabled
-
-                if enabled and not self._schedule_executor.is_running:
-                    # Home Assistant is still starting (or the entry is going
-                    # away): nothing could validate an enable now. Decide before
-                    # touching storage; an already-enabled flag is applied by
-                    # the startup reconcile anyway.
-                    if was_enabled:
-                        return self._build_schedule_response(
-                            schedule_document=current_document,
-                            reference_time=request_now,
-                        )
-                    raise ScheduleExecutionUnavailableError(
-                        "Schedule execution is not running yet; try again once "
-                        "Home Assistant has started"
-                    )
-
-                if enabled and not was_enabled:
-                    await self._save_schedule_document(
-                        ScheduleDocument(
-                            execution_enabled=True,
-                            slots=current_document.slots,
-                        )
-                    )
-            # Only a real flag change is a newer decision: a repeated enable
-            # must not cancel the rollback of the first one still in flight.
-            if enabled != was_enabled:
-                self._schedule_execution_generation += 1
-            generation = self._schedule_execution_generation
-
-            if not enabled:
-                # Disabling execution is passive: Helman stops touching hardware
-                # and leaves the inverter and every appliance exactly as they
-                # are. The user restores normal state explicitly, whenever they
-                # choose, via the scheduling card. Disabling therefore cannot
-                # fail and never rolls back.
-                #
-                # The executor keeps running so its tick still drives the
-                # pre-execution reality check; it just stops applying anything.
-                # Runtime status is dropped right away so the card does not keep
-                # showing what was executing a moment ago.
-                self._schedule_executor.reset_runtime()
-
-                if not was_enabled:
-                    return self._build_schedule_response(
-                        schedule_document=current_document,
-                        reference_time=request_now,
-                    )
-
-                await self._async_persist_execution_disabled_locked(
-                    reference_time=request_now
-                )
-                return await self._build_current_schedule_response(
-                    reference_time=request_now
-                )
-
-        try:
-            await self._schedule_executor.async_reconcile_and_wait(
-                reason="enable_request",
-            )
-        except ScheduleError as err:
-            if generation != self._schedule_execution_generation:
-                # A newer flag change superseded this request -- typically a
-                # disable, whose gate then aborted this attempt. Its outcome is
-                # moot; report the flag as persisted, as the success path does.
-                _LOGGER.debug(
-                    "Superseded enable reconcile ended with: %s (%s)",
-                    err,
-                    err.code,
-                )
-                return await self._build_current_schedule_response(
-                    reference_time=reference_time or dt_util.now()
-                )
-            if not was_enabled:
-                _LOGGER.warning(
-                    "Failed to enable schedule execution: %s (%s); rolling back persisted execution flag",
-                    err,
-                    err.code,
-                )
-                await self._async_roll_back_failed_enable(
-                    generation=generation,
-                    reference_time=request_now,
-                )
-            else:
-                _LOGGER.warning(
-                    "Failed to reconcile already-enabled schedule execution: %s (%s)",
-                    err,
-                    err.code,
-                )
-            raise
-        # Report the flag as persisted, not as requested: a disable or another
-        # enable's rollback may have landed while this one waited on hardware.
-        # A fresh clock, not `request_now`: the reconcile above may have run
-        # across a slot edge.
-        response = await self._build_current_schedule_response(
-            reference_time=reference_time or dt_util.now()
+        response, transitioned_on = await self.schedule.set_execution(
+            enabled=enabled, reference_time=reference_time
         )
-        # Announce only the enable that made the transition, and only if no
-        # newer transition has superseded it.
-        if (
-            response["executionEnabled"]
-            and not was_enabled
-            and generation == self._schedule_execution_generation
-        ):
+        if transitioned_on:
             await self._automation_triggers.request_immediate(
                 reason="execution_enabled",
                 reference_time=request_now,
             )
         return response
 
-    async def _async_persist_execution_disabled_locked(
-        self,
-        *,
-        reference_time: datetime,
-    ) -> None:
-        """Persist ``executionEnabled=false``; caller holds the flag lock."""
-        async with self._schedule_lock:
-            latest_document = await self._load_pruned_schedule_document_locked(
-                reference_time=reference_time
-            )
-            if latest_document.execution_enabled:
-                # Keep the plan intact: automation keeps planning while
-                # execution is off, so the card and the inspectors show what
-                # Helman would be doing. Only the apply step is suppressed.
-                await self._save_schedule_document(
-                    ScheduleDocument(
-                        execution_enabled=False,
-                        slots=latest_document.slots,
-                    )
-                )
+    # Delegates for tests/test_coordinator_schedule_execution.py, which reaches
+    # these coordinator attributes and is held unchanged across the move of the
+    # schedule into ScheduleService. Production code goes through
+    # ``self.schedule``.
 
-    async def _async_roll_back_failed_enable(
-        self,
-        *,
-        generation: int,
-        reference_time: datetime,
-    ) -> None:
-        async with self._schedule_execution_lock:
-            # A newer enable or disable has decided the flag since; this old
-            # failure must not undo it.
-            if generation != self._schedule_execution_generation:
-                return
-            # The rollback is itself a flag transition: an overlapping enable
-            # still waiting must report the persisted state, not success.
-            # Bumped before the save, which yields on disk I/O, so such a
-            # waiter sees the transition however it interleaves with it.
-            self._schedule_execution_generation += 1
-            await self._async_persist_execution_disabled_locked(
-                reference_time=reference_time
-            )
-            self._schedule_executor.reset_runtime()
+    @property
+    def _schedule_executor(self) -> ScheduleExecutor:
+        return self.schedule.executor
 
-    @staticmethod
-    def _build_cleaned_automation_schedule_document(
-        *,
-        schedule_document: ScheduleDocument,
-    ) -> ScheduleDocument:
-        cleaned_document = strip_automation_owned_actions(schedule_document)
-        return ScheduleDocument(
-            execution_enabled=schedule_document.execution_enabled,
-            slots=cleaned_document.slots,
-        )
+    @_schedule_executor.setter
+    def _schedule_executor(self, executor: ScheduleExecutor) -> None:
+        self.schedule.executor = executor
 
-    async def _async_cleanup_automation_owned_actions_if_needed(
-        self,
-        *,
-        reference_time: datetime,
-    ) -> bool:
-        async with self._schedule_lock:
-            schedule_document = await self._load_pruned_schedule_document_locked(
-                reference_time=reference_time
-            )
-            cleaned_document = self._build_cleaned_automation_schedule_document(
-                schedule_document=schedule_document,
-            )
-            if cleaned_document == schedule_document:
-                return False
-            await self._save_schedule_document(cleaned_document)
-            return True
+    @property
+    def _schedule_execution_lock(self) -> asyncio.Lock:
+        return self.schedule._execution_lock
+
+    def _load_schedule_document(self) -> ScheduleDocument:
+        return self.schedule.load()
+
+    async def _async_normalize_schedule_document(self) -> None:
+        await self.schedule.async_normalize()
+
+    async def _persist_automation_result_locked(self, **kwargs: Any) -> bool:
+        return await self.schedule.persist_automation_result(**kwargs)
+
+    async def get_schedule(
+        self, *, reference_time: datetime | None = None
+    ) -> ScheduleResponseDict:
+        return await self.schedule.get(reference_time=reference_time)
 
     def get_automation_input_bundle(self) -> AutomationInputBundle | None:
         if self._automation_input_bundle is None:
@@ -3564,14 +2619,9 @@ class HelmanCoordinator:
             reference_time=request_now, reason=reason
         )
 
-        automation_config = read_automation_config(self._active_config)
-        if automation_config is None:
-            automation_config = AutomationConfig(enabled=False)
+        automation_config = self._automation_config_or_disabled()
 
-        async with self._schedule_lock:
-            schedule_document = await self._load_pruned_schedule_document_locked(
-                reference_time=request_now
-            )
+        schedule_document = await self.schedule.read(request_now)
 
         if not (
             automation_config.enabled_appliance_optimizers
@@ -3594,9 +2644,9 @@ class HelmanCoordinator:
     ) -> _ForecastRefreshResult:
         """Build new forecast snapshots, cache them, and persist them.
 
-        ``reason`` only reaches :meth:`_publish_solar_forecast_entities`, which
-        publishes the battery/grid current-slot forecast sensors on the
-        slot-aligned rebuild alone.
+        ``reason`` only reaches :meth:`_publish_solar_forecast_entities`; the
+        battery/grid current-slot forecast sensors publish on the slot-aligned
+        rebuild alone.
         """
         request_now = reference_time or dt_util.now()
         try:
@@ -3605,9 +2655,9 @@ class HelmanCoordinator:
             )
             house_snapshot = await builder.build(
                 reference_time=request_now,
-                profile=self._house_profile,
-                trained_at=self._house_profile_trained_at,
-                last_outcome=self._house_profile_last_outcome,
+                profile=self.training.house_profile,
+                trained_at=self.training.house_profile_trained_at,
+                last_outcome=self.training.house_profile_last_outcome,
                 forecast_days=MAX_FORECAST_DAYS,
             )
             # One SolarForecastBuilder.build() per refresh: its solar half
@@ -3644,7 +2694,7 @@ class HelmanCoordinator:
                 solar_snapshot = self._cached_solar_forecast
             self._cached_forecast = house_snapshot
             self._cached_solar_forecast = solar_snapshot
-            self._invalidate_battery_forecast_cache()
+            self._invalidate_pipeline_cache()
             await self._storage.async_save_snapshots(
                 house_snapshot=house_snapshot,
                 solar_snapshot=solar_snapshot,
@@ -3652,12 +2702,16 @@ class HelmanCoordinator:
             # Warm the appliance pipeline before publishing so the house
             # consumption sensor reports the adjusted (base + scheduled) demand,
             # keeping the recorded history it feeds aligned with the battery and
-            # grid forecasts. Never let a pipeline failure block the refresh.
-            await self._async_warm_appliance_pipeline(
-                house_forecast=house_snapshot,
-                solar_snapshot=solar_snapshot,
-                started_at=request_now,
-            )
+            # grid forecasts. Best-effort: a house forecast that is not
+            # available leaves the pipeline cold and the sensor falls back to
+            # the base load, and a pipeline failure never blocks the refresh.
+            if house_snapshot.get("status") == "available":
+                try:
+                    await self._async_current_pipeline(
+                        request_now, in_flight=(house_snapshot, solar_snapshot)
+                    )
+                except Exception:
+                    _LOGGER.exception("Failed to warm appliance forecast pipeline")
             # The builder is the one authority on what a price is, so the
             # published sensor republishes what it just computed rather than
             # deriving the rate a second time.
@@ -3709,35 +2763,6 @@ class HelmanCoordinator:
             new_snapshot.get("status") == "unavailable"
             and not new_snapshot.get("points")
         )
-
-    async def _async_warm_appliance_pipeline(
-        self,
-        *,
-        house_forecast: dict[str, Any],
-        solar_snapshot: dict[str, Any] | None,
-        started_at: datetime,
-    ) -> None:
-        """Build the appliance forecast pipeline so its adjusted house forecast
-        is available to the house consumption sensor at publish time.
-
-        Best-effort: a missing or unavailable forecast just leaves the pipeline
-        cold, and the sensor falls back to the base load.
-        """
-        if house_forecast.get("status") != "available":
-            return
-        solar_forecast = (
-            _build_corrected_solar_forecast_view(solar_snapshot)
-            if isinstance(solar_snapshot, dict)
-            else {"status": "unavailable", "points": []}
-        )
-        try:
-            await self._async_get_appliance_forecast_pipeline(
-                solar_forecast=solar_forecast,
-                house_forecast=house_forecast,
-                started_at=started_at,
-            )
-        except Exception:
-            _LOGGER.exception("Failed to warm appliance forecast pipeline")
 
     async def _async_refresh_automation_input_bundle(
         self,
@@ -3801,47 +2826,6 @@ class HelmanCoordinator:
             ),
         )
 
-    async def _async_get_battery_forecast(
-        self,
-        *,
-        solar_forecast: dict[str, Any],
-        house_forecast: dict[str, Any],
-        started_at: datetime,
-    ) -> dict[str, Any]:
-        pipeline = await self._async_get_appliance_forecast_pipeline(
-            solar_forecast=solar_forecast,
-            house_forecast=house_forecast,
-            started_at=started_at,
-        )
-        return pipeline.battery_forecast
-
-    async def _async_get_battery_forecast_snapshot(self) -> dict[str, Any] | None:
-        """Return the battery forecast snapshot for the solar bias inspector.
-
-        Goes through the forecast pipeline rather than reading the cache
-        directly, so the inspector does not depend on another consumer having
-        called get_forecast() first. Reuses the pipeline cache when it is warm.
-        """
-        request_now = dt_util.now()
-        canonical_solar_forecast = await self._async_get_canonical_solar_forecast(
-            reference_time=request_now
-        )
-        if canonical_solar_forecast is None:
-            canonical_solar_forecast = {"status": "unavailable", "points": []}
-        canonical_house_forecast = await self._async_get_canonical_house_forecast(
-            reference_time=request_now
-        )
-        if canonical_house_forecast is None:
-            return None
-
-        return await self._async_get_battery_forecast(
-            solar_forecast=_build_corrected_solar_forecast_view(
-                canonical_solar_forecast
-            ),
-            house_forecast=canonical_house_forecast,
-            started_at=request_now,
-        )
-
     def _get_adjusted_house_forecast_snapshot(self) -> dict[str, Any] | None:
         """Return the house forecast the battery simulation ran against.
 
@@ -3854,10 +2838,10 @@ class HelmanCoordinator:
         scheduled them for — and the two stacks would not balance.
 
         Reads the pipeline the caller has already built through
-        _async_get_battery_forecast_snapshot; there is no adjusted forecast to
+        battery_forecast(); there is no adjusted forecast to
         speak of before that.
         """
-        pipeline = self._cached_appliance_forecast_pipeline
+        pipeline = self._cached_pipeline()
         if pipeline is None:
             return None
         return pipeline.adjusted_house_forecast
@@ -3878,7 +2862,7 @@ class HelmanCoordinator:
         battery forecast rebuild. Cold cache yields None and the card degrades to
         a plain forecast figure.
         """
-        pipeline = self._cached_appliance_forecast_pipeline
+        pipeline = self._cached_pipeline()
         if pipeline is None:
             return None
         return {
@@ -3890,39 +2874,12 @@ class HelmanCoordinator:
         self,
         *,
         schedule_document: ScheduleDocument,
-    ) -> _ForecastScheduleDocuments:
-        # The single place ``execution_enabled`` gates the forecast, for both
-        # domains at once.
-        #
-        # With execution off Helman actuates nothing — the executor returns
-        # before it touches either the inverter or an appliance -- so the
-        # forecast projects the unmanaged house: no scheduled inverter action,
-        # and no scheduled appliance run either. The card's schedule strips go
-        # on showing the plan; the curves show what will happen while it is not
-        # being executed, and the two are read as plan against reality.
-        #
-        # Gating both documents here rather than deeper down is what keeps that
-        # honest. Emptying only the inverter side — which is what the overlay
-        # builder used to do on its own -- left the battery unmanaged while the
-        # house forecast still carried appliance runs that could not happen, a
-        # trajectory that was neither the plan nor the reality. It also keeps
-        # both forecast cache signatures correct for free: they are derived from
-        # these documents, so an execution toggle changes them without either
-        # signature having to know the flag exists.
-        if not schedule_document.execution_enabled:
-            unmanaged = ScheduleDocument(execution_enabled=False, slots={})
-            return _ForecastScheduleDocuments(
-                forecast_schedule_document=unmanaged,
-                projection_schedule_document=unmanaged,
-            )
-        return _ForecastScheduleDocuments(
-            forecast_schedule_document=self._build_battery_forecast_schedule_document(
-                schedule_document=schedule_document
-            ),
-            projection_schedule_document=schedule_document,
+    ) -> ForecastScheduleDocuments:
+        return build_forecast_schedule_documents(
+            schedule_document, self._read_schedule_control_config()
         )
 
-    async def _async_gather_compute_inputs(
+    async def gather_compute_inputs(
         self,
         *,
         started_at: datetime,
@@ -3937,6 +2894,9 @@ class HelmanCoordinator:
         ``include_condition_flags`` evaluates optimizer execution conditions —
         only the automation pipeline needs them; forecast/projection paths skip
         the work. See :class:`ComputeInputs`.
+
+        Lock-free: never takes the schedule lock, so the automation runner may
+        call it while holding that lock for its whole run.
         """
         entity_config = read_battery_entity_config(self._active_config)
         battery_live_state = None
@@ -3966,10 +2926,12 @@ class HelmanCoordinator:
                     self._hass, self._appliances_registry.current
                 )
             ),
-            condition_met_by_optimizer_id=_condition_met_map(custom_condition_results),
             custom_condition_results_by_optimizer_id=custom_condition_results,
             appliance_active_by_id=self._read_appliance_active_by_id(),
         )
+
+    # For the same held test file, which calls the gather by its old name.
+    _async_gather_compute_inputs = gather_compute_inputs
 
     def _read_appliance_active_by_id(self) -> dict[str, bool]:
         """Which appliances are running right now, from live state.
@@ -4247,7 +3209,7 @@ class HelmanCoordinator:
         when_active_hourly_energy_kwh_by_appliance_id: dict[str, float | None] | None,
         grid_price_forecast: dict[str, Any] | None = None,
         compute_inputs: ComputeInputs | None = None,
-    ) -> _ForecastRebuildSnapshot:
+    ) -> ForecastRebuildSnapshot:
         """Async wrapper: gather I/O (unless supplied), then run the pure core.
 
         The core is the appliance projection plus the whole battery/grid
@@ -4256,12 +3218,14 @@ class HelmanCoordinator:
         is captured in ``compute_inputs`` here on the loop, so the hop is safe.
         """
         if compute_inputs is None:
-            compute_inputs = await self._async_gather_compute_inputs(
+            compute_inputs = await self.gather_compute_inputs(
                 started_at=started_at
             )
         return await self._hass.async_add_executor_job(
             functools.partial(
-                self._build_forecast_rebuild_pure,
+                build_forecast_rebuild,
+                config=self._active_config,
+                appliances_registry=self._pinned_appliances_registry(compute_inputs),
                 solar_forecast=solar_forecast,
                 original_house_forecast=original_house_forecast,
                 started_at=started_at,
@@ -4275,32 +3239,6 @@ class HelmanCoordinator:
             )
         )
 
-    def _build_battery_forecast_sync(
-        self,
-        *,
-        solar_forecast: dict[str, Any],
-        house_forecast: dict[str, Any],
-        started_at: datetime,
-        forecast_days: int,
-        schedule_overlay: ScheduleForecastOverlay | None,
-        live_state: Any,
-        actual_history: list[dict[str, Any]],
-    ) -> dict[str, Any]:
-        """Synchronous battery-forecast seam used by the pure rebuild core.
-
-        The live battery state and recorder history are pre-gathered, so this
-        never touches ``hass`` or the recorder.
-        """
-        return BatteryCapacityForecastBuilder(self._active_config).build_with_history(
-            solar_forecast=solar_forecast,
-            house_forecast=house_forecast,
-            started_at=started_at,
-            forecast_days=forecast_days,
-            schedule_overlay=schedule_overlay,
-            live_state=live_state,
-            actual_history=actual_history,
-        )
-
     def _pinned_appliances_registry(
         self, compute_inputs: ComputeInputs
     ) -> AppliancesRuntimeRegistry:
@@ -4312,72 +3250,6 @@ class HelmanCoordinator:
         that built its inputs without one.
         """
         return compute_inputs.appliances_registry or self._appliances_registry.current
-
-    def _build_forecast_rebuild_pure(
-        self,
-        *,
-        solar_forecast: dict[str, Any],
-        original_house_forecast: dict[str, Any],
-        started_at: datetime,
-        forecast_schedule_document: ScheduleDocument,
-        projection_schedule_document: ScheduleDocument,
-        when_active_hourly_energy_kwh_by_appliance_id: dict[str, float | None] | None,
-        compute_inputs: ComputeInputs,
-        grid_price_forecast: dict[str, Any] | None = None,
-    ) -> _ForecastRebuildSnapshot:
-        """Pure, synchronous forecast rebuild.
-
-        Never touches ``hass`` or the recorder — every live value comes from
-        ``compute_inputs`` — so it is safe to run in an executor.
-        """
-        input_bundle = build_projection_input_bundle(
-            solar_forecast=solar_forecast,
-            house_forecast=original_house_forecast,
-            reference_time=started_at,
-        )
-        projection_plan = build_appliance_projection_plan(
-            generated_at=started_at.isoformat(),
-            registry=self._pinned_appliances_registry(compute_inputs),
-            schedule_document=projection_schedule_document,
-            inputs=input_bundle,
-            hass=None,
-            reference_time=started_at,
-            when_active_hourly_energy_kwh_by_appliance_id=(
-                when_active_hourly_energy_kwh_by_appliance_id
-            ),
-            vehicle_remaining_capacity_kwh_by_vehicle_id=(
-                compute_inputs.vehicle_remaining_capacity_kwh_by_vehicle_id
-            ),
-        )
-        adjusted_house_forecast = build_adjusted_house_forecast(
-            house_forecast=original_house_forecast,
-            demand_points=projection_plan.demand_points,
-        )
-        schedule_overlay = self._build_battery_forecast_schedule_overlay(
-            schedule_document=forecast_schedule_document,
-            reference_time=started_at,
-        )
-        battery_forecast = self._build_battery_forecast_sync(
-            solar_forecast=solar_forecast,
-            house_forecast=adjusted_house_forecast,
-            started_at=started_at,
-            forecast_days=MAX_FORECAST_DAYS,
-            schedule_overlay=schedule_overlay,
-            live_state=compute_inputs.battery_live_state,
-            actual_history=compute_inputs.battery_actual_history,
-        )
-        grid_forecast = (
-            None
-            if grid_price_forecast is None
-            else build_grid_flow_forecast_snapshot(battery_forecast)
-        )
-        return _ForecastRebuildSnapshot(
-            adjusted_house_forecast=adjusted_house_forecast,
-            battery_forecast=battery_forecast,
-            projection_plan=projection_plan,
-            grid_forecast=grid_forecast,
-            schedule_overlay=schedule_overlay,
-        )
 
     async def async_load_day_context_bands(self) -> dict[tuple[date, str], str]:
         """The band each (day, optimizer) pair emitted on the previous run.
@@ -4402,197 +3274,86 @@ class HelmanCoordinator:
             optimizer_ids=optimizer_ids,
         )
 
-    async def _build_automation_snapshot_from_schedule_locked(
+    async def _async_current_pipeline(
         self,
+        now: datetime,
         *,
-        schedule_document: ScheduleDocument,
-        input_bundle: AutomationInputBundle,
-        reference_time: datetime,
-        day_contexts: dict[date, DayContext] | None = None,
-        compute_inputs: ComputeInputs | None = None,
-    ) -> OptimizationSnapshot:
-        """Async wrapper: gather the run-invariant live inputs once (unless the
-        caller already has them), then build the snapshot with the pure core.
-
-        The core carries a full forecast rebuild, so it goes to the executor
-        like the optimizer loop's own per-iteration rebuilds do. Nothing in it
-        reads ``hass`` — the live values are all in ``compute_inputs``, gathered
-        on the loop just above.
-        """
-        if compute_inputs is None:
-            compute_inputs = await self._async_gather_compute_inputs(
-                started_at=reference_time,
-                include_condition_flags=True,
-            )
-        return await self._hass.async_add_executor_job(
-            functools.partial(
-                self._build_automation_snapshot_from_schedule_pure,
-                schedule_document=schedule_document,
-                input_bundle=input_bundle,
-                reference_time=reference_time,
-                day_contexts=day_contexts,
-                compute_inputs=compute_inputs,
-            )
-        )
-
-    def _build_automation_snapshot_from_schedule_pure(
-        self,
-        *,
-        schedule_document: ScheduleDocument,
-        input_bundle: AutomationInputBundle,
-        reference_time: datetime,
-        day_contexts: dict[date, DayContext] | None = None,
-        compute_inputs: ComputeInputs,
-    ) -> OptimizationSnapshot:
-        """Pure, synchronous snapshot build.
-
-        Every live value comes from ``compute_inputs`` and every helper it calls
-        is hass-free, so this is safe to run in an executor.
-        """
-        # Resource accounting sees only committed actions: candidate actions
-        # (placed by optimizers whose execution condition is not met) are
-        # stripped here so their demand/battery draw frees up for downstream
-        # optimizers. They remain in ``snapshot.schedule`` for display and
-        # execution/promotion.
-        schedule_documents = self._build_forecast_schedule_documents(
-            schedule_document=strip_candidate_actions(schedule_document)
-        )
-        # #272 (P2 of #270): the phased run rebuilds the snapshot from
-        # ``working_schedule_document`` alone after every step — there is no
-        # more pending-lane restoration concept, so the projection always
-        # comes from this same document's own schedule documents.
-        projection_schedule_document = schedule_documents.projection_schedule_document
-        rebuild = self._build_forecast_rebuild_pure(
-            solar_forecast=input_bundle.solar_forecast,
-            original_house_forecast=input_bundle.original_house_forecast,
-            started_at=reference_time,
-            forecast_schedule_document=schedule_documents.forecast_schedule_document,
-            projection_schedule_document=projection_schedule_document,
-            when_active_hourly_energy_kwh_by_appliance_id=(
-                input_bundle.when_active_hourly_energy_kwh_by_appliance_id
-            ),
-            grid_price_forecast=input_bundle.grid_price_forecast,
-            compute_inputs=compute_inputs,
-        )
-        if rebuild.grid_forecast is None:
-            raise RuntimeError("Automation snapshot rebuild is missing grid forecast")
-        battery_status = rebuild.battery_forecast.get("status")
-        if battery_status not in {"available", "partial"}:
-            # Do not let optimizers skip unusable battery rails and persist an
-            # incomplete plan. The runner reports this as a snapshot failure.
-            house_anchor = rebuild.adjusted_house_forecast.get("currentSlot")
-            house_anchor_timestamp = (
-                house_anchor.get("timestamp")
-                if isinstance(house_anchor, dict)
-                else None
-            )
-            raise RuntimeError(
-                "Automation snapshot rebuild has unusable battery forecast: "
-                f"status={battery_status!r}, house_anchor={house_anchor_timestamp!r}"
-            )
-
-        battery_state = compute_inputs.battery_live_state
-
-        battery_settings = read_battery_forecast_settings(self._active_config)
-        battery_max_charge_power_kw = (
-            battery_settings.max_charge_power_w / 1000
-            if battery_settings.max_charge_power_w is not None
-            else None
-        )
-        battery_max_discharge_power_kw = (
-            battery_settings.max_discharge_power_w / 1000
-            if battery_settings.max_discharge_power_w is not None
-            else None
-        )
-        battery_usable_capacity_kwh = (
-            battery_state.nominal_capacity_kwh if battery_state is not None else None
-        )
-
-        return OptimizationSnapshot(
-            schedule=deepcopy(schedule_document),
-            adjusted_house_forecast=deepcopy(rebuild.adjusted_house_forecast),
-            battery_forecast=deepcopy(rebuild.battery_forecast),
-            grid_forecast=deepcopy(rebuild.grid_forecast),
-            # Not deepcopied: a frozen dataclass of frozen slots, and the
-            # optimizers only read it.
-            schedule_overlay=rebuild.schedule_overlay,
-            context=OptimizationContext(
-                now=reference_time,
-                battery_state=battery_state,
-                solar_forecast=deepcopy(input_bundle.solar_forecast),
-                import_price_forecast=deepcopy(
-                    input_bundle.grid_price_forecast.get("import", {})
-                ),
-                export_price_forecast=deepcopy(
-                    input_bundle.grid_price_forecast.get("export", {})
-                ),
-                appliance_registry=self._pinned_appliances_registry(compute_inputs),
-                when_active_hourly_energy_kwh_by_appliance_id=deepcopy(
-                    input_bundle.when_active_hourly_energy_kwh_by_appliance_id
-                ),
-                battery_max_charge_power_kw=battery_max_charge_power_kw,
-                battery_usable_capacity_kwh=battery_usable_capacity_kwh,
-                battery_charge_efficiency=battery_settings.charge_efficiency,
-                battery_max_discharge_power_kw=battery_max_discharge_power_kw,
-                battery_discharge_efficiency=battery_settings.discharge_efficiency,
-                runtime_hours_by_appliance_id_by_local_date=deepcopy(
-                    input_bundle.runtime_hours_by_appliance_id_by_local_date
-                ),
-                day_contexts=dict(day_contexts) if day_contexts else {},
-                condition_met_by_optimizer_id=dict(
-                    compute_inputs.condition_met_by_optimizer_id
-                ),
-                custom_condition_results_by_optimizer_id=dict(
-                    compute_inputs.custom_condition_results_by_optimizer_id
-                ),
-                appliance_active_by_id=dict(compute_inputs.appliance_active_by_id),
-            ),
-        )
-
-    async def _async_get_appliance_forecast_pipeline(
-        self,
-        *,
-        solar_forecast: dict[str, Any],
-        house_forecast: dict[str, Any],
-        started_at: datetime,
+        in_flight: tuple[dict[str, Any], dict[str, Any] | None] | None = None,
     ) -> _ApplianceForecastPipelineSnapshot:
         """Serve the shared appliance/battery pipeline, building it at most once.
+
+        The one read path. Readers build against the canonical house and solar
+        snapshots; the refresh warming the pipeline hands over the (house,
+        solar) snapshots it has just built as ``in_flight`` instead.
 
         The cache check, the history gather and the rebuild used to run without
         any coordination, so every caller that arrived while a build was in
         flight saw the same miss and started its own gather and simulation. The
         build lock closes that window: the first misser builds, the others wait
-        and then recheck the cache it filled. The recheck is a full
-        :meth:`_has_valid_battery_forecast_cache` call against freshly prepared
-        inputs, so a waiter whose inputs are *not* compatible with what the
-        winner built (different slot, schedule, snapshot generation or drifted
-        battery state) still builds its own rather than adopting the wrong
-        result. Waiting is cancellation-safe: a cancelled waiter releases its
-        place in the lock queue and never touches the build another waiter is
-        still waiting for.
+        and then recheck the cache it filled. The recheck compares a key built
+        from freshly prepared inputs, so a waiter whose inputs are *not*
+        compatible with what the winner built (different slot, schedule,
+        snapshot generation or drifted battery state) still builds its own
+        rather than adopting the wrong result. Waiting is cancellation-safe: a
+        cancelled waiter releases its place in the lock queue and never touches
+        the build another waiter is still waiting for.
 
         The preparation is inside the lock too. It is what the check reads, and
         a waiter that prepared before the winner published would be deciding
         against a schedule and a battery state that have since moved.
         """
+        if in_flight is None:
+            house_forecast = self._canonical_house_forecast()
+            solar_snapshot = self._cached_solar_forecast
+        else:
+            house_forecast, solar_snapshot = in_flight
+        solar_forecast = (
+            _build_corrected_solar_forecast_view(solar_snapshot)
+            if isinstance(solar_snapshot, dict)
+            else {"status": "unavailable", "points": []}
+        )
         async with self._appliance_forecast_pipeline_lock:
             prepared = await self._async_prepare_forecast_pipeline_inputs(
-                started_at=started_at
+                started_at=now
             )
-            cached = self._read_valid_appliance_forecast_pipeline(
-                solar_forecast=solar_forecast,
-                house_forecast=house_forecast,
-                started_at=started_at,
-                prepared=prepared,
+            key = _PipelineCacheKey(
+                slot_start=_forecast_slot_start(now),
+                house_generated_at=house_forecast.get("generatedAt"),
+                solar_signature=build_battery_forecast_solar_signature(
+                    solar_forecast
+                ),
+                schedule_sig=prepared.schedule_signature,
+                appliance_sig=prepared.appliance_schedule_signature,
+                effective_sig=prepared.schedule_effective_signature,
             )
-            if cached is not None:
-                return cached
+            entry = self._pipeline_cache
+            if (
+                entry is not None
+                and entry.key == key
+                and dt_util.as_utc(now) < dt_util.as_utc(entry.expires_at)
+                and self._has_compatible_battery_forecast_live_state(
+                    entry.snapshot.battery_forecast, prepared.live_state
+                )
+            ):
+                return entry.snapshot
             return await self._async_build_appliance_forecast_pipeline(
                 solar_forecast=solar_forecast,
                 house_forecast=house_forecast,
-                started_at=started_at,
+                started_at=now,
                 prepared=prepared,
+                key=key,
             )
+
+    def _cached_pipeline(self) -> _ApplianceForecastPipelineSnapshot | None:
+        """The pipeline last cached, for the readers that serve it as it is."""
+        entry = self._pipeline_cache
+        return None if entry is None else entry.snapshot
+
+    # The signature builder as a coordinator attribute, for the schedule
+    # execution tests that derive the read path's signature through it.
+    _build_battery_forecast_schedule_signature = staticmethod(
+        build_battery_forecast_schedule_signature
+    )
 
     async def _async_prepare_forecast_pipeline_inputs(
         self,
@@ -4600,10 +3361,7 @@ class HelmanCoordinator:
         started_at: datetime,
     ) -> _PreparedForecastPipelineInputs:
         """Load the schedule and live state, and derive the cache signatures."""
-        async with self._schedule_lock:
-            schedule_document = await self._load_pruned_schedule_document_locked(
-                reference_time=started_at
-            )
+        schedule_document = await self.schedule.read(started_at)
         # Candidate actions (placed by optimizers whose execution condition is
         # not met) are kept in the stored schedule for display/promotion but must
         # not consume resources. Strip them here so the per-appliance projection,
@@ -4628,43 +3386,23 @@ class HelmanCoordinator:
             forecast_schedule_document=forecast_schedule_document,
             projection_schedule_document=projection_schedule_document,
             live_state=run_live_state,
-            schedule_signature=self._build_battery_forecast_schedule_signature(
+            schedule_signature=build_battery_forecast_schedule_signature(
                 forecast_schedule_document
             ),
             appliance_schedule_signature=(
-                self._build_appliance_projection_schedule_signature(
+                build_appliance_projection_schedule_signature(
                     projection_schedule_document
                 )
             ),
             schedule_effective_signature=(
-                self._build_battery_forecast_schedule_effective_signature(
-                    schedule_document=forecast_schedule_document,
+                build_battery_forecast_schedule_effective_signature(
+                    forecast_schedule_document,
                     reference_time=started_at,
+                    battery_entity_config=battery_entity_config,
                     live_state=run_live_state,
                 )
             ),
         )
-
-    def _read_valid_appliance_forecast_pipeline(
-        self,
-        *,
-        solar_forecast: dict[str, Any],
-        house_forecast: dict[str, Any],
-        started_at: datetime,
-        prepared: _PreparedForecastPipelineInputs,
-    ) -> _ApplianceForecastPipelineSnapshot | None:
-        if not self._has_valid_battery_forecast_cache(
-            solar_forecast=solar_forecast,
-            house_forecast=house_forecast,
-            started_at=started_at,
-            schedule_signature=prepared.schedule_signature,
-            appliance_schedule_signature=prepared.appliance_schedule_signature,
-            schedule_effective_signature=prepared.schedule_effective_signature,
-        ):
-            return None
-        if self._cached_appliance_forecast_pipeline is None:
-            raise RuntimeError("Forecast pipeline cache is missing shared snapshot")
-        return self._cached_appliance_forecast_pipeline
 
     async def _async_build_appliance_forecast_pipeline(
         self,
@@ -4673,6 +3411,7 @@ class HelmanCoordinator:
         house_forecast: dict[str, Any],
         started_at: datetime,
         prepared: _PreparedForecastPipelineInputs,
+        key: _PipelineCacheKey,
     ) -> _ApplianceForecastPipelineSnapshot:
         history_hourly_energy_kwh_by_appliance_id = (
             self._build_history_projection_hourly_energy_by_appliance_id(
@@ -4686,7 +3425,7 @@ class HelmanCoordinator:
         # handed were read by the caller long before it got here: see
         # :meth:`_cache_holds_newer_pipeline`.
         revision = self._forecast_cache_revision
-        compute_inputs = await self._async_gather_compute_inputs(
+        compute_inputs = await self.gather_compute_inputs(
             started_at=started_at,
             live_state=prepared.live_state,
         )
@@ -4713,14 +3452,21 @@ class HelmanCoordinator:
                 house_forecast=house_forecast, started_at=started_at
             )
         ):
-            self._store_battery_forecast_cache(
-                pipeline=pipeline,
-                solar_forecast=solar_forecast,
-                house_forecast=house_forecast,
-                started_at=started_at,
-                schedule_signature=prepared.schedule_signature,
-                appliance_schedule_signature=prepared.appliance_schedule_signature,
-                schedule_effective_signature=prepared.schedule_effective_signature,
+            # Keyed on the slot the battery forecast itself says it started in:
+            # one without a ``startedAt`` -- every status short of a simulated
+            # one -- then matches no read and is rebuilt by the next reader.
+            self._pipeline_cache = _PipelineCacheEntry(
+                key=replace(
+                    key,
+                    slot_start=_battery_forecast_slot_start(
+                        pipeline.battery_forecast
+                    ),
+                ),
+                expires_at=dt_util.as_local(
+                    dt_util.as_utc(started_at)
+                    + timedelta(seconds=BATTERY_CAPACITY_FORECAST_CACHE_TTL_SECONDS)
+                ),
+                snapshot=pipeline,
             )
         else:
             # The caller asked for exactly these inputs, so it still gets what it
@@ -4732,136 +3478,9 @@ class HelmanCoordinator:
             )
         return pipeline
 
-    async def _async_get_appliance_projection_plan(
-        self,
-        *,
-        solar_forecast: dict[str, Any],
-        house_forecast: dict[str, Any],
-        started_at: datetime,
-    ) -> ApplianceProjectionPlan:
-        pipeline = await self._async_get_appliance_forecast_pipeline(
-            solar_forecast=solar_forecast,
-            house_forecast=house_forecast,
-            started_at=started_at,
-        )
-        return pipeline.projection_plan
-
-    @staticmethod
-    def _build_battery_forecast_schedule_signature(
-        schedule_document: ScheduleDocument,
-    ) -> _BatteryForecastScheduleSignature:
-        return tuple(
-            (
-                slot_id,
-                inverter_action(actions).kind,
-                inverter_action(actions).target_soc,
-            )
-            for slot_id, actions in sorted(schedule_document.slots.items())
-        )
-
-    def _build_battery_forecast_schedule_document(
-        self,
-        *,
-        schedule_document: ScheduleDocument,
-    ) -> ScheduleDocument:
-        control_config = self._read_schedule_control_config()
-        if control_config is None:
-            return schedule_document
-
-        forecast_slots = {
-            slot_id: actions
-            for slot_id, actions in schedule_document.slots.items()
-            if not (
-                inverter_action(actions).kind == SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC
-                and SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC not in control_config.options
-            )
-            and not (
-                inverter_action(actions).kind == SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC
-                and SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC not in control_config.options
-            )
-        }
-        return ScheduleDocument(
-            execution_enabled=schedule_document.execution_enabled,
-            slots=forecast_slots,
-        )
-
-    def _build_battery_forecast_schedule_effective_signature(
-        self,
-        *,
-        schedule_document: ScheduleDocument,
-        reference_time: datetime,
-        live_state: Any = _LIVE_STATE_UNSET,
-    ) -> tuple[str, str, int | None, str, str] | None:
-        active_slot_id = format_slot_id(build_horizon_start(reference_time))
-        active_actions = schedule_document.slots.get(active_slot_id)
-        active_action = (
-            None if active_actions is None else inverter_action(active_actions)
-        )
-        if active_action is None or active_action.kind not in {
-            SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
-            SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
-        }:
-            return None
-
-        battery_entity_config = read_battery_entity_config(self._active_config)
-        if battery_entity_config is None:
-            return (
-                active_slot_id,
-                active_action.kind,
-                active_action.target_soc,
-                "not_configured",
-                "not_configured",
-            )
-
-        if live_state is _LIVE_STATE_UNSET:
-            live_state = read_battery_live_state(self._hass, battery_entity_config)
-        if live_state is None:
-            return (
-                active_slot_id,
-                active_action.kind,
-                active_action.target_soc,
-                "unavailable",
-                "execution_unavailable",
-            )
-
-        resolution = resolve_executed_schedule_action(
-            action=active_action,
-            current_soc=live_state.current_soc,
-        )
-        return (
-            active_slot_id,
-            active_action.kind,
-            active_action.target_soc,
-            resolution.executed_action.kind,
-            resolution.reason,
-        )
-
-    @staticmethod
-    def _build_battery_forecast_schedule_overlay(
-        *,
-        schedule_document: ScheduleDocument,
-        reference_time: datetime,
-    ) -> ScheduleForecastOverlay | None:
-        from .scheduling.forecast_overlay import build_schedule_forecast_overlay
-
-        return build_schedule_forecast_overlay(
-            schedule_document=schedule_document,
-            reference_time=reference_time,
-        )
-
-    def _invalidate_battery_forecast_cache(self) -> None:
+    def _invalidate_pipeline_cache(self) -> None:
         self._forecast_cache_revision += 1
-        self._cached_appliance_forecast_pipeline = None
-        self._cached_battery_forecast = None
-        self._cached_battery_forecast_expires_at = None
-        self._cached_battery_forecast_house_generated_at = None
-        self._cached_battery_forecast_solar_signature = None
-        self._cached_battery_forecast_schedule_signature = None
-        self._cached_battery_forecast_schedule_effective_signature = None
-        self._invalidate_appliance_projection_cache()
-
-    def _invalidate_appliance_projection_cache(self) -> None:
-        self._cached_appliance_projection_schedule_signature = None
+        self._pipeline_cache = None
 
     def _cache_holds_newer_pipeline(
         self,
@@ -4880,145 +3499,19 @@ class HelmanCoordinator:
         signature -- the current battery forecast, the adjusted house forecast,
         the house composition -- would publish it for the rest of the slot.
         """
-        cached = self._cached_appliance_forecast_pipeline
-        if cached is None:
+        entry = self._pipeline_cache
+        if entry is None:
             return False
-        if dt_util.as_utc(cached.started_at) > dt_util.as_utc(started_at):
+        if dt_util.as_utc(entry.snapshot.started_at) > dt_util.as_utc(started_at):
             return True
         cached_generated_at = dt_util.parse_datetime(
-            self._cached_battery_forecast_house_generated_at or ""
+            entry.key.house_generated_at or ""
         )
         generated_at = dt_util.parse_datetime(house_forecast.get("generatedAt") or "")
         return (
             cached_generated_at is not None
             and generated_at is not None
             and cached_generated_at > generated_at
-        )
-
-    def _has_valid_battery_forecast_cache(
-        self,
-        *,
-        solar_forecast: dict[str, Any],
-        house_forecast: dict[str, Any],
-        started_at: datetime,
-        schedule_signature: _BatteryForecastScheduleSignature,
-        appliance_schedule_signature: tuple[
-            tuple[str, tuple[tuple[str, tuple[tuple[str, object], ...]], ...]],
-            ...,
-        ],
-        schedule_effective_signature: tuple[str, str, int | None, str, str] | None,
-    ) -> bool:
-        if (
-            self._cached_battery_forecast is None
-            or self._cached_battery_forecast_expires_at is None
-        ):
-            return False
-
-        if (
-            dt_util.as_utc(started_at)
-            >= dt_util.as_utc(self._cached_battery_forecast_expires_at)
-        ):
-            return False
-
-        cached_started_at_raw = self._cached_battery_forecast.get("startedAt")
-        if not isinstance(cached_started_at_raw, str):
-            return False
-
-        cached_started_at = dt_util.parse_datetime(cached_started_at_raw)
-        if cached_started_at is None:
-            return False
-
-        if get_local_current_slot_start(
-            cached_started_at,
-            interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
-        ) != get_local_current_slot_start(
-            started_at,
-            interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
-        ):
-            return False
-
-        if (
-            self._cached_battery_forecast_house_generated_at
-            != house_forecast.get("generatedAt")
-        ):
-            return False
-
-        if (
-            self._cached_battery_forecast_solar_signature
-            != self._build_battery_forecast_solar_signature(solar_forecast)
-        ):
-            return False
-
-        if self._cached_battery_forecast_schedule_signature != schedule_signature:
-            return False
-
-        if (
-            self._cached_appliance_projection_schedule_signature
-            != appliance_schedule_signature
-        ):
-            return False
-
-        if (
-            self._cached_battery_forecast_schedule_effective_signature
-            != schedule_effective_signature
-        ):
-            return False
-
-        return self._has_compatible_battery_forecast_live_state()
-
-    def _store_battery_forecast_cache(
-        self,
-        *,
-        pipeline: _ApplianceForecastPipelineSnapshot,
-        solar_forecast: dict[str, Any],
-        house_forecast: dict[str, Any],
-        started_at: datetime,
-        schedule_signature: _BatteryForecastScheduleSignature,
-        appliance_schedule_signature: tuple[
-            tuple[str, tuple[tuple[str, tuple[tuple[str, object], ...]], ...]],
-            ...,
-        ],
-        schedule_effective_signature: tuple[str, str, int | None, str, str] | None,
-    ) -> None:
-        self._cached_appliance_forecast_pipeline = pipeline
-        self._cached_battery_forecast = pipeline.battery_forecast
-        self._cached_battery_forecast_expires_at = dt_util.as_local(
-            dt_util.as_utc(started_at)
-            + timedelta(seconds=BATTERY_CAPACITY_FORECAST_CACHE_TTL_SECONDS)
-        )
-        self._cached_battery_forecast_house_generated_at = house_forecast.get(
-            "generatedAt"
-        )
-        self._cached_battery_forecast_solar_signature = (
-            self._build_battery_forecast_solar_signature(solar_forecast)
-        )
-        self._cached_battery_forecast_schedule_signature = schedule_signature
-        self._cached_battery_forecast_schedule_effective_signature = (
-            schedule_effective_signature
-        )
-        self._cached_appliance_projection_schedule_signature = appliance_schedule_signature
-
-    @staticmethod
-    def _build_appliance_projection_schedule_signature(
-        schedule_document: ScheduleDocument,
-    ) -> tuple[
-        tuple[str, tuple[tuple[str, tuple[tuple[str, object], ...]], ...]],
-        ...,
-    ]:
-        return tuple(
-            (
-                slot_id,
-                tuple(
-                    (
-                        appliance_id,
-                        tuple(sorted(action.items())),
-                    )
-                    for appliance_id, action in sorted(
-                        appliance_actions(actions).items()
-                    )
-                ),
-            )
-            for slot_id, actions in sorted(schedule_document.slots.items())
         )
 
     def _build_history_projection_hourly_energy_by_appliance_id(
@@ -5038,7 +3531,7 @@ class HelmanCoordinator:
         the projection already reads as "use the configured hourly energy".
         """
         return {
-            appliance.id: self._appliance_energy_estimates.get(appliance.id)
+            appliance.id: self.training.appliance_energy_estimates.get(appliance.id)
             for appliance in self._iter_projected_history_appliances(
                 schedule_document=schedule_document
             )
@@ -5066,7 +3559,7 @@ class HelmanCoordinator:
     ) -> float:
         if not appliance.projection.uses_history_average:
             return appliance.projection.hourly_energy_kwh
-        estimate = self._appliance_energy_estimates.get(appliance.id)
+        estimate = self.training.appliance_energy_estimates.get(appliance.id)
         if estimate is None or estimate <= 0:
             return appliance.projection.hourly_energy_kwh
         return estimate
@@ -5097,7 +3590,9 @@ class HelmanCoordinator:
         comes back empty instead, exactly as it did when each appliance was read
         on its own, so a failure never masquerades as a run of idle days.
         """
-        lookback_days_by_appliance_id = self._resolve_runtime_history_requirements()
+        lookback_days_by_appliance_id = resolve_runtime_history_requirements(
+            self._automation_config_or_disabled()
+        )
         if lookback_days_by_appliance_id is None:
             return {}
 
@@ -5132,58 +3627,6 @@ class HelmanCoordinator:
 
         return {request.key: queried.get(request.key) or {} for request in requests}
 
-    def _resolve_runtime_history_requirements(
-        self,
-    ) -> dict[str, int] | None:
-        """Return ``{appliance id: lookback days}`` for appliance_runtime rules.
-
-        The keys are the appliances referenced by an enabled
-        ``appliance_runtime`` optimizer — the only appliances whose recorder
-        history needs resolving. The value is that appliance's own requirement:
-        the largest ``max_consecutive_skips`` among the optimizers targeting it,
-        plus one day, which is what ``_prior_consecutive_skips`` can walk back
-        over before the answer stops mattering. Returns ``None`` when no such
-        optimizer references a valid appliance.
-
-        **The appliance lives on ``target``, not on ``params``.** It is identity,
-        which a condition group may never override, and every other reader takes
-        it from there (``config.controllable_ids``, ``base.py``,
-        ``conditions/types.py``). Reading ``params`` found nothing, so this
-        returned ``None``, the runtime map came back empty, and every appliance's
-        ``delivered_hours`` was 0 for every day — a daily minimum that never
-        counted what had already run, and a consecutive-skip guard walking back
-        over days that all looked idle.
-        """
-        automation_config = read_automation_config(self._active_config)
-        if automation_config is None or not automation_config.enabled:
-            return None
-        lookback_days_by_appliance_id: dict[str, int] = {}
-        for optimizer in automation_config.enabled_appliance_optimizers:
-            max_consecutive_skips = 0
-            # ``params.daily_minimum.max_consecutive_skips``, which is where the
-            # consumer reads it (``optimizers/appliance_runtime.py``). The old
-            # ``params.skip`` mapping is in ``RELOCATED_OPTIMIZER_KEYS`` and the
-            # loader migrates it away, so reading it found nothing and every
-            # appliance silently fell back to a one-day lookback -- the same
-            # class of miss as ``appliance_id`` below.
-            daily_minimum = optimizer.params.get("daily_minimum")
-            if isinstance(daily_minimum, Mapping):
-                raw = daily_minimum.get("max_consecutive_skips")
-                if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 0:
-                    max_consecutive_skips = raw
-            # Every member of a group runs its own daily-minimum chain against
-            # the optimizer's shared ``max_consecutive_skips``.
-            for appliance_id in optimizer.controllable_ids:
-                if not appliance_id:
-                    continue
-                lookback_days_by_appliance_id[appliance_id] = max(
-                    lookback_days_by_appliance_id.get(appliance_id, 0),
-                    max_consecutive_skips + 1,
-                )
-        if not lookback_days_by_appliance_id:
-            return None
-        return lookback_days_by_appliance_id
-
     def _iter_automation_candidate_appliances(
         self,
     ) -> list[GenericApplianceRuntime | ClimateApplianceRuntime]:
@@ -5207,7 +3650,7 @@ class HelmanCoordinator:
                     continue
 
                 appliance = self._appliances_registry.current.get_appliance(appliance_id)
-                if not self._is_projected_history_action_active(
+                if not is_projected_history_action_active(
                     appliance=appliance,
                     action=action,
                 ):
@@ -5220,36 +3663,14 @@ class HelmanCoordinator:
 
         return projected
 
-    @staticmethod
-    def _is_projected_history_action_active(
-        *,
-        appliance,
-        action: Mapping[str, Any] | None,
+    def _has_compatible_battery_forecast_live_state(
+        self, battery_forecast: dict[str, Any], live_state: Any
     ) -> bool:
-        if appliance is None or action is None:
-            return False
-        spec = spec_for(appliance.kind)
-        projection = spec.projection(appliance)
-        return (
-            projection is not None
-            and projection.uses_history_average
-            and spec.is_running(action)
-        )
-
-    def _has_compatible_battery_forecast_live_state(self) -> bool:
-        battery_entity_config = read_battery_entity_config(self._active_config)
-        if battery_entity_config is None:
-            return True
-
-        live_state = read_battery_live_state(self._hass, battery_entity_config)
         if live_state is None:
             return True
 
-        if self._cached_battery_forecast is None:
-            return False
-
-        current_soc = self._cached_battery_forecast.get("currentSoc")
-        current_remaining_energy_kwh = self._cached_battery_forecast.get(
+        current_soc = battery_forecast.get("currentSoc")
+        current_remaining_energy_kwh = battery_forecast.get(
             "currentRemainingEnergyKwh"
         )
         if not isinstance(current_soc, (int, float)) or not isinstance(
@@ -5265,36 +3686,6 @@ class HelmanCoordinator:
                 - live_state.current_remaining_energy_kwh
             )
             <= _BATTERY_FORECAST_CACHE_ENERGY_TOLERANCE_KWH
-        )
-
-    @staticmethod
-    def _build_battery_forecast_solar_signature(
-        solar_forecast: dict[str, Any],
-    ) -> tuple[Any, ...]:
-        points = solar_forecast.get("adjustedPoints")
-        if not isinstance(points, list):
-            points = solar_forecast.get("correctedPoints")
-        if not isinstance(points, list):
-            points = solar_forecast.get("points")
-        if not isinstance(points, list):
-            points = []
-
-        normalized_points: list[tuple[str, float]] = []
-        for point in points:
-            if not isinstance(point, dict):
-                continue
-
-            timestamp = point.get("timestamp")
-            value = point.get("value")
-            if not isinstance(timestamp, str):
-                continue
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                continue
-            normalized_points.append((timestamp, round(float(value), 4)))
-
-        return (
-            solar_forecast.get("status"),
-            tuple(normalized_points),
         )
 
     def _start_forecast_refresh(self) -> None:
@@ -5315,7 +3706,7 @@ class HelmanCoordinator:
             # session unavailable. See #204.
             self._create_tracked_refresh_task(
                 self._async_refresh_forecast(
-                    reason=_SLOT_ALIGNED_REFRESH_REASON,
+                    reason=SLOT_ALIGNED_REFRESH_REASON,
                     reference_time=get_local_current_slot_start(
                         dt_util.as_local(fired_at),
                         interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
@@ -5386,239 +3777,6 @@ class HelmanCoordinator:
         await self._automation_triggers.request_debounced(reason="condition_changed")
         return True
 
-    def _visualization_config(self) -> dict[str, Any]:
-        return read_visualization(self._active_config)
-
-    def _init_buffers(self, tree: dict, index: TreeIndex) -> None:
-        """Initialize rolling deques, retaining history for surviving sensors."""
-        history_buckets: int = self._visualization_config()["history_buckets"]
-        previous_history = self._power_history
-        previous_unmeasured = self._unmeasured_raw_history
-        previous_unmeasured_ids = self._unmeasured_entity_id_map
-
-        self._virtual_sensor_ids = set(index.virtual_sensor_ids)
-        self._virtual_sensor_ids.add(CONSUMPTION_TOTAL_ENTITY_ID)
-        self._virtual_sensor_ids.add(PRODUCTION_TOTAL_ENTITY_ID)
-
-        self._unmeasured_entity_id_map = dict(index.unmeasured_entity_id_map)
-        self._share_entity_id_map = {
-            node_id: entity_id
-            for node_id, (entity_id, _name) in index.share_devices.items()
-        }
-        # The very members the shared-meter history split reads, with the same
-        # running signal each, so the live split cannot pick other devices.
-        shared_meters = read_shared_meters(self._active_config).values()
-        self._share_running_signals = {
-            member_id: (entity_id, activity)
-            for shared in shared_meters
-            for member_id, entity_id, activity in shared["members"]
-        }
-        # Every member of one meter carries its parent's tolerance, so a share
-        # node's parent is found without walking the config again.
-        self._share_tolerances = {
-            member_id: shared["tolerance"]
-            for shared in shared_meters
-            for member_id, _entity_id, _activity in shared["members"]
-        }
-        # Keep smoothing windows only for unmeasured entity ids that survive.
-        self._unmeasured_raw_history = {
-            node_id: history
-            for node_id, history in previous_unmeasured.items()
-            if node_id in previous_unmeasured_ids
-            and previous_unmeasured_ids.get(node_id)
-            == self._unmeasured_entity_id_map.get(node_id)
-        }
-        self._refresh_inverter_telemetry()
-
-        # Create deques for all power sensors (real + virtual unmeasured) plus virtual totals
-        self._power_history = {
-            eid: previous_history.get(eid, deque(maxlen=history_buckets))
-            for eid in self._power_sensor_ids
-        }
-        self._power_history[CONSUMPTION_TOTAL_ENTITY_ID] = previous_history.get(
-            CONSUMPTION_TOTAL_ENTITY_ID, deque(maxlen=history_buckets)
-        )
-        self._power_history[PRODUCTION_TOTAL_ENTITY_ID] = previous_history.get(
-            PRODUCTION_TOTAL_ENTITY_ID, deque(maxlen=history_buckets)
-        )
-        # Add deques for source ratio sensors so their history is included in get_history().
-        # Derive the ratio entity IDs from the tree (NOT from _source_ratio_sensors, which the
-        # sensor platform only populates via set_sensors AFTER async_setup has already built these
-        # buffers). Without this the ratio history is absent from get_history() and the card paints
-        # every past consumer bucket with its fallback colour instead of the source colours.
-        # Mark them virtual: their values are computed by _tick Step 3, so the Step 1 real-sensor
-        # read loop must not also append them (that would double-append per tick and desync them).
-        self._source_ratio_entity_ids = dict(index.source_ratio_entity_ids)
-        for ratio_entity_id in self._source_ratio_entity_ids.values():
-            self._power_history[ratio_entity_id] = previous_history.get(
-                ratio_entity_id, deque(maxlen=history_buckets)
-            )
-            self._virtual_sensor_ids.add(ratio_entity_id)
-        self._buffer_tree = tree
-
-    def _refresh_inverter_telemetry(self) -> None:
-        self._vendor_telemetry = resolve_vendor_telemetry(self._hass, self._active_config)
-        self._inverter_telemetry = self._vendor_telemetry.get(INVERTER_TELEMETRY_KEY)
-
-    def _start_tick(self) -> None:
-        """Start the periodic tick using HA's time-interval tracker."""
-        if self._unloaded or self._unsub_tick is not None:
-            return
-        bucket_duration: int = self._visualization_config()["history_bucket_duration"]
-        self._unsub_tick = async_track_time_interval(
-            self._hass,
-            self._tick,
-            timedelta(seconds=bucket_duration),
-        )
-
-    def _stop_tick(self) -> None:
-        """Stop the periodic tick."""
-        if self._unsub_tick is not None:
-            self._unsub_tick()
-            self._unsub_tick = None
-
-    @callback
-    def _tick(self, now: datetime) -> None:
-        """Periodic snapshot: read sensors, compute ratios, push derived sensor values."""
-        if self._cached_tree is None:
-            return
-
-        # Step 1: Read all real (non-virtual) power sensors from hass.states
-        for entity_id, dq in self._power_history.items():
-            if entity_id not in self._virtual_sensor_ids:
-                dq.append(self._read_power(entity_id, "default"))
-
-        # Step 2: Compute virtual sensor values and record into _power_history
-        # Unmeasured powers (one per qualifying parent node) and shares (one per
-        # meterless child). ``None`` is unavailable: the sensor says so, and the
-        # history bucket — which only holds numbers — records 0 W, as the card
-        # shows an unavailable sensor.
-        unmeasured_map, share_map = self._compute_derived_powers()
-        for watts_by_node, entity_ids, sensors in (
-            (unmeasured_map, self._unmeasured_entity_id_map, self._unmeasured_sensors),
-            (share_map, self._share_entity_id_map, self._share_sensors),
-        ):
-            for node_id, watts in watts_by_node.items():
-                entity_id = entity_ids.get(node_id)
-                if entity_id and entity_id in self._power_history:
-                    self._power_history[entity_id].append(watts if watts is not None else 0.0)
-                sensor = sensors.get(node_id)
-                if sensor is not None:
-                    sensor.update_value(watts)
-
-        # Total power (consumption side)
-        total = self._compute_consumption_total()
-        if CONSUMPTION_TOTAL_ENTITY_ID in self._power_history:
-            self._power_history[CONSUMPTION_TOTAL_ENTITY_ID].append(total)
-        if self._consumption_total_sensor is not None:
-            self._consumption_total_sensor.update_value(total)
-
-        # Measured house consumption, per phase and their sum
-        phase_powers = self._compute_house_phase_powers()
-        house_total = (
-            None
-            if any(watts is None for watts in phase_powers.values())
-            else sum(phase_powers.values())
-        )
-        for sensor in self._house_consumption_sensors:
-            sensor.update_value(
-                house_total if sensor.phase is None else phase_powers[sensor.phase]
-            )
-
-        # Production total (source side)
-        production = self._compute_production_total()
-        if PRODUCTION_TOTAL_ENTITY_ID in self._power_history:
-            self._power_history[PRODUCTION_TOTAL_ENTITY_ID].append(production)
-        if self._production_total_sensor is not None:
-            self._production_total_sensor.update_value(production)
-
-        # Step 3: Compute global source ratios, record their history, and update ratio sensors.
-        # Driven by the tree-derived ratio entity IDs (not the sensor objects) so ratio history is
-        # recorded from the first tick, even before the sensor platform registers the ratio sensor
-        # entities. The sensor objects, when present, are used only to publish the displayed value.
-        if self._source_ratio_entity_ids:
-            normalized = {
-                src: max(0.0, watts_for_value_type(
-                    self._power_history[src][-1] if self._power_history.get(src) else 0.0,
-                    self._source_value_types.get(src, "default"),
-                ))
-                for src in self._source_sensor_ids
-                if src in self._power_history
-            }
-            total_source = sum(normalized.values())
-            for src_eid, ratio_entity_id in self._source_ratio_entity_ids.items():
-                ratio_pct = (normalized.get(src_eid, 0.0) / total_source * 100.0) if total_source > 0 else 0.0
-                if ratio_entity_id in self._power_history:
-                    self._power_history[ratio_entity_id].append(ratio_pct)
-                sensor = self._source_ratio_sensors.get(src_eid)
-                if sensor is not None:
-                    sensor.update_value(ratio_pct)
-
-        # Step 4: Battery ETAs (separate sensors for charging and discharging)
-        if self._battery_time_to_full is not None or self._battery_time_to_empty is not None:
-            battery_cfg = read_mapping(
-                config_value(self._active_config, "energy_nodes.battery")
-            )
-            sensor_id = read_battery_entities(self._active_config).get("power")
-            hist = list(self._power_history.get(sensor_id, [])) if sensor_id else []
-
-            # The one power reading not routed through ``value_type``: this
-            # works off the raw history buffer, so it has to apply the
-            # configured polarity itself. Getting it wrong is silent -- the two
-            # ETAs simply report each other's value.
-            if is_power_inverted(battery_cfg, "battery"):
-                hist = [-v for v in hist]
-
-            pos_values = [v for v in hist if v > 1]
-            neg_values = [abs(v) for v in hist if v < -1]
-            charging_avg = sum(pos_values) / len(pos_values) if pos_values else 0.0
-            discharging_avg = sum(neg_values) / len(neg_values) if neg_values else 0.0
-
-            if self._battery_time_to_full is not None:
-                minutes, target_time, target_soc = (
-                    self._compute_charging_eta(charging_avg) if charging_avg > 0
-                    else (None, "", None)
-                )
-                self._battery_time_to_full.update_value(minutes, target_time, target_soc)
-
-            if self._battery_time_to_empty is not None:
-                minutes, target_time, target_soc = (
-                    self._compute_discharging_eta(discharging_avg) if discharging_avg > 0
-                    else (None, "", None)
-                )
-                self._battery_time_to_empty.update_value(minutes, target_time, target_soc)
-
-    def get_history(self) -> dict:
-        """Return a pure dict copy of the in-memory rolling buffer. Zero computation."""
-        return {
-            "entity_history": {eid: list(dq) for eid, dq in self._power_history.items()},
-        }
-
-    def _read_power(self, entity_id: str | None, value_type: str) -> float:
-        """Read a power sensor's current value from hass.states; 0 W when it has none."""
-        watts = self._read_power_or_none(entity_id, value_type)
-        return watts if watts is not None else 0.0
-
-    def _read_power_or_none(self, entity_id: str | None, value_type: str) -> float | None:
-        """Read a power sensor's current value; ``None`` when missing or unavailable."""
-        if not entity_id:
-            return None
-        state = self._hass.states.get(entity_id)
-        if state is None or state.state in ("unavailable", "unknown", "none"):
-            return None
-        try:
-            raw = float(state.state)
-        except ValueError:
-            return None
-        factor = power_unit_factor(getattr(state, "attributes", {}).get("unit_of_measurement"))
-        return None if factor is None else watts_for_value_type(raw * factor, value_type)
-
-    def _read_battery_state(self):
-        entity_config = read_battery_entity_config(self._active_config)
-        if entity_config is None:
-            return None
-        return read_battery_live_state(self._hass, entity_config)
-
     def _read_schedule_executor_battery_state(self):
         entity_config = read_battery_entity_config(self._active_config)
         if entity_config is None:
@@ -5655,236 +3813,13 @@ class HelmanCoordinator:
             return None
         return read_battery_soc_bounds(self._hass, bounds_config)
 
-    def _compute_charging_eta(
-        self, charging_avg_w: float
-    ) -> tuple[float | None, str, int | None]:
-        """Compute time to reach max_soc at the given average charging rate."""
-        state = self._read_battery_state()
-        if state is None:
-            return None, "", None
-        to_full_kwh = state.max_energy_kwh - state.current_remaining_energy_kwh
-        if to_full_kwh <= 0:
-            return None, "", None
-        hours = (to_full_kwh * 1000) / charging_avg_w
-        minutes = hours * 60
-        target = datetime.now(tz=timezone.utc) + timedelta(hours=hours)
-        return minutes, target.isoformat(), round(state.max_soc)
-
-    def _compute_discharging_eta(
-        self, discharging_avg_w: float
-    ) -> tuple[float | None, str, int | None]:
-        """Compute time to reach min_soc at the given average discharging rate."""
-        state = self._read_battery_state()
-        if state is None:
-            return None, "", None
-        usable_kwh = state.current_remaining_energy_kwh - state.min_energy_kwh
-        if usable_kwh <= 0:
-            return None, "", None
-        hours = (usable_kwh * 1000) / discharging_avg_w
-        minutes = hours * 60
-        target = datetime.now(tz=timezone.utc) + timedelta(hours=hours)
-        return minutes, target.isoformat(), round(state.min_soc)
-
-    def _compute_consumption_total(self) -> float:
-        """Sum consumer-side top-level node powers (house + battery charging + grid export)."""
-        if self._cached_tree is None:
-            return 0.0
-        total = 0.0
-        for node in self._cached_tree.get("consumers", []):
-            if node.get("isVirtual"):
-                continue
-            total += self._read_power(
-                node.get("powerSensorId"), node.get("valueType", "default")
-            )
-        return total
-
-    def _compute_house_phase_powers(self) -> dict[int, float | None]:
-        """Measured house load per phase, ``{1: W, 2: W, 3: W}``; ``None`` unavailable.
-
-        On-grid the house draws what the inverter outputs plus what the meter
-        imports, plus the EPS output: ``ac − grid (export-positive) + eps``. A
-        missing EPS reading counts as 0 W; a missing inverter or meter reading
-        leaves the phase unknown. Off-grid the grid port is open and the EPS
-        output is the whole house, so the inverter's AC reading is not counted
-        twice. The inverter and the meter are polled at different moments, so a
-        fast change in export can briefly read below zero; a house never
-        exports, so a phase is floored at 0 W. Every phase is ``None`` without
-        an inverter profile.
-        """
-        telemetry = self._inverter_telemetry
-        if telemetry is None:
-            return {phase: None for phase in (1, 2, 3)}
-        entities = telemetry.entities
-        condition = run_mode_condition(self._hass, telemetry)
-        off_grid = condition is not None and condition["kind"] == "off_grid"
-        export_sign = (
-            1.0 if telemetry.profile.grid_phase_power_polarity == "positive_is_export" else -1.0
-        )
-        powers: dict[int, float | None] = {}
-        for phase in (1, 2, 3):
-            eps = self._read_power_or_none(entities.get(f"eps_power_l{phase}"), "default")
-            if off_grid:
-                powers[phase] = eps
-                continue
-            ac = self._read_power_or_none(entities.get(f"ac_power_l{phase}"), "default")
-            grid = self._read_power_or_none(entities.get(f"grid_power_l{phase}"), "default")
-            powers[phase] = (
-                None
-                if ac is None or grid is None
-                else max(0.0, ac - grid * export_sign + (eps or 0.0))
-            )
-        return powers
-
-    def _compute_production_total(self) -> float:
-        """Sum source-side top-level node powers (solar + battery_discharging + grid_import)."""
-        if self._cached_tree is None:
-            return 0.0
-        total = 0.0
-        for node in self._cached_tree.get("sources", []):
-            if node.get("isVirtual"):
-                continue
-            raw = self._read_power(node.get("powerSensorId"), "default")
-            total += max(0.0, watts_for_value_type(raw, node.get("valueType", "default")))
-        return total
-
-    def _compute_derived_powers(
-        self,
-    ) -> tuple[dict[str, float | None], dict[str, float | None]]:
-        """``({parent node id: remainder W}, {share node id: share W})`` for this tick.
-
-        Both come from each parent's own power, one way: the remainder is own
-        power minus the shares, so the two always add up to it. ``None`` is
-        unavailable.
-        """
-        unmeasured: dict[str, float | None] = {}
-        shares: dict[str, float | None] = {}
-        self._traverse_for_unmeasured(
-            self._cached_tree.get("consumers", []), unmeasured, shares
-        )
-        return unmeasured, shares
-
-    def _traverse_for_unmeasured(self, nodes: list, unmeasured: dict, shares: dict) -> None:
-        for node in nodes:
-            children = node.get("children", [])
-            if children and not node.get("isVirtual"):
-                has_unmeasured = any(c.get("isUnmeasured") for c in children)
-                share_nodes = [c for c in children if c.get("isEstimated")]
-                # Shares without a remainder: a parent with no power sensor. Its
-                # own power cannot be read, so its shares publish unavailable.
-                if has_unmeasured or share_nodes:
-                    own = self._own_power(node, children, strict=bool(share_nodes))
-                    node_shares = self._split_own_power(own, share_nodes)
-                    shares.update(node_shares)
-                    if has_unmeasured:
-                        unmeasured[node["id"]] = (
-                            None
-                            if own is None
-                            else max(0.0, own - sum(node_shares.values()))
-                        )
-            self._traverse_for_unmeasured(children, unmeasured, shares)
-
-    def _own_power(self, node: dict, children: list, *, strict: bool) -> float | None:
-        """A node's reading minus its metered children's, smoothed and floored at zero.
-
-        Only metered children are subtracted: the remainder and the estimated
-        share nodes are derived from this value, so subtracting them would feed
-        it back into itself.
-
-        ``strict`` for a parent its meterless children split: every input must
-        read, else own power is ``None`` — never a figure computed with the
-        missing input as 0 W. Otherwise (the house, a breaker with only
-        sub-meters) an unreadable input counts 0 W and a child without a power
-        sensor is skipped, as the remainder always did.
-        """
-        metered = [
-            c
-            for c in children
-            if not c.get("isVirtual")
-            and not c.get("isUnmeasured")
-            and not c.get("isEstimated")
-        ]
-        if strict:
-            readings = [
-                self._read_power_or_none(n.get("powerSensorId"), n.get("valueType", "default"))
-                for n in (node, *metered)
-            ]
-            if any(reading is None for reading in readings):
-                return None
-            raw = readings[0] - sum(readings[1:])
-        else:
-            raw = self._read_power(
-                node.get("powerSensorId"), node.get("valueType", "default")
-            ) - sum(
-                self._read_power(c.get("powerSensorId"), c.get("valueType", "default"))
-                for c in metered
-                if c.get("powerSensorId")
-            )
-        return self._smooth_unmeasured(node["id"], raw)
-
-    def _split_own_power(
-        self, own: float | None, share_nodes: list
-    ) -> dict[str, float | None]:
-        """Own power split among the running meterless children; 0 W for the rest.
-
-        In the ratio of their learned power and in the parent's tolerance mode,
-        by the very function the training estimate splits history with -- see
-        :func:`.shared_meter_split.split_own_power`. What a capped split does
-        not hand out stays in the parent's remainder.
-        """
-        if own is None:
-            return {n["id"]: None for n in share_nodes}
-        running = [n["id"] for n in share_nodes if self._is_share_running(n["id"])]
-        shares = (
-            split_own_power(
-                own,
-                running,
-                self._shared_meter_weights,
-                tolerance=self._share_tolerances.get(running[0]),
-            )
-            if running
-            else {}
-        )
-        return {n["id"]: shares.get(n["id"], 0.0) for n in share_nodes}
-
-    def _is_share_running(self, device_id: str) -> bool:
-        """Whether a meterless child runs now, by the predicate its history split uses."""
-        signal = self._share_running_signals.get(device_id)
-        if signal is None:
-            return False
-        entity_id, activity = signal
-        state = self._hass.states.get(entity_id)
-        return is_active_state(
-            getattr(state, "state", None), running_active_states(activity)
-        )
-
-    def _smooth_unmeasured(self, node_id: str, raw_watts: float) -> float:
-        """Median of the last few raw own-power readings, floored at zero.
-
-        Own power is a difference between readings taken at different
-        moments: the house meter reports several times a second, each circuit
-        meter only every 7-18 s. Its jitter is therefore of the same order as
-        the remainder itself once the circuits cover most of the house, and
-        flooring the raw difference pinned the published value to a hard 0 for
-        a large share of the time — the card then dropped the row entirely.
-        Taking the median first lets the symmetric skew cancel out; a house
-        whose circuits genuinely account for everything still settles on 0.
-        """
-        bucket_duration = self._visualization_config()["history_bucket_duration"] or 1
-        maxlen = max(1, round(_UNMEASURED_SMOOTHING_WINDOW_S / bucket_duration))
-        window = self._unmeasured_raw_history.get(node_id)
-        if window is None or window.maxlen != maxlen:
-            window = deque(window or (), maxlen=maxlen)
-            self._unmeasured_raw_history[node_id] = window
-        window.append(raw_watts)
-        return max(0.0, median(window))
-
     async def async_unload(self) -> None:
         """Clean up event listeners and stop the tick."""
         self._unloaded = True
         for unsub in self._unsub_listeners:
             unsub()
         self._unsub_listeners.clear()
-        self._stop_tick()
+        self.live.unload()
         self._stop_forecast_refresh()
         await self._async_cancel_refresh_tasks()
         training_batch = self._training_batch
@@ -5901,26 +3836,13 @@ class HelmanCoordinator:
                 job.task = None
         await self._automation_triggers.async_shutdown()
         self._prune_optimizer_condition_checkers(active_keys=set())
-        await self._schedule_executor.async_unload()
-        self._invalidate_battery_forecast_cache()
+        await self.schedule.async_unload()
+        self._invalidate_pipeline_cache()
 
-        self._battery_time_to_full = None
-        self._battery_time_to_empty = None
-        self._unmeasured_sensors = {}
-        self._unmeasured_raw_history = {}
-        self._share_sensors = {}
-        self._consumption_total_sensor = None
-        self._production_total_sensor = None
-        self._house_consumption_sensors = []
-        self._source_ratio_sensors = {}
-        self._source_ratio_entity_ids = {}
-        self._solar_forecast_sensors = []
         self._async_add_entities = None
-        self._unmeasured_sensor_factory = None
-        self._share_sensor_factory = None
-        self._entry = None
+        self._dynamic_sensor_factories = {}
+        self._dynamic_sensors = {}
         self._removing_entity_ids.clear()
-        self._power_history.clear()
         self._explanation_book.clear()
         self._condition_traces.clear()
 
@@ -5940,16 +3862,6 @@ class HelmanCoordinator:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._refresh_tasks.clear()
-
-
-def _condition_met_map(
-    results: dict[str, tuple[CustomConditionGroupResult, ...]],
-) -> dict[str, tuple[bool, ...]]:
-    """Fold per-entry custom results to the per-group bool the optimizers gate on."""
-    return {
-        optimizer_id: tuple(group.met for group in groups)
-        for optimizer_id, groups in results.items()
-    }
 
 
 def _any_group_met_by_optimizer(

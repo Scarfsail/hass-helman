@@ -7,14 +7,14 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
     async def test_run_plans_normally_when_execution_flag_is_off(self) -> None:
         # execution_enabled gates only the apply step: optimizers still run and
         # persist their plan so the card and the inspectors can display it.
-        coordinator = _FakeCoordinator(
+        coordinator = _FakeRunDeps(
             schedule_document=_make_schedule_document(execution_enabled=False),
             bundle=_make_automation_bundle(),
             snapshot_factory=_make_snapshot,
         )
 
-        result = await AutomationRunner(
-            coordinator=coordinator,
+        result = await _make_runner(
+            coordinator,
             automation_config=_make_automation_config(_make_optimizer_instance()),
         ).run(reference_time=REFERENCE_TIME)
 
@@ -26,14 +26,14 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotEqual(coordinator.snapshot_calls, [])
 
     async def test_run_returns_automation_disabled_when_config_disabled(self) -> None:
-        coordinator = _FakeCoordinator(
+        coordinator = _FakeRunDeps(
             schedule_document=_make_schedule_document(),
             bundle=_make_automation_bundle(),
             snapshot_factory=_make_snapshot,
         )
 
-        result = await AutomationRunner(
-            coordinator=coordinator,
+        result = await _make_runner(
+            coordinator,
             automation_config=AutomationConfig(enabled=False),
         ).run(reference_time=REFERENCE_TIME)
 
@@ -46,14 +46,14 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(coordinator.snapshot_calls, [])
 
     async def test_run_returns_inputs_unavailable_without_bundle(self) -> None:
-        coordinator = _FakeCoordinator(
+        coordinator = _FakeRunDeps(
             schedule_document=_make_schedule_document(),
             bundle=None,
             snapshot_factory=_make_snapshot,
         )
 
-        result = await AutomationRunner(
-            coordinator=coordinator,
+        result = await _make_runner(
+            coordinator,
             automation_config=_make_automation_config(_make_optimizer_instance()),
         ).run(reference_time=REFERENCE_TIME)
 
@@ -71,14 +71,14 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
         def _raise_snapshot(**kwargs):
             raise RuntimeError("snapshot boom")
 
-        coordinator = _FakeCoordinator(
+        coordinator = _FakeRunDeps(
             schedule_document=_make_schedule_document(),
             bundle=_make_automation_bundle(),
             snapshot_factory=_raise_snapshot,
         )
 
-        result = await AutomationRunner(
-            coordinator=coordinator,
+        result = await _make_runner(
+            coordinator,
             automation_config=_make_automation_config(_make_optimizer_instance()),
         ).run(reference_time=REFERENCE_TIME)
 
@@ -93,8 +93,8 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNone(result.snapshot)
         self.assertEqual(result.optimizers, ())
-        self.assertEqual(coordinator.persist_calls, [])
-        self.assertEqual(coordinator.post_write_calls, [])
+        self.assertEqual(coordinator.schedule.persist_calls, [])
+        self.assertEqual(coordinator.schedule.reconcile_requests, [])
 
     async def test_run_returns_runner_failed_when_cleanup_persist_raises(self) -> None:
         schedule_document = ScheduleDocument(
@@ -105,17 +105,17 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
                 }
             },
         )
-        coordinator = _FakeCoordinator(
+        coordinator = _FakeRunDeps(
             schedule_document=schedule_document,
             bundle=_make_automation_bundle(),
             snapshot_factory=_make_snapshot,
         )
-        coordinator._save_schedule_document = AsyncMock(
+        coordinator.schedule.save = AsyncMock(
             side_effect=RuntimeError("cleanup write failed")
         )
 
-        result = await AutomationRunner(
-            coordinator=coordinator,
+        result = await _make_runner(
+            coordinator,
             automation_config=AutomationConfig(enabled=False),
         ).run(reference_time=REFERENCE_TIME)
 
@@ -128,18 +128,18 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
                 message="cleanup write failed",
             ),
         )
-        self.assertEqual(coordinator.saved_documents, [])
-        self.assertEqual(coordinator.post_write_calls, [])
+        self.assertEqual(coordinator.schedule.saved_documents, [])
+        self.assertEqual(coordinator.schedule.reconcile_requests, [])
 
     async def test_run_returns_snapshot_and_is_repeatable(self) -> None:
         schedule_document = _make_schedule_document()
-        coordinator = _FakeCoordinator(
+        coordinator = _FakeRunDeps(
             schedule_document=schedule_document,
             bundle=_make_automation_bundle(),
             snapshot_factory=_make_snapshot,
         )
-        runner = AutomationRunner(
-            coordinator=coordinator,
+        runner = _make_runner(
+            coordinator,
             automation_config=_make_automation_config(_make_optimizer_instance()),
         )
 
@@ -173,8 +173,8 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             {"boiler": 1.25},
         )
         self.assertEqual(len(coordinator.snapshot_calls), 4)
-        self.assertEqual(len(coordinator.persist_calls), 2)
-        self.assertEqual(coordinator.post_write_calls, [])
+        self.assertEqual(len(coordinator.schedule.persist_calls), 2)
+        self.assertEqual(coordinator.schedule.reconcile_requests, [])
 
     async def test_run_builds_snapshot_from_stripped_working_schedule(self) -> None:
         next_slot_id = "2026-03-20T21:30:00+01:00"
@@ -190,7 +190,7 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
                 },
             },
         )
-        coordinator = _FakeCoordinator(
+        coordinator = _FakeRunDeps(
             schedule_document=schedule_document,
             bundle=_make_automation_bundle(),
             snapshot_factory=_make_snapshot,
@@ -203,8 +203,8 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
                 optimize=lambda snapshot, config, trace=None: deepcopy(snapshot.schedule)
             ),
         ):
-            result = await AutomationRunner(
-                coordinator=coordinator,
+            result = await _make_runner(
+                coordinator,
                 automation_config=_make_automation_config(_make_optimizer_instance()),
             ).run(reference_time=REFERENCE_TIME)
 
@@ -242,14 +242,14 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
                 }
             },
         )
-        coordinator = _FakeCoordinator(
+        coordinator = _FakeRunDeps(
             schedule_document=schedule_document,
             bundle=_make_automation_bundle(),
             snapshot_factory=_make_snapshot,
         )
 
-        result = await AutomationRunner(
-            coordinator=coordinator,
+        result = await _make_runner(
+            coordinator,
             automation_config=AutomationConfig(enabled=False),
         ).run(reference_time=REFERENCE_TIME)
 
@@ -261,9 +261,9 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
                 actions_stripped=1,
             ),
         )
-        self.assertEqual(len(coordinator.saved_documents), 1)
+        self.assertEqual(len(coordinator.schedule.saved_documents), 1)
         self.assertEqual(
-            schedule_document_to_dict(coordinator.saved_documents[0]),
+            schedule_document_to_dict(coordinator.schedule.saved_documents[0]),
             {
                 "executionEnabled": True,
                 "slotMinutes": SCHEDULE_SLOT_MINUTES,
@@ -271,26 +271,26 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertEqual(
-            coordinator.post_write_calls,
+            coordinator.schedule.reconcile_requests,
             [("automation_updated", False)],
         )
 
     async def test_run_skips_cleanup_write_when_disabled_schedule_is_already_clean(self) -> None:
-        coordinator = _FakeCoordinator(
+        coordinator = _FakeRunDeps(
             schedule_document=_make_schedule_document(),
             bundle=_make_automation_bundle(),
             snapshot_factory=_make_snapshot,
         )
 
-        result = await AutomationRunner(
-            coordinator=coordinator,
+        result = await _make_runner(
+            coordinator,
             automation_config=AutomationConfig(enabled=False),
         ).run(reference_time=REFERENCE_TIME)
 
         self.assertEqual(result.reason, "automation_disabled")
         self.assertIsNone(result.cleanup)
-        self.assertEqual(coordinator.saved_documents, [])
-        self.assertEqual(coordinator.post_write_calls, [])
+        self.assertEqual(coordinator.schedule.saved_documents, [])
+        self.assertEqual(coordinator.schedule.reconcile_requests, [])
 
     async def test_run_persists_single_optimizer_result_and_runs_side_effects_on_change(
         self,
@@ -303,7 +303,7 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
                 }
             },
         )
-        coordinator = _FakeCoordinator(
+        coordinator = _FakeRunDeps(
             schedule_document=ScheduleDocument(execution_enabled=True),
             bundle=_make_automation_bundle(),
             snapshot_factory=_make_snapshot,
@@ -317,21 +317,21 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
                 optimize=lambda snapshot, config, trace=None: deepcopy(optimized_schedule)
             ),
         ):
-            result = await AutomationRunner(
-                coordinator=coordinator,
+            result = await _make_runner(
+                coordinator,
                 automation_config=_make_automation_config(_make_optimizer_instance()),
             ).run(reference_time=REFERENCE_TIME)
 
         self.assertTrue(result.ran_automation)
-        self.assertEqual(len(coordinator.persist_calls), 1)
+        self.assertEqual(len(coordinator.schedule.persist_calls), 1)
         self.assertEqual(
             schedule_document_to_dict(
-                coordinator.persist_calls[0]["automation_result"]
+                coordinator.schedule.persist_calls[0]["automation_result"]
             ),
             schedule_document_to_dict(optimized_schedule),
         )
         self.assertEqual(
-            coordinator.post_write_calls,
+            coordinator.schedule.reconcile_requests,
             [("automation_updated", False)],
         )
         self.assertEqual(len(coordinator.snapshot_calls), 2)
@@ -353,7 +353,7 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_run_multi_optimizer_rebuilds_snapshot_between_steps(self) -> None:
-        coordinator = _FakeCoordinator(
+        coordinator = _FakeRunDeps(
             schedule_document=ScheduleDocument(execution_enabled=True),
             bundle=_make_automation_bundle(),
             snapshot_factory=_make_snapshot,
@@ -387,8 +387,8 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             "build_optimizer",
             side_effect=_build_optimizer_side_effect,
         ):
-            result = await AutomationRunner(
-                coordinator=coordinator,
+            result = await _make_runner(
+                coordinator,
                 automation_config=_make_automation_config(
                     _make_optimizer_instance(optimizer_id="one"),
                     _make_optimizer_instance(optimizer_id="two"),
@@ -406,7 +406,7 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
     async def test_run_multi_optimizer_reuses_same_pinned_input_bundle_for_every_rebuild(
         self,
     ) -> None:
-        coordinator = _FakeCoordinator(
+        coordinator = _FakeRunDeps(
             schedule_document=ScheduleDocument(execution_enabled=True),
             bundle=_make_automation_bundle(),
             snapshot_factory=_make_snapshot,
@@ -423,8 +423,8 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
                 )
             ),
         ):
-            result = await AutomationRunner(
-                coordinator=coordinator,
+            result = await _make_runner(
+                coordinator,
                 automation_config=_make_automation_config(
                     _make_optimizer_instance(optimizer_id="one"),
                     _make_optimizer_instance(optimizer_id="two"),
@@ -457,7 +457,7 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             },
         )
         final_schedule = ScheduleDocument(execution_enabled=True)
-        coordinator = _FakeCoordinator(
+        coordinator = _FakeRunDeps(
             schedule_document=ScheduleDocument(execution_enabled=True),
             bundle=_make_automation_bundle(),
             snapshot_factory=_make_snapshot,
@@ -472,8 +472,8 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
                 SimpleNamespace(optimize=Mock(return_value=deepcopy(final_schedule))),
             ],
         ):
-            result = await AutomationRunner(
-                coordinator=coordinator,
+            result = await _make_runner(
+                coordinator,
                 automation_config=_make_automation_config(
                     _make_optimizer_instance(optimizer_id="one"),
                     _make_optimizer_instance(optimizer_id="two"),
@@ -482,10 +482,10 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(result.ran_automation)
         self.assertEqual([summary.status for summary in result.optimizers], ["ok", "ok"])
-        self.assertEqual(len(coordinator.persist_calls), 1)
+        self.assertEqual(len(coordinator.schedule.persist_calls), 1)
         self.assertEqual(
             schedule_document_to_dict(
-                coordinator.persist_calls[0]["automation_result"]
+                coordinator.schedule.persist_calls[0]["automation_result"]
             ),
             schedule_document_to_dict(final_schedule),
         )
@@ -513,7 +513,7 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
                 }
             },
         )
-        coordinator = _FakeCoordinator(
+        coordinator = _FakeRunDeps(
             schedule_document=schedule_document,
             bundle=_make_automation_bundle(),
             snapshot_factory=_make_snapshot,
@@ -531,8 +531,8 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
                 )
             ),
         ):
-            result = await AutomationRunner(
-                coordinator=coordinator,
+            result = await _make_runner(
+                coordinator,
                 automation_config=_make_automation_config(
                     _make_optimizer_instance(
                         optimizer_id="run-boiler-on-surplus",
@@ -549,14 +549,14 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.optimizers[0].status, "failed")
         self.assertEqual(result.optimizers[0].error, "when-active demand is unavailable")
         # Nothing persisted: the previous good record stands.
-        self.assertEqual(coordinator.persist_calls, [])
-        self.assertEqual(coordinator.post_write_calls, [])
+        self.assertEqual(coordinator.schedule.persist_calls, [])
+        self.assertEqual(coordinator.schedule.reconcile_requests, [])
         # The "optimizer_skipped" note stays visible on the failed run's trace.
         step = result.trace.to_dict()["steps"][0]
         self.assertEqual(step["notes"][0]["code"], "optimizer_skipped")
 
     async def test_run_returns_failure_when_optimizer_raises(self) -> None:
-        coordinator = _FakeCoordinator(
+        coordinator = _FakeRunDeps(
             schedule_document=ScheduleDocument(execution_enabled=True),
             bundle=_make_automation_bundle(),
             snapshot_factory=_make_snapshot,
@@ -569,8 +569,8 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
                 optimize=Mock(side_effect=RuntimeError("boom"))
             ),
         ):
-            result = await AutomationRunner(
-                coordinator=coordinator,
+            result = await _make_runner(
+                coordinator,
                 automation_config=_make_automation_config(_make_optimizer_instance()),
             ).run(reference_time=REFERENCE_TIME)
 
@@ -579,11 +579,11 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result.optimizers), 1)
         self.assertEqual(result.optimizers[0].status, "failed")
         self.assertEqual(result.optimizers[0].error, "boom")
-        self.assertEqual(coordinator.persist_calls, [])
-        self.assertEqual(coordinator.post_write_calls, [])
+        self.assertEqual(coordinator.schedule.persist_calls, [])
+        self.assertEqual(coordinator.schedule.reconcile_requests, [])
 
     async def test_run_returns_failure_when_optimizer_construction_raises(self) -> None:
-        coordinator = _FakeCoordinator(
+        coordinator = _FakeRunDeps(
             schedule_document=ScheduleDocument(execution_enabled=True),
             bundle=_make_automation_bundle(),
             snapshot_factory=_make_snapshot,
@@ -594,8 +594,8 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             "build_optimizer",
             side_effect=ValueError("bad target"),
         ):
-            result = await AutomationRunner(
-                coordinator=coordinator,
+            result = await _make_runner(
+                coordinator,
                 automation_config=_make_automation_config(_make_optimizer_instance()),
             ).run(reference_time=REFERENCE_TIME)
 
@@ -606,16 +606,16 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.optimizers[0].error, "bad target")
         self.assertEqual(len(coordinator.snapshot_calls), 1)
         self.assertIsNotNone(result.snapshot)
-        self.assertEqual(coordinator.persist_calls, [])
-        self.assertEqual(coordinator.post_write_calls, [])
+        self.assertEqual(coordinator.schedule.persist_calls, [])
+        self.assertEqual(coordinator.schedule.reconcile_requests, [])
 
     async def test_run_returns_runner_failed_when_final_persist_raises(self) -> None:
-        coordinator = _FakeCoordinator(
+        coordinator = _FakeRunDeps(
             schedule_document=ScheduleDocument(execution_enabled=True),
             bundle=_make_automation_bundle(),
             snapshot_factory=_make_snapshot,
         )
-        coordinator._persist_automation_result_locked = AsyncMock(
+        coordinator.schedule.persist_automation_result = AsyncMock(
             side_effect=RuntimeError("persist boom")
         )
 
@@ -626,8 +626,8 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
                 optimize=Mock(side_effect=lambda snapshot, config, trace=None: deepcopy(snapshot.schedule))
             ),
         ):
-            result = await AutomationRunner(
-                coordinator=coordinator,
+            result = await _make_runner(
+                coordinator,
                 automation_config=_make_automation_config(_make_optimizer_instance()),
             ).run(reference_time=REFERENCE_TIME)
 
@@ -642,18 +642,18 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNotNone(result.snapshot)
         self.assertEqual([summary.status for summary in result.optimizers], ["ok"])
-        self.assertEqual(coordinator.post_write_calls, [])
+        self.assertEqual(coordinator.schedule.reconcile_requests, [])
 
     async def test_run_returns_runner_failed_when_post_write_side_effects_raise(
         self,
     ) -> None:
-        coordinator = _FakeCoordinator(
+        coordinator = _FakeRunDeps(
             schedule_document=ScheduleDocument(execution_enabled=True),
             bundle=_make_automation_bundle(),
             snapshot_factory=_make_snapshot,
             persist_changed=True,
         )
-        coordinator._async_run_post_schedule_write_side_effects = AsyncMock(
+        coordinator.schedule.request_reconcile = Mock(
             side_effect=RuntimeError("side effects boom")
         )
 
@@ -664,8 +664,8 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
                 optimize=Mock(side_effect=lambda snapshot, config, trace=None: deepcopy(snapshot.schedule))
             ),
         ):
-            result = await AutomationRunner(
-                coordinator=coordinator,
+            result = await _make_runner(
+                coordinator,
                 automation_config=_make_automation_config(_make_optimizer_instance()),
             ).run(reference_time=REFERENCE_TIME)
 
@@ -692,17 +692,17 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
                 }
             },
         )
-        coordinator = _FakeCoordinator(
+        coordinator = _FakeRunDeps(
             schedule_document=schedule_document,
             bundle=_make_automation_bundle(),
             snapshot_factory=_make_snapshot,
         )
-        coordinator._async_run_post_schedule_write_side_effects = AsyncMock(
+        coordinator.schedule.request_reconcile = Mock(
             side_effect=RuntimeError("cleanup side effects boom")
         )
 
-        result = await AutomationRunner(
-            coordinator=coordinator,
+        result = await _make_runner(
+            coordinator,
             automation_config=AutomationConfig(enabled=False),
         ).run(reference_time=REFERENCE_TIME)
 
@@ -724,7 +724,7 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_run_does_not_persist_when_later_optimizer_raises(self) -> None:
-        coordinator = _FakeCoordinator(
+        coordinator = _FakeRunDeps(
             schedule_document=ScheduleDocument(execution_enabled=True),
             bundle=_make_automation_bundle(),
             snapshot_factory=_make_snapshot,
@@ -746,8 +746,8 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
                 SimpleNamespace(optimize=Mock(side_effect=RuntimeError("boom after first"))),
             ],
         ):
-            result = await AutomationRunner(
-                coordinator=coordinator,
+            result = await _make_runner(
+                coordinator,
                 automation_config=_make_automation_config(
                     _make_optimizer_instance(optimizer_id="one"),
                     _make_optimizer_instance(optimizer_id="two"),
@@ -758,12 +758,12 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.message, "boom after first")
         self.assertEqual([summary.status for summary in result.optimizers], ["ok", "failed"])
         self.assertEqual(result.optimizers[1].error, "boom after first")
-        self.assertEqual(coordinator.persist_calls, [])
-        self.assertEqual(coordinator.post_write_calls, [])
+        self.assertEqual(coordinator.schedule.persist_calls, [])
+        self.assertEqual(coordinator.schedule.reconcile_requests, [])
         self.assertEqual(len(coordinator.snapshot_calls), 2)
 
     async def test_run_rebuilds_even_when_optimizer_returns_unchanged_document(self) -> None:
-        coordinator = _FakeCoordinator(
+        coordinator = _FakeRunDeps(
             schedule_document=_make_schedule_document(),
             bundle=_make_automation_bundle(),
             snapshot_factory=_make_snapshot,
@@ -780,8 +780,8 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
                 )
             ),
         ):
-            result = await AutomationRunner(
-                coordinator=coordinator,
+            result = await _make_runner(
+                coordinator,
                 automation_config=_make_automation_config(
                     _make_optimizer_instance(optimizer_id="one"),
                     _make_optimizer_instance(optimizer_id="two"),
@@ -791,12 +791,12 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result.ran_automation)
         self.assertEqual([summary.status for summary in result.optimizers], ["ok", "ok"])
         self.assertEqual(len(coordinator.snapshot_calls), 3)
-        self.assertEqual(len(coordinator.persist_calls), 1)
+        self.assertEqual(len(coordinator.schedule.persist_calls), 1)
 
 
 class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
     async def test_completed_run_attaches_trace_with_expected_shape(self) -> None:
-        coordinator = _FakeCoordinator(
+        coordinator = _FakeRunDeps(
             schedule_document=_make_schedule_document(),
             bundle=_make_automation_bundle(),
             snapshot_factory=_make_snapshot,
@@ -809,8 +809,8 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
                 optimize=lambda snapshot, config, trace=None: deepcopy(snapshot.schedule)
             ),
         ):
-            result = await AutomationRunner(
-                coordinator=coordinator,
+            result = await _make_runner(
+                coordinator,
                 automation_config=_make_automation_config(_make_optimizer_instance()),
             ).run(reference_time=REFERENCE_TIME)
 
@@ -850,7 +850,7 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
                 }
             },
         )
-        coordinator = _FakeCoordinator(
+        coordinator = _FakeRunDeps(
             schedule_document=ScheduleDocument(execution_enabled=True),
             bundle=_make_automation_bundle(),
             snapshot_factory=_make_snapshot,
@@ -863,8 +863,8 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
                 optimize=lambda snapshot, config, trace=None: deepcopy(written_schedule)
             ),
         ):
-            result = await AutomationRunner(
-                coordinator=coordinator,
+            result = await _make_runner(
+                coordinator,
                 automation_config=_make_automation_config(_make_optimizer_instance()),
             ).run(reference_time=REFERENCE_TIME)
 
@@ -884,7 +884,7 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
                 }
             },
         )
-        coordinator = _FakeCoordinator(
+        coordinator = _FakeRunDeps(
             schedule_document=ScheduleDocument(execution_enabled=True),
             bundle=_make_automation_bundle(),
             snapshot_factory=_make_snapshot,
@@ -897,8 +897,8 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
                 optimize=lambda snapshot, config, trace=None: deepcopy(written_schedule)
             ),
         ):
-            result = await AutomationRunner(
-                coordinator=coordinator,
+            result = await _make_runner(
+                coordinator,
                 automation_config=_make_automation_config(
                     _make_optimizer_instance(
                         optimizer_id="run-boiler",
@@ -920,7 +920,7 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
     async def test_completed_run_hands_the_coordinator_a_run_explanation(
         self,
     ) -> None:
-        coordinator = _FakeCoordinator(
+        coordinator = _FakeRunDeps(
             schedule_document=_make_schedule_document(),
             bundle=_make_automation_bundle(),
             snapshot_factory=_make_snapshot,
@@ -933,8 +933,8 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
                 optimize=lambda snapshot, config, trace=None: deepcopy(snapshot.schedule)
             ),
         ):
-            await AutomationRunner(
-                coordinator=coordinator,
+            await _make_runner(
+                coordinator,
                 automation_config=_make_automation_config(_make_optimizer_instance()),
             ).run(reference_time=REFERENCE_TIME)
 
@@ -950,7 +950,7 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_the_run_explanation_carries_each_step_s_lane(self) -> None:
-        coordinator = _FakeCoordinator(
+        coordinator = _FakeRunDeps(
             schedule_document=_make_schedule_document(),
             bundle=_make_automation_bundle(),
             snapshot_factory=_make_snapshot,
@@ -963,8 +963,8 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
                 optimize=lambda snapshot, config, trace=None: deepcopy(snapshot.schedule)
             ),
         ):
-            await AutomationRunner(
-                coordinator=coordinator,
+            await _make_runner(
+                coordinator,
                 automation_config=_make_automation_config(
                     _make_optimizer_instance(),
                     _make_optimizer_instance(
@@ -991,7 +991,7 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_failed_run_records_no_explanation(self) -> None:
         # The previous good record must stand: a run that blew up mid-loop has
         # nothing trustworthy to say about the slots it never reached.
-        coordinator = _FakeCoordinator(
+        coordinator = _FakeRunDeps(
             schedule_document=ScheduleDocument(execution_enabled=True),
             bundle=_make_automation_bundle(),
             snapshot_factory=_make_snapshot,
@@ -1004,8 +1004,8 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
                 optimize=Mock(side_effect=RuntimeError("boom"))
             ),
         ):
-            result = await AutomationRunner(
-                coordinator=coordinator,
+            result = await _make_runner(
+                coordinator,
                 automation_config=_make_automation_config(_make_optimizer_instance()),
             ).run(reference_time=REFERENCE_TIME)
 
@@ -1013,7 +1013,7 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(coordinator.recorded_explanations, [])
 
     async def test_optimizer_failure_still_attaches_partial_trace(self) -> None:
-        coordinator = _FakeCoordinator(
+        coordinator = _FakeRunDeps(
             schedule_document=ScheduleDocument(execution_enabled=True),
             bundle=_make_automation_bundle(),
             snapshot_factory=_make_snapshot,
@@ -1026,8 +1026,8 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
                 optimize=Mock(side_effect=RuntimeError("boom"))
             ),
         ):
-            result = await AutomationRunner(
-                coordinator=coordinator,
+            result = await _make_runner(
+                coordinator,
                 automation_config=_make_automation_config(_make_optimizer_instance()),
             ).run(reference_time=REFERENCE_TIME)
 
@@ -1055,7 +1055,7 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
                 }
             },
         )
-        coordinator = _FakeCoordinator(
+        coordinator = _FakeRunDeps(
             schedule_document=schedule_document,
             bundle=_make_automation_bundle(),
             snapshot_factory=_make_snapshot,
@@ -1073,8 +1073,8 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
                 )
             ),
         ):
-            result = await AutomationRunner(
-                coordinator=coordinator,
+            result = await _make_runner(
+                coordinator,
                 automation_config=_make_automation_config(
                     _make_optimizer_instance(
                         optimizer_id="run-boiler-on-surplus",

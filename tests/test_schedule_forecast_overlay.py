@@ -106,10 +106,10 @@ class ScheduleForecastOverlayTests(unittest.TestCase):
     def test_overlay_materializes_actions_regardless_of_execution_flag(self) -> None:
         """The builder never reads ``execution_enabled``.
 
-        Emptying the forecast while execution is off is the coordinator's job --
-        it has to do the same to the appliance projection, so the decision lives
-        in one place there rather than half of it here. See
-        ``_build_forecast_schedule_documents`` and its coordinator tests.
+        Emptying the forecast while execution is off is the forecast assembly's
+        job -- it has to do the same to the appliance projection, so the
+        decision lives in one place there rather than half of it here. See
+        ``build_forecast_schedule_documents`` and its tests.
         """
         current_slot_start = build_horizon_start(REFERENCE_TIME)
         overlay = build_schedule_forecast_overlay(

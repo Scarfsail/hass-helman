@@ -8,10 +8,10 @@ import asyncio
 import unittest
 from collections import deque
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
-from tests._fakes import FakeHass, FakeState, make_coordinator
-from custom_components.helman import coordinator as coordinator_module
+from tests._fakes import FakeHass, FakeState, make_coordinator, make_live_tracker
+from custom_components.helman import live_power as live_power_module
 from custom_components.helman.vendors import DeviceTelemetry, PROFILES
 
 
@@ -27,7 +27,7 @@ class RegistryRebuildTests(unittest.IsolatedAsyncioTestCase):
     async def test_registry_rebuild_cannot_arm_tick_after_unload(self) -> None:
         coordinator = make_coordinator(_hass=FakeHass())
         coordinator._cached_tree = TREE
-        coordinator._buffer_tree = TREE
+        coordinator.live._tree = TREE
         entered = asyncio.Event()
         release = asyncio.Event()
         armed = []
@@ -40,12 +40,12 @@ class RegistryRebuildTests(unittest.IsolatedAsyncioTestCase):
             return {**TREE, "consumers": []}
 
         coordinator.get_device_tree = slow_tree
-        coordinator._sync_derived_sensors = AsyncMock()
-        coordinator._unsub_tick = lambda: stopped.append(True)
+        coordinator._sync_derived_sensors = Mock()
+        coordinator.live._unsub_tick = lambda: stopped.append(True)
         coordinator._automation_triggers.async_shutdown = AsyncMock()
-        coordinator._schedule_executor.async_unload = AsyncMock()
+        coordinator.schedule.executor.async_unload = AsyncMock()
         with patch.object(
-            coordinator_module,
+            live_power_module,
             "async_track_time_interval",
             side_effect=lambda *_args: armed.append(True) or (lambda: None),
         ):
@@ -59,25 +59,24 @@ class RegistryRebuildTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(stopped, [True])
         self.assertEqual(armed, [])
-        self.assertIsNone(coordinator._unsub_tick)
+        self.assertIsNone(coordinator.live._unsub_tick)
 
     async def test_unrelated_registry_event_keeps_history(self) -> None:
         coordinator = make_coordinator(_hass=FakeHass())
         coordinator._cached_tree = TREE
-        coordinator._power_sensor_ids = ["sensor.house_power"]
-        coordinator._init_buffers(TREE, TreeIndex.from_tree(TREE))
-        history = coordinator._power_history["sensor.house_power"]
+        coordinator.live._init_buffers(TREE, TreeIndex.from_tree(TREE))
+        history = coordinator.live._power_history["sensor.house_power"]
         history.append(123.0)
         coordinator.get_device_tree = AsyncMock(return_value=TREE)
-        coordinator._sync_derived_sensors = AsyncMock()
-        coordinator._start_tick = lambda: None
+        coordinator._sync_derived_sensors = Mock()
+        coordinator.live._start_tick = lambda: None
 
         coordinator._on_registry_updated(
             SimpleNamespace(data={"entity_id": "sensor.unrelated"})
         )
         await asyncio.sleep(0)
 
-        self.assertIs(coordinator._power_history["sensor.house_power"], history)
+        self.assertIs(coordinator.live._power_history["sensor.house_power"], history)
         self.assertEqual(list(history), [123.0])
 
     async def test_unchanged_tree_refreshes_renamed_inverter_telemetry(self) -> None:
@@ -91,7 +90,6 @@ class RegistryRebuildTests(unittest.IsolatedAsyncioTestCase):
                 states[f"sensor.ac_l{phase}"] = FakeState("100")
         coordinator = make_coordinator(_hass=FakeHass(states))
         coordinator._cached_tree = TREE
-        coordinator._power_sensor_ids = ["sensor.house_power"]
         profile = PROFILES["solax_inverter"]
         entities = {key: None for key in profile.telemetry}
         entities.update(
@@ -109,11 +107,11 @@ class RegistryRebuildTests(unittest.IsolatedAsyncioTestCase):
                 )
             }
 
-        with patch.object(coordinator_module, "resolve_vendor_telemetry", side_effect=resolve_telemetry):
-            coordinator._init_buffers(TREE, TreeIndex.from_tree(TREE))
-            history = coordinator._power_history["sensor.house_power"]
+        with patch.object(live_power_module, "resolve_vendor_telemetry", side_effect=resolve_telemetry):
+            coordinator.live._init_buffers(TREE, TreeIndex.from_tree(TREE))
+            history = coordinator.live._power_history["sensor.house_power"]
             history.append(123.0)
-            self.assertEqual(coordinator._compute_house_phase_powers()[1], 100.0)
+            self.assertEqual(coordinator.live._compute_house_phase_powers()[1], 100.0)
             entities["ac_power_l1"] = "sensor.new_ac_l1"
             coordinator.get_device_tree = AsyncMock(return_value=TREE)
 
@@ -122,19 +120,18 @@ class RegistryRebuildTests(unittest.IsolatedAsyncioTestCase):
             )
             await asyncio.sleep(0)
 
-        self.assertEqual(coordinator._compute_house_phase_powers()[1], 300.0)
-        self.assertIs(coordinator._power_history["sensor.house_power"], history)
+        self.assertEqual(coordinator.live._compute_house_phase_powers()[1], 300.0)
+        self.assertIs(coordinator.live._power_history["sensor.house_power"], history)
         self.assertEqual(list(history), [123.0])
 
     async def test_changed_tree_keeps_surviving_history(self) -> None:
         coordinator = make_coordinator(_hass=FakeHass())
         coordinator._cached_tree = TREE
-        coordinator._power_sensor_ids = ["sensor.house_power"]
-        coordinator._init_buffers(TREE, TreeIndex.from_tree(TREE))
-        history = coordinator._power_history["sensor.house_power"]
+        coordinator.live._init_buffers(TREE, TreeIndex.from_tree(TREE))
+        history = coordinator.live._power_history["sensor.house_power"]
         history.append(123.0)
         raw_history = deque([20.0, 30.0], maxlen=3)
-        coordinator._unmeasured_raw_history["house"] = raw_history
+        coordinator.live._unmeasured_raw_history["house"] = raw_history
         new_tree = {
             **TREE,
             "consumers": [
@@ -144,16 +141,42 @@ class RegistryRebuildTests(unittest.IsolatedAsyncioTestCase):
         }
         coordinator._tree_index = TreeIndex.from_tree(new_tree)
         coordinator.get_device_tree = AsyncMock(return_value=new_tree)
-        coordinator._sync_derived_sensors = AsyncMock()
-        coordinator._start_tick = lambda: None
+        coordinator._sync_derived_sensors = Mock()
+        coordinator.live._start_tick = lambda: None
 
         await coordinator._async_rebuild_subscriptions()
 
         self.assertEqual(
-            list(coordinator._power_history["sensor.house_power"]), [123.0]
+            list(coordinator.live._power_history["sensor.house_power"]), [123.0]
         )
-        self.assertEqual(list(coordinator._power_history["sensor.other_power"]), [])
-        self.assertIs(coordinator._unmeasured_raw_history["house"], raw_history)
+        self.assertEqual(list(coordinator.live._power_history["sensor.other_power"]), [])
+        self.assertIs(coordinator.live._unmeasured_raw_history["house"], raw_history)
+
+
+class LivePowerTrackerLifecycleTests(unittest.TestCase):
+    def test_retracking_rearms_one_tick_and_unload_drops_everything(self) -> None:
+        tracker = make_live_tracker(
+            FakeHass(),
+            {"visualization": {"history_buckets": 5, "history_bucket_duration": 5}},
+        )
+        armed: list = []
+        stopped: list = []
+
+        def _arm(_hass, _action, interval):
+            armed.append(interval.total_seconds())
+            return lambda: stopped.append(True)
+
+        with patch.object(live_power_module, "async_track_time_interval", side_effect=_arm):
+            tracker.track(TREE, TreeIndex.from_tree(TREE))
+            tracker.track(TREE, TreeIndex.from_tree(TREE))
+            self.assertEqual((armed, stopped), ([5.0, 5.0], [True]))
+
+            tracker.unload()
+            self.assertEqual(tracker.get_history(), {"entity_history": {}})
+            tracker.track(TREE, TreeIndex.from_tree(TREE))
+
+        self.assertEqual((armed, stopped), ([5.0, 5.0], [True, True]))
+        self.assertEqual(tracker.get_history(), {"entity_history": {}})
 
 
 if __name__ == "__main__":
