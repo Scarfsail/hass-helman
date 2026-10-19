@@ -2119,9 +2119,11 @@ class HelmanCoordinator:
 
         if self._solar_bias_service is not None:
             self._solar_bias_service.load_stored_profile()
-            self._fire_data_changed(DATA_CHANGED_KIND_SOLAR_BIAS)
 
         await self._async_refresh_forecast(reason="training_artifacts_reloaded")
+
+        if self._solar_bias_service is not None:
+            self._fire_data_changed(DATA_CHANGED_KIND_SOLAR_BIAS)
 
     def _has_matching_forecast_snapshot(
         self,

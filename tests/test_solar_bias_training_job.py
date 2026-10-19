@@ -264,7 +264,12 @@ class CoordinatorSolarBiasCallbackTests(unittest.IsolatedAsyncioTestCase):
             on_status_changed=coordinator._on_solar_bias_changed,
         )
         coordinator._solar_bias_service = service
-        coordinator._async_refresh_forecast = AsyncMock()
+        call_order: list[str] = []
+
+        async def _record_refresh(**_kwargs) -> None:
+            call_order.append(f"refresh:{len(hass.bus.fired)}")
+
+        coordinator._async_refresh_forecast = AsyncMock(side_effect=_record_refresh)
 
         self.assertIsNone(service._profile)
 
@@ -292,6 +297,8 @@ class CoordinatorSolarBiasCallbackTests(unittest.IsolatedAsyncioTestCase):
         coordinator._async_refresh_forecast.assert_awaited_once_with(
             reason="training_artifacts_reloaded"
         )
+        # data_changed fires only after the forecast refresh completed.
+        self.assertEqual(call_order, ["refresh:0"])
         self.assertEqual(
             hass.bus.fired,
             [(const.EVENT_DATA_CHANGED, {"kind": "solar_bias"})],
