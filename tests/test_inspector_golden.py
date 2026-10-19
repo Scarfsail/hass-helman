@@ -202,7 +202,7 @@ class InspectorGoldenTests(unittest.IsolatedAsyncioTestCase):
             span_mod, "get_instance", lambda hass: span_test.RECORDER_STUB
         ), patch.object(
             span_mod, "statistics_during_period", span_test._fake_statistics_during_period
-        ):
+        ), patch.object(service_mod.dt_util, "now", lambda: NOW):
             hass = service._hass
             coordinator = SimpleNamespace(solar_inspector=service)
             hass.data[DOMAIN] = {"coordinator": coordinator}
