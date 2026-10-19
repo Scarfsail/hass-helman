@@ -33,6 +33,9 @@ service_module = importlib.import_module(
 )
 models = importlib.import_module("custom_components.helman.solar_bias_correction.models")
 storage_module = importlib.import_module("custom_components.helman.storage")
+solar_bias_module = importlib.import_module(
+    "custom_components.helman.training.solar_bias"
+)
 const = importlib.import_module("custom_components.helman.const")
 
 TRAINED_AT = "2026-08-01T03:00:00+02:00"
@@ -172,7 +175,9 @@ def _make_coordinator(
     )
     coordinator._training_batch = batch_module.TrainingBatch(
         SimpleNamespace(async_create_task=asyncio.ensure_future),
-        solar_bias_service=coordinator._solar_bias_service,
+        solar_bias_job=solar_bias_module.SolarBiasTrainingJob(
+            coordinator._solar_bias_service
+        ),
         house_consumption_job=house_job or _StubJob("profile_trained"),
         appliance_energy_job=appliance_job or _StubJob("estimates_trained"),
         on_job_finished=lambda: coordinator._fire_data_changed(
@@ -848,6 +853,65 @@ class TrainNowTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(new_coordinator._appliance_energy_estimates, {"dishwasher": 0.8})
         self.assertEqual(
             _job(connection.results[0][1]["status"], "appliance_energy")["health"],
+            "ok",
+        )
+        new_coordinator._async_refresh_forecast.assert_awaited_once_with(
+            reason="training_artifacts_reloaded"
+        )
+
+    async def test_reload_mid_run_refreshes_and_adopts_persisted_solar_bias(self) -> None:
+        backend = _MemoryBackend()
+        old_store = object.__new__(storage_module.SolarBiasCorrectionStore)
+        old_store._store = backend
+        old_store._profile = None
+        old_store._supported_versions = {1, 2}
+
+        new_store = object.__new__(storage_module.SolarBiasCorrectionStore)
+        new_store._store = backend
+        new_store._profile = None
+        new_store._supported_versions = {1, 2}
+
+        new_service = _make_bias_service()
+        new_service._store = new_store
+        new_coordinator = _make_coordinator(bias_service=new_service)
+        new_coordinator._solar_bias_store = new_store
+        new_coordinator._async_refresh_forecast = AsyncMock()
+        hass = _hass(None)
+
+        old_service = _make_bias_service()
+        old_service._store = old_store
+
+        async def _reloading_train():
+            hass.data[const.DOMAIN]["coordinator"] = new_coordinator
+            await old_store.async_save({
+                "version": 2,
+                "profile": {"factors": {"12:00": 1.3}, "omitted_slots": []},
+                "metadata": {
+                    "trained_at": TRAINED_AT,
+                    "training_config_fingerprint": service_module.compute_fingerprint(_bias_cfg()),
+                    "usable_days": 10,
+                    "dropped_days": [],
+                    "factor_min": 1.3,
+                    "factor_max": 1.3,
+                    "factor_median": 1.3,
+                    "omitted_slot_count": 0,
+                    "last_outcome": "profile_trained",
+                    "error_reason": None,
+                },
+            })
+            return {"lastOutcome": "profile_trained"}
+
+        old_service.async_train = AsyncMock(side_effect=_reloading_train)
+        old_coordinator = _make_coordinator(bias_service=old_service)
+        hass.data[const.DOMAIN]["coordinator"] = old_coordinator
+
+        connection = await _train_now_with_hass(hass, job="solar_bias")
+
+        self.assertEqual(connection.errors, [])
+        self.assertIsNotNone(new_service._profile)
+        self.assertEqual(new_service._profile.factors, {"12:00": 1.3})
+        self.assertEqual(
+            _job(connection.results[0][1]["status"], "solar_bias")["health"],
             "ok",
         )
         new_coordinator._async_refresh_forecast.assert_awaited_once_with(

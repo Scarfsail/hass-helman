@@ -217,6 +217,7 @@ from .training.house_consumption import (
     HouseTrainingRequest,
 )
 from .training.house_consumption import health_for as house_consumption_health_for
+from .training.solar_bias import SolarBiasTrainingJob
 from .tree_builder import HelmanTreeBuilder, TreeIndex
 from .vendors import (
     INVERTER_TELEMETRY_KEY,
@@ -1133,6 +1134,7 @@ class HelmanCoordinator:
             self._hass,
             self._solar_bias_store,
             bias_config,
+            on_status_changed=self._on_solar_bias_changed,
         )
         await self._solar_bias_service.async_setup()
         self._solar_inspector = SolarInspector(
@@ -1148,7 +1150,10 @@ class HelmanCoordinator:
         # the house forecast would sit at unavailable forever.
         self._training_batch = TrainingBatch(
             self._hass,
-            solar_bias_service=self._solar_bias_service,
+            solar_bias_job=SolarBiasTrainingJob(
+                self._solar_bias_service,
+                on_trained=self._async_on_solar_bias_trained,
+            ),
             house_consumption_job=HouseConsumptionTrainingJob(
                 self._hass,
                 self._training_artifacts_store,
@@ -1185,18 +1190,6 @@ class HelmanCoordinator:
         self._unsub_listeners.append(
             self._hass.bus.async_listen(
                 "entity_registry_updated", self._on_registry_updated
-            )
-        )
-        self._unsub_listeners.append(
-            self._hass.bus.async_listen(
-                "helman_solar_bias_trained",
-                self._on_solar_bias_changed,
-            )
-        )
-        self._unsub_listeners.append(
-            self._hass.bus.async_listen(
-                "helman_solar_bias_status_changed",
-                self._on_solar_bias_changed,
             )
         )
 
@@ -1331,7 +1324,7 @@ class HelmanCoordinator:
         self._create_tracked_refresh_task(self._async_rebuild_subscriptions())
 
     @callback
-    def _on_solar_bias_changed(self, event) -> None:
+    def _on_solar_bias_changed(self) -> None:
         # A freshly trained or re-enabled bias profile changes every solar
         # point, so rebuild at once rather than waiting for the quarter hour.
         # The single-flight guard absorbs an event landing on a timer tick.
@@ -2092,6 +2085,13 @@ class HelmanCoordinator:
         self._adopt_stored_house_profile(config_fingerprint=config_fingerprint)
         await self._async_refresh_forecast(reason="house_profile_trained")
 
+    async def _async_on_solar_bias_trained(self) -> None:
+        """Rebuild at once and announce that solar bias has changed."""
+        if self._unloaded:
+            return
+        await self._async_refresh_forecast(reason="solar_bias_trained")
+        self._fire_data_changed(DATA_CHANGED_KIND_SOLAR_BIAS)
+
     async def async_reload_training_artifacts(self) -> None:
         """Reload and adopt artifacts written by a superseded coordinator.
 
@@ -2099,16 +2099,31 @@ class HelmanCoordinator:
         when a config-entry reload lands during its recorder reads. The newly
         live coordinator loaded its own store before that old run wrote, so it
         must explicitly re-read persistence once the awaited run completes.
+        This reloads house consumption, appliance energy, and solar bias artifacts.
         """
-        store = self._training_artifacts_store
-        if store is None:
+        if self._training_artifacts_store is None and self._solar_bias_service is None:
             return
 
-        await store.async_load()
-        config_fingerprint = read_house_forecast_request(self._active_config).config_fingerprint
-        self._adopt_stored_house_profile(config_fingerprint=config_fingerprint)
-        self._adopt_stored_appliance_energy()
+        store = self._training_artifacts_store
+        if store is not None:
+            await store.async_load()
+            config_fingerprint = read_house_forecast_request(self._active_config).config_fingerprint
+            self._adopt_stored_house_profile(config_fingerprint=config_fingerprint)
+            self._adopt_stored_appliance_energy()
+
+        bias_store = self._solar_bias_store
+        if bias_store is None and self._solar_bias_service is not None:
+            bias_store = getattr(self._solar_bias_service, "_store", None)
+        if bias_store is not None and hasattr(bias_store, "async_load"):
+            await bias_store.async_load()
+
+        if self._solar_bias_service is not None:
+            self._solar_bias_service.load_stored_profile()
+
         await self._async_refresh_forecast(reason="training_artifacts_reloaded")
+
+        if self._solar_bias_service is not None:
+            self._fire_data_changed(DATA_CHANGED_KIND_SOLAR_BIAS)
 
     def _has_matching_forecast_snapshot(
         self,

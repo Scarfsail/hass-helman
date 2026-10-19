@@ -646,11 +646,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         coordinator = _make_refresh_only_coordinator(coordinator_module)
         coordinator._async_refresh_forecast = AsyncMock()
 
-        coordinator._on_solar_bias_changed(
-            SimpleNamespace(
-                data={"status": "applied", "effectiveVariant": "adjusted"}
-            )
-        )
+        coordinator._on_solar_bias_changed()
         await asyncio.sleep(0)
 
         coordinator._async_refresh_forecast.assert_awaited_once_with(

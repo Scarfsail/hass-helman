@@ -3,20 +3,15 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.event import async_track_time_change
 
-from ..solar_bias_correction.service import (
-    BiasNotConfiguredError,
-)
 from .appliance_energy import ApplianceEnergyTrainingJob
 from .house_consumption import HouseConsumptionTrainingJob
 from .schedule import next_scheduled_training_at, parse_training_time
-
-if TYPE_CHECKING:
-    from ..solar_bias_correction.service import SolarBiasCorrectionService
+from .solar_bias import SolarBiasTrainingJob
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -34,13 +29,13 @@ class TrainingBatch:
         self,
         hass: HomeAssistant,
         *,
-        solar_bias_service: SolarBiasCorrectionService,
+        solar_bias_job: SolarBiasTrainingJob,
         house_consumption_job: HouseConsumptionTrainingJob,
         appliance_energy_job: ApplianceEnergyTrainingJob,
         on_job_finished: Callable[[], None],
     ) -> None:
         self._hass = hass
-        self._solar_bias_service = solar_bias_service
+        self._solar_bias_job = solar_bias_job
         self._house_consumption_job = house_consumption_job
         self._appliance_energy_job = appliance_energy_job
         #: Called once as each sub-job finishes, failed or not -- never as one
@@ -147,7 +142,7 @@ class TrainingBatch:
         # recorder's single executor thread, so running them together would
         # recreate at 03:00 exactly the stall this batch exists to remove.
         _LOGGER.debug("Training batch starting (%s)", reason)
-        await self._run_subjob("solar_bias", self._async_train_solar_bias())
+        await self._run_subjob("solar_bias", self._solar_bias_job.async_train())
         await self._run_subjob(
             "house_consumption", self._house_consumption_job.async_train()
         )
@@ -158,7 +153,7 @@ class TrainingBatch:
 
     async def _async_run_solar_bias(self, reason: str) -> None:
         _LOGGER.debug("Solar bias training starting (%s)", reason)
-        await self._run_subjob("solar_bias", self._async_train_solar_bias())
+        await self._run_subjob("solar_bias", self._solar_bias_job.async_train())
 
     async def _async_run_house_consumption(self, reason: str) -> None:
         _LOGGER.debug("House consumption training starting (%s)", reason)
@@ -192,13 +187,3 @@ class TrainingBatch:
             self._on_job_finished()
         except Exception:
             _LOGGER.exception("Training sub-job %s finish callback failed", name)
-
-    async def _async_train_solar_bias(self) -> str:
-        try:
-            payload = await self._solar_bias_service.async_train()
-        except BiasNotConfiguredError:
-            return "skipped_disabled"
-        # The service catches an ordinary training failure itself and reports
-        # it in the payload rather than raising, so the outcome is read from
-        # there -- never assumed.
-        return payload["lastOutcome"]

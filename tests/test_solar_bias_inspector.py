@@ -1371,3 +1371,74 @@ def test_inspector_points_from_raw_collapses_duplicate_dst_fallback_slots():
     assert day_mod._inspector_points_from_raw(raw) == expected
     assert day_mod._inspector_points(raw) == expected
 
+
+def test_inspector_adjusted_curve_uses_bias_service_rule():
+    """The inspector's 'adjusted' curve uses the bias service's rule (a failed
+
+    run after a good profile still shows the adjusted curve).
+    """
+    assert not hasattr(service_mod.SolarInspector, "_should_preserve_profile")
+
+    points = [{"timestamp": "2026-04-25T08:00:00+02:00", "value": 100.0}]
+    service = _make_service(
+        _canonical_provider(
+            points,
+            [{"timestamp": "2026-04-25T08:00:00+02:00", "value": 200.0}],
+        ),
+        points,
+    )
+    profile = models.SolarBiasProfile(
+        factors={"08:00": 2.0},
+        omitted_slots=[],
+    )
+    service._profile = profile
+    service._metadata = models.SolarBiasMetadata(
+        trained_at="2026-04-25T03:00:00+02:00",
+        training_config_fingerprint=compute_fingerprint(_make_cfg()),
+        usable_days=12,
+        dropped_days=[],
+        factor_min=2.0,
+        factor_max=2.0,
+        factor_median=2.0,
+        omitted_slot_count=0,
+        last_outcome="training_failed",
+        error_reason="boom",
+    )
+
+    async def fake_actuals(*args, **kwargs):
+        return {}
+
+    old_now = service_mod.dt_util.now
+    try:
+        _seed_solar_actuals(service, fake_actuals)
+        service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T07:00:00+02:00")
+        payload = asyncio.run(service.async_get_inspector_day("2026-04-25"))
+
+        assert payload["status"] == "training_failed"
+        assert payload["effectiveVariant"] == "adjusted"
+        assert payload["availability"]["hasProfile"] is True
+        assert payload["series"]["raw"] == [{"slot": "08:00", "valueWh": 100.0}]
+        assert payload["series"]["corrected"] == [{"slot": "08:00", "valueWh": 200.0}]
+
+        service._metadata = models.SolarBiasMetadata(
+            trained_at="2026-04-25T03:00:00+02:00",
+            training_config_fingerprint=compute_fingerprint(_make_cfg()),
+            usable_days=1,  # min_history_days is 2 in _make_cfg()
+            dropped_days=[],
+            factor_min=2.0,
+            factor_max=2.0,
+            factor_median=2.0,
+            omitted_slot_count=0,
+            last_outcome="training_failed",
+            error_reason="boom",
+        )
+        payload_after_bad_fit = asyncio.run(service.async_get_inspector_day("2026-04-25"))
+        assert payload_after_bad_fit["status"] == "training_failed"
+        assert payload_after_bad_fit["effectiveVariant"] == "raw"
+        assert payload_after_bad_fit["availability"]["hasProfile"] is False
+        assert payload_after_bad_fit["series"]["corrected"] == payload_after_bad_fit["series"]["raw"]
+        assert payload_after_bad_fit["series"]["corrected"] == [{"slot": "08:00", "valueWh": 100.0}]
+    finally:
+        service_mod.dt_util.now = old_now
+
+
