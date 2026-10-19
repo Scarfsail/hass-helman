@@ -11,7 +11,12 @@ reach it, so it is tested on its own.
 from __future__ import annotations
 
 from custom_components.helman.tree_builder import TreeIndex
-from tests._fakes import make_coordinator
+from custom_components.helman.const import (
+    BATTERY_TIME_TO_EMPTY_ENTITY_ID,
+    BATTERY_TIME_TO_FULL_ENTITY_ID,
+    SIGNAL_LIVE_TICK,
+)
+from tests._fakes import FakeHass, capture_signal, make_coordinator
 
 import importlib
 import unittest
@@ -34,14 +39,6 @@ TREE = {
 }
 
 
-class _FakeEtaSensor:
-    def __init__(self) -> None:
-        self.minutes: int | None = None
-
-    def update_value(self, minutes, target_time, target_soc) -> None:
-        self.minutes = minutes
-
-
 class _FakeStates:
     def __init__(self, mapping: dict[str, str]) -> None:
         self._mapping = mapping
@@ -61,24 +58,18 @@ def _make_coordinator(battery_power: str, polarity: str | None):
         "visualization": {"history_buckets": 5, "history_bucket_duration": 1},
         "energy_nodes": {"battery": {"entities": entities}},
     }
-    c._hass = SimpleNamespace(states=_FakeStates({BATTERY: battery_power, HOUSE: "1000"}))
+    c._hass = FakeHass()
+    c._hass.states = _FakeStates({BATTERY: battery_power, HOUSE: "1000"})
     c._power_sensor_ids = [BATTERY, HOUSE]
     c._source_sensor_ids = [BATTERY]
     c._source_value_types = {BATTERY: "negative"}
-    c._source_ratio_sensors = {}
     c._source_ratio_entity_ids = {}
-    c._consumption_total_sensor = None
-    c._production_total_sensor = None
-    c._house_consumption_sensors = []
-    c._unmeasured_sensors = {}
     c._cached_tree = TREE
-    c._share_sensors = {}
     c._compute_derived_powers = lambda: ({}, {})
     c._compute_consumption_total = lambda: 1000.0
     c._compute_production_total = lambda: 1000.0
 
-    c._battery_time_to_full = _FakeEtaSensor()
-    c._battery_time_to_empty = _FakeEtaSensor()
+    c.sent = capture_signal(c._hass, SIGNAL_LIVE_TICK)
     # Record the average each ETA was handed, so the assertion is about which
     # branch fired rather than about the SoC arithmetic behind it.
     c.charging_avg_seen: list[float] = []
@@ -88,6 +79,11 @@ def _make_coordinator(battery_power: str, polarity: str | None):
 
     c._init_buffers(TREE, TreeIndex.from_tree(TREE))
     return c
+
+
+def _minutes(c, entity_id: str):
+    """The minutes the last tick sent for one ETA sensor."""
+    return c.sent[-1][entity_id][0]
 
 
 def _run(battery_power: str, polarity: str | None):
@@ -102,28 +98,28 @@ class BatteryEtaPolarityTests(unittest.TestCase):
         c = _run("2000", None)
         self.assertEqual(c.charging_avg_seen, [2000.0, 2000.0, 2000.0])
         self.assertEqual(c.discharging_avg_seen, [])
-        self.assertEqual(c._battery_time_to_full.minutes, 60)
-        self.assertIsNone(c._battery_time_to_empty.minutes)
+        self.assertEqual(_minutes(c, BATTERY_TIME_TO_FULL_ENTITY_ID), 60)
+        self.assertIsNone(_minutes(c, BATTERY_TIME_TO_EMPTY_ENTITY_ID))
 
     def test_default_polarity_reads_negative_as_discharging(self):
         c = _run("-1500", None)
         self.assertEqual(c.discharging_avg_seen, [1500.0, 1500.0, 1500.0])
         self.assertEqual(c.charging_avg_seen, [])
-        self.assertEqual(c._battery_time_to_empty.minutes, 90)
+        self.assertEqual(_minutes(c, BATTERY_TIME_TO_EMPTY_ENTITY_ID), 90)
 
     def test_inverted_polarity_reads_positive_as_discharging(self):
         """The silent-swap case: same reading, opposite meaning."""
         c = _run("2000", "positive_is_discharging")
         self.assertEqual(c.discharging_avg_seen, [2000.0, 2000.0, 2000.0])
         self.assertEqual(c.charging_avg_seen, [])
-        self.assertEqual(c._battery_time_to_empty.minutes, 90)
-        self.assertIsNone(c._battery_time_to_full.minutes)
+        self.assertEqual(_minutes(c, BATTERY_TIME_TO_EMPTY_ENTITY_ID), 90)
+        self.assertIsNone(_minutes(c, BATTERY_TIME_TO_FULL_ENTITY_ID))
 
     def test_inverted_polarity_reads_negative_as_charging(self):
         c = _run("-1500", "positive_is_discharging")
         self.assertEqual(c.charging_avg_seen, [1500.0, 1500.0, 1500.0])
         self.assertEqual(c.discharging_avg_seen, [])
-        self.assertEqual(c._battery_time_to_full.minutes, 60)
+        self.assertEqual(_minutes(c, BATTERY_TIME_TO_FULL_ENTITY_ID), 60)
 
     def test_explicit_default_matches_absent_key(self):
         absent = _run("2000", None)
@@ -143,3 +139,17 @@ def test_tick_tolerates_null_energy_nodes_and_battery():
         coordinator._tick(datetime(2026, 8, 25, 12, 0, 0))
         assert coordinator.charging_avg_seen == []
         assert coordinator.discharging_avg_seen == []
+
+
+def test_a_raising_eta_still_sends_the_other_live_values():
+    coordinator = _make_coordinator("2000", None)
+
+    def boom(_avg):
+        raise RuntimeError("odd battery state")
+
+    coordinator._compute_charging_eta = boom
+    coordinator._tick(datetime(2026, 8, 25, 12, 0, 0))
+
+    (values,) = coordinator.sent
+    assert values["sensor.helman_consumer_total_power"] == 1000.0
+    assert BATTERY_TIME_TO_FULL_ENTITY_ID not in values

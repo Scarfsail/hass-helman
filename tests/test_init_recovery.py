@@ -26,8 +26,9 @@ class _FakeCoordinator:
     fail_setup = False
     unload_calls = 0
 
-    def __init__(self, _hass, storage) -> None:
+    def __init__(self, _hass, storage, entry) -> None:
         self.storage = storage
+        self.entry = entry
 
     async def async_setup(self) -> None:
         if type(self).fail_setup:
@@ -132,24 +133,41 @@ class InitRecoveryTests(unittest.IsolatedAsyncioTestCase):
         await self.helman_init.async_setup(hass, {})
         self.coordinator_mod.HelmanCoordinator.fail_setup = True
 
+        entry = FakeConfigEntry()
         with self.assertRaisesRegex(RuntimeError, "coordinator setup failed"):
-            await self.helman_init.async_setup_entry(hass, FakeConfigEntry())
+            await self.helman_init.async_setup_entry(hass, entry)
 
         self.assertIn("storage", hass.data["helman"])
-        self.assertNotIn("coordinator", hass.data["helman"])
+        self.assertFalse(hasattr(entry, "runtime_data"))
         self.assertNotIn("entry-1", hass.data["helman"])
+
+    async def test_platform_setup_failure_unloads_the_coordinator(self) -> None:
+        hass = FakeHass()
+        await self.helman_init.async_setup(hass, {})
+
+        async def fail(entry, platforms):
+            raise RuntimeError("platform setup failed")
+
+        hass.config_entries.async_forward_entry_setups = fail
+        entry = FakeConfigEntry()
+        with self.assertRaisesRegex(RuntimeError, "platform setup failed"):
+            await self.helman_init.async_setup_entry(hass, entry)
+
+        self.assertFalse(hasattr(entry, "runtime_data"))
+        self.assertEqual(self.coordinator_mod.HelmanCoordinator.unload_calls, 1)
 
     async def test_async_unload_entry_keeps_storage_after_runtime_unload(self) -> None:
         hass = FakeHass()
         await self.helman_init.async_setup(hass, {})
-        await self.helman_init.async_setup_entry(hass, FakeConfigEntry())
+        entry = FakeConfigEntry()
+        await self.helman_init.async_setup_entry(hass, entry)
         self.assertEqual(self.group_services_mod.schema_updates, 1)
+        self.assertIs(entry.runtime_data.entry, entry)
 
-        result = await self.helman_init.async_unload_entry(hass, FakeConfigEntry())
+        result = await self.helman_init.async_unload_entry(hass, entry)
 
         self.assertTrue(result)
         self.assertIn("storage", hass.data["helman"])
-        self.assertNotIn("coordinator", hass.data["helman"])
         self.assertNotIn("entry-1", hass.data["helman"])
         self.assertEqual(self.coordinator_mod.HelmanCoordinator.unload_calls, 1)
 
@@ -167,10 +185,11 @@ class InitRecoveryTests(unittest.IsolatedAsyncioTestCase):
         )
         hass = FakeHass()
         await self.helman_init.async_setup(hass, {})
-        await self.helman_init.async_setup_entry(hass, FakeConfigEntry())
+        entry = FakeConfigEntry()
+        await self.helman_init.async_setup_entry(hass, entry)
         hass.data["helman"][span_mod._OLDEST_STATE_CACHE_KEY] = {"sensor.a": object()}
 
-        await self.helman_init.async_unload_entry(hass, FakeConfigEntry())
+        await self.helman_init.async_unload_entry(hass, entry)
 
         self.assertNotIn(span_mod._OLDEST_STATE_CACHE_KEY, hass.data["helman"])
 

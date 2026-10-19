@@ -12,9 +12,9 @@ from _fakes import (
     FakeConnection,
     FakeInspectorLiveSources,
     _bias_service_config,
+    loaded_config_entries,
 )
 
-from custom_components.helman.const import DOMAIN
 from custom_components.helman.solar_bias_correction import models
 from custom_components.helman.solar_bias_correction.websocket import (
     ws_get_solar_bias_day_aggregates,
@@ -128,7 +128,7 @@ class InspectorGoldenTests(unittest.IsolatedAsyncioTestCase):
             )
 
             coordinator = SimpleNamespace(solar_inspector=service)
-            hass.data[DOMAIN] = {"coordinator": coordinator}
+            hass.config_entries = loaded_config_entries(coordinator)
             conn = FakeConnection()
 
             old_now = service_mod.dt_util.now
@@ -205,7 +205,7 @@ class InspectorGoldenTests(unittest.IsolatedAsyncioTestCase):
         ), patch.object(service_mod.dt_util, "now", lambda: NOW):
             hass = service._hass
             coordinator = SimpleNamespace(solar_inspector=service)
-            hass.data[DOMAIN] = {"coordinator": coordinator}
+            hass.config_entries = loaded_config_entries(coordinator)
             conn = FakeConnection()
 
             await ws_get_solar_bias_day_aggregates.__wrapped__(

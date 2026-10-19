@@ -27,7 +27,7 @@ async def async_get_solar_forecast(
     if config_entry is None or config_entry.domain != DOMAIN:
         return None
 
-    coordinator = getattr(config_entry, "runtime_data", None) or hass.data.get(DOMAIN, {}).get("coordinator")
+    coordinator = getattr(config_entry, "runtime_data", None)
     if coordinator is None:
         return None
 

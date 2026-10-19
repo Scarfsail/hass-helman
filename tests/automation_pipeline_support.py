@@ -15,7 +15,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 from _ha_stubs import stub_ha_dt, stub_module
-from _fakes import FakeConnection as SharedFakeConnection, FakeHass as SharedFakeHass
+from _fakes import FakeConnection as SharedFakeConnection, FakeHass as SharedFakeHass, loaded_config_entries
 
 
 REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
@@ -55,7 +55,7 @@ from custom_components.helman.automation.snapshot import (
 )
 from custom_components.helman.automation.compute_inputs import ComputeInputs
 from custom_components.helman.battery_state import BatteryEntityConfig, BatteryLiveState
-from custom_components.helman.const import DOMAIN, MAX_FORECAST_DAYS, SCHEDULE_SLOT_MINUTES
+from custom_components.helman.const import MAX_FORECAST_DAYS, SCHEDULE_SLOT_MINUTES
 from custom_components.helman.coordinator import HelmanCoordinator
 from custom_components.helman import coordinator as coordinator_module
 from custom_components.helman.automation import pipeline as pipeline_module
@@ -417,7 +417,7 @@ class _FakeConnection(SharedFakeConnection):
 class _FakeHass(SharedFakeHass):
     def __init__(self, coordinator) -> None:
         super().__init__()
-        self.data = {DOMAIN: {"coordinator": coordinator}}
+        self.config_entries = loaded_config_entries(coordinator)
 
 
 

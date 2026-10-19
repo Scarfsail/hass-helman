@@ -184,7 +184,7 @@ def test_setup_adds_a_switch_per_charger_and_drops_stale_ones():
         NS(domain="select", unique_id="helman_inverter_mode", entity_id="select.c"),
     ]
     registry = NS(async_remove=Mock())
-    hass = NS(data={"helman": {"coordinator": NS(config={})}})
+    hass = NS()
 
     with (
         patch.object(
@@ -199,7 +199,9 @@ def test_setup_adds_a_switch_per_charger_and_drops_stale_ones():
         ),
     ):
         asyncio.run(
-            switch_module.async_setup_entry(hass, NS(entry_id="helman-entry"), added.extend)
+            switch_module.async_setup_entry(
+                hass, NS(entry_id="helman-entry", runtime_data=NS(config={})), added.extend
+            )
         )
 
     [entity] = added

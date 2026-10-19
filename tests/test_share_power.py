@@ -12,7 +12,8 @@ is tested, not a hand-written tree.
 from __future__ import annotations
 
 from custom_components.helman.tree_builder import TreeIndex
-from tests._fakes import make_coordinator
+from custom_components.helman.const import SIGNAL_LIVE_TICK
+from tests._fakes import FakeHass, capture_signal, make_coordinator
 
 import asyncio
 import importlib
@@ -81,14 +82,6 @@ class _States:
         return SimpleNamespace(state=raw, attributes={})
 
 
-class _Sensor:
-    def __init__(self) -> None:
-        self.values: list[float | None] = []
-
-    def update_value(self, watts: float | None) -> None:
-        self.values.append(watts)
-
-
 def _make_coordinator(
     states: dict[str, str],
     *,
@@ -105,7 +98,8 @@ def _make_coordinator(
             )
         },
     }
-    hass = SimpleNamespace(states=_States(states))
+    hass = FakeHass()
+    hass.states = _States(states)
     tree = asyncio.run(tree_builder.HelmanTreeBuilder(hass, config).build()).tree
 
     c = make_coordinator()
@@ -172,17 +166,12 @@ class SharePowerTests(unittest.TestCase):
             return state
         c._hass.states.get = get
         c._init_buffers(c._cached_tree, TreeIndex.from_tree(c._cached_tree))
-        c._unmeasured_sensors = {house["id"]: _Sensor()}
-        c._share_sensors = {}
-        c._battery_time_to_full = c._battery_time_to_empty = None
-        c._consumption_total_sensor = c._production_total_sensor = None
-        c._house_consumption_sensors = []
-        c._source_ratio_sensors = {}
         c._source_sensor_ids = []
+        sent = capture_signal(c._hass, SIGNAL_LIVE_TICK)
 
         c._tick(datetime(2026, 9, 26, 12, 0, 0))
 
-        self.assertEqual(c._unmeasured_sensors[house["id"]].values, [1750.0])
+        self.assertEqual(sent[0]["sensor.house_rest"], 1750.0)
 
     def test_no_child_running_leaves_everything_on_the_remainder(self) -> None:
         _c, (remainder, shares) = self._run(())
@@ -283,18 +272,13 @@ class SharePowerTests(unittest.TestCase):
 
     def test_the_tick_publishes_unavailable_and_records_zero(self) -> None:
         c, _ = self._run(("obyvak",), extra={HEATER_POWER: "unavailable"})
-        c._unmeasured_sensors = {BREAKER: _Sensor()}
-        c._share_sensors = {f"klima-{room}": _Sensor() for room in ROOMS}
-        c._battery_time_to_full = c._battery_time_to_empty = None
-        c._consumption_total_sensor = c._production_total_sensor = None
-        c._house_consumption_sensors = []
-        c._source_ratio_sensors = {}
         c._source_sensor_ids = []
+        sent = capture_signal(c._hass, SIGNAL_LIVE_TICK)
 
         c._tick(datetime(2026, 9, 26, 12, 0, 0))
 
-        self.assertEqual(c._unmeasured_sensors[BREAKER].values, [None])
-        self.assertEqual(c._share_sensors["klima-obyvak"].values, [None])
+        self.assertIsNone(sent[0][REMAINDER])
+        self.assertIsNone(sent[0][_share("obyvak")])
         self.assertEqual(list(c._power_history[_share("obyvak")]), [0.0])
         self.assertEqual(list(c._power_history[REMAINDER]), [0.0])
 

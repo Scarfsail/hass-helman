@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from _fakes import FakeConnection as SharedFakeConnection
-from _fakes import FakeHass as SharedFakeHass
+from _fakes import FakeHass as SharedFakeHass, loaded_config_entries
 
 from custom_components.helman.const import DOMAIN
 
@@ -21,7 +21,7 @@ class FakeConnection(SharedFakeConnection):
 class FakeHass(SharedFakeHass):
     def __init__(self, coordinator) -> None:
         super().__init__()
-        self.data = {DOMAIN: {"coordinator": coordinator}}
+        self.config_entries = loaded_config_entries(coordinator)
 
 
 def _load_websocket_modules():

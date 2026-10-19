@@ -20,6 +20,7 @@ REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
 
 from custom_components.helman.coordinator import HelmanCoordinator  # noqa: E402
 from custom_components.helman import coordinator as coordinator_module
+from custom_components.helman.const import SLOT_ALIGNED_REFRESH_REASON  # noqa: E402
 from custom_components.helman.scheduling.schedule import (  # noqa: E402
     ScheduleAction,
     ScheduleControlConfig,
@@ -1011,7 +1012,7 @@ class SlotAlignedRefreshBeatTests(unittest.TestCase):
                 reason, reference_time = self._fire(
                     datetime.fromisoformat(f"2026-03-20T21:15:00.{offset_text[2:]}+01:00")
                 )
-                self.assertEqual(reason, coordinator_module._SLOT_ALIGNED_REFRESH_REASON)
+                self.assertEqual(reason, SLOT_ALIGNED_REFRESH_REASON)
                 self.assertEqual(
                     reference_time,
                     datetime.fromisoformat("2026-03-20T21:15:00+01:00"),

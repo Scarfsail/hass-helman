@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from _fakes import FakeHass as SharedFakeHass
+from _fakes import FakeHass as SharedFakeHass, loaded_config_entries
 
 from _fakes import FakeConnection
 
@@ -86,7 +86,7 @@ class FakeCoordinator:
 class FakeHass(SharedFakeHass):
     def __init__(self, coordinator: FakeCoordinator | None) -> None:
         super().__init__()
-        self.data = {DOMAIN: {"coordinator": coordinator}}
+        self.config_entries = loaded_config_entries(coordinator)
 
 
 class ScheduleContractTests(unittest.IsolatedAsyncioTestCase):

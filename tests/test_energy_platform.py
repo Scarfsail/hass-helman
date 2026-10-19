@@ -28,7 +28,8 @@ class _FakeConfigEntries:
 
 class _FakeHass:
     def __init__(self, coordinator, entries: dict[str, _FakeConfigEntry]) -> None:
-        self.data = {"helman": {"coordinator": coordinator}}
+        for entry in entries.values():
+            entry.runtime_data = coordinator
         self.config_entries = _FakeConfigEntries(entries)
 
 

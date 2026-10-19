@@ -194,16 +194,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # hands its URL to the config editor.
     await async_register_frontend(hass)
     await async_register_panel(hass)
-    coordinator = HelmanCoordinator(hass, stor)
+    coordinator = HelmanCoordinator(hass, stor, entry)
     await coordinator.async_setup()
 
-    domain_data["coordinator"] = coordinator
+    entry.runtime_data = coordinator
 
     try:
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     except Exception:
         await coordinator.async_unload()
-        domain_data.pop("coordinator", None)
+        del entry.runtime_data
         raise
     if hass.is_running:
         hass.bus.async_fire(EVENT_DATA_CHANGED, {"kind": DATA_CHANGED_KIND_CONFIG, "revision": config_revision(stor.config)})
@@ -216,12 +216,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not unload_ok:
         return False
 
-    coordinator = hass.data[DOMAIN].get("coordinator")
-    if coordinator:
-        await coordinator.async_unload()
+    # Home Assistant drops `entry.runtime_data` once this returns True.
+    await entry.runtime_data.async_unload()
     await async_unregister_frontend(hass)
     hass.data[DOMAIN].pop(entry.entry_id, None)
-    hass.data[DOMAIN].pop("coordinator", None)
     from .recorder_statistics_span import (
         clear_month_rows_cache,
         clear_oldest_state_probe_cache,

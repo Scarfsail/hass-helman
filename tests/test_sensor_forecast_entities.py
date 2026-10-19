@@ -1,7 +1,15 @@
 from __future__ import annotations
 import sys
 import types
-from tests._fakes import make_coordinator
+from homeassistant.helpers.dispatcher import async_dispatcher_send
+
+from custom_components.helman.const import (
+    SIGNAL_FORECAST_PUBLISHED,
+    SIGNAL_LIVE_TICK,
+    SLOT_ALIGNED_REFRESH_REASON,
+    entry_signal,
+)
+from tests._fakes import FakeConfigEntry, FakeHass, make_coordinator
 
 import importlib
 import unittest
@@ -38,67 +46,43 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
                 get_device_tree=AsyncMock(
                     return_value={"sources": [], "consumers": []}
                 ),
-                tree_index=SimpleNamespace(qualifying_nodes={}, share_devices={}),
                 config={"energy_nodes": nodes},
-                set_sensors=Mock(),
                 set_entity_factory=Mock(),
-                register_house_consumption_forecast_current_sensor=Mock(),
-                register_solar_forecast_current_sensors=Mock(),
-                register_battery_forecast_current_sensors=Mock(),
-                register_grid_import_price_sensor=Mock(),
-                register_grid_export_price_sensor=Mock(),
             )
-            hass = SimpleNamespace(data={"helman": {"coordinator": coordinator}})
             entities = []
-            await sensor_module.async_setup_entry(hass, _FakeEntry(), entities.extend)
+            await sensor_module.async_setup_entry(
+                SimpleNamespace(), FakeConfigEntry(runtime_data=coordinator), entities.extend
+            )
             self.assertTrue(entities)
 
-    async def test_async_setup_entry_registers_forecast_entities_with_coordinator(
+    async def test_async_setup_entry_adds_the_forecast_and_price_entities(
         self,
     ) -> None:
         sensor_module = _load_sensor_module()
         coordinator = SimpleNamespace(
             get_device_tree=AsyncMock(return_value={"sources": [], "consumers": []}),
-            tree_index=SimpleNamespace(qualifying_nodes={}, share_devices={}),
             config={},
-            set_sensors=Mock(),
             set_entity_factory=Mock(),
-            register_house_consumption_forecast_current_sensor=Mock(),
-            register_solar_forecast_current_sensors=Mock(),
-            register_battery_forecast_current_sensors=Mock(),
-            register_grid_import_price_sensor=Mock(),
-            register_grid_export_price_sensor=Mock(),
         )
-        hass = SimpleNamespace(data={"helman": {"coordinator": coordinator}})
         added_entities: list[object] = []
 
         await sensor_module.async_setup_entry(
-            hass,
-            _FakeEntry(),
+            SimpleNamespace(),
+            FakeConfigEntry(runtime_data=coordinator),
             added_entities.extend,
         )
 
-        forecast_sensors = coordinator.set_sensors.call_args.kwargs["forecast_sensors"]
-        self.assertEqual(len(forecast_sensors), 9)
+        # The nine day-total forecast sensors, then the ten that read the
+        # current slot or rate: the house consumption forecast, the two
+        # current-slot solar forecasts, the five current-slot battery
+        # forecasts, and the two price sensors.
         self.assertEqual(
-            forecast_sensors[0].entity_id,
-            "sensor.helman_solar_forecast_today",
-        )
-        self.assertEqual(
-            forecast_sensors[-1].entity_id,
-            "sensor.helman_solar_forecast_today_remaining",
-        )
-        # The forecast sensors, then the ten coordinator-pushed singletons that
-        # follow them: the house consumption forecast, the two current-slot solar
-        # forecasts, the five current-slot battery forecasts, and the two price
-        # sensors.
-        self.assertEqual(
-            [entity.entity_id for entity in added_entities[-19:-10]],
-            [entity.entity_id for entity in forecast_sensors],
-        )
-        self.assertEqual(
-            [entity.entity_id for entity in added_entities[-10:]],
+            [entity.entity_id for entity in added_entities[-19:]],
             [
+                "sensor.helman_solar_forecast_today",
+                "sensor.helman_solar_forecast_tomorrow",
+                *(f"sensor.helman_solar_forecast_d{day}" for day in range(2, 8)),
+                "sensor.helman_solar_forecast_today_remaining",
                 "sensor.helman_house_consumption_forecast_current",
                 "sensor.helman_solar_forecast_current",
                 "sensor.helman_solar_forecast_current_corrected",
@@ -111,31 +95,111 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
                 "sensor.helman_grid_export_price",
             ],
         )
-        coordinator.register_grid_import_price_sensor.assert_called_once()
-        # Raw and corrected, both published on the slot-aligned beat.
-        (registered,) = coordinator.register_solar_forecast_current_sensors.call_args.args
-        self.assertEqual(
-            [s.entity_id for s in registered],
-            [
-                "sensor.helman_solar_forecast_current",
-                "sensor.helman_solar_forecast_current_corrected",
-            ],
+        # Every one of them is written by the forecast publish signal.
+        self.assertTrue(
+            all(
+                isinstance(entity, sensor_module._HelmanPublishedSensor)
+                for entity in added_entities[-19:]
+            )
         )
-        # The five battery forecast series, on that same beat.
-        (battery_registered,) = (
-            coordinator.register_battery_forecast_current_sensors.call_args.args
+        # The tree-sized sensors are the coordinator's to add.
+        async_add_entities, factories = coordinator.set_entity_factory.call_args.args
+        self.assertEqual(set(factories), {"unmeasured", "share"})
+
+    async def _added(self, entity):
+        """``entity`` as the platform leaves it: on a hass and subscribed."""
+        entity.hass = self._hass
+        entity.async_write_ha_state = Mock()
+        await entity.async_added_to_hass()
+        return entity
+
+    async def test_the_publish_signal_writes_on_every_reason_but_the_battery_beat(
+        self,
+    ) -> None:
+        sensor_module = _load_sensor_module()
+        self._hass = FakeHass()
+        entry = FakeConfigEntry()
+        coordinator = SimpleNamespace()
+        published = [
+            await self._added(sensor_module.HelmanSolarForecastCurrentSensor(coordinator, entry)),
+            await self._added(sensor_module.HelmanGridImportPriceSensor(coordinator, entry)),
+        ]
+        battery = await self._added(
+            sensor_module.HelmanBatterySocForecastCurrentSensor(coordinator, entry)
         )
-        self.assertEqual(
-            [s.entity_id for s in battery_registered],
-            [
-                "sensor.helman_battery_soc_forecast_current",
-                "sensor.helman_battery_net_forecast_current",
-                "sensor.helman_grid_net_forecast_current",
-                "sensor.helman_grid_import_forecast_current",
-                "sensor.helman_grid_export_forecast_current",
-            ],
+        signal = entry_signal(SIGNAL_FORECAST_PUBLISHED, entry.entry_id)
+
+        async_dispatcher_send(self._hass, signal, "startup")
+        self.assertEqual([e.async_write_ha_state.call_count for e in published], [1, 1])
+        battery.async_write_ha_state.assert_not_called()
+
+        async_dispatcher_send(self._hass, signal, SLOT_ALIGNED_REFRESH_REASON)
+        self.assertEqual([e.async_write_ha_state.call_count for e in published], [2, 2])
+        battery.async_write_ha_state.assert_called_once_with()
+
+        # Another entry's publish is not this entity's.
+        async_dispatcher_send(
+            self._hass, entry_signal(SIGNAL_FORECAST_PUBLISHED, "other"), "startup"
         )
-        coordinator.register_grid_export_price_sensor.assert_called_once()
+        self.assertEqual([e.async_write_ha_state.call_count for e in published], [2, 2])
+
+    async def test_the_live_tick_hands_each_sensor_its_own_value(self) -> None:
+        sensor_module = _load_sensor_module()
+        self._hass = FakeHass()
+        entry = FakeConfigEntry()
+        total = await self._added(sensor_module.HelmanConsumptionTotalSensor(entry))
+        phase = await self._added(sensor_module.HelmanHousePhasePowerSensor(entry, 2))
+        ratio = await self._added(sensor_module.HelmanSourceRatioSensor(entry, "solar"))
+        eta = await self._added(
+            sensor_module.HelmanBatteryTimeSensor(entry, [], "charging")
+        )
+        share = await self._added(
+            sensor_module.HelmanSharePowerSensor(
+                entry, "klima", "sensor.helman_share_power_klima", "Klima"
+            )
+        )
+        # A rename in the registry does not detach a sensor from its value.
+        total.entity_id = "sensor.my_total"
+
+        async_dispatcher_send(
+            self._hass,
+            entry_signal(SIGNAL_LIVE_TICK, entry.entry_id),
+            {
+                "sensor.helman_consumer_total_power": 1234.4,
+                "sensor.helman_house_consumption_power_l2": None,
+                "sensor.helman_solar_source_ratio": 33.333,
+                "sensor.helman_battery_time_to_full": (42.26, "2026-03-20T22:00:00", 100),
+            },
+        )
+
+        self.assertEqual(total.native_value, 1234)
+        self.assertFalse(phase.available)
+        self.assertEqual(ratio.native_value, 33.3)
+        self.assertEqual(eta.native_value, 42.3)
+        self.assertEqual(eta.extra_state_attributes["target_soc"], 100)
+        # No value for it in this tick: left alone, not written.
+        share.async_write_ha_state.assert_not_called()
+
+    async def test_a_raising_live_sensor_does_not_stop_the_others(self) -> None:
+        sensor_module = _load_sensor_module()
+        self._hass = FakeHass()
+        entry = FakeConfigEntry()
+        first = await self._added(sensor_module.HelmanConsumptionTotalSensor(entry))
+        second = await self._added(sensor_module.HelmanProductionTotalSensor(entry))
+        first.async_write_ha_state.side_effect = RuntimeError("write failed")
+
+        with self.assertLogs("homeassistant.helpers.dispatcher", "ERROR"):
+            async_dispatcher_send(
+                self._hass,
+                entry_signal(SIGNAL_LIVE_TICK, entry.entry_id),
+                {
+                    "sensor.helman_consumer_total_power": 100.0,
+                    "sensor.helman_house_supply_power": 200.0,
+                },
+            )
+
+        second.async_write_ha_state.assert_called_once_with()
+        self.assertEqual(second.native_value, 200)
 
     async def test_forecast_entities_use_kwh_and_translation_keys(self) -> None:
         sensor_module = _load_sensor_module()

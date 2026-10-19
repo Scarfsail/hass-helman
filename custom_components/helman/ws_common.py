@@ -15,10 +15,19 @@ if TYPE_CHECKING:
 from .const import DOMAIN
 
 
+def loaded_coordinator(hass: HomeAssistant) -> HelmanCoordinator | None:
+    """The config entry's coordinator, its ``runtime_data``; None while not loaded."""
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        coordinator = getattr(entry, "runtime_data", None)
+        if coordinator is not None:
+            return coordinator
+    return None
+
+
 def get_coordinator(
     hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict
 ) -> HelmanCoordinator | None:
-    coordinator = hass.data.get(DOMAIN, {}).get("coordinator")
+    coordinator = loaded_coordinator(hass)
     if coordinator is None:
         connection.send_error(
             msg["id"], "not_loaded", "Helman coordinator not available"
