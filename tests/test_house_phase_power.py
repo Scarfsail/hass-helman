@@ -7,14 +7,12 @@ whenever a phase is.
 """
 
 from __future__ import annotations
-from tests._fakes import FakeHass, capture_signal, make_coordinator
+from tests._fakes import FakeHass, capture_signal, make_live_tracker
 
-import importlib
 import unittest
 from datetime import datetime
 from types import SimpleNamespace
 
-coordinator_module = importlib.import_module("custom_components.helman.coordinator")
 from custom_components.helman.const import (
     HOUSE_CONSUMPTION_ENTITY_ID,
     SIGNAL_LIVE_TICK,
@@ -48,10 +46,10 @@ class _FakeStates:
         return None if raw is None else SimpleNamespace(state=raw)
 
 
-def _make_coordinator(states: dict[str, str], *, telemetry=True):
-    c = make_coordinator()
-    c._hass = FakeHass()
-    c._hass.states = _FakeStates(states)
+def _make_tracker(states: dict[str, str], *, telemetry=True):
+    hass = FakeHass()
+    hass.states = _FakeStates(states)
+    c = make_live_tracker(hass, {})
     c._inverter_telemetry = _telemetry() if telemetry else None
     return c
 
@@ -65,7 +63,7 @@ def _phases(**readings: str) -> dict[str, str]:
 class HousePhasePowerTests(unittest.TestCase):
     def test_on_grid_phase_is_inverter_output_minus_export_plus_eps(self):
         # The Solax meter reads positive while exporting.
-        c = _make_coordinator(
+        c = _make_tracker(
             _phases(
                 ac1="1000", grid1="200", eps1="50",
                 ac2="300", grid2="-400",
@@ -82,12 +80,12 @@ class HousePhasePowerTests(unittest.TestCase):
 
     def test_a_sampling_skew_below_zero_floors_the_phase_at_zero(self):
         # The meter read a larger export than the inverter's output it was polled beside.
-        c = _make_coordinator(_phases(ac1="500", grid1="650", ac2="0", grid2="0", ac3="0", grid3="0"))
+        c = _make_tracker(_phases(ac1="500", grid1="650", ac2="0", grid2="0", ac3="0", grid3="0"))
 
         self.assertEqual(c._compute_house_phase_powers()[1], 0.0)
 
     def test_a_missing_inverter_or_meter_reading_leaves_the_phase_unavailable(self):
-        c = _make_coordinator(
+        c = _make_tracker(
             {
                 **_phases(ac1="1000", eps1="50", grid2="100", ac3="200", grid3="0"),
                 _entity("ac_power", 2): "unavailable",
@@ -101,7 +99,7 @@ class HousePhasePowerTests(unittest.TestCase):
         self.assertEqual(powers[3], 200.0)
 
     def test_off_grid_counts_only_the_eps_output(self):
-        c = _make_coordinator(
+        c = _make_tracker(
             {
                 RUN_MODE: "Off-Grid",
                 **_phases(ac1="900", grid1="0", eps1="400", ac2="900", eps2="300", ac3="900"),
@@ -113,12 +111,12 @@ class HousePhasePowerTests(unittest.TestCase):
         self.assertEqual(powers, {1: 400.0, 2: 300.0, 3: None})
 
     def test_without_an_inverter_profile_every_phase_is_unavailable(self):
-        c = _make_coordinator(_phases(ac1="1000", grid1="0"), telemetry=False)
+        c = _make_tracker(_phases(ac1="1000", grid1="0"), telemetry=False)
 
         self.assertEqual(c._compute_house_phase_powers(), {1: None, 2: None, 3: None})
 
     def test_the_tick_publishes_each_phase_and_their_sum(self):
-        c = _make_coordinator(
+        c = _make_tracker(
             _phases(ac1="500", grid1="0", ac2="600", grid2="-100", ac3="100", grid3="0")
         )
         sent = self._prime_tick(c)
@@ -128,7 +126,7 @@ class HousePhasePowerTests(unittest.TestCase):
         self.assertEqual(self._house_values(sent), [1300.0, 500.0, 700.0, 100.0])
 
     def test_the_total_is_unavailable_when_any_phase_is(self):
-        c = _make_coordinator(_phases(ac1="500", grid1="0", ac2="600", grid2="0"))
+        c = _make_tracker(_phases(ac1="500", grid1="0", ac2="600", grid2="0"))
         sent = self._prime_tick(c)
 
         c._tick(datetime(2026, 10, 11, 12, 0, 0))
@@ -137,13 +135,8 @@ class HousePhasePowerTests(unittest.TestCase):
 
     @staticmethod
     def _prime_tick(c) -> list:
-        """Just enough coordinator state for one tick to run; returns what it sends."""
-        c._cached_tree = {"sources": [], "consumers": []}
-        c._power_history = {}
-        c._virtual_sensor_ids = set()
-        c._compute_derived_powers = lambda: ({}, {})
-        c._unmeasured_entity_id_map = c._share_entity_id_map = {}
-        c._source_ratio_entity_ids = {}
+        """Just enough tracker state for one tick to run; returns what it sends."""
+        c._tree = {"sources": [], "consumers": []}
         return capture_signal(c._hass, SIGNAL_LIVE_TICK)
 
     @staticmethod

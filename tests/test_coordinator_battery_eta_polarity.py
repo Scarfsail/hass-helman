@@ -1,6 +1,6 @@
 """Battery ETAs honour the configured power polarity.
 
-The ETA pair is the one power reading in the coordinator that does not go
+The ETA pair is the one power reading in the live tick that does not go
 through ``value_type``: it works off the raw history buffer and splits it by
 sign. That makes it the single place where an inverted battery sensor fails
 *silently* -- no exception, no ``unavailable``, just time-to-full and
@@ -16,14 +16,11 @@ from custom_components.helman.const import (
     BATTERY_TIME_TO_FULL_ENTITY_ID,
     SIGNAL_LIVE_TICK,
 )
-from tests._fakes import FakeHass, capture_signal, make_coordinator
+from tests._fakes import FakeHass, capture_signal, make_live_tracker
 
-import importlib
 import unittest
 from datetime import datetime
 from types import SimpleNamespace
-
-coordinator_module = importlib.import_module("custom_components.helman.coordinator")
 
 BATTERY = "sensor.battery_power"
 HOUSE = "sensor.house_power"
@@ -48,23 +45,20 @@ class _FakeStates:
         return None if raw is None else SimpleNamespace(state=raw)
 
 
-def _make_coordinator(battery_power: str, polarity: str | None):
+def _make_tracker(battery_power: str, polarity: str | None):
     entities = {"power": BATTERY}
     if polarity is not None:
         entities["power_polarity"] = polarity
 
-    c = make_coordinator()
-    c._active_config = {
-        "visualization": {"history_buckets": 5, "history_bucket_duration": 1},
-        "energy_nodes": {"battery": {"entities": entities}},
-    }
-    c._hass = FakeHass()
-    c._hass.states = _FakeStates({BATTERY: battery_power, HOUSE: "1000"})
-    c._power_sensor_ids = [BATTERY, HOUSE]
-    c._source_sensor_ids = [BATTERY]
-    c._source_value_types = {BATTERY: "negative"}
-    c._source_ratio_entity_ids = {}
-    c._cached_tree = TREE
+    hass = FakeHass()
+    hass.states = _FakeStates({BATTERY: battery_power, HOUSE: "1000"})
+    c = make_live_tracker(
+        hass,
+        {
+            "visualization": {"history_buckets": 5, "history_bucket_duration": 1},
+            "energy_nodes": {"battery": {"entities": entities}},
+        },
+    )
     c._compute_derived_powers = lambda: ({}, {})
     c._compute_consumption_total = lambda: 1000.0
     c._compute_production_total = lambda: 1000.0
@@ -87,7 +81,7 @@ def _minutes(c, entity_id: str):
 
 
 def _run(battery_power: str, polarity: str | None):
-    c = _make_coordinator(battery_power, polarity)
+    c = _make_tracker(battery_power, polarity)
     for _ in range(3):
         c._tick(datetime(2026, 8, 25, 12, 0, 0))
     return c
@@ -134,22 +128,22 @@ if __name__ == "__main__":
 
 def test_tick_tolerates_null_energy_nodes_and_battery():
     for nodes in (None, {"battery": None}, {"battery": {"entities": None}}):
-        coordinator = _make_coordinator("2000", None)
-        coordinator._active_config["energy_nodes"] = nodes
-        coordinator._tick(datetime(2026, 8, 25, 12, 0, 0))
-        assert coordinator.charging_avg_seen == []
-        assert coordinator.discharging_avg_seen == []
+        tracker = _make_tracker("2000", None)
+        tracker._read_config()["energy_nodes"] = nodes
+        tracker._tick(datetime(2026, 8, 25, 12, 0, 0))
+        assert tracker.charging_avg_seen == []
+        assert tracker.discharging_avg_seen == []
 
 
 def test_a_raising_eta_still_sends_the_other_live_values():
-    coordinator = _make_coordinator("2000", None)
+    tracker = _make_tracker("2000", None)
 
     def boom(_avg):
         raise RuntimeError("odd battery state")
 
-    coordinator._compute_charging_eta = boom
-    coordinator._tick(datetime(2026, 8, 25, 12, 0, 0))
+    tracker._compute_charging_eta = boom
+    tracker._tick(datetime(2026, 8, 25, 12, 0, 0))
 
-    (values,) = coordinator.sent
+    (values,) = tracker.sent
     assert values["sensor.helman_consumer_total_power"] == 1000.0
     assert BATTERY_TIME_TO_FULL_ENTITY_ID not in values

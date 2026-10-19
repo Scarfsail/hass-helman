@@ -162,15 +162,14 @@ def _make_coordinator(
 ):
     coordinator = make_coordinator()
     coordinator._solar_bias_service = bias_service or _make_bias_service()
-    coordinator._training_artifacts_store = store or _make_store()
-    coordinator._house_profile = house_profile
-    coordinator._appliance_energy_estimates = appliance_estimates or {}
-    coordinator._shared_meter_weights = {}
+    coordinator.training.store = store or _make_store()
+    coordinator.training.house_profile = house_profile
+    coordinator.training.appliance_energy_estimates = appliance_estimates or {}
     coordinator._active_config = {}
-    coordinator._read_house_training_request = lambda: SimpleNamespace(
+    coordinator.training.read_house_request = lambda: SimpleNamespace(
         config_fingerprint=HOUSE_FP
     )
-    coordinator._read_appliance_energy_training_request = lambda: SimpleNamespace(
+    coordinator.training.read_appliance_request = lambda: SimpleNamespace(
         fingerprint=APPLIANCE_FP
     )
     coordinator._training_batch = batch_module.TrainingBatch(
@@ -302,7 +301,7 @@ class TrainingStatusTests(unittest.TestCase):
                 )
             )
         )
-        coordinator._shared_meter_weights = {"pump": 2.0}
+        coordinator.training.shared_meter_weights = {"pump": 2.0}
 
         appliance = _job(self._payload(coordinator), "appliance_energy")
 
@@ -530,7 +529,7 @@ class TrainingStatusAfterRealRunsTests(unittest.IsolatedAsyncioTestCase):
         def _raise():
             raise RuntimeError("house config is broken")
 
-        coordinator._read_house_training_request = _raise
+        coordinator.training.read_house_request = _raise
         job = house_module.HouseConsumptionTrainingJob(
             SimpleNamespace(),
             store,
@@ -573,7 +572,7 @@ class TrainingStatusAfterRealRunsTests(unittest.IsolatedAsyncioTestCase):
         def _raise():
             raise RuntimeError("registry is broken")
 
-        coordinator._read_appliance_energy_training_request = _raise
+        coordinator.training.read_appliance_request = _raise
         job = appliance_module.ApplianceEnergyTrainingJob(
             SimpleNamespace(), store, read_request=_raise
         )
@@ -821,12 +820,6 @@ class TrainNowTests(unittest.IsolatedAsyncioTestCase):
         new_store = _make_store()
         new_store._store = old_store._store
         new_coordinator = _make_coordinator(store=new_store)
-        new_coordinator._read_house_forecast_config = lambda: (
-            None,
-            56,
-            14,
-            HOUSE_FP,
-        )
         new_coordinator._async_refresh_forecast = AsyncMock()
         hass = _hass(None)
 
@@ -855,7 +848,9 @@ class TrainNowTests(unittest.IsolatedAsyncioTestCase):
         connection = await _train_now_with_hass(hass, job="appliance_energy")
 
         self.assertEqual(connection.errors, [])
-        self.assertEqual(new_coordinator._appliance_energy_estimates, {"dishwasher": 0.8})
+        self.assertEqual(
+            new_coordinator.training.appliance_energy_estimates, {"dishwasher": 0.8}
+        )
         self.assertEqual(
             _job(connection.results[0][1]["status"], "appliance_energy")["health"],
             "ok",

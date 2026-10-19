@@ -378,7 +378,7 @@ class HelmanConsumptionTotalSensor(_HelmanDerivedPowerSensor):
 class HelmanProductionTotalSensor(_HelmanDerivedPowerSensor):
     """Despite the class name, this sums every non-virtual *source* node --
     solar, battery discharge and grid import alike -- so it is what supplies
-    the house, not what it produces. See ``HelmanCoordinator._compute_production_total``.
+    the house, not what it produces. See ``LivePowerTracker._compute_production_total``.
     The entity id and name say "supply"; only the class name still says
     "production", since renaming it is not part of this change.
     """

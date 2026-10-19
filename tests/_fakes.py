@@ -203,6 +203,21 @@ def make_coordinator(**overrides):
     return coordinator
 
 
+def make_live_tracker(hass: Any, config: dict, *, weights: dict | None = None):
+    """A ``LivePowerTracker`` over ``config``, sending on the default entry's signal.
+
+    ``config`` is read live, so a test may edit it in place afterwards.
+    """
+    from custom_components.helman.live_power import LivePowerTracker
+
+    return LivePowerTracker(
+        hass,
+        FakeConfigEntry().entry_id,
+        read_config=lambda: config,
+        read_shared_meter_weights=lambda: weights or {},
+    )
+
+
 def make_optimization_context(
     *,
     now: datetime,

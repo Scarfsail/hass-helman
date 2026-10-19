@@ -264,6 +264,8 @@ class CoordinatorSolarBiasCallbackTests(unittest.IsolatedAsyncioTestCase):
             on_status_changed=coordinator._on_solar_bias_changed,
         )
         coordinator._solar_bias_service = service
+        # The training artifacts are reloaded too; nothing is stored for them.
+        coordinator.training.store._store = DummyStore()
         call_order: list[str] = []
 
         async def _record_refresh(**_kwargs) -> None:

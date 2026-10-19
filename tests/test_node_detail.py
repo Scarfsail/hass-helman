@@ -32,7 +32,11 @@ async def async_get_node_detail(hass, config, **kwargs):
         config=config,
         telemetry=resolve_detail_telemetry(hass, config),
         device_report=getattr(coordinator, "async_device_report", None),
-        house_profile=getattr(coordinator, "house_profile", (None, None)),
+        house_profile=(
+            coordinator.training.served_house_profile
+            if hasattr(coordinator, "training")
+            else (None, None)
+        ),
     )
     # No entity registry here: a Helman sensor is found at the id it is created under.
     with patch(
@@ -637,7 +641,12 @@ def test_websocket_errors_carry_the_registry_code():
     )
     hass = NS(
         config_entries=loaded_config_entries(
-            NS(config=config(), vendor_telemetry={}, async_device_report=None, house_profile=(None, None))
+            NS(
+                config=config(),
+                live=NS(vendor_telemetry={}),
+                async_device_report=None,
+                training=NS(served_house_profile=(None, None)),
+            )
         )
     )
 
@@ -1709,7 +1718,7 @@ def house_detail(
 
     hass = fake_hass({})
     hass.config_entries = loaded_config_entries(
-        coordinator or NS(async_device_report=device_report, house_profile=(None, None))
+        coordinator or NS(async_device_report=device_report)
     )
     with (
         patch(
@@ -2059,7 +2068,9 @@ def test_the_learned_profile_is_the_forecasts_base_load_monday_first():
     bands = [ZERO_BAND] * 168
     bands[1 * 24 + 18] = ForecastBand(1.25, 1.0, 1.5)
     profile = NS(history_days=42, non_deferrable=bands)
-    coordinator = NS(house_profile=(profile, "2026-10-10T03:00:00+02:00"))
+    coordinator = NS(
+        training=NS(served_house_profile=(profile, "2026-10-10T03:00:00+02:00"))
+    )
     payload, _ = house_detail(section="pattern", coordinator=coordinator)
 
     learned = payload["profile"]

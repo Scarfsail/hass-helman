@@ -661,7 +661,7 @@ def ws_get_history(
     coordinator = get_coordinator(hass, connection, msg)
     if coordinator is None:
         return
-    connection.send_result(msg["id"], coordinator.get_history())
+    connection.send_result(msg["id"], coordinator.live.get_history())
 
 
 @websocket_api.websocket_command({
@@ -773,9 +773,9 @@ async def ws_get_node_detail(
             hass,
             NodeDetailContext(
                 config=coordinator.config,
-                telemetry=coordinator.vendor_telemetry,
+                telemetry=coordinator.live.vendor_telemetry,
                 device_report=coordinator.async_device_report,
-                house_profile=coordinator.house_profile,
+                house_profile=coordinator.training.served_house_profile,
             ),
             node=msg["node"],
             device_id=msg.get("device_id"),

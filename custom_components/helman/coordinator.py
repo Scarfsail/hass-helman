@@ -3,12 +3,11 @@ from __future__ import annotations
 import asyncio
 import functools
 import logging
-from collections import OrderedDict, deque
+from collections import OrderedDict
 from collections.abc import Callable, Collection, Coroutine, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from datetime import date, datetime, timedelta, timezone
-from statistics import median
+from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING, Any, NamedTuple
 from zoneinfo import ZoneInfo
 
@@ -16,10 +15,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
-from homeassistant.helpers.event import (
-    async_track_time_change,
-    async_track_time_interval,
-)
+from homeassistant.helpers.event import async_track_time_change
 from homeassistant.helpers.start import async_at_started
 from homeassistant.util import dt as dt_util
 
@@ -71,47 +67,32 @@ from .battery_forecast_response import build_battery_forecast_response
 from .battery_state import (
     describe_battery_entity_config_issue,
     describe_battery_live_state_issue,
-    read_battery_entities,
     read_battery_entity_config,
     read_battery_live_state,
     read_battery_soc_bounds,
     read_battery_soc_bounds_config,
 )
-from .config_path import get as config_value
-from .config_read import read_mapping
 from .const import (
     AUTOMATION_CONDITION_PLAN_FRESHNESS_SECONDS,
     BATTERY_CAPACITY_FORECAST_CACHE_TTL_SECONDS,
-    BATTERY_TIME_TO_EMPTY_ENTITY_ID,
-    BATTERY_TIME_TO_FULL_ENTITY_ID,
-    CONSUMPTION_TOTAL_ENTITY_ID,
     DATA_CHANGED_KIND_PLAN,
     DATA_CHANGED_KIND_SCHEDULE,
     DATA_CHANGED_KIND_SOLAR_BIAS,
     DATA_CHANGED_KIND_TRAINING,
     DEFAULT_FORECAST_DAYS,
-    DEFAULT_HISTORY_LOOKBACK_DAYS,
     EVENT_DATA_CHANGED,
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
     FORECAST_STALE_AFTER_SECONDS,
-    HOUSE_CONSUMPTION_ENTITY_ID,
     HOUSE_FORECAST_MODEL_ID,
     MAX_FORECAST_DAYS,
-    PRODUCTION_TOTAL_ENTITY_ID,
     SCHEDULE_SLOT_MINUTES,
     SIGNAL_FORECAST_PUBLISHED,
-    SIGNAL_LIVE_TICK,
     SLOT_ALIGNED_REFRESH_REASON,
     entry_signal,
-    house_consumption_phase_entity_id,
 )
 from .consumption_forecast_builder import (
     ConsumptionForecastBuilder,
     read_house_forecast_request,
-)
-from .consumption_forecast_profiles import (
-    HouseConsumptionProfile,
-    profile_from_dict,
 )
 from .controllables.config import (
     entity_friendly_name,
@@ -120,9 +101,7 @@ from .controllables.config import (
     own_meter,
     peek_controllable_id,
     read_carved_meters,
-    read_shared_meters,
     running_active_states,
-    running_signal,
 )
 from .controllables.spec import (
     CONTROLLABLE_KIND_CLIMATE,
@@ -163,10 +142,8 @@ from .grid_price_forecast_builder import (
 from .grid_price_forecast_response import build_grid_price_forecast_response
 from .house_device_consumers import extract_house_device_consumers
 from .house_forecast_response import build_house_forecast_response
-from .node_details.inverter import run_mode_condition
+from .live_power import LivePowerTracker
 from .point_forecast_response import build_solar_forecast_response
-from .power_polarity import is_power_inverted, watts_for_value_type
-from .power_reading import power_unit_factor
 from .scheduling.actual_history import ActualHistorySlot, build_entity_actual_histories
 from .scheduling.normal_state import (
     build_controllable_entities,
@@ -184,7 +161,6 @@ from .scheduling.schedule import (
 )
 from .scheduling.schedule_executor import ScheduleExecutor
 from .scheduling.schedule_service import ScheduleService
-from .shared_meter_split import split_own_power
 from .slot_grid import SLOT, SLOT_MINUTES, get_local_current_slot_start
 from .solar_bias_correction.models import read_bias_config
 from .solar_bias_correction.response import build_bias_correction_payload
@@ -192,34 +168,20 @@ from .solar_bias_correction.service import SolarBiasCorrectionService
 from .solar_bias_correction.service import health_for as solar_bias_health_for
 from .solar_inspector.service import SolarInspector
 from .span_history_model import SpanMeters, read_span_meters, recorder_tail_start
-from .storage import HelmanStorage, TrainingArtifactsStore
+from .storage import HelmanStorage
 from .today_slot_readers import (
     TodaySlotBoundaryStateReader,
     TodaySlotEnergyReader,
 )
-from .training.appliance_energy import (
-    ApplianceEnergyTrainingJob,
-    ApplianceEnergyTrainingRequest,
-    DeviceSubject,
-    SharedMeter,
-    SharedMeterMember,
-)
 from .training.appliance_energy import health_for as appliance_energy_health_for
+from .training.appliance_energy import read_appliance_energy_training_request
+from .training.artifacts import TrainingArtifacts
 from .training.batch import TrainingBatch
-from .training.house_consumption import (
-    HouseConsumptionTrainingJob,
-    HouseTrainingRequest,
-)
+from .training.house_consumption import HouseTrainingRequest
 from .training.house_consumption import health_for as house_consumption_health_for
 from .training.solar_bias import SolarBiasTrainingJob
 from .tree_builder import HelmanTreeBuilder, TreeIndex
-from .vendors import (
-    INVERTER_TELEMETRY_KEY,
-    DeviceTelemetry,
-    resolve_vendor_config,
-    resolve_vendor_telemetry,
-)
-from .visualization import read_visualization
+from .vendors import resolve_vendor_config
 
 _LOGGER = logging.getLogger(__name__)
 # Sentinel distinguishing "battery live state not supplied" from "supplied as
@@ -236,13 +198,6 @@ _OPEN_DATASET_TTL = timedelta(minutes=5)
 _DEVICE_DATASET_CACHE_SIZE = 8
 _BATTERY_FORECAST_CACHE_SOC_TOLERANCE = 1.0
 _BATTERY_FORECAST_CACHE_ENERGY_TOLERANCE_KWH = 0.1
-# How far back the unmeasured remainder looks when smoothing away meter skew.
-# See _smooth_unmeasured for why the raw remainder cannot be published as-is.
-_UNMEASURED_SMOOTHING_WINDOW_S = 15.0
-# When a stored house consumption profile is due for a refit. Long on purpose:
-# the batch runs nightly, so anything under two days is a slipped timer rather
-# than a fault, and the profile keeps being served either way.
-_HOUSE_PROFILE_STALE_AFTER_SECONDS = 48 * 3600
 _FORECAST_STALE_HINT = (
     "Forecast data has not been rebuilt for over an hour. "
     "Check the Home Assistant log for forecast refresh errors."
@@ -691,20 +646,13 @@ class HelmanCoordinator:
         self._forecast_published_signal = entry_signal(
             SIGNAL_FORECAST_PUBLISHED, entry.entry_id
         )
-        self._live_tick_signal = entry_signal(SIGNAL_LIVE_TICK, entry.entry_id)
         self._cached_tree: dict | None = None
         self._tree_index: TreeIndex | None = None
-        self._buffer_tree: dict | None = None
         self._unloaded = False
         self._device_datasets: OrderedDict[
             tuple[date, date, ZoneInfo], _CachedDeviceDataset
         ] = OrderedDict()
         self._unsub_listeners: list = []
-        self._unmeasured_raw_history: dict[str, deque] = {}
-        # The inverter's telemetry the measured house phases compute from,
-        # resolved per tree rebuild in _init_buffers.
-        self._inverter_telemetry: Any = None
-        self._vendor_telemetry: dict[str, DeviceTelemetry] = {}
         # The sensor platform's add callback and the factories of the entities
         # the device tree decides the number of, keyed by kind; the entities
         # built so far are kept per kind and node so a rebuild can diff them.
@@ -717,16 +665,6 @@ class HelmanCoordinator:
         self._active_config: dict[str, Any] = resolve_vendor_config(
             hass, storage.config
         )[0]
-        self._power_sensor_ids: list[str] = []
-        self._source_sensor_ids: list[str] = []
-        self._source_value_types: dict[str, str] = {}
-        # In-memory rolling buffers (oldest first)
-        self._power_history: dict[str, deque[float]] = {}
-        # Map: source_power_sensor_id → ratio_sensor_entity_id (derived from the tree in
-        # _init_buffers, independent of when the sensor platform registers the ratio entities).
-        self._source_ratio_entity_ids: dict[str, str] = {}
-        # Tick lifecycle
-        self._unsub_tick: Callable[[], None] | None = None
         # House forecast snapshot (persisted + cached)
         self._cached_forecast: dict | None = None
         # The import rate in force right now, refreshed with the forecast
@@ -863,25 +801,29 @@ class HelmanCoordinator:
         self._solar_bias_store: Any = None
         self._solar_bias_service: SolarBiasCorrectionService | None = None
         self._solar_inspector: SolarInspector | None = None
-        self._training_artifacts_store: TrainingArtifactsStore | None = None
         self._training_batch: TrainingBatch | None = None
-        # The fitted house consumption model the forecast is assembled from,
-        # adopted from the training artifacts store at startup and replaced
-        # whenever the nightly batch refits it. None means "nothing to serve".
-        self._house_profile: HouseConsumptionProfile | None = None
-        self._house_profile_trained_at: str | None = None
-        self._house_profile_last_outcome: str = "no_training_yet"
-        # Per-appliance average hourly energy while running, keyed by appliance
-        # id, adopted from the same store. An appliance missing from the map —
-        # never trained, no usable history, or on a fixed strategy — falls back
-        # to its configured hourly_energy_kwh, which is what the resolvers did
-        # for a failed estimate before this was stored at all.
-        self._appliance_energy_estimates: dict[str, float] = {}
-        # Each shared meter member's learned power in kW, adopted from the same
-        # section: the ratio the live split shares a parent's own power in. A
-        # member missing from it takes the others' mean, so before the first
-        # fit lands the split is even.
-        self._shared_meter_weights: dict[str, float | None] = {}
+        #: The training artifacts store and the house profile, appliance
+        #: estimates and shared-meter weights adopted from it.
+        self.training = TrainingArtifacts(
+            hass,
+            read_house_request=self._read_house_training_request,
+            read_house_fingerprint=lambda: read_house_forecast_request(
+                self._active_config
+            ).config_fingerprint,
+            read_appliance_request=lambda: read_appliance_energy_training_request(
+                self._active_config, self._iter_automation_candidate_appliances()
+            ),
+            training_batch=lambda: self._training_batch,
+            run_when_started=self._run_when_started,
+            on_adopted=self._async_on_training_adopted,
+        )
+        #: The live power tick, its history buffers and the derived live values.
+        self.live = LivePowerTracker(
+            hass,
+            entry.entry_id,
+            read_config=lambda: self._active_config,
+            read_shared_meter_weights=lambda: self.training.shared_meter_weights,
+        )
         # Today's completed slots are immutable, so the reader keeps the ones it
         # has already resolved. It lives here because the forecast builder is
         # rebuilt on every refresh and a cache inside it would never be read.
@@ -900,15 +842,6 @@ class HelmanCoordinator:
         self._forecast_refresh_task: asyncio.Task[Any] | None = None
         self._last_schedule_control_config_issue: str | None = None
         self._last_schedule_battery_state_issue: str | None = None
-        # Mapping: parent_node_id → unmeasured_entity_id (e.g. "house" → "sensor.helman_house_unmeasured_power")
-        self._unmeasured_entity_id_map: dict[str, str] = {}
-        # Mapping: share node id (a meterless child's device id) → its share entity id
-        self._share_entity_id_map: dict[str, str] = {}
-        # Mapping: meterless child id → (running-signal entity, "switch" | "climate")
-        self._share_running_signals: dict[str, tuple[str, str]] = {}
-        self._share_tolerances: dict[str, float | None] = {}
-        # Entity IDs whose values are computed by the tick (not read from hass.states)
-        self._virtual_sensor_ids: set[str] = set()
 
     @property
     def config(self) -> dict:
@@ -1021,8 +954,7 @@ class HelmanCoordinator:
             live_sources=self,
             bias_service=self._solar_bias_service,
         )
-        self._training_artifacts_store = TrainingArtifactsStore(self._hass)
-        await self._training_artifacts_store.async_load()
+        await self.training.async_load()
         # Unconditionally, outside any bias enable gate: with bias correction
         # off, a gated batch would never fit the house consumption profile and
         # the house forecast would sit at unavailable forever.
@@ -1032,18 +964,8 @@ class HelmanCoordinator:
                 self._solar_bias_service,
                 on_trained=self._async_on_solar_bias_trained,
             ),
-            house_consumption_job=HouseConsumptionTrainingJob(
-                self._hass,
-                self._training_artifacts_store,
-                read_request=self._read_house_training_request,
-                on_trained=self._async_on_house_profile_trained,
-            ),
-            appliance_energy_job=ApplianceEnergyTrainingJob(
-                self._hass,
-                self._training_artifacts_store,
-                read_request=self._read_appliance_energy_training_request,
-                on_trained=self._async_on_appliance_energy_trained,
-            ),
+            house_consumption_job=self.training.house_consumption_job,
+            appliance_energy_job=self.training.appliance_energy_job,
             on_job_finished=functools.partial(
                 self._fire_data_changed, DATA_CHANGED_KIND_TRAINING
             ),
@@ -1062,9 +984,7 @@ class HelmanCoordinator:
         )
         # After the registry: the stored estimates are keyed on the appliances
         # it holds, so there is nothing to adopt them against before this point.
-        refit_reason = self._adopt_stored_appliance_energy()
-        if refit_reason is not None:
-            self._schedule_appliance_energy_refit(refit_reason)
+        self.training.adopt_appliance_energy()
         self._unsub_listeners.append(
             self._hass.bus.async_listen(
                 "entity_registry_updated", self._on_registry_updated
@@ -1072,7 +992,7 @@ class HelmanCoordinator:
         )
 
         # Build tree upfront to learn which power sensors to track
-        self._resubscribe_tree(await self.get_device_tree())
+        self.live.track(await self.get_device_tree(), self.tree_index)
 
         # House forecast: load persisted snapshot and schedule recurring
         # refreshes. The persisted snapshots are served as-is however old they
@@ -1096,16 +1016,10 @@ class HelmanCoordinator:
             config_fingerprint=config_fingerprint,
         ):
             self._cached_forecast = None
-        # The house profile is loaded against the very same fingerprint, so the
+        # The house profile is checked against the very same fingerprint (the
+        # training request reads it off the same forecast request), so the
         # profile and the snapshot can never disagree about what is stale.
-        # A config save is a restart (ws_save_config -> async_reload ->
-        # async_setup), which is why this one path covers startup and config
-        # save both, and why there is no config-save handler anywhere.
-        refit_reason = self._adopt_stored_house_profile(
-            config_fingerprint=config_fingerprint
-        )
-        if refit_reason is not None:
-            self._schedule_house_profile_refit(refit_reason)
+        self.training.adopt_house_consumption()
         reference_time = dt_util.now()
         self._start_forecast_refresh()
 
@@ -1141,11 +1055,12 @@ class HelmanCoordinator:
     def _schedule_startup_forecast_refresh(self) -> None:
         """Build the first forecast once Home Assistant has finished starting.
 
-        Deferred for the same reason as ``_schedule_house_profile_refit``: the
-        solar half reads its points straight off the forecast provider's daily
-        energy entities, and on a cold start that integration has not
-        registered them yet — the build comes back ``unavailable`` with no
-        points a fraction of a second after setup. Until this fires the
+        Deferred for the same reason as the training refits (see
+        ``TrainingArtifacts._schedule_refit``): the solar half reads its points
+        straight off the forecast provider's daily energy entities, and on a
+        cold start that integration has not registered them yet — the build
+        comes back ``unavailable`` with no points a fraction of a second after
+        setup. Until this fires the
         persisted snapshot is served, so the card shows the last known forecast
         rather than nothing.
 
@@ -1211,11 +1126,10 @@ class HelmanCoordinator:
             tree = await self.get_device_tree()
             if self._unloaded:
                 return
-            if tree == self._buffer_tree:
-                self._refresh_inverter_telemetry()
+            if tree == self.live.tree:
+                self.live.refresh_inverter_telemetry()
                 return
-            self._stop_tick()
-            self._resubscribe_tree(tree)
+            self.live.track(tree, self.tree_index)
             if self._unloaded:
                 return
             self._sync_derived_sensors()
@@ -1223,14 +1137,6 @@ class HelmanCoordinator:
             logging.getLogger(__name__).exception(
                 "Error rebuilding Helman subscriptions"
             )
-
-    def _resubscribe_tree(self, tree: dict) -> None:
-        """Track the power sensors of ``tree`` and (re)start the tick on them."""
-        self._power_sensor_ids = list(self.tree_index.power_sensor_ids)
-        self._source_sensor_ids = list(self.tree_index.source_sensor_ids)
-        self._source_value_types = dict(self.tree_index.source_value_types)
-        self._init_buffers(tree, self.tree_index)
-        self._start_tick()
 
     def _sync_derived_sensors(self) -> None:
         """Add/remove the unmeasured and share power entities to match the current tree."""
@@ -1274,10 +1180,6 @@ class HelmanCoordinator:
             new_sensors = {node_id: factory(node_id, *wanted[node_id]) for node_id in to_add}
             sensors.update(new_sensors)
             self._async_add_entities(list(new_sensors.values()))
-
-    @property
-    def vendor_telemetry(self) -> Mapping[str, DeviceTelemetry]:
-        return self._vendor_telemetry
 
     @property
     def tree_index(self) -> TreeIndex:
@@ -1556,9 +1458,9 @@ class HelmanCoordinator:
         batch = self._training_batch
         solar = self._solar_bias_service.get_status_payload()
         solar_health = solar_bias_health_for(solar)
-        store = self._training_artifacts_store
-        house = store.house_consumption
-        appliance = store.appliance_energy
+        training = self.training
+        house = training.store.house_consumption
+        appliance = training.store.appliance_energy
         jobs = [
             {
                 **_training_job_status(
@@ -1602,9 +1504,9 @@ class HelmanCoordinator:
                 "house_consumption",
                 house,
                 health=house_consumption_health_for(house),
-                artifact_in_use=self._house_profile is not None,
+                artifact_in_use=training.house_profile is not None,
                 read_live_fingerprint=lambda: (
-                    self._read_house_training_request().config_fingerprint
+                    training.read_house_request().config_fingerprint
                 ),
                 issues=[],
             ),
@@ -1615,14 +1517,14 @@ class HelmanCoordinator:
                     health=appliance_energy_health_for(appliance),
                     # Learned weights drive the live split, and records the
                     # device detail, even when no appliance learns an estimate.
-                    artifact_in_use=bool(self._appliance_energy_estimates)
+                    artifact_in_use=bool(training.appliance_energy_estimates)
                     or any(
                         weight is not None
-                        for weight in self._shared_meter_weights.values()
+                        for weight in training.shared_meter_weights.values()
                     )
                     or bool((appliance or {}).get("devices")),
                     read_live_fingerprint=lambda: (
-                        self._read_appliance_energy_training_request().fingerprint
+                        training.read_appliance_request().fingerprint
                     ),
                     issues=[
                         {"subject": appliance_id, "reason": reason}
@@ -1634,7 +1536,7 @@ class HelmanCoordinator:
                 # The adopted map, not the stored document: it is what
                 # projection and automation actually read. kWh per running
                 # hour, keyed by controllable id.
-                "estimates": dict(self._appliance_energy_estimates),
+                "estimates": dict(training.appliance_energy_estimates),
                 # Every device's usage record, by deviceKey, as stored.
                 "devices": dict((appliance or {}).get("devices") or {}),
             },
@@ -1657,8 +1559,7 @@ class HelmanCoordinator:
         lives under its meter, so such an id is resolved to that meter here;
         a meterless child's id is already its key.
         """
-        store = self._training_artifacts_store
-        section = (store.appliance_energy if store is not None else None) or {}
+        section = self.training.store.appliance_energy or {}
         devices = section.get("devices") or {}
         record = devices.get(device_key)
         if record is None:
@@ -1688,264 +1589,11 @@ class HelmanCoordinator:
             config_fingerprint=config_fingerprint,
         )
 
-    @property
-    def house_profile(self) -> tuple[HouseConsumptionProfile | None, str | None]:
-        """The fitted house profile the forecast serves, and when it was trained."""
-        return self._house_profile, self._house_profile_trained_at
-
-    def _adopt_stored_house_profile(self, *, config_fingerprint: str) -> str | None:
-        """Adopt the stored house profile; return why a refit is due, or None.
-
-        Three cases, and they are not the same case:
-
-        * missing (or unreadable) — nothing to serve, refit;
-        * fingerprint-stale — the stored profile answers a question the user
-          has since changed, so it is blanked to make the change visible;
-        * older than 48 h — keep serving it, a 56-day fit does not become
-          wrong because it missed a night, and refit in the background.
-        """
-        self._house_profile = None
-        self._house_profile_trained_at = None
-        self._house_profile_last_outcome = "no_training_yet"
-
-        store = self._training_artifacts_store
-        section = store.house_consumption if store is not None else None
-        if section is None:
-            return "no_stored_profile"
-
-        last_outcome = section.get("last_outcome")
-        if isinstance(last_outcome, str):
-            self._house_profile_last_outcome = last_outcome
-
-        if section.get("fingerprint") != config_fingerprint:
-            return "config_changed"
-
-        profile = profile_from_dict(section.get("data"))
-        if profile is None:
-            return "unreadable_profile"
-
-        self._house_profile = profile
-        trained_at = section.get("trained_at")
-        self._house_profile_trained_at = (
-            trained_at if isinstance(trained_at, str) else None
-        )
-        if self._is_house_profile_expired(self._house_profile_trained_at):
-            return "profile_expired"
-        return None
-
-    def _schedule_house_profile_refit(self, reason: str) -> None:
-        """Refit the house profile once Home Assistant has finished starting.
-
-        Deferred rather than run here. The fit reads the house energy entity,
-        and on a cold start that entity's own integration may not have
-        registered it yet — the job would see ``hass.states.get()`` return
-        ``None``, record ``entity_missing``, and leave the house forecast
-        unavailable until the next nightly run. Observed in practice: the
-        entity appeared about eighty seconds after setup.
-
-        When Home Assistant is already running — a config save reloads the
-        entry — ``async_at_started`` fires immediately, so **G3** is unaffected.
-
-        Never awaited either way: startup must not block on a multi-day
-        recorder read, and the batch's single flight keeps this from colliding
-        with the nightly run.
-        """
-        if self._training_batch is None:
+    async def _async_on_training_adopted(self, reason: str) -> None:
+        """Rebuild at once once a training job's result has been adopted."""
+        if self._unloaded:
             return
-
-        self._run_when_started(
-            functools.partial(
-                self._training_batch.async_run_house_consumption, reason=reason
-            )
-        )
-
-    def _read_appliance_energy_training_request(
-        self,
-    ) -> ApplianceEnergyTrainingRequest:
-        """Every consumer device the nightly job learns a record for.
-
-        One subject per device with its own meter, and per meterless child its
-        parent's meter is split among, schedulable or not; the inverter is no
-        consumer. A subject is keyed by the card's ``deviceKey``: its meter, or
-        a meterless child's id. Whether it is ``history_average`` -- and so its
-        lookback -- comes from its appliance runtime, the reader the forecast
-        uses; a device that is not one learns over the default window.
-
-        Shared meters come from the device tree too: a meter owner's meterless
-        children split its own energy, and each runs by its own switch or
-        climate entity — a ``fixed`` or passive child included, since it still
-        runs and so still divides the meter.
-        """
-        shared = read_shared_meters(self._active_config)
-        learners = {
-            appliance.id: appliance
-            for appliance in self._iter_automation_candidate_appliances()
-            if appliance.projection.uses_history_average
-        }
-        subjects: dict[str, DeviceSubject] = {}
-        for device, parent in iter_devices(self._active_config):
-            controllable_id = peek_controllable_id(device)
-            meter = own_meter(device)
-            if meter is not None:
-                key, meterless = meter, False
-            else:
-                parent_meter = own_meter(parent) if parent is not None else None
-                members = shared.get(parent_meter, {}).get("members", ())
-                if controllable_id not in {member[0] for member in members}:
-                    continue
-                key, meter, meterless = controllable_id, parent_meter, True
-            if key in subjects:
-                continue
-            learner = learners.get(controllable_id)
-            consumption = device.get("consumption")
-            power = (
-                consumption.get("power_entity_id")
-                if isinstance(consumption, Mapping)
-                else None
-            )
-            subjects[key] = DeviceSubject(
-                device_key=key,
-                meter=meter,
-                meterless=meterless,
-                controllable_id=controllable_id,
-                # A meterless child's usage is its share of the meter.
-                power_entity_id=(
-                    power.strip()
-                    if not meterless and isinstance(power, str) and power.strip()
-                    else None
-                ),
-                # What the tree builder gives every device's node.
-                power_value_type="default",
-                running_signal=running_signal(device),
-                lookback_days=(
-                    learner.projection.history_lookback_days
-                    if learner is not None
-                    else DEFAULT_HISTORY_LOOKBACK_DAYS
-                ),
-                history_average=learner is not None,
-            )
-        return ApplianceEnergyTrainingRequest(
-            subjects=tuple(subjects.values()),
-            shared_meters={
-                energy_entity_id: SharedMeter(
-                    members=tuple(
-                        SharedMeterMember.for_signal(*member)
-                        for member in meter_shared["members"]
-                    ),
-                    metered_children=tuple(meter_shared["metered_children"]),
-                    tolerance=meter_shared["tolerance"],
-                )
-                for energy_entity_id, meter_shared in shared.items()
-            },
-        )
-
-    def _adopt_stored_appliance_energy(self) -> str | None:
-        """Adopt the stored estimates; return why a refresh is due, or None.
-
-        Mirrors ``_adopt_stored_house_profile``, minus the expiry arm: a
-        30-day average of energy-while-running does not go stale on a clock the
-        way a house profile does, and the nightly run refreshes it anyway. What
-        is left is missing (nothing trained yet) and fingerprint-stale (the
-        appliance set, its entities or a lookback window changed).
-
-        A fingerprint change does **not** blank the estimates the way a stale
-        house profile is blanked. The map is keyed per appliance, so the entries
-        for appliances that did not change are still right, and dropping them
-        would push those appliances onto their fixed fallback for no reason
-        until the refit lands. The same holds for the shared-meter weights,
-        keyed per member.
-        """
-        self._appliance_energy_estimates = {}
-        self._shared_meter_weights = {}
-
-        store = self._training_artifacts_store
-        section = store.appliance_energy if store is not None else None
-        if section is None:
-            # A config with no history_average appliance still refits: the job
-            # records "not_configured" against the current fingerprint, which is
-            # what stops this from rescheduling a refit on every restart.
-            return "no_stored_estimates"
-
-        data = section.get("data")
-        if isinstance(data, dict):
-            self._appliance_energy_estimates = {
-                appliance_id: float(value)
-                for appliance_id, value in data.items()
-                if isinstance(appliance_id, str)
-                and isinstance(value, (int, float))
-                and not isinstance(value, bool)
-                and value > 0
-            }
-
-        weights = section.get("shared_meter_weights")
-        if isinstance(weights, dict):
-            self._shared_meter_weights = {
-                member_id: float(value)
-                if isinstance(value, (int, float))
-                and not isinstance(value, bool)
-                and value >= 0
-                else None
-                for member_id, value in weights.items()
-                if isinstance(member_id, str)
-            }
-
-        request = self._read_appliance_energy_training_request()
-        if section.get("fingerprint") != request.fingerprint:
-            return "config_changed"
-        return None
-
-    def _schedule_appliance_energy_refit(self, reason: str) -> None:
-        """Resolve the estimates once Home Assistant has finished starting.
-
-        Deferred for the same reason as ``_schedule_house_profile_refit``: these
-        reads touch other integrations' entities, which on a cold start may not
-        exist yet — and the estimate would come back empty rather than wrong,
-        silently pinning every appliance to its fixed figure for the day.
-        """
-        if self._training_batch is None:
-            return
-
-        self._run_when_started(
-            functools.partial(
-                self._training_batch.async_run_appliance_energy, reason=reason
-            )
-        )
-
-    async def _async_on_appliance_energy_trained(self) -> None:
-        """Adopt what the job just wrote, then rebuild so it is visible.
-
-        Re-read from the store rather than handed the map directly, for the same
-        reason the house profile is: the preserve-the-previous-value-on-failure
-        rule lives in the store, so reading it back is the only way the
-        in-memory state agrees with what a failed run decided.
-        """
-        self._adopt_stored_appliance_energy()
-        await self._async_refresh_forecast(reason="appliance_energy_trained")
-
-    @staticmethod
-    def _is_house_profile_expired(trained_at: str | None) -> bool:
-        trained_at_dt = (
-            dt_util.parse_datetime(trained_at) if isinstance(trained_at, str) else None
-        )
-        if trained_at_dt is None:
-            return True
-        age = (
-            dt_util.as_utc(dt_util.now()) - dt_util.as_utc(trained_at_dt)
-        ).total_seconds()
-        return age > _HOUSE_PROFILE_STALE_AFTER_SECONDS
-
-    async def _async_on_house_profile_trained(self) -> None:
-        """Adopt what the training job just wrote, then rebuild at once.
-
-        Re-read from the store rather than handed the profile directly: the
-        store is where the preserve-the-previous-fit-on-failure rule lives, so
-        reading it back is the only way the in-memory state agrees with what a
-        failed refit decided. Rebuilding here is what makes a fresh profile
-        show up immediately instead of at the next quarter hour.
-        """
-        config_fingerprint = read_house_forecast_request(self._active_config).config_fingerprint
-        self._adopt_stored_house_profile(config_fingerprint=config_fingerprint)
-        await self._async_refresh_forecast(reason="house_profile_trained")
+        await self._async_refresh_forecast(reason=reason)
 
     async def _async_on_solar_bias_trained(self) -> None:
         """Rebuild at once and announce that solar bias has changed."""
@@ -1963,15 +1611,7 @@ class HelmanCoordinator:
         must explicitly re-read persistence once the awaited run completes.
         This reloads house consumption, appliance energy, and solar bias artifacts.
         """
-        if self._training_artifacts_store is None and self._solar_bias_service is None:
-            return
-
-        store = self._training_artifacts_store
-        if store is not None:
-            await store.async_load()
-            config_fingerprint = read_house_forecast_request(self._active_config).config_fingerprint
-            self._adopt_stored_house_profile(config_fingerprint=config_fingerprint)
-            self._adopt_stored_appliance_energy()
+        await self.training.async_reload()
 
         bias_store = self._solar_bias_store
         if bias_store is None and self._solar_bias_service is not None:
@@ -2354,8 +1994,8 @@ class HelmanCoordinator:
             config_fingerprint=request.config_fingerprint,
             source_granularity_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
             forecast_days_available=MAX_FORECAST_DAYS,
-            trained_at=self._house_profile_trained_at,
-            last_outcome=self._house_profile_last_outcome,
+            trained_at=self.training.house_profile_trained_at,
+            last_outcome=self.training.house_profile_last_outcome,
         )
 
     def _read_schedule_control_config(self) -> ScheduleControlConfig | None:
@@ -3015,9 +2655,9 @@ class HelmanCoordinator:
             )
             house_snapshot = await builder.build(
                 reference_time=request_now,
-                profile=self._house_profile,
-                trained_at=self._house_profile_trained_at,
-                last_outcome=self._house_profile_last_outcome,
+                profile=self.training.house_profile,
+                trained_at=self.training.house_profile_trained_at,
+                last_outcome=self.training.house_profile_last_outcome,
                 forecast_days=MAX_FORECAST_DAYS,
             )
             # One SolarForecastBuilder.build() per refresh: its solar half
@@ -3891,7 +3531,7 @@ class HelmanCoordinator:
         the projection already reads as "use the configured hourly energy".
         """
         return {
-            appliance.id: self._appliance_energy_estimates.get(appliance.id)
+            appliance.id: self.training.appliance_energy_estimates.get(appliance.id)
             for appliance in self._iter_projected_history_appliances(
                 schedule_document=schedule_document
             )
@@ -3919,7 +3559,7 @@ class HelmanCoordinator:
     ) -> float:
         if not appliance.projection.uses_history_average:
             return appliance.projection.hourly_energy_kwh
-        estimate = self._appliance_energy_estimates.get(appliance.id)
+        estimate = self.training.appliance_energy_estimates.get(appliance.id)
         if estimate is None or estimate <= 0:
             return appliance.projection.hourly_energy_kwh
         return estimate
@@ -4137,235 +3777,6 @@ class HelmanCoordinator:
         await self._automation_triggers.request_debounced(reason="condition_changed")
         return True
 
-    def _visualization_config(self) -> dict[str, Any]:
-        return read_visualization(self._active_config)
-
-    def _init_buffers(self, tree: dict, index: TreeIndex) -> None:
-        """Initialize rolling deques, retaining history for surviving sensors."""
-        history_buckets: int = self._visualization_config()["history_buckets"]
-        previous_history = self._power_history
-        previous_unmeasured = self._unmeasured_raw_history
-        previous_unmeasured_ids = self._unmeasured_entity_id_map
-
-        self._virtual_sensor_ids = set(index.virtual_sensor_ids)
-        self._virtual_sensor_ids.add(CONSUMPTION_TOTAL_ENTITY_ID)
-        self._virtual_sensor_ids.add(PRODUCTION_TOTAL_ENTITY_ID)
-
-        self._unmeasured_entity_id_map = dict(index.unmeasured_entity_id_map)
-        self._share_entity_id_map = {
-            node_id: entity_id
-            for node_id, (entity_id, _name) in index.share_devices.items()
-        }
-        # The very members the shared-meter history split reads, with the same
-        # running signal each, so the live split cannot pick other devices.
-        shared_meters = read_shared_meters(self._active_config).values()
-        self._share_running_signals = {
-            member_id: (entity_id, activity)
-            for shared in shared_meters
-            for member_id, entity_id, activity in shared["members"]
-        }
-        # Every member of one meter carries its parent's tolerance, so a share
-        # node's parent is found without walking the config again.
-        self._share_tolerances = {
-            member_id: shared["tolerance"]
-            for shared in shared_meters
-            for member_id, _entity_id, _activity in shared["members"]
-        }
-        # Keep smoothing windows only for unmeasured entity ids that survive.
-        self._unmeasured_raw_history = {
-            node_id: history
-            for node_id, history in previous_unmeasured.items()
-            if node_id in previous_unmeasured_ids
-            and previous_unmeasured_ids.get(node_id)
-            == self._unmeasured_entity_id_map.get(node_id)
-        }
-        self._refresh_inverter_telemetry()
-
-        # Create deques for all power sensors (real + virtual unmeasured) plus virtual totals
-        self._power_history = {
-            eid: previous_history.get(eid, deque(maxlen=history_buckets))
-            for eid in self._power_sensor_ids
-        }
-        self._power_history[CONSUMPTION_TOTAL_ENTITY_ID] = previous_history.get(
-            CONSUMPTION_TOTAL_ENTITY_ID, deque(maxlen=history_buckets)
-        )
-        self._power_history[PRODUCTION_TOTAL_ENTITY_ID] = previous_history.get(
-            PRODUCTION_TOTAL_ENTITY_ID, deque(maxlen=history_buckets)
-        )
-        # Add deques for source ratio sensors so their history is included in get_history().
-        # Derived from the tree, which async_setup has built before the sensor platform adds
-        # the ratio entities. Without this the ratio history is absent from get_history() and
-        # the card paints every past consumer bucket with its fallback colour instead of the
-        # source colours.
-        # Mark them virtual: their values are computed by _tick Step 3, so the Step 1 real-sensor
-        # read loop must not also append them (that would double-append per tick and desync them).
-        self._source_ratio_entity_ids = dict(index.source_ratio_entity_ids)
-        for ratio_entity_id in self._source_ratio_entity_ids.values():
-            self._power_history[ratio_entity_id] = previous_history.get(
-                ratio_entity_id, deque(maxlen=history_buckets)
-            )
-            self._virtual_sensor_ids.add(ratio_entity_id)
-        self._buffer_tree = tree
-
-    def _refresh_inverter_telemetry(self) -> None:
-        self._vendor_telemetry = resolve_vendor_telemetry(self._hass, self._active_config)
-        self._inverter_telemetry = self._vendor_telemetry.get(INVERTER_TELEMETRY_KEY)
-
-    def _start_tick(self) -> None:
-        """Start the periodic tick using HA's time-interval tracker."""
-        if self._unloaded or self._unsub_tick is not None:
-            return
-        bucket_duration: int = self._visualization_config()["history_bucket_duration"]
-        self._unsub_tick = async_track_time_interval(
-            self._hass,
-            self._tick,
-            timedelta(seconds=bucket_duration),
-        )
-
-    def _stop_tick(self) -> None:
-        """Stop the periodic tick."""
-        if self._unsub_tick is not None:
-            self._unsub_tick()
-            self._unsub_tick = None
-
-    @callback
-    def _tick(self, now: datetime) -> None:
-        """Periodic snapshot: read sensors, compute ratios, send derived sensor values."""
-        if self._cached_tree is None:
-            return
-        # The derived sensors' values, keyed by each one's default entity id.
-        values: dict[str, Any] = {}
-
-        # Step 1: Read all real (non-virtual) power sensors from hass.states
-        for entity_id, dq in self._power_history.items():
-            if entity_id not in self._virtual_sensor_ids:
-                dq.append(self._read_power(entity_id, "default"))
-
-        # Step 2: Compute virtual sensor values and record into _power_history
-        # Unmeasured powers (one per qualifying parent node) and shares (one per
-        # meterless child). ``None`` is unavailable: the sensor says so, and the
-        # history bucket — which only holds numbers — records 0 W, as the card
-        # shows an unavailable sensor.
-        unmeasured_map, share_map = self._compute_derived_powers()
-        for watts_by_node, entity_ids in (
-            (unmeasured_map, self._unmeasured_entity_id_map),
-            (share_map, self._share_entity_id_map),
-        ):
-            for node_id, watts in watts_by_node.items():
-                entity_id = entity_ids.get(node_id)
-                if not entity_id:
-                    continue
-                if entity_id in self._power_history:
-                    self._power_history[entity_id].append(watts if watts is not None else 0.0)
-                values[entity_id] = watts
-
-        # Total power (consumption side)
-        total = self._compute_consumption_total()
-        if CONSUMPTION_TOTAL_ENTITY_ID in self._power_history:
-            self._power_history[CONSUMPTION_TOTAL_ENTITY_ID].append(total)
-        values[CONSUMPTION_TOTAL_ENTITY_ID] = total
-
-        # Measured house consumption, per phase and their sum
-        phase_powers = self._compute_house_phase_powers()
-        values[HOUSE_CONSUMPTION_ENTITY_ID] = (
-            None
-            if any(watts is None for watts in phase_powers.values())
-            else sum(phase_powers.values())
-        )
-        for phase, watts in phase_powers.items():
-            values[house_consumption_phase_entity_id(phase)] = watts
-
-        # Production total (source side)
-        production = self._compute_production_total()
-        if PRODUCTION_TOTAL_ENTITY_ID in self._power_history:
-            self._power_history[PRODUCTION_TOTAL_ENTITY_ID].append(production)
-        values[PRODUCTION_TOTAL_ENTITY_ID] = production
-
-        # Step 3: Compute global source ratios, record their history, and send ratio values.
-        # Driven by the tree-derived ratio entity IDs so ratio history is recorded from the
-        # first tick, even before the sensor platform has added the ratio sensor entities.
-        if self._source_ratio_entity_ids:
-            normalized = {
-                src: max(0.0, watts_for_value_type(
-                    self._power_history[src][-1] if self._power_history.get(src) else 0.0,
-                    self._source_value_types.get(src, "default"),
-                ))
-                for src in self._source_sensor_ids
-                if src in self._power_history
-            }
-            total_source = sum(normalized.values())
-            for src_eid, ratio_entity_id in self._source_ratio_entity_ids.items():
-                ratio_pct = (normalized.get(src_eid, 0.0) / total_source * 100.0) if total_source > 0 else 0.0
-                if ratio_entity_id in self._power_history:
-                    self._power_history[ratio_entity_id].append(ratio_pct)
-                values[ratio_entity_id] = ratio_pct
-
-        # Step 4: Battery ETAs (separate sensors for charging and discharging)
-        # A failure here leaves the ETA keys out of the map; the other live
-        # values are still sent.
-        try:
-            battery_cfg = read_mapping(
-                config_value(self._active_config, "energy_nodes.battery")
-            )
-            sensor_id = read_battery_entities(self._active_config).get("power")
-            hist = list(self._power_history.get(sensor_id, [])) if sensor_id else []
-
-            # The one power reading not routed through ``value_type``: this
-            # works off the raw history buffer, so it has to apply the
-            # configured polarity itself. Getting it wrong is silent -- the two
-            # ETAs simply report each other's value.
-            if is_power_inverted(battery_cfg, "battery"):
-                hist = [-v for v in hist]
-
-            pos_values = [v for v in hist if v > 1]
-            neg_values = [abs(v) for v in hist if v < -1]
-            charging_avg = sum(pos_values) / len(pos_values) if pos_values else 0.0
-            discharging_avg = sum(neg_values) / len(neg_values) if neg_values else 0.0
-
-            values[BATTERY_TIME_TO_FULL_ENTITY_ID] = (
-                self._compute_charging_eta(charging_avg) if charging_avg > 0
-                else (None, "", None)
-            )
-            values[BATTERY_TIME_TO_EMPTY_ENTITY_ID] = (
-                self._compute_discharging_eta(discharging_avg) if discharging_avg > 0
-                else (None, "", None)
-            )
-        except Exception:
-            _LOGGER.exception("Error computing battery ETAs")
-
-        async_dispatcher_send(self._hass, self._live_tick_signal, values)
-
-    def get_history(self) -> dict:
-        """Return a pure dict copy of the in-memory rolling buffer. Zero computation."""
-        return {
-            "entity_history": {eid: list(dq) for eid, dq in self._power_history.items()},
-        }
-
-    def _read_power(self, entity_id: str | None, value_type: str) -> float:
-        """Read a power sensor's current value from hass.states; 0 W when it has none."""
-        watts = self._read_power_or_none(entity_id, value_type)
-        return watts if watts is not None else 0.0
-
-    def _read_power_or_none(self, entity_id: str | None, value_type: str) -> float | None:
-        """Read a power sensor's current value; ``None`` when missing or unavailable."""
-        if not entity_id:
-            return None
-        state = self._hass.states.get(entity_id)
-        if state is None or state.state in ("unavailable", "unknown", "none"):
-            return None
-        try:
-            raw = float(state.state)
-        except ValueError:
-            return None
-        factor = power_unit_factor(getattr(state, "attributes", {}).get("unit_of_measurement"))
-        return None if factor is None else watts_for_value_type(raw * factor, value_type)
-
-    def _read_battery_state(self):
-        entity_config = read_battery_entity_config(self._active_config)
-        if entity_config is None:
-            return None
-        return read_battery_live_state(self._hass, entity_config)
-
     def _read_schedule_executor_battery_state(self):
         entity_config = read_battery_entity_config(self._active_config)
         if entity_config is None:
@@ -4402,236 +3813,13 @@ class HelmanCoordinator:
             return None
         return read_battery_soc_bounds(self._hass, bounds_config)
 
-    def _compute_charging_eta(
-        self, charging_avg_w: float
-    ) -> tuple[float | None, str, int | None]:
-        """Compute time to reach max_soc at the given average charging rate."""
-        state = self._read_battery_state()
-        if state is None:
-            return None, "", None
-        to_full_kwh = state.max_energy_kwh - state.current_remaining_energy_kwh
-        if to_full_kwh <= 0:
-            return None, "", None
-        hours = (to_full_kwh * 1000) / charging_avg_w
-        minutes = hours * 60
-        target = datetime.now(tz=timezone.utc) + timedelta(hours=hours)
-        return minutes, target.isoformat(), round(state.max_soc)
-
-    def _compute_discharging_eta(
-        self, discharging_avg_w: float
-    ) -> tuple[float | None, str, int | None]:
-        """Compute time to reach min_soc at the given average discharging rate."""
-        state = self._read_battery_state()
-        if state is None:
-            return None, "", None
-        usable_kwh = state.current_remaining_energy_kwh - state.min_energy_kwh
-        if usable_kwh <= 0:
-            return None, "", None
-        hours = (usable_kwh * 1000) / discharging_avg_w
-        minutes = hours * 60
-        target = datetime.now(tz=timezone.utc) + timedelta(hours=hours)
-        return minutes, target.isoformat(), round(state.min_soc)
-
-    def _compute_consumption_total(self) -> float:
-        """Sum consumer-side top-level node powers (house + battery charging + grid export)."""
-        if self._cached_tree is None:
-            return 0.0
-        total = 0.0
-        for node in self._cached_tree.get("consumers", []):
-            if node.get("isVirtual"):
-                continue
-            total += self._read_power(
-                node.get("powerSensorId"), node.get("valueType", "default")
-            )
-        return total
-
-    def _compute_house_phase_powers(self) -> dict[int, float | None]:
-        """Measured house load per phase, ``{1: W, 2: W, 3: W}``; ``None`` unavailable.
-
-        On-grid the house draws what the inverter outputs plus what the meter
-        imports, plus the EPS output: ``ac − grid (export-positive) + eps``. A
-        missing EPS reading counts as 0 W; a missing inverter or meter reading
-        leaves the phase unknown. Off-grid the grid port is open and the EPS
-        output is the whole house, so the inverter's AC reading is not counted
-        twice. The inverter and the meter are polled at different moments, so a
-        fast change in export can briefly read below zero; a house never
-        exports, so a phase is floored at 0 W. Every phase is ``None`` without
-        an inverter profile.
-        """
-        telemetry = self._inverter_telemetry
-        if telemetry is None:
-            return {phase: None for phase in (1, 2, 3)}
-        entities = telemetry.entities
-        condition = run_mode_condition(self._hass, telemetry)
-        off_grid = condition is not None and condition["kind"] == "off_grid"
-        export_sign = (
-            1.0 if telemetry.profile.grid_phase_power_polarity == "positive_is_export" else -1.0
-        )
-        powers: dict[int, float | None] = {}
-        for phase in (1, 2, 3):
-            eps = self._read_power_or_none(entities.get(f"eps_power_l{phase}"), "default")
-            if off_grid:
-                powers[phase] = eps
-                continue
-            ac = self._read_power_or_none(entities.get(f"ac_power_l{phase}"), "default")
-            grid = self._read_power_or_none(entities.get(f"grid_power_l{phase}"), "default")
-            powers[phase] = (
-                None
-                if ac is None or grid is None
-                else max(0.0, ac - grid * export_sign + (eps or 0.0))
-            )
-        return powers
-
-    def _compute_production_total(self) -> float:
-        """Sum source-side top-level node powers (solar + battery_discharging + grid_import)."""
-        if self._cached_tree is None:
-            return 0.0
-        total = 0.0
-        for node in self._cached_tree.get("sources", []):
-            if node.get("isVirtual"):
-                continue
-            raw = self._read_power(node.get("powerSensorId"), "default")
-            total += max(0.0, watts_for_value_type(raw, node.get("valueType", "default")))
-        return total
-
-    def _compute_derived_powers(
-        self,
-    ) -> tuple[dict[str, float | None], dict[str, float | None]]:
-        """``({parent node id: remainder W}, {share node id: share W})`` for this tick.
-
-        Both come from each parent's own power, one way: the remainder is own
-        power minus the shares, so the two always add up to it. ``None`` is
-        unavailable.
-        """
-        unmeasured: dict[str, float | None] = {}
-        shares: dict[str, float | None] = {}
-        self._traverse_for_unmeasured(
-            self._cached_tree.get("consumers", []), unmeasured, shares
-        )
-        return unmeasured, shares
-
-    def _traverse_for_unmeasured(self, nodes: list, unmeasured: dict, shares: dict) -> None:
-        for node in nodes:
-            children = node.get("children", [])
-            if children and not node.get("isVirtual"):
-                has_unmeasured = any(c.get("isUnmeasured") for c in children)
-                share_nodes = [c for c in children if c.get("isEstimated")]
-                # Shares without a remainder: a parent with no power sensor. Its
-                # own power cannot be read, so its shares publish unavailable.
-                if has_unmeasured or share_nodes:
-                    own = self._own_power(node, children, strict=bool(share_nodes))
-                    node_shares = self._split_own_power(own, share_nodes)
-                    shares.update(node_shares)
-                    if has_unmeasured:
-                        unmeasured[node["id"]] = (
-                            None
-                            if own is None
-                            else max(0.0, own - sum(node_shares.values()))
-                        )
-            self._traverse_for_unmeasured(children, unmeasured, shares)
-
-    def _own_power(self, node: dict, children: list, *, strict: bool) -> float | None:
-        """A node's reading minus its metered children's, smoothed and floored at zero.
-
-        Only metered children are subtracted: the remainder and the estimated
-        share nodes are derived from this value, so subtracting them would feed
-        it back into itself.
-
-        ``strict`` for a parent its meterless children split: every input must
-        read, else own power is ``None`` — never a figure computed with the
-        missing input as 0 W. Otherwise (the house, a breaker with only
-        sub-meters) an unreadable input counts 0 W and a child without a power
-        sensor is skipped, as the remainder always did.
-        """
-        metered = [
-            c
-            for c in children
-            if not c.get("isVirtual")
-            and not c.get("isUnmeasured")
-            and not c.get("isEstimated")
-        ]
-        if strict:
-            readings = [
-                self._read_power_or_none(n.get("powerSensorId"), n.get("valueType", "default"))
-                for n in (node, *metered)
-            ]
-            if any(reading is None for reading in readings):
-                return None
-            raw = readings[0] - sum(readings[1:])
-        else:
-            raw = self._read_power(
-                node.get("powerSensorId"), node.get("valueType", "default")
-            ) - sum(
-                self._read_power(c.get("powerSensorId"), c.get("valueType", "default"))
-                for c in metered
-                if c.get("powerSensorId")
-            )
-        return self._smooth_unmeasured(node["id"], raw)
-
-    def _split_own_power(
-        self, own: float | None, share_nodes: list
-    ) -> dict[str, float | None]:
-        """Own power split among the running meterless children; 0 W for the rest.
-
-        In the ratio of their learned power and in the parent's tolerance mode,
-        by the very function the training estimate splits history with -- see
-        :func:`.shared_meter_split.split_own_power`. What a capped split does
-        not hand out stays in the parent's remainder.
-        """
-        if own is None:
-            return {n["id"]: None for n in share_nodes}
-        running = [n["id"] for n in share_nodes if self._is_share_running(n["id"])]
-        shares = (
-            split_own_power(
-                own,
-                running,
-                self._shared_meter_weights,
-                tolerance=self._share_tolerances.get(running[0]),
-            )
-            if running
-            else {}
-        )
-        return {n["id"]: shares.get(n["id"], 0.0) for n in share_nodes}
-
-    def _is_share_running(self, device_id: str) -> bool:
-        """Whether a meterless child runs now, by the predicate its history split uses."""
-        signal = self._share_running_signals.get(device_id)
-        if signal is None:
-            return False
-        entity_id, activity = signal
-        state = self._hass.states.get(entity_id)
-        return is_active_state(
-            getattr(state, "state", None), running_active_states(activity)
-        )
-
-    def _smooth_unmeasured(self, node_id: str, raw_watts: float) -> float:
-        """Median of the last few raw own-power readings, floored at zero.
-
-        Own power is a difference between readings taken at different
-        moments: the house meter reports several times a second, each circuit
-        meter only every 7-18 s. Its jitter is therefore of the same order as
-        the remainder itself once the circuits cover most of the house, and
-        flooring the raw difference pinned the published value to a hard 0 for
-        a large share of the time — the card then dropped the row entirely.
-        Taking the median first lets the symmetric skew cancel out; a house
-        whose circuits genuinely account for everything still settles on 0.
-        """
-        bucket_duration = self._visualization_config()["history_bucket_duration"] or 1
-        maxlen = max(1, round(_UNMEASURED_SMOOTHING_WINDOW_S / bucket_duration))
-        window = self._unmeasured_raw_history.get(node_id)
-        if window is None or window.maxlen != maxlen:
-            window = deque(window or (), maxlen=maxlen)
-            self._unmeasured_raw_history[node_id] = window
-        window.append(raw_watts)
-        return max(0.0, median(window))
-
     async def async_unload(self) -> None:
         """Clean up event listeners and stop the tick."""
         self._unloaded = True
         for unsub in self._unsub_listeners:
             unsub()
         self._unsub_listeners.clear()
-        self._stop_tick()
+        self.live.unload()
         self._stop_forecast_refresh()
         await self._async_cancel_refresh_tasks()
         training_batch = self._training_batch
@@ -4651,13 +3839,10 @@ class HelmanCoordinator:
         await self.schedule.async_unload()
         self._invalidate_pipeline_cache()
 
-        self._unmeasured_raw_history = {}
-        self._source_ratio_entity_ids = {}
         self._async_add_entities = None
         self._dynamic_sensor_factories = {}
         self._dynamic_sensors = {}
         self._removing_entity_ids.clear()
-        self._power_history.clear()
         self._explanation_book.clear()
         self._condition_traces.clear()
 
