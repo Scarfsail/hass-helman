@@ -8,7 +8,7 @@ import asyncio
 import unittest
 from collections import deque
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from tests._fakes import FakeHass, FakeState, make_coordinator
 from custom_components.helman import coordinator as coordinator_module
@@ -40,7 +40,7 @@ class RegistryRebuildTests(unittest.IsolatedAsyncioTestCase):
             return {**TREE, "consumers": []}
 
         coordinator.get_device_tree = slow_tree
-        coordinator._sync_derived_sensors = AsyncMock()
+        coordinator._sync_derived_sensors = Mock()
         coordinator._unsub_tick = lambda: stopped.append(True)
         coordinator._automation_triggers.async_shutdown = AsyncMock()
         coordinator._schedule_executor.async_unload = AsyncMock()
@@ -69,7 +69,7 @@ class RegistryRebuildTests(unittest.IsolatedAsyncioTestCase):
         history = coordinator._power_history["sensor.house_power"]
         history.append(123.0)
         coordinator.get_device_tree = AsyncMock(return_value=TREE)
-        coordinator._sync_derived_sensors = AsyncMock()
+        coordinator._sync_derived_sensors = Mock()
         coordinator._start_tick = lambda: None
 
         coordinator._on_registry_updated(
@@ -144,7 +144,7 @@ class RegistryRebuildTests(unittest.IsolatedAsyncioTestCase):
         }
         coordinator._tree_index = TreeIndex.from_tree(new_tree)
         coordinator.get_device_tree = AsyncMock(return_value=new_tree)
-        coordinator._sync_derived_sensors = AsyncMock()
+        coordinator._sync_derived_sensors = Mock()
         coordinator._start_tick = lambda: None
 
         await coordinator._async_rebuild_subscriptions()

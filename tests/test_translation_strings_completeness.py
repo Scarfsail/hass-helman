@@ -58,26 +58,22 @@ def _load_entity_translation_keys() -> set[str]:
                 "consumers": [],
             }
         ),
-        tree_index=SimpleNamespace(qualifying_nodes={"house": "sensor.house_power"}, share_devices={"klima-obyvak": ("sensor.helman_share_power_klima_obyvak", "Klima")}),
         config={},
-        set_sensors=Mock(),
         set_entity_factory=Mock(),
-        register_house_consumption_forecast_current_sensor=Mock(),
-        register_solar_forecast_current_sensors=Mock(),
-        register_battery_forecast_current_sensors=Mock(),
-        register_grid_import_price_sensor=Mock(),
-        register_grid_export_price_sensor=Mock(),
     )
-    hass = SimpleNamespace(
-        data={"helman": {"coordinator": coordinator}},
-        states=SimpleNamespace(get=lambda entity_id: None),
-    )
+    hass = SimpleNamespace(states=SimpleNamespace(get=lambda entity_id: None))
     added_entities: list[object] = []
+    entry = _FakeEntry()
+    entry.runtime_data = coordinator
 
     import asyncio
 
-    asyncio.run(
-        sensor_module.async_setup_entry(hass, _FakeEntry(), added_entities.extend)
+    asyncio.run(sensor_module.async_setup_entry(hass, entry, added_entities.extend))
+    # The coordinator adds the unmeasured and share sensors through the factories.
+    factories = coordinator.set_entity_factory.call_args.args[1]
+    added_entities.append(factories["unmeasured"]("house", "sensor.house_power"))
+    added_entities.append(
+        factories["share"]("klima-obyvak", "sensor.helman_share_power_klima_obyvak", "Klima")
     )
 
     return {

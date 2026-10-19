@@ -108,7 +108,7 @@ def test_index_matches_legacy_collector_outputs():
 def test_unmeasured_entity_id_matches_sensor(node_id):
     hass = SimpleNamespace(states=SimpleNamespace(get=lambda _: None))
     sensor = HelmanUnmeasuredPowerSensor(
-        SimpleNamespace(), SimpleNamespace(entry_id="test"), hass, node_id, None
+        SimpleNamespace(entry_id="test"), hass, node_id, None
     )
     assert tree_builder.unmeasured_power_entity_id(node_id) == sensor.entity_id
 

@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock
 from _fakes import FakeConnection as SharedFakeConnection
 from homeassistant.exceptions import Unauthorized
 
-from tests._fakes import make_coordinator
+from tests._fakes import loaded_config_entries, make_coordinator
 
 coordinator_module = importlib.import_module("custom_components.helman.coordinator")
 training_ws = importlib.import_module("custom_components.helman.training.websocket")
@@ -188,7 +188,12 @@ def _make_coordinator(
 
 
 def _hass(coordinator) -> SimpleNamespace:
-    return SimpleNamespace(data={const.DOMAIN: {"coordinator": coordinator}})
+    return SimpleNamespace(data={}, config_entries=loaded_config_entries(coordinator))
+
+
+def _reload(hass, coordinator) -> None:
+    """Swap the entry's runtime data, as a reload of the entry does."""
+    hass.config_entries.entries[0].runtime_data = coordinator
 
 
 def _status(coordinator, *, is_admin: bool = True):
@@ -829,7 +834,7 @@ class TrainNowTests(unittest.IsolatedAsyncioTestCase):
             async def async_train(self_inner):
                 # The new coordinator has already loaded the old empty document
                 # when the superseded coordinator completes its write.
-                hass.data[const.DOMAIN]["coordinator"] = new_coordinator
+                _reload(hass, new_coordinator)
                 await old_store.async_record_appliance_energy(
                     data={"dishwasher": 0.8},
                     fingerprint=APPLIANCE_FP,
@@ -845,7 +850,7 @@ class TrainNowTests(unittest.IsolatedAsyncioTestCase):
             store=old_store,
             appliance_job=_ReloadingApplianceJob(),
         )
-        hass.data[const.DOMAIN]["coordinator"] = old_coordinator
+        _reload(hass, old_coordinator)
 
         connection = await _train_now_with_hass(hass, job="appliance_energy")
 
@@ -882,7 +887,7 @@ class TrainNowTests(unittest.IsolatedAsyncioTestCase):
         old_service._store = old_store
 
         async def _reloading_train():
-            hass.data[const.DOMAIN]["coordinator"] = new_coordinator
+            _reload(hass, new_coordinator)
             await old_store.async_save({
                 "version": 2,
                 "profile": {"factors": {"12:00": 1.3}, "omitted_slots": []},
@@ -903,7 +908,7 @@ class TrainNowTests(unittest.IsolatedAsyncioTestCase):
 
         old_service.async_train = AsyncMock(side_effect=_reloading_train)
         old_coordinator = _make_coordinator(bias_service=old_service)
-        hass.data[const.DOMAIN]["coordinator"] = old_coordinator
+        _reload(hass, old_coordinator)
 
         connection = await _train_now_with_hass(hass, job="solar_bias")
 

@@ -13,8 +13,10 @@ from statistics import median
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import (
     async_track_time_change,
     async_track_time_interval,
@@ -91,6 +93,8 @@ from .config_read import read_mapping
 from .const import (
     AUTOMATION_CONDITION_PLAN_FRESHNESS_SECONDS,
     BATTERY_CAPACITY_FORECAST_CACHE_TTL_SECONDS,
+    BATTERY_TIME_TO_EMPTY_ENTITY_ID,
+    BATTERY_TIME_TO_FULL_ENTITY_ID,
     CONSUMPTION_TOTAL_ENTITY_ID,
     DATA_CHANGED_KIND_PLAN,
     DATA_CHANGED_KIND_SCHEDULE,
@@ -101,12 +105,18 @@ from .const import (
     EVENT_DATA_CHANGED,
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
     FORECAST_STALE_AFTER_SECONDS,
+    HOUSE_CONSUMPTION_ENTITY_ID,
     HOUSE_FORECAST_MODEL_ID,
     MAX_FORECAST_DAYS,
     PRODUCTION_TOTAL_ENTITY_ID,
     SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
     SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
     SCHEDULE_SLOT_MINUTES,
+    SIGNAL_FORECAST_PUBLISHED,
+    SIGNAL_LIVE_TICK,
+    SLOT_ALIGNED_REFRESH_REASON,
+    entry_signal,
+    house_consumption_phase_entity_id,
 )
 from .consumption_forecast_builder import (
     ConsumptionForecastBuilder,
@@ -258,21 +268,6 @@ _FORECAST_STALE_HINT = (
     "Forecast data has not been rebuilt for over an hour. "
     "Check the Home Assistant log for forecast refresh errors."
 )
-#: ``_async_refresh_forecast``'s ``reason`` for the quarter-hour timer tick, the
-#: one rebuild that lands on a :00/:15/:30/:45 boundary. ``_publish_solar_forecast_entities``
-#: gates the five battery/grid current-slot entities' *republish* on this: an
-#: off-beat rebuild that still produced a full first slot would otherwise
-#: re-write the same value mid-slot, and HA's time-weighted hourly ``mean`` --
-#: what a purged day reads back -- shifts with every such write.
-#:
-#: This gate does *not* stop a partial value: it guards only the coordinator's
-#: own publish path, and Home Assistant writes a sensor's state by other routes
-#: too (``async_add_entities``, ``homeassistant.update_entity``, a registry
-#: rename), each reading the accessor directly. The partial-value guard is in
-#: :meth:`HelmanCoordinator.get_battery_forecast_current`, which refuses a first
-#: entry whose ``durationHours`` is short of a full slot.
-_SLOT_ALIGNED_REFRESH_REASON = "slot_refresh"
-
 #: A full canonical forecast slot, in hours. The snapshot's first series entry
 #: is stamped at build time; off the slot-aligned beat it covers only the slot's
 #: remainder, carrying ``durationHours`` short of this with its four energies
@@ -695,9 +690,16 @@ class _BackfillJob:
 
 class HelmanCoordinator:
 
-    def __init__(self, hass: HomeAssistant, storage: HelmanStorage) -> None:
+    def __init__(
+        self, hass: HomeAssistant, storage: HelmanStorage, entry: ConfigEntry
+    ) -> None:
         self._hass = hass
         self._storage = storage
+        self._entry = entry
+        self._forecast_published_signal = entry_signal(
+            SIGNAL_FORECAST_PUBLISHED, entry.entry_id
+        )
+        self._live_tick_signal = entry_signal(SIGNAL_LIVE_TICK, entry.entry_id)
         self._cached_tree: dict | None = None
         self._tree_index: TreeIndex | None = None
         self._buffer_tree: dict | None = None
@@ -706,22 +708,17 @@ class HelmanCoordinator:
             tuple[date, date, ZoneInfo], _CachedDeviceDataset
         ] = OrderedDict()
         self._unsub_listeners: list = []
-        self._battery_time_to_full = None
-        self._battery_time_to_empty = None
-        self._unmeasured_sensors: dict[str, Any] = {}
         self._unmeasured_raw_history: dict[str, deque] = {}
-        self._consumption_total_sensor = None
-        self._production_total_sensor = None
-        self._house_consumption_sensors: list[Any] = []
         # The inverter's telemetry the measured house phases compute from,
         # resolved per tree rebuild in _init_buffers.
         self._inverter_telemetry: Any = None
         self._vendor_telemetry: dict[str, DeviceTelemetry] = {}
+        # The sensor platform's add callback and the factories of the entities
+        # the device tree decides the number of, keyed by kind; the entities
+        # built so far are kept per kind and node so a rebuild can diff them.
         self._async_add_entities: Callable | None = None
-        self._unmeasured_sensor_factory: Callable | None = None
-        self._share_sensors: dict[str, Any] = {}
-        self._share_sensor_factory: Callable | None = None
-        self._entry: Any = None
+        self._dynamic_sensor_factories: Mapping[str, Callable] = {}
+        self._dynamic_sensors: dict[str, dict[str, Any]] = {}
         self._removing_entity_ids: set[str] = set()
         # The hardware profiles fill the slots they own here, so nothing
         # downstream knows they exist. `async_setup` re-reads and logs.
@@ -733,28 +730,18 @@ class HelmanCoordinator:
         self._source_value_types: dict[str, str] = {}
         # In-memory rolling buffers (oldest first)
         self._power_history: dict[str, deque[float]] = {}
-        self._source_ratio_sensors: dict[str, Any] = {}
         # Map: source_power_sensor_id → ratio_sensor_entity_id (derived from the tree in
         # _init_buffers, independent of when the sensor platform registers the ratio entities).
         self._source_ratio_entity_ids: dict[str, str] = {}
-        self._solar_forecast_sensors: list[Any] = []
         # Tick lifecycle
         self._unsub_tick: Callable[[], None] | None = None
         # House forecast snapshot (persisted + cached)
         self._cached_forecast: dict | None = None
-        self._house_consumption_forecast_current_sensor = None
-        self._solar_forecast_current_sensors: list[Any] = []
-        # The five battery-forecast current-slot entities, published on the same
-        # slot-aligned beat so their recorder history is the archive the retired
-        # BatteryForecastHistoryStore used to keep.
-        self._battery_forecast_current_sensors: list[Any] = []
-        self._grid_import_price_sensor = None
         # The import rate in force right now, refreshed with the forecast
         # snapshots. Nothing else records it, so this is what the published
         # sensor hands the recorder to archive.
         self._grid_import_price_current: float | None = None
         self._grid_import_price_unit: str | None = None
-        self._grid_export_price_sensor = None
         # The export rate in force right now, mirrored off the configured
         # sell-price entity on the same beat. Its own entity typically declares
         # no `state_class`, so this mirror is what gives the rate a long-term
@@ -1017,103 +1004,29 @@ class HelmanCoordinator:
         # moved, and the inspector draws those.
         self._fire_data_changed(DATA_CHANGED_KIND_PLAN)
 
-    def set_sensors(
-        self,
-        battery_time_to_full,
-        battery_time_to_empty,
-        unmeasured_sensors: dict,
-        total_power=None,
-        production_total=None,
-        source_ratio_sensors: dict | None = None,
-        forecast_sensors: list[Any] | None = None,
-        share_sensors: dict | None = None,
-        house_consumption_sensors: list | None = None,
-    ) -> None:
-        """Called from async_setup_entry to register all sensor entities."""
-        self._battery_time_to_full = battery_time_to_full
-        self._battery_time_to_empty = battery_time_to_empty
-        self._unmeasured_sensors = unmeasured_sensors
-        self._share_sensors = share_sensors or {}
-        self._consumption_total_sensor = total_power
-        self._production_total_sensor = production_total
-        self._house_consumption_sensors = list(house_consumption_sensors or [])
-        self._source_ratio_sensors = source_ratio_sensors or {}
-        self._solar_forecast_sensors = list(forecast_sensors or [])
-
     def set_entity_factory(
         self,
-        entry,
         async_add_entities: Callable,
-        unmeasured_sensor_factory: Callable,
-        share_sensor_factory: Callable | None = None,
+        factories: Mapping[str, Callable],
     ) -> None:
-        """Store the async_add_entities callback and sensor factories for dynamic entity management."""
-        self._entry = entry
+        """Take over the entities the device tree decides the number of.
+
+        ``factories`` maps a kind (``unmeasured``, ``share``) to the callable
+        that builds one entity of it from a node. The entities are added here,
+        and added and removed again by every tree rebuild.
+        """
         self._async_add_entities = async_add_entities
-        self._unmeasured_sensor_factory = unmeasured_sensor_factory
-        self._share_sensor_factory = share_sensor_factory
+        self._dynamic_sensor_factories = factories
+        self._sync_derived_sensors()
 
     def _publish_solar_forecast_entities(self, *, reason: str) -> None:
-        for sensor in self._solar_forecast_sensors:
-            if getattr(sensor, "hass", None) is None:
-                continue
-            try:
-                sensor.async_write_ha_state()
-            except Exception:
-                _LOGGER.exception(
-                    "Error publishing solar forecast sensor state: %s",
-                    getattr(sensor, "entity_id", "<unknown>"),
-                )
-        hcfc_sensor = self._house_consumption_forecast_current_sensor
-        if hcfc_sensor is not None and getattr(hcfc_sensor, "hass", None) is not None:
-            hcfc_sensor.async_write_ha_state()
-        # The two current-slot forecast entities ride the same slot-aligned
-        # beat, which is what makes their recorded history a stair-step of what
-        # was believed about each slot before it began.
-        for solar_sensor in self._solar_forecast_current_sensors:
-            if getattr(solar_sensor, "hass", None) is not None:
-                try:
-                    solar_sensor.async_write_ha_state()
-                except Exception:
-                    _LOGGER.exception(
-                        "Error publishing solar forecast sensor state: %s",
-                        getattr(solar_sensor, "entity_id", "<unknown>"),
-                    )
-        # The five battery/grid current-slot forecast entities publish *only* on
-        # the slot-aligned rebuild -- unlike the solar and house sensors above,
-        # which publish on every refresh. An off-beat rebuild re-stamps the
-        # snapshot's first series entry partway through the slot, so its value
-        # covers only the slot's remainder; the raw-state reader passes that
-        # revision over, but HA's time-weighted hourly ``mean`` -- which a purged
-        # day reads back -- would be dragged low by it and the error would
-        # outlive the raw states. See ``_SLOT_ALIGNED_REFRESH_REASON``.
-        if reason == _SLOT_ALIGNED_REFRESH_REASON:
-            for battery_sensor in self._battery_forecast_current_sensors:
-                if getattr(battery_sensor, "hass", None) is not None:
-                    try:
-                        battery_sensor.async_write_ha_state()
-                    except Exception:
-                        _LOGGER.exception(
-                            "Error publishing battery forecast sensor state: %s",
-                            getattr(battery_sensor, "entity_id", "<unknown>"),
-                        )
-        # Published on the same beat, though it is neither solar nor a forecast:
-        # the refresh that feeds this is slot-aligned (:00/:15/:30/:45) and the
-        # import windows align to the same grid, so a price change and its
-        # publication land in the same slot.
-        price_sensor = self._grid_import_price_sensor
-        if price_sensor is not None and getattr(price_sensor, "hass", None) is not None:
-            price_sensor.async_write_ha_state()
-        # The export mirror rides the same beat. Its source entity moves on the
-        # hour and this refresh is slot-aligned, so the mirror lands in the same
-        # slot as the change it copies; the recorder's own hourly mean is time
-        # weighted, so a mirror written at :00 values the whole hour correctly.
-        export_price_sensor = self._grid_export_price_sensor
-        if (
-            export_price_sensor is not None
-            and getattr(export_price_sensor, "hass", None) is not None
-        ):
-            export_price_sensor.async_write_ha_state()
+        """Tell the forecast and price sensors to write their state now.
+
+        The back-fill jobs start right after, on the same beat: a job's first
+        statistics import must not run before its target entity has published a
+        value and a unit.
+        """
+        async_dispatcher_send(self._hass, self._forecast_published_signal, reason)
         self._maybe_start_backfill_jobs()
 
     async def async_setup(self) -> None:
@@ -1194,12 +1107,7 @@ class HelmanCoordinator:
         )
 
         # Build tree upfront to learn which power sensors to track
-        tree = await self.get_device_tree()
-        self._power_sensor_ids = list(self.tree_index.power_sensor_ids)
-        self._source_sensor_ids = list(self.tree_index.source_sensor_ids)
-        self._source_value_types = dict(self.tree_index.source_value_types)
-        self._init_buffers(tree, self.tree_index)
-        self._start_tick()
+        self._resubscribe_tree(await self.get_device_tree())
 
         # House forecast: load persisted snapshot and schedule recurring
         # refreshes. The persisted snapshots are served as-is however old they
@@ -1265,14 +1173,7 @@ class HelmanCoordinator:
         whether anything is applied is decided inside the reconcile, and
         ultimately by the actuation gate.
         """
-
-        @callback
-        def _start_schedule_execution(_hass: HomeAssistant) -> None:
-            self._create_tracked_refresh_task(self._async_start_schedule_execution())
-
-        self._unsub_listeners.append(
-            async_at_started(self._hass, _start_schedule_execution)
-        )
+        self._run_when_started(self._async_start_schedule_execution)
 
     async def _async_start_schedule_execution(self) -> None:
         await self._schedule_executor.async_start()
@@ -1292,16 +1193,24 @@ class HelmanCoordinator:
         When Home Assistant is already running — a config save reloads the
         entry — ``async_at_started`` fires immediately, so **G3** is unaffected.
         """
+        self._run_when_started(
+            functools.partial(self._async_refresh_forecast, reason="startup")
+        )
+
+    def _run_when_started(
+        self, factory: Callable[[], Coroutine[Any, Any, Any]]
+    ) -> None:
+        """Run ``factory()`` as a tracked task once Home Assistant has started.
+
+        At once when it already has (a reload), as ``async_at_started`` fires
+        immediately; the listener is dropped on unload either way.
+        """
 
         @callback
-        def _run_startup_refresh(_hass: HomeAssistant) -> None:
-            self._create_tracked_refresh_task(
-                self._async_refresh_forecast(reason="startup")
-            )
+        def _start(_hass: HomeAssistant) -> None:
+            self._create_tracked_refresh_task(factory())
 
-        self._unsub_listeners.append(
-            async_at_started(self._hass, _run_startup_refresh)
-        )
+        self._unsub_listeners.append(async_at_started(self._hass, _start))
 
     @callback
     def _on_registry_updated(self, event) -> None:
@@ -1314,8 +1223,7 @@ class HelmanCoordinator:
         # resolves to. Services copy their config at setup, so the change is
         # applied the way a save applies one: by reloading the entry.
         if (
-            self._entry is not None
-            and resolve_vendor_config(self._hass, self._storage.config)[0]
+            resolve_vendor_config(self._hass, self._storage.config)[0]
             != self._active_config
         ):
             self._hass.config_entries.async_schedule_reload(self._entry.entry_id)
@@ -1348,37 +1256,37 @@ class HelmanCoordinator:
                 self._refresh_inverter_telemetry()
                 return
             self._stop_tick()
-            self._power_sensor_ids = list(self.tree_index.power_sensor_ids)
-            self._source_sensor_ids = list(self.tree_index.source_sensor_ids)
-            self._source_value_types = dict(self.tree_index.source_value_types)
-            self._init_buffers(tree, self.tree_index)
-            self._start_tick()
+            self._resubscribe_tree(tree)
             if self._unloaded:
                 return
-            await self._sync_derived_sensors(tree)
+            self._sync_derived_sensors()
         except Exception:
             logging.getLogger(__name__).exception(
                 "Error rebuilding Helman subscriptions"
             )
 
-    async def _sync_derived_sensors(self, tree: dict) -> None:
+    def _resubscribe_tree(self, tree: dict) -> None:
+        """Track the power sensors of ``tree`` and (re)start the tick on them."""
+        self._power_sensor_ids = list(self.tree_index.power_sensor_ids)
+        self._source_sensor_ids = list(self.tree_index.source_sensor_ids)
+        self._source_value_types = dict(self.tree_index.source_value_types)
+        self._init_buffers(tree, self.tree_index)
+        self._start_tick()
+
+    def _sync_derived_sensors(self) -> None:
         """Add/remove the unmeasured and share power entities to match the current tree."""
         if self._async_add_entities is None:
             return
-        if self._unmeasured_sensor_factory is not None:
+        wanted = {
+            "unmeasured": {
+                node_id: (parent_sensor_id,)
+                for node_id, parent_sensor_id in self.tree_index.qualifying_nodes.items()
+            },
+            "share": self.tree_index.share_devices,
+        }
+        for kind, factory in self._dynamic_sensor_factories.items():
             self._sync_node_sensors(
-                self._unmeasured_sensors,
-                {
-                    node_id: (parent_sensor_id,)
-                    for node_id, parent_sensor_id in self.tree_index.qualifying_nodes.items()
-                },
-                self._unmeasured_sensor_factory,
-            )
-        if self._share_sensor_factory is not None:
-            self._sync_node_sensors(
-                self._share_sensors,
-                self.tree_index.share_devices,
-                self._share_sensor_factory,
+                self._dynamic_sensors.setdefault(kind, {}), wanted[kind], factory
             )
 
     def _sync_node_sensors(
@@ -1879,16 +1787,10 @@ class HelmanCoordinator:
         if self._training_batch is None:
             return
 
-        @callback
-        def _start_house_refit(_hass: HomeAssistant) -> None:
-            if self._training_batch is None:
-                return
-            self._create_tracked_refresh_task(
-                self._training_batch.async_run_house_consumption(reason=reason)
+        self._run_when_started(
+            functools.partial(
+                self._training_batch.async_run_house_consumption, reason=reason
             )
-
-        self._unsub_listeners.append(
-            async_at_started(self._hass, _start_house_refit)
         )
 
     def _read_appliance_energy_training_request(
@@ -2037,16 +1939,10 @@ class HelmanCoordinator:
         if self._training_batch is None:
             return
 
-        @callback
-        def _start_appliance_energy_refit(_hass: HomeAssistant) -> None:
-            if self._training_batch is None:
-                return
-            self._create_tracked_refresh_task(
-                self._training_batch.async_run_appliance_energy(reason=reason)
+        self._run_when_started(
+            functools.partial(
+                self._training_batch.async_run_appliance_energy, reason=reason
             )
-
-        self._unsub_listeners.append(
-            async_at_started(self._hass, _start_appliance_energy_refit)
         )
 
     async def _async_on_appliance_energy_trained(self) -> None:
@@ -2794,12 +2690,6 @@ class HelmanCoordinator:
             return None
         return round(sum(values) / 1000.0, 4)
 
-    def register_house_consumption_forecast_current_sensor(self, sensor) -> None:
-        self._house_consumption_forecast_current_sensor = sensor
-
-    def register_solar_forecast_current_sensors(self, sensors) -> None:
-        self._solar_forecast_current_sensors = list(sensors)
-
     def get_solar_forecast_current_wh(self, *, corrected: bool) -> float | None:
         """The current slot's forecast energy in Wh, or None.
 
@@ -2846,9 +2736,6 @@ class HelmanCoordinator:
             except (TypeError, ValueError):
                 return None
         return None
-
-    def register_battery_forecast_current_sensors(self, sensors) -> None:
-        self._battery_forecast_current_sensors = list(sensors)
 
     def get_battery_forecast_current(self) -> dict[str, float] | None:
         """The current 15-minute slot's forecast SoC, grid and battery energy.
@@ -2900,7 +2787,7 @@ class HelmanCoordinator:
         worth seeing rather than papering over with a value from earlier in the
         slot.
 
-        The ``slot_refresh`` gate in :meth:`_publish_solar_forecast_entities` is
+        The ``slot_refresh`` gate on the five sensors' publish signal is
         the other half of the guard and stops a different thing: an off-beat
         rebuild that still produced a *full* first slot re-writing that value
         mid-slot. Neither is the whole guard; the ``socPct`` level is dropped
@@ -3026,9 +2913,6 @@ class HelmanCoordinator:
         )
         return None
 
-    def register_grid_import_price_sensor(self, sensor) -> None:
-        self._grid_import_price_sensor = sensor
-
     def get_grid_import_price_current(self) -> float | None:
         """The import rate in force right now, or None when unconfigured."""
         return self._grid_import_price_current
@@ -3036,9 +2920,6 @@ class HelmanCoordinator:
     def get_grid_import_price_unit(self) -> str | None:
         """The configured currency-per-energy unit of the import price."""
         return self._grid_import_price_unit
-
-    def register_grid_export_price_sensor(self, sensor) -> None:
-        self._grid_export_price_sensor = sensor
 
     def get_grid_export_price_current(self) -> float | None:
         """The export rate in force right now, or None when unconfigured."""
@@ -3594,9 +3475,9 @@ class HelmanCoordinator:
     ) -> _ForecastRefreshResult:
         """Build new forecast snapshots, cache them, and persist them.
 
-        ``reason`` only reaches :meth:`_publish_solar_forecast_entities`, which
-        publishes the battery/grid current-slot forecast sensors on the
-        slot-aligned rebuild alone.
+        ``reason`` only reaches :meth:`_publish_solar_forecast_entities`; the
+        battery/grid current-slot forecast sensors publish on the slot-aligned
+        rebuild alone.
         """
         request_now = reference_time or dt_util.now()
         try:
@@ -5315,7 +5196,7 @@ class HelmanCoordinator:
             # session unavailable. See #204.
             self._create_tracked_refresh_task(
                 self._async_refresh_forecast(
-                    reason=_SLOT_ALIGNED_REFRESH_REASON,
+                    reason=SLOT_ALIGNED_REFRESH_REASON,
                     reference_time=get_local_current_slot_start(
                         dt_util.as_local(fired_at),
                         interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
@@ -5442,10 +5323,10 @@ class HelmanCoordinator:
             PRODUCTION_TOTAL_ENTITY_ID, deque(maxlen=history_buckets)
         )
         # Add deques for source ratio sensors so their history is included in get_history().
-        # Derive the ratio entity IDs from the tree (NOT from _source_ratio_sensors, which the
-        # sensor platform only populates via set_sensors AFTER async_setup has already built these
-        # buffers). Without this the ratio history is absent from get_history() and the card paints
-        # every past consumer bucket with its fallback colour instead of the source colours.
+        # Derived from the tree, which async_setup has built before the sensor platform adds
+        # the ratio entities. Without this the ratio history is absent from get_history() and
+        # the card paints every past consumer bucket with its fallback colour instead of the
+        # source colours.
         # Mark them virtual: their values are computed by _tick Step 3, so the Step 1 real-sensor
         # read loop must not also append them (that would double-append per tick and desync them).
         self._source_ratio_entity_ids = dict(index.source_ratio_entity_ids)
@@ -5479,9 +5360,11 @@ class HelmanCoordinator:
 
     @callback
     def _tick(self, now: datetime) -> None:
-        """Periodic snapshot: read sensors, compute ratios, push derived sensor values."""
+        """Periodic snapshot: read sensors, compute ratios, send derived sensor values."""
         if self._cached_tree is None:
             return
+        # The derived sensors' values, keyed by each one's default entity id.
+        values: dict[str, Any] = {}
 
         # Step 1: Read all real (non-virtual) power sensors from hass.states
         for entity_id, dq in self._power_history.items():
@@ -5494,48 +5377,43 @@ class HelmanCoordinator:
         # history bucket — which only holds numbers — records 0 W, as the card
         # shows an unavailable sensor.
         unmeasured_map, share_map = self._compute_derived_powers()
-        for watts_by_node, entity_ids, sensors in (
-            (unmeasured_map, self._unmeasured_entity_id_map, self._unmeasured_sensors),
-            (share_map, self._share_entity_id_map, self._share_sensors),
+        for watts_by_node, entity_ids in (
+            (unmeasured_map, self._unmeasured_entity_id_map),
+            (share_map, self._share_entity_id_map),
         ):
             for node_id, watts in watts_by_node.items():
                 entity_id = entity_ids.get(node_id)
-                if entity_id and entity_id in self._power_history:
+                if not entity_id:
+                    continue
+                if entity_id in self._power_history:
                     self._power_history[entity_id].append(watts if watts is not None else 0.0)
-                sensor = sensors.get(node_id)
-                if sensor is not None:
-                    sensor.update_value(watts)
+                values[entity_id] = watts
 
         # Total power (consumption side)
         total = self._compute_consumption_total()
         if CONSUMPTION_TOTAL_ENTITY_ID in self._power_history:
             self._power_history[CONSUMPTION_TOTAL_ENTITY_ID].append(total)
-        if self._consumption_total_sensor is not None:
-            self._consumption_total_sensor.update_value(total)
+        values[CONSUMPTION_TOTAL_ENTITY_ID] = total
 
         # Measured house consumption, per phase and their sum
         phase_powers = self._compute_house_phase_powers()
-        house_total = (
+        values[HOUSE_CONSUMPTION_ENTITY_ID] = (
             None
             if any(watts is None for watts in phase_powers.values())
             else sum(phase_powers.values())
         )
-        for sensor in self._house_consumption_sensors:
-            sensor.update_value(
-                house_total if sensor.phase is None else phase_powers[sensor.phase]
-            )
+        for phase, watts in phase_powers.items():
+            values[house_consumption_phase_entity_id(phase)] = watts
 
         # Production total (source side)
         production = self._compute_production_total()
         if PRODUCTION_TOTAL_ENTITY_ID in self._power_history:
             self._power_history[PRODUCTION_TOTAL_ENTITY_ID].append(production)
-        if self._production_total_sensor is not None:
-            self._production_total_sensor.update_value(production)
+        values[PRODUCTION_TOTAL_ENTITY_ID] = production
 
-        # Step 3: Compute global source ratios, record their history, and update ratio sensors.
-        # Driven by the tree-derived ratio entity IDs (not the sensor objects) so ratio history is
-        # recorded from the first tick, even before the sensor platform registers the ratio sensor
-        # entities. The sensor objects, when present, are used only to publish the displayed value.
+        # Step 3: Compute global source ratios, record their history, and send ratio values.
+        # Driven by the tree-derived ratio entity IDs so ratio history is recorded from the
+        # first tick, even before the sensor platform has added the ratio sensor entities.
         if self._source_ratio_entity_ids:
             normalized = {
                 src: max(0.0, watts_for_value_type(
@@ -5550,12 +5428,12 @@ class HelmanCoordinator:
                 ratio_pct = (normalized.get(src_eid, 0.0) / total_source * 100.0) if total_source > 0 else 0.0
                 if ratio_entity_id in self._power_history:
                     self._power_history[ratio_entity_id].append(ratio_pct)
-                sensor = self._source_ratio_sensors.get(src_eid)
-                if sensor is not None:
-                    sensor.update_value(ratio_pct)
+                values[ratio_entity_id] = ratio_pct
 
         # Step 4: Battery ETAs (separate sensors for charging and discharging)
-        if self._battery_time_to_full is not None or self._battery_time_to_empty is not None:
+        # A failure here leaves the ETA keys out of the map; the other live
+        # values are still sent.
+        try:
             battery_cfg = read_mapping(
                 config_value(self._active_config, "energy_nodes.battery")
             )
@@ -5574,19 +5452,18 @@ class HelmanCoordinator:
             charging_avg = sum(pos_values) / len(pos_values) if pos_values else 0.0
             discharging_avg = sum(neg_values) / len(neg_values) if neg_values else 0.0
 
-            if self._battery_time_to_full is not None:
-                minutes, target_time, target_soc = (
-                    self._compute_charging_eta(charging_avg) if charging_avg > 0
-                    else (None, "", None)
-                )
-                self._battery_time_to_full.update_value(minutes, target_time, target_soc)
+            values[BATTERY_TIME_TO_FULL_ENTITY_ID] = (
+                self._compute_charging_eta(charging_avg) if charging_avg > 0
+                else (None, "", None)
+            )
+            values[BATTERY_TIME_TO_EMPTY_ENTITY_ID] = (
+                self._compute_discharging_eta(discharging_avg) if discharging_avg > 0
+                else (None, "", None)
+            )
+        except Exception:
+            _LOGGER.exception("Error computing battery ETAs")
 
-            if self._battery_time_to_empty is not None:
-                minutes, target_time, target_soc = (
-                    self._compute_discharging_eta(discharging_avg) if discharging_avg > 0
-                    else (None, "", None)
-                )
-                self._battery_time_to_empty.update_value(minutes, target_time, target_soc)
+        async_dispatcher_send(self._hass, self._live_tick_signal, values)
 
     def get_history(self) -> dict:
         """Return a pure dict copy of the in-memory rolling buffer. Zero computation."""
@@ -5904,21 +5781,11 @@ class HelmanCoordinator:
         await self._schedule_executor.async_unload()
         self._invalidate_battery_forecast_cache()
 
-        self._battery_time_to_full = None
-        self._battery_time_to_empty = None
-        self._unmeasured_sensors = {}
         self._unmeasured_raw_history = {}
-        self._share_sensors = {}
-        self._consumption_total_sensor = None
-        self._production_total_sensor = None
-        self._house_consumption_sensors = []
-        self._source_ratio_sensors = {}
         self._source_ratio_entity_ids = {}
-        self._solar_forecast_sensors = []
         self._async_add_entities = None
-        self._unmeasured_sensor_factory = None
-        self._share_sensor_factory = None
-        self._entry = None
+        self._dynamic_sensor_factories = {}
+        self._dynamic_sensors = {}
         self._removing_entity_ids.clear()
         self._power_history.clear()
         self._explanation_book.clear()

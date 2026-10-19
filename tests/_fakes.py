@@ -78,6 +78,29 @@ class FakeServices:
             self._hass.states._states[data["entity_id"]].state = "on"
 
 
+class FakeConfigEntry:
+    """A Helman config entry; ``runtime_data`` is set only when given."""
+
+    def __init__(
+        self, entry_id: str = "helman-entry", *, domain: str = "helman", **attrs: Any
+    ) -> None:
+        self.entry_id = entry_id
+        self.domain = domain
+        for name, value in attrs.items():
+            setattr(self, name, value)
+
+
+class FakeConfigEntries:
+    def __init__(self, entries: list[Any] | None = None) -> None:
+        self.entries = list(entries or [])
+
+    def async_entries(self, domain: str | None = None) -> list[Any]:
+        return [e for e in self.entries if domain is None or e.domain == domain]
+
+    def async_get_entry(self, entry_id: str) -> Any:
+        return next((e for e in self.entries if e.entry_id == entry_id), None)
+
+
 class FakeHass:
     def __init__(self, states: dict[str, FakeState] | None = None) -> None:
         self.data: dict = {}
@@ -85,12 +108,44 @@ class FakeHass:
         self.states = FakeStates(states)
         self.bus = FakeBus()
         self.services = FakeServices(self)
+        self.config_entries = FakeConfigEntries()
 
     def async_create_task(self, coro):
         return asyncio.create_task(coro)
 
     def async_create_background_task(self, coro, name):
         return asyncio.create_task(coro, name=name)
+
+    def verify_event_loop_thread(self, what: str) -> None:
+        """Lets the real dispatcher send; the tests run on the loop."""
+
+
+def loaded_config_entries(coordinator: Any) -> FakeConfigEntries:
+    """Config entries holding one Helman entry loaded with ``coordinator``."""
+    return FakeConfigEntries([FakeConfigEntry(runtime_data=coordinator)])
+
+
+def hass_with_coordinator(coordinator: Any, **attrs: Any) -> FakeHass:
+    """A hass whose loaded Helman entry carries ``coordinator`` as runtime data."""
+    hass = FakeHass()
+    hass.config_entries = loaded_config_entries(coordinator)
+    for name, value in attrs.items():
+        setattr(hass, name, value)
+    return hass
+
+
+def capture_signal(hass: Any, signal: str, entry_id: str = "helman-entry") -> list:
+    """Record every payload sent on this entry's ``signal``, through the real dispatcher."""
+    from homeassistant.core import callback
+    from homeassistant.helpers.dispatcher import async_dispatcher_connect
+
+    from custom_components.helman.const import entry_signal
+
+    sent: list = []
+    async_dispatcher_connect(
+        hass, entry_signal(signal, entry_id), callback(lambda payload: sent.append(payload))
+    )
+    return sent
 
 
 def make_coordinator(**overrides):
@@ -99,13 +154,16 @@ def make_coordinator(**overrides):
 
     hass = overrides.pop("_hass", None)
     storage = overrides.pop("_storage", None)
+    entry = overrides.pop("_entry", None)
     if hass is None:
         hass = FakeHass()
     if storage is None:
         storage = FakeStorage(
             schedule_document={"executionEnabled": False, "slotMinutes": 15, "slots": {}}
         )
-    coordinator = HelmanCoordinator(hass, storage)
+    if entry is None:
+        entry = FakeConfigEntry()
+    coordinator = HelmanCoordinator(hass, storage, entry)
     for name, value in overrides.items():
         setattr(coordinator, name, value)
     return coordinator

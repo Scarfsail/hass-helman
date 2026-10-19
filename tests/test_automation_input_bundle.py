@@ -364,7 +364,6 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
         coordinator._house_profile_trained_at = None
         coordinator._house_profile_last_outcome = "no_training_yet"
         coordinator._cached_solar_forecast = None
-        coordinator._solar_forecast_sensors = []
         coordinator._slot_history = None
         coordinator._ingest_grid_export_price = Mock(
             return_value={"status": "available", "unit": "CZK/kWh"}

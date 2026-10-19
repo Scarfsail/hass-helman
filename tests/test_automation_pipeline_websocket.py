@@ -3,6 +3,7 @@ from __future__ import annotations
 from homeassistant.exceptions import Unauthorized
 
 from automation_pipeline_support import *
+from _fakes import FakeConfigEntries
 
 
 class RunAutomationWebsocketTests(unittest.IsolatedAsyncioTestCase):
@@ -205,7 +206,9 @@ class ScheduleExplanationWebsocketTests(unittest.IsolatedAsyncioTestCase):
         connection = _FakeConnection(is_admin=True)
 
         ws_get_schedule_explanation(
-            SimpleNamespace(data={DOMAIN: {}}), connection, dict(self.MESSAGE)
+            SimpleNamespace(data={}, config_entries=FakeConfigEntries()),
+            connection,
+            dict(self.MESSAGE),
         )
 
         self.assertEqual(connection.results, [])

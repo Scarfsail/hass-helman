@@ -7,7 +7,7 @@ whenever a phase is.
 """
 
 from __future__ import annotations
-from tests._fakes import make_coordinator
+from tests._fakes import FakeHass, capture_signal, make_coordinator
 
 import importlib
 import unittest
@@ -15,6 +15,11 @@ from datetime import datetime
 from types import SimpleNamespace
 
 coordinator_module = importlib.import_module("custom_components.helman.coordinator")
+from custom_components.helman.const import (
+    HOUSE_CONSUMPTION_ENTITY_ID,
+    SIGNAL_LIVE_TICK,
+    house_consumption_phase_entity_id,
+)
 from custom_components.helman.vendors import PROFILES, DeviceTelemetry
 
 RUN_MODE = "sensor.solax_run_mode"
@@ -43,18 +48,10 @@ class _FakeStates:
         return None if raw is None else SimpleNamespace(state=raw)
 
 
-class _FakeSensor:
-    def __init__(self, phase: int | None) -> None:
-        self.phase = phase
-        self.values: list[float | None] = []
-
-    def update_value(self, watts: float | None) -> None:
-        self.values.append(watts)
-
-
 def _make_coordinator(states: dict[str, str], *, telemetry=True):
     c = make_coordinator()
-    c._hass = SimpleNamespace(states=_FakeStates(states))
+    c._hass = FakeHass()
+    c._hass.states = _FakeStates(states)
     c._inverter_telemetry = _telemetry() if telemetry else None
     return c
 
@@ -124,35 +121,38 @@ class HousePhasePowerTests(unittest.TestCase):
         c = _make_coordinator(
             _phases(ac1="500", grid1="0", ac2="600", grid2="-100", ac3="100", grid3="0")
         )
-        sensors = [_FakeSensor(phase) for phase in (None, 1, 2, 3)]
-        self._prime_tick(c, sensors)
+        sent = self._prime_tick(c)
 
         c._tick(datetime(2026, 10, 11, 12, 0, 0))
 
-        self.assertEqual([s.values for s in sensors], [[1300.0], [500.0], [700.0], [100.0]])
+        self.assertEqual(self._house_values(sent), [1300.0, 500.0, 700.0, 100.0])
 
     def test_the_total_is_unavailable_when_any_phase_is(self):
         c = _make_coordinator(_phases(ac1="500", grid1="0", ac2="600", grid2="0"))
-        sensors = [_FakeSensor(phase) for phase in (None, 1, 2, 3)]
-        self._prime_tick(c, sensors)
+        sent = self._prime_tick(c)
 
         c._tick(datetime(2026, 10, 11, 12, 0, 0))
 
-        self.assertEqual([s.values for s in sensors], [[None], [500.0], [600.0], [None]])
+        self.assertEqual(self._house_values(sent), [None, 500.0, 600.0, None])
 
     @staticmethod
-    def _prime_tick(c, sensors) -> None:
-        """Just enough coordinator state for one tick to run."""
+    def _prime_tick(c) -> list:
+        """Just enough coordinator state for one tick to run; returns what it sends."""
         c._cached_tree = {"sources": [], "consumers": []}
         c._power_history = {}
         c._virtual_sensor_ids = set()
         c._compute_derived_powers = lambda: ({}, {})
         c._unmeasured_entity_id_map = c._share_entity_id_map = {}
-        c._unmeasured_sensors = c._share_sensors = {}
-        c._consumption_total_sensor = c._production_total_sensor = None
         c._source_ratio_entity_ids = {}
-        c._battery_time_to_full = c._battery_time_to_empty = None
-        c._house_consumption_sensors = sensors
+        return capture_signal(c._hass, SIGNAL_LIVE_TICK)
+
+    @staticmethod
+    def _house_values(sent: list) -> list:
+        """The one tick's total, then phases 1-3."""
+        (values,) = sent
+        return [values[HOUSE_CONSUMPTION_ENTITY_ID]] + [
+            values[house_consumption_phase_entity_id(phase)] for phase in (1, 2, 3)
+        ]
 
 
 if __name__ == "__main__":

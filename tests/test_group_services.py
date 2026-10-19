@@ -27,6 +27,7 @@ from custom_components.helman.controllables.config import (  # noqa: E402
     group_exists,
     group_member_entities,
 )
+from tests._fakes import FakeConfigEntries, loaded_config_entries  # noqa: E402
 
 
 def _switch(entity_id: str) -> dict:
@@ -100,7 +101,10 @@ class GroupResolverTests(unittest.TestCase):
                     "groups": {"power": "night"}}],
             }
         }
-        hass = SimpleNamespace(data={DOMAIN: {"storage": SimpleNamespace(config=config)}})
+        hass = SimpleNamespace(
+            data={DOMAIN: {"storage": SimpleNamespace(config=config)}},
+            config_entries=FakeConfigEntries(),
+        )
         with patch("custom_components.helman.vendors._bound_device_entry", return_value=None), patch(
             "homeassistant.helpers.entity_registry.async_get",
             return_value=SimpleNamespace(async_get_entity_id=lambda *args: None),
@@ -111,10 +115,10 @@ class GroupResolverTests(unittest.TestCase):
             )
 
     def test_loaded_entry_uses_its_runtime_snapshot(self) -> None:
-        hass = SimpleNamespace(data={DOMAIN: {
-            "storage": SimpleNamespace(config={}),
-            "coordinator": SimpleNamespace(config=CONFIG),
-        }})
+        hass = SimpleNamespace(
+            data={DOMAIN: {"storage": SimpleNamespace(config={})}},
+            config_entries=loaded_config_entries(SimpleNamespace(config=CONFIG)),
+        )
         self.assertEqual(
             group_services._resolve_group(hass, {"grouping": "power", "group": "night"}),
             (NIGHT, ["no_control"]),
@@ -179,6 +183,7 @@ class GroupServicesTests(unittest.TestCase):
 
         self.hass = SimpleNamespace(
             data={DOMAIN: {"storage": self.storage}},
+            config_entries=FakeConfigEntries(),
             services=self.services,
             async_add_executor_job=run_in_executor,
         )

@@ -11,7 +11,12 @@ from __future__ import annotations
 
 from homeassistant.exceptions import Unauthorized
 
-from _fakes import FakeHass as SharedFakeHass, make_coordinator
+from _fakes import (
+    FakeConfigEntries,
+    FakeHass as SharedFakeHass,
+    loaded_config_entries,
+    make_coordinator,
+)
 
 from _fakes import FakeConnection as SharedFakeConnection
 
@@ -25,7 +30,6 @@ ROOT = Path(__file__).resolve().parents[1]
 
 from homeassistant.core import State  # noqa: E402
 
-from custom_components.helman.const import DOMAIN  # noqa: E402
 from custom_components.helman.automation.condition_trace import (  # noqa: E402
     evaluate_traced,
     extract_entity_ids,
@@ -676,7 +680,7 @@ class ConditionTraceWebsocketTests(unittest.IsolatedAsyncioTestCase):
 
     @staticmethod
     def _hass(coordinator: object) -> SimpleNamespace:
-        return SimpleNamespace(data={DOMAIN: {"coordinator": coordinator}})
+        return SimpleNamespace(data={}, config_entries=loaded_config_entries(coordinator))
 
     async def test_returns_the_record_for_the_requested_group(self) -> None:
         hass = FakeHass({"sensor.soc": "42.0"})
@@ -730,7 +734,9 @@ class ConditionTraceWebsocketTests(unittest.IsolatedAsyncioTestCase):
         connection = FakeConnection()
 
         ws_get_condition_trace(
-            SimpleNamespace(data={DOMAIN: {}}), connection, dict(self.MESSAGE)
+            SimpleNamespace(data={}, config_entries=FakeConfigEntries()),
+            connection,
+            dict(self.MESSAGE),
         )
 
         self.assertEqual(connection.results, [])

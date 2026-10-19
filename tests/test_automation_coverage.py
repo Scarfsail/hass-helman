@@ -11,11 +11,10 @@ import importlib
 import unittest
 from types import SimpleNamespace
 
-from _fakes import FakeConnection, FakeHass, make_coordinator
+from _fakes import FakeConnection, FakeHass, loaded_config_entries, make_coordinator
 
 from custom_components.helman.automation.config import AutomationConfig
 from custom_components.helman.automation.coverage import build_automation_coverage
-from custom_components.helman.const import DOMAIN
 
 websockets_module = importlib.import_module("custom_components.helman.websockets")
 
@@ -149,7 +148,7 @@ class AutomationCoverageWebsocketTests(unittest.TestCase):
             "automation": {"system_optimizers": [_export_price("export")]},
         }
         hass = FakeHass()
-        hass.data = {DOMAIN: {"coordinator": coordinator}}
+        hass.config_entries = loaded_config_entries(coordinator)
         connection = FakeConnection()
         # The badge is drawn for every viewer, so the command is not admin-gated.
         connection.user = SimpleNamespace(is_admin=False)

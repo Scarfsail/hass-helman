@@ -34,6 +34,7 @@ from .controllables.config import (
 )
 from .scheduling.actuation import ScheduleActuator
 from .vendors import resolve_vendor_config
+from .ws_common import loaded_coordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -60,11 +61,10 @@ GROUP_ACTION_SCHEMA = vol.Schema(
 
 def active_config(hass: HomeAssistant) -> dict[str, Any]:
     """The loaded entry's runtime config, or a resolved stored config before load."""
-    domain_data = hass.data[DOMAIN]
-    coordinator = domain_data.get("coordinator")
+    coordinator = loaded_coordinator(hass)
     if coordinator is not None:
         return coordinator.config
-    return resolve_vendor_config(hass, domain_data["storage"].config)[0]
+    return resolve_vendor_config(hass, hass.data[DOMAIN]["storage"].config)[0]
 
 
 def _resolve_group(

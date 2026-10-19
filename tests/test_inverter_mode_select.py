@@ -241,12 +241,13 @@ def test_without_a_restored_state_the_vendor_state_is_the_option(states, expecte
 
 def _setup(config, registered=None):
     added: list = []
-    registry = NS(
-        async_get_entity_id=lambda domain, platform, unique_id: registered,
-        async_remove=Mock(),
+    registry = NS(async_remove=Mock())
+    rows = (
+        []
+        if registered is None
+        else [NS(domain="select", unique_id="helman_inverter_mode", entity_id=registered)]
     )
     hass = NS(
-        data={"helman": {"coordinator": NS(config=config)}},
         config_entries=NS(
             async_get_entry=lambda entry_id: NS(
                 entry_id=entry_id,
@@ -256,9 +257,17 @@ def _setup(config, registered=None):
             )
         ),
     )
-    with patch("homeassistant.helpers.entity_registry.async_get", return_value=registry):
+    with (
+        patch("homeassistant.helpers.entity_registry.async_get", return_value=registry),
+        patch(
+            "homeassistant.helpers.entity_registry.async_entries_for_config_entry",
+            return_value=rows,
+        ),
+    ):
         asyncio.run(
-            select_module.async_setup_entry(hass, NS(entry_id="helman-entry"), added.extend)
+            select_module.async_setup_entry(
+                hass, NS(entry_id="helman-entry", runtime_data=NS(config=config)), added.extend
+            )
         )
     return added, registry
 
