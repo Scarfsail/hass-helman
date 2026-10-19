@@ -41,8 +41,8 @@ from custom_components.helman.automation.conditions.types import (  # noqa: E402
     ConditionRailsUnavailable,
     Scope,
 )
+from _fakes import make_optimization_context  # noqa: E402
 from custom_components.helman.automation.snapshot import (  # noqa: E402
-    OptimizationContext,
     OptimizationSnapshot,
 )
 from custom_components.helman.automation.spec import OPTIMIZER_SPECS  # noqa: E402
@@ -74,7 +74,7 @@ def _snapshot(
         adjusted_house_forecast={"status": "available", "series": []},
         battery_forecast={"status": "available", "series": []},
         grid_forecast={"status": "available", "series": []},
-        context=OptimizationContext(
+        context=make_optimization_context(
             now=REFERENCE_TIME,
             battery_state=None,
             solar_forecast={"status": "available", "points": []},
@@ -278,7 +278,16 @@ class MaxRunPriceConditionTests(unittest.TestCase):
         forecast["currentPrice"] = current_price
         snapshot = replace(
             snapshot,
-            context=replace(snapshot.context, export_price_forecast=forecast),
+            context=replace(
+                snapshot.context,
+                inputs=replace(
+                    snapshot.context.inputs,
+                    grid_price_forecast={
+                        **snapshot.context.inputs.grid_price_forecast,
+                        "export": forecast,
+                    },
+                ),
+            ),
         )
         if now is not None:
             snapshot = replace(snapshot, context=replace(snapshot.context, now=now))
@@ -835,19 +844,22 @@ class GroupExplanationTests(unittest.TestCase):
             snapshot,
             context=replace(
                 snapshot.context,
-                custom_condition_results_by_optimizer_id={
-                    config.id: (
-                        CustomConditionGroupResult(
-                            index=0,
-                            met=False,
-                            entries=(
-                                CustomConditionResult(met=True),
-                                CustomConditionResult(met=False),
-                                CustomConditionResult(met=False, errored=True),
+                live=replace(
+                    snapshot.context.live,
+                    custom_condition_results_by_optimizer_id={
+                        config.id: (
+                            CustomConditionGroupResult(
+                                index=0,
+                                met=False,
+                                entries=(
+                                    CustomConditionResult(met=True),
+                                    CustomConditionResult(met=False),
+                                    CustomConditionResult(met=False, errored=True),
+                                ),
                             ),
-                        ),
-                    )
-                },
+                        )
+                    },
+                ),
             ),
         )
         groups = self._explanations(snapshot, config)[SLOT_0]

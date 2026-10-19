@@ -236,7 +236,7 @@ class CoordinatorAutomationTriggerTests(unittest.IsolatedAsyncioTestCase):
         )
         coordinator = make_coordinator(_hass=FakeHass(), _storage=storage)
         executor = FakeExecutor()
-        coordinator._schedule_executor = executor
+        coordinator.schedule.executor = executor
         coordinator._automation_triggers = SimpleNamespace(
             request_immediate=AsyncMock(),
             request_debounced=AsyncMock(),
@@ -495,8 +495,8 @@ class CoordinatorAutomationTriggerTests(unittest.IsolatedAsyncioTestCase):
             schedule_document={"executionEnabled": True, "slots": {}}
         )
 
-        async with coordinator._schedule_lock:
-            changed = await coordinator._persist_automation_result_locked(
+        async with coordinator.schedule.locked(REFERENCE_TIME):
+            changed = await coordinator.schedule.persist_automation_result(
                 automation_result=ScheduleDocument(
                     execution_enabled=True,
                     slots={

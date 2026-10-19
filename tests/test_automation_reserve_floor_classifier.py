@@ -78,8 +78,8 @@ from reserve_floor_classifier import (  # noqa: E402
     classify_reserve_floor_observation,
     classify_reserve_floor_observations,
 )
+from _fakes import make_optimization_context  # noqa: E402
 from custom_components.helman.automation.snapshot import (  # noqa: E402
-    OptimizationContext,
     OptimizationSnapshot,
 )
 from custom_components.helman.automation.trace import ReserveFloorObservation  # noqa: E402
@@ -485,10 +485,13 @@ def _make_build_snapshot(
             adjusted_house_forecast={"status": "available", "series": []},
             battery_forecast={"status": "available", "series": soc_series},
             grid_forecast={"status": "available", "series": []},
-            context=OptimizationContext(
+            context=make_optimization_context(
                 now=REFERENCE_TIME,
                 battery_state=types.SimpleNamespace(
-                    current_soc=50.0, min_soc=10.0, max_soc=battery_max_soc
+                    current_soc=50.0,
+                    min_soc=10.0,
+                    max_soc=battery_max_soc,
+                    nominal_capacity_kwh=10.0,
                 ),
                 solar_forecast={"status": "available", "points": []},
                 import_price_forecast={
@@ -500,7 +503,6 @@ def _make_build_snapshot(
                 appliance_registry=AppliancesRuntimeRegistry(),
                 when_active_hourly_energy_kwh_by_appliance_id={},
                 battery_max_charge_power_kw=5.0,
-                battery_usable_capacity_kwh=10.0,
                 battery_charge_efficiency=1.0,
                 runtime_hours_by_appliance_id_by_local_date={},
                 day_contexts={DAY: _day_context(bands)},

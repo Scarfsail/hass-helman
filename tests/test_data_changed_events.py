@@ -56,7 +56,7 @@ class DataChangedEventTests(unittest.IsolatedAsyncioTestCase):
         storage = FakeStorage(schedule_document=persisted)
         hass = FakeHass()
         coordinator = make_coordinator(_hass=hass, _storage=storage)
-        coordinator._schedule_executor = FakeExecutor()
+        coordinator.schedule.executor = FakeExecutor()
         return coordinator, storage, hass
 
     @staticmethod
@@ -99,7 +99,7 @@ class DataChangedEventTests(unittest.IsolatedAsyncioTestCase):
             }
         )
 
-        await coordinator.get_schedule(reference_time=REFERENCE_TIME)
+        await coordinator.schedule.get(reference_time=REFERENCE_TIME)
 
         self.assertEqual(storage.schedule_document["slots"], {})
         self.assertEqual(self._data_changed_kinds(hass), [])

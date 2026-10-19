@@ -40,14 +40,15 @@ def _make_coordinator(test: unittest.TestCase) -> HelmanCoordinator:
     test and left on it as ``test.build_battery_forecast`` and
     ``test.build_overlay``.
     """
-    coordinator = make_coordinator(_active_config={})
-    coordinator._hass = SimpleNamespace(async_add_executor_job=_inline_executor_job)
-    coordinator._storage = SimpleNamespace(
+    storage = SimpleNamespace(
         config={},
         schedule_document=_make_schedule_document(),
         async_save_schedule_document=AsyncMock(),
     )
-    coordinator._load_schedule_document = lambda: coordinator._storage.schedule_document
+    coordinator = make_coordinator(_storage=storage, _active_config={})
+    coordinator._hass = SimpleNamespace(async_add_executor_job=_inline_executor_job)
+    # The tests store documents, not their dicts.
+    coordinator.schedule.load = lambda: storage.schedule_document
     coordinator._appliances_registry.current = coordinator_module.AppliancesRuntimeRegistry()
     test.build_battery_forecast = test.enterContext(
         patch.object(
@@ -315,7 +316,7 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             }
         )
         coordinator = make_coordinator(_hass=FakeHass(), _storage=storage)
-        coordinator._schedule_executor = FakeExecutor()
+        coordinator.schedule.executor = FakeExecutor()
         hold_pipeline(coordinator, SimpleNamespace())
         entry = coordinator._pipeline_cache
         revision = coordinator._forecast_cache_revision
@@ -1157,7 +1158,7 @@ class ApplianceForecastPipelineDedupeTests(unittest.IsolatedAsyncioTestCase):
             lambda **_kwargs: _make_battery_forecast()
         )
         gate = asyncio.Event()
-        gather = coordinator._async_gather_compute_inputs
+        gather = coordinator.gather_compute_inputs
         calls: list[dict] = []
 
         async def gated_gather(**kwargs):
@@ -1165,7 +1166,7 @@ class ApplianceForecastPipelineDedupeTests(unittest.IsolatedAsyncioTestCase):
             await gate.wait()
             return await gather(**kwargs)
 
-        coordinator._async_gather_compute_inputs = gated_gather
+        coordinator.gather_compute_inputs = gated_gather
         return coordinator, gate, calls
 
     @staticmethod
@@ -1293,8 +1294,8 @@ class ApplianceForecastPipelineDedupeTests(unittest.IsolatedAsyncioTestCase):
         the snapshots it is holding say the build is behind.
         """
         coordinator = self._make_gated_coordinator()[0]
-        coordinator._async_gather_compute_inputs = (
-            HelmanCoordinator._async_gather_compute_inputs.__get__(coordinator)
+        coordinator.gather_compute_inputs = (
+            HelmanCoordinator.gather_compute_inputs.__get__(coordinator)
         )
 
         fresh = await _read_pipeline(
@@ -1335,7 +1336,7 @@ class ApplianceForecastPipelineDedupeTests(unittest.IsolatedAsyncioTestCase):
         """
         coordinator = _make_coordinator(self)
         pinned = coordinator._appliances_registry.current
-        gather = coordinator._async_gather_compute_inputs
+        gather = coordinator.gather_compute_inputs
         used: list[object] = []
 
         async def gather_then_swap(**kwargs):
@@ -1347,7 +1348,7 @@ class ApplianceForecastPipelineDedupeTests(unittest.IsolatedAsyncioTestCase):
             )
             return compute_inputs
 
-        coordinator._async_gather_compute_inputs = gather_then_swap
+        coordinator.gather_compute_inputs = gather_then_swap
 
         def record_registry(**kwargs):
             used.append(kwargs["registry"])

@@ -9,6 +9,7 @@ them once on the event loop into this immutable container lets the compute path
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -78,17 +79,14 @@ class ComputeInputs:
     vehicle_remaining_capacity_kwh_by_vehicle_id: dict[str, float | None] = field(
         default_factory=dict
     )
-    # Per-optimizer execution-condition result, evaluated once per run against
-    # current live state (fail-closed on error). Absent id == always met. Frozen
-    # here so the pure optimizer loop can read it without touching ``hass``.
-    condition_met_by_optimizer_id: dict[str, tuple[bool, ...]] = field(
-        default_factory=dict
-    )
-    # The same evaluation, one level finer: per condition group, one result per
-    # ``custom`` entry plus an ``errored`` flag. ``condition_met_by_optimizer_id``
-    # stays what *scheduling* reads (it holds the same aggregate); this detail
-    # exists so an explanation can name which custom condition failed, and
-    # whether it failed or blew up. Absent id == not evaluated, as above.
+    # Per-optimizer execution-condition results, evaluated once per run against
+    # current live state (fail-closed on error): per condition group, one result
+    # per ``custom`` entry plus an ``errored`` flag. Frozen here so the pure
+    # optimizer loop can read it without touching ``hass``. Absent id == not
+    # evaluated, so every group counts as met. Scheduling reads the per-group
+    # aggregate, :attr:`condition_met_by_optimizer_id`; the detail exists so an
+    # explanation can name which custom condition failed, and whether it failed
+    # or blew up.
     custom_condition_results_by_optimizer_id: dict[
         str, tuple[CustomConditionGroupResult, ...]
     ] = field(default_factory=dict)
@@ -97,3 +95,18 @@ class ComputeInputs:
     # by ``appliance_runtime`` to keep an in-flight run in the plan; see
     # ``OptimizationContext.appliance_active_by_id``.
     appliance_active_by_id: dict[str, bool] = field(default_factory=dict)
+
+    @property
+    def condition_met_by_optimizer_id(self) -> dict[str, tuple[bool, ...]]:
+        """The per-group bool each optimizer gates on, folded from the results."""
+        return condition_met_map(self.custom_condition_results_by_optimizer_id)
+
+
+def condition_met_map(
+    results: Mapping[str, tuple[CustomConditionGroupResult, ...]],
+) -> dict[str, tuple[bool, ...]]:
+    """Fold per-entry custom results to the per-group bool the optimizers gate on."""
+    return {
+        optimizer_id: tuple(group.met for group in groups)
+        for optimizer_id, groups in results.items()
+    }

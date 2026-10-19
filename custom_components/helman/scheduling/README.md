@@ -20,6 +20,8 @@ request schemas and response construction.
 
 ## Execution and status
 
+[schedule_service.py](schedule_service.py) owns the stored document: its lock, the one prune every reader goes through, the writes, the execution toggle and the executor. Its docstring lists which methods take the lock and which must be called under it.
+
 [schedule_executor.py](schedule_executor.py) reconciles the active slot with
 the current entity states. [runtime_status.py](runtime_status.py) defines the
 per-controllable runtime record attached to the active slot in the schedule

@@ -51,6 +51,7 @@ from custom_components.helman.scheduling.schedule import (  # noqa: E402
     ScheduleExecutionUnavailableError,
     ScheduleNotConfiguredError,
     build_controllable_actions,
+    prune_expired_slots,
 )
 from custom_components.helman.scheduling.schedule_executor import (  # noqa: E402
     ScheduleExecutor,
@@ -116,12 +117,25 @@ class FakeHass(SharedFakeHass):
 
 
 class FakeScheduleStore:
+    """The schedule service's side of the executor: a document and its lock."""
+
     def __init__(self, document: ScheduleDocument) -> None:
         self.document = document
         self.saved_documents: list[ScheduleDocument] = []
+        self.lock = asyncio.Lock()
 
     def load(self) -> ScheduleDocument:
         return self.document
+
+    async def read(self, reference_time: datetime) -> ScheduleDocument:
+        async with self.lock:
+            return ScheduleDocument(
+                execution_enabled=self.document.execution_enabled,
+                slots=prune_expired_slots(
+                    stored_slots=self.document.slots,
+                    reference_time=reference_time,
+                ),
+            )
 
     async def save(self, document: ScheduleDocument) -> None:
         self.document = document
@@ -177,7 +191,6 @@ def _build_executor(
     extra_states: dict[str, FakeState] | None = None,
     now=None,
     announce_schedule_changed=None,
-    save_pruned_schedule_document=None,
 ) -> tuple[ScheduleExecutor, FakeHass, FakeScheduleStore]:
     states = {} if state is None else {entity_id: state}
     states.update(extra_states or {})
@@ -186,16 +199,14 @@ def _build_executor(
     executor = ScheduleExecutor(
         hass,
         ScheduleExecutorDependencies(
-            schedule_lock=asyncio.Lock(),
+            read_schedule_document=store.read,
             load_schedule_document=store.load,
-            save_schedule_document=store.save,
             read_schedule_control_config=lambda: control_config
             or _build_control_config(entity_id),
             read_battery_state=lambda: battery_state,
             read_appliances_registry=lambda: registry or AppliancesRuntimeRegistry(),
             check_reality_and_maybe_replan=check_reality_and_maybe_replan,
             announce_schedule_changed=announce_schedule_changed,
-            save_pruned_schedule_document=save_pruned_schedule_document,
         ),
         now=now,
     )
@@ -308,31 +319,6 @@ class RuntimeAnnouncementTests(unittest.IsolatedAsyncioTestCase):
 
         executor._set_execution_status(status("Switch is unavailable", "third"))
         self.assertEqual(announced, ["schedule", "schedule"])
-
-    async def test_executor_prune_uses_quiet_persistence(self) -> None:
-        quietly_saved = []
-        executor, _hass, store = _build_executor(
-            entity_id="select.mode",
-            state=None,
-            document=ScheduleDocument(
-                execution_enabled=False,
-                slots={
-                    CURRENT_SLOT_ID: build_controllable_actions(
-                        inverter=ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)
-                    )
-                },
-            ),
-            save_pruned_schedule_document=(
-                lambda doc: quietly_saved.append(doc) or store.save(doc)
-            ),
-        )
-
-        await executor._load_pruned_schedule_document_locked(
-            reference_time=AFTER_NEXT_SLOT_BOUNDARY
-        )
-
-        self.assertEqual(len(quietly_saved), 1)
-        self.assertEqual(quietly_saved[0].slots, {})
 
     async def test_material_runtime_change_announces_once_per_change(self) -> None:
         announced = []
@@ -1125,9 +1111,8 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
         executor = ScheduleExecutor(
             hass,
             ScheduleExecutorDependencies(
-                schedule_lock=asyncio.Lock(),
+                read_schedule_document=store.read,
                 load_schedule_document=store.load,
-                save_schedule_document=store.save,
                 read_schedule_control_config=lambda: None,
                 read_battery_state=lambda: None,
                 read_appliances_registry=lambda: AppliancesRuntimeRegistry(),
@@ -1187,7 +1172,7 @@ class ScheduleExecutorConcurrencyTests(unittest.IsolatedAsyncioTestCase):
     async def _assert_schedule_lock_is_free(
         self, executor: ScheduleExecutor, store: FakeScheduleStore
     ) -> None:
-        lock = executor._dependencies.schedule_lock
+        lock = store.lock
         self.assertFalse(lock.locked())
         # A read and a save both get through while the hardware call is parked.
         async with asyncio.timeout(1):
@@ -1423,7 +1408,7 @@ class ScheduleExecutorConcurrencyTests(unittest.IsolatedAsyncioTestCase):
         await self._wait(hass.services.entered.wait())
         # A schedule edit lands while the attempt is blocked, and a follow-up is
         # queued before the slot boundary.
-        async with executor._dependencies.schedule_lock:
+        async with store.lock:
             await store.save(
                 ScheduleDocument(
                     execution_enabled=True,

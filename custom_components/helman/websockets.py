@@ -502,7 +502,7 @@ async def ws_get_schedule(
         return
 
     try:
-        schedule = await coordinator.get_schedule()
+        schedule = await coordinator.schedule.get()
     except ScheduleError as err:
         map_errors(connection, msg, err)
         return

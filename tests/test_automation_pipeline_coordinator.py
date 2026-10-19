@@ -2,6 +2,10 @@ from __future__ import annotations
 
 from automation_pipeline_support import *
 
+import functools
+
+from _fakes import FakeExecutor, FakeStorage
+
 from custom_components.helman.forecast import assembly
 
 
@@ -26,14 +30,14 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
                 compute_inputs=ComputeInputs(),
             )
 
-        coordinator = _FakeCoordinator(
+        coordinator = _FakeRunDeps(
             schedule_document=_make_schedule_document(),
             bundle=_make_automation_bundle(),
             snapshot_factory=build_snapshot,
         )
         with patch.object(assembly, "build_forecast_rebuild", return_value=rebuild):
-            result = await AutomationRunner(
-                coordinator=coordinator,
+            result = await _make_runner(
+                coordinator,
                 automation_config=_make_automation_config(_make_optimizer_instance()),
             ).run(reference_time=REFERENCE_TIME)
 
@@ -44,8 +48,8 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(CURRENT_SLOT_ID, result.failure.message)
         self.assertIsNone(result.snapshot)
         self.assertEqual(result.optimizers, ())
-        self.assertEqual(coordinator.persist_calls, [])
-        self.assertEqual(coordinator.post_write_calls, [])
+        self.assertEqual(coordinator.schedule.persist_calls, [])
+        self.assertEqual(coordinator.schedule.reconcile_requests, [])
 
     async def test_async_build_forecast_rebuild_uses_pinned_inputs_and_composes_grid(self) -> None:
         coordinator = make_coordinator()
@@ -154,45 +158,69 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
             assembly.build_forecast_rebuild,
         )
 
-    async def test_build_automation_snapshot_locked_populates_context_from_bundle(self) -> None:
-        coordinator = make_coordinator()
-        coordinator._hass = _make_executor_hass()
-        coordinator._active_config = {}
-        coordinator._appliances_registry.current = AppliancesRuntimeRegistry()
-        # The async wrapper gathers the run-invariant inputs once, then delegates
-        # to the pure snapshot builder (which reads the battery state from the
-        # gathered ComputeInputs and calls the pure rebuild core).
+    async def test_initial_snapshot_is_built_off_loop_from_the_bundle_and_live_inputs(
+        self,
+    ) -> None:
+        # The runner builds its initial snapshot with the assembly function it
+        # was handed, in the executor, from the gathered live inputs.
         rebuild = assembly.ForecastRebuildSnapshot(
             adjusted_house_forecast={"status": "available"},
             battery_forecast={"status": "available"},
             projection_plan=SimpleNamespace(generated_at=REFERENCE_TIME.isoformat()),
             grid_forecast={"status": "available", "currentImportPrice": 7.0},
         )
-        coordinator._async_gather_compute_inputs = AsyncMock(
+        deps = _FakeRunDeps(
+            schedule_document=_make_schedule_document(),
+            bundle=_make_automation_bundle(),
+            snapshot_factory=None,
+        )
+        battery_state = BatteryLiveState(
+            current_remaining_energy_kwh=7.5,
+            current_soc=50.0,
+            min_soc=10.0,
+            max_soc=90.0,
+            nominal_capacity_kwh=15.0,
+            min_energy_kwh=1.5,
+            max_energy_kwh=13.5,
+        )
+        deps.gather_compute_inputs = AsyncMock(
             return_value=ComputeInputs(
-                battery_live_state=BatteryLiveState(
-                    current_remaining_energy_kwh=7.5,
-                    current_soc=50.0,
-                    min_soc=10.0,
-                    max_soc=90.0,
-                    nominal_capacity_kwh=15.0,
-                    min_energy_kwh=1.5,
-                    max_energy_kwh=13.5,
-                ),
+                battery_live_state=battery_state,
+                appliances_registry=AppliancesRuntimeRegistry(),
             )
         )
+        executor_hops: list[object] = []
 
-        with patch.object(assembly, "build_forecast_rebuild", return_value=rebuild):
-            for status in ("available", "partial"):
-                with self.subTest(status=status):
-                    rebuild.battery_forecast["status"] = status
-                    snapshot = await coordinator._build_automation_snapshot_from_schedule_locked(
-                        schedule_document=_make_schedule_document(),
-                        input_bundle=_make_automation_bundle(),
-                        reference_time=REFERENCE_TIME,
-                    )
-                    self.assertEqual(snapshot.battery_forecast["status"], status)
+        async def run_in_executor(func, *args):
+            executor_hops.append(func)
+            return func(*args)
 
+        runner = AutomationRunner(
+            automation_config=_make_automation_config(_make_optimizer_instance()),
+            schedule=deps.schedule,
+            forecast=deps,
+            recorder=deps,
+            build_snapshot=functools.partial(
+                assembly.build_automation_snapshot, config={}
+            ),
+            read_control_config=lambda: None,
+            run_in_executor=run_in_executor,
+        )
+        with (
+            patch.object(assembly, "build_forecast_rebuild", return_value=rebuild),
+            # Stop right after the initial snapshot: a failed optimizer reports
+            # the snapshot it was handed.
+            patch.object(
+                pipeline_module, "build_optimizer", side_effect=ValueError("stop")
+            ),
+        ):
+            result = await runner.run(reference_time=REFERENCE_TIME)
+
+        deps.gather_compute_inputs.assert_awaited_once_with(
+            started_at=REFERENCE_TIME, include_condition_flags=True
+        )
+        snapshot = result.snapshot
+        self.assertEqual(result.reason, "optimizer_failed")
         self.assertEqual(snapshot.schedule, _make_schedule_document())
         self.assertEqual(snapshot.context.import_price_forecast["currentPrice"], 7.0)
         self.assertEqual(snapshot.context.export_price_forecast["currentPrice"], 2.5)
@@ -200,57 +228,77 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
             snapshot.context.when_active_hourly_energy_kwh_by_appliance_id,
             {"boiler": 1.25},
         )
-        self.assertEqual(snapshot.context.battery_state.current_soc, 50.0)
-        # One executor hop per snapshot build (two statuses were exercised).
-        self.assertEqual(len(coordinator._hass.executor_hops), 2)
-        self.assertEqual(
-            {hop.func for hop in coordinator._hass.executor_hops},
-            {coordinator._build_automation_snapshot_from_schedule_pure},
-        )
+        self.assertIs(snapshot.context.battery_state, battery_state)
+        # The initial snapshot hop, then the optimizer loop's own.
+        self.assertEqual(len(executor_hops), 2)
+        self.assertEqual(executor_hops[0].func.__name__, "_snapshot_for")
+        self.assertIs(executor_hops[1].func, pipeline_module.run_optimizer_loop_pure)
 
 
-class CoordinatorRunAutomationFailureTests(unittest.IsolatedAsyncioTestCase):
-    """What ``run_automation`` returns when the runner escapes.
+class CoordinatorRunAutomationTests(unittest.IsolatedAsyncioTestCase):
+    """``run_automation`` runs against the coordinator's own schedule service."""
 
-    An exception that gets past the runner must still come back as a structured
-    ``runner_failed`` result rather than propagating to the caller.
-    """
-
-    async def test_run_automation_returns_runner_failed_when_runner_escapes(
+    async def test_disabled_automation_strips_owned_actions_and_requests_execution(
         self,
     ) -> None:
-        coordinator = make_coordinator()
+        storage = FakeStorage(
+            schedule_document={
+                "executionEnabled": True,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
+                "slots": {
+                    CURRENT_SLOT_ID: {
+                        "inverter": {"kind": "stop_export", "setBy": "automation"},
+                    },
+                },
+            }
+        )
+        coordinator = make_coordinator(_storage=storage)
         coordinator._active_config = {}
-        # Recording a run also announces the new plan on the bus, so every run
-        # path -- including the escaped-failure one -- needs a bus to fire on.
-        coordinator._hass = SimpleNamespace(
-            bus=SimpleNamespace(async_fire=lambda event_type, event_data=None: None)
+        coordinator._hass.async_add_executor_job = _FakeRunDeps.run_in_executor
+        executor = FakeExecutor()
+        coordinator.schedule.executor = executor
+
+        result = await coordinator.run_automation(
+            reference_time=REFERENCE_TIME, reason="trigger"
         )
 
-        class _FailingRunner:
-            def __init__(self, *, coordinator, automation_config) -> None:
-                pass
+        self.assertEqual(result.reason, "cleanup_only")
+        self.assertEqual(
+            result.cleanup,
+            AutomationCleanupSummary(reason="automation_disabled", actions_stripped=1),
+        )
+        self.assertEqual(storage.schedule_document["slots"], {})
+        self.assertEqual(executor.requested_reconciles, ["automation_updated"])
+        self.assertFalse(coordinator.schedule._lock.locked())
 
-            async def run(self, *, reference_time=None, run_reason=None):
-                raise RuntimeError("escaped runner failure")
+    async def test_run_automation_returns_runner_failed_when_control_config_read_raises(
+        self,
+    ) -> None:
+        coordinator = make_coordinator(
+            _storage=FakeStorage(
+                schedule_document={
+                    "executionEnabled": True,
+                    "slotMinutes": SCHEDULE_SLOT_MINUTES,
+                    "slots": {},
+                }
+            )
+        )
+        coordinator._active_config = {}
+        coordinator._hass.async_add_executor_job = _FakeRunDeps.run_in_executor
+        coordinator._record_automation_run = Mock()
 
-        with (
-            patch.object(coordinator_module, "read_automation_config", return_value=None),
-            patch.object(pipeline_module, "AutomationRunner", _FailingRunner),
+        with patch.object(
+            coordinator,
+            "_read_schedule_control_config",
+            side_effect=ValueError("malformed inverter mode config"),
         ):
             result = await coordinator.run_automation(
-                reference_time=REFERENCE_TIME,
-                reason="trigger",
+                reference_time=REFERENCE_TIME, reason="trigger"
             )
 
+        self.assertFalse(result.ran_automation)
         self.assertEqual(result.reason, "runner_failed")
-        self.assertEqual(
-            result.failure,
-            AutomationRunFailure(
-                stage="coordinator",
-                message="escaped runner failure",
-            ),
-        )
-        self.assertIsInstance(result.duration_ms, int)
-
-
+        self.assertEqual(result.failure.stage, "baseline_schedule")
+        self.assertIn("malformed inverter mode config", result.failure.message)
+        coordinator._record_automation_run.assert_called_once_with(result)
+        self.assertFalse(coordinator.schedule._lock.locked())

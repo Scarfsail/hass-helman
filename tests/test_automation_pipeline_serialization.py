@@ -28,8 +28,11 @@ class SnapshotSerializationTests(unittest.TestCase):
                 _make_snapshot(),
                 context=replace(
                     context,
-                    battery_max_discharge_power_kw=4.0,
-                    battery_discharge_efficiency=0.93,
+                    battery=replace(
+                        context.battery,
+                        max_discharge_power_w=4000.0,
+                        discharge_efficiency=0.93,
+                    ),
                 ),
             )
         )

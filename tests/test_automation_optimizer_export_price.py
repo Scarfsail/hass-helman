@@ -29,8 +29,8 @@ from custom_components.helman.const import SCHEDULE_SLOT_MINUTES  # noqa: E402
 from custom_components.helman.automation.optimizers.export_price import (  # noqa: E402
     ExportPriceOptimizer,
 )
+from _fakes import make_optimization_context  # noqa: E402
 from custom_components.helman.automation.snapshot import (  # noqa: E402
-    OptimizationContext,
     OptimizationSnapshot,
 )
 from custom_components.helman.scheduling.schedule import (  # noqa: E402
@@ -103,7 +103,7 @@ def _make_snapshot(
             "currentExportPrice": current_price,
             "series": [] if grid_series is None else deepcopy(grid_series),
         },
-        context=OptimizationContext(
+        context=make_optimization_context(
             now=REFERENCE_TIME,
             battery_state=None,
             solar_forecast={"status": "available", "points": []},
