@@ -385,23 +385,6 @@ def build_automation_snapshot(
             f"status={battery_status!r}, house_anchor={house_anchor_timestamp!r}"
         )
 
-    battery_state = compute_inputs.battery_live_state
-
-    battery_settings = read_battery_forecast_settings(config)
-    battery_max_charge_power_kw = (
-        battery_settings.max_charge_power_w / 1000
-        if battery_settings.max_charge_power_w is not None
-        else None
-    )
-    battery_max_discharge_power_kw = (
-        battery_settings.max_discharge_power_w / 1000
-        if battery_settings.max_discharge_power_w is not None
-        else None
-    )
-    battery_usable_capacity_kwh = (
-        battery_state.nominal_capacity_kwh if battery_state is not None else None
-    )
-
     return OptimizationSnapshot(
         schedule=deepcopy(schedule_document),
         adjusted_house_forecast=deepcopy(rebuild.adjusted_house_forecast),
@@ -410,36 +393,14 @@ def build_automation_snapshot(
         # Not deepcopied: a frozen dataclass of frozen slots, and the
         # optimizers only read it.
         schedule_overlay=rebuild.schedule_overlay,
+        # The run's inputs by reference: the optimizers only read them.
         context=OptimizationContext(
             now=reference_time,
-            battery_state=battery_state,
-            solar_forecast=deepcopy(input_bundle.solar_forecast),
-            import_price_forecast=deepcopy(
-                input_bundle.grid_price_forecast.get("import", {})
-            ),
-            export_price_forecast=deepcopy(
-                input_bundle.grid_price_forecast.get("export", {})
-            ),
+            inputs=input_bundle,
+            live=compute_inputs,
+            battery=read_battery_forecast_settings(config),
             appliance_registry=appliances_registry,
-            when_active_hourly_energy_kwh_by_appliance_id=deepcopy(
-                input_bundle.when_active_hourly_energy_kwh_by_appliance_id
-            ),
-            battery_max_charge_power_kw=battery_max_charge_power_kw,
-            battery_usable_capacity_kwh=battery_usable_capacity_kwh,
-            battery_charge_efficiency=battery_settings.charge_efficiency,
-            battery_max_discharge_power_kw=battery_max_discharge_power_kw,
-            battery_discharge_efficiency=battery_settings.discharge_efficiency,
-            runtime_hours_by_appliance_id_by_local_date=deepcopy(
-                input_bundle.runtime_hours_by_appliance_id_by_local_date
-            ),
             day_contexts=dict(day_contexts) if day_contexts else {},
-            condition_met_by_optimizer_id=dict(
-                compute_inputs.condition_met_by_optimizer_id
-            ),
-            custom_condition_results_by_optimizer_id=dict(
-                compute_inputs.custom_condition_results_by_optimizer_id
-            ),
-            appliance_active_by_id=dict(compute_inputs.appliance_active_by_id),
         ),
     )
 

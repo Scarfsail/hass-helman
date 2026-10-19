@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import functools
 import logging
-import time
 from collections import OrderedDict, deque
 from collections.abc import Callable, Collection, Coroutine, Mapping, Sequence
 from copy import deepcopy
@@ -48,6 +47,7 @@ from .automation.compute_inputs import (
     CustomConditionGroupResult,
     CustomConditionResult,
 )
+from .automation.compute_inputs import condition_met_map as _condition_met_map
 from .automation.condition_trace import (
     ConditionTrace,
     evaluate_traced,
@@ -62,16 +62,10 @@ from .automation.config import (
     read_automation_config,
 )
 from .automation.coverage import AutomationCoverageDict, build_automation_coverage
-from .automation.day_context import DayContext
 from .automation.day_context_store import DayContextStore
 from .automation.explain import ExplanationBook, RunExplanation
 from .automation.input_bundle import AutomationInputBundle
-from .automation.ownership import (
-    has_automation_owned_actions,
-    merge_automation_result,
-    strip_automation_owned_actions,
-)
-from .automation.snapshot import OptimizationSnapshot
+from .automation.ownership import has_automation_owned_actions
 from .automation.triggers import AutomationTriggerCoordinator
 from .battery_forecast_response import build_battery_forecast_response
 from .battery_state import (
@@ -177,37 +171,19 @@ from .scheduling.actual_history import ActualHistorySlot, build_entity_actual_hi
 from .scheduling.normal_state import (
     build_controllable_entities,
 )
-from .scheduling.runtime_status import (
-    schedule_execution_status_to_dict,
-)
 from .scheduling.schedule import (
     ScheduleActionSetBy,
     ScheduleControlConfig,
     ScheduleDocument,
-    ScheduleError,
-    ScheduleExecutionUnavailableError,
     ScheduleResponseDict,
     ScheduleSlot,
     appliance_actions,
-    apply_slot_patches,
-    build_horizon_start,
     describe_schedule_control_config_issue,
-    format_slot_id,
-    materialize_schedule_slots,
-    normalize_schedule_document_for_registry,
-    normalize_slot_patch_request,
-    prune_expired_slots,
     read_schedule_control_config,
-    schedule_document_from_dict,
-    schedule_document_to_dict,
-    slot_to_dict,
     strip_candidate_actions,
-    with_slot_set_by,
 )
-from .scheduling.schedule_executor import (
-    ScheduleExecutor,
-    ScheduleExecutorDependencies,
-)
+from .scheduling.schedule_executor import ScheduleExecutor
+from .scheduling.schedule_service import ScheduleService
 from .shared_meter_split import split_own_power
 from .slot_grid import SLOT, SLOT_MINUTES, get_local_current_slot_start
 from .solar_bias_correction.models import read_bias_config
@@ -870,33 +846,20 @@ class HelmanCoordinator:
             run_callback=self._async_run_automation_trigger_request,
         )
         self._unsub_forecast_refresh: Callable[[], None] | None = None
-        self._schedule_lock = asyncio.Lock()
-        # Guards execution-flag transitions only; never held while the executor
-        # or hardware is awaited.
-        self._schedule_execution_lock = asyncio.Lock()
-        # Bumped by every flag transition -- enable, disable, and a failed
-        # enable's rollback -- so a failed enable only rolls the flag back when
-        # no newer transition has been made since.
-        self._schedule_execution_generation = 0
-        self._schedule_executor = ScheduleExecutor(
-            hass,
-            ScheduleExecutorDependencies(
-                schedule_lock=self._schedule_lock,
-                load_schedule_document=self._load_schedule_document,
-                save_schedule_document=self._save_schedule_document,
-                save_pruned_schedule_document=self._save_pruned_schedule_document,
-                announce_schedule_changed=lambda: self._fire_data_changed(
-                    DATA_CHANGED_KIND_SCHEDULE
-                ),
-                read_schedule_control_config=self._read_schedule_executor_control_config,
-                read_battery_state=self._read_schedule_executor_battery_state,
-                read_appliances_registry=lambda: self._appliances_registry.current,
-                check_reality_and_maybe_replan=(
-                    self._async_reality_check_and_maybe_replan
-                ),
-            ),
-        )
         self._appliances_registry = AppliancesRegistryHolder(self._hass, lambda: self._active_config)
+        #: The stored schedule, its lock and its executor. See ScheduleService.
+        self.schedule = ScheduleService(
+            hass,
+            storage,
+            self._appliances_registry,
+            read_battery_soc_bounds=self._read_battery_soc_bounds,
+            announce_changed=lambda: self._fire_data_changed(
+                DATA_CHANGED_KIND_SCHEDULE
+            ),
+            read_control_config=self._read_schedule_executor_control_config,
+            read_battery_state=self._read_schedule_executor_battery_state,
+            check_reality_and_maybe_replan=self._async_reality_check_and_maybe_replan,
+        )
         self._solar_bias_store: Any = None
         self._solar_bias_service: SolarBiasCorrectionService | None = None
         self._solar_inspector: SolarInspector | None = None
@@ -1146,7 +1109,7 @@ class HelmanCoordinator:
         reference_time = dt_util.now()
         self._start_forecast_refresh()
 
-        await self._async_normalize_schedule_document()
+        await self.schedule.async_normalize()
         automation_config = self._automation_config_or_disabled()
         # Stale automation-owned actions are stripped when automation itself is
         # off. This is independent of execution_enabled: with execution off the
@@ -1155,7 +1118,7 @@ class HelmanCoordinator:
             automation_config.enabled_appliance_optimizers
             or automation_config.enabled_system_optimizers
         ):
-            await self._async_cleanup_automation_owned_actions_if_needed(
+            await self.schedule.cleanup_automation_owned_actions(
                 reference_time=reference_time,
             )
         self._schedule_startup_schedule_execution()
@@ -1173,11 +1136,7 @@ class HelmanCoordinator:
         whether anything is applied is decided inside the reconcile, and
         ultimately by the actuation gate.
         """
-        self._run_when_started(self._async_start_schedule_execution)
-
-    async def _async_start_schedule_execution(self) -> None:
-        await self._schedule_executor.async_start()
-        self._schedule_executor.request_reconcile(reason="startup")
+        self._run_when_started(self.schedule.async_start)
 
     def _schedule_startup_forecast_refresh(self) -> None:
         """Build the first forecast once Home Assistant has finished starting.
@@ -2451,49 +2410,11 @@ class HelmanCoordinator:
             for entity in entities
         }
 
-    async def _async_normalize_schedule_document(self) -> None:
-        self._appliances_registry.refresh()
-        raw_document = self._storage.schedule_document
-        if raw_document is None:
-            return
-
-        try:
-            schedule_document = schedule_document_from_dict(raw_document)
-            schedule_document = normalize_schedule_document_for_registry(
-                schedule_document,
-                appliances_registry=self._appliances_registry.current,
-            )
-        except ScheduleError as err:
-            # The slots are what became incompatible; whether the user had
-            # execution switched on is a preference, not slot data, and losing
-            # it would silently stop the automation after an upgrade.
-            execution_enabled = (
-                raw_document.get("executionEnabled")
-                if isinstance(raw_document, Mapping)
-                else None
-            )
-            _LOGGER.warning(
-                "Resetting persisted schedule slots because they are invalid or "
-                "do not match the configured slot duration (execution stays %s): %s",
-                "on" if execution_enabled is True else "off",
-                err,
-            )
-            await self._save_schedule_document(
-                ScheduleDocument(execution_enabled=execution_enabled is True)
-            )
-            return
-
-        if schedule_document_to_dict(schedule_document) != raw_document:
-            await self._save_schedule_document(schedule_document)
-
-    def _load_schedule_document(self) -> ScheduleDocument:
-        return schedule_document_from_dict(self._storage.schedule_document)
-
     def _fire_data_changed(self, kind: str) -> None:
         """Announce that something the cards draw has been rewritten.
 
         ``async_fire`` is synchronous and non-blocking, so the schedule write
-        sites may call this from inside ``_schedule_lock`` without holding it a
+        sites may call this from inside the schedule lock without holding it a
         moment longer than the dict copy takes.
 
         No coalescing here on purpose: one automation run legitimately produces
@@ -2503,133 +2424,6 @@ class HelmanCoordinator:
         modules that never see this coordinator.
         """
         self._hass.bus.async_fire(EVENT_DATA_CHANGED, {"kind": kind})
-
-    async def _save_schedule_document(
-        self, doc: ScheduleDocument, *, notify: bool = True
-    ) -> None:
-        await self._storage.async_save_schedule_document(schedule_document_to_dict(doc))
-        if notify:
-            self._fire_data_changed(DATA_CHANGED_KIND_SCHEDULE)
-
-    async def _save_pruned_schedule_document(self, doc: ScheduleDocument) -> None:
-        await self._save_schedule_document(doc, notify=False)
-
-    def _build_pruned_schedule_document(
-        self,
-        *,
-        reference_time: datetime,
-    ) -> tuple[ScheduleDocument, ScheduleDocument]:
-        self._appliances_registry.refresh()
-        loaded_document = self._load_schedule_document()
-        schedule_document = normalize_schedule_document_for_registry(
-            loaded_document,
-            appliances_registry=self._appliances_registry.current,
-        )
-        pruned_slots = prune_expired_slots(
-            stored_slots=schedule_document.slots,
-            reference_time=reference_time,
-        )
-        pruned_document = ScheduleDocument(
-            execution_enabled=schedule_document.execution_enabled,
-            slots=pruned_slots,
-        )
-        return loaded_document, pruned_document
-
-    async def _load_pruned_schedule_document_locked(
-        self,
-        *,
-        reference_time: datetime,
-    ) -> ScheduleDocument:
-        loaded_document, pruned_document = self._build_pruned_schedule_document(
-            reference_time=reference_time
-        )
-        if pruned_document != loaded_document:
-            await self._save_pruned_schedule_document(pruned_document)
-        return pruned_document
-
-    def _build_automation_working_schedule_document_locked(
-        self,
-        *,
-        reference_time: datetime,
-    ) -> ScheduleDocument:
-        _loaded_document, pruned_document = self._build_pruned_schedule_document(
-            reference_time=reference_time
-        )
-        return pruned_document
-
-    def _normalize_schedule_document_for_strict_write(
-        self,
-        *,
-        schedule_document: ScheduleDocument,
-        reference_time: datetime,
-    ) -> ScheduleDocument:
-        if not schedule_document.slots:
-            return ScheduleDocument(
-                execution_enabled=schedule_document.execution_enabled,
-                slots={},
-            )
-
-        normalized_slots = normalize_slot_patch_request(
-            slots=[
-                ScheduleSlot(id=slot_id, controllables=actions)
-                for slot_id, actions in schedule_document.slots.items()
-            ],
-            reference_time=reference_time,
-            battery_soc_bounds=self._read_battery_soc_bounds(),
-            appliances_registry=self._appliances_registry.current,
-        )
-        return ScheduleDocument(
-            execution_enabled=schedule_document.execution_enabled,
-            slots=apply_slot_patches(stored_slots={}, slot_patches=normalized_slots),
-        )
-
-    def _build_schedule_response(
-        self,
-        *,
-        schedule_document: ScheduleDocument,
-        reference_time: datetime,
-    ) -> ScheduleResponseDict:
-        response: ScheduleResponseDict = {
-            "executionEnabled": schedule_document.execution_enabled,
-            "slotMinutes": SCHEDULE_SLOT_MINUTES,
-            "slots": [
-                slot_to_dict(slot)
-                for slot in materialize_schedule_slots(
-                    stored_slots=schedule_document.slots,
-                    reference_time=reference_time,
-                )
-            ],
-        }
-        if schedule_document.execution_enabled:
-            current_slot_id = format_slot_id(build_horizon_start(reference_time))
-            execution_status = self._schedule_executor.get_execution_status()
-            if execution_status.active_slot_id == current_slot_id:
-                runtime = schedule_execution_status_to_dict(execution_status)
-                if runtime is not None:
-                    response["runtime"] = runtime
-        return response
-
-    async def _build_current_schedule_response(
-        self,
-        *,
-        reference_time: datetime,
-    ) -> ScheduleResponseDict:
-        async with self._schedule_lock:
-            return self._build_schedule_response(
-                schedule_document=await self._load_pruned_schedule_document_locked(
-                    reference_time=reference_time
-                ),
-                reference_time=reference_time,
-            )
-
-    async def get_schedule(
-        self,
-        *,
-        reference_time: datetime | None = None,
-    ) -> ScheduleResponseDict:
-        return await self._build_current_schedule_response(
-            reference_time=reference_time or dt_util.now()
-        )
 
     def _controllable_sources(self):
         """The refreshed registry and control config everything drivable is read from."""
@@ -3014,41 +2808,20 @@ class HelmanCoordinator:
         reference_time: datetime | None = None,
         reason: str | None = None,
     ) -> AutomationRunResult:
-        from .automation.pipeline import (
-            AutomationRunFailure,
-            AutomationRunner,
-            AutomationRunResult,
-        )
+        from .automation.pipeline import AutomationRunner
 
-        automation_config = self._automation_config_or_disabled()
-
-        run_started_at = time.perf_counter()
-        try:
-            result = await AutomationRunner(
-                coordinator=self,
-                automation_config=automation_config,
-            ).run(reference_time=reference_time, run_reason=reason)
-        except Exception as err:
-            _LOGGER.exception("Automation runner escaped coordinator boundary")
-            result = AutomationRunResult.failed(
-                reason="runner_failed",
-                failure=AutomationRunFailure(
-                    stage="coordinator",
-                    message=str(err) or err.__class__.__name__,
-                ),
-                duration_ms=max(0, int((time.perf_counter() - run_started_at) * 1000)),
-            )
-            _LOGGER.info(
-                "automation run result trigger=%s outcome=%s ran=%s optimizers=%s duration_ms=%s cleanup_reason=%s cleanup_actions=%s failure_stage=%s",
-                reason or "manual",
-                result.reason or "completed",
-                result.ran_automation,
-                len(result.optimizers),
-                result.duration_ms,
-                None,
-                0,
-                result.failure.stage,
-            )
+        result = await AutomationRunner(
+            automation_config=self._automation_config_or_disabled(),
+            schedule=self.schedule,
+            forecast=self,
+            recorder=self,
+            build_snapshot=functools.partial(
+                build_automation_snapshot,
+                config=self._active_config,
+            ),
+            read_control_config=self._read_schedule_control_config,
+            run_in_executor=self._hass.async_add_executor_job,
+        ).run(reference_time=reference_time, run_reason=reason)
         self._record_automation_run(result)
         return result
 
@@ -3069,35 +2842,9 @@ class HelmanCoordinator:
         set_by: ScheduleActionSetBy | None = None,
     ) -> ScheduleResponseDict:
         request_now = reference_time or dt_util.now()
-        document_changed = False
-        async with self._schedule_lock:
-            schedule_document = await self._load_pruned_schedule_document_locked(
-                reference_time=request_now
-            )
-            normalized_slots = normalize_slot_patch_request(
-                slots=slots,
-                reference_time=request_now,
-                battery_soc_bounds=self._read_battery_soc_bounds(),
-                appliances_registry=self._appliances_registry.current,
-            )
-            stamped_slots = [
-                with_slot_set_by(slot, set_by=set_by) for slot in normalized_slots
-            ]
-            updated_document = ScheduleDocument(
-                execution_enabled=schedule_document.execution_enabled,
-                slots=apply_slot_patches(
-                    stored_slots=schedule_document.slots,
-                    slot_patches=stamped_slots,
-                ),
-            )
-            if updated_document != schedule_document:
-                await self._save_schedule_document(updated_document)
-                document_changed = True
-            response = self._build_schedule_response(
-                schedule_document=updated_document,
-                reference_time=request_now,
-            )
-
+        response, document_changed = await self.schedule.set_slots(
+            slots=slots, reference_time=request_now, set_by=set_by
+        )
         if document_changed:
             await self._async_run_post_schedule_write_side_effects(
                 reason="schedule_updated",
@@ -3117,42 +2864,7 @@ class HelmanCoordinator:
         # No cache invalidation here: the schedule signatures the pipeline read
         # computes cover every slot this write can have touched, so the next
         # card read rebuilds only if the plan it draws actually changed.
-        #
-        # The write is already persisted; execution is only requested, so a
-        # websocket reply or automation run never waits behind hardware. The
-        # worker reads the time and the schedule afresh when it starts.
-        self._schedule_executor.request_reconcile(reason=reason)
-
-    async def _persist_automation_result_locked(
-        self,
-        *,
-        automation_result: ScheduleDocument,
-        reference_time: datetime | None = None,
-    ) -> bool:
-        request_now = reference_time or dt_util.now()
-        latest_document = await self._load_pruned_schedule_document_locked(
-            reference_time=request_now
-        )
-        normalized_automation_result = self._normalize_schedule_document_for_strict_write(
-            schedule_document=ScheduleDocument(
-                execution_enabled=latest_document.execution_enabled,
-                slots=automation_result.slots,
-            ),
-            reference_time=request_now,
-        )
-        merged_document = merge_automation_result(
-            baseline=latest_document,
-            automation_result=normalized_automation_result,
-        )
-        canonical_document = normalize_schedule_document_for_registry(
-            merged_document,
-            appliances_registry=self._appliances_registry.current,
-        )
-        if canonical_document == latest_document:
-            return False
-
-        await self._save_schedule_document(canonical_document)
-        return True
+        self.schedule.request_reconcile(reason=reason)
 
     async def set_schedule_execution(
         self,
@@ -3161,194 +2873,46 @@ class HelmanCoordinator:
         reference_time: datetime | None = None,
     ) -> ScheduleResponseDict:
         request_now = reference_time or dt_util.now()
-
-        # Only the flag transition is serialized. The enable reconcile below is
-        # awaited outside this lock, so a disable issued while hardware is slow
-        # still persists at once.
-        async with self._schedule_execution_lock:
-            async with self._schedule_lock:
-                current_document = await self._load_pruned_schedule_document_locked(
-                    reference_time=request_now
-                )
-                was_enabled = current_document.execution_enabled
-
-                if enabled and not self._schedule_executor.is_running:
-                    # Home Assistant is still starting (or the entry is going
-                    # away): nothing could validate an enable now. Decide before
-                    # touching storage; an already-enabled flag is applied by
-                    # the startup reconcile anyway.
-                    if was_enabled:
-                        return self._build_schedule_response(
-                            schedule_document=current_document,
-                            reference_time=request_now,
-                        )
-                    raise ScheduleExecutionUnavailableError(
-                        "Schedule execution is not running yet; try again once "
-                        "Home Assistant has started"
-                    )
-
-                if enabled and not was_enabled:
-                    await self._save_schedule_document(
-                        ScheduleDocument(
-                            execution_enabled=True,
-                            slots=current_document.slots,
-                        )
-                    )
-            # Only a real flag change is a newer decision: a repeated enable
-            # must not cancel the rollback of the first one still in flight.
-            if enabled != was_enabled:
-                self._schedule_execution_generation += 1
-            generation = self._schedule_execution_generation
-
-            if not enabled:
-                # Disabling execution is passive: Helman stops touching hardware
-                # and leaves the inverter and every appliance exactly as they
-                # are. The user restores normal state explicitly, whenever they
-                # choose, via the scheduling card. Disabling therefore cannot
-                # fail and never rolls back.
-                #
-                # The executor keeps running so its tick still drives the
-                # pre-execution reality check; it just stops applying anything.
-                # Runtime status is dropped right away so the card does not keep
-                # showing what was executing a moment ago.
-                self._schedule_executor.reset_runtime()
-
-                if not was_enabled:
-                    return self._build_schedule_response(
-                        schedule_document=current_document,
-                        reference_time=request_now,
-                    )
-
-                await self._async_persist_execution_disabled_locked(
-                    reference_time=request_now
-                )
-                return await self._build_current_schedule_response(
-                    reference_time=request_now
-                )
-
-        try:
-            await self._schedule_executor.async_reconcile_and_wait(
-                reason="enable_request",
-            )
-        except ScheduleError as err:
-            if generation != self._schedule_execution_generation:
-                # A newer flag change superseded this request -- typically a
-                # disable, whose gate then aborted this attempt. Its outcome is
-                # moot; report the flag as persisted, as the success path does.
-                _LOGGER.debug(
-                    "Superseded enable reconcile ended with: %s (%s)",
-                    err,
-                    err.code,
-                )
-                return await self._build_current_schedule_response(
-                    reference_time=reference_time or dt_util.now()
-                )
-            if not was_enabled:
-                _LOGGER.warning(
-                    "Failed to enable schedule execution: %s (%s); rolling back persisted execution flag",
-                    err,
-                    err.code,
-                )
-                await self._async_roll_back_failed_enable(
-                    generation=generation,
-                    reference_time=request_now,
-                )
-            else:
-                _LOGGER.warning(
-                    "Failed to reconcile already-enabled schedule execution: %s (%s)",
-                    err,
-                    err.code,
-                )
-            raise
-        # Report the flag as persisted, not as requested: a disable or another
-        # enable's rollback may have landed while this one waited on hardware.
-        # A fresh clock, not `request_now`: the reconcile above may have run
-        # across a slot edge.
-        response = await self._build_current_schedule_response(
-            reference_time=reference_time or dt_util.now()
+        response, transitioned_on = await self.schedule.set_execution(
+            enabled=enabled, reference_time=reference_time
         )
-        # Announce only the enable that made the transition, and only if no
-        # newer transition has superseded it.
-        if (
-            response["executionEnabled"]
-            and not was_enabled
-            and generation == self._schedule_execution_generation
-        ):
+        if transitioned_on:
             await self._automation_triggers.request_immediate(
                 reason="execution_enabled",
                 reference_time=request_now,
             )
         return response
 
-    async def _async_persist_execution_disabled_locked(
-        self,
-        *,
-        reference_time: datetime,
-    ) -> None:
-        """Persist ``executionEnabled=false``; caller holds the flag lock."""
-        async with self._schedule_lock:
-            latest_document = await self._load_pruned_schedule_document_locked(
-                reference_time=reference_time
-            )
-            if latest_document.execution_enabled:
-                # Keep the plan intact: automation keeps planning while
-                # execution is off, so the card and the inspectors show what
-                # Helman would be doing. Only the apply step is suppressed.
-                await self._save_schedule_document(
-                    ScheduleDocument(
-                        execution_enabled=False,
-                        slots=latest_document.slots,
-                    )
-                )
+    # Delegates for tests/test_coordinator_schedule_execution.py, which reaches
+    # these coordinator attributes and is held unchanged across the move of the
+    # schedule into ScheduleService. Production code goes through
+    # ``self.schedule``.
 
-    async def _async_roll_back_failed_enable(
-        self,
-        *,
-        generation: int,
-        reference_time: datetime,
-    ) -> None:
-        async with self._schedule_execution_lock:
-            # A newer enable or disable has decided the flag since; this old
-            # failure must not undo it.
-            if generation != self._schedule_execution_generation:
-                return
-            # The rollback is itself a flag transition: an overlapping enable
-            # still waiting must report the persisted state, not success.
-            # Bumped before the save, which yields on disk I/O, so such a
-            # waiter sees the transition however it interleaves with it.
-            self._schedule_execution_generation += 1
-            await self._async_persist_execution_disabled_locked(
-                reference_time=reference_time
-            )
-            self._schedule_executor.reset_runtime()
+    @property
+    def _schedule_executor(self) -> ScheduleExecutor:
+        return self.schedule.executor
 
-    @staticmethod
-    def _build_cleaned_automation_schedule_document(
-        *,
-        schedule_document: ScheduleDocument,
-    ) -> ScheduleDocument:
-        cleaned_document = strip_automation_owned_actions(schedule_document)
-        return ScheduleDocument(
-            execution_enabled=schedule_document.execution_enabled,
-            slots=cleaned_document.slots,
-        )
+    @_schedule_executor.setter
+    def _schedule_executor(self, executor: ScheduleExecutor) -> None:
+        self.schedule.executor = executor
 
-    async def _async_cleanup_automation_owned_actions_if_needed(
-        self,
-        *,
-        reference_time: datetime,
-    ) -> bool:
-        async with self._schedule_lock:
-            schedule_document = await self._load_pruned_schedule_document_locked(
-                reference_time=reference_time
-            )
-            cleaned_document = self._build_cleaned_automation_schedule_document(
-                schedule_document=schedule_document,
-            )
-            if cleaned_document == schedule_document:
-                return False
-            await self._save_schedule_document(cleaned_document)
-            return True
+    @property
+    def _schedule_execution_lock(self) -> asyncio.Lock:
+        return self.schedule._execution_lock
+
+    def _load_schedule_document(self) -> ScheduleDocument:
+        return self.schedule.load()
+
+    async def _async_normalize_schedule_document(self) -> None:
+        await self.schedule.async_normalize()
+
+    async def _persist_automation_result_locked(self, **kwargs: Any) -> bool:
+        return await self.schedule.persist_automation_result(**kwargs)
+
+    async def get_schedule(
+        self, *, reference_time: datetime | None = None
+    ) -> ScheduleResponseDict:
+        return await self.schedule.get(reference_time=reference_time)
 
     def get_automation_input_bundle(self) -> AutomationInputBundle | None:
         if self._automation_input_bundle is None:
@@ -3417,10 +2981,7 @@ class HelmanCoordinator:
 
         automation_config = self._automation_config_or_disabled()
 
-        async with self._schedule_lock:
-            schedule_document = await self._load_pruned_schedule_document_locked(
-                reference_time=request_now
-            )
+        schedule_document = await self.schedule.read(request_now)
 
         if not (
             automation_config.enabled_appliance_optimizers
@@ -3678,7 +3239,7 @@ class HelmanCoordinator:
             schedule_document, self._read_schedule_control_config()
         )
 
-    async def _async_gather_compute_inputs(
+    async def gather_compute_inputs(
         self,
         *,
         started_at: datetime,
@@ -3693,6 +3254,9 @@ class HelmanCoordinator:
         ``include_condition_flags`` evaluates optimizer execution conditions —
         only the automation pipeline needs them; forecast/projection paths skip
         the work. See :class:`ComputeInputs`.
+
+        Lock-free: never takes the schedule lock, so the automation runner may
+        call it while holding that lock for its whole run.
         """
         entity_config = read_battery_entity_config(self._active_config)
         battery_live_state = None
@@ -3722,10 +3286,12 @@ class HelmanCoordinator:
                     self._hass, self._appliances_registry.current
                 )
             ),
-            condition_met_by_optimizer_id=_condition_met_map(custom_condition_results),
             custom_condition_results_by_optimizer_id=custom_condition_results,
             appliance_active_by_id=self._read_appliance_active_by_id(),
         )
+
+    # For the same held test file, which calls the gather by its old name.
+    _async_gather_compute_inputs = gather_compute_inputs
 
     def _read_appliance_active_by_id(self) -> dict[str, bool]:
         """Which appliances are running right now, from live state.
@@ -4012,7 +3578,7 @@ class HelmanCoordinator:
         is captured in ``compute_inputs`` here on the loop, so the hop is safe.
         """
         if compute_inputs is None:
-            compute_inputs = await self._async_gather_compute_inputs(
+            compute_inputs = await self.gather_compute_inputs(
                 started_at=started_at
             )
         return await self._hass.async_add_executor_job(
@@ -4066,64 +3632,6 @@ class HelmanCoordinator:
             emitted=emitted,
             today=dt_util.as_local(reference_time).date(),
             optimizer_ids=optimizer_ids,
-        )
-
-    async def _build_automation_snapshot_from_schedule_locked(
-        self,
-        *,
-        schedule_document: ScheduleDocument,
-        input_bundle: AutomationInputBundle,
-        reference_time: datetime,
-        day_contexts: dict[date, DayContext] | None = None,
-        compute_inputs: ComputeInputs | None = None,
-    ) -> OptimizationSnapshot:
-        """Async wrapper: gather the run-invariant live inputs once (unless the
-        caller already has them), then build the snapshot with the pure core.
-
-        The core carries a full forecast rebuild, so it goes to the executor
-        like the optimizer loop's own per-iteration rebuilds do. Nothing in it
-        reads ``hass`` — the live values are all in ``compute_inputs``, gathered
-        on the loop just above.
-        """
-        if compute_inputs is None:
-            compute_inputs = await self._async_gather_compute_inputs(
-                started_at=reference_time,
-                include_condition_flags=True,
-            )
-        return await self._hass.async_add_executor_job(
-            functools.partial(
-                self._build_automation_snapshot_from_schedule_pure,
-                schedule_document=schedule_document,
-                input_bundle=input_bundle,
-                reference_time=reference_time,
-                day_contexts=day_contexts,
-                compute_inputs=compute_inputs,
-            )
-        )
-
-    def _build_automation_snapshot_from_schedule_pure(
-        self,
-        *,
-        schedule_document: ScheduleDocument,
-        input_bundle: AutomationInputBundle,
-        reference_time: datetime,
-        day_contexts: dict[date, DayContext] | None = None,
-        compute_inputs: ComputeInputs,
-    ) -> OptimizationSnapshot:
-        """The pure snapshot build, bound to the active config and registry.
-
-        Synchronous and hass-free, so it runs in an executor: every live value
-        comes from ``compute_inputs``.
-        """
-        return build_automation_snapshot(
-            config=self._active_config,
-            control_config=self._read_schedule_control_config(),
-            appliances_registry=self._pinned_appliances_registry(compute_inputs),
-            schedule_document=schedule_document,
-            input_bundle=input_bundle,
-            reference_time=reference_time,
-            compute_inputs=compute_inputs,
-            day_contexts=day_contexts,
         )
 
     async def _async_current_pipeline(
@@ -4213,10 +3721,7 @@ class HelmanCoordinator:
         started_at: datetime,
     ) -> _PreparedForecastPipelineInputs:
         """Load the schedule and live state, and derive the cache signatures."""
-        async with self._schedule_lock:
-            schedule_document = await self._load_pruned_schedule_document_locked(
-                reference_time=started_at
-            )
+        schedule_document = await self.schedule.read(started_at)
         # Candidate actions (placed by optimizers whose execution condition is
         # not met) are kept in the stored schedule for display/promotion but must
         # not consume resources. Strip them here so the per-appliance projection,
@@ -4280,7 +3785,7 @@ class HelmanCoordinator:
         # handed were read by the caller long before it got here: see
         # :meth:`_cache_holds_newer_pipeline`.
         revision = self._forecast_cache_revision
-        compute_inputs = await self._async_gather_compute_inputs(
+        compute_inputs = await self.gather_compute_inputs(
             started_at=started_at,
             live_state=prepared.live_state,
         )
@@ -5143,7 +4648,7 @@ class HelmanCoordinator:
                 job.task = None
         await self._automation_triggers.async_shutdown()
         self._prune_optimizer_condition_checkers(active_keys=set())
-        await self._schedule_executor.async_unload()
+        await self.schedule.async_unload()
         self._invalidate_pipeline_cache()
 
         self._unmeasured_raw_history = {}
@@ -5172,16 +4677,6 @@ class HelmanCoordinator:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._refresh_tasks.clear()
-
-
-def _condition_met_map(
-    results: dict[str, tuple[CustomConditionGroupResult, ...]],
-) -> dict[str, tuple[bool, ...]]:
-    """Fold per-entry custom results to the per-group bool the optimizers gate on."""
-    return {
-        optimizer_id: tuple(group.met for group in groups)
-        for optimizer_id, groups in results.items()
-    }
 
 
 def _any_group_met_by_optimizer(

@@ -194,9 +194,98 @@ def make_coordinator(**overrides):
     if entry is None:
         entry = FakeConfigEntry()
     coordinator = HelmanCoordinator(hass, storage, entry)
+    # The schedule lock under its pre-ScheduleService name, for
+    # test_coordinator_schedule_execution.py, which is held unchanged and holds
+    # the lock around the persist call it reaches on the coordinator.
+    coordinator._schedule_lock = coordinator.schedule._lock
     for name, value in overrides.items():
         setattr(coordinator, name, value)
     return coordinator
+
+
+def make_optimization_context(
+    *,
+    now: datetime,
+    battery_state: Any = None,
+    solar_forecast: dict | None = None,
+    import_price_forecast: dict | None = None,
+    export_price_forecast: dict | None = None,
+    appliance_registry: Any = None,
+    when_active_hourly_energy_kwh_by_appliance_id: dict | None = None,
+    runtime_hours_by_appliance_id_by_local_date: dict | None = None,
+    battery_max_charge_power_kw: float | None = None,
+    battery_max_discharge_power_kw: float | None = None,
+    battery_charge_efficiency: float | None = None,
+    battery_discharge_efficiency: float | None = None,
+    day_contexts: dict | None = None,
+    condition_met_by_optimizer_id: dict[str, tuple[bool, ...]] | None = None,
+    custom_condition_results_by_optimizer_id: dict | None = None,
+    appliance_active_by_id: dict[str, bool] | None = None,
+):
+    """An ``OptimizationContext`` from the flat fields an optimizer reads.
+
+    The context holds the run's input bundle, live inputs and battery settings
+    by reference and derives these fields from them; this builds the three
+    containers that derive to the values given. ``condition_met_by_optimizer_id``
+    is folded from the custom results, so a plain per-group map becomes one
+    entry-less group result per bool. The usable capacity is the battery
+    state's own ``nominal_capacity_kwh``.
+    """
+    from custom_components.helman.appliances.state import AppliancesRuntimeRegistry
+    from custom_components.helman.automation.compute_inputs import (
+        ComputeInputs,
+        CustomConditionGroupResult,
+    )
+    from custom_components.helman.automation.input_bundle import AutomationInputBundle
+    from custom_components.helman.automation.snapshot import OptimizationContext
+    from custom_components.helman.battery_state import BatteryForecastSettings
+
+    def kw_to_w(value_kw: float | None) -> float | None:
+        return None if value_kw is None else value_kw * 1000
+
+    custom_results = dict(custom_condition_results_by_optimizer_id or {})
+    for optimizer_id, met_by_group in (condition_met_by_optimizer_id or {}).items():
+        custom_results[optimizer_id] = tuple(
+            CustomConditionGroupResult(index=index, met=met)
+            for index, met in enumerate(met_by_group)
+        )
+    grid_price_forecast = {}
+    if import_price_forecast is not None:
+        grid_price_forecast["import"] = import_price_forecast
+    if export_price_forecast is not None:
+        grid_price_forecast["export"] = export_price_forecast
+    return OptimizationContext(
+        now=now,
+        inputs=AutomationInputBundle(
+            original_house_forecast={},
+            solar_forecast={} if solar_forecast is None else solar_forecast,
+            grid_price_forecast=grid_price_forecast,
+            when_active_hourly_energy_kwh_by_appliance_id=(
+                when_active_hourly_energy_kwh_by_appliance_id or {}
+            ),
+            runtime_hours_by_appliance_id_by_local_date=(
+                runtime_hours_by_appliance_id_by_local_date or {}
+            ),
+        ),
+        live=ComputeInputs(
+            battery_live_state=battery_state,
+            appliances_registry=appliance_registry,
+            custom_condition_results_by_optimizer_id=custom_results,
+            appliance_active_by_id=appliance_active_by_id or {},
+        ),
+        battery=BatteryForecastSettings(
+            charge_efficiency=battery_charge_efficiency,
+            discharge_efficiency=battery_discharge_efficiency,
+            max_charge_power_w=kw_to_w(battery_max_charge_power_kw),
+            max_discharge_power_w=kw_to_w(battery_max_discharge_power_kw),
+        ),
+        appliance_registry=(
+            AppliancesRuntimeRegistry()
+            if appliance_registry is None
+            else appliance_registry
+        ),
+        day_contexts={} if day_contexts is None else day_contexts,
+    )
 
 
 def _valid_config() -> dict:

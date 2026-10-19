@@ -8,6 +8,7 @@ import inspect
 import sys
 import types
 import unittest
+from contextlib import asynccontextmanager
 from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -48,8 +49,8 @@ from custom_components.helman.automation.pipeline import (
     _PipelineExecutionResult,
     run_optimizer_loop_pure,
 )
+from _fakes import make_optimization_context
 from custom_components.helman.automation.snapshot import (
-    OptimizationContext,
     OptimizationSnapshot,
     snapshot_to_dict,
 )
@@ -177,7 +178,7 @@ def _make_snapshot(
                 }
             ],
         },
-        context=OptimizationContext(
+        context=make_optimization_context(
             now=REFERENCE_TIME if reference_time is None else reference_time,
             battery_state=BatteryLiveState(
                 current_remaining_energy_kwh=7.5,
@@ -265,7 +266,57 @@ def _make_automation_config(
     )
 
 
-class _FakeCoordinator:
+class _FakeSchedule:
+    """The ``ScheduleService`` surface the runner uses, over one document."""
+
+    def __init__(
+        self, schedule_document: ScheduleDocument, *, persist_changed: bool
+    ) -> None:
+        self.lock = asyncio.Lock()
+        self.document = schedule_document
+        self.persist_changed = persist_changed
+        self.persist_calls: list[dict[str, object]] = []
+        self.saved_documents: list[ScheduleDocument] = []
+        #: (reason, whether the schedule lock was held when it was requested).
+        self.reconcile_requests: list[tuple[str, bool]] = []
+
+    @asynccontextmanager
+    async def locked(self, reference_time: datetime):
+        async with self.lock:
+            yield deepcopy(self.document)
+
+    async def save(self, schedule_document: ScheduleDocument) -> None:
+        assert self.lock.locked(), "save requires the schedule lock"
+        self.saved_documents.append(deepcopy(schedule_document))
+        self.document = deepcopy(schedule_document)
+
+    async def persist_automation_result(
+        self,
+        *,
+        automation_result: ScheduleDocument,
+        reference_time: datetime | None = None,
+    ) -> bool:
+        assert self.lock.locked(), "persist requires the schedule lock"
+        self.persist_calls.append(
+            {
+                "automation_result": automation_result,
+                "reference_time": reference_time,
+            }
+        )
+        return self.persist_changed
+
+    def request_reconcile(self, *, reason: str) -> None:
+        self.reconcile_requests.append((reason, self.lock.locked()))
+
+
+class _FakeRunDeps:
+    """Everything an ``AutomationRunner`` is built from, faked.
+
+    ``schedule`` stands in for ``ScheduleService``; this object itself is the
+    lock-free ``ForecastInputs`` and ``RunRecorder``, and ``build_snapshot``
+    stands in for the bound assembly function.
+    """
+
     def __init__(
         self,
         *,
@@ -275,21 +326,14 @@ class _FakeCoordinator:
         persist_changed: bool = False,
         control_config: ScheduleControlConfig | None = None,
     ) -> None:
-        self._schedule_lock = asyncio.Lock()
-        self._schedule_document = schedule_document
+        self.schedule = _FakeSchedule(
+            schedule_document, persist_changed=persist_changed
+        )
         self._bundle = bundle
         self._snapshot_factory = snapshot_factory
-        self._persist_changed = persist_changed
-        self._control_config = control_config
-        from custom_components.helman.appliances.registry_holder import AppliancesRegistryHolder
-        self._appliances_registry = AppliancesRegistryHolder(None, lambda: {})
-        self._hass = SimpleNamespace(
-            async_add_executor_job=self._async_add_executor_job
-        )
+        self.control_config = control_config
+        self.registry = AppliancesRuntimeRegistry()
         self.snapshot_calls: list[dict[str, object]] = []
-        self.persist_calls: list[dict[str, object]] = []
-        self.saved_documents: list[ScheduleDocument] = []
-        self.post_write_calls: list[tuple[str, bool]] = []
         self.recorded_explanations: list[object] = []
         #: The hysteresis store, faked: what the previous run left behind, and
         #: what this run asked to write back (#264).
@@ -298,20 +342,6 @@ class _FakeCoordinator:
 
     def record_run_explanation(self, explanation) -> None:
         self.recorded_explanations.append(explanation)
-
-    def _build_automation_working_schedule_document_locked(
-        self,
-        *,
-        reference_time: datetime,
-    ) -> ScheduleDocument:
-        return deepcopy(self._schedule_document)
-
-    async def _load_pruned_schedule_document_locked(
-        self,
-        *,
-        reference_time: datetime,
-    ) -> ScheduleDocument:
-        return deepcopy(self._schedule_document)
 
     def get_automation_input_bundle(self) -> AutomationInputBundle | None:
         return None if self._bundle is None else deepcopy(self._bundle)
@@ -330,24 +360,26 @@ class _FakeCoordinator:
             (dict(emitted), reference_time, set(optimizer_ids))
         )
 
-    async def _async_gather_compute_inputs(
-        self, *, started_at: datetime, live_state=None, include_condition_flags=False
-    ):
-        return None
+    async def gather_compute_inputs(
+        self, *, started_at: datetime, include_condition_flags: bool
+    ) -> ComputeInputs:
+        return ComputeInputs(appliances_registry=self.registry)
 
     @staticmethod
-    async def _async_add_executor_job(func, *args):
+    async def run_in_executor(func, *args):
         # Tests run the pure loop inline; production hands it to a worker thread.
         return func(*args)
 
-    def _build_automation_snapshot_from_schedule_pure(
+    def build_snapshot(
         self,
         *,
+        appliances_registry,
         schedule_document: ScheduleDocument,
         input_bundle: AutomationInputBundle,
         reference_time: datetime,
+        compute_inputs,
         day_contexts: dict | None = None,
-        compute_inputs=None,
+        control_config=None,
     ) -> OptimizationSnapshot:
         self.snapshot_calls.append(
             {
@@ -362,50 +394,19 @@ class _FakeCoordinator:
             reference_time=reference_time,
         )
 
-    async def _build_automation_snapshot_from_schedule_locked(
-        self,
-        *,
-        schedule_document: ScheduleDocument,
-        input_bundle: AutomationInputBundle,
-        reference_time: datetime,
-        day_contexts: dict | None = None,
-        compute_inputs=None,
-    ) -> OptimizationSnapshot:
-        return self._build_automation_snapshot_from_schedule_pure(
-            schedule_document=schedule_document,
-            input_bundle=input_bundle,
-            reference_time=reference_time,
-            day_contexts=day_contexts,
-            compute_inputs=compute_inputs,
-        )
 
-    async def _persist_automation_result_locked(
-        self,
-        *,
-        automation_result: ScheduleDocument,
-        reference_time: datetime | None = None,
-    ) -> bool:
-        self.persist_calls.append(
-            {
-                "automation_result": automation_result,
-                "reference_time": reference_time,
-            }
-        )
-        return self._persist_changed
-
-    async def _save_schedule_document(self, schedule_document: ScheduleDocument) -> None:
-        self.saved_documents.append(deepcopy(schedule_document))
-        self._schedule_document = deepcopy(schedule_document)
-
-    async def _async_run_post_schedule_write_side_effects(
-        self,
-        *,
-        reason: str,
-    ) -> None:
-        self.post_write_calls.append((reason, self._schedule_lock.locked()))
-
-    def _read_schedule_control_config(self) -> ScheduleControlConfig | None:
-        return self._control_config
+def _make_runner(
+    deps: _FakeRunDeps, *, automation_config: AutomationConfig
+) -> AutomationRunner:
+    return AutomationRunner(
+        automation_config=automation_config,
+        schedule=deps.schedule,
+        forecast=deps,
+        recorder=deps,
+        build_snapshot=deps.build_snapshot,
+        read_control_config=lambda: deps.control_config,
+        run_in_executor=deps.run_in_executor,
+    )
 
 
 class _FakeConnection(SharedFakeConnection):

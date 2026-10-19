@@ -557,8 +557,8 @@ class ConditionMatrixTests(unittest.TestCase):
     ):
         from custom_components.helman.appliances.state import AppliancesRuntimeRegistry
         from custom_components.helman.automation.day_context import DayContext
+        from _fakes import make_optimization_context
         from custom_components.helman.automation.snapshot import (
-            OptimizationContext,
             OptimizationSnapshot,
         )
         from custom_components.helman.scheduling.schedule import ScheduleDocument
@@ -580,7 +580,7 @@ class ConditionMatrixTests(unittest.TestCase):
             adjusted_house_forecast={"status": "available", "series": []},
             battery_forecast={"status": "available", "series": []},
             grid_forecast={"status": "available", "series": []},
-            context=OptimizationContext(
+            context=make_optimization_context(
                 now=self.REFERENCE_TIME,
                 battery_state=None,
                 solar_forecast={"status": "available", "points": []},

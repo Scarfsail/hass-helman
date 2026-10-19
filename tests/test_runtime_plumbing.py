@@ -181,7 +181,7 @@ def test_registry_holder_refresh_is_visible_to_executor_and_retains_unchanged_re
     )
     original = holder.current
     read_registry = (
-        coordinator._schedule_executor._dependencies.read_appliances_registry
+        coordinator.schedule.executor._dependencies.read_appliances_registry
     )
     assert read_registry() is original
     holder.refresh()

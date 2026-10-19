@@ -29,8 +29,8 @@ from custom_components.helman.automation.optimizers.appliance_runtime import (  
     _SelfSustainabilityGate,
     build_appliance_runtime_optimizer,
 )
+from _fakes import make_optimization_context  # noqa: E402
 from custom_components.helman.automation.snapshot import (  # noqa: E402
-    OptimizationContext,
     OptimizationSnapshot,
 )
 from custom_components.helman.scheduling.forecast_overlay import (  # noqa: E402
@@ -197,7 +197,6 @@ BATTERY_PARAMS = {
     "battery_charge_efficiency": 1.0,
     "battery_max_discharge_power_kw": 5.0,
     "battery_discharge_efficiency": 1.0,
-    "battery_usable_capacity_kwh": 10.0,
 }
 #: 48 h of 15-minute buckets, which is what the schedule horizon spans.
 HORIZON_BUCKETS = 192
@@ -365,7 +364,7 @@ def _make_snapshot(
             "coverageUntil": grid_coverage_until,
             "series": [] if grid_series is None else deepcopy(grid_series),
         },
-        context=OptimizationContext(
+        context=make_optimization_context(
             now=REFERENCE_TIME if now is None else now,
             battery_state=battery_state,
             **(battery_params or {}),
@@ -502,7 +501,15 @@ class ApplianceRuntimeOptimizerTests(unittest.TestCase):
     # slot, and 12:00 is the *most expensive* slot of the window. Ranking alone
     # therefore drops it and the appliance is switched off mid-run.
 
-    def _in_flight_snapshot(self, appliance, *, active: bool, now=None, done=0.5):
+    def _in_flight_snapshot(
+        self,
+        appliance,
+        *,
+        active: bool,
+        now=None,
+        done=0.5,
+        condition_met_by_optimizer_id=None,
+    ):
         # Enough cheap slots that ranking never has to reach back to 12:00 on
         # the chronological tie-break — the only thing that may place it is the
         # promotion under test.
@@ -513,6 +520,7 @@ class ApplianceRuntimeOptimizerTests(unittest.TestCase):
             runtime_by_date={appliance.id: {DAY: done}},
             now=_at(12, 10) if now is None else now,
             appliance_active_by_id={appliance.id: active},
+            condition_met_by_optimizer_id=condition_met_by_optimizer_id,
         )
 
     def test_idle_appliance_loses_its_expensive_current_slot(self) -> None:
@@ -587,8 +595,9 @@ class ApplianceRuntimeOptimizerTests(unittest.TestCase):
         # condition going false still stops the run, via candidate stripping.
         appliance = _generic()
         cfg = _config(appliance_id=appliance.id, min_hours_per_day=1)
-        snapshot = self._in_flight_snapshot(appliance, active=True)
-        snapshot.context.condition_met_by_optimizer_id[cfg.id] = (False,)
+        snapshot = self._in_flight_snapshot(
+            appliance, active=True, condition_met_by_optimizer_id={cfg.id: (False,)}
+        )
         result = _runtime(appliance.id, cfg).optimize(snapshot, cfg)
         self.assertEqual(
             _placed_slots(result, appliance.id)[_slot_id(12, 0)].get("conditionMet"),

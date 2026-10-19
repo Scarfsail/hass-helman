@@ -43,7 +43,7 @@ class RegistryRebuildTests(unittest.IsolatedAsyncioTestCase):
         coordinator._sync_derived_sensors = Mock()
         coordinator._unsub_tick = lambda: stopped.append(True)
         coordinator._automation_triggers.async_shutdown = AsyncMock()
-        coordinator._schedule_executor.async_unload = AsyncMock()
+        coordinator.schedule.executor.async_unload = AsyncMock()
         with patch.object(
             coordinator_module,
             "async_track_time_interval",
