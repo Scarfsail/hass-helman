@@ -56,7 +56,8 @@ class SolarBiasCorrectionService:
         self._explainability: SolarBiasTrainingExplainability | None = None
         self._is_stale = False
         self._last_emitted_status: tuple[str, str] | None = None
-    async def async_setup(self) -> None:
+    def load_stored_profile(self) -> None:
+        """Re-read stored profile, metadata and explainability from the store."""
         try:
             stored = self._store.profile
             current_fingerprint = self._current_fingerprint
@@ -95,6 +96,9 @@ class SolarBiasCorrectionService:
             self._is_stale = metadata.training_config_fingerprint != current_fingerprint
         finally:
             self._sync_last_emitted_status()
+
+    async def async_setup(self) -> None:
+        self.load_stored_profile()
 
     async def async_train(self) -> dict[str, Any]:
         if not self._cfg.enabled:

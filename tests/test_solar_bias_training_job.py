@@ -236,3 +236,64 @@ class CoordinatorSolarBiasCallbackTests(unittest.IsolatedAsyncioTestCase):
         )
         for event_name, _ in hass.bus.fired:
             self.assertNotIn("helman_solar_bias", event_name)
+
+    async def test_on_solar_bias_trained_noop_when_coordinator_unloaded(self) -> None:
+        """An unloaded coordinator does not refresh and fires no data_changed."""
+        hass = FakeHass()
+        coordinator = make_coordinator(_hass=hass)
+        coordinator._unloaded = True
+        coordinator._async_refresh_forecast = AsyncMock()
+
+        await coordinator._async_on_solar_bias_trained()
+
+        coordinator._async_refresh_forecast.assert_not_awaited()
+        self.assertEqual(hass.bus.fired, [])
+
+    async def test_async_reload_training_artifacts_reloads_solar_bias_service(
+        self,
+    ) -> None:
+        """async_reload_training_artifacts makes the solar bias service reload its store."""
+        hass = FakeHass()
+        coordinator = make_coordinator(_hass=hass)
+        store = DummyStore()
+        bias_cfg = models.read_bias_config({})
+        service = service_mod.SolarBiasCorrectionService(
+            hass,
+            store,
+            bias_cfg,
+            on_status_changed=coordinator._on_solar_bias_changed,
+        )
+        coordinator._solar_bias_service = service
+        coordinator._async_refresh_forecast = AsyncMock()
+
+        self.assertIsNone(service._profile)
+
+        store.profile = {
+            "profile": {"factors": {"10:00": 1.25}, "omitted_slots": []},
+            "metadata": {
+                "trained_at": "2026-04-25T03:00:00+02:00",
+                "training_config_fingerprint": service_mod.compute_fingerprint(bias_cfg),
+                "usable_days": 10,
+                "dropped_days": [],
+                "factor_min": 1.25,
+                "factor_max": 1.25,
+                "factor_median": 1.25,
+                "omitted_slot_count": 0,
+                "last_outcome": "profile_trained",
+                "error_reason": None,
+            },
+        }
+
+        await coordinator.async_reload_training_artifacts()
+
+        self.assertIsNotNone(service._profile)
+        self.assertEqual(service._profile.factors, {"10:00": 1.25})
+        self.assertEqual(service._metadata.last_outcome, "profile_trained")
+        coordinator._async_refresh_forecast.assert_awaited_once_with(
+            reason="training_artifacts_reloaded"
+        )
+        self.assertEqual(
+            hass.bus.fired,
+            [(const.EVENT_DATA_CHANGED, {"kind": "solar_bias"})],
+        )
+
