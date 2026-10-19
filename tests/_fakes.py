@@ -148,6 +148,36 @@ def capture_signal(hass: Any, signal: str, entry_id: str = "helman-entry") -> li
     return sent
 
 
+def hold_pipeline(coordinator: Any, pipeline: Any) -> None:
+    """Cache ``pipeline`` for the readers that serve it without a key check."""
+    from datetime import datetime, timezone
+
+    from custom_components.helman.coordinator import (
+        _PipelineCacheEntry,
+        _PipelineCacheKey,
+    )
+
+    # A key no live lookup can equal (no real slot starts in year 1), so the
+    # entry is well-formed for every reader but never a cache hit.
+    never_a_hit = _PipelineCacheKey(
+        slot_start=None,
+        house_generated_at=None,
+        solar_signature=None,
+        schedule_sig=(),
+        appliance_sig=(),
+        effective_sig=None,
+    )
+    coordinator._pipeline_cache = (
+        None
+        if pipeline is None
+        else _PipelineCacheEntry(
+            key=never_a_hit,
+            expires_at=datetime(1, 1, 1, tzinfo=timezone.utc),
+            snapshot=pipeline,
+        )
+    )
+
+
 def make_coordinator(**overrides):
     """Build a coordinator through its real constructor, then set test state."""
     from custom_components.helman.coordinator import HelmanCoordinator

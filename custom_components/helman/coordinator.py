@@ -7,10 +7,10 @@ import time
 from collections import OrderedDict, deque
 from collections.abc import Callable, Collection, Coroutine, Mapping, Sequence
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from statistics import median
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 from zoneinfo import ZoneInfo
 
 from homeassistant.config_entries import ConfigEntry
@@ -31,12 +31,9 @@ from .appliance_runtime_history import (
 from .appliances.climate_appliance import ClimateApplianceRuntime
 from .appliances.config import build_appliances_runtime_registry
 from .appliances.dto import ApplianceMetadataResponseDict, build_appliances_response
-from .appliances.forecast_integration import build_adjusted_house_forecast
 from .appliances.generic_appliance import GenericApplianceRuntime
 from .appliances.projection_builder import (
     ApplianceProjectionPlan,
-    build_appliance_projection_plan,
-    build_projection_input_bundle,
     read_vehicle_remaining_capacity_kwh_by_vehicle_id,
 )
 from .appliances.projection_response import (
@@ -74,16 +71,14 @@ from .automation.ownership import (
     merge_automation_result,
     strip_automation_owned_actions,
 )
-from .automation.snapshot import OptimizationContext, OptimizationSnapshot
+from .automation.snapshot import OptimizationSnapshot
 from .automation.triggers import AutomationTriggerCoordinator
-from .battery_capacity_forecast_builder import BatteryCapacityForecastBuilder
 from .battery_forecast_response import build_battery_forecast_response
 from .battery_state import (
     describe_battery_entity_config_issue,
     describe_battery_live_state_issue,
     read_battery_entities,
     read_battery_entity_config,
-    read_battery_forecast_settings,
     read_battery_live_state,
     read_battery_soc_bounds,
     read_battery_soc_bounds_config,
@@ -109,8 +104,6 @@ from .const import (
     HOUSE_FORECAST_MODEL_ID,
     MAX_FORECAST_DAYS,
     PRODUCTION_TOTAL_ENTITY_ID,
-    SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
-    SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
     SCHEDULE_SLOT_MINUTES,
     SIGNAL_FORECAST_PUBLISHED,
     SIGNAL_LIVE_TICK,
@@ -149,6 +142,23 @@ from .device_reports.dataset import (
     find_house_node,
 )
 from .device_reports.reports import ReportQuery, build_report
+from .forecast.assembly import (
+    ApplianceScheduleSignature,
+    BatteryScheduleSignature,
+    EffectiveScheduleSignature,
+    ForecastRebuildSnapshot,
+    ForecastScheduleDocuments,
+    SolarSignature,
+    build_appliance_projection_schedule_signature,
+    build_automation_snapshot,
+    build_battery_forecast_schedule_effective_signature,
+    build_battery_forecast_schedule_signature,
+    build_battery_forecast_solar_signature,
+    build_forecast_rebuild,
+    build_forecast_schedule_documents,
+    is_projected_history_action_active,
+    resolve_runtime_history_requirements,
+)
 from .forecast_builder import SolarForecastBuilder, read_solar_forecast_entities
 from .grid_flow_forecast_builder import build_grid_flow_forecast_snapshot
 from .grid_flow_forecast_response import build_grid_flow_forecast_response
@@ -163,7 +173,6 @@ from .node_details.inverter import run_mode_condition
 from .point_forecast_response import build_solar_forecast_response
 from .power_polarity import is_power_inverted, watts_for_value_type
 from .power_reading import power_unit_factor
-from .scheduling.action_resolution import resolve_executed_schedule_action
 from .scheduling.actual_history import ActualHistorySlot, build_entity_actual_histories
 from .scheduling.normal_state import (
     build_controllable_entities,
@@ -184,7 +193,6 @@ from .scheduling.schedule import (
     build_horizon_start,
     describe_schedule_control_config_issue,
     format_slot_id,
-    inverter_action,
     materialize_schedule_slots,
     normalize_schedule_document_for_registry,
     normalize_slot_patch_request,
@@ -252,11 +260,6 @@ _OPEN_DATASET_TTL = timedelta(minutes=5)
 _DEVICE_DATASET_CACHE_SIZE = 8
 _BATTERY_FORECAST_CACHE_SOC_TOLERANCE = 1.0
 _BATTERY_FORECAST_CACHE_ENERGY_TOLERANCE_KWH = 0.1
-# The battery-forecast schedule cache key: the inverter action of every slot.
-# Built from the forecast schedule document, which is already empty when
-# execution is off, so an execution toggle moves this key without it having to
-# carry the flag itself.
-_BatteryForecastScheduleSignature = tuple[tuple[str, str, int | None], ...]
 # How far back the unmeasured remainder looks when smoothing away meter skew.
 # See _smooth_unmeasured for why the raw remainder cannot be published as-is.
 _UNMEASURED_SMOOTHING_WINDOW_S = 15.0
@@ -285,7 +288,6 @@ _FORECAST_SLOT_DURATION_TOLERANCE_HOURS = 1 / 3600
 
 if TYPE_CHECKING:
     from .automation.pipeline import AutomationRunResult
-    from .scheduling.forecast_overlay import ScheduleForecastOverlay
 
 #: kWh -> Wh for the battery forecast series. See _battery_forecast_slot_values.
 _BATTERY_FORECAST_KWH_TO_WH = 1000.0
@@ -598,6 +600,21 @@ def _bucket_points_by_local_day(
     return buckets
 
 
+def _forecast_slot_start(moment: datetime) -> datetime:
+    return get_local_current_slot_start(
+        moment, interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES
+    )
+
+
+def _battery_forecast_slot_start(battery_forecast: dict[str, Any]) -> datetime | None:
+    """The forecast slot a battery forecast says it started in, if it says."""
+    started_at_raw = battery_forecast.get("startedAt")
+    if not isinstance(started_at_raw, str):
+        return None
+    started_at = dt_util.parse_datetime(started_at_raw)
+    return None if started_at is None else _forecast_slot_start(started_at)
+
+
 def _build_corrected_solar_forecast_view(
     snapshot: dict[str, Any],
 ) -> dict[str, Any]:
@@ -631,30 +648,29 @@ class _PreparedForecastPipelineInputs:
     forecast_schedule_document: ScheduleDocument
     projection_schedule_document: ScheduleDocument
     live_state: Any
-    schedule_signature: _BatteryForecastScheduleSignature
-    appliance_schedule_signature: tuple[
-        tuple[str, tuple[tuple[str, tuple[tuple[str, object], ...]], ...]],
-        ...,
-    ]
-    schedule_effective_signature: tuple[str, str, int | None, str, str] | None
+    schedule_signature: BatteryScheduleSignature
+    appliance_schedule_signature: ApplianceScheduleSignature
+    schedule_effective_signature: EffectiveScheduleSignature
 
 
 @dataclass(frozen=True)
-class _ForecastScheduleDocuments:
-    forecast_schedule_document: ScheduleDocument
-    projection_schedule_document: ScheduleDocument
+class _PipelineCacheKey:
+    """What a cached pipeline was built from, compared whole on every read."""
+
+    #: The forecast slot the read is in; stored as the slot the battery
+    #: forecast says it started in, None when it carries no ``startedAt``.
+    slot_start: datetime | None
+    house_generated_at: str | None
+    solar_signature: SolarSignature
+    schedule_sig: BatteryScheduleSignature
+    appliance_sig: ApplianceScheduleSignature
+    effective_sig: EffectiveScheduleSignature
 
 
-@dataclass(frozen=True)
-class _ForecastRebuildSnapshot:
-    adjusted_house_forecast: dict[str, Any]
-    battery_forecast: dict[str, Any]
-    projection_plan: ApplianceProjectionPlan
-    grid_forecast: dict[str, Any] | None = None
-    #: The overlay ``battery_forecast`` was simulated from, kept so the
-    #: optimization snapshot can carry it. Re-deriving it downstream is not
-    #: possible: the snapshot's schedule document is the unstripped original.
-    schedule_overlay: ScheduleForecastOverlay | None = None
+class _PipelineCacheEntry(NamedTuple):
+    key: _PipelineCacheKey
+    expires_at: datetime
+    snapshot: _ApplianceForecastPipelineSnapshot
 
 
 @dataclass(frozen=True)
@@ -784,24 +800,14 @@ class HelmanCoordinator:
         self._cached_solar_forecast: dict[str, Any] | None = None
         #: (slot start, snapshot) for `grid_price_snapshot`'s per-slot hold.
         self._grid_price_snapshot_cache: tuple[datetime, dict[str, Any]] | None = None
-        self._cached_battery_forecast: dict | None = None
-        self._cached_battery_forecast_expires_at: datetime | None = None
-        self._cached_battery_forecast_house_generated_at: str | None = None
-        self._cached_battery_forecast_solar_signature: tuple[Any, ...] | None = None
-        self._cached_battery_forecast_schedule_signature: (
-            _BatteryForecastScheduleSignature | None
-        ) = None
-        self._cached_battery_forecast_schedule_effective_signature: (
-            tuple[str, str, int | None, str, str] | None
-        ) = None
-        self._cached_appliance_forecast_pipeline: (
-            _ApplianceForecastPipelineSnapshot | None
-        ) = None
+        #: The appliance/battery pipeline last built, what it was built from and
+        #: until when it may be served. See :meth:`_async_current_pipeline`.
+        self._pipeline_cache: _PipelineCacheEntry | None = None
         #: Serializes appliance/battery pipeline builds so concurrent cache
         #: misses gather history and simulate once instead of once each. Held
         #: across the recheck as well, or the losers would race straight back
         #: into their own build. See
-        #: :meth:`_async_get_appliance_forecast_pipeline`.
+        #: :meth:`_async_current_pipeline`.
         self._appliance_forecast_pipeline_lock = asyncio.Lock()
         #: Bumped by every forecast-cache invalidation. A build that started
         #: before the bump publishes nothing, so a late result can never
@@ -823,10 +829,6 @@ class HelmanCoordinator:
         self._battery_forecast_current_slot: (
             tuple[str, dict[str, float]] | None
         ) = None
-        self._cached_appliance_projection_schedule_signature: tuple[
-            tuple[str, tuple[tuple[str, tuple[tuple[str, object], ...]], ...]],
-            ...,
-        ] | None = None
         self._create_task = getattr(self._hass, "async_create_task", asyncio.create_task)
         self._refresh_tasks: set[asyncio.Task[Any]] = set()
         self._automation_input_bundle: AutomationInputBundle | None = None
@@ -1145,9 +1147,7 @@ class HelmanCoordinator:
         self._start_forecast_refresh()
 
         await self._async_normalize_schedule_document()
-        automation_config = read_automation_config(self._active_config)
-        if automation_config is None:
-            automation_config = AutomationConfig(enabled=False)
+        automation_config = self._automation_config_or_disabled()
         # Stale automation-owned actions are stripped when automation itself is
         # off. This is independent of execution_enabled: with execution off the
         # optimizers still plan, so their actions stay.
@@ -1565,7 +1565,14 @@ class HelmanCoordinator:
         )
 
     async def battery_forecast(self) -> dict[str, Any] | None:
-        return await self._async_get_battery_forecast_snapshot()
+        """The battery forecast snapshot, for the solar bias inspector.
+
+        Goes through the pipeline rather than reading the cache directly, so
+        the inspector does not depend on another consumer having called
+        get_forecast() first. Reuses the pipeline cache when it is warm.
+        """
+        pipeline = await self._async_current_pipeline(dt_util.now())
+        return pipeline.battery_forecast
 
     def house_forecast_snapshot(self) -> dict[str, Any] | None:
         return self._get_adjusted_house_forecast_snapshot()
@@ -2159,22 +2166,15 @@ class HelmanCoordinator:
         # timestamps, which no reference time reshapes. Only the grid half:
         # HelmanForecastBuilder would also run the solar half's same-day
         raw_grid_price_forecast = self.grid_price_snapshot(request_now)
-        canonical_house_forecast = await self._async_get_canonical_house_forecast(
-            reference_time=request_now
-        )
-        pipeline = await self._async_get_appliance_forecast_pipeline(
-            solar_forecast=_build_corrected_solar_forecast_view(
-                canonical_solar_forecast
-            ),
-            house_forecast=canonical_house_forecast,
-            started_at=request_now,
-        )
+        pipeline = await self._async_current_pipeline(request_now)
         result["house_consumption"] = build_house_forecast_response(
             pipeline.adjusted_house_forecast,
             forecast_days=forecast_days,
         )
-        # Read off the canonical snapshot, not the adjusted view the pipeline
-        # derives from it: the adjusted copy is rebuilt per request.
+        # Read off the canonical snapshot the pipeline was built from, not the
+        # adjusted view it derives from it: the adjusted copy is rebuilt per
+        # build, and a cache hit means the same canonical generatedAt.
+        canonical_house_forecast = pipeline.original_house_forecast
         result["house_consumption"]["staleness"] = _build_forecast_staleness(
             canonical_house_forecast.get("generatedAt"),
             reference_time=request_now,
@@ -2373,39 +2373,26 @@ class HelmanCoordinator:
             return cached_solar_forecast
         return None
 
-    async def _async_get_canonical_house_forecast(
-        self,
-        *,
-        reference_time: datetime,
-    ) -> dict[str, Any]:
+    def _canonical_house_forecast(self) -> dict[str, Any]:
         """The cached house snapshot, however old it is.
 
-        Like the solar half, a pure cache read. A snapshot that no longer
-        matches the current config is not old but wrong, so it is blanked and
-        reported unavailable until the next refresh rebuilds it.
+        Like the solar half, a pure cache read. Without a snapshot -- before the
+        first refresh, with nothing persisted -- the answer is a placeholder
+        payload reporting unavailable. A snapshot held here always answers the
+        current config: setup drops a persisted one that does not (a config
+        save reloads the entry), and every refresh builds against the config
+        this coordinator was set up with.
         """
-        request = read_house_forecast_request(self._active_config)
-        total_energy_entity_id = request.total_energy_entity_id
-        training_window_days = request.training_window_days
-        min_history_days = request.min_history_days
-        config_fingerprint = request.config_fingerprint
-        if self._has_matching_forecast_snapshot(
-            total_energy_entity_id=total_energy_entity_id,
-            training_window_days=training_window_days,
-            min_history_days=min_history_days,
-            config_fingerprint=config_fingerprint,
-        ):
+        if self._cached_forecast is not None:
             return self._cached_forecast
-
-        self._cached_forecast = None
-        self._invalidate_battery_forecast_cache()
+        request = read_house_forecast_request(self._active_config)
         return ConsumptionForecastBuilder._make_payload(
             status="not_configured"
-            if total_energy_entity_id is None
+            if request.total_energy_entity_id is None
             else "unavailable",
-            training_window_days=training_window_days,
-            min_history_days=min_history_days,
-            config_fingerprint=config_fingerprint,
+            training_window_days=request.training_window_days,
+            min_history_days=request.min_history_days,
+            config_fingerprint=request.config_fingerprint,
             source_granularity_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
             forecast_days_available=MAX_FORECAST_DAYS,
             trained_at=self._house_profile_trained_at,
@@ -2414,6 +2401,12 @@ class HelmanCoordinator:
 
     def _read_schedule_control_config(self) -> ScheduleControlConfig | None:
         return read_schedule_control_config(self._active_config)
+
+    def _automation_config_or_disabled(self) -> AutomationConfig:
+        """The stored automation config, or a disabled one when there is none."""
+        return read_automation_config(self._active_config) or AutomationConfig(
+            enabled=False
+        )
 
     def _read_schedule_executor_control_config(self) -> ScheduleControlConfig | None:
         control_config = self._read_schedule_control_config()
@@ -2658,12 +2651,10 @@ class HelmanCoordinator:
         this read answers with an empty index instead of failing the card.
         """
         try:
-            automation_config = read_automation_config(self._active_config)
+            automation_config = self._automation_config_or_disabled()
         except AutomationConfigError:
-            automation_config = None
-        return build_automation_coverage(
-            automation_config or AutomationConfig(enabled=False)
-        )
+            automation_config = AutomationConfig(enabled=False)
+        return build_automation_coverage(automation_config)
 
     def get_raw_solar_forecast_points(self) -> list[dict[str, Any]]:
         snapshot = self._cached_solar_forecast or {}
@@ -2742,7 +2733,7 @@ class HelmanCoordinator:
 
         The figures ``BatteryForecastHistoryStore`` used to archive, read
         straight off the snapshot the rest of the system already acts on
-        (``_cached_appliance_forecast_pipeline.battery_forecast``) — the same
+        (the cached pipeline's ``battery_forecast``) — the same
         move :meth:`get_solar_forecast_current_wh` makes for the solar forecast,
         so the five published entities' recorder history becomes that archive.
 
@@ -2824,7 +2815,7 @@ class HelmanCoordinator:
                 *args,
             )
 
-        pipeline = self._cached_appliance_forecast_pipeline
+        pipeline = self._cached_pipeline()
         if pipeline is None:
             refuse("pipeline_cold", "the appliance forecast pipeline has no snapshot yet")
             return None
@@ -2946,7 +2937,7 @@ class HelmanCoordinator:
         # this sensor feeds would double-count them against solar in the
         # inspector. Fall back to the unadjusted base load only while the
         # appliance pipeline is cold — never to base + deferrableConsumers.
-        pipeline = self._cached_appliance_forecast_pipeline
+        pipeline = self._cached_pipeline()
         forecast: dict[str, Any] | None = None
         if pipeline is not None and isinstance(
             pipeline.adjusted_house_forecast, dict
@@ -3007,27 +2998,8 @@ class HelmanCoordinator:
 
     async def get_appliance_projections(self) -> ApplianceProjectionsResponseDict:
         self._appliances_registry.refresh()
-        request_now = dt_util.now()
-        canonical_solar_forecast = await self._async_get_canonical_solar_forecast(
-            reference_time=request_now
-        )
-        if canonical_solar_forecast is None:
-            canonical_solar_forecast = {"status": "unavailable", "points": []}
-        canonical_house_forecast = await self._async_get_canonical_house_forecast(
-            reference_time=request_now
-        )
-        if canonical_house_forecast is None:
-            return build_empty_appliance_projections_response(
-                generated_at=request_now.isoformat()
-            )
-
-        plan = await self._async_get_appliance_projection_plan(
-            solar_forecast=_build_corrected_solar_forecast_view(
-                canonical_solar_forecast
-            ),
-            house_forecast=canonical_house_forecast,
-            started_at=request_now,
-        )
+        pipeline = await self._async_current_pipeline(dt_util.now())
+        plan = pipeline.projection_plan
         if not plan.appliances_by_id:
             return build_empty_appliance_projections_response(generated_at=plan.generated_at)
         return build_appliance_projections_response(
@@ -3048,9 +3020,7 @@ class HelmanCoordinator:
             AutomationRunResult,
         )
 
-        automation_config = read_automation_config(self._active_config)
-        if automation_config is None:
-            automation_config = AutomationConfig(enabled=False)
+        automation_config = self._automation_config_or_disabled()
 
         run_started_at = time.perf_counter()
         try:
@@ -3445,9 +3415,7 @@ class HelmanCoordinator:
             reference_time=request_now, reason=reason
         )
 
-        automation_config = read_automation_config(self._active_config)
-        if automation_config is None:
-            automation_config = AutomationConfig(enabled=False)
+        automation_config = self._automation_config_or_disabled()
 
         async with self._schedule_lock:
             schedule_document = await self._load_pruned_schedule_document_locked(
@@ -3525,7 +3493,7 @@ class HelmanCoordinator:
                 solar_snapshot = self._cached_solar_forecast
             self._cached_forecast = house_snapshot
             self._cached_solar_forecast = solar_snapshot
-            self._invalidate_battery_forecast_cache()
+            self._invalidate_pipeline_cache()
             await self._storage.async_save_snapshots(
                 house_snapshot=house_snapshot,
                 solar_snapshot=solar_snapshot,
@@ -3533,12 +3501,16 @@ class HelmanCoordinator:
             # Warm the appliance pipeline before publishing so the house
             # consumption sensor reports the adjusted (base + scheduled) demand,
             # keeping the recorded history it feeds aligned with the battery and
-            # grid forecasts. Never let a pipeline failure block the refresh.
-            await self._async_warm_appliance_pipeline(
-                house_forecast=house_snapshot,
-                solar_snapshot=solar_snapshot,
-                started_at=request_now,
-            )
+            # grid forecasts. Best-effort: a house forecast that is not
+            # available leaves the pipeline cold and the sensor falls back to
+            # the base load, and a pipeline failure never blocks the refresh.
+            if house_snapshot.get("status") == "available":
+                try:
+                    await self._async_current_pipeline(
+                        request_now, in_flight=(house_snapshot, solar_snapshot)
+                    )
+                except Exception:
+                    _LOGGER.exception("Failed to warm appliance forecast pipeline")
             # The builder is the one authority on what a price is, so the
             # published sensor republishes what it just computed rather than
             # deriving the rate a second time.
@@ -3590,35 +3562,6 @@ class HelmanCoordinator:
             new_snapshot.get("status") == "unavailable"
             and not new_snapshot.get("points")
         )
-
-    async def _async_warm_appliance_pipeline(
-        self,
-        *,
-        house_forecast: dict[str, Any],
-        solar_snapshot: dict[str, Any] | None,
-        started_at: datetime,
-    ) -> None:
-        """Build the appliance forecast pipeline so its adjusted house forecast
-        is available to the house consumption sensor at publish time.
-
-        Best-effort: a missing or unavailable forecast just leaves the pipeline
-        cold, and the sensor falls back to the base load.
-        """
-        if house_forecast.get("status") != "available":
-            return
-        solar_forecast = (
-            _build_corrected_solar_forecast_view(solar_snapshot)
-            if isinstance(solar_snapshot, dict)
-            else {"status": "unavailable", "points": []}
-        )
-        try:
-            await self._async_get_appliance_forecast_pipeline(
-                solar_forecast=solar_forecast,
-                house_forecast=house_forecast,
-                started_at=started_at,
-            )
-        except Exception:
-            _LOGGER.exception("Failed to warm appliance forecast pipeline")
 
     async def _async_refresh_automation_input_bundle(
         self,
@@ -3682,47 +3625,6 @@ class HelmanCoordinator:
             ),
         )
 
-    async def _async_get_battery_forecast(
-        self,
-        *,
-        solar_forecast: dict[str, Any],
-        house_forecast: dict[str, Any],
-        started_at: datetime,
-    ) -> dict[str, Any]:
-        pipeline = await self._async_get_appliance_forecast_pipeline(
-            solar_forecast=solar_forecast,
-            house_forecast=house_forecast,
-            started_at=started_at,
-        )
-        return pipeline.battery_forecast
-
-    async def _async_get_battery_forecast_snapshot(self) -> dict[str, Any] | None:
-        """Return the battery forecast snapshot for the solar bias inspector.
-
-        Goes through the forecast pipeline rather than reading the cache
-        directly, so the inspector does not depend on another consumer having
-        called get_forecast() first. Reuses the pipeline cache when it is warm.
-        """
-        request_now = dt_util.now()
-        canonical_solar_forecast = await self._async_get_canonical_solar_forecast(
-            reference_time=request_now
-        )
-        if canonical_solar_forecast is None:
-            canonical_solar_forecast = {"status": "unavailable", "points": []}
-        canonical_house_forecast = await self._async_get_canonical_house_forecast(
-            reference_time=request_now
-        )
-        if canonical_house_forecast is None:
-            return None
-
-        return await self._async_get_battery_forecast(
-            solar_forecast=_build_corrected_solar_forecast_view(
-                canonical_solar_forecast
-            ),
-            house_forecast=canonical_house_forecast,
-            started_at=request_now,
-        )
-
     def _get_adjusted_house_forecast_snapshot(self) -> dict[str, Any] | None:
         """Return the house forecast the battery simulation ran against.
 
@@ -3735,10 +3637,10 @@ class HelmanCoordinator:
         scheduled them for — and the two stacks would not balance.
 
         Reads the pipeline the caller has already built through
-        _async_get_battery_forecast_snapshot; there is no adjusted forecast to
+        battery_forecast(); there is no adjusted forecast to
         speak of before that.
         """
-        pipeline = self._cached_appliance_forecast_pipeline
+        pipeline = self._cached_pipeline()
         if pipeline is None:
             return None
         return pipeline.adjusted_house_forecast
@@ -3759,7 +3661,7 @@ class HelmanCoordinator:
         battery forecast rebuild. Cold cache yields None and the card degrades to
         a plain forecast figure.
         """
-        pipeline = self._cached_appliance_forecast_pipeline
+        pipeline = self._cached_pipeline()
         if pipeline is None:
             return None
         return {
@@ -3771,36 +3673,9 @@ class HelmanCoordinator:
         self,
         *,
         schedule_document: ScheduleDocument,
-    ) -> _ForecastScheduleDocuments:
-        # The single place ``execution_enabled`` gates the forecast, for both
-        # domains at once.
-        #
-        # With execution off Helman actuates nothing — the executor returns
-        # before it touches either the inverter or an appliance -- so the
-        # forecast projects the unmanaged house: no scheduled inverter action,
-        # and no scheduled appliance run either. The card's schedule strips go
-        # on showing the plan; the curves show what will happen while it is not
-        # being executed, and the two are read as plan against reality.
-        #
-        # Gating both documents here rather than deeper down is what keeps that
-        # honest. Emptying only the inverter side — which is what the overlay
-        # builder used to do on its own -- left the battery unmanaged while the
-        # house forecast still carried appliance runs that could not happen, a
-        # trajectory that was neither the plan nor the reality. It also keeps
-        # both forecast cache signatures correct for free: they are derived from
-        # these documents, so an execution toggle changes them without either
-        # signature having to know the flag exists.
-        if not schedule_document.execution_enabled:
-            unmanaged = ScheduleDocument(execution_enabled=False, slots={})
-            return _ForecastScheduleDocuments(
-                forecast_schedule_document=unmanaged,
-                projection_schedule_document=unmanaged,
-            )
-        return _ForecastScheduleDocuments(
-            forecast_schedule_document=self._build_battery_forecast_schedule_document(
-                schedule_document=schedule_document
-            ),
-            projection_schedule_document=schedule_document,
+    ) -> ForecastScheduleDocuments:
+        return build_forecast_schedule_documents(
+            schedule_document, self._read_schedule_control_config()
         )
 
     async def _async_gather_compute_inputs(
@@ -4128,7 +4003,7 @@ class HelmanCoordinator:
         when_active_hourly_energy_kwh_by_appliance_id: dict[str, float | None] | None,
         grid_price_forecast: dict[str, Any] | None = None,
         compute_inputs: ComputeInputs | None = None,
-    ) -> _ForecastRebuildSnapshot:
+    ) -> ForecastRebuildSnapshot:
         """Async wrapper: gather I/O (unless supplied), then run the pure core.
 
         The core is the appliance projection plus the whole battery/grid
@@ -4142,7 +4017,9 @@ class HelmanCoordinator:
             )
         return await self._hass.async_add_executor_job(
             functools.partial(
-                self._build_forecast_rebuild_pure,
+                build_forecast_rebuild,
+                config=self._active_config,
+                appliances_registry=self._pinned_appliances_registry(compute_inputs),
                 solar_forecast=solar_forecast,
                 original_house_forecast=original_house_forecast,
                 started_at=started_at,
@@ -4156,32 +4033,6 @@ class HelmanCoordinator:
             )
         )
 
-    def _build_battery_forecast_sync(
-        self,
-        *,
-        solar_forecast: dict[str, Any],
-        house_forecast: dict[str, Any],
-        started_at: datetime,
-        forecast_days: int,
-        schedule_overlay: ScheduleForecastOverlay | None,
-        live_state: Any,
-        actual_history: list[dict[str, Any]],
-    ) -> dict[str, Any]:
-        """Synchronous battery-forecast seam used by the pure rebuild core.
-
-        The live battery state and recorder history are pre-gathered, so this
-        never touches ``hass`` or the recorder.
-        """
-        return BatteryCapacityForecastBuilder(self._active_config).build_with_history(
-            solar_forecast=solar_forecast,
-            house_forecast=house_forecast,
-            started_at=started_at,
-            forecast_days=forecast_days,
-            schedule_overlay=schedule_overlay,
-            live_state=live_state,
-            actual_history=actual_history,
-        )
-
     def _pinned_appliances_registry(
         self, compute_inputs: ComputeInputs
     ) -> AppliancesRuntimeRegistry:
@@ -4193,72 +4044,6 @@ class HelmanCoordinator:
         that built its inputs without one.
         """
         return compute_inputs.appliances_registry or self._appliances_registry.current
-
-    def _build_forecast_rebuild_pure(
-        self,
-        *,
-        solar_forecast: dict[str, Any],
-        original_house_forecast: dict[str, Any],
-        started_at: datetime,
-        forecast_schedule_document: ScheduleDocument,
-        projection_schedule_document: ScheduleDocument,
-        when_active_hourly_energy_kwh_by_appliance_id: dict[str, float | None] | None,
-        compute_inputs: ComputeInputs,
-        grid_price_forecast: dict[str, Any] | None = None,
-    ) -> _ForecastRebuildSnapshot:
-        """Pure, synchronous forecast rebuild.
-
-        Never touches ``hass`` or the recorder — every live value comes from
-        ``compute_inputs`` — so it is safe to run in an executor.
-        """
-        input_bundle = build_projection_input_bundle(
-            solar_forecast=solar_forecast,
-            house_forecast=original_house_forecast,
-            reference_time=started_at,
-        )
-        projection_plan = build_appliance_projection_plan(
-            generated_at=started_at.isoformat(),
-            registry=self._pinned_appliances_registry(compute_inputs),
-            schedule_document=projection_schedule_document,
-            inputs=input_bundle,
-            hass=None,
-            reference_time=started_at,
-            when_active_hourly_energy_kwh_by_appliance_id=(
-                when_active_hourly_energy_kwh_by_appliance_id
-            ),
-            vehicle_remaining_capacity_kwh_by_vehicle_id=(
-                compute_inputs.vehicle_remaining_capacity_kwh_by_vehicle_id
-            ),
-        )
-        adjusted_house_forecast = build_adjusted_house_forecast(
-            house_forecast=original_house_forecast,
-            demand_points=projection_plan.demand_points,
-        )
-        schedule_overlay = self._build_battery_forecast_schedule_overlay(
-            schedule_document=forecast_schedule_document,
-            reference_time=started_at,
-        )
-        battery_forecast = self._build_battery_forecast_sync(
-            solar_forecast=solar_forecast,
-            house_forecast=adjusted_house_forecast,
-            started_at=started_at,
-            forecast_days=MAX_FORECAST_DAYS,
-            schedule_overlay=schedule_overlay,
-            live_state=compute_inputs.battery_live_state,
-            actual_history=compute_inputs.battery_actual_history,
-        )
-        grid_forecast = (
-            None
-            if grid_price_forecast is None
-            else build_grid_flow_forecast_snapshot(battery_forecast)
-        )
-        return _ForecastRebuildSnapshot(
-            adjusted_house_forecast=adjusted_house_forecast,
-            battery_forecast=battery_forecast,
-            projection_plan=projection_plan,
-            grid_forecast=grid_forecast,
-            schedule_overlay=schedule_overlay,
-        )
 
     async def async_load_day_context_bands(self) -> dict[tuple[date, str], str]:
         """The band each (day, optimizer) pair emitted on the previous run.
@@ -4325,155 +4110,102 @@ class HelmanCoordinator:
         day_contexts: dict[date, DayContext] | None = None,
         compute_inputs: ComputeInputs,
     ) -> OptimizationSnapshot:
-        """Pure, synchronous snapshot build.
+        """The pure snapshot build, bound to the active config and registry.
 
-        Every live value comes from ``compute_inputs`` and every helper it calls
-        is hass-free, so this is safe to run in an executor.
+        Synchronous and hass-free, so it runs in an executor: every live value
+        comes from ``compute_inputs``.
         """
-        # Resource accounting sees only committed actions: candidate actions
-        # (placed by optimizers whose execution condition is not met) are
-        # stripped here so their demand/battery draw frees up for downstream
-        # optimizers. They remain in ``snapshot.schedule`` for display and
-        # execution/promotion.
-        schedule_documents = self._build_forecast_schedule_documents(
-            schedule_document=strip_candidate_actions(schedule_document)
-        )
-        # #272 (P2 of #270): the phased run rebuilds the snapshot from
-        # ``working_schedule_document`` alone after every step — there is no
-        # more pending-lane restoration concept, so the projection always
-        # comes from this same document's own schedule documents.
-        projection_schedule_document = schedule_documents.projection_schedule_document
-        rebuild = self._build_forecast_rebuild_pure(
-            solar_forecast=input_bundle.solar_forecast,
-            original_house_forecast=input_bundle.original_house_forecast,
-            started_at=reference_time,
-            forecast_schedule_document=schedule_documents.forecast_schedule_document,
-            projection_schedule_document=projection_schedule_document,
-            when_active_hourly_energy_kwh_by_appliance_id=(
-                input_bundle.when_active_hourly_energy_kwh_by_appliance_id
-            ),
-            grid_price_forecast=input_bundle.grid_price_forecast,
+        return build_automation_snapshot(
+            config=self._active_config,
+            control_config=self._read_schedule_control_config(),
+            appliances_registry=self._pinned_appliances_registry(compute_inputs),
+            schedule_document=schedule_document,
+            input_bundle=input_bundle,
+            reference_time=reference_time,
             compute_inputs=compute_inputs,
-        )
-        if rebuild.grid_forecast is None:
-            raise RuntimeError("Automation snapshot rebuild is missing grid forecast")
-        battery_status = rebuild.battery_forecast.get("status")
-        if battery_status not in {"available", "partial"}:
-            # Do not let optimizers skip unusable battery rails and persist an
-            # incomplete plan. The runner reports this as a snapshot failure.
-            house_anchor = rebuild.adjusted_house_forecast.get("currentSlot")
-            house_anchor_timestamp = (
-                house_anchor.get("timestamp")
-                if isinstance(house_anchor, dict)
-                else None
-            )
-            raise RuntimeError(
-                "Automation snapshot rebuild has unusable battery forecast: "
-                f"status={battery_status!r}, house_anchor={house_anchor_timestamp!r}"
-            )
-
-        battery_state = compute_inputs.battery_live_state
-
-        battery_settings = read_battery_forecast_settings(self._active_config)
-        battery_max_charge_power_kw = (
-            battery_settings.max_charge_power_w / 1000
-            if battery_settings.max_charge_power_w is not None
-            else None
-        )
-        battery_max_discharge_power_kw = (
-            battery_settings.max_discharge_power_w / 1000
-            if battery_settings.max_discharge_power_w is not None
-            else None
-        )
-        battery_usable_capacity_kwh = (
-            battery_state.nominal_capacity_kwh if battery_state is not None else None
+            day_contexts=day_contexts,
         )
 
-        return OptimizationSnapshot(
-            schedule=deepcopy(schedule_document),
-            adjusted_house_forecast=deepcopy(rebuild.adjusted_house_forecast),
-            battery_forecast=deepcopy(rebuild.battery_forecast),
-            grid_forecast=deepcopy(rebuild.grid_forecast),
-            # Not deepcopied: a frozen dataclass of frozen slots, and the
-            # optimizers only read it.
-            schedule_overlay=rebuild.schedule_overlay,
-            context=OptimizationContext(
-                now=reference_time,
-                battery_state=battery_state,
-                solar_forecast=deepcopy(input_bundle.solar_forecast),
-                import_price_forecast=deepcopy(
-                    input_bundle.grid_price_forecast.get("import", {})
-                ),
-                export_price_forecast=deepcopy(
-                    input_bundle.grid_price_forecast.get("export", {})
-                ),
-                appliance_registry=self._pinned_appliances_registry(compute_inputs),
-                when_active_hourly_energy_kwh_by_appliance_id=deepcopy(
-                    input_bundle.when_active_hourly_energy_kwh_by_appliance_id
-                ),
-                battery_max_charge_power_kw=battery_max_charge_power_kw,
-                battery_usable_capacity_kwh=battery_usable_capacity_kwh,
-                battery_charge_efficiency=battery_settings.charge_efficiency,
-                battery_max_discharge_power_kw=battery_max_discharge_power_kw,
-                battery_discharge_efficiency=battery_settings.discharge_efficiency,
-                runtime_hours_by_appliance_id_by_local_date=deepcopy(
-                    input_bundle.runtime_hours_by_appliance_id_by_local_date
-                ),
-                day_contexts=dict(day_contexts) if day_contexts else {},
-                condition_met_by_optimizer_id=dict(
-                    compute_inputs.condition_met_by_optimizer_id
-                ),
-                custom_condition_results_by_optimizer_id=dict(
-                    compute_inputs.custom_condition_results_by_optimizer_id
-                ),
-                appliance_active_by_id=dict(compute_inputs.appliance_active_by_id),
-            ),
-        )
-
-    async def _async_get_appliance_forecast_pipeline(
+    async def _async_current_pipeline(
         self,
+        now: datetime,
         *,
-        solar_forecast: dict[str, Any],
-        house_forecast: dict[str, Any],
-        started_at: datetime,
+        in_flight: tuple[dict[str, Any], dict[str, Any] | None] | None = None,
     ) -> _ApplianceForecastPipelineSnapshot:
         """Serve the shared appliance/battery pipeline, building it at most once.
+
+        The one read path. Readers build against the canonical house and solar
+        snapshots; the refresh warming the pipeline hands over the (house,
+        solar) snapshots it has just built as ``in_flight`` instead.
 
         The cache check, the history gather and the rebuild used to run without
         any coordination, so every caller that arrived while a build was in
         flight saw the same miss and started its own gather and simulation. The
         build lock closes that window: the first misser builds, the others wait
-        and then recheck the cache it filled. The recheck is a full
-        :meth:`_has_valid_battery_forecast_cache` call against freshly prepared
-        inputs, so a waiter whose inputs are *not* compatible with what the
-        winner built (different slot, schedule, snapshot generation or drifted
-        battery state) still builds its own rather than adopting the wrong
-        result. Waiting is cancellation-safe: a cancelled waiter releases its
-        place in the lock queue and never touches the build another waiter is
-        still waiting for.
+        and then recheck the cache it filled. The recheck compares a key built
+        from freshly prepared inputs, so a waiter whose inputs are *not*
+        compatible with what the winner built (different slot, schedule,
+        snapshot generation or drifted battery state) still builds its own
+        rather than adopting the wrong result. Waiting is cancellation-safe: a
+        cancelled waiter releases its place in the lock queue and never touches
+        the build another waiter is still waiting for.
 
         The preparation is inside the lock too. It is what the check reads, and
         a waiter that prepared before the winner published would be deciding
         against a schedule and a battery state that have since moved.
         """
+        if in_flight is None:
+            house_forecast = self._canonical_house_forecast()
+            solar_snapshot = self._cached_solar_forecast
+        else:
+            house_forecast, solar_snapshot = in_flight
+        solar_forecast = (
+            _build_corrected_solar_forecast_view(solar_snapshot)
+            if isinstance(solar_snapshot, dict)
+            else {"status": "unavailable", "points": []}
+        )
         async with self._appliance_forecast_pipeline_lock:
             prepared = await self._async_prepare_forecast_pipeline_inputs(
-                started_at=started_at
+                started_at=now
             )
-            cached = self._read_valid_appliance_forecast_pipeline(
-                solar_forecast=solar_forecast,
-                house_forecast=house_forecast,
-                started_at=started_at,
-                prepared=prepared,
+            key = _PipelineCacheKey(
+                slot_start=_forecast_slot_start(now),
+                house_generated_at=house_forecast.get("generatedAt"),
+                solar_signature=build_battery_forecast_solar_signature(
+                    solar_forecast
+                ),
+                schedule_sig=prepared.schedule_signature,
+                appliance_sig=prepared.appliance_schedule_signature,
+                effective_sig=prepared.schedule_effective_signature,
             )
-            if cached is not None:
-                return cached
+            entry = self._pipeline_cache
+            if (
+                entry is not None
+                and entry.key == key
+                and dt_util.as_utc(now) < dt_util.as_utc(entry.expires_at)
+                and self._has_compatible_battery_forecast_live_state(
+                    entry.snapshot.battery_forecast, prepared.live_state
+                )
+            ):
+                return entry.snapshot
             return await self._async_build_appliance_forecast_pipeline(
                 solar_forecast=solar_forecast,
                 house_forecast=house_forecast,
-                started_at=started_at,
+                started_at=now,
                 prepared=prepared,
+                key=key,
             )
+
+    def _cached_pipeline(self) -> _ApplianceForecastPipelineSnapshot | None:
+        """The pipeline last cached, for the readers that serve it as it is."""
+        entry = self._pipeline_cache
+        return None if entry is None else entry.snapshot
+
+    # The signature builder as a coordinator attribute, for the schedule
+    # execution tests that derive the read path's signature through it.
+    _build_battery_forecast_schedule_signature = staticmethod(
+        build_battery_forecast_schedule_signature
+    )
 
     async def _async_prepare_forecast_pipeline_inputs(
         self,
@@ -4509,43 +4241,23 @@ class HelmanCoordinator:
             forecast_schedule_document=forecast_schedule_document,
             projection_schedule_document=projection_schedule_document,
             live_state=run_live_state,
-            schedule_signature=self._build_battery_forecast_schedule_signature(
+            schedule_signature=build_battery_forecast_schedule_signature(
                 forecast_schedule_document
             ),
             appliance_schedule_signature=(
-                self._build_appliance_projection_schedule_signature(
+                build_appliance_projection_schedule_signature(
                     projection_schedule_document
                 )
             ),
             schedule_effective_signature=(
-                self._build_battery_forecast_schedule_effective_signature(
-                    schedule_document=forecast_schedule_document,
+                build_battery_forecast_schedule_effective_signature(
+                    forecast_schedule_document,
                     reference_time=started_at,
+                    battery_entity_config=battery_entity_config,
                     live_state=run_live_state,
                 )
             ),
         )
-
-    def _read_valid_appliance_forecast_pipeline(
-        self,
-        *,
-        solar_forecast: dict[str, Any],
-        house_forecast: dict[str, Any],
-        started_at: datetime,
-        prepared: _PreparedForecastPipelineInputs,
-    ) -> _ApplianceForecastPipelineSnapshot | None:
-        if not self._has_valid_battery_forecast_cache(
-            solar_forecast=solar_forecast,
-            house_forecast=house_forecast,
-            started_at=started_at,
-            schedule_signature=prepared.schedule_signature,
-            appliance_schedule_signature=prepared.appliance_schedule_signature,
-            schedule_effective_signature=prepared.schedule_effective_signature,
-        ):
-            return None
-        if self._cached_appliance_forecast_pipeline is None:
-            raise RuntimeError("Forecast pipeline cache is missing shared snapshot")
-        return self._cached_appliance_forecast_pipeline
 
     async def _async_build_appliance_forecast_pipeline(
         self,
@@ -4554,6 +4266,7 @@ class HelmanCoordinator:
         house_forecast: dict[str, Any],
         started_at: datetime,
         prepared: _PreparedForecastPipelineInputs,
+        key: _PipelineCacheKey,
     ) -> _ApplianceForecastPipelineSnapshot:
         history_hourly_energy_kwh_by_appliance_id = (
             self._build_history_projection_hourly_energy_by_appliance_id(
@@ -4594,14 +4307,21 @@ class HelmanCoordinator:
                 house_forecast=house_forecast, started_at=started_at
             )
         ):
-            self._store_battery_forecast_cache(
-                pipeline=pipeline,
-                solar_forecast=solar_forecast,
-                house_forecast=house_forecast,
-                started_at=started_at,
-                schedule_signature=prepared.schedule_signature,
-                appliance_schedule_signature=prepared.appliance_schedule_signature,
-                schedule_effective_signature=prepared.schedule_effective_signature,
+            # Keyed on the slot the battery forecast itself says it started in:
+            # one without a ``startedAt`` -- every status short of a simulated
+            # one -- then matches no read and is rebuilt by the next reader.
+            self._pipeline_cache = _PipelineCacheEntry(
+                key=replace(
+                    key,
+                    slot_start=_battery_forecast_slot_start(
+                        pipeline.battery_forecast
+                    ),
+                ),
+                expires_at=dt_util.as_local(
+                    dt_util.as_utc(started_at)
+                    + timedelta(seconds=BATTERY_CAPACITY_FORECAST_CACHE_TTL_SECONDS)
+                ),
+                snapshot=pipeline,
             )
         else:
             # The caller asked for exactly these inputs, so it still gets what it
@@ -4613,136 +4333,9 @@ class HelmanCoordinator:
             )
         return pipeline
 
-    async def _async_get_appliance_projection_plan(
-        self,
-        *,
-        solar_forecast: dict[str, Any],
-        house_forecast: dict[str, Any],
-        started_at: datetime,
-    ) -> ApplianceProjectionPlan:
-        pipeline = await self._async_get_appliance_forecast_pipeline(
-            solar_forecast=solar_forecast,
-            house_forecast=house_forecast,
-            started_at=started_at,
-        )
-        return pipeline.projection_plan
-
-    @staticmethod
-    def _build_battery_forecast_schedule_signature(
-        schedule_document: ScheduleDocument,
-    ) -> _BatteryForecastScheduleSignature:
-        return tuple(
-            (
-                slot_id,
-                inverter_action(actions).kind,
-                inverter_action(actions).target_soc,
-            )
-            for slot_id, actions in sorted(schedule_document.slots.items())
-        )
-
-    def _build_battery_forecast_schedule_document(
-        self,
-        *,
-        schedule_document: ScheduleDocument,
-    ) -> ScheduleDocument:
-        control_config = self._read_schedule_control_config()
-        if control_config is None:
-            return schedule_document
-
-        forecast_slots = {
-            slot_id: actions
-            for slot_id, actions in schedule_document.slots.items()
-            if not (
-                inverter_action(actions).kind == SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC
-                and SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC not in control_config.options
-            )
-            and not (
-                inverter_action(actions).kind == SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC
-                and SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC not in control_config.options
-            )
-        }
-        return ScheduleDocument(
-            execution_enabled=schedule_document.execution_enabled,
-            slots=forecast_slots,
-        )
-
-    def _build_battery_forecast_schedule_effective_signature(
-        self,
-        *,
-        schedule_document: ScheduleDocument,
-        reference_time: datetime,
-        live_state: Any = _LIVE_STATE_UNSET,
-    ) -> tuple[str, str, int | None, str, str] | None:
-        active_slot_id = format_slot_id(build_horizon_start(reference_time))
-        active_actions = schedule_document.slots.get(active_slot_id)
-        active_action = (
-            None if active_actions is None else inverter_action(active_actions)
-        )
-        if active_action is None or active_action.kind not in {
-            SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
-            SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
-        }:
-            return None
-
-        battery_entity_config = read_battery_entity_config(self._active_config)
-        if battery_entity_config is None:
-            return (
-                active_slot_id,
-                active_action.kind,
-                active_action.target_soc,
-                "not_configured",
-                "not_configured",
-            )
-
-        if live_state is _LIVE_STATE_UNSET:
-            live_state = read_battery_live_state(self._hass, battery_entity_config)
-        if live_state is None:
-            return (
-                active_slot_id,
-                active_action.kind,
-                active_action.target_soc,
-                "unavailable",
-                "execution_unavailable",
-            )
-
-        resolution = resolve_executed_schedule_action(
-            action=active_action,
-            current_soc=live_state.current_soc,
-        )
-        return (
-            active_slot_id,
-            active_action.kind,
-            active_action.target_soc,
-            resolution.executed_action.kind,
-            resolution.reason,
-        )
-
-    @staticmethod
-    def _build_battery_forecast_schedule_overlay(
-        *,
-        schedule_document: ScheduleDocument,
-        reference_time: datetime,
-    ) -> ScheduleForecastOverlay | None:
-        from .scheduling.forecast_overlay import build_schedule_forecast_overlay
-
-        return build_schedule_forecast_overlay(
-            schedule_document=schedule_document,
-            reference_time=reference_time,
-        )
-
-    def _invalidate_battery_forecast_cache(self) -> None:
+    def _invalidate_pipeline_cache(self) -> None:
         self._forecast_cache_revision += 1
-        self._cached_appliance_forecast_pipeline = None
-        self._cached_battery_forecast = None
-        self._cached_battery_forecast_expires_at = None
-        self._cached_battery_forecast_house_generated_at = None
-        self._cached_battery_forecast_solar_signature = None
-        self._cached_battery_forecast_schedule_signature = None
-        self._cached_battery_forecast_schedule_effective_signature = None
-        self._invalidate_appliance_projection_cache()
-
-    def _invalidate_appliance_projection_cache(self) -> None:
-        self._cached_appliance_projection_schedule_signature = None
+        self._pipeline_cache = None
 
     def _cache_holds_newer_pipeline(
         self,
@@ -4761,145 +4354,19 @@ class HelmanCoordinator:
         signature -- the current battery forecast, the adjusted house forecast,
         the house composition -- would publish it for the rest of the slot.
         """
-        cached = self._cached_appliance_forecast_pipeline
-        if cached is None:
+        entry = self._pipeline_cache
+        if entry is None:
             return False
-        if dt_util.as_utc(cached.started_at) > dt_util.as_utc(started_at):
+        if dt_util.as_utc(entry.snapshot.started_at) > dt_util.as_utc(started_at):
             return True
         cached_generated_at = dt_util.parse_datetime(
-            self._cached_battery_forecast_house_generated_at or ""
+            entry.key.house_generated_at or ""
         )
         generated_at = dt_util.parse_datetime(house_forecast.get("generatedAt") or "")
         return (
             cached_generated_at is not None
             and generated_at is not None
             and cached_generated_at > generated_at
-        )
-
-    def _has_valid_battery_forecast_cache(
-        self,
-        *,
-        solar_forecast: dict[str, Any],
-        house_forecast: dict[str, Any],
-        started_at: datetime,
-        schedule_signature: _BatteryForecastScheduleSignature,
-        appliance_schedule_signature: tuple[
-            tuple[str, tuple[tuple[str, tuple[tuple[str, object], ...]], ...]],
-            ...,
-        ],
-        schedule_effective_signature: tuple[str, str, int | None, str, str] | None,
-    ) -> bool:
-        if (
-            self._cached_battery_forecast is None
-            or self._cached_battery_forecast_expires_at is None
-        ):
-            return False
-
-        if (
-            dt_util.as_utc(started_at)
-            >= dt_util.as_utc(self._cached_battery_forecast_expires_at)
-        ):
-            return False
-
-        cached_started_at_raw = self._cached_battery_forecast.get("startedAt")
-        if not isinstance(cached_started_at_raw, str):
-            return False
-
-        cached_started_at = dt_util.parse_datetime(cached_started_at_raw)
-        if cached_started_at is None:
-            return False
-
-        if get_local_current_slot_start(
-            cached_started_at,
-            interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
-        ) != get_local_current_slot_start(
-            started_at,
-            interval_minutes=FORECAST_CANONICAL_GRANULARITY_MINUTES,
-        ):
-            return False
-
-        if (
-            self._cached_battery_forecast_house_generated_at
-            != house_forecast.get("generatedAt")
-        ):
-            return False
-
-        if (
-            self._cached_battery_forecast_solar_signature
-            != self._build_battery_forecast_solar_signature(solar_forecast)
-        ):
-            return False
-
-        if self._cached_battery_forecast_schedule_signature != schedule_signature:
-            return False
-
-        if (
-            self._cached_appliance_projection_schedule_signature
-            != appliance_schedule_signature
-        ):
-            return False
-
-        if (
-            self._cached_battery_forecast_schedule_effective_signature
-            != schedule_effective_signature
-        ):
-            return False
-
-        return self._has_compatible_battery_forecast_live_state()
-
-    def _store_battery_forecast_cache(
-        self,
-        *,
-        pipeline: _ApplianceForecastPipelineSnapshot,
-        solar_forecast: dict[str, Any],
-        house_forecast: dict[str, Any],
-        started_at: datetime,
-        schedule_signature: _BatteryForecastScheduleSignature,
-        appliance_schedule_signature: tuple[
-            tuple[str, tuple[tuple[str, tuple[tuple[str, object], ...]], ...]],
-            ...,
-        ],
-        schedule_effective_signature: tuple[str, str, int | None, str, str] | None,
-    ) -> None:
-        self._cached_appliance_forecast_pipeline = pipeline
-        self._cached_battery_forecast = pipeline.battery_forecast
-        self._cached_battery_forecast_expires_at = dt_util.as_local(
-            dt_util.as_utc(started_at)
-            + timedelta(seconds=BATTERY_CAPACITY_FORECAST_CACHE_TTL_SECONDS)
-        )
-        self._cached_battery_forecast_house_generated_at = house_forecast.get(
-            "generatedAt"
-        )
-        self._cached_battery_forecast_solar_signature = (
-            self._build_battery_forecast_solar_signature(solar_forecast)
-        )
-        self._cached_battery_forecast_schedule_signature = schedule_signature
-        self._cached_battery_forecast_schedule_effective_signature = (
-            schedule_effective_signature
-        )
-        self._cached_appliance_projection_schedule_signature = appliance_schedule_signature
-
-    @staticmethod
-    def _build_appliance_projection_schedule_signature(
-        schedule_document: ScheduleDocument,
-    ) -> tuple[
-        tuple[str, tuple[tuple[str, tuple[tuple[str, object], ...]], ...]],
-        ...,
-    ]:
-        return tuple(
-            (
-                slot_id,
-                tuple(
-                    (
-                        appliance_id,
-                        tuple(sorted(action.items())),
-                    )
-                    for appliance_id, action in sorted(
-                        appliance_actions(actions).items()
-                    )
-                ),
-            )
-            for slot_id, actions in sorted(schedule_document.slots.items())
         )
 
     def _build_history_projection_hourly_energy_by_appliance_id(
@@ -4978,7 +4445,9 @@ class HelmanCoordinator:
         comes back empty instead, exactly as it did when each appliance was read
         on its own, so a failure never masquerades as a run of idle days.
         """
-        lookback_days_by_appliance_id = self._resolve_runtime_history_requirements()
+        lookback_days_by_appliance_id = resolve_runtime_history_requirements(
+            self._automation_config_or_disabled()
+        )
         if lookback_days_by_appliance_id is None:
             return {}
 
@@ -5013,58 +4482,6 @@ class HelmanCoordinator:
 
         return {request.key: queried.get(request.key) or {} for request in requests}
 
-    def _resolve_runtime_history_requirements(
-        self,
-    ) -> dict[str, int] | None:
-        """Return ``{appliance id: lookback days}`` for appliance_runtime rules.
-
-        The keys are the appliances referenced by an enabled
-        ``appliance_runtime`` optimizer — the only appliances whose recorder
-        history needs resolving. The value is that appliance's own requirement:
-        the largest ``max_consecutive_skips`` among the optimizers targeting it,
-        plus one day, which is what ``_prior_consecutive_skips`` can walk back
-        over before the answer stops mattering. Returns ``None`` when no such
-        optimizer references a valid appliance.
-
-        **The appliance lives on ``target``, not on ``params``.** It is identity,
-        which a condition group may never override, and every other reader takes
-        it from there (``config.controllable_ids``, ``base.py``,
-        ``conditions/types.py``). Reading ``params`` found nothing, so this
-        returned ``None``, the runtime map came back empty, and every appliance's
-        ``delivered_hours`` was 0 for every day — a daily minimum that never
-        counted what had already run, and a consecutive-skip guard walking back
-        over days that all looked idle.
-        """
-        automation_config = read_automation_config(self._active_config)
-        if automation_config is None or not automation_config.enabled:
-            return None
-        lookback_days_by_appliance_id: dict[str, int] = {}
-        for optimizer in automation_config.enabled_appliance_optimizers:
-            max_consecutive_skips = 0
-            # ``params.daily_minimum.max_consecutive_skips``, which is where the
-            # consumer reads it (``optimizers/appliance_runtime.py``). The old
-            # ``params.skip`` mapping is in ``RELOCATED_OPTIMIZER_KEYS`` and the
-            # loader migrates it away, so reading it found nothing and every
-            # appliance silently fell back to a one-day lookback -- the same
-            # class of miss as ``appliance_id`` below.
-            daily_minimum = optimizer.params.get("daily_minimum")
-            if isinstance(daily_minimum, Mapping):
-                raw = daily_minimum.get("max_consecutive_skips")
-                if isinstance(raw, int) and not isinstance(raw, bool) and raw >= 0:
-                    max_consecutive_skips = raw
-            # Every member of a group runs its own daily-minimum chain against
-            # the optimizer's shared ``max_consecutive_skips``.
-            for appliance_id in optimizer.controllable_ids:
-                if not appliance_id:
-                    continue
-                lookback_days_by_appliance_id[appliance_id] = max(
-                    lookback_days_by_appliance_id.get(appliance_id, 0),
-                    max_consecutive_skips + 1,
-                )
-        if not lookback_days_by_appliance_id:
-            return None
-        return lookback_days_by_appliance_id
-
     def _iter_automation_candidate_appliances(
         self,
     ) -> list[GenericApplianceRuntime | ClimateApplianceRuntime]:
@@ -5088,7 +4505,7 @@ class HelmanCoordinator:
                     continue
 
                 appliance = self._appliances_registry.current.get_appliance(appliance_id)
-                if not self._is_projected_history_action_active(
+                if not is_projected_history_action_active(
                     appliance=appliance,
                     action=action,
                 ):
@@ -5101,36 +4518,14 @@ class HelmanCoordinator:
 
         return projected
 
-    @staticmethod
-    def _is_projected_history_action_active(
-        *,
-        appliance,
-        action: Mapping[str, Any] | None,
+    def _has_compatible_battery_forecast_live_state(
+        self, battery_forecast: dict[str, Any], live_state: Any
     ) -> bool:
-        if appliance is None or action is None:
-            return False
-        spec = spec_for(appliance.kind)
-        projection = spec.projection(appliance)
-        return (
-            projection is not None
-            and projection.uses_history_average
-            and spec.is_running(action)
-        )
-
-    def _has_compatible_battery_forecast_live_state(self) -> bool:
-        battery_entity_config = read_battery_entity_config(self._active_config)
-        if battery_entity_config is None:
-            return True
-
-        live_state = read_battery_live_state(self._hass, battery_entity_config)
         if live_state is None:
             return True
 
-        if self._cached_battery_forecast is None:
-            return False
-
-        current_soc = self._cached_battery_forecast.get("currentSoc")
-        current_remaining_energy_kwh = self._cached_battery_forecast.get(
+        current_soc = battery_forecast.get("currentSoc")
+        current_remaining_energy_kwh = battery_forecast.get(
             "currentRemainingEnergyKwh"
         )
         if not isinstance(current_soc, (int, float)) or not isinstance(
@@ -5146,36 +4541,6 @@ class HelmanCoordinator:
                 - live_state.current_remaining_energy_kwh
             )
             <= _BATTERY_FORECAST_CACHE_ENERGY_TOLERANCE_KWH
-        )
-
-    @staticmethod
-    def _build_battery_forecast_solar_signature(
-        solar_forecast: dict[str, Any],
-    ) -> tuple[Any, ...]:
-        points = solar_forecast.get("adjustedPoints")
-        if not isinstance(points, list):
-            points = solar_forecast.get("correctedPoints")
-        if not isinstance(points, list):
-            points = solar_forecast.get("points")
-        if not isinstance(points, list):
-            points = []
-
-        normalized_points: list[tuple[str, float]] = []
-        for point in points:
-            if not isinstance(point, dict):
-                continue
-
-            timestamp = point.get("timestamp")
-            value = point.get("value")
-            if not isinstance(timestamp, str):
-                continue
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                continue
-            normalized_points.append((timestamp, round(float(value), 4)))
-
-        return (
-            solar_forecast.get("status"),
-            tuple(normalized_points),
         )
 
     def _start_forecast_refresh(self) -> None:
@@ -5779,7 +5144,7 @@ class HelmanCoordinator:
         await self._automation_triggers.async_shutdown()
         self._prune_optimizer_condition_checkers(active_keys=set())
         await self._schedule_executor.async_unload()
-        self._invalidate_battery_forecast_cache()
+        self._invalidate_pipeline_cache()
 
         self._unmeasured_raw_history = {}
         self._source_ratio_entity_ids = {}

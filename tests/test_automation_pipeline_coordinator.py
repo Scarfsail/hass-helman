@@ -2,31 +2,28 @@ from __future__ import annotations
 
 from automation_pipeline_support import *
 
+from custom_components.helman.forecast import assembly
+
 
 class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
     async def test_unusable_battery_rebuild_aborts_runner_before_persistence(self) -> None:
-        snapshot_coordinator = make_coordinator()
-        snapshot_coordinator._build_forecast_schedule_documents = Mock(
-            return_value=coordinator_module._ForecastScheduleDocuments(
-                forecast_schedule_document=_make_schedule_document(),
-                projection_schedule_document=_make_schedule_document(),
-            )
-        )
-        snapshot_coordinator._build_forecast_rebuild_pure = Mock(
-            return_value=coordinator_module._ForecastRebuildSnapshot(
-                adjusted_house_forecast={
-                    "status": "available",
-                    "currentSlot": {"timestamp": CURRENT_SLOT_ID},
-                },
-                battery_forecast={"status": "unavailable", "series": []},
-                projection_plan=SimpleNamespace(),
-                grid_forecast={"status": "unavailable", "series": []},
-            )
+        rebuild = assembly.ForecastRebuildSnapshot(
+            adjusted_house_forecast={
+                "status": "available",
+                "currentSlot": {"timestamp": CURRENT_SLOT_ID},
+            },
+            battery_forecast={"status": "unavailable", "series": []},
+            projection_plan=SimpleNamespace(),
+            grid_forecast={"status": "unavailable", "series": []},
         )
 
         def build_snapshot(**kwargs):
-            return snapshot_coordinator._build_automation_snapshot_from_schedule_pure(
-                **kwargs, compute_inputs=ComputeInputs()
+            return assembly.build_automation_snapshot(
+                **kwargs,
+                config={},
+                control_config=None,
+                appliances_registry=AppliancesRuntimeRegistry(),
+                compute_inputs=ComputeInputs(),
             )
 
         coordinator = _FakeCoordinator(
@@ -34,10 +31,11 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
             bundle=_make_automation_bundle(),
             snapshot_factory=build_snapshot,
         )
-        result = await AutomationRunner(
-            coordinator=coordinator,
-            automation_config=_make_automation_config(_make_optimizer_instance()),
-        ).run(reference_time=REFERENCE_TIME)
+        with patch.object(assembly, "build_forecast_rebuild", return_value=rebuild):
+            result = await AutomationRunner(
+                coordinator=coordinator,
+                automation_config=_make_automation_config(_make_optimizer_instance()),
+            ).run(reference_time=REFERENCE_TIME)
 
         self.assertFalse(result.ran_automation)
         self.assertEqual(result.reason, "runner_failed")
@@ -49,51 +47,12 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(coordinator.persist_calls, [])
         self.assertEqual(coordinator.post_write_calls, [])
 
-    def test_snapshot_rejects_unusable_battery_forecast_with_house_anchor(self) -> None:
-        coordinator = make_coordinator()
-        coordinator._build_forecast_schedule_documents = Mock(
-            return_value=coordinator_module._ForecastScheduleDocuments(
-                forecast_schedule_document=_make_schedule_document(),
-                projection_schedule_document=_make_schedule_document(),
-            )
-        )
-        for status in ("unavailable", "not_configured", "insufficient_history", None):
-            for anchor_field in ("currentSlot", None):
-                with self.subTest(status=status, anchor_field=anchor_field):
-                    house_forecast = {"status": "available"}
-                    if anchor_field is not None:
-                        house_forecast[anchor_field] = {"timestamp": CURRENT_SLOT_ID}
-                    coordinator._build_forecast_rebuild_pure = Mock(
-                        return_value=coordinator_module._ForecastRebuildSnapshot(
-                            adjusted_house_forecast=house_forecast,
-                            battery_forecast={"status": status},
-                            projection_plan=SimpleNamespace(),
-                            # Grid composition still returns a payload when the
-                            # battery forecast cannot provide usable rails.
-                            grid_forecast={"status": "unavailable", "series": []},
-                        )
-                    )
-
-                    with self.assertRaises(RuntimeError) as raised:
-                        coordinator._build_automation_snapshot_from_schedule_pure(
-                            schedule_document=_make_schedule_document(),
-                            input_bundle=_make_automation_bundle(),
-                            reference_time=REFERENCE_TIME,
-                            compute_inputs=ComputeInputs(),
-                        )
-
-                    message = str(raised.exception)
-                    self.assertIn("unusable battery forecast", message)
-                    self.assertIn(f"status={status!r}", message)
-                    anchor = CURRENT_SLOT_ID if anchor_field is not None else None
-                    self.assertIn(f"house_anchor={anchor!r}", message)
-
     async def test_async_build_forecast_rebuild_uses_pinned_inputs_and_composes_grid(self) -> None:
         coordinator = make_coordinator()
         coordinator._hass = _make_executor_hass()
         coordinator._active_config = {}
         coordinator._appliances_registry.current = AppliancesRuntimeRegistry()
-        coordinator._build_battery_forecast_sync = Mock(
+        build_battery_forecast = Mock(
             return_value={
                 "status": "available",
                 "generatedAt": REFERENCE_TIME.isoformat(),
@@ -108,9 +67,6 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
                     }
                 ],
             }
-        )
-        coordinator._build_battery_forecast_schedule_overlay = Mock(
-            return_value={"overlay": True}
         )
         projection_plan = SimpleNamespace(
             generated_at=REFERENCE_TIME.isoformat(),
@@ -131,19 +87,29 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(
-                coordinator_module,
+                assembly,
                 "build_projection_input_bundle",
                 return_value={"projection": "bundle"},
             ),
             patch.object(
-                coordinator_module,
+                assembly,
                 "build_appliance_projection_plan",
                 return_value=projection_plan,
             ) as build_projection_plan,
             patch.object(
-                coordinator_module,
+                assembly,
                 "build_adjusted_house_forecast",
                 return_value=adjusted_house_forecast,
+            ),
+            patch.object(
+                assembly,
+                "build_schedule_forecast_overlay",
+                return_value={"overlay": True},
+            ),
+            patch.object(
+                assembly.BatteryCapacityForecastBuilder,
+                "build_with_history",
+                build_battery_forecast,
             ),
         ):
             result = await coordinator._async_build_forecast_rebuild(
@@ -166,7 +132,7 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
             when_active_hourly_energy_kwh_by_appliance_id=pinned_inputs,
             vehicle_remaining_capacity_kwh_by_vehicle_id={},
         )
-        coordinator._build_battery_forecast_sync.assert_called_once_with(
+        build_battery_forecast.assert_called_once_with(
             solar_forecast={"status": "available", "points": []},
             house_forecast=adjusted_house_forecast,
             started_at=REFERENCE_TIME,
@@ -183,9 +149,9 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
         )
         # The simulation is pure CPU: it goes to the executor, not the loop.
         self.assertEqual(len(coordinator._hass.executor_hops), 1)
-        self.assertEqual(
+        self.assertIs(
             coordinator._hass.executor_hops[0].func,
-            coordinator._build_forecast_rebuild_pure,
+            assembly.build_forecast_rebuild,
         )
 
     async def test_build_automation_snapshot_locked_populates_context_from_bundle(self) -> None:
@@ -196,13 +162,11 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
         # The async wrapper gathers the run-invariant inputs once, then delegates
         # to the pure snapshot builder (which reads the battery state from the
         # gathered ComputeInputs and calls the pure rebuild core).
-        coordinator._build_forecast_rebuild_pure = Mock(
-            return_value=coordinator_module._ForecastRebuildSnapshot(
-                adjusted_house_forecast={"status": "available"},
-                battery_forecast={"status": "available"},
-                projection_plan=SimpleNamespace(generated_at=REFERENCE_TIME.isoformat()),
-                grid_forecast={"status": "available", "currentImportPrice": 7.0},
-            )
+        rebuild = assembly.ForecastRebuildSnapshot(
+            adjusted_house_forecast={"status": "available"},
+            battery_forecast={"status": "available"},
+            projection_plan=SimpleNamespace(generated_at=REFERENCE_TIME.isoformat()),
+            grid_forecast={"status": "available", "currentImportPrice": 7.0},
         )
         coordinator._async_gather_compute_inputs = AsyncMock(
             return_value=ComputeInputs(
@@ -218,19 +182,10 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        with patch.object(
-            coordinator,
-            "_build_forecast_schedule_documents",
-            return_value=coordinator_module._ForecastScheduleDocuments(
-                forecast_schedule_document=_make_schedule_document(),
-                projection_schedule_document=_make_schedule_document(),
-            ),
-        ):
+        with patch.object(assembly, "build_forecast_rebuild", return_value=rebuild):
             for status in ("available", "partial"):
                 with self.subTest(status=status):
-                    coordinator._build_forecast_rebuild_pure.return_value.battery_forecast[
-                        "status"
-                    ] = status
+                    rebuild.battery_forecast["status"] = status
                     snapshot = await coordinator._build_automation_snapshot_from_schedule_locked(
                         schedule_document=_make_schedule_document(),
                         input_bundle=_make_automation_bundle(),

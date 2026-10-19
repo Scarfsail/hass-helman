@@ -103,7 +103,7 @@ class OptimizationSnapshot:
     #: actions, matching the ``battery_forecast`` it has to agree with. The
     #: appliance projection is emptied by the same gate, so the two halves of
     #: that trajectory stay consistent. See
-    #: ``HelmanCoordinator._build_forecast_schedule_documents``.
+    #: ``forecast.assembly.build_forecast_schedule_documents``.
     #:
     #: Deliberately absent from :func:`snapshot_to_dict`: it is a simulation
     #: input, and serialising it would restate the schedule at canonical

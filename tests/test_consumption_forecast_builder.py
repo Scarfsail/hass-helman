@@ -287,6 +287,48 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["series"], [])
         self.assertEqual(builder._slot_history.queries, [])
 
+    async def test_every_payload_matches_the_snapshot_filter_for_its_config(
+        self,
+    ) -> None:
+        """The coordinator's read path trusts this: a snapshot the refresh
+        stores always passes ``_has_matching_forecast_snapshot`` for the config
+        it was built from, so the getter carries no fingerprint check."""
+        from tests._fakes import make_coordinator
+
+        consumption_module, recorder_module, builder = self._make_builder()
+        unconfigured = consumption_module.ConsumptionForecastBuilder(
+            builder._hass, {}, builder._slot_history
+        )
+        cases = (
+            (builder, self._flat_profile(consumption_module)),
+            (builder, None),
+            (unconfigured, None),
+        )
+
+        for case_builder, profile in cases:
+            with (
+                patch.object(consumption_module, "dt_util", dt_util),
+                patch.object(recorder_module, "dt_util", dt_util),
+            ):
+                payload = await case_builder.build(
+                    reference_time=REFERENCE_TIME, profile=profile
+                )
+            request = consumption_module.read_house_forecast_request(
+                case_builder._config
+            )
+            coordinator = make_coordinator()
+            coordinator._cached_forecast = payload
+
+            with self.subTest(status=payload["status"]):
+                self.assertTrue(
+                    coordinator._has_matching_forecast_snapshot(
+                        total_energy_entity_id=request.total_energy_entity_id,
+                        training_window_days=request.training_window_days,
+                        min_history_days=request.min_history_days,
+                        config_fingerprint=request.config_fingerprint,
+                    )
+                )
+
     async def test_build_issues_no_multi_day_recorder_query(self) -> None:
         """Job #4's acceptance criterion: only today-scoped queries remain."""
         consumption_module, recorder_module, builder = self._make_builder()
