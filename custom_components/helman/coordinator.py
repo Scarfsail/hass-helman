@@ -4184,7 +4184,7 @@ class HelmanCoordinator:
                 and entry.key == key
                 and dt_util.as_utc(now) < dt_util.as_utc(entry.expires_at)
                 and self._has_compatible_battery_forecast_live_state(
-                    entry.snapshot.battery_forecast
+                    entry.snapshot.battery_forecast, prepared.live_state
                 )
             ):
                 return entry.snapshot
@@ -4519,13 +4519,8 @@ class HelmanCoordinator:
         return projected
 
     def _has_compatible_battery_forecast_live_state(
-        self, battery_forecast: dict[str, Any]
+        self, battery_forecast: dict[str, Any], live_state: Any
     ) -> bool:
-        battery_entity_config = read_battery_entity_config(self._active_config)
-        if battery_entity_config is None:
-            return True
-
-        live_state = read_battery_live_state(self._hass, battery_entity_config)
         if live_state is None:
             return True
 

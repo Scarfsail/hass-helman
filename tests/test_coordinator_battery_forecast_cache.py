@@ -292,6 +292,52 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(self.build_battery_forecast.call_count, 2)
 
+    async def test_schedule_writes_leave_the_forecast_cache_alone(self) -> None:
+        # The signatures in the cache key cover every slot a write can touch,
+        # so neither write drops the entry nor moves the revision.
+        from custom_components.helman.const import SCHEDULE_ACTION_STOP_CHARGING
+        from custom_components.helman.scheduling.schedule import (
+            ScheduleAction,
+            ScheduleSlot,
+        )
+        from tests._fakes import (
+            CURRENT_SLOT_ID,
+            FakeExecutor,
+            FakeHass,
+            FakeStorage,
+        )
+
+        storage = FakeStorage(
+            schedule_document={
+                "executionEnabled": False,
+                "slotMinutes": coordinator_module.SCHEDULE_SLOT_MINUTES,
+                "slots": {},
+            }
+        )
+        coordinator = make_coordinator(_hass=FakeHass(), _storage=storage)
+        coordinator._schedule_executor = FakeExecutor()
+        hold_pipeline(coordinator, SimpleNamespace())
+        entry = coordinator._pipeline_cache
+        revision = coordinator._forecast_cache_revision
+
+        await coordinator.set_schedule(
+            slots=[
+                ScheduleSlot(
+                    id=CURRENT_SLOT_ID,
+                    action=ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING),
+                )
+            ],
+            reference_time=REFERENCE_TIME,
+        )
+        self.assertEqual(coordinator._forecast_cache_revision, revision)
+        self.assertIs(coordinator._pipeline_cache, entry)
+
+        await coordinator.set_schedule_execution(
+            enabled=True, reference_time=REFERENCE_TIME
+        )
+        self.assertEqual(coordinator._forecast_cache_revision, revision)
+        self.assertIs(coordinator._pipeline_cache, entry)
+
     async def test_projection_plan_reuses_cache_for_same_started_at(
         self,
     ) -> None:
