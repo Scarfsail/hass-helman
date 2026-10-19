@@ -287,31 +287,21 @@ class SolarInspector:
         if last_outcome == "insufficient_history":
             return ("insufficient_history", "raw", "insufficient_history")
         if last_outcome == "training_failed":
-            if profile is not None:
+            if profile is not None and self._has_usable_profile():
                 return ("training_failed", "adjusted", None)
             return ("training_failed", "raw", "training_failed")
         return ("no_training_yet", "raw", "no_training_yet")
 
-    def _should_preserve_profile(
-        self,
-        profile: SolarBiasProfile | None,
-        metadata: SolarBiasMetadata,
-    ) -> bool:
-        if profile is None:
-            return False
-        if metadata.last_outcome not in ("profile_trained", "training_failed"):
-            return False
-        min_history_days = getattr(self._cfg, "min_history_days", 0) if self._cfg else 0
-        return metadata.usable_days >= min_history_days
-
     def _has_usable_profile(self) -> bool:
         profile = self._profile
         metadata = self._metadata
-        if profile is None:
+        if profile is None or metadata is None:
             return False
-        if metadata is not None and getattr(metadata, "last_outcome", None) == "profile_trained":
+        if getattr(metadata, "last_outcome", None) == "profile_trained":
             return True
-        return self._should_preserve_profile(profile, metadata) if metadata is not None else False
+        if self._bias_service is not None:
+            return self._bias_service.profile_is_usable(profile, metadata)
+        return False
 
     async def _canonical_solar_forecast(self, reference_time: datetime) -> dict[str, Any] | None:
         if self._live_sources is not None and hasattr(self._live_sources, "canonical_solar_forecast"):

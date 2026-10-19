@@ -416,7 +416,7 @@ class TrainingArtifactsStore:
     ) -> None:
         """Record a failure while preserving whatever was last trained.
 
-        The same rule the bias service applies in ``_should_preserve_profile``:
+        The same rule the bias service applies in ``profile_is_usable``:
         a fit that could not run does not make the last one wrong. This is what
         makes "older than 48 h, refit fails" keep serving with a banner instead
         of blanking the card.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
@@ -43,51 +44,57 @@ class SolarBiasCorrectionService:
         hass: HomeAssistant,
         store: SolarBiasCorrectionStore,
         cfg: BiasConfig,
+        *,
+        on_status_changed: Callable[[], None] | None = None,
     ) -> None:
         self._hass = hass
         self._store = store
         self._cfg = cfg
+        self._on_status_changed = on_status_changed
         self._profile: SolarBiasProfile | None = None
         self._metadata = self._build_default_metadata(last_outcome="no_training_yet")
         self._explainability: SolarBiasTrainingExplainability | None = None
         self._is_stale = False
         self._last_emitted_status: tuple[str, str] | None = None
     async def async_setup(self) -> None:
-        stored = self._store.profile
-        current_fingerprint = self._current_fingerprint
-        if not isinstance(stored, dict):
-            self._profile = None
-            self._metadata = self._build_default_metadata(last_outcome="no_training_yet")
-            self._explainability = None
-            self._is_stale = False
-            return
-
-        raw_profile = stored.get("profile")
-        if raw_profile is None:
-            profile = None
-        else:
-            profile = _profile_from_dict(raw_profile)
-            if profile is None:
+        try:
+            stored = self._store.profile
+            current_fingerprint = self._current_fingerprint
+            if not isinstance(stored, dict):
                 self._profile = None
                 self._metadata = self._build_default_metadata(last_outcome="no_training_yet")
                 self._explainability = None
                 self._is_stale = False
                 return
 
-        metadata = _metadata_from_dict(stored.get("metadata"))
-        if metadata is None:
-            self._profile = None
-            self._metadata = self._build_default_metadata(last_outcome="no_training_yet")
-            self._explainability = None
-            self._is_stale = False
-            return
+            raw_profile = stored.get("profile")
+            if raw_profile is None:
+                profile = None
+            else:
+                profile = _profile_from_dict(raw_profile)
+                if profile is None:
+                    self._profile = None
+                    self._metadata = self._build_default_metadata(last_outcome="no_training_yet")
+                    self._explainability = None
+                    self._is_stale = False
+                    return
 
-        self._profile = profile
-        self._metadata = metadata
-        self._explainability = _training_explainability_from_dict(
-            stored.get("trainingExplainability", stored.get("training_explainability"))
-        )
-        self._is_stale = metadata.training_config_fingerprint != current_fingerprint
+            metadata = _metadata_from_dict(stored.get("metadata"))
+            if metadata is None:
+                self._profile = None
+                self._metadata = self._build_default_metadata(last_outcome="no_training_yet")
+                self._explainability = None
+                self._is_stale = False
+                return
+
+            self._profile = profile
+            self._metadata = metadata
+            self._explainability = _training_explainability_from_dict(
+                stored.get("trainingExplainability", stored.get("training_explainability"))
+            )
+            self._is_stale = metadata.training_config_fingerprint != current_fingerprint
+        finally:
+            self._sync_last_emitted_status()
 
     async def async_train(self) -> dict[str, Any]:
         if not self._cfg.enabled:
@@ -125,7 +132,7 @@ class SolarBiasCorrectionService:
             self._explainability = outcome.explainability
             self._is_stale = False
         except Exception as err:  # noqa: BLE001
-            preserve_profile = self._should_preserve_profile(
+            preserve_profile = self.profile_is_usable(
                 previous_profile,
                 previous_metadata,
             )
@@ -150,9 +157,8 @@ class SolarBiasCorrectionService:
             self._explainability = previous_explainability if preserve_profile else None
             self._is_stale = previous_is_stale
             await self._store.async_save(self._serialize_state())
-        payload = self.get_status_payload()
-        self._hass.bus.async_fire("helman_solar_bias_trained", payload)
-        return payload
+        self._sync_last_emitted_status()
+        return self.get_status_payload()
 
     def build_adjustment_result(
         self,
@@ -253,10 +259,12 @@ class SolarBiasCorrectionService:
         if self._last_emitted_status == current:
             return
         self._last_emitted_status = current
-        self._hass.bus.async_fire(
-            "helman_solar_bias_status_changed",
-            {"status": status, "effectiveVariant": effective_variant},
-        )
+        if self._on_status_changed is not None:
+            self._on_status_changed()
+
+    def _sync_last_emitted_status(self) -> None:
+        status, effective_variant, _ = self._resolve_status()
+        self._last_emitted_status = (status, effective_variant)
 
     def _build_default_metadata(self, *, last_outcome: str) -> SolarBiasMetadata:
         return SolarBiasMetadata(
@@ -296,25 +304,27 @@ class SolarBiasCorrectionService:
             error_reason=error_reason,
         )
 
-    def _should_preserve_profile(
+    def profile_is_usable(
         self,
-        profile: SolarBiasProfile | None,
-        metadata: SolarBiasMetadata,
+        profile: SolarBiasProfile | None = None,
+        metadata: SolarBiasMetadata | None = None,
     ) -> bool:
-        if profile is None:
+        prof = self._profile if profile is None else profile
+        meta = self._metadata if metadata is None else metadata
+        if prof is None or meta is None:
             return False
 
-        if metadata.last_outcome not in ("profile_trained", "training_failed"):
+        if meta.last_outcome not in ("profile_trained", "training_failed"):
             return False
 
-        return metadata.usable_days >= self._cfg.min_history_days
+        return meta.usable_days >= self._cfg.min_history_days
 
     def _has_usable_profile(self) -> bool:
         if self._profile is None:
             return False
         if self._metadata.last_outcome == "profile_trained":
             return True
-        return self._should_preserve_profile(self._profile, self._metadata)
+        return self.profile_is_usable(self._profile, self._metadata)
 
     def _next_scheduled_training_at(self) -> str | None:
         if not self._cfg.enabled:

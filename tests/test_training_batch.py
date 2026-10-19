@@ -18,6 +18,10 @@ house_module = importlib.import_module(
 service_module = importlib.import_module(
     "custom_components.helman.solar_bias_correction.service"
 )
+solar_bias_job_mod = importlib.import_module(
+    "custom_components.helman.training.solar_bias"
+)
+SolarBiasTrainingJob = solar_bias_job_mod.SolarBiasTrainingJob
 profiles_module = importlib.import_module(
     "custom_components.helman.consumption_forecast_profiles"
 )
@@ -226,7 +230,7 @@ class _FakeBiasService:
         self.calls += 1
         if self._error is not None:
             raise self._error
-        return {}
+        return {"lastOutcome": "profile_trained"}
 
 
 class _StubApplianceEnergyJob:
@@ -245,11 +249,20 @@ class _StubApplianceEnergyJob:
 
 
 class TrainingBatchTests(unittest.IsolatedAsyncioTestCase):
-    def _make_batch(self, *, bias_service, house_job, appliance_energy_job=None):
+    def _make_batch(
+        self,
+        *,
+        bias_job=None,
+        bias_service=None,
+        house_job,
+        appliance_energy_job=None,
+    ):
         self.finished: list[dict[str, str]] = []
+        if bias_job is None:
+            bias_job = SolarBiasTrainingJob(bias_service or _FakeBiasService())
         batch = batch_module.TrainingBatch(
             _make_hass(),
-            solar_bias_service=bias_service,
+            solar_bias_job=bias_job,
             house_consumption_job=house_job,
             appliance_energy_job=appliance_energy_job or _StubApplianceEnergyJob(),
             # Records which outcomes had landed when the announcement went out.
@@ -278,7 +291,7 @@ class TrainingBatchTests(unittest.IsolatedAsyncioTestCase):
                 order.append("bias_start")
                 await asyncio.sleep(0)
                 order.append("bias_end")
-                return {}
+                return {"lastOutcome": "profile_trained"}
 
         batch = self._make_batch(
             bias_service=_BiasService(),
@@ -322,7 +335,7 @@ class TrainingBatchTests(unittest.IsolatedAsyncioTestCase):
 
         batch = batch_module.TrainingBatch(
             _make_hass(),
-            solar_bias_service=_FakeBiasService(),
+            solar_bias_job=SolarBiasTrainingJob(_FakeBiasService()),
             house_consumption_job=self._make_recording_house_job(order),
             appliance_energy_job=_StubApplianceEnergyJob(),
             on_job_finished=_raise,
@@ -564,7 +577,7 @@ class TrainingBatchTests(unittest.IsolatedAsyncioTestCase):
         created: list = []
         batch = batch_module.TrainingBatch(
             SimpleNamespace(async_create_task=created.append),
-            solar_bias_service=_FakeBiasService(),
+            solar_bias_job=SolarBiasTrainingJob(_FakeBiasService()),
             house_consumption_job=self._make_recording_house_job([]),
             appliance_energy_job=_StubApplianceEnergyJob(),
             on_job_finished=lambda: None,

@@ -33,6 +33,9 @@ service_module = importlib.import_module(
 )
 models = importlib.import_module("custom_components.helman.solar_bias_correction.models")
 storage_module = importlib.import_module("custom_components.helman.storage")
+solar_bias_module = importlib.import_module(
+    "custom_components.helman.training.solar_bias"
+)
 const = importlib.import_module("custom_components.helman.const")
 
 TRAINED_AT = "2026-08-01T03:00:00+02:00"
@@ -172,7 +175,9 @@ def _make_coordinator(
     )
     coordinator._training_batch = batch_module.TrainingBatch(
         SimpleNamespace(async_create_task=asyncio.ensure_future),
-        solar_bias_service=coordinator._solar_bias_service,
+        solar_bias_job=solar_bias_module.SolarBiasTrainingJob(
+            coordinator._solar_bias_service
+        ),
         house_consumption_job=house_job or _StubJob("profile_trained"),
         appliance_energy_job=appliance_job or _StubJob("estimates_trained"),
         on_job_finished=lambda: coordinator._fire_data_changed(
