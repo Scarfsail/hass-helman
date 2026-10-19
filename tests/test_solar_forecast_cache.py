@@ -141,9 +141,6 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         coordinator._hass = FakeHass()
         coordinator._active_config = {}
         coordinator._cached_forecast = None
-        coordinator._house_profile = None
-        coordinator._house_profile_trained_at = None
-        coordinator._house_profile_last_outcome = "no_training_yet"
         coordinator._slot_history = None
         coordinator._ingest_grid_export_price = Mock(
             return_value={"status": "available", "currentPrice": 2.5}
@@ -211,9 +208,6 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         coordinator = make_coordinator()
         coordinator._active_config = {}
         coordinator._cached_forecast = None
-        coordinator._house_profile = None
-        coordinator._house_profile_trained_at = None
-        coordinator._house_profile_last_outcome = "no_training_yet"
         coordinator._slot_history = None
         coordinator._ingest_grid_export_price = Mock(
             return_value={"status": "available", "currentPrice": 2.5}
@@ -657,9 +651,6 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             },
         }
         coordinator._storage = SimpleNamespace(config={})
-        coordinator._house_profile = None
-        coordinator._house_profile_trained_at = None
-        coordinator._house_profile_last_outcome = "no_training_yet"
         coordinator._slot_history = None
         coordinator._ingest_grid_export_price = Mock(
             return_value={"status": "available", "currentPrice": 2.5}
@@ -828,9 +819,6 @@ class DegradedSolarRebuildTests(unittest.IsolatedAsyncioTestCase):
         coordinator._hass = FakeHass()
         coordinator._active_config = {}
         coordinator._cached_forecast = None
-        coordinator._house_profile = None
-        coordinator._house_profile_trained_at = None
-        coordinator._house_profile_last_outcome = "no_training_yet"
         coordinator._slot_history = None
         coordinator._ingest_grid_export_price = Mock(
             return_value={"status": "available", "currentPrice": 2.5}

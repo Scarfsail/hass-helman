@@ -5,8 +5,8 @@ consumer's power to the sources (solar/battery/grid) using the *recorded* source
 ratio history returned by ``get_history()``. Two properties must hold:
 
 1. The ratio history must be **present** in ``get_history()`` at all. The ratio
-   deques are created in ``_init_buffers`` (run during the coordinator's
-   ``async_setup``), but the ratio *sensor entities* are only added later, by
+   deques are created in ``LivePowerTracker._init_buffers`` (run during the
+   coordinator's ``async_setup``), but the ratio *sensor entities* are only added later, by
    the sensor platform. So the buffers must be derived from the device tree —
    otherwise the ratio history is missing entirely and the card paints every
    past consumer bucket with its fallback colour instead of the source colour.
@@ -19,15 +19,11 @@ from __future__ import annotations
 
 from custom_components.helman.tree_builder import TreeIndex
 from custom_components.helman.const import SIGNAL_LIVE_TICK
-from tests._fakes import FakeHass, capture_signal, make_coordinator
+from tests._fakes import FakeHass, capture_signal, make_live_tracker
 
-import importlib
 import unittest
-from collections import deque
 from datetime import datetime
 from types import SimpleNamespace
-
-coordinator_module = importlib.import_module("custom_components.helman.coordinator")
 
 HOUSE = "sensor.house_power"
 SOLAR = "sensor.solar_power"
@@ -61,18 +57,12 @@ class _FakeStates:
         return SimpleNamespace(state=raw)
 
 
-def _make_coordinator(states: dict[str, str]):
-    c = make_coordinator()
-    c._active_config = {
-        "visualization": {"history_buckets": 5, "history_bucket_duration": 1}
-    }
-    c._hass = FakeHass()
-    c._hass.states = _FakeStates(states)
-    c._power_sensor_ids = [HOUSE, SOLAR, GRID]
-    c._source_sensor_ids = [SOLAR, GRID]
-    c._source_value_types = {SOLAR: "positive", GRID: "default"}
-    c._source_ratio_entity_ids = {}
-    c._cached_tree = TREE
+def _make_tracker(states: dict[str, str]):
+    hass = FakeHass()
+    hass.states = _FakeStates(states)
+    c = make_live_tracker(
+        hass, {"visualization": {"history_buckets": 5, "history_bucket_duration": 1}}
+    )
     c._compute_derived_powers = lambda: ({}, {})
     c._compute_consumption_total = lambda: 1000.0
     c._compute_production_total = lambda: 1000.0
@@ -83,7 +73,7 @@ class RatioHistoryTests(unittest.TestCase):
     def test_ratio_history_is_present_and_aligned_without_registered_sensors(self):
         # Solar carries the whole 1 kW house load; grid contributes nothing. The ratio
         # sensor entities are NOT registered yet (the startup ordering that broke this).
-        c = _make_coordinator({HOUSE: "1000", SOLAR: "1000", GRID: "0"})
+        c = _make_tracker({HOUSE: "1000", SOLAR: "1000", GRID: "0"})
         c._init_buffers(TREE, TreeIndex.from_tree(TREE))
 
         ticks = 3  # fewer than history_buckets (5) so any desync would show as length skew
@@ -106,7 +96,7 @@ class RatioHistoryTests(unittest.TestCase):
         self.assertEqual(history[GRID_RATIO], [0.0, 0.0, 0.0])
 
     def test_the_tick_sends_each_ratio_under_its_entity_id(self):
-        c = _make_coordinator({HOUSE: "1000", SOLAR: "1000", GRID: "0"})
+        c = _make_tracker({HOUSE: "1000", SOLAR: "1000", GRID: "0"})
         c._init_buffers(TREE, TreeIndex.from_tree(TREE))
         sent = capture_signal(c._hass, SIGNAL_LIVE_TICK)
 
@@ -116,7 +106,7 @@ class RatioHistoryTests(unittest.TestCase):
         self.assertEqual(sent[0][GRID_RATIO], 0.0)
 
     def test_ratio_sensors_are_marked_virtual(self):
-        c = _make_coordinator({HOUSE: "1000", SOLAR: "1000", GRID: "0"})
+        c = _make_tracker({HOUSE: "1000", SOLAR: "1000", GRID: "0"})
         c._init_buffers(TREE, TreeIndex.from_tree(TREE))
         # The derived ratio sensors must be excluded from the Step 1 read loop.
         self.assertIn(SOLAR_RATIO, c._virtual_sensor_ids)

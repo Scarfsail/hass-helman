@@ -7,19 +7,16 @@ the resulting skew is as large as the remainder itself, so flooring the raw
 difference at zero published a hard 0 a large share of the time — and the card
 drops the unmeasured row below 1 W, so it kept blinking out of the breakdown.
 
-The coordinator therefore smooths the raw difference before flooring it.
+The live tracker therefore smooths the raw difference before flooring it.
 """
 
 from __future__ import annotations
 
 from custom_components.helman.tree_builder import TreeIndex
-from tests._fakes import make_coordinator
+from tests._fakes import make_live_tracker
 
-import importlib
 import unittest
 from types import SimpleNamespace
-
-coordinator_module = importlib.import_module("custom_components.helman.coordinator")
 
 HOUSE = "sensor.house_power"
 CIRCUIT_A = "sensor.circuit_a_power"
@@ -56,14 +53,12 @@ class _FakeStates:
         return SimpleNamespace(state=raw)
 
 
-def _make_coordinator(states: dict[str, str]):
-    c = make_coordinator()
-    c._active_config = {
-        "visualization": {"history_buckets": 60, "history_bucket_duration": 1}
-    }
-    c._hass = SimpleNamespace(states=_FakeStates(states))
-    c._cached_tree = TREE
-    c._unmeasured_raw_history = {}
+def _make_tracker(states: dict[str, str]):
+    c = make_live_tracker(
+        SimpleNamespace(states=_FakeStates(states)),
+        {"visualization": {"history_buckets": 60, "history_bucket_duration": 1}},
+    )
+    c._tree = TREE
     return c
 
 
@@ -72,7 +67,7 @@ class UnmeasuredSmoothingTests(unittest.TestCase):
         # A 100 W remainder under a house meter that jitters +-150 W: every other
         # raw reading is negative, which used to publish 0.
         states = {CIRCUIT_A: "3000", CIRCUIT_B: "900"}
-        c = _make_coordinator(states)
+        c = _make_tracker(states)
         cycle = [150, -150, 100, -100, 50, -50, 0]
         jitter = [cycle[i % len(cycle)] for i in range(25)]
 
@@ -90,7 +85,7 @@ class UnmeasuredSmoothingTests(unittest.TestCase):
     def test_fully_metered_house_still_reports_zero(self):
         # Nothing left over: smoothing must not invent a remainder.
         states = {HOUSE: "3900", CIRCUIT_A: "3000", CIRCUIT_B: "900"}
-        c = _make_coordinator(states)
+        c = _make_tracker(states)
         for _ in range(20):
             value = c._compute_derived_powers()[0]["house"]
         self.assertEqual(value, 0.0)
@@ -99,7 +94,7 @@ class UnmeasuredSmoothingTests(unittest.TestCase):
         # A real change (a 2 kW load nobody meters) must reach the sensor, not be
         # smoothed away: within the window length the value tracks the new level.
         states = {HOUSE: "3900", CIRCUIT_A: "3000", CIRCUIT_B: "900"}
-        c = _make_coordinator(states)
+        c = _make_tracker(states)
         for _ in range(20):
             c._compute_derived_powers()
 
@@ -111,9 +106,7 @@ class UnmeasuredSmoothingTests(unittest.TestCase):
     def test_window_is_reset_when_the_tree_is_rebuilt(self):
         # A rebuild can re-parent a node; its old readings describe other children.
         states = {HOUSE: "4000", CIRCUIT_A: "3000", CIRCUIT_B: "900"}
-        c = _make_coordinator(states)
-        c._power_sensor_ids = [HOUSE, CIRCUIT_A, CIRCUIT_B]
-        c._source_ratio_entity_ids = {}
+        c = _make_tracker(states)
         for _ in range(10):
             c._compute_derived_powers()
         self.assertTrue(c._unmeasured_raw_history)

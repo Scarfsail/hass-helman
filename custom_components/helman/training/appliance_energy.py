@@ -5,17 +5,28 @@ import logging
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, tzinfo
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.core import HomeAssistant
 from homeassistant.util import dt as dt_util
 
 from .. import shared_meter_fit as recorder
 from ..const import DEFAULT_HISTORY_LOOKBACK_DAYS
-from ..controllables.config import running_active_states
+from ..controllables.config import (
+    iter_devices,
+    own_meter,
+    peek_controllable_id,
+    read_shared_meters,
+    running_active_states,
+    running_signal,
+)
 from ..recorder_slot_energy import _states_within
 from ..storage import TrainingArtifactsStore
 from .device_stats import local_midnights, member_record, metered_record
+
+if TYPE_CHECKING:
+    from ..appliances.climate_appliance import ClimateApplianceRuntime
+    from ..appliances.generic_appliance import GenericApplianceRuntime
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -149,6 +160,89 @@ class ApplianceEnergyTrainingRequest:
             for energy_entity_id, shared in sorted(self.shared_meters.items())
         )
         return hashlib.sha256("\n".join(parts).encode()).hexdigest()
+
+
+def read_appliance_energy_training_request(
+    config: Mapping[str, Any],
+    appliances: Iterable[GenericApplianceRuntime | ClimateApplianceRuntime],
+) -> ApplianceEnergyTrainingRequest:
+    """Every consumer device the nightly job learns a record for.
+
+    One subject per device with its own meter, and per meterless child its
+    parent's meter is split among, schedulable or not; the inverter is no
+    consumer. A subject is keyed by the card's ``deviceKey``: its meter, or
+    a meterless child's id. Whether it is ``history_average`` -- and so its
+    lookback -- comes from its appliance runtime in ``appliances``, the
+    reader the forecast uses; a device that is not one learns over the
+    default window.
+
+    Shared meters come from the device tree too: a meter owner's meterless
+    children split its own energy, and each runs by its own switch or
+    climate entity — a ``fixed`` or passive child included, since it still
+    runs and so still divides the meter.
+    """
+    shared = read_shared_meters(config)
+    learners = {
+        appliance.id: appliance
+        for appliance in appliances
+        if appliance.projection.uses_history_average
+    }
+    subjects: dict[str, DeviceSubject] = {}
+    for device, parent in iter_devices(config):
+        controllable_id = peek_controllable_id(device)
+        meter = own_meter(device)
+        if meter is not None:
+            key, meterless = meter, False
+        else:
+            parent_meter = own_meter(parent) if parent is not None else None
+            members = shared.get(parent_meter, {}).get("members", ())
+            if controllable_id not in {member[0] for member in members}:
+                continue
+            key, meter, meterless = controllable_id, parent_meter, True
+        if key in subjects:
+            continue
+        learner = learners.get(controllable_id)
+        consumption = device.get("consumption")
+        power = (
+            consumption.get("power_entity_id")
+            if isinstance(consumption, Mapping)
+            else None
+        )
+        subjects[key] = DeviceSubject(
+            device_key=key,
+            meter=meter,
+            meterless=meterless,
+            controllable_id=controllable_id,
+            # A meterless child's usage is its share of the meter.
+            power_entity_id=(
+                power.strip()
+                if not meterless and isinstance(power, str) and power.strip()
+                else None
+            ),
+            # What the tree builder gives every device's node.
+            power_value_type="default",
+            running_signal=running_signal(device),
+            lookback_days=(
+                learner.projection.history_lookback_days
+                if learner is not None
+                else DEFAULT_HISTORY_LOOKBACK_DAYS
+            ),
+            history_average=learner is not None,
+        )
+    return ApplianceEnergyTrainingRequest(
+        subjects=tuple(subjects.values()),
+        shared_meters={
+            energy_entity_id: SharedMeter(
+                members=tuple(
+                    SharedMeterMember.for_signal(*member)
+                    for member in meter_shared["members"]
+                ),
+                metered_children=tuple(meter_shared["metered_children"]),
+                tolerance=meter_shared["tolerance"],
+            )
+            for energy_entity_id, meter_shared in shared.items()
+        },
+    )
 
 
 class ApplianceEnergyTrainingJob:
