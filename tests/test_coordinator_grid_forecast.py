@@ -29,7 +29,6 @@ class CoordinatorGridForecastTests(unittest.IsolatedAsyncioTestCase):
         coordinator._read_house_forecast_config = Mock(
             return_value=("sensor.house_total", 56, 14, "fp")
         )
-        coordinator._has_matching_forecast_snapshot = Mock(return_value=True)
 
         adjusted_house_forecast = {"status": "available", "generatedAt": "2026-03-20T21:16:00+01:00"}
         canonical_battery_forecast = {
@@ -45,8 +44,9 @@ class CoordinatorGridForecastTests(unittest.IsolatedAsyncioTestCase):
                 }
             ],
         }
-        coordinator._async_get_appliance_forecast_pipeline = AsyncMock(
+        coordinator._async_current_pipeline = AsyncMock(
             return_value=SimpleNamespace(
+                original_house_forecast=adjusted_house_forecast,
                 adjusted_house_forecast=adjusted_house_forecast,
                 battery_forecast=canonical_battery_forecast,
             )
@@ -54,9 +54,6 @@ class CoordinatorGridForecastTests(unittest.IsolatedAsyncioTestCase):
         canonical_solar = {"canonical": "solar"}
         coordinator._async_get_canonical_solar_forecast = AsyncMock(
             return_value=canonical_solar
-        )
-        coordinator._async_get_canonical_house_forecast = AsyncMock(
-            return_value=adjusted_house_forecast
         )
 
         builder_instance = SimpleNamespace(
@@ -149,11 +146,7 @@ class CoordinatorGridForecastTests(unittest.IsolatedAsyncioTestCase):
             canonical_grid_response,
             forecast_days=1,
         )
-        coordinator._async_get_appliance_forecast_pipeline.assert_awaited_once_with(
-            solar_forecast=canonical_solar,
-            house_forecast=adjusted_house_forecast,
-            started_at=REFERENCE_TIME,
-        )
+        coordinator._async_current_pipeline.assert_awaited_once_with(REFERENCE_TIME)
         self.assertEqual(result["solar"], solar_response)
         self.assertEqual(result["house_consumption"], house_response)
         self.assertEqual(result["battery_capacity"], battery_response)

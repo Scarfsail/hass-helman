@@ -148,6 +148,17 @@ def capture_signal(hass: Any, signal: str, entry_id: str = "helman-entry") -> li
     return sent
 
 
+def hold_pipeline(coordinator: Any, pipeline: Any) -> None:
+    """Cache ``pipeline`` for the readers that serve it without a key check."""
+    from custom_components.helman.coordinator import _PipelineCacheEntry
+
+    coordinator._pipeline_cache = (
+        None
+        if pipeline is None
+        else _PipelineCacheEntry(key=None, expires_at=None, snapshot=pipeline)
+    )
+
+
 def make_coordinator(**overrides):
     """Build a coordinator through its real constructor, then set test state."""
     from custom_components.helman.coordinator import HelmanCoordinator

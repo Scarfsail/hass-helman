@@ -45,7 +45,7 @@ def build_schedule_forecast_overlay(
     # ``execution_enabled``. Deciding that an unexecuted plan should forecast as
     # an unmanaged house is the caller's call, and the caller has to make it for
     # the appliance projection too; see
-    # ``HelmanCoordinator._build_forecast_schedule_documents``, which hands this
+    # ``forecast.assembly.build_forecast_schedule_documents``, which hands this
     # an empty document when execution is off.
     pruned_slots = prune_expired_slots(
         stored_slots=schedule_document.slots,

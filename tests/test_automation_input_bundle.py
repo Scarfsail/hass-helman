@@ -14,6 +14,7 @@ coordinator_module = importlib.import_module("custom_components.helman.coordinat
 input_bundle_module = importlib.import_module("custom_components.helman.automation.input_bundle")
 config_module = importlib.import_module("custom_components.helman.appliances.config")
 automation_config_module = importlib.import_module("custom_components.helman.automation.config")
+assembly = importlib.import_module("custom_components.helman.forecast.assembly")
 
 
 @pytest.fixture(autouse=True)
@@ -357,7 +358,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
             schedule_document={"executionEnabled": False, "slotMinutes": 15, "slots": {}},
             async_save_snapshots=AsyncMock(),
         )
-        coordinator._invalidate_battery_forecast_cache = Mock()
+        coordinator._invalidate_pipeline_cache = Mock()
         coordinator._async_refresh_automation_input_bundle = AsyncMock(return_value=True)
         coordinator._cached_forecast = None
         coordinator._house_profile = None
@@ -405,7 +406,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
                 bundle_ready=True,
             ),
         )
-        coordinator._invalidate_battery_forecast_cache.assert_called_once_with()
+        coordinator._invalidate_pipeline_cache.assert_called_once_with()
         coordinator._storage.async_save_snapshots.assert_awaited_once_with(
             house_snapshot=snapshot,
             solar_snapshot=solar_snapshot,
@@ -430,16 +431,9 @@ class RuntimeHistoryRequirementsTests(unittest.TestCase):
     made.
     """
 
-    @staticmethod
-    def _coordinator():
-        coordinator = make_coordinator()
-        coordinator._active_config = {}
-        return coordinator
-
     def test_the_appliance_is_read_from_target_not_params(self) -> None:
         # `target` is identity -- a condition group may never override it --
         # and every other reader takes the appliance from there.
-        coordinator = self._coordinator()
         config = SimpleNamespace(
             enabled=True,
             enabled_appliance_optimizers=[
@@ -456,10 +450,7 @@ class RuntimeHistoryRequirementsTests(unittest.TestCase):
             ],
         )
 
-        with patch.object(
-            coordinator_module, "read_automation_config", return_value=config
-        ):
-            requirements = coordinator._resolve_runtime_history_requirements()
+        requirements = assembly.resolve_runtime_history_requirements(config)
 
         # The skip window plus today, keyed by the appliance that needs it.
         self.assertEqual(requirements, {"pool-filtration": 3})
@@ -468,7 +459,6 @@ class RuntimeHistoryRequirementsTests(unittest.TestCase):
         # Each member runs its own daily-minimum chain against the one shared
         # `max_consecutive_skips`, so each needs its own history -- not just
         # the first member's.
-        coordinator = self._coordinator()
         config = SimpleNamespace(
             enabled=True,
             enabled_appliance_optimizers=[
@@ -486,10 +476,7 @@ class RuntimeHistoryRequirementsTests(unittest.TestCase):
             ],
         )
 
-        with patch.object(
-            coordinator_module, "read_automation_config", return_value=config
-        ):
-            requirements = coordinator._resolve_runtime_history_requirements()
+        requirements = assembly.resolve_runtime_history_requirements(config)
 
         self.assertEqual(requirements, {"ac-living": 3, "ac-bedroom": 3})
 
@@ -501,7 +488,6 @@ class RuntimeHistoryRequirementsTests(unittest.TestCase):
         of skips made the dishwasher read a fortnight too, for days its own
         skip guard can never look at.
         """
-        coordinator = self._coordinator()
         config = SimpleNamespace(
             enabled=True,
             enabled_appliance_optimizers=[
@@ -535,10 +521,7 @@ class RuntimeHistoryRequirementsTests(unittest.TestCase):
             ],
         )
 
-        with patch.object(
-            coordinator_module, "read_automation_config", return_value=config
-        ):
-            requirements = coordinator._resolve_runtime_history_requirements()
+        requirements = assembly.resolve_runtime_history_requirements(config)
 
         self.assertEqual(
             requirements,
@@ -546,17 +529,13 @@ class RuntimeHistoryRequirementsTests(unittest.TestCase):
         )
 
     def test_no_appliance_optimizers_need_no_history(self) -> None:
-        # `_resolve_runtime_history_requirements` walks the appliance bucket
+        # `resolve_runtime_history_requirements` walks the appliance bucket
         # only -- a system-kind optimizer like `charge_hold` cannot land there
         # (config parsing rejects it with `wrong_bucket`), so there is nothing
         # left to filter by kind any more.
-        coordinator = self._coordinator()
         config = SimpleNamespace(enabled=True, enabled_appliance_optimizers=[])
 
-        with patch.object(
-            coordinator_module, "read_automation_config", return_value=config
-        ):
-            self.assertIsNone(coordinator._resolve_runtime_history_requirements())
+        self.assertIsNone(assembly.resolve_runtime_history_requirements(config))
 
 
 class ApplianceRuntimeHistoryResolutionTests(unittest.IsolatedAsyncioTestCase):

@@ -1,5 +1,5 @@
 from __future__ import annotations
-from tests._fakes import make_coordinator
+from tests._fakes import hold_pipeline, make_coordinator
 
 import importlib
 import types
@@ -89,16 +89,19 @@ class CoordinatorHouseForecastTests(unittest.TestCase):
             },
             "series": [],
         }
-        coordinator._cached_appliance_forecast_pipeline = types.SimpleNamespace(
-            adjusted_house_forecast={
-                "status": "available",
-                "currentSlot": {
-                    "timestamp": "2026-03-20T21:15:00+01:00",
-                    "nonDeferrable": {"value": 0.6},
-                    "deferrableConsumers": [{"value": 0.9}],
-                },
-                "series": [],
-            }
+        hold_pipeline(
+            coordinator,
+            types.SimpleNamespace(
+                adjusted_house_forecast={
+                    "status": "available",
+                    "currentSlot": {
+                        "timestamp": "2026-03-20T21:15:00+01:00",
+                        "nonDeferrable": {"value": 0.6},
+                        "deferrableConsumers": [{"value": 0.9}],
+                    },
+                    "series": [],
+                }
+            ),
         )
 
         # 0.6 kWh over a 15-min slot -> 0.6 * 1000 / 0.25 = 2400 W.
@@ -111,7 +114,7 @@ class CoordinatorHouseForecastTests(unittest.TestCase):
         # With no pipeline, the sensor reports the unadjusted base load only,
         # never base + deferrableConsumers.
         coordinator = make_coordinator()
-        coordinator._cached_appliance_forecast_pipeline = None
+        hold_pipeline(coordinator, None)
         coordinator._cached_forecast = {
             "status": "available",
             "currentSlot": {
