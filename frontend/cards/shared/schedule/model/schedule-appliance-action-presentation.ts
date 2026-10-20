@@ -7,6 +7,8 @@ import {
     isScheduleEvChargerAction,
     isScheduleGenericApplianceAction,
 } from "../schedule-types";
+import { APPLIANCE_KIND_UI } from "./schedule-appliance-kind-ui";
+export { formatScheduleClimateModeLabel } from "./schedule-appliance-kind-ui";
 
 export type ScheduleApplianceActionTone = Extract<ScheduleActionTone, "neutral" | "charge" | "stop">;
 export type ScheduleApplianceActionToneClass = `action-tone-${ScheduleApplianceActionTone}`;
@@ -51,30 +53,10 @@ function _getBaseApplianceActionPresentation({
         };
     }
 
-    if (appliance.kind === "ev_charger" && isScheduleEvChargerAction(action)) {
-        return _getEvChargerActionPresentation(appliance.icon, action, localize);
-    }
-
-    if (appliance.kind === "generic" && isScheduleGenericApplianceAction(action)) {
-        return action.on
-            ? {
-                icon: appliance.icon,
-                label: localize("scheduling.appliance.generic.action.on"),
-                tone: "charge",
-            }
-            : {
-                icon: appliance.icon,
-                label: localize("scheduling.appliance.generic.action.off"),
-                tone: "stop",
-            };
-    }
-
-    if (appliance.kind === "climate" && isScheduleClimateApplianceAction(action)) {
-        return {
-            icon: appliance.icon,
-            label: formatScheduleClimateModeLabel(action.mode, localize),
-            tone: action.mode === "off" ? "stop" : "charge",
-        };
+    if ((appliance.kind === "ev_charger" && isScheduleEvChargerAction(action))
+        || (appliance.kind === "generic" && isScheduleGenericApplianceAction(action))
+        || (appliance.kind === "climate" && isScheduleClimateApplianceAction(action))) {
+        return APPLIANCE_KIND_UI[appliance.kind].presentation(action, appliance.icon, localize);
     }
 
     return {
@@ -82,50 +64,4 @@ function _getBaseApplianceActionPresentation({
         label: localize("scheduling.appliance.action.generic"),
         tone: "neutral",
     };
-}
-
-export function formatScheduleClimateModeLabel(
-    mode: string,
-    localize: LocalizeFunction,
-): string {
-    switch (mode) {
-        case "heat":
-            return localize("scheduling.appliance.climate.mode.heat");
-        case "cool":
-            return localize("scheduling.appliance.climate.mode.cool");
-        case "off":
-            return localize("scheduling.appliance.climate.mode.off");
-        default:
-            return mode;
-    }
-}
-
-function _getEvChargerActionPresentation(
-    icon: string,
-    action: Extract<ScheduleApplianceAction, { charge: boolean }>,
-    localize: LocalizeFunction,
-): Omit<ScheduleApplianceActionPresentation, "isCandidate" | "toneClass"> {
-    const modeLabel = _buildEvModeLabel(action, localize);
-    return {
-        icon,
-        label: action.charge ? modeLabel : localize("scheduling.appliance.ev.action.no_charge"),
-        tone: action.charge ? "charge" : "stop",
-    };
-}
-
-function _buildEvModeLabel(
-    action: Extract<ScheduleApplianceAction, { charge: boolean }>,
-    localize: LocalizeFunction,
-): string {
-    if (!action.charge) {
-        return localize("scheduling.appliance.ev.action.no_charge");
-    }
-
-    const useMode = action.useMode ?? "Fast";
-    if (useMode === "ECO") {
-        const ecoLabel = localize("scheduling.appliance.ev.mode.eco");
-        return action.ecoGear ? `${ecoLabel} ${action.ecoGear}` : ecoLabel;
-    }
-
-    return localize("scheduling.appliance.ev.mode.fast");
 }

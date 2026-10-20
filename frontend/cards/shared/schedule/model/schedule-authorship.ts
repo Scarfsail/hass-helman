@@ -29,9 +29,7 @@ export function extractScheduleSlotAssignments(
         Object.entries(controllables).map(([controllableId, action]) => [
             controllableId,
             {
-                action: "kind" in action
-                    ? stripScheduleInverterSetBy(action)
-                    : stripScheduleApplianceSetBy(action),
+                action: stripScheduleSetBy(action),
                 setBy: _readSetBy(
                     action.setBy,
                     `slot "${slotId}" controllable "${controllableId}" action`,
@@ -41,16 +39,16 @@ export function extractScheduleSlotAssignments(
     );
 }
 
-export function stripScheduleInverterSetBy(action: ScheduleActionDTO): ScheduleAction {
+export function stripScheduleSetBy(action: ScheduleActionDTO): ScheduleAction;
+export function stripScheduleSetBy(action: ScheduleApplianceActionDTO): ScheduleApplianceAction;
+export function stripScheduleSetBy(
+    action: ScheduleActionDTO | ScheduleApplianceActionDTO,
+): ScheduleAction | ScheduleApplianceAction;
+export function stripScheduleSetBy(
+    action: ScheduleActionDTO | ScheduleApplianceActionDTO,
+): ScheduleAction | ScheduleApplianceAction {
     // Strip only setBy; keep kind/targetSoc/conditionMet so candidate actions
     // still render muted in the plan.
-    const { setBy: _ignoredSetBy, ...valueAction } = action;
-    return valueAction;
-}
-
-export function stripScheduleApplianceSetBy(
-    action: ScheduleApplianceActionDTO,
-): ScheduleApplianceAction {
     const { setBy: _ignoredSetBy, ...valueAction } = action;
     return valueAction;
 }

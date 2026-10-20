@@ -35,7 +35,6 @@ import {
     buildEntityScheduleBoundaryOptions,
     buildEntityScheduleDays,
     buildEntityScheduleLanePatches,
-    isEntityInverterAction,
     isInverterScheduleTarget,
     isEntityScheduleActionEmpty,
     resolveEntityScheduleRangeLimits,
@@ -43,6 +42,7 @@ import {
     selectEntityScheduleDayBlocks,
     selectEntityScheduleSlotsInRange,
 } from "../model/entity-day-schedule-model";
+import { isScheduleInverterAction } from "../schedule-types";
 import { buildEntityDayBandLanes } from "../model/entity-lane-source";
 import {
     parseScheduleExplanation,
@@ -918,7 +918,7 @@ export class SchedulingEntityDayEditor extends LitElement {
     }
 
     private _renderActionChip(lane: EntityScheduleLane, action: EntityScheduleAction) {
-        if (isInverterScheduleTarget(lane.target) && isEntityInverterAction(action)) {
+        if (isInverterScheduleTarget(lane.target) && action !== null && isScheduleInverterAction(action)) {
             return html`
                 <scheduling-action-chip
                     .action=${action}
@@ -928,7 +928,7 @@ export class SchedulingEntityDayEditor extends LitElement {
             `;
         }
 
-        const applianceAction = action === null || isEntityInverterAction(action)
+        const applianceAction = action === null || isScheduleInverterAction(action)
             ? null
             : action as ScheduleApplianceAction;
         const appliance = lane.appliance === null
