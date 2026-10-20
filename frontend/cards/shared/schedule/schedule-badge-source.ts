@@ -5,16 +5,9 @@ import {
     _readCommittedApplianceAction,
 } from "./model/controllable-entity-status";
 import type { ScheduleControllable } from "./model/schedule-appliance-metadata";
-import { NormalizedScheduleCache } from "./model/schedule-normalizer";
+import { resolveLocale } from "../resolve-locale";
 import { getSharedScheduleOwner, type SharedScheduleOwner } from "./schedule-owner";
 import type { ScheduleOwnerSnapshot, ScheduleSetBy, ScheduleSlot } from "./schedule-types";
-
-/**
- * Coarse on purpose, and the same resolution the band strip's own clock runs
- * at: everything a badge shows changes on a slot boundary, so a second-accurate
- * clock would only re-render the same icon.
- */
-const NOW_RESOLUTION_MS = 30_000;
 
 type ScheduleConnection = HomeAssistant["connection"];
 type ScheduleBadgeListener = () => void;
@@ -56,12 +49,9 @@ class ScheduleBadgeSourceImpl implements SharedScheduleBadgeSource {
     private _hass: HomeAssistant;
     private _owner: SharedScheduleOwner | null = null;
     private _unsubscribeOwner: (() => void) | null = null;
+    private _unsubscribeRoster: (() => void) | null = null;
     private _snapshot: ScheduleOwnerSnapshot | null = null;
     private _controllables: readonly ScheduleControllable[] = [];
-    private _rosterRequested = false;
-    private _nowMs = Date.now();
-    private _nowTimer: number | null = null;
-    private readonly _normalizedCache = new NormalizedScheduleCache();
     private readonly _listeners = new Set<ScheduleBadgeListener>();
 
     constructor(hass: HomeAssistant) {
@@ -109,13 +99,8 @@ class ScheduleBadgeSourceImpl implements SharedScheduleBadgeSource {
         // again — correctly — as soon as a good payload arrives.
         let activeSlot: ScheduleSlot | null;
         try {
-            const normalized = this._normalizedCache.get(
-                this._snapshot?.schedule ?? null,
-                this._timeZone,
-                this._locale,
-                new Date(this._nowMs),
-            );
-            activeSlot = normalized.slots.find((slot) => slot.isCurrent) ?? null;
+            const normalized = this._owner?.getNormalized(this._timeZone, this._locale);
+            activeSlot = normalized?.slots.find((slot) => slot.isCurrent) ?? null;
         } catch (error) {
             console.warn("schedule: failed to read the current slot for badges", error);
             return null;
@@ -146,11 +131,7 @@ class ScheduleBadgeSourceImpl implements SharedScheduleBadgeSource {
     }
 
     private get _locale(): string {
-        if (this._hass.locale?.language) {
-            return this._hass.locale.language;
-        }
-
-        return typeof navigator !== "undefined" ? navigator.language : "cs";
+        return resolveLocale(this._hass);
     }
 
     private _ensureLifecycle(): void {
@@ -159,8 +140,11 @@ class ScheduleBadgeSourceImpl implements SharedScheduleBadgeSource {
         }
 
         this._syncOwner();
-        this._ensureNowTimer();
-        void this._loadRoster();
+        this._unsubscribeRoster ??= getSharedHelmanStore(this._hass).subscribeRosterInvalidation(() => {
+            this._controllables = [];
+            this._emit();
+            void this._loadRoster();
+        });
     }
 
     private _syncOwner(): void {
@@ -171,23 +155,25 @@ class ScheduleBadgeSourceImpl implements SharedScheduleBadgeSource {
 
         this._unsubscribeOwner?.();
         this._owner = owner;
+        let initial = true;
         this._unsubscribeOwner = owner.subscribe((snapshot) => {
             const scheduleChanged = snapshot.schedule !== this._snapshot?.schedule;
             this._snapshot = snapshot;
-            if (scheduleChanged) {
+            if (initial || (scheduleChanged && this._controllables.length === 0)) {
                 // The roster is the other half of an answer, and a load that
                 // failed while Home Assistant was still starting would otherwise
                 // never be tried again — leaving every badge grey for the life of
                 // the page while the schedule beside it refreshes happily. The
                 // owner's own refresh is the retry.
                 void this._loadRoster();
-                this._emit();
             }
+            initial = false;
+            this._emit();
         });
     }
 
     /**
-     * The controllable roster, fetched once.
+     * The controllable roster, cached by the shared store.
      *
      * It describes configuration rather than state, so one round trip per
      * connection serves every badge for the life of the page. A failed load is
@@ -195,40 +181,22 @@ class ScheduleBadgeSourceImpl implements SharedScheduleBadgeSource {
      * for an appliance with nothing scheduled anyway.
      */
     private async _loadRoster(): Promise<void> {
-        if (this._rosterRequested) {
-            return;
-        }
-
-        this._rosterRequested = true;
         const hass = this._hass;
         try {
-            const payload = await getSharedHelmanStore(hass).getAppliances();
+            const controllables = await getSharedHelmanStore(hass).getControllableRoster();
             if (this._hass.connection !== hass.connection) {
                 return;
             }
 
-            this._controllables = payload.appliances;
+            this._controllables = controllables;
             this._emit();
         } catch (error) {
             if (this._hass.connection !== hass.connection) {
                 return;
             }
 
-            this._rosterRequested = false;
             console.warn("schedule: failed to load the controllable roster for badges", error);
         }
-    }
-
-    private _ensureNowTimer(): void {
-        if (this._nowTimer !== null || typeof window === "undefined") {
-            return;
-        }
-
-        this._nowMs = Date.now();
-        this._nowTimer = window.setInterval(() => {
-            this._nowMs = Date.now();
-            this._emit();
-        }, NOW_RESOLUTION_MS);
     }
 
     private _emit(): void {
@@ -250,10 +218,8 @@ class ScheduleBadgeSourceImpl implements SharedScheduleBadgeSource {
     private _dispose(): void {
         this._unsubscribeOwner?.();
         this._unsubscribeOwner = null;
+        this._unsubscribeRoster?.();
+        this._unsubscribeRoster = null;
         this._owner = null;
-        if (this._nowTimer !== null && typeof window !== "undefined") {
-            window.clearInterval(this._nowTimer);
-            this._nowTimer = null;
-        }
     }
 }

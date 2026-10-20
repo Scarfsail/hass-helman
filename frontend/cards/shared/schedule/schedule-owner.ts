@@ -2,11 +2,14 @@ import type { HomeAssistant } from "../../../types/ha";
 import type { SchedulePayload } from "../../helman-api";
 import { getSharedDataChangedFeed } from "../data/data-changed";
 import { getSharedHelmanStore, type HelmanStore } from "../data/store";
+import { startNowClock } from "../now-clock";
+import { NormalizedScheduleCache } from "./model/schedule-normalizer";
 import { getNextScheduleBoundaryDelayMs } from "./model/schedule-time";
 import type {
     ScheduleOwnerError,
     ScheduleOwnerSnapshot,
     ScheduleSlotPatch,
+    NormalizedScheduleModel,
 } from "./schedule-types";
 
 const BOUNDARY_BUFFER_MS = 50;
@@ -20,7 +23,7 @@ const scheduleOwners = new WeakMap<ScheduleConnection, ScheduleOwnerImpl>();
  * Frozen because it is shared: it is the starting snapshot of every owner, and
  * the object every pre-first-emit `getSnapshot()` hands out.
  */
-const EMPTY_SCHEDULE_OWNER_SNAPSHOT: ScheduleOwnerSnapshot = Object.freeze({
+export const EMPTY_SCHEDULE_OWNER_SNAPSHOT: ScheduleOwnerSnapshot = Object.freeze({
     schedule: null,
     loading: false,
     refreshing: false,
@@ -33,6 +36,8 @@ const EMPTY_SCHEDULE_OWNER_SNAPSHOT: ScheduleOwnerSnapshot = Object.freeze({
 
 export interface SharedScheduleOwner {
     getSnapshot(): ScheduleOwnerSnapshot;
+    getNowMs(): number;
+    getNormalized(timeZone: string, locale: string): NormalizedScheduleModel;
     subscribe(listener: ScheduleOwnerListener): () => void;
     refresh(): Promise<void>;
     /** Write the batch and commit the schedule it returns. Resolves with the write's error, or null. */
@@ -71,6 +76,9 @@ class ScheduleOwnerImpl implements SharedScheduleOwner {
     /** A refresh was asked for while a mutation was in flight. */
     private _refreshAfterMutation = false;
     private _boundaryTimer: number | null = null;
+    private _stopNowClock: (() => void) | null = null;
+    private _nowMs = Date.now();
+    private readonly _normalizedCache = new NormalizedScheduleCache();
     private _unsubscribeDataChanged: (() => void) | null = null;
     private readonly _listeners = new Set<ScheduleOwnerListener>();
 
@@ -103,7 +111,18 @@ class ScheduleOwnerImpl implements SharedScheduleOwner {
         return this._snapshot;
     }
 
+    public getNowMs(): number {
+        return this._nowMs;
+    }
+
+    public getNormalized(timeZone: string, locale: string): NormalizedScheduleModel {
+        return this._normalizedCache.get(this._schedule, timeZone, locale, new Date(this._nowMs));
+    }
+
     public subscribe(listener: ScheduleOwnerListener): () => void {
+        // A new reader can arrive between coarse ticks, including just after a
+        // slot boundary. Give its first render the current slot.
+        this._nowMs = Date.now();
         this._listeners.add(listener);
         listener(this.getSnapshot());
         this._ensureLifecycle();
@@ -142,7 +161,7 @@ class ScheduleOwnerImpl implements SharedScheduleOwner {
             return null;
         }
 
-        return this._mutate(
+        return this._trackMutation(
             "_writing",
             () => this._helmanStore.applySchedulePatches(patches),
             "schedule: failed to update schedule",
@@ -150,7 +169,7 @@ class ScheduleOwnerImpl implements SharedScheduleOwner {
     }
 
     public async setExecutionEnabled(enabled: boolean): Promise<void> {
-        await this._mutate(
+        await this._trackMutation(
             "_togglingExecution",
             () => this._helmanStore.setScheduleExecution(enabled),
             "schedule: failed to update schedule execution",
@@ -165,7 +184,7 @@ class ScheduleOwnerImpl implements SharedScheduleOwner {
      * triggers an automation run -- and arrives through the data-changed feed;
      * one that lands while the write is in flight is run once it commits.
      */
-    private async _mutate(
+    private async _trackMutation(
         flag: "_writing" | "_togglingExecution",
         write: () => Promise<SchedulePayload>,
         failureMessage: string,
@@ -226,6 +245,10 @@ class ScheduleOwnerImpl implements SharedScheduleOwner {
             return;
         }
 
+        this._stopNowClock ??= startNowClock(() => {
+            this._nowMs = Date.now();
+            this._emit();
+        });
         this._scheduleNextBoundaryRefresh();
         this._ensureDataChangedSubscription();
         if (this._schedule === null && !this._loading && !this._refreshing) {
@@ -254,25 +277,42 @@ class ScheduleOwnerImpl implements SharedScheduleOwner {
     }
 
     /**
-     * Rebuild the snapshot, then hand it to whoever is listening.
+     * Rebuild the snapshot if a field moved, then hand it to whoever is listening.
      *
-     * The rebuild is unconditional on purpose. Dropping the last listener while
-     * a refresh is in flight is possible -- that request's `finally` still
-     * writes the fields and emits -- and a no-listener early return here would
-     * leave the cached snapshot stale for good, for the next reader to pick up.
-     * One object literal per mutation event is a cheap price for that.
+     * The rebuild does not wait for listeners on purpose. Dropping the last
+     * listener while a refresh is in flight is possible -- that request's
+     * `finally` still writes the fields and emits -- and a no-listener early
+     * return here would leave the cached snapshot stale for good, for the next
+     * reader to pick up.
+     *
+     * Listeners are told even when nothing in the snapshot moved: a clock tick
+     * changes only `getNowMs()` and `getNormalized()`, and whoever reads those
+     * needs the cue. Handing them the same object keeps a `@state` assignment
+     * from re-rendering a card that reads neither.
      */
     private _emit(): void {
-        this._snapshot = {
-            schedule: this._schedule,
-            loading: this._loading,
-            refreshing: this._refreshing,
-            writing: this._writing,
-            togglingExecution: this._togglingExecution,
-            error: this._error,
-            updatedAt: this._updatedAt,
-            stale: this._stale,
-        };
+        const current = this._snapshot;
+        if (
+            current.schedule !== this._schedule
+            || current.loading !== this._loading
+            || current.refreshing !== this._refreshing
+            || current.writing !== this._writing
+            || current.togglingExecution !== this._togglingExecution
+            || current.error !== this._error
+            || current.updatedAt !== this._updatedAt
+            || current.stale !== this._stale
+        ) {
+            this._snapshot = {
+                schedule: this._schedule,
+                loading: this._loading,
+                refreshing: this._refreshing,
+                writing: this._writing,
+                togglingExecution: this._togglingExecution,
+                error: this._error,
+                updatedAt: this._updatedAt,
+                stale: this._stale,
+            };
+        }
 
         for (const listener of this._listeners) {
             listener(this._snapshot);
@@ -332,6 +372,8 @@ class ScheduleOwnerImpl implements SharedScheduleOwner {
 
     private _commitSchedule(schedule: SchedulePayload): void {
         this._schedule = schedule;
+        // A boundary refresh may finish before the next coarse clock tick.
+        this._nowMs = Date.now();
         this._error = null;
         this._updatedAt = Date.now();
         this._stale = false;
@@ -372,6 +414,8 @@ class ScheduleOwnerImpl implements SharedScheduleOwner {
     }
 
     private _dispose(): void {
+        this._stopNowClock?.();
+        this._stopNowClock = null;
         this._clearBoundaryTimer();
         this._unsubscribeDataChanged?.();
         this._unsubscribeDataChanged = null;

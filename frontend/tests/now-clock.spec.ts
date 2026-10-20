@@ -103,12 +103,25 @@ test.describe("the inspector's clock", () => {
         await mountInspector(page);
         await selectPreviousDay(page);
         const before = await cardNowMs(page);
+        // The shared schedule owner ticks too. Its snapshot did not move, so the
+        // object each card holds in a `@state` must not either.
+        await page.evaluate(() => {
+            const inspector = document.querySelector("helman-solar-inspector") as any;
+            const pills = inspector.shadowRoot.querySelector("helman-solar-day-pills");
+            (window as any).__snapshotsBefore = [inspector._scheduleSnapshot, pills._ownerSnapshot];
+        });
 
         await page.clock.runFor(TICK_SPAN_MS);
 
         // Nothing on screen reads it: there is no "now" line on a day that has
         // finished, and the day has not rolled over.
         expect(await cardNowMs(page)).toBe(before);
+        expect(await page.evaluate(() => {
+            const inspector = document.querySelector("helman-solar-inspector") as any;
+            const pills = inspector.shadowRoot.querySelector("helman-solar-day-pills");
+            const [inspectorBefore, pillsBefore] = (window as any).__snapshotsBefore;
+            return inspector._scheduleSnapshot === inspectorBefore && pills._ownerSnapshot === pillsBefore;
+        })).toBe(true);
     });
 
     test("a hidden page stops the clock, and coming back catches it up in one step", async ({ page }) => {
@@ -135,12 +148,12 @@ test.describe("the inspector's clock", () => {
  * getters, so the identities below are what a rebuild propagates through.
  */
 test.describe("the schedule host's clock", () => {
-    async function mountHost(page: Page): Promise<void> {
-        await page.clock.install({ time: new Date(FIXED_NOW_ISO) });
+    async function mountHost(page: Page, nowIso = FIXED_NOW_ISO): Promise<void> {
+        await page.clock.install({ time: new Date(nowIso) });
         await loadBundle(page, "scheduling-day-editor-host");
 
-        const nowMs = Date.parse(FIXED_NOW_ISO);
-        const dayStartMs = Date.parse(`${FIXED_NOW_ISO.slice(0, 10)}T00:00:00Z`);
+        const nowMs = Date.parse(nowIso);
+        const dayStartMs = Date.parse(`${nowIso.slice(0, 10)}T00:00:00Z`);
         const schedule = scheduleSlots({ slotMinutes: 60, start: new Date(dayStartMs).toISOString(), count: 24 });
         const running = schedule.slots.find((slot) => Date.parse(slot.id) <= nowMs && nowMs < Date.parse(slot.id) + 3_600_000);
         if (running) running.controllables = { boiler: { on: true, setBy: "user" } };
@@ -275,6 +288,43 @@ test.describe("the schedule host's clock", () => {
         const after = await derivedAgain(page);
         expect(after.rebuilt).toBe(true);
         expect(after.announcements).toBeGreaterThan(0);
+    });
+
+    test("a boundary refresh uses the new slot before the next coarse tick", async ({ page }) => {
+        await mountHost(page, "2026-10-21T12:59:45.000Z");
+        const nextSlotId = "2026-10-21T13:00:00.000Z";
+        expect(await page.evaluate(() => (window as any).__host._normalized.currentSlotId))
+            .toBe("2026-10-21T12:00:00.000Z");
+
+        // The owner's boundary timer fires at 13:00:00.050; its 30 s clock
+        // will not tick until 13:00:15.
+        await page.clock.runFor(15_100);
+
+        await expect.poll(() => page.evaluate(
+            () => (window as any).__host._normalized.currentSlotId,
+        )).toBe(nextSlotId);
+        expect(await page.evaluate(() => (window as any).__host.nowMs as number))
+            .toBeLessThan(Date.parse("2026-10-21T13:00:15.000Z"));
+    });
+
+    test("a consumer mounted after a boundary starts in the current slot", async ({ page }) => {
+        await mountHost(page, "2026-10-21T12:59:45.000Z");
+
+        // Mount before the boundary refresh and the next 30 s tick.
+        await page.clock.runFor(15_010);
+        await page.evaluate(() => {
+            const first = (window as any).__host;
+            const second = document.createElement("scheduling-day-editor-host") as any;
+            second.hass = first.hass;
+            second.timeZone = "UTC";
+            second.preload = true;
+            document.body.appendChild(second);
+            (window as any).__secondHost = second;
+        });
+
+        await expect.poll(() => page.evaluate(
+            () => (window as any).__secondHost._normalized.currentSlotId,
+        )).toBe("2026-10-21T13:00:00.000Z");
     });
 
     test("a hidden page runs no clock, and returning catches up in one step", async ({ page }) => {

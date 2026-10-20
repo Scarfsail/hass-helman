@@ -15,12 +15,8 @@ import type {
     ScheduleSetBy,
     ScheduleSlot,
 } from "../schedule-types";
-import {
-    isScheduleClimateApplianceAction,
-    isScheduleEvChargerAction,
-    isScheduleGenericApplianceAction,
-    isScheduleInverterAction,
-} from "../schedule-types";
+import { isScheduleInverterAction } from "../schedule-types";
+import { APPLIANCE_KIND_UI } from "./schedule-appliance-kind-ui";
 
 /**
  * One state of one controllable entity, expressed the way the slot editor
@@ -304,28 +300,21 @@ function _buildLiveApplianceAction({
     state: string;
     states: HomeAssistant["states"];
 }): ScheduleApplianceAction | null {
-    if (entity.kind === "climate") {
-        return { mode: state };
-    }
-
-    if (entity.kind === "ev_charger") {
-        const charge = state === "on";
-        if (!charge) {
-            return { charge };
-        }
+    const action = resolveScheduleActionFromEntityState({ entity, state }) as ScheduleApplianceAction;
+    if (entity.kind === "ev_charger" && "charge" in action && action.charge) {
 
         // Only the live view can say which mode a running charger is in: it
         // reads the charger's own selects, which the recorder is not asked for.
         const useMode = _readOptionalState(states, entity.controls.useMode.entityId);
         const ecoGear = _readOptionalState(states, entity.controls.ecoGear.entityId);
         return {
-            charge,
+            charge: true,
             ...(useMode === "ECO" || useMode === "Fast" ? { useMode } : {}),
             ...(ecoGear === null ? {} : { ecoGear }),
         };
     }
 
-    return { on: state === "on" };
+    return action;
 }
 
 /**
@@ -448,20 +437,7 @@ export function _projectEntityState({
         return entity.actionOptions?.[inverterAction.kind] ?? entity.normalState;
     }
 
-    const applianceAction = action as ScheduleApplianceAction;
-    if (isScheduleClimateApplianceAction(applianceAction)) {
-        return applianceAction.mode;
-    }
-
-    if (isScheduleEvChargerAction(applianceAction)) {
-        return applianceAction.charge ? "on" : "off";
-    }
-
-    if (isScheduleGenericApplianceAction(applianceAction)) {
-        return applianceAction.on ? "on" : "off";
-    }
-
-    return entity.normalState;
+    return APPLIANCE_KIND_UI[entity.kind].stateFromAction(action as ScheduleApplianceAction);
 }
 
 /**
@@ -496,15 +472,7 @@ export function resolveScheduleActionFromEntityState({
         return kind === null ? null : { kind };
     }
 
-    if (entity.kind === "climate") {
-        return { mode: state };
-    }
-
-    if (entity.kind === "ev_charger") {
-        return { charge: state === "on" };
-    }
-
-    return { on: state === "on" };
+    return APPLIANCE_KIND_UI[entity.kind].actionFromState(state);
 }
 
 function _readOptionalState(

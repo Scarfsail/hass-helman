@@ -5,6 +5,7 @@ import type {
     EvChargerApplianceMetadataDTO,
     GenericApplianceMetadataRecordDTO,
 } from "../../../helman-api";
+import { APPLIANCE_KIND_UI } from "./schedule-appliance-kind-ui";
 
 /**
  * One entry of the controllable roster, the inverter included, exactly as
@@ -28,7 +29,7 @@ export interface ScheduleApplianceDescriptor {
 }
 
 export function describeScheduleAppliance(appliance: ScheduleApplianceMetadata): ScheduleApplianceDescriptor {
-    return { id: appliance.id, name: appliance.name, kind: appliance.kind, icon: appliance.metadata.icon };
+    return APPLIANCE_KIND_UI[appliance.kind].describe(appliance);
 }
 
 /** The appliance behind a roster entry, or null for the inverter. */

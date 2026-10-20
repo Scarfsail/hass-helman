@@ -732,6 +732,29 @@ function diagram(page: Page) {
     return page.locator("scheduling-explanation-panel scheduling-logic-diagram");
 }
 
+test("records the diagram rows produced by explanationRows before model extraction", async ({ page }) => {
+    await mountPanel(page);
+    const rows = [];
+    for (let index = 0; index < SLOT_IDS.length; index += 1) {
+        await openDiagram(page, index);
+        rows.push(await diagram(page).locator("svg.logic").evaluate((root) => ({
+            terminal: root.getAttribute("data-terminal"),
+            blocks: Array.from(root.querySelectorAll("g.block")).map((block) => ({
+                id: block.getAttribute("data-id"),
+                state: block.getAttribute("data-state"),
+                decisive: block.getAttribute("data-decisive"),
+                group: block.getAttribute("data-group"),
+            })),
+            edges: Array.from(root.querySelectorAll("path.edge")).map((edge) => ({
+                from: edge.getAttribute("data-from"),
+                to: edge.getAttribute("data-to"),
+                decisive: edge.getAttribute("data-decisive"),
+            })),
+        })));
+    }
+    expect(JSON.stringify(rows, null, 2)).toMatchSnapshot("explanation-rows-diagrams.json");
+});
+
 /**
  * Open a slot's diagram.
  *

@@ -10,6 +10,9 @@ import type {
 } from "../../helman-api";
 import { callHelman } from "./helman-commands";
 import type { HelmanSchedulePatch } from "../../helman/models";
+import type { ScheduleControllable } from "../schedule/model/schedule-appliance-metadata";
+import type { ScheduleExplanationPayload } from "./helman-commands";
+import { getSharedDataChangedFeed } from "./data-changed";
 
 type HelmanConnection = HomeAssistant["connection"];
 
@@ -24,6 +27,10 @@ export interface HelmanStore {
     setScheduleExecution(enabled: boolean): Promise<SchedulePayload>;
     getEntityActualHistory(): Promise<EntityActualHistoryPayload>;
     getAppliances(): Promise<AppliancesPayload>;
+    getControllableRoster(): Promise<readonly ScheduleControllable[]>;
+    subscribeRosterInvalidation(listener: () => void): () => void;
+    getScheduleExplanation(controllableId: string, date: string): Promise<ScheduleExplanationPayload | null>;
+    subscribeExplanationInvalidation(listener: () => void): () => void;
     getApplianceProjections(): Promise<ApplianceProjectionsPayload>;
     getDeviceTree(options?: { fresh?: boolean }): Promise<TreePayload>;
     getHistory(options?: { fresh?: boolean }): Promise<HistoryPayload>;
@@ -57,6 +64,14 @@ class HelmanStoreImpl implements HelmanStore {
      * and a failure propagates to everyone who was waiting.
      */
     private readonly _inFlight = new Map<string, Promise<unknown>>();
+    private _roster: readonly ScheduleControllable[] | null = null;
+    private _rosterRequest: Promise<readonly ScheduleControllable[]> | null = null;
+    private _explanations = new Map<string, ScheduleExplanationPayload | null>();
+    private _unsubscribeDataChanged: (() => void) | null = null;
+    private readonly _explanationListeners = new Set<() => void>();
+    private readonly _rosterListeners = new Set<() => void>();
+    private _explanationGeneration = 0;
+    private _rosterGeneration = 0;
 
     constructor(hass: HomeAssistant) {
         this._hass = hass;
@@ -121,6 +136,71 @@ class HelmanStoreImpl implements HelmanStore {
 
     public getAppliances(): Promise<AppliancesPayload> {
         return this._dedupe("get_appliances", () => callHelman(this._hass, "helman/get_appliances", {}));
+    }
+
+    public getControllableRoster(): Promise<readonly ScheduleControllable[]> {
+        this._ensureDataChangedInvalidation();
+        if (this._roster !== null) return Promise.resolve(this._roster);
+        if (this._rosterRequest !== null) return this._rosterRequest;
+        const generation = this._rosterGeneration;
+        const request = this.getAppliances()
+            .then((payload) => generation === this._rosterGeneration
+                ? this._roster ??= payload.appliances
+                : this.getControllableRoster())
+            .catch((error) => {
+                if (generation !== this._rosterGeneration) return this.getControllableRoster();
+                throw error;
+            })
+            .finally(() => {
+                if (this._rosterRequest === request) this._rosterRequest = null;
+            });
+        this._rosterRequest = request;
+        return request;
+    }
+
+    public subscribeRosterInvalidation(listener: () => void): () => void {
+        this._ensureDataChangedInvalidation();
+        this._rosterListeners.add(listener);
+        return () => this._rosterListeners.delete(listener);
+    }
+
+    public getScheduleExplanation(controllableId: string, date: string): Promise<ScheduleExplanationPayload | null> {
+        this._ensureDataChangedInvalidation();
+        const key = `get_schedule_explanation:${controllableId}:${date}`;
+        if (this._explanations.has(key)) return Promise.resolve(this._explanations.get(key)!);
+        return this._dedupe(key, async () => {
+            const generation = this._explanationGeneration;
+            const payload = await callHelman(this._hass, "helman/get_schedule_explanation", {
+                controllable_id: controllableId,
+                date,
+            });
+            if (generation === this._explanationGeneration) this._explanations.set(key, payload ?? null);
+            return payload ?? null;
+        });
+    }
+
+    public subscribeExplanationInvalidation(listener: () => void): () => void {
+        this._ensureDataChangedInvalidation();
+        this._explanationListeners.add(listener);
+        return () => this._explanationListeners.delete(listener);
+    }
+
+    private _ensureDataChangedInvalidation(): void {
+        this._unsubscribeDataChanged ??= getSharedDataChangedFeed(this._hass).subscribe((kinds) => {
+            if (kinds.has("config")) {
+                this._rosterGeneration++;
+                this._roster = null;
+                this._rosterRequest = null;
+                this._inFlight.delete("get_appliances");
+                for (const listener of this._rosterListeners) listener();
+            }
+            this._explanationGeneration++;
+            this._explanations.clear();
+            for (const key of this._inFlight.keys()) {
+                if (key.startsWith("get_schedule_explanation:")) this._inFlight.delete(key);
+            }
+            for (const listener of this._explanationListeners) listener();
+        });
     }
 
     /**

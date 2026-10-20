@@ -4,6 +4,7 @@ import { nothing } from "lit-html";
 import type { HomeAssistant } from "../../types/ha";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import { helmanColorVars } from "../color-vars";
+import { resolveLocale } from "../shared/resolve-locale";
 import {
     buildSpanPillRows,
     spanKeyForYear,
@@ -427,12 +428,8 @@ export class HelmanSolarSpanPills extends LitElement {
         return this._localizeFn ?? ((key: string) => key);
     }
 
-    private get _locale(): string | undefined {
-        if (this.hass?.locale?.language) {
-            return this.hass.locale.language;
-        }
-
-        return typeof navigator !== "undefined" ? navigator.language : undefined;
+    private get _locale(): string {
+        return resolveLocale(this.hass);
     }
 }
 

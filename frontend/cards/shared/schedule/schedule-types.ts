@@ -30,9 +30,9 @@ export type ScheduleControllableActions = Record<string, ScheduleControllableAct
 export const INVERTER_CONTROLLABLE_ID = "inverter";
 
 export function isScheduleInverterAction(
-    action: ScheduleControllableAction,
+    action: ScheduleControllableAction | null,
 ): action is ScheduleInverterAction {
-    return "kind" in action;
+    return action !== null && "kind" in action;
 }
 
 export type ScheduleSetBy = ScheduleSetByDTO;
@@ -215,8 +215,11 @@ export function areScheduleApplianceActionsEqual(
 }
 
 export function getScheduleControllableActionIdentityKey(
-    action: ScheduleControllableAction,
+    action: ScheduleControllableAction | null,
 ): string {
+    if (action === null) {
+        return "none";
+    }
     return isScheduleInverterAction(action)
         // Prefixed by the action's *shape*, not by a lane: two lanes never
         // compare their keys, but an inverter action and an appliance action

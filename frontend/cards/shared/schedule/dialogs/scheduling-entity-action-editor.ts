@@ -3,28 +3,24 @@ import { customElement, property, state } from "lit/decorators.js";
 import { nothing } from "lit-html";
 import type { LocalizeFunction } from "../../../localize/localize";
 import "../components/scheduling-action-option-card";
-import "./scheduling-climate-appliance-editor";
-import "./scheduling-ev-charger-editor";
-import "./scheduling-generic-appliance-editor";
+import "./scheduling-appliance-action-editor";
 import type { ScheduleActionOptionSelectDetail } from "../components/scheduling-action-option-card";
 import type {
     EntityScheduleAction,
     EntityScheduleBlockAuthorship,
     EntityScheduleTarget,
 } from "../model/entity-day-schedule-model";
-import { isEntityInverterAction, isInverterScheduleTarget } from "../model/entity-day-schedule-model";
+import { isInverterScheduleTarget } from "../model/entity-day-schedule-model";
 import { summarizeScheduleAuthorship } from "../model/schedule-authorship";
 import type {
     ScheduleApplianceMetadata,
-    ScheduleClimateApplianceMetadata,
-    ScheduleEvChargerApplianceMetadata,
-    ScheduleGenericApplianceMetadata,
 } from "../model/schedule-appliance-metadata";
 import type {
     ScheduleAction,
     ScheduleActionAuthorshipSummary,
     ScheduleApplianceAction,
 } from "../schedule-types";
+import { isScheduleInverterAction } from "../schedule-types";
 import { schedulingSharedStyles } from "../styles/scheduling-shared-styles";
 import type { ScheduleApplianceActionChangeDetail } from "./schedule-appliance-editor-types";
 
@@ -123,7 +119,7 @@ export class SchedulingEntityActionEditor extends LitElement {
             return;
         }
 
-        const action = isEntityInverterAction(this.action) ? this.action : null;
+        const action = this.action !== null && isScheduleInverterAction(this.action) ? this.action : null;
         this._actionKind = action === null || action.kind === "empty" ? null : action.kind;
         this._targetSocInput = action?.targetSoc?.toString() ?? "";
     }
@@ -183,44 +179,19 @@ export class SchedulingEntityActionEditor extends LitElement {
             `;
         }
 
-        const action = this.action === null || isEntityInverterAction(this.action)
+        const action = this.action === null || isScheduleInverterAction(this.action)
             ? null
             : this.action;
-        switch (appliance.kind) {
-            case "ev_charger":
-                return html`
-                    <scheduling-ev-charger-editor
-                        .appliance=${appliance as ScheduleEvChargerApplianceMetadata}
-                        .localize=${this.localize}
-                        .action=${action}
-                        .selectedAuthorship=${this._authorshipSummary()}
-                        .showControls=${true}
-                        @schedule-appliance-action-change=${this._handleApplianceActionChange}
-                    ></scheduling-ev-charger-editor>
-                `;
-            case "climate":
-                return html`
-                    <scheduling-climate-appliance-editor
-                        .appliance=${appliance as ScheduleClimateApplianceMetadata}
-                        .localize=${this.localize}
-                        .action=${action}
-                        .selectedAuthorship=${this._authorshipSummary()}
-                        .showControls=${true}
-                        @schedule-appliance-action-change=${this._handleApplianceActionChange}
-                    ></scheduling-climate-appliance-editor>
-                `;
-            default:
-                return html`
-                    <scheduling-generic-appliance-editor
-                        .appliance=${appliance as ScheduleGenericApplianceMetadata}
-                        .localize=${this.localize}
-                        .action=${action}
-                        .selectedAuthorship=${this._authorshipSummary()}
-                        .showControls=${true}
-                        @schedule-appliance-action-change=${this._handleApplianceActionChange}
-                    ></scheduling-generic-appliance-editor>
-                `;
-        }
+        return html`
+            <scheduling-appliance-action-editor
+                .appliance=${appliance}
+                .localize=${this.localize}
+                .action=${action}
+                .selectedAuthorship=${this._authorshipSummary()}
+                .showControls=${true}
+                @schedule-appliance-action-change=${this._handleApplianceActionChange}
+            ></scheduling-appliance-action-editor>
+        `;
     }
 
     private _handleApplianceActionChange(

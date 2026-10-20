@@ -1,4 +1,5 @@
-import { callHelman, type ScheduleExplanationPayload } from "../../data/helman-commands";
+import type { ScheduleExplanationPayload } from "../../data/helman-commands";
+import { getSharedHelmanStore, type HelmanStore } from "../../data/store";
 import { DialogHistoryController } from "../../dialog-history-controller";
 import { LitElement, css, html } from "lit-element";
 import { customElement, property, state } from "lit/decorators.js";
@@ -9,7 +10,6 @@ import "../components/scheduling-action-chip";
 import "../components/scheduling-appliance-chip";
 import "../components/scheduling-entity-day-band";
 import "../components/scheduling-explanation-panel";
-import { DataChangedController } from "../../data/data-changed";
 import "./scheduling-entity-action-editor";
 import type {
     EntityDayBandBlockSelectDetail,
@@ -35,7 +35,6 @@ import {
     buildEntityScheduleBoundaryOptions,
     buildEntityScheduleDays,
     buildEntityScheduleLanePatches,
-    isEntityInverterAction,
     isInverterScheduleTarget,
     isEntityScheduleActionEmpty,
     resolveEntityScheduleRangeLimits,
@@ -43,6 +42,7 @@ import {
     selectEntityScheduleDayBlocks,
     selectEntityScheduleSlotsInRange,
 } from "../model/entity-day-schedule-model";
+import { isScheduleInverterAction } from "../schedule-types";
 import { buildEntityDayBandLanes } from "../model/entity-lane-source";
 import {
     parseScheduleExplanation,
@@ -83,6 +83,7 @@ interface EntityScheduleEditSession {
 
 /** Shared empty set, so a lane with no authored edges allocates nothing. */
 const EMPTY_BLOCK_SPLITS: ReadonlySet<number> = new Set<number>();
+const EMPTY_DRAFT: EntityScheduleDraft = {};
 
 export interface EntityScheduleSaveDetail {
     patches: ScheduleSlotPatch[];
@@ -369,8 +370,6 @@ export class SchedulingEntityDayEditor extends LitElement {
     /** Projected consumption and vehicle SoC, for the band's own figures. */
     @property({ attribute: false }) public projectionIndex: ScheduleApplianceProjectionIndex =
         EMPTY_SCHEDULE_APPLIANCE_PROJECTION_INDEX;
-    @property({ type: String }) public entityName = "";
-    @property({ type: String }) public entityIcon = "mdi:flash-outline";
     /** How the price is denominated, for the forecast rows' tooltips. */
     @property({ type: String }) public priceUnit: string | null = null;
     @property({ type: String }) public currentDayKey: string | null = null;
@@ -442,11 +441,8 @@ export class SchedulingEntityDayEditor extends LitElement {
     /**
      * The condition record per lane and day, raw as the backend served it.
      *
-     * Fetched here rather than by the host: both hosts of this dialog would
-     * otherwise need the same websocket wiring for a mode that only exists
-     * inside it. A record is a whole day of per-slot condition trees for one
-     * lane, so they are asked for once per lane per day and kept for as long as
-     * the dialog is open.
+     * The store fetches and shares each lane/day record across openings. The
+     * editor keeps this map for the current opening's rendering and errors.
      */
     @state() private _explanations: ReadonlyMap<string, ScheduleExplanationPayload | null> = new Map();
     /** Lanes whose record could not be fetched, which is not the same as none. */
@@ -454,37 +450,60 @@ export class SchedulingEntityDayEditor extends LitElement {
     /** The parsed form of `_explanations`, rebuilt only when that map changes. */
     private _explanationModels: ReadonlyMap<string, ScheduleExplanationModel> = new Map();
     /**
-     * Lanes already asked about, so re-entering Explain mode does not refetch.
-     * Reset per opening along with the records themselves.
+     * Lanes already asked about in this opening, so re-entering Explain mode
+     * does not ask again. The store keeps successful records across openings.
      */
     private _explanationsRequested = new Set<string>();
+    private _explanationGeneration = 0;
+    private _explanationStore: HelmanStore | null = null;
+    private _unsubscribeExplanationInvalidation: (() => void) | null = null;
+    private _daysFor: {
+        slots: readonly ScheduleSlot[]; nowMs: number; timeZone: string;
+        locale: string; currentDayKey: string | null; slotMinutes: number;
+    } | null = null;
+    private _cachedDays: EntityScheduleDay[] = [];
+    private _blocksFor = new Map<string, {
+        day: EntityScheduleDay; slots: readonly ScheduleSlot[]; target: EntityScheduleTarget;
+        draft: EntityScheduleDraft; splits: ReadonlySet<number>; editing: EntityScheduleEditSession | null;
+        nowMs: number; blocks: EntityScheduleBlock[];
+    }>();
+    private _bandLanesFor: {
+        day: EntityScheduleDay; lanes: readonly EntityScheduleLane[];
+        slots: readonly ScheduleSlot[]; drafts: EntityScheduleDrafts;
+        splits: EntityScheduleBlockSplits; editing: EntityScheduleEditSession | null;
+        nowMs: number; projectionIndex: ScheduleApplianceProjectionIndex;
+        result: EntityDayBandLane[];
+    } | null = null;
     private _draftBeforeEdit: EntityScheduleDraft = {};
     /** Bumped per edit session, so the action editor knows a new one began. */
     private _editSessionId = 0;
     private readonly _history = new DialogHistoryController(this, "__helmanEntityScheduleDialogId", { close: () => this._close() });
 
-    constructor() {
-        super();
-        /**
-         * Drop the cached explanations whenever the backend says something changed.
-         *
-         * They are fetched once per (lane, day) and kept for the life of an opening
-         * -- which was right while the only thing that could invalidate them was
-         * closing and reopening the dialog. Editing an optimizer from the diagram
-         * broke that: the save reloads the entry, re-runs the automation, and fires
-         * `helman_data_changed`, and a cache that survived it would leave the
-         * reader looking at the rule they just changed, unchanged. Clearing is
-         * enough -- the panel refetches whatever it is still showing.
-         */
-        new DataChangedController(this, () => this.hass, {}, () => {
+    private _syncExplanationStore(): void {
+        if (!this.hass) return;
+        const store = getSharedHelmanStore(this.hass);
+        if (store === this._explanationStore) return;
+        this._unsubscribeExplanationInvalidation?.();
+        this._explanationStore = store;
+        this._unsubscribeExplanationInvalidation = store.subscribeExplanationInvalidation(() => {
+            this._explanationGeneration++;
             this._explanations = new Map();
             this._explanationFailures = new Set();
             this._explanationsRequested = new Set();
+            if (this.open && this._mode === "explain") this._requestExplanations();
         });
+    }
+
+    disconnectedCallback(): void {
+        super.disconnectedCallback();
+        this._unsubscribeExplanationInvalidation?.();
+        this._unsubscribeExplanationInvalidation = null;
+        this._explanationStore = null;
     }
 
     willUpdate(changedProperties: Map<string, unknown>): void {
         super.willUpdate(changedProperties);
+        this._syncExplanationStore();
 
         // Seed once per opening: later slot updates are the refresh case, which
         // the stale banner reports instead of applying.
@@ -525,7 +544,7 @@ export class SchedulingEntityDayEditor extends LitElement {
         // every renderer that needs them -- during a drag this runs per frame.
         const days = this._days();
         const day = this._selectedDay(days);
-        if (this._lanes.length === 0 || day === null) {
+        if (this.lanes.length === 0 || day === null) {
             return nothing;
         }
 
@@ -749,7 +768,7 @@ export class SchedulingEntityDayEditor extends LitElement {
         // config editor, and the lane already knows its name -- so the
         // explanation can name them the same way without asking the backend
         // for the config it would otherwise need.
-        const lane = this._lanes.find((entry) => entry.key === selection.laneKey);
+        const lane = this.lanes.find((entry) => entry.key === selection.laneKey);
         return html`
             <div class="panel">
                 <scheduling-explanation-panel
@@ -918,7 +937,7 @@ export class SchedulingEntityDayEditor extends LitElement {
     }
 
     private _renderActionChip(lane: EntityScheduleLane, action: EntityScheduleAction) {
-        if (isInverterScheduleTarget(lane.target) && isEntityInverterAction(action)) {
+        if (isInverterScheduleTarget(lane.target) && action !== null && isScheduleInverterAction(action)) {
             return html`
                 <scheduling-action-chip
                     .action=${action}
@@ -928,7 +947,7 @@ export class SchedulingEntityDayEditor extends LitElement {
             `;
         }
 
-        const applianceAction = action === null || isEntityInverterAction(action)
+        const applianceAction = action === null || isScheduleInverterAction(action)
             ? null
             : action as ScheduleApplianceAction;
         const appliance = lane.appliance === null
@@ -949,35 +968,8 @@ export class SchedulingEntityDayEditor extends LitElement {
         `;
     }
 
-    /**
-     * Every lane to stack, falling back to the single target the dialog was
-     * opened with when the card has not supplied a roster.
-     */
-    private get _lanes(): EntityScheduleLane[] {
-        if (this.lanes.length > 0) {
-            return [...this.lanes];
-        }
-
-        if (this.target === null) {
-            return [];
-        }
-
-        return [{
-            key: this.target,
-            target: this.target,
-            // The roster is where the entity ids come from; without it there is
-            // nothing to resolve, so the lane's label keeps its static icon.
-            entityId: "",
-            name: this.entityName,
-            icon: this.appliance?.metadata.icon ?? this.entityIcon,
-            appliance: this.appliance,
-            isAvailable: true,
-            actualSlots: [],
-        }];
-    }
-
     private get _selectedLane(): EntityScheduleLane | null {
-        return this._lanes.find((lane) => lane.key === this._selectedLaneKey) ?? null;
+        return this.lanes.find((lane) => lane.key === this._selectedLaneKey) ?? null;
     }
 
     /** The selected lane's pending edits. */
@@ -1022,7 +1014,7 @@ export class SchedulingEntityDayEditor extends LitElement {
         draft: EntityScheduleDraft,
     ): EntityScheduleBlockSplits {
         const stored = splits[laneKey];
-        const lane = this._lanes.find((candidate) => candidate.key === laneKey);
+        const lane = this.lanes.find((candidate) => candidate.key === laneKey);
         if (stored === undefined || stored.size === 0 || lane === undefined) {
             return splits;
         }
@@ -1042,7 +1034,7 @@ export class SchedulingEntityDayEditor extends LitElement {
     }
 
     private _laneDrafts(): { target: EntityScheduleTarget; draft: EntityScheduleDraft }[] {
-        return this._lanes.flatMap((lane) => {
+        return this.lanes.flatMap((lane) => {
             const draft = this._drafts[lane.key];
             return draft === undefined ? [] : [{ target: lane.target, draft }];
         });
@@ -1060,9 +1052,10 @@ export class SchedulingEntityDayEditor extends LitElement {
         // something they mean to have explained.
         this._mode = "edit";
         this._explainSelection = null;
-        // The records are only as good as the run that produced them, and a
-        // save between two openings re-runs the automation: the answer this
-        // dialog gave last time is not the answer to give now.
+        // The store keeps answered records across openings and invalidates
+        // them when the backend reports a data change. This opening starts with
+        // a fresh view of those records.
+        this._explanationGeneration++;
         this._explanations = new Map();
         this._explanationFailures = new Set();
         this._explanationsRequested = new Set();
@@ -1113,7 +1106,17 @@ export class SchedulingEntityDayEditor extends LitElement {
     }
 
     private _days(): EntityScheduleDay[] {
-        return buildEntityScheduleDays({
+        const previous = this._daysFor;
+        if (previous && previous.slots === this._baselineSlots && previous.nowMs === this.nowMs
+            && previous.timeZone === this.timeZone && previous.locale === this.locale
+            && previous.currentDayKey === this.currentDayKey && previous.slotMinutes === this.slotMinutes) {
+            return this._cachedDays;
+        }
+        this._daysFor = {
+            slots: this._baselineSlots, nowMs: this.nowMs, timeZone: this.timeZone,
+            locale: this.locale, currentDayKey: this.currentDayKey, slotMinutes: this.slotMinutes,
+        };
+        return this._cachedDays = buildEntityScheduleDays({
             slots: this._baselineSlots,
             slotMinutes: this.slotMinutes,
             timeZone: this.timeZone,
@@ -1134,21 +1137,40 @@ export class SchedulingEntityDayEditor extends LitElement {
     }
 
     private _dayBlocks(day: EntityScheduleDay, lane: EntityScheduleLane): EntityScheduleBlock[] {
-        return selectEntityScheduleDayBlocks(
+        const draft = this._drafts[lane.key] ?? EMPTY_DRAFT;
+        const splits = this._blockSplits[lane.key] ?? EMPTY_BLOCK_SPLITS;
+        const previous = this._blocksFor.get(lane.key);
+        if (previous && previous.day === day && previous.slots === this._baselineSlots
+            && previous.target === lane.target && previous.draft === draft
+            && previous.splits === splits && previous.editing === this._editing
+            && previous.nowMs === this.nowMs) return previous.blocks;
+        const blocks = selectEntityScheduleDayBlocks(
             buildEntityScheduleBlocks({
                 slots: this._baselineSlots,
                 target: lane.target,
-                draft: this._drafts[lane.key] ?? {},
+                draft,
                 nowMs: this.nowMs,
                 splitAtMs: this._laneBlockSplits(lane.key),
             }),
             day,
         );
+        this._blocksFor.set(lane.key, {
+            day, slots: this._baselineSlots, target: lane.target, draft, splits,
+            editing: this._editing, nowMs: this.nowMs, blocks,
+        });
+        return blocks;
     }
 
     private _buildBandLanes(day: EntityScheduleDay): EntityDayBandLane[] {
-        return buildEntityDayBandLanes({
-            lanes: this._lanes,
+        const previous = this._bandLanesFor;
+        if (previous && previous.day === day && previous.lanes === this.lanes
+            && previous.slots === this._baselineSlots && previous.drafts === this._drafts
+            && previous.splits === this._blockSplits && previous.editing === this._editing
+            && previous.nowMs === this.nowMs && previous.projectionIndex === this.projectionIndex) {
+            return previous.result;
+        }
+        const result = buildEntityDayBandLanes({
+            lanes: this.lanes,
             slots: this._baselineSlots,
             day,
             drafts: this._drafts,
@@ -1156,6 +1178,12 @@ export class SchedulingEntityDayEditor extends LitElement {
             nowMs: this.nowMs,
             projectionIndex: this.projectionIndex,
         });
+        this._bandLanesFor = {
+            day, lanes: this.lanes, slots: this._baselineSlots, drafts: this._drafts,
+            splits: this._blockSplits, editing: this._editing, nowMs: this.nowMs,
+            projectionIndex: this.projectionIndex, result,
+        };
+        return result;
     }
 
     /**
@@ -1196,7 +1224,7 @@ export class SchedulingEntityDayEditor extends LitElement {
     /** The same, for every lane at once, as the band lane builder wants it. */
     private _allBlockSplits(): EntityScheduleBlockSplits {
         const splits: Record<string, ReadonlySet<number>> = {};
-        for (const lane of this._lanes) {
+        for (const lane of this.lanes) {
             const laneSplits = this._laneBlockSplits(lane.key);
             if (laneSplits.size > 0) {
                 splits[lane.key] = laneSplits;
@@ -1273,7 +1301,7 @@ export class SchedulingEntityDayEditor extends LitElement {
             return;
         }
 
-        for (const lane of this._lanes) {
+        for (const lane of this.lanes) {
             void this._loadExplanation(lane.key, day.dayKey);
         }
     }
@@ -1286,16 +1314,16 @@ export class SchedulingEntityDayEditor extends LitElement {
         }
 
         this._explanationsRequested.add(key);
+        const generation = this._explanationGeneration;
         try {
-            const payload = await callHelman(hass, "helman/get_schedule_explanation", {
-                controllable_id: laneKey,
-                date: dayKey,
-            });
+            const payload = await getSharedHelmanStore(hass).getScheduleExplanation(laneKey, dayKey);
+            if (generation !== this._explanationGeneration) return;
             // A null answer is not a failure: it means nothing was recorded for
             // this lane on this date, which is exactly what drops the lane out
             // of Explain mode.
             this._explanations = new Map(this._explanations).set(key, payload ?? null);
         } catch {
+            if (generation !== this._explanationGeneration) return;
             // Asked and unanswered, which is not the same as "nothing recorded"
             // -- the panel says so rather than reading as an empty day.
             this._explanationsRequested.delete(key);

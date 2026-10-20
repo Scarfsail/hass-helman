@@ -10,7 +10,6 @@ import {
     buildElapsedScheduleSlots,
     buildEntityActualSegments,
     buildEntityScheduleBlocks,
-    isEntityInverterAction,
     isInverterScheduleTarget,
     selectEntityScheduleDayBlocks,
     type EntityActualSegment,
@@ -23,6 +22,7 @@ import {
     type EntityScheduleLane,
     type EntityScheduleTarget,
 } from "./entity-day-schedule-model";
+import { isScheduleInverterAction } from "../schedule-types";
 import {
     asScheduleAppliance,
     describeScheduleAppliance,
@@ -202,13 +202,13 @@ export function resolveLaneRunPresentation(
     run: { action: EntityScheduleAction },
     localize: LocalizeFunction,
 ) {
-    if (isInverterScheduleTarget(lane.target) && isEntityInverterAction(run.action)) {
+    if (isInverterScheduleTarget(lane.target) && run.action !== null && isScheduleInverterAction(run.action)) {
         return getScheduleActionPresentation(run.action, localize);
     }
 
     return getScheduleApplianceActionPresentation({
         appliance: lane.appliance === null ? { kind: "generic", icon: lane.icon } : describeScheduleAppliance(lane.appliance),
-        action: run.action === null || isEntityInverterAction(run.action) ? null : run.action,
+        action: run.action === null || isScheduleInverterAction(run.action) ? null : run.action,
         localize,
     });
 }
@@ -334,7 +334,7 @@ function _buildLaneBlockProjections({
 
     for (const block of blocks) {
         const action = block.action;
-        if (action === null || isEntityInverterAction(action)) {
+        if (action === null || isScheduleInverterAction(action)) {
             continue;
         }
 
@@ -388,7 +388,7 @@ function _buildLaneBlockVehicleSoc({
         const action = block.action;
         if (
             action === null
-            || isEntityInverterAction(action)
+            || isScheduleInverterAction(action)
             || !isScheduleEvChargerAction(action)
         ) {
             continue;

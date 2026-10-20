@@ -7,11 +7,9 @@ import type { HomeAssistant } from "../../types/ha";
 import type { ForecastPayload } from "../helman-api";
 import { ForecastLoader } from "../shared/data/forecast-loader";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
-import { getSharedScheduleOwner, type SharedScheduleOwner } from "../shared/schedule/schedule-owner";
-import {
-    EMPTY_NORMALIZED_SCHEDULE,
-    NormalizedScheduleCache,
-} from "../shared/schedule/model/schedule-normalizer";
+import { EMPTY_SCHEDULE_OWNER_SNAPSHOT, getSharedScheduleOwner, type SharedScheduleOwner } from "../shared/schedule/schedule-owner";
+import { resolveLocale } from "../shared/resolve-locale";
+import { EMPTY_NORMALIZED_SCHEDULE } from "../shared/schedule/model/schedule-normalizer";
 import { buildScheduleTimelineModel } from "../shared/schedule/model/schedule-timeline-builder";
 import {
     buildSlotForecastMap,
@@ -53,17 +51,6 @@ import { formatHouseForecastErrorPct, houseForecastError } from "./solar-inspect
  * more than the row could be read at a glance, and the day's import and export
  * are what the chart below spells out anyway.
  */
-
-const EMPTY_OWNER_SNAPSHOT: ScheduleOwnerSnapshot = {
-    schedule: null,
-    loading: false,
-    refreshing: false,
-    writing: false,
-    togglingExecution: false,
-    error: null,
-    updatedAt: null,
-    stale: false,
-};
 
 /** The day a pill was clicked for; the inspector loads it. */
 export interface DayPillSelectDetail {
@@ -405,7 +392,7 @@ export class HelmanSolarDayPills extends LitElement {
     private _restore?: { day: string; offset: number };
     private _revealed = -1;
 
-    @state() private _ownerSnapshot: ScheduleOwnerSnapshot = EMPTY_OWNER_SNAPSHOT;
+    @state() private _ownerSnapshot: ScheduleOwnerSnapshot = EMPTY_SCHEDULE_OWNER_SNAPSHOT;
     @state() private _forecast: ForecastPayload | null = null;
 
     private _localizeFn?: LocalizeFunction;
@@ -413,7 +400,6 @@ export class HelmanSolarDayPills extends LitElement {
     private _unsubscribeOwner?: () => void;
     private _forecastLoader: ForecastLoader | null = null;
 
-    private _normalizedCache = new NormalizedScheduleCache();
     private _normalized: NormalizedScheduleModel = EMPTY_NORMALIZED_SCHEDULE;
     private _model: SolarInspectorDayPillModel = EMPTY_DAY_PILL_MODEL;
     private _modelFor: {
@@ -804,6 +790,15 @@ export class HelmanSolarDayPills extends LitElement {
     }
 
     private _applyOwnerSnapshot(snapshot: ScheduleOwnerSnapshot): void {
+        if (snapshot === this._ownerSnapshot) {
+            // A clock tick: only the current slot or day can have moved, and
+            // the normalized model is the same object until one does.
+            if (this._scheduleOwner?.getNormalized(this.timeZone, this._locale) !== this._normalized) {
+                this.requestUpdate();
+            }
+            return;
+        }
+
         const scheduleChanged = snapshot.schedule !== this._ownerSnapshot.schedule;
         this._ownerSnapshot = snapshot;
         if (scheduleChanged && snapshot.schedule !== null) {
@@ -842,18 +837,10 @@ export class HelmanSolarDayPills extends LitElement {
         }
     }
 
-    /**
-     * The pills own no clock of their own, so they read the true wall clock:
-     * the row is rebuilt for other reasons often enough that a coarse "now"
-     * would only make the current-day pill lag without saving anything.
-     */
+    /** Read the owner's shared clock and normalized schedule. */
     private _rebuildNormalizedIfNeeded(): void {
-        this._normalized = this._normalizedCache.get(
-            this._ownerSnapshot.schedule,
-            this.timeZone,
-            this._locale,
-            new Date(),
-        );
+        this._normalized = this._scheduleOwner?.getNormalized(this.timeZone, this._locale)
+            ?? EMPTY_NORMALIZED_SCHEDULE;
     }
 
     /**
@@ -930,11 +917,7 @@ export class HelmanSolarDayPills extends LitElement {
     }
 
     private get _locale(): string {
-        if (this.hass?.locale?.language) {
-            return this.hass.locale.language;
-        }
-
-        return typeof navigator !== "undefined" ? navigator.language : "cs";
+        return resolveLocale(this.hass);
     }
 }
 

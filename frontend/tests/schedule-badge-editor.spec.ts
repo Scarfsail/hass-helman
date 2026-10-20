@@ -52,12 +52,18 @@ async function installFakeBackend(page: Page): Promise<void> {
             metadata: { icon: "mdi:flash", scheduleCapabilities: { onOffToggle: true } },
             controls: { switch: { entityId: `switch.${id}` } },
         });
+        (window as any).__roster = [appliance("dishwasher", "Dishwasher"), appliance("boiler", "Boiler")];
+        (window as any).__fireConfig = () => (window as any).__onHelmanUpdate?.({ kind: "config" });
 
         window.__fakeHass = {
             language: "en",
             locale: { language: "en" },
             config: { time_zone: "UTC" },
             connection: {
+                subscribeMessage: async (callback: (message: { kind: string }) => void) => {
+                    (window as any).__onHelmanUpdate = callback;
+                    return () => { (window as any).__onHelmanUpdate = null; };
+                },
                 // The editor asks for the forecast when it opens. There is none
                 // here: the dialog draws the day perfectly well without prices,
                 // and the load's own failure path is what a house with no
@@ -89,12 +95,14 @@ async function installFakeBackend(page: Page): Promise<void> {
                 "helman/get_appliances": async (msg: {
                     type: string;
                 }) => {
-                    return {
-                        appliances: [
-                            appliance("dishwasher", "Dishwasher"),
-                            appliance("boiler", "Boiler"),
-                        ],
-                    };
+                    if ((window as any).__deferRoster) {
+                        (window as any).__deferRoster = false;
+                        const oldRoster = (window as any).__roster;
+                        return new Promise((resolve) => {
+                            (window as any).__releaseRoster = () => resolve({ appliances: oldRoster });
+                        });
+                    }
+                    return { appliances: (window as any).__roster };
                 },
                 "helman/get_entity_actual_history": async (msg: {
                     type: string;
@@ -115,7 +123,7 @@ async function installFakeBackend(page: Page): Promise<void> {
  * Mount the boxes and the host side by side, with the card's own wiring between
  * them: the request bubbles to the wrapper, and the wrapper opens the host.
  */
-async function mount(page: Page, nodes: FakeNode[]): Promise<void> {
+async function mount(page: Page, nodes: FakeNode[], waitForRoster = true): Promise<void> {
     await page.evaluate(async (fakeNodes) => {
         const hydrate = (node: any): any => ({
             children: [],
@@ -152,7 +160,7 @@ async function mount(page: Page, nodes: FakeNode[]): Promise<void> {
 
     // The host needs its schedule and the roster before it has lanes to open
     // on; until then a press is correctly a no-op.
-    await page.waitForFunction(() => {
+    if (waitForRoster) await page.waitForFunction(() => {
         const host = document.querySelector("scheduling-day-editor-host") as any;
         return (host?.lanes?.length ?? 0) >= 2;
     });
@@ -230,6 +238,39 @@ test.describe("opening the day editor from a scheduling badge", () => {
     test.beforeEach(async ({ page }) => {
         await loadBundle(page, "scheduling-day-editor-host");
         await installFakeBackend(page);
+    });
+
+    test("the badge clock pauses while the page is hidden", async ({ page }) => {
+        await page.clock.install();
+        await mount(page, [
+            { id: "s1", name: "Dishwasher", deferrable: true, controllableIds: ["dishwasher"] },
+            { id: "s2", name: "Boiler", deferrable: true, controllableIds: ["boiler"] },
+        ]);
+        await expect.poll(() => badgeColor(page, "Boiler")).toContain("--schedule-authorship-user-color");
+        const initial = await page.evaluate(() => {
+            const boxes = document.querySelector("helman-tree-item-list") as any;
+            const row = boxes.shadowRoot.querySelector("helman-tree-item") as any;
+            const info = row.shadowRoot.querySelector("helman-tree-item-info") as any;
+            const badge = info.shadowRoot.querySelector("helman-schedule-badge") as any;
+            const source = badge._source as any;
+            (window as any).badgeTickCount = 0;
+            (window as any).stopBadgeTicks = source.subscribe(() => (window as any).badgeTickCount++);
+            const initial = (window as any).badgeTickCount;
+            Object.defineProperty(document, "hidden", { configurable: true, value: true });
+            document.dispatchEvent(new Event("visibilitychange"));
+            return initial;
+        });
+        await page.clock.runFor(31_000);
+        const hidden = await page.evaluate(() => (window as any).badgeTickCount as number);
+        const resumed = await page.evaluate(() => {
+            Object.defineProperty(document, "hidden", { configurable: true, value: false });
+            document.dispatchEvent(new Event("visibilitychange"));
+            const resumed = (window as any).badgeTickCount as number;
+            (window as any).stopBadgeTicks();
+            return resumed;
+        });
+        expect(hidden).toBe(initial);
+        expect(resumed).toBeGreaterThan(hidden);
     });
 
     test("a device row opens the editor on that controllable's lane", async ({ page }) => {
@@ -426,6 +467,61 @@ test.describe("opening the day editor from a scheduling badge", () => {
         // The host and the badge source ask together, and the shared store
         // answers both with one read.
         expect(types.filter((type) => type === "helman/get_appliances")).toHaveLength(1);
+    });
+
+    test("a config change refreshes mounted editor lanes and badge decisions", async ({ page }) => {
+        await mount(page, [
+            { id: "s1", name: "Dishwasher", deferrable: true, controllableIds: ["dishwasher"] },
+            { id: "s2", name: "Boiler", deferrable: true, controllableIds: ["boiler"] },
+        ]);
+        expect(await badgeColor(page, "Boiler")).toContain("--schedule-authorship-user-color");
+
+        await page.evaluate(() => {
+            const roster = (window as any).__roster;
+            (window as any).__roster = [
+                roster[0],
+                { ...roster[1], normalState: "on" },
+                { ...roster[1], id: "pump", name: "Pump", primaryEntityId: "switch.pump",
+                    controls: { switch: { entityId: "switch.pump" } } },
+            ];
+            (window.__fakeHass as any).states["switch.pump"] = {
+                entity_id: "switch.pump", state: "off", attributes: { friendly_name: "Pump" },
+                last_changed: new Date().toISOString(),
+            };
+            (window as any).__fireConfig();
+        });
+
+        await expect.poll(async () => page.evaluate(() => {
+            const host = document.querySelector("scheduling-day-editor-host") as any;
+            return host.lanes.map((lane: any) => lane.target);
+        })).toContain("pump");
+        await expect.poll(() => badgeColor(page, "Boiler")).not.toContain("--schedule-authorship-user-color");
+        const types = (await mockRequests(page)).map((request) => request.type);
+        expect(types.filter((type) => type === "helman/get_appliances")).toHaveLength(2);
+    });
+
+    test("a config change during the first roster request cannot restore the old roster", async ({ page }) => {
+        await page.evaluate(() => { (window as any).__deferRoster = true; });
+        await mount(page, [
+            { id: "s1", name: "Dishwasher", deferrable: true, controllableIds: ["dishwasher"] },
+            { id: "s2", name: "Boiler", deferrable: true, controllableIds: ["boiler"] },
+        ], false);
+        await page.waitForFunction(() => typeof (window as any).__releaseRoster === "function");
+        await page.evaluate(() => {
+            const roster = (window as any).__roster;
+            (window as any).__roster = [roster[0], { ...roster[1], normalState: "on" }];
+            (window as any).__fireConfig();
+        });
+        await expect.poll(async () => (await mockRequests(page))
+            .filter((request) => request.type === "helman/get_appliances").length).toBe(2);
+        await expect.poll(() => badgeColor(page, "Boiler")).not.toContain("--schedule-authorship-user-color");
+        await page.evaluate(async () => {
+            (window as any).__releaseRoster();
+            await new Promise((resolve) => setTimeout(resolve, 0));
+        });
+        await expect.poll(() => badgeColor(page, "Boiler")).not.toContain("--schedule-authorship-user-color");
+        const types = (await mockRequests(page)).map((request) => request.type);
+        expect(types.filter((type) => type === "helman/get_appliances")).toHaveLength(2);
     });
 
     test("nothing is open until a badge is pressed", async ({ page }) => {
