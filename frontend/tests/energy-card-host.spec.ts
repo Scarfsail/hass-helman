@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { mountSimpleCard, state, inverterOverview, flowsSection } from "./support/node-detail-harness";
+import { cardTree } from "./support/payload-builders";
 import { installMockHass } from "./support/mock-hass";
 import { CARD_BUNDLE } from "./support/card-page";
 
@@ -205,5 +206,25 @@ test.describe("EnergyCardHost", () => {
         // The same dialog element, never torn down for a loading placeholder.
         expect(await page.locator("node-detail-dialog").evaluate((dialog: any) => dialog.__beforeRefresh === true)).toBe(true);
         await expect(page.locator("node-detail-inverter-content")).toBeVisible();
+    });
+
+    test("a config reload reads the new tree from the latest hass even when the inverter request fails", async ({ page }) => {
+        await mountSimpleCard(page, {
+            states: { "sensor.solar": state("4200", "W") },
+            overviews: { inverter: "error" },
+        });
+        const moved = cardTree();
+        moved.sources[0].powerSensorId = "sensor.solar_moved";
+        await page.evaluate((tree) => {
+            const hass = window.__NodeDetailHass;
+            window.__setMockReply(hass, "helman/get_device_tree", tree);
+            // An unwatched entity changes: the card filters this push out.
+            const pushed = { ...hass, states: { ...hass.states, "sensor.solar_moved": window.__nodeDetailState("7100", "W") } };
+            (document.querySelector("helman-simple-card") as any).hass = pushed;
+            window.__NodeDetailHass = pushed;
+            window.__fireDataChanged("config");
+        }, moved);
+        await expect.poll(() => page.evaluate(() =>
+            (document.querySelector("helman-simple-card") as any)._host.readings.solarPower)).toBe(7100);
     });
 });

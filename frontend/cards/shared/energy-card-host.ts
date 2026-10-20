@@ -217,7 +217,7 @@ export class EnergyCardHost implements ReactiveController {
             }
 
             this._historyEngine = engine;
-            this._updateReadings();
+            this._adoptLatestHass();
             this._rebuildWatchedEntityIds();
 
             engine.start(
