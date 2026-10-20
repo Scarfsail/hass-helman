@@ -154,6 +154,10 @@ async function mountEditor(
         el.localize = (key: string) => key;
         el.target = "boiler";
         el.appliance = boiler;
+        el.lanes = [{
+            key: "boiler", target: "boiler", name: "Boiler", icon: "mdi:water-boiler",
+            appliance: boiler, isAvailable: true, actualSlots: [],
+        }];
         if (multiLane) {
             el.lanes = [
                 {
@@ -267,6 +271,7 @@ async function mountEditor(
             };
             el.hass = {
                 config: { time_zone: "UTC" },
+                connection: {},
                 states: {},
                 callWS: window.__mockHass({
                     "helman/get_schedule_explanation": async ({ controllable_id }: {
@@ -280,7 +285,6 @@ async function mountEditor(
 
         el.slots = slots;
         el.slotMinutes = stepMs / 60_000;
-        el.entityName = "Boiler";
         el.currentDayKey = dayOne;
         el.locale = "cs";
         el.timeZone = "UTC";
@@ -1602,6 +1606,51 @@ test.describe("entity day editor, explain mode", () => {
                 .map((lane: Element) => lane.getAttribute("data-lane"));
         });
         expect(lanes).toEqual(["inverter", "boiler"]);
+    });
+
+    test("reopening the editor reuses one explanation for the same lane and date", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { multiLane: true, explainable: true });
+        await page.evaluate(() => {
+            const el = document.querySelector("scheduling-entity-day-editor") as any;
+            const original = el.hass.callWS;
+            (window as any).explanationCalls = 0;
+            el.hass.callWS = (message: any) => {
+                if (message.type === "helman/get_schedule_explanation" && message.controllable_id === "boiler") {
+                    (window as any).explanationCalls++;
+                }
+                return original(message);
+            };
+        });
+        await enterExplain(page);
+        await page.waitForFunction(() => (window as any).explanationCalls === 1);
+        await page.evaluate(async () => {
+            const el = document.querySelector("scheduling-entity-day-editor") as any;
+            el.open = false;
+            await el.updateComplete;
+            el.open = true;
+            await el.updateComplete;
+            el._setMode("explain");
+        });
+        expect(await page.evaluate(() => (window as any).explanationCalls)).toBe(1);
+    });
+
+    test("typing in the editor keeps the derived days", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { multiLane: true });
+        const point = await trackPoint(page, Date.parse(`${DAY_ONE}T13:00:00Z`), "inverter");
+        await page.mouse.click(point.x, point.y);
+        const sameDays = await page.evaluate(async () => {
+            const el = document.querySelector("scheduling-entity-day-editor") as any;
+            const before = el._days();
+            const actionEditor = el.shadowRoot.querySelector("scheduling-entity-action-editor") as any;
+            const field = actionEditor.shadowRoot.querySelector(".target-field input") as HTMLInputElement;
+            field.value = "75";
+            field.dispatchEvent(new Event("input", { bubbles: true }));
+            await el.updateComplete;
+            return el._days() === before;
+        });
+        expect(sameDays).toBe(true);
     });
 
     test("the lanes are split into the day's slots, and nothing is preselected", async ({ page }) => {

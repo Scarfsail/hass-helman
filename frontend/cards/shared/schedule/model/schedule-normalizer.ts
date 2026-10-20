@@ -42,14 +42,12 @@ export const EMPTY_NORMALIZED_SCHEDULE: NormalizedScheduleModel = {
  * is the worked example), so a "harmless" copy here rebuilds their entire
  * derived model on every render.
  *
- * `now` is a parameter, not `new Date()`, because the two callers legitimately
- * disagree about what the clock is: the day pills read the true wall clock,
- * while the band strip reads its own coarse 30 s `_nowMs` so that everything
- * derived from the clock moves in one step.
+ * `now` is a parameter so the owner can use its shared clock for every
+ * consumer, including a fresh read after a schedule commit or subscription.
  */
 export class NormalizedScheduleCache {
     private _model: NormalizedScheduleModel = EMPTY_NORMALIZED_SCHEDULE;
-    private _for: { schedule: unknown; timeZone: string } | null = null;
+    private _for: { schedule: unknown; timeZone: string; locale: string } | null = null;
 
     get(
         schedule: SchedulePayload | null,
@@ -61,9 +59,10 @@ export class NormalizedScheduleCache {
             this._for === null
             || this._for.schedule !== schedule
             || this._for.timeZone !== timeZone
+            || this._for.locale !== locale
         ) {
             this._model = buildNormalizedScheduleStructure({ schedule, timeZone, locale });
-            this._for = { schedule, timeZone };
+            this._for = { schedule, timeZone, locale };
         }
 
         this._model = applyNormalizedScheduleCurrentState(this._model, timeZone, now);

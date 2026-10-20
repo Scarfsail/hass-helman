@@ -10,8 +10,8 @@ import { ForecastLoader } from "../../data/forecast-loader";
 import { getSharedHelmanStore } from "../../data/store";
 import { getLocalizeFunction, type LocalizeFunction } from "../../../localize/localize";
 import { dispatchWatchedEntities } from "../../hass-change";
-import { startNowClock } from "../../now-clock";
-import { getSharedScheduleOwner, type SharedScheduleOwner } from "../schedule-owner";
+import { resolveLocale } from "../../resolve-locale";
+import { EMPTY_SCHEDULE_OWNER_SNAPSHOT, getSharedScheduleOwner, type SharedScheduleOwner } from "../schedule-owner";
 import "./scheduling-entity-day-editor";
 import type { EntityScheduleSaveDetail } from "./scheduling-entity-day-editor";
 import {
@@ -35,10 +35,7 @@ import {
     EMPTY_SCHEDULE_APPLIANCE_PROJECTION_INDEX,
     type ScheduleApplianceProjectionIndex,
 } from "../model/schedule-appliance-projection";
-import {
-    EMPTY_NORMALIZED_SCHEDULE,
-    NormalizedScheduleCache,
-} from "../model/schedule-normalizer";
+import { EMPTY_NORMALIZED_SCHEDULE } from "../model/schedule-normalizer";
 import {
     buildSlotForecastMap,
     EMPTY_SLOT_FORECAST_MAP,
@@ -64,17 +61,6 @@ export const OPEN_SCHEDULE_EDITOR_EVENT = "helman-open-schedule-editor";
 export interface OpenScheduleEditorDetail {
     target: EntityScheduleTarget | null;
 }
-
-const EMPTY_OWNER_SNAPSHOT: ScheduleOwnerSnapshot = {
-    schedule: null,
-    loading: false,
-    refreshing: false,
-    writing: false,
-    togglingExecution: false,
-    error: null,
-    updatedAt: null,
-    stale: false,
-};
 
 const EMPTY_DAY_VIEW: EntityScheduleDayView = { slots: [], forecastPoints: new Map() };
 
@@ -112,8 +98,8 @@ export class SchedulingDayEditorHost extends LitElement {
      * rather than on every schedule refresh for every user who never does.
      */
     @property({ type: Boolean }) public preload = false;
-    @state() private _ownerSnapshot: ScheduleOwnerSnapshot = EMPTY_OWNER_SNAPSHOT;
-    @state() private _controllables: ScheduleControllable[] = [];
+    @state() private _ownerSnapshot: ScheduleOwnerSnapshot = EMPTY_SCHEDULE_OWNER_SNAPSHOT;
+    @state() private _controllables: readonly ScheduleControllable[] = [];
     @state() private _actualHistory: Record<string, EntityActualHistorySlotDTO[]> = {};
     @state() private _projectionIndex: ScheduleApplianceProjectionIndex = EMPTY_SCHEDULE_APPLIANCE_PROJECTION_INDEX;
     @state() private _forecast: ForecastPayload | null = null;
@@ -148,12 +134,11 @@ export class SchedulingDayEditorHost extends LitElement {
      */
     @state() private _editorSaveError: ScheduleOwnerError | null = null;
 
-    private _stopNowClock?: () => void;
     private _localizeFn?: LocalizeFunction;
     private _scheduleOwner?: SharedScheduleOwner;
     private _unsubscribeOwner?: () => void;
+    private _unsubscribeRoster?: () => void;
     private _loadedConnection: unknown = null;
-    private _controllablesRequested = false;
     private _forecastLoader: ForecastLoader | null = null;
     private _projectionLoadGeneration = 0;
     /** An editor has been asked for, so the day is worth keeping complete. */
@@ -163,7 +148,6 @@ export class SchedulingDayEditorHost extends LitElement {
     /** Bumped per opening, so a write can tell whether its draft is still up. */
     private _editorOpening = 0;
 
-    private _normalizedCache = new NormalizedScheduleCache();
     private _normalized: NormalizedScheduleModel = EMPTY_NORMALIZED_SCHEDULE;
 
     /**
@@ -259,7 +243,13 @@ export class SchedulingDayEditorHost extends LitElement {
             this._localizeFn = getLocalizeFunction(this.hass);
             if (this._loadedConnection !== this.hass.connection) {
                 this._loadedConnection = this.hass.connection;
-                this._controllablesRequested = false;
+                this._unsubscribeRoster?.();
+                this._unsubscribeRoster = getSharedHelmanStore(this.hass).subscribeRosterInvalidation(() => {
+                    this._controllables = [];
+                    this._actualHistory = {};
+                    this._emitWatchedEntities();
+                    void this._loadControllables();
+                });
                 this._actualHistory = {};
                 this._projectionLoadGeneration += 1;
                 this._projectionIndex = EMPTY_SCHEDULE_APPLIANCE_PROJECTION_INDEX;
@@ -274,29 +264,12 @@ export class SchedulingDayEditorHost extends LitElement {
         this._rebuildDerivedIfNeeded();
     }
 
-    connectedCallback(): void {
-        super.connectedCallback();
-        // The wall clock owns a timer, because `hass` churn is not a clock: the
-        // card above filters `hass` down to the entities this host actually
-        // reads, so on an idle installation nothing else would move the day on.
-        // Coarse on purpose, and stopped while the page is hidden -- see
-        // `now-clock`.
-        this._stopNowClock = startNowClock(() => {
-            this._nowMs = Date.now();
-            // The band draws its now-marker off `nowMs` through a getter and only
-            // re-renders when this host says so. The derived model no longer moves
-            // on a tick inside a slot, so the tick has to say so itself; the band's
-            // own keys then decide there is nothing to rebuild.
-            this.dispatchEvent(new CustomEvent(SCHEDULE_DAY_MODEL_CHANGED_EVENT));
-        });
-    }
-
     disconnectedCallback(): void {
         super.disconnectedCallback();
-        this._stopNowClock?.();
-        this._stopNowClock = undefined;
         this._unsubscribeOwner?.();
         this._unsubscribeOwner = undefined;
+        this._unsubscribeRoster?.();
+        this._unsubscribeRoster = undefined;
         this._scheduleOwner = undefined;
     }
 
@@ -323,8 +296,6 @@ export class SchedulingDayEditorHost extends LitElement {
                 .forecastPoints=${this._dayView.forecastPoints}
                 .projectionIndex=${this._projectionIndex}
                 .priceUnit=${this._forecastMap.priceDisplayUnit}
-                .entityName=${lane?.name ?? ""}
-                .entityIcon=${lane?.icon}
                 .currentDayKey=${this._normalized.currentDayKey}
                 .initialDayKey=${this._editorDayKey ?? this._normalized.currentDayKey}
                 .locale=${this._locale}
@@ -419,6 +390,11 @@ export class SchedulingDayEditorHost extends LitElement {
      * refresh keeps the two the same age without a clock of its own.
      */
     private _applyOwnerSnapshot(snapshot: ScheduleOwnerSnapshot): void {
+        const nowMs = this._scheduleOwner?.getNowMs() ?? this._nowMs;
+        if (nowMs !== this._nowMs) {
+            this._nowMs = nowMs;
+            this.dispatchEvent(new CustomEvent(SCHEDULE_DAY_MODEL_CHANGED_EVENT));
+        }
         const scheduleChanged = snapshot.schedule !== this._ownerSnapshot.schedule;
         this._ownerSnapshot = snapshot;
         if (!scheduleChanged) {
@@ -487,17 +463,16 @@ export class SchedulingDayEditorHost extends LitElement {
 
     private async _loadControllables(): Promise<void> {
         const hass = this.hass;
-        if (!hass || this._controllablesRequested) {
+        if (!hass) {
             return;
         }
 
-        this._controllablesRequested = true;
         try {
-            const payload = await getSharedHelmanStore(hass).getAppliances();
+            const controllables = await getSharedHelmanStore(hass).getControllableRoster();
             if (this.hass?.connection !== hass.connection) {
                 return;
             }
-            this._controllables = payload.appliances;
+            this._controllables = controllables;
             this._emitWatchedEntities();
             if (this.preload || this._opened) {
                 void this._loadActualHistory();
@@ -506,7 +481,6 @@ export class SchedulingDayEditorHost extends LitElement {
             if (this.hass?.connection !== hass.connection) {
                 return;
             }
-            this._controllablesRequested = false;
             this._controllables = [];
             console.error("scheduling: failed to load the controllable roster", error);
         }
@@ -564,22 +538,10 @@ export class SchedulingDayEditorHost extends LitElement {
         }
     }
 
-    /**
-     * The schedule as slots, with the one the clock is inside marked.
-     *
-     * Read from this host's own coarse `_nowMs` rather than the wall clock, so
-     * the model moves in one step with everything else derived from the clock --
-     * and, critically, only when that timer ticks. Pass `new Date()` here
-     * instead and the model would gain a new identity on every render that
-     * crossed a slot boundary out of step with `_nowMs`.
-     */
+    /** The owner's normalized slots use the same clock this host reads. */
     private _rebuildNormalizedIfNeeded(): void {
-        this._normalized = this._normalizedCache.get(
-            this._ownerSnapshot.schedule,
-            this.timeZone,
-            this._locale,
-            new Date(this._nowMs),
-        );
+        this._normalized = this._scheduleOwner?.getNormalized(this.timeZone, this._locale)
+            ?? EMPTY_NORMALIZED_SCHEDULE;
     }
 
     /** `hass.states`, or null while no roster has named anything to read in it. */
@@ -705,11 +667,7 @@ export class SchedulingDayEditorHost extends LitElement {
     }
 
     private get _locale(): string {
-        if (this.hass?.locale?.language) {
-            return this.hass.locale.language;
-        }
-
-        return typeof navigator !== "undefined" ? navigator.language : "cs";
+        return resolveLocale(this.hass);
     }
 }
 

@@ -176,8 +176,8 @@ export class NodeDetailDialog extends LitElement {
         if (this._applianceKindsRequested) return;
         this._applianceKindsRequested = true;
         const opening = this._opening;
-        getSharedHelmanStore(this.hass).getAppliances()
-            .then((payload) => new Map((payload?.appliances ?? []).map((appliance) => [appliance.id, appliance.kind])))
+        getSharedHelmanStore(this.hass).getControllableRoster()
+            .then((roster) => new Map(roster.map((appliance) => [appliance.id, appliance.kind])))
             .catch((error) => {
                 console.error("node-detail-dialog: failed to read the appliance roster", error);
                 return new Map<string, string>();

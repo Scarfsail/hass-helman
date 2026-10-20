@@ -1,4 +1,5 @@
 import { LitElement, css, html, type PropertyValues } from "lit-element";
+import { resolveLocale } from "../shared/resolve-locale";
 import { customElement, property } from "lit/decorators.js";
 import { nothing } from "lit-html";
 import type { HomeAssistant } from "../../types/ha";
@@ -480,11 +481,7 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
     }
 
     private get _locale(): string {
-        if (this.hass?.locale?.language) {
-            return this.hass.locale.language;
-        }
-
-        return typeof navigator !== "undefined" ? navigator.language : "cs";
+        return resolveLocale(this.hass);
     }
 }
 
