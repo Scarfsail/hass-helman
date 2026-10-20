@@ -1,30 +1,31 @@
-import { formatMoney } from "../../shared/format";
+import { formatMoney } from "../shared/format";
 import { LitElement, html, nothing, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
-import type { HomeAssistant } from "../../../types/ha";
-import { fillTemplate, type LocalizeFunction } from "../../localize/localize";
-import type { FlowsSectionPayload, ForecastPayload, GetNodeDetailRequest, NodeDetailNode, ScheduleActionDTO } from "../../helman-api";
-import { getScheduleActionLabel } from "../../shared/schedule/model/schedule-labels";
-import type { HelmanSolarInspectorCardConfig } from "../../helman-solar-inspector/HelmanSolarInspectorCardConfig";
-import { DataChangedController } from "../../helman/data-changed";
-import { ForecastLoader } from "../../helman/forecast-loader";
-import { startNowClock } from "../../shared/now-clock";
-import { isoDateInTimeZone, todayKey } from "../../shared/time/day-key";
-import { getSharedHelmanStore } from "../../helman/store";
-import { formatScheduleTime } from "../../shared/schedule/model/schedule-time";
+import type { HomeAssistant } from "../../types/ha";
+import { fillTemplate, type LocalizeFunction } from "../localize/localize";
+import type { FlowsSectionPayload, ForecastPayload, GetNodeDetailRequest, NodeDetailNode, ScheduleActionDTO } from "../helman-api";
+import { getScheduleActionLabel } from "../shared/schedule/model/schedule-labels";
+import type { HelmanSolarInspectorCardConfig } from "../helman-solar-inspector/HelmanSolarInspectorCardConfig";
+import { DataChangedController } from "../shared/data/data-changed";
+import { ForecastLoader } from "../shared/data/forecast-loader";
+import { startNowClock } from "../shared/now-clock";
+import { isoDateInTimeZone, todayKey } from "../shared/time/day-key";
+import { getSharedHelmanStore } from "../shared/data/store";
+import { formatScheduleTime } from "../shared/schedule/model/schedule-time";
 import {
     EVIDENCE_TOGGLE_EVENT,
     QUESTION_TOGGLE_EVENT,
     type QuestionToggleDetail,
-} from "../../shared/node-question";
-import "../../shared/node-question";
-import "../../shared/node-tile";
-import "../../shared/node-flow";
-import { FLOW_SCOPE_EVENT, type FlowItem, type FlowScope, type FlowScopeDetail } from "../../shared/node-flow";
-import type { ScheduleActionTone } from "../../shared/schedule/action-tones";
-import { announceWatchedEntities, readingNumber, readingText } from "./node-detail-readings";
+} from "../shared/node-question";
+import "../shared/node-question";
+import "../shared/node-tile";
+import "../shared/node-flow";
+import { FLOW_SCOPE_EVENT, type FlowItem, type FlowScope, type FlowScopeDetail } from "../shared/node-flow";
+import type { ScheduleActionTone } from "../shared/schedule/action-tones";
+import { readingNumber, readingText } from "./node-detail-readings";
+import { dispatchWatchedEntities } from "../shared/hass-change";
 
-import { IDLE_W } from "../live-flows";
+import { IDLE_W } from "./live-flows";
 
 export { IDLE_W };
 
@@ -256,7 +257,7 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
             if (request !== this._overviewRequest) return;
             if (!previous) this._overviewStates = this._overviewSignature(payload);
             this._overview = { status: "ready", payload };
-            announceWatchedEntities(this, this._watchedEntities(payload));
+            dispatchWatchedEntities(this, "node-detail", this._watchedEntities(payload));
             this._overviewLoaded(payload);
         } catch (error) {
             if (request !== this._overviewRequest) return;

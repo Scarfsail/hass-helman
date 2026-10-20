@@ -212,12 +212,15 @@ test("live history and detail context use watts for mixed-case power units", asy
     const values = await page.evaluate(() => {
         const card = document.querySelector("helman-card") as any;
         const hass = (window as any).__hass;
-        hass.states["sensor.house"] = { state: "2.4", attributes: { unit_of_measurement: "KW" } };
-        hass.states["sensor.solar"] = { state: "4.2", attributes: { unit_of_measurement: "kW" } };
-        card.hass = { ...hass };
-        card._historyEngine.advanceBuckets(card._computedNodes.sourcesChildren, card._computedNodes.sourcesChildren);
-        card._historyEngine.advanceBuckets(card._computedNodes.consumersChildren, card._computedNodes.sourcesChildren);
-        const context = card._buildNodeDetailContext();
+        // New state objects, as Home Assistant hands them on every change.
+        card.hass = { ...hass, states: {
+            ...hass.states,
+            "sensor.house": { state: "2.4", attributes: { unit_of_measurement: "KW" } },
+            "sensor.solar": { state: "4.2", attributes: { unit_of_measurement: "kW" } },
+        } };
+        card._host.historyEngine.advanceBuckets(card._computedNodes.sourcesChildren, card._computedNodes.sourcesChildren);
+        card._host.historyEngine.advanceBuckets(card._computedNodes.consumersChildren, card._computedNodes.sourcesChildren);
+        const context = card._host.readings;
         return { housePower: context.housePower, solarPower: context.solarPower, solarPowerReading: context.solarPowerReading };
     });
     expect(values).toEqual({ housePower: 2400, solarPower: 4200, solarPowerReading: 4200 });

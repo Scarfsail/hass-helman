@@ -1,36 +1,20 @@
-import { applyValueType, readPowerW } from "../shared/power-reading";
-import { LitElement, css, html } from "lit-element"
+import { LitElement, css, html } from "lit-element";
 import { customElement, state } from "lit/decorators.js";
 import type { HomeAssistant, LovelaceCard, LovelaceCardEditor } from "../../types/ha";
-import { TreeItem } from "./tree-item";
+import { TreeItem } from "../shared/data/tree-item";
 import "./tree-item-row";
 import "./tree-item-list";
 import { HelmanCardConfig, HelmanUiConfig } from "./HelmanCardConfig";
-import { InverterDetailPayload, TreePayload } from "../helman-api";
-import { hydrateItem } from "./tree-item-hydrator";
-import { HistoryEngine } from "./history-engine";
-import { getSharedHelmanStore } from "./store";
-import { DataChangedController } from "./data-changed";
-import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
-import {
-    buildNodeDetailParams,
-    type NodeDetailContext,
-} from "../node-detail/node-detail-params-builder";
-import type { NodeType } from "../node-detail/node-detail-types";
-import "../helman-simple/node-detail-dialog";
-import { inverterCellEntityIds } from "../helman-simple/inverter-cell";
-import { DEFAULT_SOLAR_MAX_W, liveFlows } from "../helman-simple/live-flows";
-import "./power-flow-arrows"
-import "./tree-item-info"
-import "./house-devices-section"
-import "../shared/schedule/dialogs/scheduling-day-editor-host"
-import {
-    OPEN_SCHEDULE_EDITOR_EVENT,
-    type OpenScheduleEditorDetail,
-    type SchedulingDayEditorHost,
-} from "../shared/schedule/dialogs/scheduling-day-editor-host";
-import { WATCHED_ENTITIES_EVENT, type WatchedEntitiesDetail } from "../shared/hass-change";
-import "./helman-card-editor"
+import { InverterDetailPayload } from "../helman-api";
+import { EnergyCardHost } from "../shared/energy-card-host";
+import type { LocalizeFunction } from "../localize/localize";
+import "../node-detail/node-detail-dialog";
+import "../helman-simple/inverter-cell";
+import "./power-flow-arrows";
+import "./tree-item-info";
+import "./house-devices-section";
+import "../shared/schedule/dialogs/scheduling-day-editor-host";
+import "./helman-card-editor";
 
 const EMPTY_ARRAY: readonly TreeItem[] = Object.freeze([]);
 
@@ -57,46 +41,13 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         `;
     }
 
-    // 3. Private properties
+    // 3. Private properties & Host controller
     private config!: HelmanCardConfig;
-    private _historyEngine?: HistoryEngine;
-    /**
-     * Bumped on every disconnect and on every load that replaces another. A load
-     * that resolves after its generation was superseded commits nothing: the card
-     * may already be detached, and installing a `HistoryEngine` on it would start
-     * an interval nothing ever stops (#232).
-     */
-    private _loadGeneration = 0;
-    // Inverter reads belong to the displayed tree, even while a replacement is staged.
-    private _inverterGeneration = 0;
-    private _localize?: LocalizeFunction;
-    private _localizeLanguage?: string;
-    private _sourceNodes: TreeItem[] = [];
-    private _watchedEntityIds: Set<string> = new Set();
-    /** Entity ids the schedule editor host resolved, folded into the filter. */
-    private _scheduleWatchedIds: Set<string> = new Set();
-    /** The readings the open node detail announced it reads live. */
-    private _detailEntityIds: string[] = [];
-    private _latestHass?: HomeAssistant;
+    private readonly _host = new EnergyCardHost(this, {
+        whichNodesToWalk: (tree) => tree,
+    });
+    private _cachedTree?: TreeItem[];
 
-    // 5. State properties
-    @state() private _hass?: HomeAssistant;
-    @state() private _deviceTree: TreeItem[] = [];
-    /** What the node detail dialog shows: a top-level node by type, or one device. */
-    @state() private _dialogRequest: NodeType | TreeItem | null = null;
-    /**
-     * Bumped once per history tick. `HistoryEngine` mutates the item histories in
-     * place, so nothing a child is handed changes identity when a bucket rolls —
-     * same items, same arrays, and on an idle house the same power values too.
-     * Without a signal of its own the containers' dirty checks saw nothing and the
-     * bars below them froze until an unrelated HA state change happened to shake
-     * the tree (#227). A counter is the whole signal: it moves exactly when the
-     * histories moved, and never otherwise.
-     */
-    @state() private _historyRevision = 0;
-    @state() private _uiConfig?: HelmanUiConfig;
-    /** The last successful overview the distribution row's inverter cell reads; `null` until loaded. */
-    @state() private _inverter: InverterDetailPayload | null = null;
     @state() private _computedNodes?: {
         sourcesNode: TreeItem | undefined;
         sourcesChildren: readonly TreeItem[];
@@ -107,48 +58,17 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         houseDevices: readonly TreeItem[];
     };
 
-    // 7. HA-specific setters
-    /**
-     * The worked example of "a new `hass` is not a change signal" — see
-     * `frontend/cards/README.md`, "Card rendering discipline".
-     */
+    // 7. HA-specific setters & getters
     public set hass(hass: HomeAssistant) {
-        const previous = this._latestHass;
-        this._latestHass = hass;
-        const language = hass.locale?.language ?? hass.language;
-        const languageChanged = language !== this._localizeLanguage;
-        if (languageChanged || !this._localize) {
-            this._localizeLanguage = language;
-            this._localize = getLocalizeFunction({ ...hass, language });
-            if (languageChanged && this._deviceTree.length) {
-                for (const root of this._deviceTree) {
-                    if (root.id === "sources") root.name = this._localize("card.sources_title");
-                    if (root.id === "consumers") root.name = this._localize("card.consumers_title");
-                }
-                for (const item of HistoryEngine.walkTree(this._deviceTree)) {
-                    if (item.isUnmeasured) item.name = this._localize("house_section.unmeasured");
-                }
-                this._deviceTree = [...this._deviceTree];
-            }
-        }
-
-        if (!previous || languageChanged) {
-            this._hass = hass;
-            return;
-        }
-        if (this._watchedEntityIds.size === 0) {
-            // Tree not yet hydrated — keep the simple behavior so initial load still works.
-            this._hass = hass;
-            return;
-        }
-        for (const id of this._watchedEntityIds) {
-            if (previous.states[id] !== hass.states[id]) {
-                this._hass = hass;
-                return;
-            }
-        }
-        // No watched entity changed — skip the re-render entirely.
+        this._host.setHass(hass);
     }
+
+    private get _hass(): HomeAssistant | undefined { return this._host.hass; }
+    private get _deviceTree(): TreeItem[] { return this._host.deviceTree; }
+    private get _historyRevision(): number { return this._host.historyRevision; }
+    private get _uiConfig(): HelmanUiConfig | undefined { return this._host.uiConfig ?? undefined; }
+    private get _inverter(): InverterDetailPayload | null { return this._host.inverter; }
+    private get _localize(): LocalizeFunction | undefined { return this._host.localize; }
 
     // 8. HA-specific methods
     getCardSize() {
@@ -159,50 +79,17 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         this.config = { ...config };
     }
 
-    // 9. Lifecycle methods
-    constructor() {
-        super();
-        new DataChangedController(this, () => this._latestHass, { kinds: ["config"] }, () => void this._loadBackendData(true));
-    }
-
-    async connectedCallback() {
-        super.connectedCallback();
-        // On the card itself rather than on `ha-card`: the node detail dialog is
-        // rendered beside it and draws the very same house rows, badges and
-        // device names and all, so a listener inside the card body would hear
-        // nothing from there.
-        this.addEventListener(OPEN_SCHEDULE_EDITOR_EVENT, this._handleOpenScheduleEditor);
-        this.addEventListener(WATCHED_ENTITIES_EVENT, this._handleWatchedEntities);
-        this.addEventListener("show-node-detail", this._handleShowNodeDetail);
-        this.addEventListener("show-device-detail", this._handleShowDeviceDetail);
-        if (this._latestHass) {
-            await this._loadBackendData();
-        }
-    }
-
-    disconnectedCallback(): void {
-        super.disconnectedCallback();
-        this.removeEventListener(OPEN_SCHEDULE_EDITOR_EVENT, this._handleOpenScheduleEditor);
-        this.removeEventListener(WATCHED_ENTITIES_EVENT, this._handleWatchedEntities);
-        this.removeEventListener("show-node-detail", this._handleShowNodeDetail);
-        this.removeEventListener("show-device-detail", this._handleShowDeviceDetail);
-
-        this._loadGeneration += 1;
-        this._inverterGeneration += 1;
-        this._historyEngine?.stop();
-    }
-
     willUpdate(changedProperties: Map<string, any>): void {
         super.willUpdate(changedProperties);
-        if (changedProperties.has('_deviceTree')) {
-            const sourcesNode = this._deviceTree.find((device) => device.id === "sources");
+        const deviceTree = this._host.deviceTree;
+        if (deviceTree !== this._cachedTree) {
+            this._cachedTree = deviceTree;
+            const sourcesNode = deviceTree.find((device) => device.id === "sources");
             const sourcesChildren = sourcesNode?.children ?? EMPTY_ARRAY;
-            const consumerNode = this._deviceTree.find((device) => device.id === "consumers");
+            const consumerNode = deviceTree.find((device) => device.id === "consumers");
             const consumersChildren = consumerNode?.children ?? EMPTY_ARRAY;
             const houseNode = consumersChildren.find((device) => device.id === "house");
             const houseDevices = houseNode?.children ?? EMPTY_ARRAY;
-            // The house arrow row draws one arrow in three columns; built here so
-            // the row is not handed a fresh array on every render.
             const houseArrowDevices = [houseNode, undefined, undefined];
             this._computedNodes = { sourcesNode, sourcesChildren, consumerNode, consumersChildren, houseNode, houseArrowDevices, houseDevices };
         }
@@ -216,9 +103,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         const { sourcesNode, sourcesChildren, consumerNode, consumersChildren, houseNode, houseArrowDevices, houseDevices } = this._computedNodes;
         const historyBuckets = this._uiConfig.history_buckets;
         const historyBucketDuration = this._uiConfig.history_bucket_duration;
-        const dialogParams = this._dialogRequest !== null
-            ? buildNodeDetailParams(this._buildNodeDetailContext(), this._dialogRequest)
-            : null;
+        const dialogParams = this._host.dialogParams;
 
         return html`
             <ha-card>
@@ -289,283 +174,14 @@ export class HelmanCard extends LitElement implements LovelaceCard {
                     .open=${true}
                     .params=${dialogParams}
                     @closed=${this._closeNodeDetail}
-                    @helman-watch-entities=${this._onDetailWatch}
                 ></node-detail-dialog>
             ` : ""}
         `;
     }
 
-    // 12. Private helper methods
-    // A request while the dialog is open (a device name inside the house
-    // detail) swaps its content in place, with no second history entry.
-    private _handleShowNodeDetail = (event: Event): void => {
-        event.stopPropagation();
-        this._dialogRequest = (event as CustomEvent<{ nodeType: NodeType }>).detail.nodeType;
+    private _closeNodeDetail = (): void => {
+        this._host.closeDialog();
     };
-
-    /** The open detail's own readings: watched while it is open, the latest handed down now. */
-    private _onDetailWatch = (event: CustomEvent<string[]>): void => {
-        event.stopPropagation();
-        this._detailEntityIds = event.detail;
-        this._rebuildWatchedEntityIds();
-        if (this._latestHass) this._hass = this._latestHass;
-    };
-
-    private _handleShowDeviceDetail = (event: Event): void => {
-        event.stopPropagation();
-        this._dialogRequest = (event as CustomEvent<{ item: TreeItem }>).detail.item;
-    };
-
-    private _closeNodeDetail(): void {
-        this._dialogRequest = null;
-        this._detailEntityIds = [];
-        this._rebuildWatchedEntityIds();
-    }
-
-    /**
-     * A badge asked for the day editor; open it on the controllable it named.
-     *
-     * The card has no day of its own, so the host is left to open on today —
-     * which is the only day a badge is ever talking about, since it reports the
-     * slot running right now.
-     */
-    private _handleOpenScheduleEditor = (event: Event): void => {
-        event.stopPropagation();
-        const detail = (event as CustomEvent<OpenScheduleEditorDetail>).detail;
-        const host = this.shadowRoot?.querySelector<SchedulingDayEditorHost>(
-            "scheduling-day-editor-host",
-        );
-        host?.openFor(detail.target);
-    };
-
-    /**
-     * The editor host resolves controllable entities the device tree knows
-     * nothing about — switches, climates, the EV charger's mode selects — and
-     * the card filters `hass` down to what it watches. Without folding these in,
-     * the editor opened from a badge would read stale states on a quiet house.
-     */
-    private _handleWatchedEntities = (event: Event): void => {
-        const detail = (event as CustomEvent<WatchedEntitiesDetail>).detail;
-        const next = new Set(detail.entityIds);
-        if (next.size === this._scheduleWatchedIds.size
-            && [...next].every((id) => this._scheduleWatchedIds.has(id))) {
-            return;
-        }
-
-        this._scheduleWatchedIds = next;
-        this._rebuildWatchedEntityIds();
-    };
-
-    private _buildNodeDetailContext(): NodeDetailContext {
-        const { sourcesChildren, consumersChildren, houseNode } = this._computedNodes!;
-        const solarNode = sourcesChildren.find((device) => device.sourceType === "solar") ?? null;
-        const gridProducerNode = sourcesChildren.find((device) => device.sourceType === "grid") ?? null;
-        const gridConsumerNode = consumersChildren.find((device) => device.sourceType === "grid") ?? null;
-        const batteryProducerNode = sourcesChildren.find((device) => device.sourceType === "battery") ?? null;
-        const batteryConsumerNode = consumersChildren.find((device) => device.sourceType === "battery") ?? null;
-        // The open detail reads the sensors' current states, signed as the
-        // simple card signs them; the tree's powerValue moves only on history ticks.
-        const raw = (entityId: string | null | undefined): number | null =>
-            this._hass ? readPowerW(this._hass, entityId) : null;
-        const batteryNode = batteryProducerNode ?? batteryConsumerNode;
-        const batteryRaw = raw(batteryNode?.powerSensorId);
-        const solarRaw = raw(solarNode?.powerSensorId);
-        const gridNode = gridProducerNode ?? gridConsumerNode;
-        const gridRaw = raw(gridNode?.powerSensorId);
-        const houseRaw = raw(houseNode?.powerSensorId);
-
-        const batteryPower = (batteryConsumerNode?.powerValue ?? 0) - (batteryProducerNode?.powerValue ?? 0);
-        const gridPower = gridRaw === null ? null : gridProducerNode?.valueType === "negative" ? -gridRaw : gridRaw;
-        const housePower = houseRaw === null ? 0 : Math.max(0, applyValueType(houseRaw, houseNode!.valueType));
-        const solarPower = solarNode?.powerValue ?? 0;
-        const batteryPowerReading = batteryRaw === null ? null : batteryProducerNode?.valueType === "positive" ? -batteryRaw : batteryRaw;
-        const solarPowerReading = solarRaw === null ? null : applyValueType(solarRaw, solarNode!.valueType);
-
-        return {
-            // From the sensors' current states, as the reading figures are.
-            flows: liveFlows({
-                solarPower: solarPowerReading ?? 0,
-                housePower,
-                batteryPower: batteryPowerReading ?? 0,
-                gridPower: gridPower ?? 0,
-            }),
-            // This card reads no inverter overview: the solar node's maximum is the
-            // scale. nodeConfig is the DTO's sourceConfig, which the simple card reads it from.
-            flowScaleW: Math.max(1, (solarNode?.nodeConfig as { max_power?: number } | undefined)?.max_power ?? DEFAULT_SOLAR_MAX_W),
-            batteryPower,
-            batteryPowerReading,
-            solarPowerReading,
-            gridPower,
-            housePower,
-            houseReadable: houseRaw !== null,
-            solarPower,
-            houseNode: houseNode ?? null,
-            historyBuckets: this._uiConfig?.history_buckets ?? 60,
-            historyBucketDuration: this._uiConfig?.history_bucket_duration ?? 60,
-        };
-    }
-
-    private async _loadBackendData(freshTree = false, retryInitial = true): Promise<void> {
-        const generation = ++this._loadGeneration;
-        // Superseded by a later load, or the card is gone. Either way this
-        // response belongs to nobody: commit none of it.
-        const obsolete = () => generation !== this._loadGeneration || !this.isConnected;
-        try {
-            const store = getSharedHelmanStore(this._latestHass!);
-            const treePayload = await store.getDeviceTree({ fresh: freshTree });
-            if (obsolete()) return;
-            const history = await store.getHistory({ fresh: freshTree });
-            if (obsolete()) return;
-            const deviceTree = this._hydrateTreeItems(treePayload);
-            const sourceNodes = this._collectSourceNodes(deviceTree);
-            const engine = new HistoryEngine(
-                () => this._latestHass,
-                treePayload.uiConfig.history_buckets,
-                () => { this._historyRevision++; },
-            );
-            engine.applyHistory(history, HistoryEngine.walkTree(deviceTree), sourceNodes);
-
-            this._historyEngine?.stop();
-            this._uiConfig = treePayload.uiConfig;
-            this._deviceTree = deviceTree;
-            this._sourceNodes = sourceNodes;
-            if (this._dialogRequest instanceof TreeItem) {
-                const old = this._dialogRequest;
-                this._dialogRequest = HistoryEngine.walkTree(this._deviceTree)
-                    .find((item) => item.id === old.id && item.isSource === old.isSource) ?? null;
-                this._detailEntityIds = [];
-            }
-            this._rebuildWatchedEntityIds();
-
-            this._historyEngine = engine;
-            this.requestUpdate();
-
-            engine.start(
-                this._uiConfig.history_bucket_duration,
-                () => this._deviceTree,
-                () => this._sourceNodes,
-            );
-            engine.advanceBuckets(this._deviceTree, this._sourceNodes);
-            const inverterGeneration = ++this._inverterGeneration;
-            void this._loadInverter(
-                () => inverterGeneration !== this._inverterGeneration || !this.isConnected,
-                freshTree,
-            );
-        } catch (error) {
-            // Logged even for an obsolete load: the guard is there to keep stale data
-            // out of the card, not to hide a backend failure that raced a detach.
-            console.error('Helman: failed to load backend data', error);
-            // A config event can supersede the initial load before any tree is
-            // installed. Give that failed refresh one new, post-event read.
-            if (!obsolete() && freshTree && retryInitial && !this._historyEngine) {
-                void this._loadBackendData(true, false);
-            }
-        }
-    }
-
-    /** The inverter overview, after the card has drawn: a failure only leaves the cell out. */
-    private async _loadInverter(obsolete: () => boolean, fresh: boolean): Promise<void> {
-        try {
-            const payload = await getSharedHelmanStore(this._latestHass!)
-                .getNodeDetail<InverterDetailPayload>({ node: "inverter" }, { fresh });
-            if (obsolete()) return;
-            this._inverter = payload;
-            this._rebuildWatchedEntityIds();
-            this._hass = this._latestHass;
-        } catch (err) {
-            if (!obsolete()) console.error("Helman: failed to load the inverter overview", err);
-        }
-    }
-
-    private _hydrateTreeItems(payload: TreePayload): TreeItem[] {
-        const { sources, consumers, consumptionTotalSensorId, productionTotalSensorId, uiConfig } = payload;
-        const historyBuckets = uiConfig.history_buckets;
-        const roots: TreeItem[] = [];
-
-        // Build id→sourceType map from source DTOs so consumer counterparts (battery, grid)
-        // can inherit the same sourceType even when the backend doesn't set it on the consumer side.
-        const sourceTypeByDeviceId = new Map<string, string>();
-        for (const dto of sources) {
-            if (dto.sourceType) sourceTypeByDeviceId.set(dto.id, dto.sourceType);
-        }
-
-        if (sources.length > 0) {
-            const sourcesNode = new TreeItem("sources", this._localize!('card.sources_title'), null, null, historyBuckets);
-            sourcesNode.childrenCollapsed = false;
-            sourcesNode.icon = 'mdi:lightning-bolt-outline';
-            sourcesNode.powerSensorId = productionTotalSensorId;
-            sourcesNode.children = sources.map(dto => hydrateItem(dto, historyBuckets, this._localize!));
-            roots.push(sourcesNode);
-        }
-
-        if (consumers.length > 0) {
-            const consumersNode = new TreeItem("consumers", this._localize!('card.consumers_title'), null, null, historyBuckets);
-            consumersNode.hideChildren = true;
-            consumersNode.hideChildrenIndicator = true;
-            consumersNode.icon = 'mdi:lightning-bolt-outline';
-            consumersNode.powerSensorId = consumptionTotalSensorId;
-            consumersNode.children = consumers.map(dto => hydrateItem(dto, historyBuckets, this._localize!));
-            // Propagate sourceType to consumer nodes. Source counterparts (battery/grid) inherit
-            // from the sourceTypeByDeviceId map; house is identified by its well-known id.
-            const propagateSourceType = (items: TreeItem[]) => {
-                for (const item of items) {
-                    if (!item.sourceType) {
-                        item.sourceType = sourceTypeByDeviceId.get(item.id)
-                            ?? (item.id === 'house' ? 'house' : null);
-                    }
-                    propagateSourceType(item.children);
-                }
-            };
-            propagateSourceType(consumersNode.children);
-            roots.push(consumersNode);
-        }
-
-        return roots;
-    }
-
-    private _rebuildWatchedEntityIds(): void {
-        const ids = new Set<string>();
-        const visit = (items: TreeItem[]) => {
-            for (const item of items) {
-                if (item.powerSensorId) ids.add(item.powerSensorId);
-                if (item.ratioSensorId) ids.add(item.ratioSensorId);
-                visit(item.children);
-            }
-        };
-        visit(this._deviceTree);
-
-        // Also watch battery SOC/remaining-energy entities so the dialog
-        // reflects live values even when no power/ratio entity changed.
-        const sourcesChildren = this._deviceTree.find((item) => item.id === "sources")?.children;
-        const consumersChildren = this._deviceTree.find((item) => item.id === "consumers")?.children;
-        const batteryProducerNode = sourcesChildren?.find((n) => n.sourceType === "battery");
-        const batteryConsumerNode = consumersChildren?.find((n) => n.sourceType === "battery");
-        const batteryConfig = (batteryProducerNode?.nodeConfig ?? batteryConsumerNode?.nodeConfig) as import("./energy-node-config").BatteryNodeConfig | undefined;
-        if (batteryConfig?.entities.capacity) ids.add(batteryConfig.entities.capacity);
-        if (batteryConfig?.entities.remaining_energy) ids.add(batteryConfig.entities.remaining_energy);
-
-        for (const id of this._scheduleWatchedIds) {
-            ids.add(id);
-        }
-
-        // The distribution row's inverter cell: its mode and link cue.
-        for (const id of inverterCellEntityIds(this._inverter)) ids.add(id);
-
-        for (const id of this._detailEntityIds) ids.add(id);
-        this._watchedEntityIds = ids;
-    }
-
-    private _collectSourceNodes(items: TreeItem[]): TreeItem[] {
-        const sourceNodes: TreeItem[] = [];
-        const collect = (itemList: TreeItem[]) => {
-            for (const item of itemList) {
-                if (item.isSource) sourceNodes.push(item);
-                if (item.children) collect(item.children);
-            }
-        };
-        collect(items);
-        return sourceNodes;
-    }
 }
 
 // Register the custom card in Home Assistant

@@ -1,8 +1,8 @@
-import { formatKwh, formatPower } from "../../shared/format";
-import { SLOT_MS } from "../../shared/time/slot-time";
+import { formatKwh, formatPower } from "../shared/format";
+import { SLOT_MS } from "../shared/time/slot-time";
 import { css, html, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import { fillTemplate } from "../../localize/localize";
+import { fillTemplate } from "../localize/localize";
 import type {
     ApplianceProjectionsPayload,
     ApplianceRuntimeDTO,
@@ -14,24 +14,25 @@ import type {
     GetNodeDetailRequest,
     ScheduleEvChargerActionDTO,
     SchedulePayload,
-} from "../../helman-api";
-import { helmanColorVars } from "../../color-vars";
-import { currencyFromPriceUnit } from "../../helman-solar-inspector/money-model";
-import { getSharedHelmanStore } from "../../helman/store";
+} from "../helman-api";
+import { helmanColorVars } from "../color-vars";
+import { currencyFromPriceUnit } from "../helman-solar-inspector/money-model";
+import { getSharedHelmanStore } from "../shared/data/store";
 
-import { loadHaEntityToggle } from "../../shared/load-ha-elements";
-import "../../shared/mode-strip";
-import { modeStripWindow, type ModeChange, type ModeSegment } from "../../shared/mode-strip";
-import type { FlowItem } from "../../shared/node-flow";
-import "../../shared/soc-glyph";
-import { scheduleActionToneStyles, type ScheduleActionTone } from "../../shared/schedule/action-tones";
-import { getScheduleApplianceActionPresentation } from "../../shared/schedule/model/schedule-appliance-action-presentation";
-import { resolveScheduleSlotBoundaries, type ScheduleSlotBoundary } from "../../shared/schedule/model/schedule-time";
-import { getSharedScheduleOwner } from "../../shared/schedule/schedule-owner";
-import { DEFAULT_SOLAR_MAX_W } from "../live-flows";
+import { loadHaEntityToggle } from "../shared/load-ha-elements";
+import "../shared/mode-strip";
+import { modeStripWindow, type ModeChange, type ModeSegment } from "../shared/mode-strip";
+import type { FlowItem } from "../shared/node-flow";
+import "../shared/soc-glyph";
+import { scheduleActionToneStyles, type ScheduleActionTone } from "../shared/schedule/action-tones";
+import { getScheduleApplianceActionPresentation } from "../shared/schedule/model/schedule-appliance-action-presentation";
+import { resolveScheduleSlotBoundaries, type ScheduleSlotBoundary } from "../shared/schedule/model/schedule-time";
+import { getSharedScheduleOwner } from "../shared/schedule/schedule-owner";
+import { DEFAULT_SOLAR_MAX_W } from "./live-flows";
 import { IDLE_W, NodeDetailContentBase, TODAY_REFRESH_MS, type FlowNode, type NodeFlow, type SectionState } from "./node-detail-base";
-import { announceWatchedEntities, readEnergyKWh, readingNumber } from "./node-detail-readings";
-import { powerUnitFactor } from "../../shared/power-reading";
+import { readEnergyKWh, readingNumber } from "./node-detail-readings";
+import { dispatchWatchedEntities } from "../shared/hass-change";
+import { powerUnitFactor } from "../shared/power-reading";
 import { dayKey, todayAndTomorrow } from "./node-detail-schedule";
 import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { DeviceDetailParams } from "./node-detail-types";
@@ -312,7 +313,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
             if (request !== this._applianceRequest) return;
             const appliance = (payload?.appliances ?? []).find((item) => item.id === this.deviceId && item.kind === "ev_charger");
             this._appliance = { status: "ready", payload: (appliance as EvChargerApplianceMetadataDTO | undefined) ?? null };
-            if (this._overview.status === "ready") announceWatchedEntities(this, this._watchedEntities(this._overview.payload));
+            if (this._overview.status === "ready") dispatchWatchedEntities(this, "node-detail", this._watchedEntities(this._overview.payload));
         } catch (error) {
             if (request !== this._applianceRequest) return;
             console.error("node-detail-ev_charger: failed to load the appliance roster", error);

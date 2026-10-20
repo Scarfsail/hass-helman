@@ -1,20 +1,20 @@
-import { formatKwh, formatMoney, formatPower } from "../../shared/format";
+import { formatKwh, formatMoney, formatPower } from "../shared/format";
 import { css, html, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import { fillTemplate } from "../../localize/localize";
+import { fillTemplate } from "../localize/localize";
 import type {
     BatteryChargeDTO,
     BatteryChargeSectionPayload,
     BatteryDetailPayload,
     SchedulePayload,
-} from "../../helman-api";
-import { currencyFromPriceUnit } from "../../helman-solar-inspector/money-model";
-import { getSharedHelmanStore } from "../../helman/store";
+} from "../helman-api";
+import { currencyFromPriceUnit } from "../helman-solar-inspector/money-model";
+import { getSharedHelmanStore } from "../shared/data/store";
 
-import "../../shared/soc-glyph";
-import type { SocDirection } from "../../shared/soc-glyph";
-import { getScheduleActionTone, scheduleActionToneStyles, type ScheduleActionTone } from "../../shared/schedule/action-tones";
-import { getSharedScheduleOwner } from "../../shared/schedule/schedule-owner";
+import "../shared/soc-glyph";
+import type { SocDirection } from "../shared/soc-glyph";
+import { getScheduleActionTone, scheduleActionToneStyles, type ScheduleActionTone } from "../shared/schedule/action-tones";
+import { getSharedScheduleOwner } from "../shared/schedule/schedule-owner";
 import { IDLE_W, NodeDetailContentBase, TODAY_REFRESH_MS, type NodeFlow, type SectionState } from "./node-detail-base";
 import { INVERTER_PLAN_INSPECTOR_CONFIG } from "./node-detail-inverter-content";
 import { readEnergyKWh, readingNumber } from "./node-detail-readings";

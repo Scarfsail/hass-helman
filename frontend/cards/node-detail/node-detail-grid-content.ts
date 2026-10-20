@@ -1,26 +1,26 @@
-import { formatKwh, formatMoney, formatPower } from "../../shared/format";
-import { phaseSign } from "../../shared/power-reading";
+import { formatKwh, formatMoney, formatPower } from "../shared/format";
+import { phaseSign } from "../shared/power-reading";
 import { css, html, nothing, svg } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import { fillTemplate } from "../../localize/localize";
+import { fillTemplate } from "../localize/localize";
 import {
     fetchDayAggregates,
     type DayStatsDTO,
     type GridDayAggregatesPayload,
     type GridDetailPayload,
     type GridVoltageSectionPayload,
-} from "../../helman-api";
-import type { HelmanSolarInspectorCardConfig } from "../../helman-solar-inspector/HelmanSolarInspectorCardConfig";
-import { currencyFromPriceUnit } from "../../helman-solar-inspector/money-model";
-import { PHASE_COLORS } from "../../color-utils";
-import { helmanColorVars } from "../../color-vars";
-import { getSharedHelmanStore } from "../../helman/store";
+} from "../helman-api";
+import type { HelmanSolarInspectorCardConfig } from "../helman-solar-inspector/HelmanSolarInspectorCardConfig";
+import { currencyFromPriceUnit } from "../helman-solar-inspector/money-model";
+import { PHASE_COLORS } from "../color-utils";
+import { helmanColorVars } from "../color-vars";
+import { getSharedHelmanStore } from "../shared/data/store";
 
-import { todayKey } from "../../shared/time/day-key";
-import { pylonGlyph } from "../../shared/node-glyphs";
-import { scheduleActionToneStyles } from "../../shared/schedule/action-tones";
-import "../../shared/day-line-chart";
-import type { DayLineBand, DayLineReference, DayLineSeries } from "../../shared/day-line-chart";
+import { todayKey } from "../shared/time/day-key";
+import { pylonGlyph } from "../shared/node-glyphs";
+import { scheduleActionToneStyles } from "../shared/schedule/action-tones";
+import "../shared/day-line-chart";
+import type { DayLineBand, DayLineReference, DayLineSeries } from "../shared/day-line-chart";
 import { IDLE_W, NodeDetailContentBase, TODAY_REFRESH_MS, type NodeFlow, type SectionState } from "./node-detail-base";
 import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { GridDetailParams } from "./node-detail-types";

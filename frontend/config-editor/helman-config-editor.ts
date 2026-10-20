@@ -97,7 +97,7 @@ import {
   type ScopeId,
   type TabId,
 } from "./config-editor-scopes";
-import { DataChangedController } from "../cards/helman/data-changed";
+import { DataChangedController } from "../cards/shared/data/data-changed";
 import { getLocalizeFunction, type LocalizeFunction } from "../cards/localize/localize";
 import { mdiAlertOutline, mdiDragVertical } from "@mdi/js";
 import {
@@ -151,9 +151,9 @@ import {
   type SolarInspectorCardElement,
 } from "./solar-inspector-embed";
 import type { HomeAssistant } from "../types/ha";
-import { getSharedHelmanStore } from "../cards/helman/store";
-import type { TreeItem } from "../cards/helman/tree-item";
-import { hydrateItem } from "../cards/helman/tree-item-hydrator";
+import { getSharedHelmanStore } from "../cards/shared/data/store";
+import type { TreeItem } from "../cards/shared/data/tree-item";
+import { hydrateItem } from "../cards/shared/data/tree-item-hydrator";
 import "./info-callout";
 import "../cards/shared/config/entity-group";
 import {

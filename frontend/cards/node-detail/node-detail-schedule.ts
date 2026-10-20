@@ -1,13 +1,13 @@
 import { html, nothing, type TemplateResult } from "lit";
-import type { InverterRuntimeDTO, ScheduleActionDTO, SchedulePayload } from "../../helman-api";
-import type { LocalizeFunction } from "../../localize/localize";
+import type { InverterRuntimeDTO, ScheduleActionDTO, SchedulePayload } from "../helman-api";
+import type { LocalizeFunction } from "../localize/localize";
 import {
     addDaysToDayKey,
     getScheduleDayKey,
     resolveScheduleSlotBoundaries,
-} from "../../shared/schedule/model/schedule-time";
-import { getScheduleActionLabel, getScheduleReasonLabel } from "../../shared/schedule/model/schedule-labels";
-import { INVERTER_CONTROLLABLE_ID } from "../../shared/schedule/schedule-types";
+} from "../shared/schedule/model/schedule-time";
+import { getScheduleActionLabel, getScheduleReasonLabel } from "../shared/schedule/model/schedule-labels";
+import { INVERTER_CONTROLLABLE_ID } from "../shared/schedule/schedule-types";
 
 /**
  * The inverter's plan as the node details read it: runs of equal actions, the

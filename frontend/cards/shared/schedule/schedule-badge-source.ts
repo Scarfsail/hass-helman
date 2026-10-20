@@ -1,5 +1,5 @@
 import type { HomeAssistant } from "../../../types/ha";
-import { getSharedHelmanStore } from "../../helman/store";
+import { getSharedHelmanStore } from "../data/store";
 import {
     _projectEntityState,
     _readCommittedApplianceAction,

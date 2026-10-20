@@ -12,7 +12,7 @@ import {
     type DeviceReportPayload,
     type DeviceReportQuery,
 } from "../helman-api";
-import { DataChangedController } from "../helman/data-changed";
+import { DataChangedController } from "../shared/data/data-changed";
 import { fillTemplate, getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 
 import {

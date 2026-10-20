@@ -1,5 +1,5 @@
-import { TreeItemDTO } from "../helman-api";
-import type { LocalizeFunction } from "../localize/localize";
+import { TreeItemDTO } from "../../helman-api";
+import type { LocalizeFunction } from "../../localize/localize";
 import { TreeItem } from "./tree-item";
 
 /** An unmeasured remainder carries no name from the backend; the card names every one alike. */

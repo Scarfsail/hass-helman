@@ -29,7 +29,7 @@ export function state(value: string, unit?: string, attributes: Record<string, u
 export function inverterOverview(overrides: Record<string, unknown> = {}) {
     return { node: "inverter", asOf: "2026-10-21T12:00:00+00:00", configured: false, profile: null, mode: null,
         entities: {}, maxAllowedExportPower: 9900,
-        agreement: { status: "unknown", reason: "no_profile", commanded: null, observedOption: null, registers: [] },
+        agreement: { status: "unknown", reason: "no_profile", commanded: null, observedOption: null, observedFrom: [], registers: [] },
         condition: null, sections: [], ...overrides };
 }
 

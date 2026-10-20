@@ -1,4 +1,4 @@
-import type { HomeAssistant } from "../../types/ha";
+import type { HomeAssistant } from "../../../types/ha";
 import type {
     ApplianceProjectionsPayload,
     AppliancesPayload,
@@ -7,9 +7,9 @@ import type {
     HistoryPayload,
     SchedulePayload,
     TreePayload,
-} from "../helman-api";
-import { callHelman } from "../shared/data/helman-commands";
-import type { HelmanSchedulePatch } from "./models";
+} from "../../helman-api";
+import { callHelman } from "./helman-commands";
+import type { HelmanSchedulePatch } from "../../helman/models";
 
 type HelmanConnection = HomeAssistant["connection"];
 

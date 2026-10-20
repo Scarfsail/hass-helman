@@ -1,5 +1,5 @@
-import type { HomeAssistant } from "../../../types/ha";
-import { convertToKWh } from "../../helman/energy-unit-converter";
+import type { HomeAssistant } from "../../types/ha";
+import { convertToKWh } from "../helman/energy-unit-converter";
 
 type HassState = HomeAssistant["states"][string];
 

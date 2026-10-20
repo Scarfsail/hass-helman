@@ -1,8 +1,8 @@
-import { applyValueType, readPowerW } from "../shared/power-reading";
-import type { HomeAssistant } from "../../types/ha";
-import { HistoryPayload } from "../helman-api";
+import { applyValueType, readPowerW } from "../power-reading";
+import type { HomeAssistant } from "../../../types/ha";
+import { HistoryPayload } from "../../helman-api";
 import { TreeItem } from "./tree-item";
-import { nodeAccentColor } from "../color-utils";
+import { nodeAccentColor } from "../../color-utils";
 
 export class HistoryEngine {
     private _interval?: number;
