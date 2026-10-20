@@ -41,6 +41,7 @@ type Variant = {
     todayUnavailable?: boolean;
     /** Schedule execution is switched off. */
     executionOff?: boolean;
+    noSlots?: boolean;
     /** Today misses one of its completed hours. */
     partialToday?: boolean;
     /** The EV's run switches from Fast to ECO at 15:30, its condition met. */
@@ -250,7 +251,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             }
             slots.push({ id: at.toISOString().replace(".000Z", "+00:00"), controllables });
         }
-        const schedule: SchedulePayload = { ...scheduleDefaults, executionEnabled: !v.executionOff, slots, runtime: { activeSlotId: "2026-10-21T12:00:00+00:00", controllables: {} } };
+        const schedule: SchedulePayload = { ...scheduleDefaults, executionEnabled: !v.executionOff, slots: (v.noSlots ? undefined : slots) as SchedulePayload["slots"], runtime: { activeSlotId: "2026-10-21T12:00:00+00:00", controllables: {} } };
         // The house forecast: 0.3 kWh in the slot in progress, 0.25 kWh in every later one.
         const houseSlot = (ms: number, kwh: number) => ({
             timestamp: new Date(ms).toISOString().replace(".000Z", "+00:00"),
@@ -625,6 +626,14 @@ test.describe("what comes next", () => {
         await openDetail(page);
         await open(page, "next");
         await expect(question(page, "next").locator("[data-execution-off]")).toContainText("does not carry it out");
+    });
+
+    test("a plan without slots renders with no planned runs", async ({ page }) => {
+        await mount(page, { noSlots: true });
+        await openDetail(page);
+        await open(page, "next");
+        await expect(question(page, "next").locator("[data-row='rest']")).toContainText("12 kWh");
+        await expect(question(page, "next").locator("[data-row^='run-']")).toHaveCount(0);
     });
 });
 

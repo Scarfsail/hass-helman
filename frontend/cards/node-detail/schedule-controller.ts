@@ -32,7 +32,7 @@ export class ScheduleController<R extends PlanSpan> {
 
     /** The plan's runs as `read` makes them, once per update. */
     get runs(): R[] {
-        return this._runs ??= this.schedule ? this._read(this.schedule, Date.now()) : [];
+        return this._runs ??= this.schedule?.slots ? this._read(this.schedule, Date.now()) : [];
     }
 
     start(hass: HomeAssistant): void {

@@ -82,7 +82,7 @@ export function currentRun(runs: ScheduleRun[], now: number): ScheduleRun | null
 export function runtimeFor<T extends ControllableRuntimeDTO>(schedule: SchedulePayload | null, id: string, now: number): T | null {
     const runtime = schedule?.runtime;
     if (!schedule || !runtime) return null;
-    const slots = resolveScheduleSlotBoundaries(schedule.slots.map((slot) => slot.id));
+    const slots = resolveScheduleSlotBoundaries((schedule.slots ?? []).map((slot) => slot.id));
     const current = slots.find((slot) => slot.startMs <= now && now < slot.startMs + SLOT_MS);
     if (!current || current.id !== runtime.activeSlotId) return null;
     return (runtime.controllables[id] as T | undefined) ?? null;
