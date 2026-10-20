@@ -8,6 +8,7 @@ import type { TreeItem } from "../shared/data/tree-item";
 import type { DeviceDetailParams } from "./node-detail-types";
 import { nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import { readPowerW } from "../shared/power-reading";
+import { SectionResource } from "./section-resource";
 
 import "../appliance-switch-badge";
 import { type DeviceStats, type DeviceStatsSpread } from "../helman-api";
@@ -27,6 +28,9 @@ type HistoryGraphCard = HTMLElement & { hass?: HomeAssistant };
 
 /** A tile's figure: `undefined` while it loads, `null` when HA had no answer. */
 type Reading = number | null | undefined;
+
+/** What the device's own meter counted today and in the last hour; `null` where HA had no answer. */
+type MeterEnergy = { today: number | null; lastHour: number | null };
 
 /**
  * The device's power sensor, if it has one. An inspector box with no power
@@ -85,11 +89,28 @@ export class NodeDetailDeviceContent extends LitElement {
     @property({ attribute: false }) public localize!: LocalizeFunction;
     @property({ attribute: false }) public params!: DeviceDetailParams;
 
-    @state() private _today: Reading;
-    @state() private _lastHour: Reading;
-    /** The learned usage record: `undefined` while it loads, `null` when there is none. */
-    @state() private _stats: DeviceStats | null | undefined;
-    @state() private _chart?: HistoryGraphCard;
+    /** The energy the device's own meter counted. */
+    private readonly _energy = new SectionResource<MeterEnergy>(this, "energy", {
+        fetch: () => this._readEnergy(this.params.item.energyEntityId!),
+        shown: () => !!this.params.item.energyEntityId,
+        staleness: () => false,
+    });
+    /** The learned usage record; `null` when there is none. */
+    private readonly _stats = new SectionResource<DeviceStats | null>(this, "stats", {
+        // The solar inspector's deviceKey is a controllable id; the backend
+        // resolves a metered device's id to its meter.
+        fetch: () => callHelman(this.hass, "helman/get_device_stats", { device_key: this.params.item.deviceKey! }),
+        shown: () => !!this.params.item.deviceKey,
+        staleness: () => false,
+    });
+    /** HA's history graph of the device's power and switch. */
+    private readonly _chart = new SectionResource<HistoryGraphCard>(this, "chart", {
+        fetch: () => this._createChart(this._chartEntities(this.params.item)),
+        shown: () => this._chartEntities(this.params.item).length > 0 && typeof (window as any).loadCardHelpers === "function",
+        staleness: () => false,
+    });
+    /** Every figure of the device, read once per device opened. */
+    private readonly _sections = [this._energy, this._stats, this._chart];
     /** The device's config form is open over this detail. */
     @state() private _editing = false;
 
@@ -103,23 +124,21 @@ export class NodeDetailDeviceContent extends LitElement {
         return true;
     }
 
-    /** The device the figures and chart were loaded for; the host rebuilds params every render. */
+    /** The device the figures and chart were read for; the host rebuilds params every render. */
     private _loadedItem?: TreeItem;
 
     protected willUpdate(changed: PropertyValues<this>): void {
         super.willUpdate(changed);
         const item = this.params?.item;
-        if (item && item !== this._loadedItem && this.hass) {
+        if (!item || !this.hass) return;
+        // Another device: nothing shown is its.
+        if (item !== this._loadedItem) {
             this._loadedItem = item;
-            this._today = undefined;
-            this._lastHour = undefined;
-            this._stats = undefined;
-            this._chart = undefined;
-            void this._loadEnergy(item);
-            void this._loadStats(item);
-            void this._loadChart(item);
+            for (const section of this._sections) section.drop();
         }
-        if (this._chart && changed.has("hass")) this._chart.hass = this.hass;
+        for (const section of this._sections) section.sync();
+        const chart = this._chart.payload;
+        if (chart && changed.has("hass")) chart.hass = this.hass;
     }
 
     render() {
@@ -144,12 +163,12 @@ export class NodeDetailDeviceContent extends LitElement {
                 </div>
                 ${item.energyEntityId ? html`
                     <div class="tiles">
-                        ${this._tile("today", this._today, item.energyEntityId)}
-                        ${this._tile("last_hour", this._lastHour, item.energyEntityId)}
+                        ${this._tile("today", this._energy.payload?.today, item.energyEntityId)}
+                        ${this._tile("last_hour", this._energy.payload?.lastHour, item.energyEntityId)}
                     </div>
                 ` : nothing}
                 ${this._renderStats()}
-                ${this._chart ?? nothing}
+                ${this._chart.payload ?? nothing}
             </div>
             ${this._renderEditDialog(item)}
         `;
@@ -202,7 +221,7 @@ export class NodeDetailDeviceContent extends LitElement {
      * where the recorder has purged older history.
      */
     private _renderStats() {
-        const stats = this._stats;
+        const stats = this._stats.payload;
         if (!stats) return nothing;
         const day = stats.daily_kwh;
         const run = stats.run_minutes && stats.run_kwh
@@ -262,25 +281,7 @@ export class NodeDetailDeviceContent extends LitElement {
         `;
     }
 
-    private async _loadStats(item: TreeItem): Promise<void> {
-        // The solar inspector's deviceKey is a controllable id; the backend
-        // resolves a metered device's id to its meter.
-        const deviceKey = item.deviceKey;
-        if (!deviceKey) return;
-        let stats: DeviceStats | null;
-        try {
-            stats = await callHelman(this.hass, "helman/get_device_stats", { device_key: deviceKey });
-        } catch {
-            stats = null;
-        }
-        // Swapped to another device while this was in flight.
-        if (this._loadedItem !== item) return;
-        this._stats = stats;
-    }
-
-    private async _loadEnergy(item: TreeItem): Promise<void> {
-        const meter = item.energyEntityId;
-        if (!meter) return;
+    private async _readEnergy(meter: string): Promise<MeterEnergy> {
         const change = async (period: Record<string, unknown>): Promise<number | null> => {
             try {
                 const result = await this.hass.callWS<{ change?: number | null }>({
@@ -298,25 +299,22 @@ export class NodeDetailDeviceContent extends LitElement {
             change({ calendar: { period: "day" } }),
             change({ rolling_window: { duration: { hours: 1 } } }),
         ]);
-        // Swapped to another device while this was in flight.
-        if (this._loadedItem !== item) return;
-        this._today = today;
-        this._lastHour = lastHour;
+        return { today, lastHour };
     }
 
-    private async _loadChart(item: TreeItem): Promise<void> {
-        const entities = [powerEntity(item), item.switchEntityId].filter(Boolean);
-        const loadCardHelpers = (window as any).loadCardHelpers;
-        if (entities.length === 0 || typeof loadCardHelpers !== "function") return;
-        const helpers = await loadCardHelpers();
-        if (this._loadedItem !== item) return;
+    private _chartEntities(item: TreeItem): string[] {
+        return [powerEntity(item), item.switchEntityId].filter((id): id is string => !!id);
+    }
+
+    private async _createChart(entities: string[]): Promise<HistoryGraphCard> {
+        const helpers = await (window as any).loadCardHelpers();
         const chart = helpers.createCardElement({
             type: "history-graph",
             hours_to_show: 24,
             entities,
         }) as HistoryGraphCard;
         chart.hass = this.hass;
-        this._chart = chart;
+        return chart;
     }
 
     /** HA's own more-info request, as the device rows turn it. */

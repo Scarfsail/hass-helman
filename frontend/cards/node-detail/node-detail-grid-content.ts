@@ -1,7 +1,7 @@
 import { formatKwh, formatMoney, formatPower } from "../shared/format";
 import { phaseSign } from "../shared/power-reading";
 import { css, html, nothing, svg } from "lit";
-import { customElement, property, state } from "lit/decorators.js";
+import { customElement, property } from "lit/decorators.js";
 import { fillTemplate } from "../localize/localize";
 import {
     fetchDayAggregates,
@@ -14,14 +14,13 @@ import type { HelmanSolarInspectorCardConfig } from "../helman-solar-inspector/H
 import { currencyFromPriceUnit } from "../helman-solar-inspector/money-model";
 import { PHASE_COLORS } from "../color-utils";
 import { helmanColorVars } from "../color-vars";
-import { getSharedHelmanStore } from "../shared/data/store";
 
-import { todayKey } from "../shared/time/day-key";
+import { isoDateInTimeZone, todayKey } from "../shared/time/day-key";
 import { pylonGlyph } from "../shared/node-glyphs";
 import { scheduleActionToneStyles } from "../shared/schedule/action-tones";
 import "../shared/day-line-chart";
 import type { DayLineBand, DayLineReference, DayLineSeries } from "../shared/day-line-chart";
-import { IDLE_W, NodeDetailContentBase, TODAY_REFRESH_MS, type NodeFlow, type SectionState } from "./node-detail-base";
+import { IDLE_W, NodeDetailContentBase, type NodeFlow } from "./node-detail-base";
 import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { GridDetailParams } from "./node-detail-types";
 
@@ -222,8 +221,19 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
 
     @property({ attribute: false }) public params!: GridDetailParams;
 
-    @state() private _money: SectionState<GridDayAggregatesPayload> | null = null;
-    @state() private _voltage: SectionState<GridVoltageSectionPayload> | null = null;
+    /** Today's measured grid money; a failure leaves the money figures out, nothing else. */
+    private readonly _money = this._section<GridDayAggregatesPayload>("money", {
+        fetch: () => {
+            const date = todayKey(this._timeZone);
+            return fetchDayAggregates(this.hass, { start_date: date, end_date: date });
+        },
+        shown: () => true,
+    });
+    /** Today's voltages, which the picture's ranges draw, once the overview says there are sensors to read. */
+    private readonly _voltage = this._section<GridVoltageSectionPayload>("voltage", {
+        fetch: () => this._readSection("voltage"),
+        shown: () => this._offers("voltage"),
+    });
     private _voltageChart?: {
         payload: GridVoltageSectionPayload;
         series: DayLineSeries[];
@@ -231,99 +241,9 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         bands: DayLineBand[];
     };
 
-    private _moneyRequest = 0;
-    /** The local date `_money` was requested for; a new day re-reads it. */
-    private _moneyDate = "";
-    private _moneyRequestedAt = 0;
-    private _voltageRequestedAt = 0;
-    private _voltageRequest = 0;
-
-    willUpdate(changed: Map<string, unknown>): void {
-        super.willUpdate(changed);
-        // Today's statistics grow while the dialog is open: re-read them on a new
-        // day, and otherwise at most every few minutes, only while the page is
-        // visible. The now-clock brings an idle or returning dialog back here.
-        if (this._started && !document.hidden && (this._moneyDate !== todayKey(this._timeZone) || Date.now() - this._moneyRequestedAt > TODAY_REFRESH_MS)) {
-            void this._loadMoney();
-        }
-        // Today's voltages, which the picture's ranges draw, follow the day the same way.
-        if (this._voltage?.status === "ready" && !document.hidden
-            && (!this._isToday(this._voltage.payload.period.start) || Date.now() - this._voltageRequestedAt > TODAY_REFRESH_MS)) {
-            void this._loadVoltage();
-        }
-    }
-
     protected _start(): void {
         super._start();
-        void this._loadMoney();
         void this._loadForecast();
-    }
-
-    protected _stop(): void {
-        this._moneyRequest += 1;
-        this._voltageRequest += 1;
-        // A dropped load would otherwise stay "loading" after a reconnect.
-        if (this._voltage?.status === "loading") this._voltage = null;
-    }
-
-    protected _onDataChanged(): void {
-        super._onDataChanged();
-        void this._loadMoney();
-        if (this._voltage !== null) void this._loadVoltage();
-    }
-
-    /** The run mode the overview's condition was computed from. */
-    protected _overviewSignature(payload: GridDetailPayload): string {
-        const entityId = payload.entities.run_mode;
-        return entityId ? this.hass.states[entityId]?.state ?? "" : "";
-    }
-
-    protected _overviewLoaded(payload: GridDetailPayload): void {
-        // The picture's voltage ranges are read on opening, once the overview
-        // says there are sensors to read.
-        if (this._voltage === null && payload.sections.includes("voltage")) void this._loadVoltage();
-    }
-
-    // ── Data ────────────────────────────────────────────────────────────────
-
-    /** Today's measured grid money; a failure leaves the money figures out, nothing else. */
-    private async _loadMoney(): Promise<void> {
-        const request = ++this._moneyRequest;
-        if (this._money?.status !== "ready") this._money = { status: "loading" };
-        const date = todayKey(this._timeZone);
-        this._moneyDate = date;
-        this._moneyRequestedAt = Date.now();
-        try {
-            const payload = await fetchDayAggregates(this.hass, {
-                start_date: date,
-                end_date: date,
-            });
-            if (request !== this._moneyRequest) return;
-            this._money = { status: "ready", payload };
-        } catch (error) {
-            if (request !== this._moneyRequest) return;
-            console.error("node-detail-grid: failed to load today's money", error);
-            if (this._money?.status !== "ready") this._money = { status: "error" };
-        }
-    }
-
-    private async _loadVoltage(): Promise<void> {
-        const request = ++this._voltageRequest;
-        // A refresh keeps the chart on screen until the new day's figures land.
-        if (this._voltage?.status !== "ready" || !this._isToday(this._voltage.payload.period.start)) {
-            this._voltage = { status: "loading" };
-        }
-        this._voltageRequestedAt = Date.now();
-        try {
-            const payload = await getSharedHelmanStore(this.hass)
-                .getNodeDetail<GridVoltageSectionPayload>({ node: "grid", section: "voltage" }, { fresh: true });
-            if (request !== this._voltageRequest) return;
-            this._voltage = { status: "ready", payload };
-        } catch (error) {
-            if (request !== this._voltageRequest) return;
-            console.error("node-detail-grid: failed to load today's voltages", error);
-            if (this._voltage?.status !== "ready") this._voltage = { status: "error" };
-        }
     }
 
     // ── Disclosure ──────────────────────────────────────────────────────────
@@ -331,7 +251,7 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
     protected _setOpen(id: QuestionId | null): void {
         super._setOpen(id);
         // An opened answer shows today's figures as they are now.
-        if (id === "money") void this._loadMoney();
+        if (id === "money") void this._money.load();
         if (id === "next") void this._loadForecast();
     }
 
@@ -386,7 +306,7 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         return html`
             <div class="summary" data-overview>
                 <p class="status pill action-tone-neutral" data-tone="neutral">${status}</p>
-                ${this._renderException(overview)}
+                ${overview.condition ? this._exceptionBanner(fillTemplate(this._t(`exception.${overview.condition.kind}`), { state: overview.condition.runMode }), "outage") : nothing}
             </div>
         `;
     }
@@ -417,7 +337,7 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         }
         const readings = this._phaseReadings(overview);
         const scaleW = this._phaseScaleW(overview, readings);
-        const ranges = this._voltage?.status === "ready" ? this._voltage.payload.phases : null;
+        const ranges = this._voltage.payload?.phases ?? null;
         const known = [
             ...readings.map((reading) => reading.voltage).filter((value): value is number => value !== null && value > 0),
             ...PHASES.flatMap((phase) => {
@@ -450,14 +370,14 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
     /** Whether today's voltage ranges are still loading or failed; nothing once they are in. */
     private _renderRangeStatus(overview: GridDetailPayload) {
         if (!overview.sections.includes("voltage")) return nothing;
-        const section = this._voltage;
+        const section = this._voltage.state;
         if (section === null || section.status === "loading") {
             return html`<p class="note" data-range-loading>${this._t("picture.range_loading")}</p>`;
         }
         if (section.status === "error") {
             return html`
                 <p class="note" data-range-failed>${this._t("picture.range_failed")}</p>
-                <button class="link-button" @click=${() => this._loadVoltage()}>${this._t("retry")}</button>
+                <button class="link-button" @click=${() => this._voltage.load()}>${this._t("retry")}</button>
             `;
         }
         return nothing;
@@ -552,7 +472,7 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
      * opening; a side whose money is not known says so, never zero.
      */
     private _todayFlow(): NodeFlow {
-        const flows = this._todayFlows?.status === "ready" ? this._todayFlows.payload.flows : null;
+        const flows = this._flows.payload?.flows ?? null;
         const energy = (value: number | null) => value === null ? "–" : (formatKwh(Math.abs(value)) + " kWh");
         const inputs = [
             this._flowItem("solar", flows?.solarToGrid ?? null, energy),
@@ -570,7 +490,7 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         const withMoney = (total: string | null, key: string, value: number | null) => money
             ? [total, fillTemplate(this._t(key), { value: value === null ? unknown : this._formatMoney(value, money.currency) })].filter(Boolean).join(" · ")
             : total;
-        if (this._money?.status === "error") notes.push(this._t("money.failed"));
+        if (this._money.state?.status === "error") notes.push(this._t("money.failed"));
         return {
             scopeLabel: this._todayScopeLabel(),
             inputs,
@@ -616,7 +536,7 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         if (!overview.sections.includes("voltage")) {
             return this._tile("voltage", "–", this._t(this._hasPhaseTelemetry(overview, "ac_voltage") ? "tile.no_voltage_sensors" : "voltage.no_profile"));
         }
-        const section = this._voltage;
+        const section = this._voltage.state;
         if (section === null || section.status === "loading") return this._tile("voltage", "–", this._t("loading_history"));
         if (section.status === "error") return this._tile("voltage", "–", this._t("history_failed"));
         const drawn = PHASES.flatMap((phase) => {
@@ -653,17 +573,6 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         return this._tile("voltage", `${Math.floor(low)}–${Math.ceil(high)} V`, this._t("tile.voltage_range"), graphic);
     }
 
-    /** At most one: off-grid operation or a fault the inverter reports. */
-    private _renderException(overview: GridDetailPayload) {
-        if (!overview.condition) return nothing;
-        return html`
-            <div class="exception" role="status" data-exception>
-                <span>${fillTemplate(this._t(`exception.${overview.condition.kind}`), { state: overview.condition.runMode })}</span>
-                <button class="link-button" @click=${() => this._setOpen("outage")}>${this._t("exception.details")}</button>
-            </div>
-        `;
-    }
-
     // Voltage -----------------------------------------------------------------
 
     private _voltagePreview(overview: GridDetailPayload): string {
@@ -684,14 +593,14 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         if (!overview.sections.includes("voltage")) {
             return html`<p class="note">${this._t(this._hasPhaseTelemetry(overview, "ac_voltage") ? "voltage.no_sensors" : "voltage.no_profile_long")}</p>`;
         }
-        const section = this._voltage;
+        const section = this._voltage.state;
         if (section === null || section.status === "loading") {
             return html`<p class="note" data-voltage-loading>${this._t("loading_history")}</p>`;
         }
         if (section.status === "error") {
             return html`
                 <p class="note">${this._t("history_failed")}</p>
-                <button class="link-button" @click=${() => this._loadVoltage()}>${this._t("retry")}</button>
+                <button class="link-button" @click=${() => this._voltage.load()}>${this._t("retry")}</button>
             `;
         }
         const payload = section.payload;
@@ -771,7 +680,7 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
     }
 
     private _renderVoltageEvidence(overview: GridDetailPayload) {
-        const section = this._voltage?.status === "ready" ? this._voltage.payload : null;
+        const section = this._voltage.payload;
         const stats = section
             ? PHASES.flatMap((phase) => {
                 const day = section.phases[String(phase) as "1" | "2" | "3"];
@@ -887,8 +796,11 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
 
     /** Today's money from the span read, `null` while unknown. */
     private _moneyFigures(): MoneyFigures | null {
-        if (this._money?.status !== "ready") return null;
-        const day = this._money.payload.days.find((row) => row.date === this._moneyDate);
+        const payload = this._money.payload;
+        if (!payload) return null;
+        // The span read is for the day it was requested on.
+        const date = isoDateInTimeZone(new Date(this._money.requestedAt), this._timeZone);
+        const day = payload.days.find((row) => row.date === date);
         if (!day) return null;
         // A direction measured at zero cost or earned nothing; one with kWh
         // but no rate, or with nothing measured, is unknown, never zero.
@@ -899,7 +811,7 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
             cost,
             gain,
             net: cost === null || gain === null ? null : cost - gain,
-            currency: currencyFromPriceUnit(this._money.payload.currency),
+            currency: currencyFromPriceUnit(payload.currency),
             importKwh: day.gridImportKwh,
             exportKwh: day.gridExportKwh,
             costKwh: day.moneyCostKwh,
@@ -908,8 +820,8 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
     }
 
     private _moneyPreview(): string | null {
-        if (this._money?.status === "error") return this._t("money.failed");
-        if (this._money?.status !== "ready") return null;
+        if (this._money.state?.status === "error") return this._t("money.failed");
+        if (!this._money.payload) return null;
         const money = this._moneyFigures();
         if (!money || (money.cost === null && money.gain === null)) return this._t("money.unpriced");
         const parts: string[] = [];
@@ -919,13 +831,14 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
     }
 
     private _renderMoney() {
-        if (this._money === null || this._money.status === "loading") {
+        const section = this._money.state;
+        if (section === null || section.status === "loading") {
             return html`<p class="note">${this._t("money.loading")}</p>`;
         }
-        if (this._money.status === "error") {
+        if (section.status === "error") {
             return html`
                 <p class="note">${this._t("money.failed")}</p>
-                <button class="link-button" @click=${() => this._loadMoney()}>${this._t("retry")}</button>
+                <button class="link-button" @click=${() => this._money.load()}>${this._t("retry")}</button>
             `;
         }
         const money = this._moneyFigures();

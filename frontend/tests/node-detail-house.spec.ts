@@ -1,4 +1,4 @@
-import { prepareNodeDetailPage, mountSimpleCard, nodeDetailLocators, sectionRequestLog, treeNode, holdSection, powerTick, reconnectDetail } from "./support/node-detail-harness";
+import { prepareNodeDetailPage, mountSimpleCard, nodeDetailLocators, sectionRequestLog, sectionReads, expectKeepRule, treeNode, holdSection, powerTick, reconnectDetail } from "./support/node-detail-harness";
 import { energyFields, forecastPayload, scheduleSlots, treePayload } from "./support/payload-builders";
 import type { DevicePhase, ForecastPayload, ScheduleControllableActionsDTO, SchedulePayload, ScheduleSlotDTO, TreeItemDTO } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
@@ -846,7 +846,7 @@ test("Today across midnight throttles power ticks and accepts a late answer", as
     await powerTick(page, "node-detail-house-content", 31);
     expect((await sectionRequestLog(page, "house", "today")).length - before).toBe(2);
     await page.evaluate(() => (window as any).__releaseSection(true));
-    await expect.poll(() => content(page).evaluate((element: any) => element._today?.status)).toBe("ready");
+    await expect.poll(() => content(page).evaluate((element: any) => element._today.state?.status)).toBe("ready");
 });
 
 
@@ -855,11 +855,11 @@ test("a disconnected loading section can recover after reconnect", async ({ page
     await openDetail(page);
     await holdSection(page, "house", "pattern");
     await open(page, "pattern");
-    await expect.poll(() => content(page).evaluate((element: any) => element._pattern?.status)).toBe("loading");
+    await expect.poll(() => content(page).evaluate((element: any) => element._pattern.state?.status)).toBe("loading");
     expect(await reconnectDetail(page, "node-detail-house-content", "_pattern")).toBeNull();
-    await expect.poll(() => content(page).evaluate((element: any) => element._pattern?.status)).toBe("loading");
+    await expect.poll(() => content(page).evaluate((element: any) => element._pattern.state?.status)).toBe("loading");
     await page.evaluate(() => { (window as any).__releaseSection(); (window as any).__releaseSection(); });
-    await expect.poll(() => content(page).evaluate((element: any) => element._pattern?.status)).toBe("ready");
+    await expect.poll(() => content(page).evaluate((element: any) => element._pattern.state?.status)).toBe("ready");
 });
 
 
@@ -888,5 +888,40 @@ test("an idle Today retries a delayed previous-day answer on the clock", async (
     await page.clock.runFor(20_000);
     expect((await sectionRequestLog(page, "house", "today")).length - before).toBe(2);
     await page.evaluate(() => (window as any).__releaseSection(true));
-    await expect.poll(() => content(page).evaluate((element: any) => element._today?.status)).toBe("ready");
+    await expect.poll(() => content(page).evaluate((element: any) => element._today.state?.status)).toBe("ready");
+});
+
+
+test("section requests: a section is read while shown, re-read on a data change and dropped once hidden", async ({ page }) => {
+    await mount(page);
+    await openDetail(page);
+    const REPORT = "helman/device_report";
+    const reads = () => sectionReads(page, "house", [REPORT]);
+    await expect.poll(reads).toEqual({ today: 1 });
+    await open(page, "pattern");
+    await expect.poll(reads).toEqual({ today: 1, pattern: 1 });
+    // A closed answer's figures are dropped: reopened, it is read again.
+    await header(page, "pattern").click();
+    await open(page, "pattern");
+    await expect.poll(reads).toEqual({ today: 1, pattern: 2 });
+    // The full ranking only behind the consumers answer's evidence.
+    await open(page, "consumers");
+    await evidence(page, "consumers").click();
+    await expect.poll(reads).toEqual({ today: 1, pattern: 2, [REPORT]: 1 });
+    // Today draws the today section the overview already read.
+    await flow(page).locator("[data-scope='today']").click();
+    await page.evaluate(() => window.__fireDataChanged("config"));
+    // Once: Today draws the section the overview reads, not a second copy of it.
+    await expect.poll(reads).toEqual({ today: 2, pattern: 2, [REPORT]: 2 });
+    await flow(page).locator("[data-scope='now']").click();
+    await flow(page).locator("[data-scope='today']").click();
+    await page.waitForTimeout(300);
+    expect(await reads()).toEqual({ today: 2, pattern: 2, [REPORT]: 2 });
+});
+
+
+test("today's figures stay while they refresh within the day and on a failure, and give way on a new day", async ({ page }) => {
+    await mount(page);
+    await openDetail(page);
+    await expectKeepRule(page, "node-detail-house-content", "house", "today", "_today");
 });

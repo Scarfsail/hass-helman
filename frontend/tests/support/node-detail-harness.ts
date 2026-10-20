@@ -124,6 +124,23 @@ export async function sectionRequestLog(page: Page, node: string, section?: stri
         r.type === "helman/get_node_detail" && r.node === node && r.section && (section === undefined || r.section === section)), { node, section });
 }
 
+/**
+ * How often each section of `node` was read: a node-detail section by its
+ * name, and each of `commands` (a section read through another command) by
+ * its type.
+ */
+export async function sectionReads(page: Page, node: string, commands: string[] = []): Promise<Record<string, number>> {
+    return page.evaluate(({ node, commands }) => {
+        const counts: Record<string, number> = {};
+        for (const r of window.__NodeDetailRequests) {
+            const key = r.type === "helman/get_node_detail" && r.node === node && r.section ? String(r.section)
+                : commands.includes(r.type) ? r.type : null;
+            if (key) counts[key] = (counts[key] ?? 0) + 1;
+        }
+        return counts;
+    }, { node, commands });
+}
+
 /** Hold a real section read while live power updates keep reaching the open dialog. */
 export async function holdSection(page: Page, node: string, section: string): Promise<void> {
     await page.evaluate(async ({ node, section }) => {
@@ -151,6 +168,49 @@ export async function holdSection(page: Page, node: string, section: string): Pr
     }, { node, section });
 }
 
+/** Make every later read of a section fail, as while the recorder is down. */
+export async function failSection(page: Page, node: string, section: string): Promise<void> {
+    await page.evaluate(({ node, section }) => {
+        const hass = window.__NodeDetailHass;
+        const original = hass.callWS;
+        hass.callWS = (request: MockRequest) => {
+            if (request.type !== "helman/get_node_detail" || request.node !== node || request.section !== section) return original(request);
+            window.__NodeDetailRequests.push({ ...request });
+            return Promise.reject(new Error("recorder down"));
+        };
+    }, { node, section });
+}
+
+/**
+ * The one keep rule on the section `field` of the open detail: a refresh
+ * within the day keeps its figures until the new ones land, a failed refresh
+ * keeps them, and a refresh on a new day replaces them.
+ */
+export async function expectKeepRule(page: Page, selector: string, node: string, section: string, field: string): Promise<void> {
+    const content = page.locator(selector);
+    const status = () => content.evaluate((element: any, field) => element[field].state?.status, field);
+    const reads = async () => (await sectionRequestLog(page, node, section)).length;
+    /** Announce a data change and wait for the section's read it brings. */
+    const refresh = async () => {
+        const before = await reads();
+        await page.evaluate(() => window.__fireDataChanged("config"));
+        await expect.poll(reads).toBeGreaterThan(before);
+    };
+    await expect.poll(status).toBe("ready");
+    await holdSection(page, node, section);
+    await refresh();
+    expect(await status()).toBe("ready");
+    await page.evaluate(() => (window as any).__releaseSection());
+    await failSection(page, node, section);
+    await refresh();
+    await content.evaluate(async (element: any) => { await element.updateComplete; });
+    expect(await status()).toBe("ready");
+    // Past midnight the shown figures are yesterday's: the failed read replaces them.
+    await page.clock.setFixedTime(new Date("2026-10-22T00:01:00Z"));
+    await content.evaluate((element: any) => element.requestUpdate());
+    await expect.poll(status).toBe("error");
+}
+
 /** Deliver one real hass power tick and wait for the dialog's resulting render. */
 export async function powerTick(page: Page, contentSelector: string, second: number): Promise<void> {
     await page.evaluate(async ({ second }) => {
@@ -167,11 +227,12 @@ export async function powerTick(page: Page, contentSelector: string, second: num
     await page.locator(contentSelector).evaluate(async (element: any) => { await element.updateComplete; });
 }
 
+/** Reconnect the detail, returning the state of its section `field` while it was out of the page. */
 export async function reconnectDetail(page: Page, selector: string, field: string): Promise<unknown> {
     return page.locator(selector).evaluate((element: any, field) => {
         const parent = element.parentNode!;
         element.remove();
-        const state = element[field];
+        const state = element[field].state;
         parent.appendChild(element);
         return state;
     }, field);

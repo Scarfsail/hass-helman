@@ -1,4 +1,4 @@
-import { prepareNodeDetailPage, mountSimpleCard, nodeDetailLocators, sectionRequestLog, holdSection, reconnectDetail } from "./support/node-detail-harness";
+import { prepareNodeDetailPage, mountSimpleCard, nodeDetailLocators, sectionRequestLog, sectionReads, holdSection, reconnectDetail, failSection } from "./support/node-detail-harness";
 import { cardTree, forecastPayload, scheduleSlots } from "./support/payload-builders";
 import type { ForecastPayload, ScheduleActionDTO, SchedulePayload, ScheduleSlotDTO } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
@@ -788,11 +788,88 @@ test("a disconnected loading section can recover after reconnect", async ({ page
     await openDetail(page);
     await holdSection(page, "battery", "charge");
     await open(page, "charge");
-    await expect.poll(() => content(page).evaluate((element: any) => element._charge?.status)).toBe("loading");
+    await expect.poll(() => content(page).evaluate((element: any) => element._charge.state?.status)).toBe("loading");
     expect(await reconnectDetail(page, "node-detail-battery-content", "_charge")).toBeNull();
+    // Still open: the answer reads its section again by itself.
+    await expect.poll(() => content(page).evaluate((element: any) => element._charge.state?.status)).toBe("loading");
+    await page.evaluate(() => { (window as any).__releaseSection(); (window as any).__releaseSection(); });
+    await expect.poll(() => content(page).evaluate((element: any) => element._charge.state?.status)).toBe("ready");
+});
+
+
+test("section requests: a section is read while shown, re-read on a data change and dropped once hidden", async ({ page }) => {
+    await mount(page);
+    await openDetail(page);
+    const reads = () => sectionReads(page, "battery");
+    expect(await reads()).toEqual({});
+    await open(page, "charge");
+    await expect.poll(reads).toEqual({ charge: 1 });
+    // A closed answer's figures are dropped: reopened, it is read again.
     await header(page, "charge").click();
     await open(page, "charge");
-    await expect.poll(() => content(page).evaluate((element: any) => element._charge?.status)).toBe("loading");
-    await page.evaluate(() => { (window as any).__releaseSection(); (window as any).__releaseSection(); });
-    await expect.poll(() => content(page).evaluate((element: any) => element._charge?.status)).toBe("ready");
+    await expect.poll(reads).toEqual({ charge: 2 });
+    await flow(page).locator("[data-scope='today']").click();
+    await expect.poll(reads).toEqual({ charge: 2, flows: 1 });
+    await page.evaluate(() => window.__fireDataChanged("config"));
+    await expect.poll(reads).toEqual({ charge: 3, flows: 2 });
+    await flow(page).locator("[data-scope='now']").click();
+    await flow(page).locator("[data-scope='today']").click();
+    await expect(flowLabel(page, "in", "solar")).toContainText("kWh");
+    await page.waitForTimeout(300);
+    expect(await reads()).toEqual({ charge: 3, flows: 2 });
+});
+
+
+test.describe("today's flows kept while Now is shown", () => {
+    const status = (page: Page) => content(page).evaluate((element: any) => element._flows.state?.status);
+
+    test("a Today that failed is read again when it is shown again", async ({ page }) => {
+        await mount(page);
+        await openDetail(page);
+        await page.evaluate(() => { (window as any).__callWS = window.__BatteryHass.callWS; });
+        await failSection(page, "battery", "flows");
+        await flow(page).locator("[data-scope='today']").click();
+        await expect.poll(() => status(page)).toBe("error");
+        await flow(page).locator("[data-scope='now']").click();
+        await page.evaluate(() => { window.__BatteryHass.callWS = (window as any).__callWS; });
+        await flow(page).locator("[data-scope='today']").click();
+        await expect(flowLabel(page, "in", "solar")).toContainText("4.2 kWh");
+        expect(await sectionRequests(page, "flows")).toBe(2);
+    });
+
+    test("a data change while Now is shown re-reads Today once it is shown again", async ({ page }) => {
+        await mount(page);
+        await openDetail(page);
+        await flow(page).locator("[data-scope='today']").click();
+        await expect(flowLabel(page, "in", "solar")).toContainText("4.2 kWh");
+        await flow(page).locator("[data-scope='now']").click();
+        const overviews = () => page.evaluate(() => window.__NodeDetailRequests.filter((r) =>
+            r.type === "helman/get_node_detail" && r.node === "battery" && !r.section).length);
+        const before = await overviews();
+        await page.evaluate(() => window.__fireDataChanged("config"));
+        await expect.poll(overviews).toBeGreaterThan(before);
+        await page.waitForTimeout(300);
+        // Hidden, Today is not read on the change itself.
+        expect(await sectionRequests(page, "flows")).toBe(1);
+        await flow(page).locator("[data-scope='today']").click();
+        await expect.poll(() => sectionRequests(page, "flows")).toBe(2);
+    });
+
+    test("a refresh cancelled by a toggle leaves Today's figures as old as they are", async ({ page }) => {
+        await mount(page);
+        await openDetail(page);
+        await flow(page).locator("[data-scope='today']").click();
+        await expect(flowLabel(page, "in", "solar")).toContainText("4.2 kWh");
+        await page.clock.setFixedTime(new Date("2026-10-21T12:04:00Z"));
+        await holdSection(page, "battery", "flows");
+        const before = await sectionRequests(page, "flows");
+        await page.evaluate(() => window.__fireDataChanged("config"));
+        await expect.poll(() => sectionRequests(page, "flows")).toBe(before + 1);
+        // The refresh in flight is cancelled; the figures shown are still the 12:00 ones.
+        await flow(page).locator("[data-scope='now']").click();
+        await page.clock.setFixedTime(new Date("2026-10-21T12:05:01Z"));
+        await flow(page).locator("[data-scope='today']").click();
+        await expect.poll(() => sectionRequests(page, "flows")).toBe(before + 2);
+        expect(await status(page)).toBe("ready");
+    });
 });
