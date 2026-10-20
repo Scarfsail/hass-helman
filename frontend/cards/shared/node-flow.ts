@@ -221,8 +221,8 @@ export class HelmanNodeFlow extends LitElement {
 
     @property({ attribute: false }) public inputs: FlowItem[] = [];
     @property({ attribute: false }) public outputs: FlowItem[] = [];
-    /** The value drawn at full height, in the items' unit. */
-    @property({ type: Number }) public scale = 1;
+    /** The value drawn at full height; `null` when not known, every flow drawn at the minimum width. */
+    @property({ attribute: false }) public scale: number | null = null;
     @property() public scope: FlowScope = "now";
     /** What is shown and when, such as "Now · 21:08". */
     @property({ attribute: false }) public scopeLabel = "";
@@ -350,8 +350,9 @@ export class HelmanNodeFlow extends LitElement {
      * A side whose total would overflow the centre is drawn to fit it.
      */
     private _thicknesses(items: FlowItem[]): number[] {
-        const scale = this.scale > 0 ? this.scale : 1;
-        const raw = items.map((item) => !item.value || item.value <= 0 ? 0 : Math.max(MIN_RIBBON, item.value / scale * FULL));
+        const scale = this.scale;
+        const raw = items.map((item) => !item.value || item.value <= 0 ? 0
+            : scale === null || scale <= 0 ? MIN_RIBBON : Math.max(MIN_RIBBON, item.value / scale * FULL));
         const total = raw.reduce((sum, t) => sum + t, 0);
         return total > FULL ? raw.map((t) => t * FULL / total) : raw;
     }

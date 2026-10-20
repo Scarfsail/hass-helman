@@ -22,13 +22,42 @@ export interface TreeItemDTOBase {
     id: string;
     powerSensorId: string | null;
     valueType: ValueType;
-    sourceConfig: any | null;
     sourceType: string | null;
     children: TreeItemDTOBase[];
 }
 
+/**
+ * A battery's or grid's power sensor and the sign that reads it in Helman's
+ * convention: raw × sign is positive into the consumer side — a battery
+ * charging, the grid exporting. Lossless where `valueType` keeps one half.
+ */
+export interface SignedPower {
+    entityId: string;
+    sign: 1 | -1;
+}
+
+/**
+ * What the cards read off an energy node, resolved by the backend from the
+ * active config with its own defaults; `null` on every node a field does not
+ * apply to. Both halves of a battery or grid carry the same fields.
+ */
+export interface EnergyNodeFields {
+    /** Battery and grid only. */
+    power: SignedPower | null;
+    /** Solar, battery and grid: the full scale of the node's flows, W. */
+    maxPowerW: number | null;
+    socEntityId: string | null;
+    minSocEntityId: string | null;
+    maxSocEntityId: string | null;
+    remainingEnergyEntityId: string | null;
+    /** Solar and house. */
+    todayEnergyEntityId: string | null;
+    todayImportEntityId: string | null;
+    todayExportEntityId: string | null;
+}
+
 /** Full device node DTO — includes all fields used by helman-card. */
-export interface TreeItemDTO extends TreeItemDTOBase {
+export interface TreeItemDTO extends TreeItemDTOBase, EnergyNodeFields {
     displayName: string;
     switchEntityId: string | null;
     isSource: boolean;

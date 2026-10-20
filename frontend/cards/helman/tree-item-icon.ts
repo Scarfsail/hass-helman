@@ -2,7 +2,6 @@ import { LitElement, TemplateResult, css, html, nothing } from "lit-element";
 import { customElement, property } from "lit/decorators.js";
 import type { HomeAssistant } from "../../types/ha";
 import { TreeItem } from "../shared/data/tree-item";
-import { BatteryNodeConfig } from "./energy-node-config";
 import { sharedStyles } from "./shared-styles";
 import { computeDominantSourceColorCached } from "../color-utils";
 import type { NodeType } from "../node-detail/node-detail-types";
@@ -132,17 +131,17 @@ export class HelmanTreeItemIcon extends LitElement {
             // isSource=true → discharging (negative in simple-card convention); isSource=false → charging (positive)
             const signedPower = device.isSource ? -power : power;
             const sourceColor = device.isSource ? undefined : computeDominantSourceColorCached(this.device);
-            const battConfig = device.nodeConfig as BatteryNodeConfig;
-            const soc = battConfig?.entities?.capacity
-                ? parseFloat(this.hass.states[battConfig.entities.capacity]?.state ?? '0') || 0
+            const socEntityId = device.socEntityId;
+            const soc = socEntityId
+                ? parseFloat(this.hass.states[socEntityId]?.state ?? '0') || 0
                 : 0;
-            const minSoc = battConfig?.entities?.min_soc
-                ? parseFloat(this.hass.states[battConfig.entities.min_soc]?.state ?? '10') || 10
+            const minSoc = device.minSocEntityId
+                ? parseFloat(this.hass.states[device.minSocEntityId]?.state ?? '10') || 10
                 : 10;
             const clickHandler = this.openNodeDetailOnClick
                 ? () => this._fireShowNodeDetail("battery")
-                : battConfig?.entities?.capacity
-                ? () => this._fireShowMoreInfo(battConfig.entities.capacity!)
+                : socEntityId
+                ? () => this._fireShowMoreInfo(socEntityId)
                 : this._fireToggleChildren;
             return html`
                 <div class="node-icon" @click=${clickHandler}>

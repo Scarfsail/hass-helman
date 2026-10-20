@@ -35,8 +35,8 @@ type Variant = {
     exportPartlyPriced?: boolean;
     /** The payload's current import price is from before the 12:00 boundary. */
     staleCurrentPrice?: boolean;
-    /** The grid source node is `positive`, as with a positive-is-import meter. */
-    positiveGridNode?: boolean;
+    /** The grid node's power sign: `-1` (the default) for a positive-is-import meter, `1` for positive-is-export. */
+    gridSign?: 1 | -1;
     /** The grid power sensor reads unavailable. */
     gridUnavailable?: boolean;
     /** The solar, house and battery meters' states, W. */
@@ -166,7 +166,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             },
         });
         window.__GridRequests = window.__NodeDetailRequests;
-    }, { v: variant, tree: cardTree(variant.positiveGridNode ? "positive" : "default"), forecastDefaults: forecastPayload() });
+    }, { v: variant, tree: cardTree(variant.gridSign), forecastDefaults: forecastPayload() });
     await mountSimpleCard(page);
 }
 
@@ -197,8 +197,8 @@ async function openDetail(page: Page): Promise<void> {
     await expect(content(page).locator("[data-overview]")).toBeVisible();
 }
 
-test("a positive grid source node still reports the export the meter reads", async ({ page }) => {
-    await mount(page, { positiveGridNode: true });
+test("a positive-is-export meter reports the export its typed sign reads", async ({ page }) => {
+    await mount(page, { gridSign: 1, grid: "650" });
     await openDetail(page);
     await expect(content(page).locator("[data-overview] .status")).toHaveText("Exporting 650 W to the grid.");
 });

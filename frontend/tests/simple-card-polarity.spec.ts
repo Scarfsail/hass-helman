@@ -1,20 +1,22 @@
 import { test, expect } from "@playwright/test";
 import { readEnergyReadings, type EnergyNodes } from "../cards/node-detail/node-detail-readings";
 import type { TreeItem } from "../cards/shared/data/tree-item";
-import type { ValueType } from "../cards/helman-api";
+import { hydrateItem } from "../cards/shared/data/tree-item-hydrator";
+import type { TreeItemDTO, ValueType } from "../cards/helman-api";
 import type { HomeAssistant } from "../types/ha";
+import { treeNode } from "./support/payload-builders";
 
 /**
  * The simple card reading power sensors that are not on the house convention.
  *
- * Both readings here bypass the tree node's `valueType`, for different reasons,
- * and both were wrong when `power_polarity` shipped:
+ * Both readings were wrong when `power_polarity` shipped:
  *
  * - **Battery** is needed *signed* — the card derives charging/discharging from
- *   its sign — where `applyValueType` yields an unsigned magnitude. So it takes
- *   a flip rather than a `ValueType`, and an inverted sensor used to draw
+ *   its sign — where `applyValueType` yields an unsigned magnitude. So it bypasses
+ *   `valueType` and reads the node's typed `power.sign`, and an inverted sensor used to draw
  *   charging as discharging.
- * - **House** was hard-coded `Math.max(0, raw)`, which reads a
+ * - **House** goes through the node's `valueType`, but was hard-coded
+ *   `Math.max(0, raw)`, which reads a
  *   negative-is-consumption sensor as a flat zero — and that zero propagates
  *   into `solarToGrid`, so solar appears to export everything it makes.
  *
@@ -37,11 +39,12 @@ function energyNodes({ batteryInverted = false, houseValueType = "default", sola
     const node = (fields: Record<string, unknown>) => fields as unknown as TreeItem;
     return {
         solarNode: solarPowerEntityId ? node({ powerSensorId: solarPowerEntityId, valueType: "default" }) : null,
-        // The battery source node is `negative` upright and `positive` when `power_polarity` inverts it.
+        // The backend's sign: 1 upright, -1 when `power_polarity` inverts the sensor.
         batteryProducerNode: node({
             powerSensorId: BATTERY,
             valueType: batteryInverted ? "positive" : "negative",
-            nodeConfig: { entities: { capacity: batterySocEntityId } },
+            power: { entityId: BATTERY, sign: batteryInverted ? -1 : 1 },
+            socEntityId: batterySocEntityId ?? null,
         }),
         houseNode: node({ powerSensorId: HOUSE, valueType: houseValueType }),
     };
@@ -87,7 +90,7 @@ test("an inverted house sensor reports its magnitude, not zero", () => {
 
 test("a missing sensor still reads zero on either convention", () => {
     const values = readEnergy({}, { batteryInverted: true, houseValueType: "negative" });
-    expect(values).toEqual({ batteryPower: -0, housePower: 0 });
+    expect(values).toEqual({ batteryPower: 0, housePower: 0 });
 });
 
 test("power units convert live while SOC remains a percentage", () => {
@@ -107,4 +110,30 @@ test("power units convert live while SOC remains a percentage", () => {
     expect(first).toMatchObject({ housePower: 2400, solarPower: 4200, solarPowerReading: 4200, batteryPower: -1000, batterySoc: 75 });
     expect(second.housePower).toBe(2.4);
     expect(unknown).toMatchObject({ housePower: 0, houseReadable: false });
+});
+
+test("only the typed fields reach the card, never a stored config key", () => {
+    // A stored key a migration renamed, simulated: the legacy stored config
+    // still rides on the DTO, but the backend resolved no SoC entity from it.
+    const legacy = {
+        ...treeNode({ id: BATTERY, powerSensorId: BATTERY, sourceType: "battery", isSource: true, socEntityId: null }),
+        sourceConfig: { entities: { power: BATTERY, capacity: "sensor.soc" } },
+    } as TreeItemDTO;
+    const item = hydrateItem(legacy, 3, (key: string) => key);
+    const hass = hassWith({ "sensor.soc": { state: "75" }, [BATTERY]: { state: "1000" } });
+    expect(readEnergyReadings(hass, { batteryProducerNode: item })).toMatchObject({ batterySoc: 0, batteryMinSoc: null });
+    expect(item).not.toHaveProperty("sourceConfig");
+    expect(item).not.toHaveProperty("nodeConfig");
+
+    const typed = hydrateItem({ ...legacy, socEntityId: "sensor.soc" }, 3, (key: string) => key);
+    expect(readEnergyReadings(hass, { batteryProducerNode: typed }).batterySoc).toBe(75);
+});
+
+test("the grid reads signed from its typed sign, both polarities", () => {
+    const grid = (sign: 1 | -1) => ({ gridProducerNode: { powerSensorId: "sensor.grid", valueType: "default", power: { entityId: "sensor.grid", sign } } as unknown as TreeItem });
+    const hass = hassWith({ "sensor.grid": { state: "800" } });
+    // Export-positive meter: +800 exports, so the card's import-positive figure is −800.
+    expect(readEnergyReadings(hass, grid(1)).gridPowerSigned).toBe(-800);
+    // Import-positive meter: +800 imports.
+    expect(readEnergyReadings(hass, grid(-1)).gridPowerSigned).toBe(800);
 });

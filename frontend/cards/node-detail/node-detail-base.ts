@@ -433,7 +433,7 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
      * tap on either side opens `questionId`, or on the destinations
      * `outputQuestionId` when given; `centre` is the node's glyph.
      */
-    protected _renderFlow(flow: NodeFlow, scaleW: number, questionId: Q, centre: TemplateResult, outputQuestionId: Q | null = null) {
+    protected _renderFlow(flow: NodeFlow, scaleW: number | null, questionId: Q, centre: TemplateResult, outputQuestionId: Q | null = null) {
         const now = this._flowScope === "now";
         return html`
             <helman-node-flow
@@ -444,7 +444,7 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
                 .todayLabel=${this.localize("node_detail.flow.today")}
                 .inputs=${flow.inputs}
                 .outputs=${flow.outputs}
-                .scale=${now ? scaleW : scaleW * TODAY_SCALE_HOURS / 1000}
+                .scale=${now || scaleW === null ? scaleW : scaleW * TODAY_SCALE_HOURS / 1000}
                 .totalIn=${flow.totalIn}
                 .totalOut=${flow.totalOut}
                 .notes=${flow.notes}

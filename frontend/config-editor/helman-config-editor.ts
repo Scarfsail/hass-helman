@@ -1992,6 +1992,13 @@ export class HelmanConfigEditorPanel
                 helpKey: "editor.help.solar_today_energy_entity",
               },
             )}
+            ${this._renderOptionalNumberField(
+              ["energy_nodes", "solar", "max_power"],
+              "editor.fields.max_power",
+              undefined,
+              "editor.help.solar_max_power",
+              { min: 0, suffix: "W" },
+            )}
           </div>
 
           ${this._renderSectionScope(
@@ -2081,6 +2088,13 @@ export class HelmanConfigEditorPanel
                 helpKey: "editor.help.battery_max_soc_entity",
               },
             )}
+            ${this._renderOptionalNumberField(
+              ["energy_nodes", "battery", "max_power"],
+              "editor.fields.max_power",
+              undefined,
+              "editor.help.battery_max_power",
+              { min: 0, suffix: "W" },
+            )}
           </div>
 
           ${this._renderSectionScope(
@@ -2133,6 +2147,13 @@ export class HelmanConfigEditorPanel
               "editor.fields.max_allowed_export_power",
               undefined,
               "editor.help.grid_max_allowed_export_power",
+              { min: 0, suffix: "W" },
+            )}
+            ${this._renderOptionalNumberField(
+              ["energy_nodes", "grid", "max_power"],
+              "editor.fields.max_power",
+              undefined,
+              "editor.help.grid_max_power",
               { min: 0, suffix: "W" },
             )}
           </div>

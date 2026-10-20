@@ -199,7 +199,8 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         const edge = (key: typeof edgeList[number]["key"]) => {
             const power = flows[key];
             const max = edgeList.find((entry) => entry.key === key)!.max;
-            return { active: power > 0, width: Math.max(1.5, Math.min(power / max, 1) * 12) };
+            // An absent node has no maximum: its edge keeps the minimum width.
+            return { active: power > 0, width: max === null ? 1.5 : Math.max(1.5, Math.min(power / max, 1) * 12) };
         };
 
         const solarFlowColor   = this._flowColors!.solar;
