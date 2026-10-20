@@ -2,6 +2,7 @@ import type { ScheduleApplianceMetadata } from "./schedule-appliance-metadata";
 import type {
     ScheduleApplianceAction,
     ScheduleControllableAction,
+    ScheduleControllableActions,
     ScheduleInverterAction,
     ScheduleSetBy,
     ScheduleSlot,
@@ -11,11 +12,11 @@ import {
     INVERTER_CONTROLLABLE_ID,
     cloneScheduleApplianceAction,
     cloneScheduleInverterAction,
-    getScheduleActionIdentityKey,
-    getScheduleApplianceActionIdentityKey,
+    getScheduleControllableActionIdentityKey,
+    isScheduleInverterAction,
+    cloneScheduleControllableAction,
+    areScheduleControllableActionsEqual,
 } from "../schedule-types";
-import { buildScheduleSlotPatches } from "./schedule-patch-builder";
-import type { ScheduleEditIntent, ScheduleRangeEditIntent } from "./schedule-patch-builder";
 import {
     formatScheduleDayLabel,
     getScheduleLocalDayStartMs,
@@ -142,41 +143,21 @@ export interface EntityScheduleBlock {
     continuesAfter: boolean;
 }
 
-export function isEntityInverterAction(
-    action: EntityScheduleAction,
-): action is ScheduleInverterAction {
-    return action !== null && "kind" in action;
-}
-
 /** Whether a lane is the inverter's, which is now a question about its id. */
 export function isInverterScheduleTarget(target: EntityScheduleTarget): boolean {
     return target === INVERTER_CONTROLLABLE_ID;
 }
 
 export function isEntityScheduleActionEmpty(action: EntityScheduleAction): boolean {
-    return action === null || (isEntityInverterAction(action) && action.kind === "empty");
-}
-
-export function getEntityScheduleActionKey(action: EntityScheduleAction): string {
-    if (action === null) {
-        return "none";
-    }
-
-    return isEntityInverterAction(action)
-        // Prefixed by the action's *shape*, not by a lane: two lanes never
-        // compare their keys, but an inverter action and an appliance action
-        // must never collide on one. Deliberately not the bare word
-        // "appliance", which used to prefix a lane key and no longer prefixes
-        // anything.
-        ? `inverter-action:${getScheduleActionIdentityKey(action)}`
-        : `appliance-action:${getScheduleApplianceActionIdentityKey(action)}`;
+    return action === null || (isScheduleInverterAction(action) && action.kind === "empty");
 }
 
 export function areEntityScheduleActionsEqual(
     left: EntityScheduleAction,
     right: EntityScheduleAction,
 ): boolean {
-    return getEntityScheduleActionKey(left) === getEntityScheduleActionKey(right);
+    return getScheduleControllableActionIdentityKey(left)
+        === getScheduleControllableActionIdentityKey(right);
 }
 
 export function cloneEntityScheduleAction(action: EntityScheduleAction): EntityScheduleAction {
@@ -184,7 +165,7 @@ export function cloneEntityScheduleAction(action: EntityScheduleAction): EntityS
         return null;
     }
 
-    return isEntityInverterAction(action)
+    return isScheduleInverterAction(action)
         ? cloneScheduleInverterAction(action)
         : cloneScheduleApplianceAction(action);
 }
@@ -406,7 +387,7 @@ export function buildEntityScheduleBlocks({
         }
 
         blocks.push({
-            key: `${slot.id}:${getEntityScheduleActionKey(action)}`,
+            key: `${slot.id}:${getScheduleControllableActionIdentityKey(action)}`,
             startMs,
             endMs,
             slotIds: [slot.id],
@@ -563,22 +544,12 @@ export function selectEntityScheduleSlotsInRange({
 }
 
 /**
- * The whole draft as one batch of slot patches.
- *
- * Slots that land on the same action are patched together so the existing range
- * patch builder still does the work -- it is what knows how to keep the other
- * entities' actions in a slot intact. Slots the user may no longer write are
- * dropped here as well as in the UI: the backend rejects past slots, and a
- * rejected batch would take the whole day's edit with it.
- */
-/**
  * Every lane's draft as one batch of slot patches.
  *
  * A patch carries the slot's whole set of user domains, so two lanes that both
  * changed the same slot have to arrive as one patch built from both -- sending
  * one patch per lane would make the last one win and silently drop the other
- * entity's edit. Slots are therefore grouped by their combined intent, not by
- * one lane's action.
+ * entity's edit. Elapsed slots are omitted before constructing their patches.
  */
 export function buildEntityScheduleLanePatches({
     slots,
@@ -590,7 +561,7 @@ export function buildEntityScheduleLanePatches({
     nowMs: number;
 }): ScheduleSlotPatch[] {
     const editableFromMs = _resolveEditableFromMs(slots, nowMs);
-    const groups = new Map<string, { intent: ScheduleRangeEditIntent; slots: ScheduleSlot[] }>();
+    const patches: ScheduleSlotPatch[] = [];
     for (const slot of slots) {
         if (slot.startMs < editableFromMs) {
             continue;
@@ -601,23 +572,27 @@ export function buildEntityScheduleLanePatches({
             continue;
         }
 
-        const intent = _buildCombinedEditIntent(slot, dirtyLanes);
-        const key = _getEditIntentKey(intent);
-        const group = groups.get(key);
-        if (group === undefined) {
-            groups.set(key, { intent, slots: [slot] });
-            continue;
+        const current: ScheduleControllableActions = {};
+        for (const [id, assignment] of Object.entries(slot.assignments)) {
+            if (assignment.setBy === "user") {
+                current[id] = cloneScheduleControllableAction(assignment.action);
+            }
         }
-
-        group.slots.push(slot);
+        const next: ScheduleControllableActions = { ...current };
+        for (const lane of dirtyLanes) {
+            const action = readEntityScheduleDraftAction(slot, lane.target, lane.draft);
+            if (isEntityScheduleActionEmpty(action)) {
+                delete next[lane.target];
+            } else {
+                next[lane.target] = cloneScheduleControllableAction(action as ScheduleControllableAction);
+            }
+        }
+        if (dirtyLanes.some((lane) => slot.assignments[lane.target]?.setBy !== "user")
+            || !areScheduleControllableActionsEqual(current, next)) {
+            patches.push({ id: slot.id, controllables: next });
+        }
     }
-
-    return [...groups.values()]
-        .flatMap((group) => buildScheduleSlotPatches({
-            selectedSlots: group.slots,
-            result: group.intent,
-        }))
-        .sort((left, right) => left.id.localeCompare(right.id));
+    return patches.sort((left, right) => left.id.localeCompare(right.id));
 }
 
 /**
@@ -638,44 +613,6 @@ export function areEntityScheduleLanesDirty(
     const editableFromMs = _resolveEditableFromMs(slots, nowMs);
     return slots.some((slot) => slot.startMs >= editableFromMs
         && lanes.some((lane) => _isSlotDirty(slot, lane.target, lane.draft)));
-}
-
-function _buildCombinedEditIntent(
-    slot: ScheduleSlot,
-    lanes: readonly { target: EntityScheduleTarget; draft: EntityScheduleDraft }[],
-): ScheduleRangeEditIntent {
-    const intent: ScheduleRangeEditIntent = {};
-    for (const lane of lanes) {
-        intent[lane.target] = _buildEntityEditIntent(
-            readEntityScheduleDraftAction(slot, lane.target, lane.draft),
-        );
-    }
-
-    return intent;
-}
-
-/** Two slots share a patch group only when they are being written identically. */
-function _getEditIntentKey(intent: ScheduleRangeEditIntent): string {
-    return Object.keys(intent)
-        .sort()
-        .map((controllableId) => `${controllableId}=${JSON.stringify(intent[controllableId])}`)
-        .join(",");
-}
-
-/**
- * One lane's drafted action as an edit intent -- the same rule for every lane.
- *
- * "Nothing here" is `unset_user` whichever lane it came from. The inverter used
- * to need `set_user` with an `empty` action instead, because its domain always
- * carried one; with the flat map an absent entry says it, so a cleared inverter
- * block and a cleared boiler block write the same thing.
- */
-function _buildEntityEditIntent(action: EntityScheduleAction): ScheduleEditIntent {
-    if (action === null || (isEntityInverterAction(action) && action.kind === "empty")) {
-        return { kind: "unset_user" };
-    }
-
-    return { kind: "set_user", action: action as ScheduleControllableAction };
 }
 
 function _isSlotDirty(

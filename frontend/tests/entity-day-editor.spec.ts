@@ -42,6 +42,7 @@ async function mountEditor(
          *  that ends exactly at its midnight. */
         acrossMidnight?: boolean;
         straddling?: boolean;
+        futureAutomation?: boolean;
         multiLane?: boolean;
         /** Hand the editor a backend that answers the explanation query. */
         explainable?: boolean;
@@ -50,7 +51,7 @@ async function mountEditor(
         pruned?: boolean;
     } = {},
 ): Promise<void> {
-    await page.evaluate(({ dayOne, dayTwo, nowMs, neighbour, oneSlotGap, halfHourSlots, acrossMidnight, straddling, multiLane, pruned, explainable }) => {
+    await page.evaluate(({ dayOne, dayTwo, nowMs, neighbour, oneSlotGap, halfHourSlots, acrossMidnight, straddling, futureAutomation, multiLane, pruned, explainable }) => {
         const stepMs = halfHourSlots ? 1_800_000 : 3_600_000;
         const buildSlot = (dayKey: string, index: number) => {
             const startMs = Date.parse(`${dayKey}T00:00:00Z`) + index * stepMs;
@@ -98,6 +99,9 @@ async function mountEditor(
             }
             if (hour === 17 || hour === 18) {
                 slot.assignments.boiler = { action: { on: true }, setBy: "user" };
+            }
+            if (futureAutomation && hour === 13) {
+                slot.assignments.boiler = { action: { on: true }, setBy: "automation" };
             }
             if (straddling && hour >= 8 && hour <= 11) {
                 slot.assignments.boiler = { action: { on: true }, setBy: "user" };
@@ -292,6 +296,7 @@ async function mountEditor(
         halfHourSlots: options.halfHourSlots ?? false,
         acrossMidnight: options.acrossMidnight ?? false,
         straddling: options.straddling ?? false,
+        futureAutomation: options.futureAutomation ?? false,
         multiLane: options.multiLane ?? false,
         pruned: options.pruned ?? false,
         explainable: options.explainable ?? false,
@@ -354,6 +359,153 @@ async function savedPatches(page: Page) {
 }
 
 test.describe("entity day editor", () => {
+    test("generic, climate and EV action choices keep their editor labels and icons", async ({ page }) => {
+        await loadCardBundle(page);
+        const options = await page.evaluate(async () => {
+            const generic = {
+                id: "boiler", name: "Boiler", kind: "generic", supportsAuthoring: true,
+                metadata: { icon: "mdi:water-boiler", scheduleCapabilities: { onOffToggle: true } },
+            };
+            const climate = {
+                id: "heater", name: "Heater", kind: "climate", supportsAuthoring: true,
+                metadata: { icon: "mdi:radiator", scheduleCapabilities: { modes: ["heat", "cool"] } },
+            };
+            const ev = {
+                id: "charger", name: "Charger", kind: "ev_charger", supportsAuthoring: true,
+                metadata: { icon: "mdi:ev-station", scheduleCapabilities: {
+                    requiresVehicleSelection: false, useModes: ["Fast", "ECO"], ecoGears: ["green"],
+                } },
+                vehicles: [],
+            };
+            const result = [];
+            for (const appliance of [generic, climate, ev]) {
+                const editor = document.createElement("scheduling-entity-action-editor") as any;
+                editor.localize = (key: string) => key;
+                editor.target = appliance.id;
+                editor.appliance = appliance;
+                document.body.append(editor);
+                await editor.updateComplete;
+                const child = editor.shadowRoot.querySelector("scheduling-generic-appliance-editor, scheduling-climate-appliance-editor, scheduling-ev-charger-editor, scheduling-appliance-action-editor") as any;
+                await child.updateComplete;
+                result.push({
+                    kind: appliance.kind,
+                    options: [...child.shadowRoot.querySelectorAll(".compact-action-option")].map((option: Element) => ({
+                        value: option.querySelector("input")?.getAttribute("value"),
+                        label: option.querySelector("input")?.getAttribute("aria-label"),
+                        icon: (option.querySelector("ha-icon") as any)?.icon,
+                    })),
+                });
+                editor.remove();
+            }
+            return result;
+        });
+        expect(options).toEqual([
+            { kind: "generic", options: [
+                { value: "none", label: "scheduling.dialog.appliance.no_action", icon: "mdi:circle-outline" },
+                { value: "off", label: "scheduling.dialog.appliance.turn_off", icon: "mdi:power-plug-off" },
+                { value: "on", label: "scheduling.dialog.appliance.turn_on", icon: "mdi:power-plug" },
+            ] },
+            { kind: "climate", options: [
+                { value: "none", label: "scheduling.dialog.appliance.no_action", icon: "mdi:radiator" },
+                { value: "__off__", label: "scheduling.appliance.climate.mode.off", icon: "mdi:radiator" },
+                { value: "heat", label: "scheduling.appliance.climate.mode.heat", icon: "mdi:radiator" },
+                { value: "cool", label: "scheduling.appliance.climate.mode.cool", icon: "mdi:radiator" },
+            ] },
+            { kind: "ev_charger", options: [
+                { value: "none", label: "scheduling.dialog.appliance.no_action", icon: "mdi:circle-outline" },
+                { value: "off", label: "scheduling.dialog.appliance.no_charge", icon: "mdi:car-electric" },
+                { value: "charge", label: "scheduling.dialog.appliance.charge", icon: "mdi:car-electric" },
+            ] },
+        ]);
+    });
+
+    test("generic, climate and EV choices emit their scheduled actions and can clear them", async ({ page }) => {
+        await loadCardBundle(page);
+        const actions = await page.evaluate(async () => {
+            const appliances = [
+                { id: "boiler", name: "Boiler", kind: "generic", supportsAuthoring: true,
+                    metadata: { icon: "mdi:water-boiler", scheduleCapabilities: { onOffToggle: true } } },
+                { id: "heater", name: "Heater", kind: "climate", supportsAuthoring: true,
+                    metadata: { icon: "mdi:radiator", scheduleCapabilities: { modes: ["heat"] } } },
+                { id: "charger", name: "Charger", kind: "ev_charger", supportsAuthoring: true,
+                    metadata: { icon: "mdi:ev-station", scheduleCapabilities: {
+                        requiresVehicleSelection: true, useModes: ["Fast", "ECO"], ecoGears: ["green"],
+                    } }, vehicles: [{ id: "car", name: "Car" }] },
+            ];
+            const values = [];
+            for (const appliance of appliances) {
+                const editor = document.createElement("scheduling-entity-action-editor") as any;
+                editor.localize = (key: string) => key;
+                editor.target = appliance.id;
+                editor.appliance = appliance;
+                const emitted: unknown[] = [];
+                editor.addEventListener("entity-action-change", (event: Event) => emitted.push((event as CustomEvent).detail));
+                document.body.append(editor);
+                await editor.updateComplete;
+                const child = editor.shadowRoot.querySelector("scheduling-appliance-action-editor") as any;
+                await child.updateComplete;
+                const mode = appliance.kind === "generic" ? "on" : appliance.kind === "climate" ? "heat" : "charge";
+                for (const value of [mode, "none"]) {
+                    const input = child.shadowRoot.querySelector(`input[value="${value}"]`) as HTMLInputElement;
+                    input.checked = true;
+                    input.dispatchEvent(new Event("change", { bubbles: true }));
+                    await child.updateComplete;
+                }
+                values.push({ kind: appliance.kind, emitted });
+                editor.remove();
+            }
+            return values;
+        });
+        expect(actions).toEqual([
+            { kind: "generic", emitted: [{ action: { on: true }, valid: true }, { action: null, valid: true }] },
+            { kind: "climate", emitted: [{ action: { mode: "heat" }, valid: true }, { action: null, valid: true }] },
+            { kind: "ev_charger", emitted: [{ action: {
+                charge: true, vehicleId: "car", useMode: "Fast", ecoGear: undefined,
+            }, valid: true }, { action: null, valid: true }] },
+        ]);
+    });
+
+    test("EV charge details follow vehicle, mode and ECO gear selections", async ({ page }) => {
+        await loadCardBundle(page);
+        const actions = await page.evaluate(async () => {
+            const editor = document.createElement("scheduling-entity-action-editor") as any;
+            editor.localize = (key: string) => key;
+            editor.target = "charger";
+            editor.appliance = {
+                id: "charger", name: "Charger", kind: "ev_charger", supportsAuthoring: true,
+                metadata: { icon: "mdi:ev-station", scheduleCapabilities: {
+                    requiresVehicleSelection: true, useModes: ["Fast", "ECO"], ecoGears: ["green", "solar"],
+                } },
+                vehicles: [{ id: "car-a", name: "Car A" }, { id: "car-b", name: "Car B" }],
+            };
+            const emitted: unknown[] = [];
+            editor.addEventListener("entity-action-change", (event: Event) => emitted.push((event as CustomEvent).detail));
+            document.body.append(editor);
+            await editor.updateComplete;
+            const child = editor.shadowRoot.querySelector("scheduling-appliance-action-editor") as any;
+            await child.updateComplete;
+            const charge = child.shadowRoot.querySelector('input[value="charge"]') as HTMLInputElement;
+            charge.checked = true;
+            charge.dispatchEvent(new Event("change", { bubbles: true }));
+            await child.updateComplete;
+            const selects = () => [...child.shadowRoot.querySelectorAll(".action-detail-fields select")] as HTMLSelectElement[];
+            selects()[0].value = "ECO";
+            selects()[0].dispatchEvent(new Event("change", { bubbles: true }));
+            await child.updateComplete;
+            selects()[1].value = "solar";
+            selects()[1].dispatchEvent(new Event("change", { bubbles: true }));
+            selects()[2].value = "car-b";
+            selects()[2].dispatchEvent(new Event("change", { bubbles: true }));
+            editor.remove();
+            return emitted;
+        });
+        expect(actions).toEqual([
+            { action: { charge: true, vehicleId: "car-a", useMode: "Fast", ecoGear: undefined }, valid: true },
+            { action: { charge: true, vehicleId: "car-a", useMode: "ECO", ecoGear: "green" }, valid: true },
+            { action: { charge: true, vehicleId: "car-a", useMode: "ECO", ecoGear: "solar" }, valid: true },
+            { action: { charge: true, vehicleId: "car-b", useMode: "ECO", ecoGear: "solar" }, valid: true },
+        ]);
+    });
     test("takes the whole screen, and the content takes the whole dialog", async ({ page }) => {
         // A whole day on one time axis, with a decision diagram under it: both
         // are read across rather than down, and an hour has to be wide enough
@@ -429,6 +581,17 @@ test.describe("entity day editor", () => {
             `${DAY_ONE}T18:00:00.000Z`,
         ]);
         expect(patches[0].controllables).toEqual({});
+    });
+
+    test("clearing an automation-owned lane sends a patch even with no user action", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { futureAutomation: true });
+
+        await page.locator(".block-row").nth(1).locator("button").nth(1).click();
+        await page.locator("ha-button[slot=primaryAction]").click();
+
+        const [patches] = await savedPatches(page);
+        expect(patches).toEqual([{ id: `${DAY_ONE}T13:00:00.000Z`, controllables: {} }]);
     });
 
     test("adding a block on the next day writes that day's slots", async ({ page }) => {
