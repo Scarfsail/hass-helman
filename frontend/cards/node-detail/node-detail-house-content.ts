@@ -3,7 +3,7 @@ import { callHelman } from "../shared/data/helman-commands";
 import { pad2, SLOT_MS } from "../shared/time/slot-time";
 import { phaseSign } from "../shared/power-reading";
 import { css, html, nothing, unsafeCSS } from "lit";
-import { customElement, property, state } from "lit/decorators.js";
+import { customElement, property } from "lit/decorators.js";
 import { fillTemplate } from "../localize/localize";
 import {
     isDeviceReportUnavailable,
@@ -14,7 +14,6 @@ import {
     type HouseTodaySectionPayload,
     type RankingReportPayload,
     type ScheduleApplianceActionDTO,
-    type SchedulePayload,
 } from "../helman-api";
 import type { HelmanSolarInspectorCardConfig } from "../helman-solar-inspector/HelmanSolarInspectorCardConfig";
 import { currencyFromPriceUnit } from "../helman-solar-inspector/money-model";
@@ -27,8 +26,8 @@ import { houseGlyph, type HouseShare } from "../shared/node-glyphs";
 import { scheduleActionToneStyles, type ScheduleActionTone } from "../shared/schedule/action-tones";
 import { getScheduleApplianceActionPresentation } from "../shared/schedule/model/schedule-appliance-action-presentation";
 import { resolveScheduleSlotBoundaries } from "../shared/schedule/model/schedule-time";
-import { getSharedScheduleOwner } from "../shared/schedule/schedule-owner";
 import {
+    getScheduleApplianceActionIdentityKey,
     INVERTER_CONTROLLABLE_ID,
     isScheduleApplianceActionEnabled,
     isScheduleClimateApplianceAction,
@@ -39,7 +38,7 @@ import "../helman-device-reports/device-report-ranking";
 import { IDLE_W, NodeDetailContentBase, type NodeFlow } from "./node-detail-base";
 import { readingNumber } from "./node-detail-readings";
 import { powerUnitFactor, readPowerW } from "../shared/power-reading";
-import { dayKey, todayAndTomorrow } from "./node-detail-schedule";
+import { dayKey, mergeRuns, todayAndTomorrow, withinTodayTomorrow } from "./node-detail-schedule";
 import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { HouseDetailParams } from "./node-detail-types";
 
@@ -294,7 +293,35 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
 
     @property({ attribute: false }) public params!: HouseDetailParams;
 
-    @state() private _schedule: SchedulePayload | null = null;
+    /**
+     * The appliances' planned runs from now through tomorrow: consecutive
+     * slots in which the plan has the appliance running with the same
+     * settings; any change of them starts a new run. A candidate, whose
+     * condition is not met, is kept and marked: the executor does not run it.
+     */
+    private readonly _plan = this._useSchedule((schedule, now): PlannedRun[] => {
+        const boundaries = resolveScheduleSlotBoundaries(schedule.slots.map((slot) => slot.id));
+        const slotsById = new Map(schedule.slots.map((slot) => [slot.id, slot]));
+        const ids = new Set(schedule.slots.flatMap((slot) => Object.keys(slot.controllables)));
+        ids.delete(INVERTER_CONTROLLABLE_ID);
+        const names = this._applianceNames();
+        // Who set a slot is plan metadata, not a setting: it does not split a run.
+        const sameSettings = (left: ScheduleApplianceActionDTO, right: ScheduleApplianceActionDTO) => {
+            const { setBy: _left, ...leftSettings } = left;
+            const { setBy: _right, ...rightSettings } = right;
+            return getScheduleApplianceActionIdentityKey(leftSettings) === getScheduleApplianceActionIdentityKey(rightSettings);
+        };
+        const runs = [...ids].flatMap((id) => mergeRuns<ScheduleApplianceActionDTO>(
+            boundaries, slotsById, id, (action) => isScheduleApplianceActionEnabled(action) === true, sameSettings,
+        ).map((run) => ({
+            ...run,
+            id,
+            name: names.get(id) ?? id,
+            candidate: run.action.conditionMet === false,
+            setBy: run.action.setBy ?? null,
+        })));
+        return withinTodayTomorrow(runs, now, this._timeZone).sort((a, b) => a.startMs - b.startMs);
+    });
     /** Today's report figures, shown on the overview and drawn by Today. */
     private readonly _today = this._section<HouseTodaySectionPayload>("today", {
         fetch: () => this._readSection("today"),
@@ -315,27 +342,6 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         shown: () => this._open === "consumers" && this._evidenceOpen,
     });
 
-    private _unsubscribeSchedule?: () => void;
-    /** The planned runs, read several times a render; cleared before each update. */
-    private _runsCache?: PlannedRun[];
-
-    willUpdate(changed: Map<string, unknown>): void {
-        this._runsCache = undefined;
-        super.willUpdate(changed);
-    }
-
-    protected _start(): void {
-        this._unsubscribeSchedule = getSharedScheduleOwner(this.hass).subscribe((snapshot) => {
-            this._schedule = snapshot.schedule;
-        });
-        super._start();
-    }
-
-    protected _stop(): void {
-        this._unsubscribeSchedule?.();
-        this._unsubscribeSchedule = undefined;
-    }
-
     /** The overview's entities, and every load the phase estimate reads. */
     protected *_watchedEntities(payload: HouseDetailPayload): Iterable<string | null | undefined> {
         yield* Object.values(payload.entities);
@@ -348,14 +354,9 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         yield* walk(this.params.houseNode?.children ?? []);
     }
 
-    /** The rest of today's forecast moves at each slot boundary; the next planned load at each run. */
+    /** The rest of today's forecast moves at each slot boundary; the next planned load at each run, which the base follows. */
     protected *_clockBoundaries(): Iterable<number> {
-        const now = Date.now();
-        yield Math.ceil(now / SLOT_MS) * SLOT_MS;
-        for (const run of this._plannedRuns()) {
-            yield run.startMs;
-            if (run.endMs !== null) yield run.endMs;
-        }
+        yield Math.ceil(Date.now() / SLOT_MS) * SLOT_MS;
     }
 
     // ── Disclosure ──────────────────────────────────────────────────────────
@@ -440,13 +441,8 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
      * reading, never 0; a load without a reading is in neither.
      */
     private _nowFlow(phases: PhaseEstimate): { flow: NodeFlow; shares: HouseShare[] | null } {
-        const flows = this.params.flows;
-        const power = (value: number | null) => value === null ? "–" : formatPower(value).display;
-        const inputs = [
-            this._flowItem("solar", flows?.solarToHouse ?? null, power),
-            this._flowItem("battery", flows?.batteryToHouse ?? null, power),
-            this._flowItem("grid", flows?.gridToHouse ?? null, power),
-        ];
+        const power = this._fmt("now");
+        const inputs = this._edgeItems(this.params.flows, [["solar", "solarToHouse"], ["battery", "batteryToHouse"], ["grid", "gridToHouse"]], power);
         const loads = phases.loads
             .filter((load) => load.watts !== null && load.watts > 0)
             .sort((a, b) => b.watts! - a.watts!)
@@ -456,15 +452,10 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         const top = loads.reduce((sum, load) => sum + load.value, 0);
         const outputs = this._consumerItems(loads, house === null ? null : Math.max(0, house - top), power);
         return {
-            flow: {
-                scopeLabel: this._nowScopeLabel(),
-                inputs,
-                outputs,
-                ...this._flowTotals(inputs, outputs, power),
-                notes: [],
-                centreValue: power(house),
+            flow: this._flowShell("now", inputs, outputs, {
+                centre: () => power(house),
                 active: this._isActive(house),
-            },
+            }),
             shares: this._shares(inputs.map((item) => ({ id: item.id, value: item.value, color: item.color }))),
         };
     }
@@ -478,7 +469,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
     private _todayFlow(): { flow: NodeFlow; shares: HouseShare[] | null } {
         const today = this._today.payload;
         const house = today?.house ?? null;
-        const energy = (value: number | null) => value === null ? "–" : (formatKwh(Math.abs(value)) + " kWh");
+        const energy = this._fmt("today");
         const inputs = SOURCES.map(([key]) => this._flowItem(key, house ? house.sources[key] : null, energy));
         const top = (today?.consumers?.top ?? []).slice(0, TOP_CONSUMERS).map((load) => ({ label: this._loadName(load), value: load.kwh }));
         const named = top.reduce((sum, load) => sum + load.value, 0);
@@ -487,21 +478,16 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         const status = this._todayFlowStatus();
         if (status) notes.push(status);
         if (house) {
-            if (house.sources.unattributed > 0) notes.push(fillTemplate(this._t("flow.unattributed"), { kwh: (formatKwh(Math.abs(house.sources.unattributed)) + " kWh") }));
+            if (house.sources.unattributed > 0) notes.push(fillTemplate(this._t("flow.unattributed"), { kwh: energy(house.sources.unattributed) }));
             if (house.money.paid !== null) notes.push(fillTemplate(this._t("flow.paid"), { value: this._money(house.money.paid, today!.priceUnit) }));
         }
-        const { sumIn, sumOut, ...totals } = this._flowTotals(inputs, outputs, energy, house?.sources.unattributed ?? 0);
         return {
-            flow: {
-                scopeLabel: this._todayScopeLabel(),
-                inputs,
-                outputs,
-                ...totals,
-                notes,
+            flow: this._flowShell("today", inputs, outputs, {
                 // Used: every source and the unattributed rest.
-                centreValue: energy(sumIn),
-                active: false,
-            },
+                centre: (sumIn) => energy(sumIn),
+                notes,
+                unresolvedIn: house?.sources.unattributed ?? 0,
+            }),
             shares: this._shares([
                 ...inputs.map((item) => ({ id: item.id, value: item.value, color: item.color })),
                 { id: "unattributed", value: house?.sources.unattributed ?? null, color: "var(--helman-neutral-light)" },
@@ -547,7 +533,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
 
     /** The next planned appliance run, or the one running now, in its action's tone. */
     private _renderNextTile() {
-        const run = this._plannedRuns()[0];
+        const run = this._plan.runs[0];
         if (!run) return this._tile("next", this._t("tile.no_runs"), null, nothing, "neutral");
         const running = run.startMs <= Date.now();
         const detail = [run.name, run.candidate ? this._t("next.candidate") : null].filter(Boolean).join(" · ");
@@ -782,7 +768,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
 
     private _nextPreview(): string | null {
         const rest = this._restOfDayKwh();
-        const run = this._plannedRuns()[0];
+        const run = this._plan.runs[0];
         const parts: string[] = [];
         if (rest !== null) parts.push(fillTemplate(this._t("next.rest_short"), { kwh: (formatKwh(Math.abs(rest)) + " kWh") }));
         if (run) parts.push(fillTemplate(this._t("next.run_short"), { name: run.name, time: this._time(run.startMs) }));
@@ -792,8 +778,8 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
 
     private _renderNext() {
         const rest = this._restOfDayKwh();
-        const runs = this._plannedRuns();
-        const executionOff = this._schedule?.executionEnabled === false;
+        const runs = this._plan.runs;
+        const executionOff = this._plan.schedule?.executionEnabled === false;
         return html`
             ${rest !== null
                 ? this._row(this._t("next.rest"), (formatKwh(Math.abs(rest)) + " kWh"), "rest", this._t("next.rest_scope"))
@@ -814,7 +800,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
     private _renderNextEvidence() {
         const forecast = this._forecast?.house_consumption;
         const slot = forecast?.currentSlot;
-        const runs = this._plannedRuns();
+        const runs = this._plan.runs;
         return html`
             <div class="section-title">${this._t("next.forecast_title")}</div>
             ${forecast ? html`
@@ -872,62 +858,6 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
             kwh += Math.max(0, slot.nonDeferrable.value) * Math.min(1, (end - Math.max(start, now)) / SLOT_MS);
         }
         return kwh;
-    }
-
-    /**
-     * The appliances' planned runs from now through tomorrow: consecutive
-     * slots in which the plan has the appliance running. A candidate, whose
-     * condition is not met, is kept and marked: the executor does not run it.
-     */
-    private _plannedRuns(): PlannedRun[] {
-        return this._runsCache ??= this._readPlannedRuns();
-    }
-
-    private _readPlannedRuns(): PlannedRun[] {
-        const schedule = this._schedule;
-        const slots = schedule?.slots ?? [];
-        if (!schedule || !slots.length) return [];
-        const slotDurationMs = schedule.slotMinutes * 60_000;
-        const now = Date.now();
-        const days = todayAndTomorrow(now, this._timeZone);
-        const names = this._applianceNames();
-        const byId = new Map(slots.map((slot) => [slot.id, slot]));
-        const open = new Map<string, PlannedRun>();
-        const runs: PlannedRun[] = [];
-        for (const boundary of resolveScheduleSlotBoundaries(slots.map((slot) => slot.id))) {
-            const actions = byId.get(boundary.id)?.controllables ?? {};
-            for (const [id, run] of open) {
-                const action = actions[id] as ScheduleApplianceActionDTO | undefined;
-                if (!action || isScheduleApplianceActionEnabled(action) !== true || (action.conditionMet === false) !== run.candidate || run.endMs !== boundary.startMs) {
-                    open.delete(id);
-                }
-            }
-            for (const [id, value] of Object.entries(actions)) {
-                if (id === INVERTER_CONTROLLABLE_ID) continue;
-                const action = value as ScheduleApplianceActionDTO;
-                if (isScheduleApplianceActionEnabled(action) !== true) continue;
-                const run = open.get(id);
-                if (run) {
-                    run.endMs = boundary.startMs + slotDurationMs;
-                    continue;
-                }
-                const next: PlannedRun = {
-                    id,
-                    name: names.get(id) ?? id,
-                    startMs: boundary.startMs,
-                    endMs: boundary.startMs + slotDurationMs,
-                    candidate: action.conditionMet === false,
-                    setBy: action.setBy ?? null,
-                    action,
-                };
-                open.set(id, next);
-                runs.push(next);
-            }
-        }
-        return runs
-            // A run started yesterday and still going is kept: it is running now.
-            .filter((run) => (run.endMs === null || run.endMs > now) && (run.startMs <= now || days.includes(dayKey(run.startMs, this._timeZone))))
-            .sort((a, b) => a.startMs - b.startMs);
     }
 
     /** Controllable id → the device's name, from the card's house tree. */

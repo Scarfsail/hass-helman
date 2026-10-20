@@ -29,6 +29,10 @@ type QuestionId = "voltage" | "phases" | "money" | "next" | "outage";
 const PHASES = [1, 2, 3] as const;
 type Phase = (typeof PHASES)[number];
 
+/** What the grid takes in, exports, and gives out, imports, in the order every flow shows them. */
+const EXPORTS = [["solar", "solarToGrid"], ["battery", "batteryToGrid"]] as const;
+const IMPORTS = [["house", "gridToHouse"], ["battery", "gridToBattery"]] as const;
+
 /** The nominal low-voltage supply and the ±10 % band around it, as references only. */
 const NOMINAL_VOLTAGE = 230;
 const REFERENCE_BAND = { from: 207, to: 253 };
@@ -445,25 +449,15 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
     /** The card's live split, W; unknown without the solar, battery or house reading, never 0. */
     private _nowFlow(): NodeFlow {
         const flows = this.params.flows;
-        const power = (value: number | null) => value === null ? "–" : formatPower(value).display;
-        const inputs = [
-            this._flowItem("solar", flows?.solarToGrid ?? null, power),
-            this._flowItem("battery", flows?.batteryToGrid ?? null, power),
-        ];
-        const outputs = [
-            this._flowItem("house", flows?.gridToHouse ?? null, power),
-            this._flowItem("battery", flows?.gridToBattery ?? null, power),
-        ];
+        const power = this._fmt("now");
+        const inputs = this._edgeItems(flows, EXPORTS, power);
+        const outputs = this._edgeItems(flows, IMPORTS, power);
         const prices = this._pricesNow();
-        return {
-            scopeLabel: this._nowScopeLabel(),
-            inputs,
-            outputs,
-            ...this._flowTotals(inputs, outputs, power),
-            notes: prices.length ? [fillTemplate(this._t("flow.price_now"), { prices: prices.join(" · ") })] : [],
-            centreValue: this.params.gridPower === null ? null : this._directedPower(this.params.gridPower),
+        return this._flowShell("now", inputs, outputs, {
+            centre: () => this.params.gridPower === null ? null : this._directedPower(this.params.gridPower),
             active: this._isActive(this.params.gridPower),
-        };
+            notes: prices.length ? [fillTemplate(this._t("flow.price_now"), { prices: prices.join(" · ") })] : [],
+        });
     }
 
     /**
@@ -473,34 +467,24 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
      */
     private _todayFlow(): NodeFlow {
         const flows = this._flows.payload?.flows ?? null;
-        const energy = (value: number | null) => value === null ? "–" : (formatKwh(Math.abs(value)) + " kWh");
-        const inputs = [
-            this._flowItem("solar", flows?.solarToGrid ?? null, energy),
-            this._flowItem("battery", flows?.batteryToGrid ?? null, energy),
-        ];
-        const outputs = [
-            this._flowItem("house", flows?.gridToHouse ?? null, energy),
-            this._flowItem("battery", flows?.gridToBattery ?? null, energy),
-        ];
+        const energy = this._fmt("today");
         const status = this._todayFlowsNote();
         const notes: string[] = status ? [status] : [];
-        const { sumIn, sumOut, ...totals } = this._flowTotals(inputs, outputs, energy);
         const money = this._moneyFigures();
         const unknown = this._t("money.unknown");
         const withMoney = (total: string | null, key: string, value: number | null) => money
             ? [total, fillTemplate(this._t(key), { value: value === null ? unknown : this._formatMoney(value, money.currency) })].filter(Boolean).join(" · ")
             : total;
         if (this._money.state?.status === "error") notes.push(this._t("money.failed"));
-        return {
-            scopeLabel: this._todayScopeLabel(),
-            inputs,
-            outputs,
-            totalIn: withMoney(totals.totalIn, "money.income_short", money?.gain ?? null),
-            totalOut: withMoney(totals.totalOut, "money.cost_short", money?.cost ?? null),
-            notes,
+        const flow = this._flowShell("today", this._edgeItems(flows, EXPORTS, energy), this._edgeItems(flows, IMPORTS, energy), {
             // Exported in, imported out.
-            centreValue: this._centrePair(sumIn, sumOut, energy),
-            active: false,
+            centre: (sumIn, sumOut) => this._centrePair(sumIn, sumOut, energy),
+            notes,
+        });
+        return {
+            ...flow,
+            totalIn: withMoney(flow.totalIn, "money.income_short", money?.gain ?? null),
+            totalOut: withMoney(flow.totalOut, "money.cost_short", money?.cost ?? null),
         };
     }
 
