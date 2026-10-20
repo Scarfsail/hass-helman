@@ -5,6 +5,12 @@ export function pad2(value: number | string): string {
 export const DEFAULT_SLOT_MINUTES = 15;
 export const SLOT_MS = DEFAULT_SLOT_MINUTES * 60_000;
 
+/** Canonical 15-minute forecast key for an aligned timestamp. */
+export function slotTimeKey(value: string | number): number | null {
+    const ms = typeof value === "number" ? value : Date.parse(value);
+    return Number.isFinite(ms) && ms % SLOT_MS === 0 ? ms / SLOT_MS : null;
+}
+
 /** A complete HH:MM clock within a day; range-end 24:00 is formatting only. */
 export function slotMinutes(value: unknown): number | null {
     if (typeof value !== "string") return null;

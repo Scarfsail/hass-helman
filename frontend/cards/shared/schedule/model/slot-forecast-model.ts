@@ -6,6 +6,7 @@ import type {
     SolarForecastDTO,
 } from "../../../helman-api";
 import { getEffectiveSolarForecastPoints } from "../../../helman-api";
+import { SLOT_MS, slotTimeKey } from "../../time/slot-time";
 import type { ScheduleDisplaySlot } from "../schedule-types";
 
 export interface SlotForecastPoint {
@@ -90,11 +91,11 @@ export function buildSlotForecastProjection(
     const batteryAvailable = FORECAST_AVAILABLE_STATUSES.has(forecast.battery_capacity.status);
     const solarAvailable = FORECAST_AVAILABLE_STATUSES.has(forecast.solar.status);
     const gridAvailable = FORECAST_AVAILABLE_STATUSES.has(forecast.grid.status);
-    const batteryByMs = batteryAvailable
-        ? _buildBatteryTimeline(forecast.battery_capacity)
+    const batteryBySlot = batteryAvailable
+        ? _buildBatteryLookup(forecast.battery_capacity)
         : new Map<number, number>();
-    const solarByMs = solarAvailable
-        ? _buildSolarTimeline(forecast.solar)
+    const solarBySlot = solarAvailable
+        ? _buildSolarLookup(forecast.solar)
         : new Map<number, number>();
     const priceProjection = _buildPriceProjection(forecast.grid, slots);
     if (!batteryAvailable && !solarAvailable && !gridAvailable && !priceProjection.available) {
@@ -111,8 +112,9 @@ export function buildSlotForecastProjection(
     const points = new Map<string, SlotForecastPoint>();
 
     for (const slot of slots) {
-        const socPct = batteryByMs.get(slot.startMs) ?? null;
-        const solarWh = solarByMs.get(slot.startMs) ?? null;
+        const key = slotTimeKey(slot.startMs);
+        const socPct = key === null ? null : batteryBySlot.get(key) ?? null;
+        const solarWh = key === null ? null : solarBySlot.get(key) ?? null;
         const gridPoint = gridProjection.points.get(slot.id);
         const pricePoint = priceProjection.points.get(slot.id);
 
@@ -186,44 +188,44 @@ export function materializeSlotForecastMap(
     };
 }
 
-function _buildBatteryTimeline(battery: BatteryCapacityForecastDTO): Map<number, number> {
-    const timeline = new Map<number, number>();
+function _buildBatteryLookup(battery: BatteryCapacityForecastDTO): Map<number, number> {
+    const points = new Map<number, number>();
 
     for (const entry of battery.actualHistory) {
-        const ms = new Date(entry.timestamp).getTime();
-        if (!Number.isNaN(ms)) {
-            timeline.set(ms, entry.socPct);
+        const key = slotTimeKey(entry.timestamp);
+        if (key !== null) {
+            points.set(key, entry.socPct);
         }
     }
 
     for (const entry of battery.series) {
-        const ms = new Date(entry.timestamp).getTime();
-        if (!Number.isNaN(ms)) {
-            timeline.set(ms, entry.socPct);
+        const key = slotTimeKey(entry.timestamp);
+        if (key !== null) {
+            points.set(key, entry.socPct);
         }
     }
 
-    return timeline;
+    return points;
 }
 
-function _buildSolarTimeline(solar: SolarForecastDTO): Map<number, number> {
-    const timeline = new Map<number, number>();
+function _buildSolarLookup(solar: SolarForecastDTO): Map<number, number> {
+    const points = new Map<number, number>();
 
     for (const entry of solar.actualHistory) {
-        const ms = new Date(entry.timestamp).getTime();
-        if (!Number.isNaN(ms)) {
-            timeline.set(ms, entry.value);
+        const key = slotTimeKey(entry.timestamp);
+        if (key !== null) {
+            points.set(key, entry.value);
         }
     }
 
     for (const entry of getEffectiveSolarForecastPoints(solar)) {
-        const ms = new Date(entry.timestamp).getTime();
-        if (!Number.isNaN(ms)) {
-            timeline.set(ms, entry.value);
+        const key = slotTimeKey(entry.timestamp);
+        if (key !== null) {
+            points.set(key, entry.value);
         }
     }
 
-    return timeline;
+    return points;
 }
 
 function _buildGridProjection(
@@ -235,6 +237,21 @@ function _buildGridProjection(
 } {
     const points = new Map<string, Pick<SlotForecastPoint, "gridNetKwh" | "gridImportKwh" | "gridExportKwh" | "availableSurplusKwh">>();
     let maxAbsKwh = 0;
+    // A feed entry can cover several schedule slots. Index it under each
+    // quarter it touches, then count it once per slot before applying overlap.
+    const entriesBySlot = new Map<number, typeof grid.series>();
+    for (const entry of grid.series) {
+        const entryStartMs = Date.parse(entry.timestamp);
+        const entryDurationMs = entry.durationHours * 3_600_000;
+        if (!Number.isFinite(entryStartMs) || !(entryDurationMs > 0)) continue;
+        const firstKey = Math.floor(entryStartMs / SLOT_MS);
+        const lastKey = Math.ceil((entryStartMs + entryDurationMs) / SLOT_MS) - 1;
+        for (let key = firstKey; key <= lastKey; key += 1) {
+            const entries = entriesBySlot.get(key) ?? [];
+            entries.push(entry);
+            entriesBySlot.set(key, entries);
+        }
+    }
 
     for (const slot of slots) {
         let importedKwh = 0;
@@ -243,13 +260,14 @@ function _buildGridProjection(
         let hasAvailableSurplus = false;
         let hasOverlap = false;
 
-        for (const entry of grid.series) {
-            const entryStartMs = new Date(entry.timestamp).getTime();
+        const candidates = new Set<typeof grid.series[number]>();
+        for (let key = Math.floor(slot.startMs / SLOT_MS);
+            key < Math.ceil(slot.endMs / SLOT_MS); key += 1) {
+            for (const entry of entriesBySlot.get(key) ?? []) candidates.add(entry);
+        }
+        for (const entry of candidates) {
+            const entryStartMs = Date.parse(entry.timestamp);
             const entryDurationMs = entry.durationHours * 3_600_000;
-            if (Number.isNaN(entryStartMs) || !(entryDurationMs > 0)) {
-                continue;
-            }
-
             const entryEndMs = entryStartMs + entryDurationMs;
             const overlapMs = Math.min(slot.endMs, entryEndMs) - Math.max(slot.startMs, entryStartMs);
             if (overlapMs <= 0) {
@@ -302,16 +320,17 @@ function _buildPriceProjection(
     available: boolean;
     displayUnit: string | null;
 } {
-    const exportPriceByMs = _buildForecastPointTimeline(grid.exportPricePoints ?? []);
+    const exportPriceBySlot = _buildForecastPointLookup(grid.exportPricePoints ?? []);
     const points = new Map<string, Pick<SlotForecastPoint, "price">>();
     let maxAbs = Math.max(
-        ...Array.from(exportPriceByMs.values()).map((value) => Math.abs(value)),
+        ...Array.from(exportPriceBySlot.values()).map((value) => Math.abs(value)),
         Math.abs(grid.currentExportPrice ?? 0),
         0,
     );
 
     for (const slot of slots) {
-        const price = exportPriceByMs.get(slot.startMs) ?? null;
+        const key = slotTimeKey(slot.startMs);
+        const price = key === null ? null : exportPriceBySlot.get(key) ?? null;
 
         if (price === null) {
             continue;
@@ -332,15 +351,15 @@ function _buildPriceProjection(
     };
 }
 
-function _buildForecastPointTimeline(points: readonly ForecastPointDTO[]): Map<number, number> {
-    const timeline = new Map<number, number>();
+function _buildForecastPointLookup(points: readonly ForecastPointDTO[]): Map<number, number> {
+    const lookup = new Map<number, number>();
 
     for (const point of points) {
-        const ms = new Date(point.timestamp).getTime();
-        if (!Number.isNaN(ms)) {
-            timeline.set(ms, point.value);
+        const key = slotTimeKey(point.timestamp);
+        if (key !== null) {
+            lookup.set(key, point.value);
         }
     }
 
-    return timeline;
+    return lookup;
 }
