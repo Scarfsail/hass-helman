@@ -9,7 +9,7 @@ import "../components/scheduling-action-chip";
 import "../components/scheduling-appliance-chip";
 import "../components/scheduling-entity-day-band";
 import "../components/scheduling-explanation-panel";
-import { DataChangedController } from "../../../helman/data-changed";
+import { DataChangedController } from "../../data/data-changed";
 import "./scheduling-entity-action-editor";
 import type {
     EntityDayBandBlockSelectDetail,

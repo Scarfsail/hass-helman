@@ -3,8 +3,10 @@ from __future__ import annotations
 from .const import (
     BATTERY_CAPACITY_FORECAST_DEFAULT_CHARGE_EFFICIENCY,
     BATTERY_CAPACITY_FORECAST_DEFAULT_DISCHARGE_EFFICIENCY,
+    BATTERY_DEFAULT_MAX_POWER_W,
     DAY_CONTEXT_DEFAULT_DEFICIT_BELOW_RATIO,
     DAY_CONTEXT_DEFAULT_SURPLUS_ABOVE_RATIO,
+    GRID_DEFAULT_MAX_POWER_W,
     HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
     HOUSE_FORECAST_DEFAULT_TRAINING_WINDOW_DAYS,
     SOLAR_BIAS_DEFAULT_AGGREGATION_METHOD,
@@ -20,6 +22,7 @@ from .const import (
     SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS,
     SOLAR_BIAS_DEFAULT_MIN_VALID_SLOT_DAYS,
     SOLAR_BIAS_DEFAULT_TRAINING_TIME,
+    SOLAR_DEFAULT_MAX_POWER_W,
 )
 
 #: What an unset optional config field is actually worth at runtime, keyed by
@@ -81,6 +84,12 @@ CONFIG_FIELD_DEFAULTS: dict[str, object] = {
     "energy_nodes.battery.forecast.discharge_efficiency": (
         BATTERY_CAPACITY_FORECAST_DEFAULT_DISCHARGE_EFFICIENCY
     ),
+    # tree_builder.py: _max_power_w, the scale the cards draw each flow at.
+    # The default applies to the card scale only: an unset solar max_power keeps
+    # the solar-bias glitch cap and the solar detail's stated maximum off.
+    "energy_nodes.solar.max_power": SOLAR_DEFAULT_MAX_POWER_W,
+    "energy_nodes.battery.max_power": BATTERY_DEFAULT_MAX_POWER_W,
+    "energy_nodes.grid.max_power": GRID_DEFAULT_MAX_POWER_W,
     # automation/config.py: _read_day_context
     "automation.day_context.deficit_below_ratio": (
         DAY_CONTEXT_DEFAULT_DEFICIT_BELOW_RATIO

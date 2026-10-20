@@ -301,6 +301,7 @@
       "vendor_entry": "Integration entry",
       "vendor_device": "Device",
       "max_allowed_export_power": "Max allowed export power",
+      "max_power": "Max power",
       "device_phase": "House phase"
     },
     "entity_status": {
@@ -593,7 +594,10 @@
       "hardware_profile": "The hardware this device is. A profile is defined in Helman, so it knows which entity of the vendor integration feeds each setting; renaming those entities does not break it. Picking one removes the entities it provides from this config. Site settings, such as maximum power, prices or efficiencies, stay yours to set.",
       "vendor_entry": "The vendor integration's config entry this device is, in Settings > Devices & services.",
       "vendor_device": "The vendor integration's HA device this device is, in Settings > Devices & services. Only devices on which the profile finds every entity it needs are offered, minus those another device already uses.",
-      "grid_max_allowed_export_power": "The most your contract with the grid provider lets you export, in watts; 0 for a no-export contract. Take it from your grid contract: it is a fact of your site, not of the hardware. Required with a hardware profile that drives the inverter's modes, which restores the inverter's export limit to it after a stop-export slot. Unused otherwise."
+      "grid_max_allowed_export_power": "The most your contract with the grid provider lets you export, in watts; 0 for a no-export contract. Take it from your grid contract: it is a fact of your site, not of the hardware. Required with a hardware profile that drives the inverter's modes, which restores the inverter's export limit to it after a stop-export slot. Unused otherwise.",
+      "solar_max_power": "The most the solar array produces, in watts. It scales the solar power-flow lines on the cards, and also sets the solar-bias data-glitch cap and the maximum shown in the solar detail. Leave empty to keep those two off; the cards then scale to the default.",
+      "battery_max_power": "The most the battery charges or discharges at, in watts: the full scale of its power-flow lines on the cards. Leave empty for the default.",
+      "grid_max_power": "The most the grid connection carries, in watts: the full scale of its power-flow lines on the cards. Leave empty for the default."
     },
     "device_filter": {
       "label": "Show devices",

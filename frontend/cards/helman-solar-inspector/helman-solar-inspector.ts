@@ -95,8 +95,8 @@ import {
   type MoneyTotals,
 } from "./money-model";
 import "../helman/tree-item-list";
-import "../helman-simple/node-detail-dialog";
-import { TreeItem } from "../helman/tree-item";
+import "../node-detail/node-detail-dialog";
+import { TreeItem } from "../shared/data/tree-item";
 import {
   findTrainingSlot,
   formatHouseForecastErrorPct,
@@ -152,7 +152,7 @@ import {
 import { nowMinutesOnDay, renderNowMarker } from "./now-marker.js";
 import { helmanColorVars } from "../color-vars";
 import { schedulingSharedStyles } from "../shared/schedule/styles/scheduling-shared-styles";
-import { DataChangedController } from "../helman/data-changed";
+import { DataChangedController } from "../shared/data/data-changed";
 import { startNowClock } from "../shared/now-clock";
 import { getSharedScheduleOwner, type SharedScheduleOwner } from "../shared/schedule/schedule-owner";
 import type { ScheduleOwnerSnapshot } from "../shared/schedule/schedule-types";
@@ -5124,7 +5124,7 @@ export class HelmanSolarInspector extends LitElement {
         if (appliance.switchEntityId) ids.add(appliance.switchEntityId);
       }
     }
-    dispatchWatchedEntities(this, [...ids]);
+    dispatchWatchedEntities(this, "house-breakdown", [...ids]);
   }
 
   /**

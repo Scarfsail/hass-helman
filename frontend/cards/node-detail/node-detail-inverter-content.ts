@@ -1,47 +1,50 @@
-import { formatKwh, formatPower } from "../../shared/format";
+import { formatPower } from "../shared/format";
 import { css, html, nothing, svg } from "lit";
-import { customElement, property, state } from "lit/decorators.js";
-import { fillTemplate } from "../../localize/localize";
+import { customElement, property } from "lit/decorators.js";
+import { fillTemplate } from "../localize/localize";
 import type {
     InverterDetailPayload,
     InverterModesSectionPayload,
+    InverterRuntimeDTO,
     InverterTemperatureSectionPayload,
     ScheduleActionKind,
-    SchedulePayload,
-    TodayFlowsDTO,
-} from "../../helman-api";
-import type { HelmanSolarInspectorCardConfig } from "../../helman-solar-inspector/HelmanSolarInspectorCardConfig";
-import { helmanColorVars } from "../../color-vars";
-import { getSharedHelmanStore } from "../../helman/store";
-import { commandedModeKind } from "../../helman-api";
+} from "../helman-api";
+import type { HelmanSolarInspectorCardConfig } from "../helman-solar-inspector/HelmanSolarInspectorCardConfig";
+import { helmanColorVars } from "../color-vars";
+import { commandedModeKind } from "../helman-api";
 
-import "../../shared/mode-strip";
-import { modeStripWindow, type ModeChange, type ModeSegment } from "../../shared/mode-strip";
-import { inverterGlyph } from "../../shared/node-glyphs";
-import { getScheduleActionTone, scheduleActionToneStyles, type ScheduleActionTone } from "../../shared/schedule/action-tones";
-import { getSharedScheduleOwner } from "../../shared/schedule/schedule-owner";
-import "../../shared/day-line-chart";
-import type { DayLineSeries } from "../../shared/day-line-chart";
-import { NodeDetailContentBase, TODAY_REFRESH_MS, type NodeFlow, type SectionState } from "./node-detail-base";
+import "../shared/mode-strip";
+import { modeStripWindow, type ModeChange, type ModeSegment } from "../shared/mode-strip";
+import { inverterGlyph } from "../shared/node-glyphs";
+import { getScheduleActionTone, scheduleActionToneStyles, type ScheduleActionTone } from "../shared/schedule/action-tones";
+import { INVERTER_CONTROLLABLE_ID } from "../shared/schedule/schedule-types";
+import "../shared/day-line-chart";
+import type { DayLineSeries } from "../shared/day-line-chart";
+import { NodeDetailContentBase, type NodeFlow } from "./node-detail-base";
+import { staleToday } from "./section-resource";
 import {
     currentRun,
-    currentRuntime,
     dayKey,
     effectiveAction,
+    inverterRuns,
     nextChange,
     renderCurrentSlot,
+    runtimeFor,
     runtimeText,
-    scheduleRuns,
     todayAndTomorrow,
     type ScheduleRun,
 } from "./node-detail-schedule";
-import { powerUnitFactor } from "../../shared/power-reading";
+import { powerUnitFactor } from "../shared/power-reading";
 import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { InverterDetailParams } from "./node-detail-types";
+import type { LiveFlows } from "./live-flows";
 
 type QuestionId = "why" | "next" | "limits" | "operating" | "trust";
 
 const PHASES = [1, 2, 3] as const;
+
+/** A flow between two nodes, live and today. */
+type FlowEdge = Exclude<keyof LiveFlows, "gridPower">;
 
 /**
  * The inspector under "What will it do next?": the battery SoC plan with the
@@ -206,78 +209,35 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
 
     @property({ attribute: false }) public params!: InverterDetailParams;
 
-    @state() private _schedule: SchedulePayload | null = null;
-    @state() private _temperature: SectionState<InverterTemperatureSectionPayload> | null = null;
-    /** Today's observed modes, read on opening for the strip. */
-    @state() private _modes: SectionState<InverterModesSectionPayload> | null = null;
-
-    private _temperatureRequest = 0;
-    private _modesRequest = 0;
-    private _modesRequestedAt = 0;
+    /** The inverter's plan. */
+    private readonly _plan = this._useSchedule(inverterRuns);
+    /**
+     * Today's temperature, while the operating answer is open; read on
+     * opening and re-read on a data change only. A refresh follows a data
+     * change: what was shown may be out of date, so a failure replaces it.
+     */
+    private readonly _temperature = this._section<InverterTemperatureSectionPayload>("temperature", {
+        fetch: () => this._readSection("temperature"),
+        shown: () => this._open === "operating" && this._offers("temperature"),
+        staleness: () => false,
+        keepOnError: false,
+    });
     /** The observed mode today's modes were read under; a new one re-reads them. */
     private _modesObserved: ScheduleActionKind | null = null;
-    /** A data change was announced: the overview it reloads re-reads today's modes. */
-    private _modesChanged = false;
-    private _unsubscribeSchedule?: () => void;
-    /** `_runs()` for the update in progress; several answers read it per render. */
-    private _runsCache?: ScheduleRun[];
-
-    willUpdate(changed: Map<string, unknown>): void {
-        this._runsCache = undefined;
-        super.willUpdate(changed);
-        // Today's modes are "today so far": re-read on a new day, and otherwise
-        // at most every few minutes, only while the page is visible.
-        if (this._modes?.status === "ready" && !document.hidden
-            && (!this._isToday(this._modes.payload.period.start) || Date.now() - this._modesRequestedAt > TODAY_REFRESH_MS)) {
-            void this._loadModes();
-        }
-    }
-
-    protected _start(): void {
-        this._unsubscribeSchedule = getSharedScheduleOwner(this.hass).subscribe((snapshot) => {
-            this._schedule = snapshot.schedule;
-        });
-        super._start();
-    }
-
-    protected _stop(): void {
-        this._unsubscribeSchedule?.();
-        this._unsubscribeSchedule = undefined;
-        this._temperatureRequest += 1;
-        this._modesRequest += 1;
-        // A dropped load would otherwise stay "loading" after a reconnect.
-        if (this._modes?.status === "loading") this._modes = null;
-    }
-
-    protected _onDataChanged(): void {
-        // A config change (another client) can re-map what the overview reads.
-        super._onDataChanged();
-        if (this._open === "operating" && this._temperature !== null) void this._loadTemperature();
-        this._modesChanged = true;
-    }
-
-    /**
-     * Today's modes, a recorder read, are read with the first overview, and
-     * again when an overview brings a new observed mode or follows a data
-     * change; `willUpdate` keeps them current otherwise.
-     */
-    protected _overviewLoaded(payload: InverterDetailPayload): void {
-        const changed = this._modesChanged;
-        this._modesChanged = false;
-        if (!payload.sections.includes("modes")) {
-            // No longer offered (a config change): nothing to show or refresh.
-            this._modesRequest += 1;
-            this._modes = null;
-            return;
-        }
-        if (changed || this._modes === null || payload.agreement.observedOption !== this._modesObserved) void this._loadModes();
-    }
-
+    /** Today's observed modes, for the strip, while the overview offers them. */
+    private readonly _modes = this._section<InverterModesSectionPayload>("modes", {
+        fetch: () => this._readSection("modes"),
+        shown: () => this._offers("modes"),
+        staleness: (payload, requestedAt) => staleToday(payload, requestedAt, this.hass)
+            || (this._overview.status === "ready" && this._overview.payload.agreement.observedOption !== this._modesObserved),
+        onRequest: () => {
+            this._modesObserved = this._overview.status === "ready" ? this._overview.payload.agreement.observedOption : null;
+        },
+    });
     /** The states the backend compared: a change in any of them re-reads the comparison. */
-    protected _overviewSignature(payload: InverterDetailPayload): string {
+    protected _signatureEntities(payload: InverterDetailPayload) {
         // Every register the observed mode is read from, not only the command's.
-        const ids = [payload.mode?.entityId, ...payload.agreement.observedFrom, payload.entities.run_mode];
-        return ids.map((id) => (id ? this.hass.states[id]?.state ?? "" : "")).join("|");
+        return [payload.mode?.entityId, ...payload.agreement.observedFrom, payload.entities.run_mode];
     }
 
     protected _watchedEntities(payload: InverterDetailPayload) {
@@ -286,56 +246,6 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
             ...Object.values(payload.entities),
             ...payload.agreement.registers.map((register) => register.entityId),
         ];
-    }
-
-    // ── Data ────────────────────────────────────────────────────────────────
-
-    private async _loadTemperature(): Promise<void> {
-        const request = ++this._temperatureRequest;
-        this._temperature = { status: "loading" };
-        try {
-            const payload = await getSharedHelmanStore(this.hass)
-                .getNodeDetail<InverterTemperatureSectionPayload>({ node: "inverter", section: "temperature" }, { fresh: true });
-            if (request !== this._temperatureRequest) return;
-            this._temperature = { status: "ready", payload };
-        } catch (error) {
-            if (request !== this._temperatureRequest) return;
-            console.error("node-detail-inverter: failed to load today's temperature", error);
-            this._temperature = { status: "error" };
-        }
-    }
-
-    /** Today's observed modes; a refresh keeps the day's strip on screen. */
-    private async _loadModes(): Promise<void> {
-        const request = ++this._modesRequest;
-        // A refresh keeps today's strip; yesterday's gives way, so a failure shows.
-        if (this._modes?.status !== "ready" || !this._isToday(this._modes.payload.period.start)) {
-            this._modes = { status: "loading" };
-        }
-        this._modesRequestedAt = Date.now();
-        this._modesObserved = this._overview.status === "ready" ? this._overview.payload.agreement.observedOption : null;
-        try {
-            const payload = await getSharedHelmanStore(this.hass)
-                .getNodeDetail<InverterModesSectionPayload>({ node: "inverter", section: "modes" }, { fresh: true });
-            if (request !== this._modesRequest) return;
-            this._modes = { status: "ready", payload };
-        } catch (error) {
-            if (request !== this._modesRequest) return;
-            console.error("node-detail-inverter: failed to load today's modes", error);
-            if (this._modes?.status !== "ready") this._modes = { status: "error" };
-        }
-    }
-
-    // ── Disclosure ──────────────────────────────────────────────────────────
-
-    protected _setOpen(id: QuestionId | null): void {
-        super._setOpen(id);
-        // A closed answer's history request is obsolete; it is re-read on reopen.
-        this._temperatureRequest += 1;
-        this._temperature = null;
-        if (id === "operating" && this._overview.status === "ready" && this._overview.payload.sections.includes("temperature")) {
-            void this._loadTemperature();
-        }
     }
 
     // ── Rendering ───────────────────────────────────────────────────────────
@@ -386,22 +296,12 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
             ? fillTemplate(this._t("status.commanded"), { mode: commanded ? this._modeLabel(commanded) : raw! })
             : this._t("status.no_command");
         const tone: ScheduleActionTone = commanded ? getScheduleActionTone(commanded) : "neutral";
+        // A fault or off-grid operation the hardware reports, leading to the operating answer.
+        const condition = overview.condition;
         return html`
             <div class="summary" data-overview>
                 <p class="status pill action-tone-${tone}" data-tone=${tone}>${status}</p>
-                ${this._renderCondition(overview)}
-            </div>
-        `;
-    }
-
-    /** A fault or off-grid operation the hardware reports, leading to the operating answer. */
-    private _renderCondition(overview: InverterDetailPayload) {
-        const condition = overview.condition;
-        if (!condition) return nothing;
-        return html`
-            <div class="exception" role="status" data-exception>
-                <span>${fillTemplate(this._t(`exception.${condition.kind}`), { state: condition.runMode })}</span>
-                <button class="link-button" @click=${() => this._setOpen("operating")}>${this._t("exception.details")}</button>
+                ${condition ? this._exceptionBanner(fillTemplate(this._t(`exception.${condition.kind}`), { state: condition.runMode }), "operating") : nothing}
             </div>
         `;
     }
@@ -415,7 +315,7 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
      * mismatch exception under the chain. The chain opens *why*.
      */
     private _renderChain(overview: InverterDetailPayload) {
-        const notApplied = this._schedule !== null && !this._schedule.executionEnabled;
+        const notApplied = this._plan.schedule !== null && !this._plan.schedule.executionEnabled;
         const [plan, command, inverter] = this._chainBoxes(overview);
         const mismatch = overview.agreement.status === "mismatch";
         return html`
@@ -440,8 +340,8 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
     }
 
     private _chainBoxes(overview: InverterDetailPayload): [ChainBox, ChainBox, ChainBox] {
-        const run = this._currentRun();
-        const runtime = this._currentRuntime();
+        const run = currentRun(this._plan.runs, Date.now());
+        const runtime = runtimeFor<InverterRuntimeDTO>(this._plan.schedule, INVERTER_CONTROLLABLE_ID, Date.now());
         const commanded = this._commandedKind(overview);
         const agreement = overview.agreement;
         const observed = agreement.observedOption;
@@ -453,7 +353,7 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
             value: planned ? this._actionLabel(planned) : this._t("why.nothing_scheduled"),
             detail: [
                 run?.action.conditionMet === false ? fillTemplate(this._t("chain.candidate"), { action: this._actionLabel(run.action) }) : null,
-                this._schedule ? this._t(this._schedule.executionEnabled ? "why.execution_on_short" : "why.execution_off_short") : null,
+                this._plan.schedule ? this._t(this._plan.schedule.executionEnabled ? "why.execution_on_short" : "why.execution_off_short") : null,
             ].filter(Boolean).join(" · ") || null,
             tone: planned ? getScheduleActionTone(planned.kind) : "neutral",
         };
@@ -514,7 +414,7 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
     private _renderStrip(overview: InverterDetailPayload) {
         const now = Date.now();
         const { start, end } = modeStripWindow(now, this._timeZone);
-        const change = this._nextChange();
+        const change = nextChange(this._plan.runs, Date.now(), this._timeZone);
         const next: ModeChange | null = change ? {
             at: change.startMs,
             tone: getScheduleActionTone(change.action.kind),
@@ -534,13 +434,13 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
                     .locale=${this._locale}
                 ></helman-mode-strip>
             </button>
-            ${this._modes?.status === "error" ? html`
+            ${this._modes.state?.status === "error" ? html`
                 <p class="note" data-strip-failed>${this._t("strip.history_failed")}
-                    <button class="link-button" @click=${() => this._loadModes()}>${this._t("retry")}</button>
+                    <button class="link-button" @click=${() => this._modes.load()}>${this._t("retry")}</button>
                 </p>
             ` : nothing}
             ${!overview.sections.includes("modes") ? html`<p class="note" data-strip-no-history>${this._t("strip.no_history")}</p>`
-                : this._modes?.status === "ready" && this._modes.payload.modes === null ? html`<p class="note" data-strip-no-registers>${this._t("strip.no_registers")}</p>`
+                : this._modes.payload?.modes === null ? html`<p class="note" data-strip-no-registers>${this._t("strip.no_registers")}</p>`
                 : nothing}
         `;
     }
@@ -552,7 +452,7 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
      */
     private _stripSegments(overview: InverterDetailPayload, now: number): ModeSegment[] {
         const segments: ModeSegment[] = [];
-        const modes = this._modes?.status === "ready" ? this._modes.payload.modes : null;
+        const modes = this._modes.payload?.modes ?? null;
         for (const stretch of modes ?? []) {
             if (stretch.kind === null) continue;
             // Still held: drawn to now while the registers still show it.
@@ -564,8 +464,8 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
                 label: this._modeLabel(stretch.kind),
             });
         }
-        const executing = this._schedule?.executionEnabled === true;
-        for (const run of this._runs()) {
+        const executing = this._plan.schedule?.executionEnabled === true;
+        for (const run of this._plan.runs) {
             const action = effectiveAction(run.action);
             segments.push({
                 start: Math.max(run.startMs, now),
@@ -591,29 +491,13 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
 
     /** The card's live split, W; unknown without the solar, battery or house reading, never 0. */
     private _nowFlow(overview: InverterDetailPayload): NodeFlow {
-        const flows = this.params.flows;
-        const power = (value: number | null) => value === null ? "–" : formatPower(value).display;
-        const sum = (...keys: Array<keyof NonNullable<typeof flows>>) => flows ? keys.reduce((total, key) => total + flows[key], 0) : null;
-        const inputs = [
-            this._flowItem("solar", sum("solarToHouse", "solarToBattery", "solarToGrid"), power),
-            this._flowItem("battery", sum("batteryToHouse", "batteryToGrid"), power),
-            this._flowItem("grid", sum("gridToHouse", "gridToBattery"), power),
-        ];
-        const outputs = [
-            this._flowItem("house", sum("solarToHouse", "batteryToHouse", "gridToHouse"), power),
-            this._flowItem("battery", sum("solarToBattery", "gridToBattery"), power),
-            this._exportItem(sum("solarToGrid", "batteryToGrid"), power),
-        ];
+        const power = this._fmt("now");
+        const { inputs, outputs } = this._sides(this.params.flows, power);
         const ac = this._acPower(overview);
-        return {
-            scopeLabel: this._nowScopeLabel(),
-            inputs,
-            outputs,
-            ...this._flowTotals(inputs, outputs, power),
-            notes: [],
-            centreValue: ac === null ? null : fillTemplate(this._t("operating.ac_short"), { value: power(ac) }),
+        return this._flowShell("now", inputs, outputs, {
+            centre: () => ac === null ? null : fillTemplate(this._t("operating.ac_short"), { value: power(ac) }),
             active: this._isActive(ac),
-        };
+        });
     }
 
     /**
@@ -622,39 +506,39 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
      * added to its side's total, never forced into a ribbon.
      */
     private _todayFlow(): NodeFlow {
-        const flows = this._todayFlows?.status === "ready" ? this._todayFlows.payload.flows : null;
-        const energy = (value: number | null) => value === null ? "–" : (formatKwh(Math.abs(value)) + " kWh");
-        const sum = (...keys: Array<keyof TodayFlowsDTO>) => {
-            const values = keys.map((key) => flows?.[key] ?? null);
-            return values.some((value) => value === null) ? null : values.reduce((total, value) => total! + value!, 0);
-        };
-        const inputs = [
-            this._flowItem("solar", sum("solarToHouse", "solarToBattery", "solarToGrid"), energy),
-            this._flowItem("battery", sum("batteryToHouse", "batteryToGrid"), energy),
-            this._flowItem("grid", sum("gridToHouse", "gridToBattery"), energy),
-        ];
-        const outputs = [
-            this._flowItem("house", sum("solarToHouse", "batteryToHouse", "gridToHouse"), energy),
-            this._flowItem("battery", sum("solarToBattery", "gridToBattery"), energy),
-            this._exportItem(sum("solarToGrid", "batteryToGrid"), energy),
-        ];
+        const flows = this._flows.payload?.flows ?? null;
+        const energy = this._fmt("today");
+        const { inputs, outputs } = this._sides(flows, energy);
         const status = this._todayFlowsNote();
         const notes: string[] = status ? [status] : [];
         const unresolvedSolar = flows?.solarUnresolved ?? 0;
         const unknownCharge = flows?.unknownToBattery ?? 0;
         const unknownHouse = flows?.unknownToHouse ?? 0;
-        if (unresolvedSolar > 0) notes.push(fillTemplate(this.localize("node_detail.solar.flow.unresolved"), { kwh: (formatKwh(Math.abs(unresolvedSolar)) + " kWh") }));
-        if (unknownCharge > 0) notes.push(fillTemplate(this.localize("node_detail.battery.flow.unknown_charge"), { kwh: (formatKwh(Math.abs(unknownCharge)) + " kWh") }));
-        if (unknownHouse > 0) notes.push(fillTemplate(this._t("flow.unknown_house"), { kwh: (formatKwh(Math.abs(unknownHouse)) + " kWh") }));
-        const { sumOut, ...totals } = this._flowTotals(inputs, outputs, energy, unresolvedSolar, unknownCharge + unknownHouse);
-        return {
-            scopeLabel: this._todayScopeLabel(),
-            inputs,
-            outputs,
-            ...totals,
+        if (unresolvedSolar > 0) notes.push(fillTemplate(this.localize("node_detail.solar.flow.unresolved"), { kwh: energy(unresolvedSolar) }));
+        if (unknownCharge > 0) notes.push(fillTemplate(this.localize("node_detail.battery.flow.unknown_charge"), { kwh: energy(unknownCharge) }));
+        if (unknownHouse > 0) notes.push(fillTemplate(this._t("flow.unknown_house"), { kwh: energy(unknownHouse) }));
+        return this._flowShell("today", inputs, outputs, {
+            centre: (_sumIn, sumOut) => energy(sumOut),
             notes,
-            centreValue: energy(sumOut),
-            active: false,
+            unresolvedIn: unresolvedSolar,
+            unresolvedOut: unknownCharge + unknownHouse,
+        });
+    }
+
+    /** Solar, battery and grid in; house, battery and export out: each the sum of its edges. */
+    private _sides(flows: Partial<Record<FlowEdge, number | null>> | null, format: (value: number | null) => string) {
+        const sum = (...keys: FlowEdge[]) => this._sumEdges(flows, keys);
+        return {
+            inputs: [
+                this._flowItem("solar", sum("solarToHouse", "solarToBattery", "solarToGrid"), format),
+                this._flowItem("battery", sum("batteryToHouse", "batteryToGrid"), format),
+                this._flowItem("grid", sum("gridToHouse", "gridToBattery"), format),
+            ],
+            outputs: [
+                this._flowItem("house", sum("solarToHouse", "batteryToHouse", "gridToHouse"), format),
+                this._flowItem("battery", sum("solarToBattery", "gridToBattery"), format),
+                this._exportItem(sum("solarToGrid", "batteryToGrid"), format),
+            ],
         };
     }
 
@@ -713,21 +597,21 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
     // Why ---------------------------------------------------------------------
 
     private _whyPreview(): string | null {
-        const run = this._currentRun();
+        const run = currentRun(this._plan.runs, Date.now());
         const parts = [run ? this._actionLabel(run.action) : this._t("why.nothing_scheduled")];
-        if (this._schedule) parts.push(this._t(this._schedule.executionEnabled ? "why.execution_on_short" : "why.execution_off_short"));
+        if (this._plan.schedule) parts.push(this._t(this._plan.schedule.executionEnabled ? "why.execution_on_short" : "why.execution_off_short"));
         return parts.join(" · ");
     }
 
     private _renderWhy(overview: InverterDetailPayload) {
-        const run = this._currentRun();
-        const runtime = this._currentRuntime();
+        const run = currentRun(this._plan.runs, Date.now());
+        const runtime = runtimeFor<InverterRuntimeDTO>(this._plan.schedule, INVERTER_CONTROLLABLE_ID, Date.now());
         const commanded = this._commandedKind(overview);
         return html`
             ${this._row(this._t("why.scheduled_now"), run
                 ? this._scheduledText(run)
                 : this._t("why.nothing_scheduled"), "scheduled")}
-            ${this._schedule ? this._row(this._t("why.execution"), this._t(this._schedule.executionEnabled ? "why.execution_on" : "why.execution_off"), "execution") : nothing}
+            ${this._plan.schedule ? this._row(this._t("why.execution"), this._t(this._plan.schedule.executionEnabled ? "why.execution_on" : "why.execution_off"), "execution") : nothing}
             ${this._row(this._t("why.executor"), runtime ? runtimeText(runtime, this.localize) : this._t("why.no_runtime"), "executor")}
             ${this._row(this._t("why.last_command"), commanded ? this._modeLabel(commanded) : this._commandedRaw(overview) ?? this._t("unavailable"), "last-command")}
             ${overview.agreement.reason !== "no_profile" ? this._row(this._t("why.observed"), this._agreementText(overview), "agreement") : nothing}
@@ -786,7 +670,7 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
     // Next ----------------------------------------------------------------------
 
     private _nextPreview(): string | null {
-        const next = this._nextChange();
+        const next = nextChange(this._plan.runs, Date.now(), this._timeZone);
         return next
             ? fillTemplate(this._t("next_change"), { time: this._time(next.startMs), action: this._actionLabel(next.action) })
             : this._t("no_change");
@@ -821,7 +705,7 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
     }
 
     private _renderNextEvidence() {
-        return renderCurrentSlot(this._currentRun(), this._currentRuntime(), this.localize, (label, value) => this._row(label, value));
+        return renderCurrentSlot(currentRun(this._plan.runs, Date.now()), runtimeFor<InverterRuntimeDTO>(this._plan.schedule, INVERTER_CONTROLLABLE_ID, Date.now()), this.localize, (label, value) => this._row(label, value));
     }
 
     // Limits --------------------------------------------------------------------
@@ -890,7 +774,7 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
     }
 
     private _renderTemperature() {
-        const section = this._temperature;
+        const section = this._temperature.state;
         const title = html`<div class="section-title">${this._t("operating.temperature_today")}</div>`;
         if (section === null || section.status === "loading") {
             return html`${title}<p class="note" data-temperature-loading>${this._t("operating.loading_history")}</p>`;
@@ -899,7 +783,7 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
             return html`
                 ${title}
                 <p class="note">${this._t("operating.history_failed")}</p>
-                <button class="link-button" @click=${() => this._loadTemperature()}>${this._t("retry")}</button>
+                <button class="link-button" @click=${() => this._temperature.load()}>${this._t("retry")}</button>
             `;
         }
         const stats = section.payload.temperature;
@@ -1038,35 +922,10 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
 
     // ── Schedule ────────────────────────────────────────────────────────────
 
-    /** The inverter's actions from the current slot on, merged into runs. */
-    /** The slot in progress and the next change are read off the clock. */
-    protected *_clockBoundaries(): Iterable<number> {
-        for (const run of this._runs()) {
-            yield run.startMs;
-            if (run.endMs !== null) yield run.endMs;
-        }
-    }
-
-    private _runs(): ScheduleRun[] {
-        return this._runsCache ??= scheduleRuns(this._schedule, Date.now());
-    }
-
-    private _currentRun(): ScheduleRun | null {
-        return currentRun(this._runs(), Date.now());
-    }
-
-    private _currentRuntime() {
-        return currentRuntime(this._schedule, Date.now());
-    }
-
-    private _nextChange(): ScheduleRun | null {
-        return nextChange(this._runs(), Date.now(), this._timeZone);
-    }
-
     /** Today's and tomorrow's runs, empty stretches left out. */
     private _upcomingRuns(): ScheduleRun[] {
         const [today, tomorrow] = todayAndTomorrow(Date.now(), this._timeZone);
-        return this._runs().filter((run) => {
+        return this._plan.runs.filter((run) => {
             const day = this._dayKey(run.startMs);
             return run.action.kind !== "empty" && (day === today || day === tomorrow);
         });

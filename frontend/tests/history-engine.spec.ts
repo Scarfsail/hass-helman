@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
-import { HistoryEngine } from "../cards/helman/history-engine";
-import { TreeItem } from "../cards/helman/tree-item";
+import { HistoryEngine } from "../cards/shared/data/history-engine";
+import { TreeItem } from "../cards/shared/data/tree-item";
 import { nodeAccentColor } from "../cards/color-utils";
 
 /**

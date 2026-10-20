@@ -1,5 +1,5 @@
-import { prepareNodeDetailPage, mountSimpleCard, nodeDetailLocators, sectionRequestLog, treeNode, holdSection, powerTick, reconnectDetail } from "./support/node-detail-harness";
-import { forecastPayload, scheduleSlots, treePayload } from "./support/payload-builders";
+import { prepareNodeDetailPage, mountSimpleCard, nodeDetailLocators, sectionRequestLog, sectionReads, expectKeepRule, treeNode, holdSection, powerTick, reconnectDetail } from "./support/node-detail-harness";
+import { energyFields, forecastPayload, scheduleSlots, treePayload } from "./support/payload-builders";
 import type { DevicePhase, ForecastPayload, ScheduleControllableActionsDTO, SchedulePayload, ScheduleSlotDTO, TreeItemDTO } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
 import { FIXED_NOW_ISO } from "./support/fixed-clock";
@@ -41,8 +41,13 @@ type Variant = {
     todayUnavailable?: boolean;
     /** Schedule execution is switched off. */
     executionOff?: boolean;
+    noSlots?: boolean;
     /** Today misses one of its completed hours. */
     partialToday?: boolean;
+    /** The EV's run switches from Fast to ECO at 15:30, its condition met. */
+    evModeChange?: boolean;
+    /** The boiler's 13:30 slot was set by the user, its settings unchanged. */
+    boilerSetByUser?: boolean;
 };
 
 declare global {
@@ -75,7 +80,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             }),
             rest("house"),
         ];
-        const source = (id: string, sensor: string, sourceType: string) => ({ ...item(id, id, sensor), sourceType, isSource: true });
+        const source = (id: string, sensor: string, sourceType: string) => ({ ...item(id, id, sensor, energyFields(id)), sourceType, isSource: true });
         const tree = treePayload({
             sources: [source("solar", "sensor.solar", "solar"), source("grid", "sensor.grid", "grid"), source("battery", "sensor.battery", "battery")],
             consumers: [{ ...item("house", "House", "sensor.house"), children: houseChildren }],
@@ -238,11 +243,15 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             const at = new Date(Date.parse("2026-10-21T11:45:00Z") + i * 900_000);
             const hour = at.getUTCHours();
             const controllables: ScheduleControllableActionsDTO = { inverter: { kind: "normal", setBy: "automation" } };
-            if (hour === 13) controllables.boiler = { on: true, setBy: "automation" };
-            if (hour === 15) controllables.ev = { charge: true, useMode: "Fast", setBy: "automation", conditionMet: false };
+            if (hour === 13) controllables.boiler = { on: true, setBy: v.boilerSetByUser && at.getUTCMinutes() === 30 ? "user" : "automation" };
+            if (hour === 15) {
+                controllables.ev = v.evModeChange
+                    ? { charge: true, useMode: at.getUTCMinutes() < 30 ? "Fast" : "ECO", setBy: "automation" }
+                    : { charge: true, useMode: "Fast", setBy: "automation", conditionMet: false };
+            }
             slots.push({ id: at.toISOString().replace(".000Z", "+00:00"), controllables });
         }
-        const schedule: SchedulePayload = { ...scheduleDefaults, executionEnabled: !v.executionOff, slots, runtime: { activeSlotId: "2026-10-21T12:00:00+00:00", controllables: {} } };
+        const schedule: SchedulePayload = { ...scheduleDefaults, executionEnabled: !v.executionOff, slots: (v.noSlots ? undefined : slots) as SchedulePayload["slots"], runtime: { activeSlotId: "2026-10-21T12:00:00+00:00", controllables: {} } };
         // The house forecast: 0.3 kWh in the slot in progress, 0.25 kWh in every later one.
         const houseSlot = (ms: number, kwh: number) => ({
             timestamp: new Date(ms).toISOString().replace(".000Z", "+00:00"),
@@ -589,11 +598,42 @@ test.describe("what comes next", () => {
         await expect(next.locator("[data-row='plan-2']")).toContainText("not met");
     });
 
+    test("a run whose settings change mid-run shows as two runs", async ({ page }) => {
+        await mount(page, { evModeChange: true });
+        await openDetail(page);
+        await open(page, "next");
+        const next = question(page, "next");
+        await expect(next.locator("[data-row='run-1']")).toContainText("Boiler");
+        await expect(next.locator("[data-row='run-2']")).toContainText("EV");
+        await expect(next.locator("[data-row='run-2']")).toContainText("15:00–15:30");
+        await expect(next.locator("[data-row='run-3']")).toContainText("EV");
+        await expect(next.locator("[data-row='run-3']")).toContainText("15:30–16:00");
+        await expect(next.locator("[data-row^='run-']")).toHaveCount(3);
+    });
+
+    test("a run whose slots differ only in who set them shows as one run", async ({ page }) => {
+        await mount(page, { boilerSetByUser: true });
+        await openDetail(page);
+        await open(page, "next");
+        const next = question(page, "next");
+        await expect(next.locator("[data-row='run-1']")).toContainText("Boiler");
+        await expect(next.locator("[data-row='run-1']")).toContainText("13:00–14:00");
+        await expect(next.locator("[data-row^='run-']")).toHaveCount(2);
+    });
+
     test("with execution switched off the plan says it is not carried out", async ({ page }) => {
         await mount(page, { executionOff: true });
         await openDetail(page);
         await open(page, "next");
         await expect(question(page, "next").locator("[data-execution-off]")).toContainText("does not carry it out");
+    });
+
+    test("a plan without slots renders with no planned runs", async ({ page }) => {
+        await mount(page, { noSlots: true });
+        await openDetail(page);
+        await open(page, "next");
+        await expect(question(page, "next").locator("[data-row='rest']")).toContainText("12 kWh");
+        await expect(question(page, "next").locator("[data-row^='run-']")).toHaveCount(0);
     });
 });
 
@@ -846,7 +886,7 @@ test("Today across midnight throttles power ticks and accepts a late answer", as
     await powerTick(page, "node-detail-house-content", 31);
     expect((await sectionRequestLog(page, "house", "today")).length - before).toBe(2);
     await page.evaluate(() => (window as any).__releaseSection(true));
-    await expect.poll(() => content(page).evaluate((element: any) => element._today?.status)).toBe("ready");
+    await expect.poll(() => content(page).evaluate((element: any) => element._today.state?.status)).toBe("ready");
 });
 
 
@@ -855,11 +895,11 @@ test("a disconnected loading section can recover after reconnect", async ({ page
     await openDetail(page);
     await holdSection(page, "house", "pattern");
     await open(page, "pattern");
-    await expect.poll(() => content(page).evaluate((element: any) => element._pattern?.status)).toBe("loading");
+    await expect.poll(() => content(page).evaluate((element: any) => element._pattern.state?.status)).toBe("loading");
     expect(await reconnectDetail(page, "node-detail-house-content", "_pattern")).toBeNull();
-    await expect.poll(() => content(page).evaluate((element: any) => element._pattern?.status)).toBe("loading");
+    await expect.poll(() => content(page).evaluate((element: any) => element._pattern.state?.status)).toBe("loading");
     await page.evaluate(() => { (window as any).__releaseSection(); (window as any).__releaseSection(); });
-    await expect.poll(() => content(page).evaluate((element: any) => element._pattern?.status)).toBe("ready");
+    await expect.poll(() => content(page).evaluate((element: any) => element._pattern.state?.status)).toBe("ready");
 });
 
 
@@ -888,5 +928,40 @@ test("an idle Today retries a delayed previous-day answer on the clock", async (
     await page.clock.runFor(20_000);
     expect((await sectionRequestLog(page, "house", "today")).length - before).toBe(2);
     await page.evaluate(() => (window as any).__releaseSection(true));
-    await expect.poll(() => content(page).evaluate((element: any) => element._today?.status)).toBe("ready");
+    await expect.poll(() => content(page).evaluate((element: any) => element._today.state?.status)).toBe("ready");
+});
+
+
+test("section requests: a section is read while shown, re-read on a data change and dropped once hidden", async ({ page }) => {
+    await mount(page);
+    await openDetail(page);
+    const REPORT = "helman/device_report";
+    const reads = () => sectionReads(page, "house", [REPORT]);
+    await expect.poll(reads).toEqual({ today: 1 });
+    await open(page, "pattern");
+    await expect.poll(reads).toEqual({ today: 1, pattern: 1 });
+    // A closed answer's figures are dropped: reopened, it is read again.
+    await header(page, "pattern").click();
+    await open(page, "pattern");
+    await expect.poll(reads).toEqual({ today: 1, pattern: 2 });
+    // The full ranking only behind the consumers answer's evidence.
+    await open(page, "consumers");
+    await evidence(page, "consumers").click();
+    await expect.poll(reads).toEqual({ today: 1, pattern: 2, [REPORT]: 1 });
+    // Today draws the today section the overview already read.
+    await flow(page).locator("[data-scope='today']").click();
+    await page.evaluate(() => window.__fireDataChanged("config"));
+    // Once: Today draws the section the overview reads, not a second copy of it.
+    await expect.poll(reads).toEqual({ today: 2, pattern: 2, [REPORT]: 2 });
+    await flow(page).locator("[data-scope='now']").click();
+    await flow(page).locator("[data-scope='today']").click();
+    await page.waitForTimeout(300);
+    expect(await reads()).toEqual({ today: 2, pattern: 2, [REPORT]: 2 });
+});
+
+
+test("today's figures stay while they refresh within the day and on a failure, and give way on a new day", async ({ page }) => {
+    await mount(page);
+    await openDetail(page);
+    await expectKeepRule(page, "node-detail-house-content", "house", "today", "_today");
 });

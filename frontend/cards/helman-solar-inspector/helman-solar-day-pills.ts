@@ -5,7 +5,7 @@ import { nothing } from "lit-html";
 import { repeat } from "lit/directives/repeat.js";
 import type { HomeAssistant } from "../../types/ha";
 import type { ForecastPayload } from "../helman-api";
-import { ForecastLoader } from "../helman/forecast-loader";
+import { ForecastLoader } from "../shared/data/forecast-loader";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import { getSharedScheduleOwner, type SharedScheduleOwner } from "../shared/schedule/schedule-owner";
 import {

@@ -1,8 +1,8 @@
-import { formatKwh, formatPower } from "../../shared/format";
-import { SLOT_MS } from "../../shared/time/slot-time";
+import { formatKwh, formatPower } from "../shared/format";
+import { SLOT_MS } from "../shared/time/slot-time";
 import { css, html, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import { fillTemplate } from "../../localize/localize";
+import { fillTemplate } from "../localize/localize";
 import type {
     ApplianceProjectionsPayload,
     ApplianceRuntimeDTO,
@@ -13,26 +13,25 @@ import type {
     EvChargerTodaySectionPayload,
     GetNodeDetailRequest,
     ScheduleEvChargerActionDTO,
-    SchedulePayload,
-} from "../../helman-api";
-import { helmanColorVars } from "../../color-vars";
-import { currencyFromPriceUnit } from "../../helman-solar-inspector/money-model";
-import { getSharedHelmanStore } from "../../helman/store";
+} from "../helman-api";
+import { helmanColorVars } from "../color-vars";
+import { currencyFromPriceUnit } from "../helman-solar-inspector/money-model";
+import { getSharedHelmanStore } from "../shared/data/store";
 
-import { loadHaEntityToggle } from "../../shared/load-ha-elements";
-import "../../shared/mode-strip";
-import { modeStripWindow, type ModeChange, type ModeSegment } from "../../shared/mode-strip";
-import type { FlowItem } from "../../shared/node-flow";
-import "../../shared/soc-glyph";
-import { scheduleActionToneStyles, type ScheduleActionTone } from "../../shared/schedule/action-tones";
-import { getScheduleApplianceActionPresentation } from "../../shared/schedule/model/schedule-appliance-action-presentation";
-import { resolveScheduleSlotBoundaries, type ScheduleSlotBoundary } from "../../shared/schedule/model/schedule-time";
-import { getSharedScheduleOwner } from "../../shared/schedule/schedule-owner";
-import { DEFAULT_SOLAR_MAX_W } from "../live-flows";
-import { IDLE_W, NodeDetailContentBase, TODAY_REFRESH_MS, type FlowNode, type NodeFlow, type SectionState } from "./node-detail-base";
-import { announceWatchedEntities, readEnergyKWh, readingNumber } from "./node-detail-readings";
-import { powerUnitFactor } from "../../shared/power-reading";
-import { dayKey, todayAndTomorrow } from "./node-detail-schedule";
+import { loadHaEntityToggle } from "../shared/load-ha-elements";
+import "../shared/mode-strip";
+import { modeStripWindow, type ModeChange, type ModeSegment } from "../shared/mode-strip";
+import type { FlowItem } from "../shared/node-flow";
+import "../shared/soc-glyph";
+import { scheduleActionToneStyles, type ScheduleActionTone } from "../shared/schedule/action-tones";
+import { getScheduleApplianceActionPresentation } from "../shared/schedule/model/schedule-appliance-action-presentation";
+import { resolveScheduleSlotBoundaries, type ScheduleSlotBoundary } from "../shared/schedule/model/schedule-time";
+import { IDLE_W, NodeDetailContentBase, type FlowNode, type NodeFlow } from "./node-detail-base";
+import { staleToday } from "./section-resource";
+import { readEnergyKWh, readingNumber } from "./node-detail-readings";
+import { dispatchWatchedEntities } from "../shared/hass-change";
+import { powerUnitFactor } from "../shared/power-reading";
+import { mergeRuns, runtimeFor, withinTodayTomorrow } from "./node-detail-schedule";
 import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { DeviceDetailParams } from "./node-detail-types";
 
@@ -61,6 +60,12 @@ interface ChargeWindow {
     useMode: string | null;
     ecoGear: string | null;
     vehicleId: string | null;
+}
+
+/** Whether two charging actions are one window: the same car, mode, gear and condition. */
+function sameWindow(left: ScheduleEvChargerActionDTO, right: ScheduleEvChargerActionDTO): boolean {
+    return (left.conditionMet === false) === (right.conditionMet === false)
+        && left.useMode === right.useMode && left.ecoGear === right.ecoGear && left.vehicleId === right.vehicleId;
 }
 
 /** The car the answers are about, and what its readings say. */
@@ -157,114 +162,98 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
     /** The device as opened: the card's live split and the flow's scale. */
     @property({ attribute: false }) public params!: DeviceDetailParams;
 
-    @state() private _schedule: SchedulePayload | null = null;
-    @state() private _scheduleFailed = false;
+    /** This charger's charging windows in progress, today and tomorrow. */
+    private readonly _plan = this._useSchedule((schedule, now): ChargeWindow[] => {
+        const slotsById = new Map(schedule.slots.map((slot) => [slot.id, slot]));
+        const runs = mergeRuns<ScheduleEvChargerActionDTO>(this._boundaries(), slotsById, this.deviceId, (action) => action.charge, sameWindow)
+            .map(({ startMs, endMs, action }) => ({
+                startMs,
+                endMs,
+                candidate: action.conditionMet === false,
+                useMode: action.useMode ?? null,
+                ecoGear: action.ecoGear ?? null,
+                vehicleId: action.vehicleId ?? null,
+            }));
+        return withinTodayTomorrow(runs, now, this._timeZone);
+    });
     /** This charger's appliance metadata; `null` in the payload when the roster has no such charger. */
-    @state() private _appliance: SectionState<EvChargerApplianceMetadataDTO | null> = { status: "loading" };
-    /** The plan's projection, read on opening for the completion line. */
-    @state() private _projection: SectionState<ApplianceProjectionsPayload> | null = null;
-    /** Today's attribution, `null` until Today or its question is chosen. */
-    @state() private _today: SectionState<EvChargerTodaySectionPayload> | null = null;
-    /** Today's recorded charging and the segment's start, read on opening for the strip. */
-    @state() private _segment: SectionState<EvChargerSegmentSectionPayload> | null = null;
+    private readonly _appliance = this._section<EvChargerApplianceMetadataDTO | null>("appliance", {
+        fetch: async () => {
+            const roster = await getSharedHelmanStore(this.hass).getAppliances();
+            const appliance = (roster?.appliances ?? []).find((item) => item.id === this.deviceId && item.kind === "ev_charger");
+            return (appliance as EvChargerApplianceMetadataDTO | undefined) ?? null;
+        },
+        shown: () => true,
+        staleness: () => false,
+    });
+    /**
+     * The plan's projection, for the completion line. A projection from an
+     * earlier slot counts energy already delivered: re-read once per slot. A
+     * refresh follows a plan change or a new slot: what was shown may be the
+     * old plan's, so a failure replaces it.
+     */
+    private readonly _projection = this._section<ApplianceProjectionsPayload>("projection", {
+        // Never shared: a projection is a function of the schedule, re-read because it changed.
+        fetch: () => getSharedHelmanStore(this.hass).getApplianceProjections(),
+        shown: () => true,
+        staleness: (_payload, requestedAt) => requestedAt < Math.floor(Date.now() / SLOT_MS) * SLOT_MS,
+        keepOnError: false,
+    });
+    /** Today's attribution, while Today or its question is chosen. */
+    private readonly _today = this._section<EvChargerTodaySectionPayload>("today", {
+        fetch: () => this._readSection("today"),
+        shown: () => this._open === "today" || this._flowScope === "today",
+    });
+    /** The appliance answer the cars' entities were last announced for. */
+    private _announcedAppliance: unknown = null;
+    /** The run mode today's charging was read under; a new one re-reads it. */
+    private _segmentRunMode = "";
+    /** Today's recorded charging and the segment's start, for the strip, once the overview landed. */
+    private readonly _segment = this._section<EvChargerSegmentSectionPayload>("segment", {
+        fetch: () => this._readSection("segment"),
+        shown: () => this._overview.status === "ready",
+        staleness: (payload, requestedAt) => staleToday(payload, requestedAt, this.hass)
+            || (this._overview.status === "ready" && this._runModeState(this._overview.payload) !== this._segmentRunMode),
+        onRequest: () => {
+            this._segmentRunMode = this._overview.status === "ready" ? this._runModeState(this._overview.payload) : "";
+        },
+    });
     /** HA's entity toggle is defined; until then, or if it fails to load, the switch's state is text. */
     @state() private _toggleReady = !!customElements.get("ha-entity-toggle");
 
-    private _unsubscribeSchedule?: () => void;
-    private _applianceRequest = 0;
-    private _projectionRequest = 0;
-    private _projectionRequestedAt = 0;
-    private _todayRequest = 0;
-    private _todayRequestedAt = 0;
-    private _segmentRequest = 0;
-    private _segmentRequestedAt = 0;
-    /** The run mode today's charging was read under. */
-    private _segmentRunMode = "";
-    /** The windows and slot boundaries, read several times a render; cleared before each update. */
-    private _windowsCache?: ChargeWindow[];
+    /** The slot boundaries, read several times a render; cleared before each update. */
     private _boundariesCache?: ScheduleSlotBoundary[];
 
     willUpdate(changed: Map<string, unknown>): void {
-        this._windowsCache = undefined;
         this._boundariesCache = undefined;
         // Another charger in the same element: nothing shown is its.
         if (changed.has("deviceId") && changed.get("deviceId") !== undefined && this._started) {
             this._overview = { status: "loading" };
-            this._appliance = { status: "loading" };
             this._setOpen(null);
             // Every opening starts on Now.
             this._flowScope = "now";
-            this._projectionRequest += 1;
-            this._todayRequest += 1;
-            this._segmentRequest += 1;
-            this._projection = this._today = this._segment = null;
+            // The sections shown are read again in the update.
+            for (const section of this._sections) section.drop();
             void this._loadOverview(true);
-            void this._loadAppliance();
-            void this._loadProjection();
         }
         super.willUpdate(changed);
-        if (document.hidden) return;
-        // Today's answer and flow and the strip's charging are "today so far":
-        // re-read on a new day, and otherwise at most every few minutes, only
-        // while shown and visible.
-        const stale = (start: string, requestedAt: number) => !this._isToday(start) || Date.now() - requestedAt > TODAY_REFRESH_MS;
-        // On Today the base refreshes it through `_todaySection`.
-        if (this._open === "today" && this._flowScope === "now" && this._today?.status === "ready" && this._todayStale()) {
-            void this._loadToday();
-        }
-        if (this._segment?.status === "ready" && stale(this._segment.payload.period.start, this._segmentRequestedAt)) {
-            void this._loadSegment();
-        }
-        // A projection from an earlier slot counts energy already delivered: re-read it once per slot.
-        const slotStart = Math.floor(Date.now() / SLOT_MS) * SLOT_MS;
-        if (this._projection?.status === "ready" && this._projectionRequestedAt < slotStart) {
-            void this._loadProjection();
-        }
     }
 
     protected _start(): void {
-        this._unsubscribeSchedule = getSharedScheduleOwner(this.hass).subscribe((snapshot) => {
-            this._schedule = snapshot.schedule;
-            this._scheduleFailed = snapshot.schedule === null && snapshot.error !== null;
-        });
         super._start();
-        void this._loadAppliance();
-        // The completion line under the strip is a picture's: read on opening.
-        void this._loadProjection();
         loadHaEntityToggle()
             .then(() => { this._toggleReady = true; })
             .catch((error) => console.error("node-detail-ev_charger: failed to load HA's entity toggle", error));
     }
 
-    protected _stop(): void {
-        this._unsubscribeSchedule?.();
-        this._unsubscribeSchedule = undefined;
-        this._applianceRequest += 1;
-        this._projectionRequest += 1;
-        this._todayRequest += 1;
-        this._segmentRequest += 1;
-        if (this._projection?.status === "loading") this._projection = null;
-        if (this._today?.status === "loading") this._today = null;
-        if (this._segment?.status === "loading") this._segment = null;
-    }
-
-    protected _onDataChanged(): void {
-        // The base reloads the overview; the schedule owner reloads itself.
-        super._onDataChanged();
-        void this._loadAppliance();
-        if (this._projection !== null) void this._loadProjection();
-        // On Today the base re-reads it, through `_loadTodayFlows`.
-        if (this._today !== null && this._flowScope === "now") void this._loadToday();
-        if (this._segment !== null) void this._loadSegment();
-    }
-
-    /**
-     * Today's charging and the segment's start, a recorder read, are read
-     * with the first overview and again when an overview brings a new run
-     * mode; `willUpdate` keeps them current otherwise.
-     */
-    protected _overviewLoaded(payload: EvChargerDetailPayload): void {
-        if (this._segment === null || this._runModeState(payload) !== this._segmentRunMode) void this._loadSegment();
+    protected updated(changed: Map<string, unknown>): void {
+        super.updated(changed);
+        // The cars' entities are watched from the read that resolved them, once it answered.
+        const appliance = this._appliance.state;
+        if (appliance?.status === "ready" && appliance !== this._announcedAppliance) {
+            this._announcedAppliance = appliance;
+            if (this._overview.status === "ready") dispatchWatchedEntities(this, "node-detail", this._watchedEntities(this._overview.payload));
+        }
     }
 
     /** The run mode's state now, `""` without one. */
@@ -277,116 +266,23 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         return { ...super._detailRequest(section), device_id: this.deviceId };
     }
 
-    /** The run mode the status and the charging segment were computed from. */
-    protected _overviewSignature(payload: EvChargerDetailPayload): string {
-        const entityId = payload.entities.run_mode;
-        return entityId ? this.hass.states[entityId]?.state ?? "" : "";
-    }
-
     /** The overview's entities, and every car's SoC and charge limit. */
     protected *_watchedEntities(payload: EvChargerDetailPayload): Iterable<string | null | undefined> {
         yield* Object.values(payload.entities);
-        const appliance = this._appliance.status === "ready" ? this._appliance.payload : null;
-        for (const vehicle of appliance?.vehicles ?? []) {
+        for (const vehicle of this._appliance.payload?.vehicles ?? []) {
             yield vehicle.telemetry.socEntityId;
             yield vehicle.telemetry.chargeLimitEntityId;
         }
     }
 
-    /** The windows start and end, and the slot in progress names the car and dates the projection. */
+    /** The slot in progress names the car and dates the projection; the windows, which the base follows, start and end. */
     protected *_clockBoundaries(): Iterable<number> {
         yield Math.ceil((Date.now() + 1) / SLOT_MS) * SLOT_MS;
-        for (const window of this._windows()) {
-            yield window.startMs;
-            if (window.endMs !== null) yield window.endMs;
-        }
-    }
-
-    // ── Data ────────────────────────────────────────────────────────────────
-
-    private async _loadAppliance(): Promise<void> {
-        const request = ++this._applianceRequest;
-        if (this._appliance.status !== "ready") this._appliance = { status: "loading" };
-        try {
-            const payload = await getSharedHelmanStore(this.hass).getAppliances();
-            if (request !== this._applianceRequest) return;
-            const appliance = (payload?.appliances ?? []).find((item) => item.id === this.deviceId && item.kind === "ev_charger");
-            this._appliance = { status: "ready", payload: (appliance as EvChargerApplianceMetadataDTO | undefined) ?? null };
-            if (this._overview.status === "ready") announceWatchedEntities(this, this._watchedEntities(this._overview.payload));
-        } catch (error) {
-            if (request !== this._applianceRequest) return;
-            console.error("node-detail-ev_charger: failed to load the appliance roster", error);
-            if (this._appliance.status !== "ready") this._appliance = { status: "error" };
-        }
-    }
-
-    private async _loadProjection(): Promise<void> {
-        const request = ++this._projectionRequest;
-        if (this._projection?.status !== "ready") this._projection = { status: "loading" };
-        this._projectionRequestedAt = Date.now();
-        try {
-            // Never shared: a projection is a function of the schedule, re-read because it changed.
-            const payload = await getSharedHelmanStore(this.hass).getApplianceProjections();
-            if (request !== this._projectionRequest) return;
-            this._projection = { status: "ready", payload };
-        } catch (error) {
-            if (request !== this._projectionRequest) return;
-            console.error("node-detail-ev_charger: failed to load the projection", error);
-            // A refresh follows a plan change or a new slot: what was shown may be
-            // the old plan's, so the failure and its retry replace it.
-            this._projection = { status: "error" };
-        }
-    }
-
-    private async _loadToday(): Promise<void> {
-        const request = ++this._todayRequest;
-        if (this._today?.status !== "ready" || !this._isToday(this._today.payload.period.start)) this._today = { status: "loading" };
-        this._todayRequestedAt = Date.now();
-        try {
-            const payload = await getSharedHelmanStore(this.hass)
-                .getNodeDetail<EvChargerTodaySectionPayload>(this._detailRequest("today"), { fresh: true });
-            if (request !== this._todayRequest) return;
-            this._today = { status: "ready", payload };
-        } catch (error) {
-            if (request !== this._todayRequest) return;
-            console.error("node-detail-ev_charger: failed to load today's attribution", error);
-            if (this._today?.status !== "ready") this._today = { status: "error" };
-        }
-    }
-
-    private async _loadSegment(): Promise<void> {
-        const request = ++this._segmentRequest;
-        if (this._segment?.status !== "ready") this._segment = { status: "loading" };
-        this._segmentRequestedAt = Date.now();
-        this._segmentRunMode = this._overview.status === "ready" ? this._runModeState(this._overview.payload) : "";
-        try {
-            const payload = await getSharedHelmanStore(this.hass)
-                .getNodeDetail<EvChargerSegmentSectionPayload>(this._detailRequest("segment"), { fresh: true });
-            if (request !== this._segmentRequest) return;
-            this._segment = { status: "ready", payload };
-        } catch (error) {
-            if (request !== this._segmentRequest) return;
-            console.error("node-detail-ev_charger: failed to load today's charging", error);
-            if (this._segment?.status !== "ready") this._segment = { status: "error" };
-        }
-    }
-
-    // ── Disclosure ──────────────────────────────────────────────────────────
-
-    /** Today's answer shows its figures as they are now; a refresh keeps them on screen. */
-    protected _setOpen(id: QuestionId | null): void {
-        super._setOpen(id);
-        // The segment and the projection are the pictures', read on opening and kept current.
-        if (id === "today" && this._todayStale()) void this._loadToday();
     }
 
     /** Today is the charger's `today` section: its sources, without the phases. */
-    protected _todaySection() {
-        return { state: this._today, requestedAt: this._todayRequestedAt };
-    }
-
-    protected _loadTodayFlows(): Promise<void> {
-        return this._loadToday();
+    protected _todayResource() {
+        return this._today;
     }
 
     // ── Rendering ───────────────────────────────────────────────────────────
@@ -436,10 +332,12 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         const power = this._powerW(overview);
         const kind = overview.status?.kind;
         const tone: ScheduleActionTone = this._charging(overview) ? "charge" : kind === "fault" ? "stop" : "neutral";
+        // At most one exception: a fault the charger reports, linked to the readings answer.
+        const fault = this._fault(overview);
         return html`
             <div class="summary" data-overview>
                 <p class="status pill action-tone-${tone}" data-tone=${tone}>${this._statusText(overview, power)}</p>
-                ${this._renderException(overview)}
+                ${fault ? this._exceptionBanner(fillTemplate(this._t("exception.fault"), { fault }), "trust") : nothing}
             </div>
         `;
     }
@@ -453,18 +351,6 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         if (runMode !== null) return fillTemplate(this._t("status.reported"), { state: runMode });
         if (power === null) return this._t("status.unavailable");
         return fillTemplate(this._t(power > IDLE_W ? "status.drawing" : "status.not_drawing"), values);
-    }
-
-    /** At most one: a fault the charger reports, linked to the readings answer. */
-    private _renderException(overview: EvChargerDetailPayload) {
-        const fault = this._fault(overview);
-        if (!fault) return nothing;
-        return html`
-            <div class="exception" role="status" data-exception>
-                <span>${fillTemplate(this._t("exception.fault"), { fault })}</span>
-                <button class="link-button" @click=${() => this._setOpen("trust")}>${this._t("exception.details")}</button>
-            </div>
-        `;
     }
 
     // Switch ------------------------------------------------------------------
@@ -494,7 +380,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
 
     /** The switch against the plan's window now and its next change; `null` until the plan is read. */
     private _switchLine(entityId: string): { state: string; text: string } | null {
-        const schedule = this._schedule;
+        const schedule = this._plan.schedule;
         if (!schedule) return null;
         if (!schedule.executionEnabled) return { state: "execution_off", text: this._t("switch.execution_off") };
         const reading = this.hass.states[entityId]?.state;
@@ -510,9 +396,9 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
 
     /** The effective window in progress: execution on and its condition met. */
     private _effectiveWindowNow(): ChargeWindow | null {
-        if (!this._schedule?.executionEnabled) return null;
+        if (!this._plan.schedule?.executionEnabled) return null;
         const now = Date.now();
-        return this._windows().find((window) => !window.candidate && window.startMs <= now) ?? null;
+        return this._plan.runs.find((window) => !window.candidate && window.startMs <= now) ?? null;
     }
 
     /**
@@ -521,8 +407,8 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
      * one stretch of charging; a candidate is not executed and changes nothing.
      */
     private _planChange(): { at: number; charge: boolean } | null {
-        if (!this._schedule?.executionEnabled) return null;
-        const effective = this._windows().filter((window) => !window.candidate);
+        if (!this._plan.schedule?.executionEnabled) return null;
+        const effective = this._plan.runs.filter((window) => !window.candidate);
         const current = this._effectiveWindowNow();
         if (!current) return effective[0] ? { at: effective[0].startMs, charge: true } : null;
         let end = current.endMs;
@@ -560,7 +446,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
                     .locale=${this._locale}
                 ></helman-mode-strip>
             </button>
-            ${this._segment?.status === "error" ? html`<p class="note" data-strip-failed>${this._t("strip.history_failed")}</p>` : nothing}
+            ${this._segment.state?.status === "error" ? html`<p class="note" data-strip-failed>${this._t("strip.history_failed")}</p>` : nothing}
             <p class="note" data-completion-line>${this._completionLine(selection)}</p>
         `;
     }
@@ -572,7 +458,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
      */
     private _stripSegments(now: number): ModeSegment[] {
         const segments: ModeSegment[] = [];
-        const section = this._segment?.status === "ready" ? this._segment.payload : null;
+        const section = this._segment.payload;
         const overview = this._overview.status === "ready" ? this._overview.payload : null;
         for (const stretch of section?.charging ?? []) {
             const open = stretch.open && overview !== null && this._charging(overview);
@@ -583,8 +469,8 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
                 label: this._t("strip.charged"),
             });
         }
-        const executing = this._schedule?.executionEnabled === true;
-        for (const window of this._windows()) {
+        const executing = this._plan.schedule?.executionEnabled === true;
+        for (const window of this._plan.runs) {
             const effective = executing && !window.candidate;
             segments.push({
                 start: Math.max(window.startMs, now),
@@ -607,7 +493,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
 
     /** The existing completion, as one line: the limit's time, or the charge at the plan's end and the shortfall. */
     private _completionLine(selection: VehicleSelection): string {
-        const projection = this._projection;
+        const projection = this._projection.state;
         if (projection === null || projection.status === "loading") return this._t("plan.projection_loading");
         if (projection.status === "error") return this._t("plan.projection_failed");
         const completion = this._completion(selection, projection.payload);
@@ -636,8 +522,8 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
     private _renderCarFlow(overview: EvChargerDetailPayload, selection: VehicleSelection) {
         const flow = this._flowScope === "now" ? this._nowFlow(overview) : this._todayFlow();
         const car = selection.kind === "selected" ? selection.car : null;
-        // A device opened without the card's live split (the solar inspector's) has no scale of its own.
-        return this._renderFlow(flow, this.params?.flowScaleW ?? DEFAULT_SOLAR_MAX_W, "today", html`
+        // A device opened without the card's live split (the solar inspector's) has no scale: minimum widths.
+        return this._renderFlow(flow, this.params?.flowScaleW ?? null, "today", html`
             <button
                 slot="centre"
                 class="glyph"
@@ -662,7 +548,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
     private _nowFlow(overview: EvChargerDetailPayload): NodeFlow {
         const flows = this.params?.flows ?? null;
         const power = this._powerW(overview);
-        const format = (value: number | null) => value === null ? "–" : formatPower(value).display;
+        const format = this._fmt("now");
         const mix: Array<[FlowNode, number]> = flows
             ? [["solar", flows.solarToHouse], ["battery", flows.batteryToHouse], ["grid", flows.gridToHouse]]
             : [];
@@ -677,25 +563,20 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
                 const watts = this._power(overview.entities[`charge_power_l${phase}`]);
                 return { id: `phase-${phase}`, label: `L${phase}`, value: watts, display: format(watts), color: `var(--helman-phase-l${phase})` };
             });
-        const totals = this._flowTotals(inputs, outputs, format);
-        return {
-            scopeLabel: this._nowScopeLabel(),
-            inputs,
-            outputs,
-            // Without phase readings nothing is drawn out, which is not 0 W out.
-            totalIn: totals.totalIn,
-            totalOut: outputs.length ? totals.totalOut : null,
-            notes: power !== null && power > IDLE_W ? [this._t("flow.mix_estimate")] : [],
-            centreValue: format(power),
+        const flow = this._flowShell("now", inputs, outputs, {
+            centre: () => format(power),
             active: this._isActive(power),
-        };
+            notes: power !== null && power > IDLE_W ? [this._t("flow.mix_estimate")] : [],
+        });
+        // Without phase readings nothing is drawn out, which is not 0 W out.
+        return outputs.length ? flow : { ...flow, totalOut: null };
     }
 
     /** Today's sources from the `today` section, kWh; energy of no known source is a footnote, never a source. */
     private _todayFlow(): NodeFlow {
-        const payload = this._today?.status === "ready" ? this._today.payload : null;
+        const payload = this._today.payload;
         const charger = payload?.charger ?? null;
-        const energy = (value: number | null) => value === null ? "–" : (formatKwh(Math.abs(value)) + " kWh");
+        const energy = this._fmt("today");
         const paid = charger?.money.paid ?? null;
         const inputs = (["solar", "battery", "grid"] as const).map((node) => this._flowItem(node, charger ? charger.sources[node] : null, energy));
         if (paid !== null && (charger?.sources.grid ?? 0) > 0) {
@@ -705,25 +586,21 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         const status = this._todayStatus();
         if (status) notes.push(status);
         if (charger && charger.sources.unattributed > 0) {
-            notes.push(fillTemplate(this._t("flow.unattributed"), { kwh: (formatKwh(Math.abs(charger.sources.unattributed)) + " kWh") }));
+            notes.push(fillTemplate(this._t("flow.unattributed"), { kwh: energy(charger.sources.unattributed) }));
         }
-        const { totalIn, sumIn } = this._flowTotals(inputs, [], energy, charger?.sources.unattributed ?? 0);
-        return {
-            scopeLabel: this._todayScopeLabel(),
-            inputs,
-            outputs: [],
-            totalIn,
-            totalOut: null,
-            notes,
+        const flow = this._flowShell("today", inputs, [], {
             // Charged: every source and the unattributed rest.
-            centreValue: energy(sumIn),
-            active: false,
-        };
+            centre: (sumIn) => energy(sumIn),
+            notes,
+            unresolvedIn: charger?.sources.unattributed ?? 0,
+        });
+        // Per-phase energy is not recorded: nothing goes out.
+        return { ...flow, totalOut: null };
     }
 
     /** Why Today has no sources to draw: loading, failed or unavailable; `null` once it has them. */
     private _todayStatus(): string | null {
-        const today = this._today;
+        const today = this._today.state;
         if (today === null || today.status === "loading") return this._t("today.loading");
         if (today.status === "error") return this._t("today.failed");
         if (!today.payload.charger) {
@@ -748,7 +625,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
     private _renderWaitingTile(overview: EvChargerDetailPayload, selection: VehicleSelection) {
         const waiting = this._waiting(overview, selection);
         if (waiting.kind === "charging") {
-            const since = this._segment?.status === "ready" ? this._segment.payload.chargingSince : null;
+            const since = this._segment.payload?.chargingSince ?? null;
             return this._tile("waiting", this._t("tile.charging"), since ? fillTemplate(this._t("tile.charging_since"), { time: this._time(Date.parse(since)) }) : null, nothing, "charge");
         }
         if (waiting.kind === "fault") return this._tile("waiting", this._t("tile.fault"), waiting.text, nothing, "stop");
@@ -805,11 +682,11 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
 
     /** The recorded start of the charging segment; nothing while not charging or unknown. */
     private _renderSegment() {
-        const segment = this._segment;
+        const segment = this._segment.state;
         if (segment?.status === "error") {
             return html`
                 <p class="note">${this._t("progress.segment_failed")}</p>
-                <button class="link-button" @click=${() => this._loadSegment()}>${this._t("retry")}</button>
+                <button class="link-button" @click=${() => this._segment.load()}>${this._t("retry")}</button>
             `;
         }
         const since = segment?.status === "ready" ? segment.payload.chargingSince : null;
@@ -891,24 +768,24 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
     // Plan --------------------------------------------------------------------
 
     private _planPreview(): string {
-        if (this._scheduleFailed) return this._t("plan.failed");
+        if (this._plan.failed) return this._t("plan.failed");
         const window = this._nextEffectiveWindow();
         if (window) return fillTemplate(this._t("next_window"), { window: this._windowTime(window) });
-        if (this._schedule && !this._schedule.executionEnabled && this._windows().length) return this._t("plan.execution_off_short");
-        return this._windows().length ? this._t("plan.candidates_only_short") : this._t("plan.none");
+        if (this._plan.schedule && !this._plan.schedule.executionEnabled && this._plan.runs.length) return this._t("plan.execution_off_short");
+        return this._plan.runs.length ? this._t("plan.candidates_only_short") : this._t("plan.none");
     }
 
     private _renderPlan(selection: VehicleSelection) {
-        if (this._scheduleFailed) {
+        if (this._plan.failed) {
             return html`
                 <p class="note">${this._t("plan.failed")}</p>
-                <button class="link-button" @click=${() => void getSharedScheduleOwner(this.hass).refresh()}>${this._t("retry")}</button>
+                <button class="link-button" @click=${() => this._plan.refresh()}>${this._t("retry")}</button>
             `;
         }
-        if (!this._schedule) return html`<p class="note">${this._t("plan.loading")}</p>`;
-        const windows = this._windows();
+        if (!this._plan.schedule) return html`<p class="note">${this._t("plan.loading")}</p>`;
+        const windows = this._plan.runs;
         return html`
-            ${!this._schedule.executionEnabled ? html`<p class="note" data-execution-off>${this._t("plan.execution_off")}</p>` : nothing}
+            ${!this._plan.schedule.executionEnabled ? html`<p class="note" data-execution-off>${this._t("plan.execution_off")}</p>` : nothing}
             ${windows.length ? windows.map((window) => this._renderWindow(window)) : html`<p class="note" data-no-windows>${this._t("plan.none")}</p>`}
             <div class="section-title">${this._t("plan.completion")}</div>
             ${this._renderCompletion(selection)}
@@ -916,13 +793,13 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
     }
 
     private _renderWindow(window: ChargeWindow) {
-        const appliance = this._appliance.status === "ready" ? this._appliance.payload : null;
+        const appliance = this._appliance.payload;
         const vehicle = appliance?.vehicles.find((item) => item.id === window.vehicleId);
         const details = [
             [window.useMode, window.ecoGear].filter(Boolean).join(" "),
             vehicle?.name ?? null,
         ].filter(Boolean).join(" · ");
-        const effective = !window.candidate && this._schedule?.executionEnabled === true;
+        const effective = !window.candidate && this._plan.schedule?.executionEnabled === true;
         return html`
             <div class="row" data-window data-effective=${effective ? "true" : "false"}>
                 <span class="label">${this._windowTime(window)}${details ? html`<br><span class="note">${details}</span>` : nothing}</span>
@@ -932,12 +809,12 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
     }
 
     private _renderCompletion(selection: VehicleSelection) {
-        const projection = this._projection;
+        const projection = this._projection.state;
         if (projection === null || projection.status === "loading") return html`<p class="note" data-projection-loading>${this._t("plan.projection_loading")}</p>`;
         if (projection.status === "error") {
             return html`
                 <p class="note">${this._t("plan.projection_failed")}</p>
-                <button class="link-button" @click=${() => this._loadProjection()}>${this._t("retry")}</button>
+                <button class="link-button" @click=${() => this._projection.load()}>${this._t("retry")}</button>
             `;
         }
         const completion = this._completion(selection, projection.payload);
@@ -980,11 +857,11 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         const car = selection.car;
         if (car.soc === null || car.limit === null || car.capacityKwh === null || car.neededKwh === null) return unsupported("no_target");
         if (car.neededKwh <= 0) return unsupported("reached");
-        const schedule = this._schedule;
+        const schedule = this._plan.schedule;
         if (!schedule) return unsupported("no_plan");
         if (!schedule.executionEnabled) return unsupported("execution_off");
         const now = Date.now();
-        const windows = this._windows();
+        const windows = this._plan.runs;
         if (!windows.some((window) => !window.candidate && window.vehicleId === car.vehicle.id)) {
             return unsupported(windows.some((window) => window.vehicleId === car.vehicle.id) ? "candidates_only" : "no_windows");
         }
@@ -1036,11 +913,11 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
     }
 
     private _renderPlanEvidence(overview: EvChargerDetailPayload, selection: VehicleSelection) {
-        const runtime = this._runtime();
-        const projection = this._projection?.status === "ready" ? this._projection.payload : null;
+        const runtime = runtimeFor<ApplianceRuntimeDTO>(this._plan.schedule, this.deviceId, Date.now());
+        const projection = this._projection.payload;
         const supplied = projection ? this._completion(selection, projection) : null;
         return html`
-            ${this._schedule ? this._row(this._t("plan.execution"), this._t(this._schedule.executionEnabled ? "plan.execution_on_value" : "plan.execution_off_value"), "execution") : nothing}
+            ${this._plan.schedule ? this._row(this._t("plan.execution"), this._t(this._plan.schedule.executionEnabled ? "plan.execution_on_value" : "plan.execution_off_value"), "execution") : nothing}
             ${this._optionalRow(overview, "use_mode", "plan.use_mode")}
             ${this._optionalRow(overview, "eco_gear", "plan.eco_gear")}
             ${this._optionalRow(overview, "charge_mode", "plan.charge_mode")}
@@ -1079,9 +956,9 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
                 name: selection.car.vehicle.name, soc: this._percent(selection.car.soc!), limit: this._percent(selection.car.limit!),
             }));
         }
-        const schedule = this._schedule;
+        const schedule = this._plan.schedule;
         const now = Date.now();
-        const current = this._windows().find((window) => window.startMs <= now);
+        const current = this._plan.runs.find((window) => window.startMs <= now);
         let eco = false;
         if (schedule && !schedule.executionEnabled) {
             reasons.push(this._t("waiting.execution_off"));
@@ -1091,7 +968,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         } else if (current?.candidate) {
             reasons.push(this._t("waiting.candidate"));
         } else if (current) {
-            const runtime = this._runtime();
+            const runtime = runtimeFor<ApplianceRuntimeDTO>(this._plan.schedule, this.deviceId, Date.now());
             if (runtime?.outcome === "failed") {
                 reasons.push(fillTemplate(this._t("waiting.runtime_failed"), { message: runtime.message ?? runtime.errorCode ?? this._t("unknown") }));
             }
@@ -1131,7 +1008,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
     }
 
     private _renderWaitingEvidence(overview: EvChargerDetailPayload) {
-        const current = this._windows().find((window) => window.startMs <= Date.now());
+        const current = this._plan.runs.find((window) => window.startMs <= Date.now());
         return html`
             ${this._optionalRow(overview, "run_mode", "waiting.run_mode")}
             ${this._optionalRow(overview, "charge_switch", "waiting.charge_switch")}
@@ -1139,7 +1016,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
             ${this._optionalRow(overview, "eco_gear", "plan.eco_gear")}
             ${this._optionalRow(overview, "green_start_power", "waiting.green_start_power")}
             ${this._optionalRow(overview, "grid_power", "waiting.grid_power")}
-            ${this._schedule ? this._row(this._t("plan.execution"), this._t(this._schedule.executionEnabled ? "plan.execution_on_value" : "plan.execution_off_value"), "execution") : nothing}
+            ${this._plan.schedule ? this._row(this._t("plan.execution"), this._t(this._plan.schedule.executionEnabled ? "plan.execution_on_value" : "plan.execution_off_value"), "execution") : nothing}
             ${this._row(this._t("waiting.scheduled_now"), current
                 ? this._windowTime(current) + (current.candidate ? " – " + this._t("plan.candidate") : "")
                 : this._t("waiting.nothing_scheduled"), "scheduled-now")}
@@ -1150,7 +1027,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
     // Today -------------------------------------------------------------------
 
     private _todayPreview(): string | null {
-        const payload = this._today?.status === "ready" ? this._today.payload : null;
+        const payload = this._today.payload;
         const charger = payload?.charger;
         if (!charger) return null;
         const parts = [fillTemplate(this._t("today.kwh_short"), { kwh: (formatKwh(Math.abs(charger.kwh)) + " kWh") })];
@@ -1161,12 +1038,12 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
     }
 
     private _renderToday() {
-        const today = this._today;
+        const today = this._today.state;
         if (today === null || today.status === "loading") return html`<p class="note" data-today-loading>${this._t("today.loading")}</p>`;
         if (today.status === "error") {
             return html`
                 <p class="note">${this._t("today.failed")}</p>
-                <button class="link-button" @click=${() => this._loadToday()}>${this._t("retry")}</button>
+                <button class="link-button" @click=${() => this._today.load()}>${this._t("retry")}</button>
             `;
         }
         const payload = today.payload;
@@ -1196,7 +1073,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
     }
 
     private _renderTodayEvidence() {
-        const payload = this._today?.status === "ready" ? this._today.payload : null;
+        const payload = this._today.payload;
         if (!payload) return html`<p class="note">${this._t("today.attribution_note")}</p>`;
         const charger = payload.charger;
         const currency = currencyFromPriceUnit(payload.priceUnit);
@@ -1366,7 +1243,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
      * no car's SoC is shown rather than possibly the wrong one's.
      */
     private _selection(): VehicleSelection {
-        const appliance = this._appliance.status === "ready" ? this._appliance.payload : null;
+        const appliance = this._appliance.payload;
         const vehicles = appliance?.vehicles ?? [];
         if (!vehicles.length) return { kind: "none" };
         if (vehicles.length === 1) return { kind: "selected", car: this._car(vehicles[0], "only") };
@@ -1397,7 +1274,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
     /** This charger's action in the slot in progress. */
     private _currentAction(): ScheduleEvChargerActionDTO | null {
         const slot = this._currentSlot();
-        return slot ? (this._schedule!.slots.find((item) => item.id === slot.id)?.controllables[this.deviceId] as ScheduleEvChargerActionDTO | undefined) ?? null : null;
+        return slot ? (this._plan.schedule!.slots.find((item) => item.id === slot.id)?.controllables[this.deviceId] as ScheduleEvChargerActionDTO | undefined) ?? null : null;
     }
 
     private _currentSlot() {
@@ -1407,59 +1284,15 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
 
     private _boundaries(): ScheduleSlotBoundary[] {
         if (this._boundariesCache) return this._boundariesCache;
-        const schedule = this._schedule;
-        const slotDurationMs = (schedule?.slotMinutes ?? 0) * 60_000;
+        const schedule = this._plan.schedule;
         return this._boundariesCache = resolveScheduleSlotBoundaries((schedule?.slots ?? []).map((slot) => slot.id))
-            .map((slot) => ({ ...slot, endMs: slot.startMs + slotDurationMs }));
-    }
-
-    /** The executor's record for this charger, only when it is for the slot in progress. */
-    private _runtime(): ApplianceRuntimeDTO | null {
-        const runtime = this._schedule?.runtime;
-        const slot = this._currentSlot();
-        if (!runtime || !slot || runtime.activeSlotId !== slot.id) return null;
-        return (runtime.controllables[this.deviceId] as ApplianceRuntimeDTO | undefined) ?? null;
-    }
-
-    private _windows(): ChargeWindow[] {
-        return this._windowsCache ??= this._readWindows();
-    }
-
-    /** This charger's charging windows in progress, today and tomorrow. */
-    private _readWindows(): ChargeWindow[] {
-        const slots = this._schedule?.slots ?? [];
-        if (!slots.length) return [];
-        const now = Date.now();
-        const days = todayAndTomorrow(now, this._timeZone);
-        const byId = new Map(slots.map((slot) => [slot.id, slot]));
-        const windows: ChargeWindow[] = [];
-        for (const boundary of this._boundaries()) {
-            const action = byId.get(boundary.id)?.controllables[this.deviceId] as ScheduleEvChargerActionDTO | undefined;
-            if (!action?.charge) continue;
-            const next: ChargeWindow = {
-                startMs: boundary.startMs,
-                endMs: boundary.endMs,
-                candidate: action.conditionMet === false,
-                useMode: action.useMode ?? null,
-                ecoGear: action.ecoGear ?? null,
-                vehicleId: action.vehicleId ?? null,
-            };
-            const last = windows[windows.length - 1];
-            if (last && last.endMs === next.startMs && last.candidate === next.candidate && last.useMode === next.useMode
-                && last.ecoGear === next.ecoGear && last.vehicleId === next.vehicleId) {
-                last.endMs = next.endMs;
-            } else {
-                windows.push(next);
-            }
-        }
-        return windows.filter((window) => (window.endMs === null || window.endMs > now)
-            && (window.startMs <= now || days.includes(dayKey(window.startMs, this._timeZone))));
+            .map((slot) => ({ ...slot, endMs: slot.startMs + SLOT_MS }));
     }
 
     /** The first window that will run: execution on and its condition met. */
     private _nextEffectiveWindow(): ChargeWindow | null {
-        if (!this._schedule?.executionEnabled) return null;
-        return this._windows().find((window) => !window.candidate) ?? null;
+        if (!this._plan.schedule?.executionEnabled) return null;
+        return this._plan.runs.find((window) => !window.candidate) ?? null;
     }
 
     private _windowTime(window: ChargeWindow): string {

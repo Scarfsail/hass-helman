@@ -1,56 +1,52 @@
-import { formatKwh, formatMoney, formatPower } from "../../shared/format";
-import { pad2, SLOT_MS } from "../../shared/time/slot-time";
+import { formatKwh, formatMoney, formatPower } from "../shared/format";
+import { pad2, SLOT_MS } from "../shared/time/slot-time";
 import { css, html, nothing, svg } from "lit";
-import { customElement, property, state } from "lit/decorators.js";
-import { fillTemplate } from "../../localize/localize";
+import { customElement, property } from "lit/decorators.js";
+import { fillTemplate } from "../localize/localize";
 import {
     getEffectiveSolarForecastPoints,
-    type SchedulePayload,
+    type InverterRuntimeDTO,
     type SolarDestinationsSectionPayload,
     type SolarDetailPayload,
     type SolarProductionSectionPayload,
     type SolarStringsSectionPayload,
-} from "../../helman-api";
-import type { HelmanSolarInspectorCardConfig } from "../../helman-solar-inspector/HelmanSolarInspectorCardConfig";
-import { currencyFromPriceUnit } from "../../helman-solar-inspector/money-model";
-import { BATT_COLOR, GRID_EXPORT_COLOR, HOUSE_COLOR, NEUTRAL_LIGHT_COLOR } from "../../color-utils";
-import { helmanColorVars } from "../../color-vars";
-import { ACTUAL_FILL_OPACITY, CHART_COLORS } from "../../helman-solar-inspector/chart-colors";
-import { getScheduleLocalTimeParts } from "../../shared/schedule/model/schedule-time";
-import { renderNowMarker } from "../../helman-solar-inspector/now-marker";
-import { panelGlyph } from "../../shared/node-glyphs";
-import { scheduleActionToneStyles } from "../../shared/schedule/action-tones";
-import { getSharedHelmanStore } from "../../helman/store";
+} from "../helman-api";
+import type { HelmanSolarInspectorCardConfig } from "../helman-solar-inspector/HelmanSolarInspectorCardConfig";
+import { currencyFromPriceUnit } from "../helman-solar-inspector/money-model";
+import { BATT_COLOR, GRID_EXPORT_COLOR, HOUSE_COLOR, NEUTRAL_LIGHT_COLOR } from "../color-utils";
+import { helmanColorVars } from "../color-vars";
+import { ACTUAL_FILL_OPACITY, CHART_COLORS } from "../helman-solar-inspector/chart-colors";
+import { getScheduleLocalTimeParts } from "../shared/schedule/model/schedule-time";
+import { renderNowMarker } from "../helman-solar-inspector/now-marker";
+import { panelGlyph } from "../shared/node-glyphs";
+import { scheduleActionToneStyles } from "../shared/schedule/action-tones";
 
-import { addDaysToDayKey } from "../../shared/schedule/model/schedule-time";
-import { getSharedScheduleOwner } from "../../shared/schedule/schedule-owner";
-import "../../shared/day-line-chart";
-import type { DayLineSeries } from "../../shared/day-line-chart";
-import type { FlowItem } from "../../shared/node-flow";
-import { IDLE_W, NodeDetailContentBase, TODAY_REFRESH_MS, type NodeFlow, type SectionState } from "./node-detail-base";
+import { addDaysToDayKey } from "../shared/schedule/model/schedule-time";
+import { INVERTER_CONTROLLABLE_ID } from "../shared/schedule/schedule-types";
+import "../shared/day-line-chart";
+import type { DayLineSeries } from "../shared/day-line-chart";
+import type { FlowItem } from "../shared/node-flow";
+import { IDLE_W, NodeDetailContentBase, type NodeFlow } from "./node-detail-base";
 import { readEnergyKWh } from "./node-detail-readings";
-import { powerUnitFactor } from "../../shared/power-reading";
+import { powerUnitFactor } from "../shared/power-reading";
 import {
     currentRun,
-    currentRuntime,
     dayKey,
+    inverterRuns,
     renderCurrentSlot,
+    runtimeFor,
     runtimeText,
-    scheduleRuns,
-    type ScheduleRun,
 } from "./node-detail-schedule";
 import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { SolarDetailParams } from "./node-detail-types";
 
 type QuestionId = "production" | "destinations" | "limits" | "strings" | "outlook";
-type SectionName = "production" | "strings" | "destinations";
-type SectionPayload = SolarProductionSectionPayload | SolarStringsSectionPayload | SolarDestinationsSectionPayload;
-
-/** The history sections, in the order they are requested. */
-const SECTIONS: SectionName[] = ["production", "strings", "destinations"];
 
 /** How many calendar days the outlook shows, today first. */
 const OUTLOOK_DAYS = 7;
+
+/** Where solar goes, in the order every flow shows it. */
+const DESTINATIONS = [["house", "solarToHouse"], ["battery", "solarToBattery"], ["grid", "solarToGrid"]] as const;
 
 /** One colour per string; every chart and row also names the string in text. */
 const STRING_COLORS: Record<string, string> = { "1": "#fb8c00", "2": "#3949ab" };
@@ -265,132 +261,47 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
 
     @property({ attribute: false }) public params!: SolarDetailParams;
 
-    @state() private _schedule: SchedulePayload | null = null;
-    /** The history sections shown, by name; one that is not shown is absent. */
-    @state() private _sections: Partial<Record<SectionName, SectionState<SectionPayload>>> = {};
+    /** The inverter's plan, for the control intent. */
+    private readonly _plan = this._useSchedule(inverterRuns);
+    /** Today's production, for the curve, while the overview offers it. */
+    private readonly _production = this._section<SolarProductionSectionPayload>("production", {
+        fetch: () => this._readSection("production"),
+        shown: () => this._offers("production"),
+    });
+    /** Today's strings, while Today's flow or their answer shows them. */
+    private readonly _strings = this._section<SolarStringsSectionPayload>("strings", {
+        fetch: () => this._readSection("strings"),
+        shown: () => this._offers("strings") && (this._flowScope === "today" || this._open === "strings"),
+    });
+    /** Where today's solar went, while its answer is open. */
+    private readonly _destinations = this._section<SolarDestinationsSectionPayload>("destinations", {
+        fetch: () => this._readSection("destinations"),
+        shown: () => this._offers("destinations") && this._open === "destinations",
+    });
 
-    private _unsubscribeSchedule?: () => void;
-    private readonly _sectionRequests: Record<SectionName, number> = { production: 0, strings: 0, destinations: 0 };
-    private readonly _sectionRequestedAt: Record<SectionName, number> = { production: 0, strings: 0, destinations: 0 };
     private _modelCache?: { forecast: unknown; slot: number; model: ForecastModel | null };
     private _stringsChart?: { payload: SolarStringsSectionPayload; series: DayLineSeries[] };
 
-    willUpdate(changed: Map<string, unknown>): void {
-        super.willUpdate(changed);
-        if (this._started) this._syncSections();
-    }
-
-    /**
-     * Request the sections shown and drop the rest. What is shown is "today so
-     * far": re-read on a new day, and otherwise at most every few minutes,
-     * only while the page is visible. A dropped section's request is obsolete;
-     * it is read again when shown again.
-     */
-    private _syncSections(): void {
-        for (const name of SECTIONS) {
-            const section = this._sections[name];
-            if (!this._sectionShown(name)) {
-                if (section) {
-                    this._sectionRequests[name] += 1;
-                    const { [name]: _dropped, ...rest } = this._sections;
-                    this._sections = rest;
-                }
-            } else if (!section) {
-                void this._loadSection(name);
-            } else if (section.status === "ready" && !document.hidden
-                && (!this._isToday(section.payload.period.start) || Date.now() - this._sectionRequestedAt[name] > TODAY_REFRESH_MS)) {
-                void this._loadSection(name);
-            }
-        }
-    }
-
     protected _start(): void {
-        this._unsubscribeSchedule = getSharedScheduleOwner(this.hass).subscribe((snapshot) => {
-            this._schedule = snapshot.schedule;
-        });
         super._start();
         // The overview compares today's production with the forecast.
         void this._loadForecast();
     }
 
-    protected _stop(): void {
-        this._unsubscribeSchedule?.();
-        this._unsubscribeSchedule = undefined;
-        for (const name of SECTIONS) this._sectionRequests[name] += 1;
-        // A dropped load would otherwise stay "loading" after a reconnect.
-        this._sections = Object.fromEntries(Object.entries(this._sections).filter(([, section]) => section?.status !== "loading"));
-    }
-
-    protected _onDataChanged(): void {
-        // The base reloads the overview and the forecast; the schedule owner reloads itself.
-        super._onDataChanged();
-        for (const name of SECTIONS) if (this._sections[name]) void this._loadSection(name);
-    }
-
-    /** The run mode the overview's condition was computed from. */
-    protected _overviewSignature(payload: SolarDetailPayload): string {
-        const entityId = payload.entities.run_mode;
-        return entityId ? this.hass.states[entityId]?.state ?? "" : "";
-    }
-
     /**
      * The comparison, the slot in progress and the rest of today's forecast
-     * move at each forecast slot boundary; the control intent at each plan run.
+     * move at each forecast slot boundary; the control intent at each plan
+     * run, which the base follows.
      */
     protected *_clockBoundaries(): Iterable<number> {
         yield* this._model()?.boundaries ?? [];
-        for (const run of this._runs()) {
-            yield run.startMs;
-            if (run.endMs !== null) yield run.endMs;
-        }
-    }
-
-    // ── Data ────────────────────────────────────────────────────────────────
-
-    /**
-     * Whether `name` is shown: today's production always, for the curve;
-     * the strings while Today's flow or their answer shows them; the
-     * destinations while their answer is open. Only a section the overview
-     * offers is shown.
-     */
-    private _sectionShown(name: SectionName): boolean {
-        if (this._overview.status !== "ready" || !this._overview.payload.sections.includes(name)) return false;
-        if (name === "strings") return this._flowScope === "today" || this._open === "strings";
-        if (name === "destinations") return this._open === "destinations";
-        return true;
-    }
-
-    private async _loadSection(name: SectionName): Promise<void> {
-        const request = ++this._sectionRequests[name];
-        // A refresh keeps the figures on screen until the new ones land.
-        const shown = this._sections[name];
-        if (shown?.status !== "ready" || !this._isToday(shown.payload.period.start)) {
-            this._sections = { ...this._sections, [name]: { status: "loading" } };
-        }
-        this._sectionRequestedAt[name] = Date.now();
-        try {
-            const payload = await getSharedHelmanStore(this.hass)
-                .getNodeDetail<SectionPayload>({ node: "solar", section: name }, { fresh: true });
-            if (request !== this._sectionRequests[name]) return;
-            this._sections = { ...this._sections, [name]: { status: "ready", payload } };
-        } catch (error) {
-            if (request !== this._sectionRequests[name]) return;
-            console.error(`node-detail-solar: failed to load the ${name} section`, error);
-            if (this._sections[name]?.status !== "ready") this._sections = { ...this._sections, [name]: { status: "error" } };
-        }
-    }
-
-    /** A section's payload, when it has landed. */
-    private _ready<T extends SectionPayload>(name: T["section"]): T | null {
-        const section = this._sections[name];
-        return section?.status === "ready" ? section.payload as T : null;
     }
 
     // ── Disclosure ──────────────────────────────────────────────────────────
 
     protected _setOpen(id: QuestionId | null): void {
         super._setOpen(id);
-        // The sections the answer reads follow in `willUpdate`. An opened forecast answer shows the forecast as it is now.
+        // An opened forecast answer shows the forecast as it is now.
         if (id === "production" || id === "outlook") void this._loadForecast();
     }
 
@@ -445,7 +356,7 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
         return html`
             <div class="summary" data-overview>
                 <p class="status pill action-tone-neutral" data-tone="neutral">${status}</p>
-                ${this._renderException(overview)}
+                ${overview.condition ? this._exceptionBanner(fillTemplate(this._t(`exception.${overview.condition.kind}`), { state: overview.condition.runMode }), "limits") : nothing}
             </div>
         `;
     }
@@ -461,9 +372,9 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
      * opens the production answer.
      */
     private _renderCurve(overview: SolarDetailPayload, model: ForecastModel | null) {
-        const section = this._sections.production;
+        const section = this._production.state;
         const offered = overview.sections.includes("production");
-        const payload = this._ready<SolarProductionSectionPayload>("production");
+        const payload = this._production.payload;
         const caption = [this._productionPreview(model), this._nextLine(model)].filter(Boolean).join(" · ");
         let status: unknown = nothing;
         if (!offered) status = html`<p class="note" data-curve-none>${this._t("curve.no_sensor")}</p>`;
@@ -471,7 +382,7 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
         else if (section.status === "error") {
             status = html`
                 <p class="note" data-curve-failed>${this._t("history_failed")}</p>
-                <button class="link-button" @click=${() => this._loadSection("production")}>${this._t("retry")}</button>
+                <button class="link-button" @click=${() => this._production.load()}>${this._t("retry")}</button>
             `;
         } else if (payload && payload.power === null) status = html`<p class="note" data-curve-unit>${this._t("curve.unit")}</p>`;
         return html`
@@ -511,7 +422,8 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
         const forecast = (model?.todaySlots ?? []).map((slot) => ({ t: slot.start + SLOT_MS / 2, w: Math.max(0, slot.wh) / (SLOT_MS / 3_600_000) }));
         const rated = this._ratedW(overview);
         const scale = rated ?? this.params.flowScaleW;
-        const top = Math.max(scale, ...points.map((point) => point.w), ...forecast.map((point) => point.w));
+        // Without a rating or a solar node there is no scale: the curve fills the plot.
+        const top = Math.max(scale ?? 0, ...points.map((point) => point.w), ...forecast.map((point) => point.w)) || 1;
         const x = (t: number) => (t - start) / span * W;
         const y = (w: number) => H - w / top * (H - 4);
         // Each run of buckets without a gap is one filled shape; a gap stays a gap.
@@ -529,10 +441,10 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
         }).join("");
         const forecastPath = forecast.map((point, index) => `${index ? "L" : "M"}${x(point.t).toFixed(1)},${y(point.w).toFixed(1)}`).join("");
         const now = Date.now();
-        // Only a rating or a configured maximum is named; the card's default scale is not a figure of the install.
+        // Only a rating or a configured maximum is named; the default scale is not a figure of the install.
         const ratingLabel = rated !== null
-            ? fillTemplate(this._t("limits.rating_short"), { power: formatPower(scale).display })
-            : overview.configuredMaxPowerW !== null
+            ? fillTemplate(this._t("limits.rating_short"), { power: formatPower(rated).display })
+            : scale !== null && overview.configuredMaxPowerW !== null
             ? fillTemplate(this._t("curve.maximum"), { power: formatPower(scale).display })
             : null;
         // Wall-clock hours in Home Assistant's zone: the day starts at its
@@ -547,14 +459,14 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
             <span class="plot">
                 <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
                     <line class="baseline" x1="0" x2=${W} y1=${H} y2=${H} vector-effect="non-scaling-stroke"></line>
-                    <line class="rating" data-rating data-w=${scale} x1="0" x2=${W} y1=${y(scale)} y2=${y(scale)} vector-effect="non-scaling-stroke"></line>
+                    ${scale !== null ? svg`<line class="rating" data-rating data-w=${scale} x1="0" x2=${W} y1=${y(scale)} y2=${y(scale)} vector-effect="non-scaling-stroke"></line>` : nothing}
                     ${actual ? svg`<path data-actual d=${actual} fill=${CHART_COLORS.actual} fill-opacity=${ACTUAL_FILL_OPACITY}
                         stroke=${CHART_COLORS.actual} stroke-width="1.5" vector-effect="non-scaling-stroke"></path>` : nothing}
                     ${forecastPath ? svg`<path data-forecast d=${forecastPath} fill="none" stroke=${this._forecastColor(model)}
                         stroke-width="2" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"></path>` : nothing}
                     ${now >= start && now < end ? svg`<g data-now>${renderNowMarker(x(now), 0, H, this._time(now))}</g>` : nothing}
                 </svg>
-                ${ratingLabel ? html`<span class="rating-label" style="top: ${(y(scale) / H * 100).toFixed(1)}%">${ratingLabel}</span>` : nothing}
+                ${ratingLabel && scale !== null ? html`<span class="rating-label" style="top: ${(y(scale) / H * 100).toFixed(1)}%">${ratingLabel}</span>` : nothing}
             </span>
             <span class="hours" aria-hidden="true">
                 ${hours.map(({ hour, t }) => html`<span style="left: ${(x(t) / W * 100).toFixed(2)}%">${pad2(hour)}</span>`)}
@@ -604,7 +516,7 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
 
     /** Live, W: each string's reading, or the solar reading as one input; unknown is "–", never 0. */
     private _nowFlow(overview: SolarDetailPayload): NodeFlow {
-        const power = (value: number | null) => value === null ? "–" : formatPower(value).display;
+        const power = this._fmt("now");
         const watts = (value: number | null) => value === null ? null : Math.max(0, value);
         const production = watts(this._powerNow());
         const inputs = overview.strings.length >= 2
@@ -613,21 +525,11 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
                 return this._stringItem(string, value, power(value));
             })
             : [this._flowItem("solar", production, power)];
-        const flows = this.params.flows;
-        const outputs = [
-            this._flowItem("house", flows?.solarToHouse ?? null, power),
-            this._flowItem("battery", flows?.solarToBattery ?? null, power),
-            this._flowItem("grid", flows?.solarToGrid ?? null, power),
-        ];
-        return {
-            scopeLabel: this._nowScopeLabel(),
-            inputs,
-            outputs,
-            ...this._flowTotals(inputs, outputs, power),
-            notes: [],
-            centreValue: power(production),
+        const outputs = this._edgeItems(this.params.flows, DESTINATIONS, power);
+        return this._flowShell("now", inputs, outputs, {
+            centre: () => power(production),
             active: this._isActive(production),
-        };
+        });
     }
 
     /**
@@ -637,44 +539,34 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
      * total, never drawn as a destination.
      */
     private _todayFlow(overview: SolarDetailPayload): NodeFlow {
-        const flows = this._todayFlows?.status === "ready" ? this._todayFlows.payload.flows : null;
-        const energy = (value: number | null) => value === null ? "–" : (formatKwh(Math.abs(value)) + " kWh");
+        const flows = this._flows.payload?.flows ?? null;
+        const energy = this._fmt("today");
         const notes: string[] = [];
         const status = this._todayFlowsNote();
         if (status) notes.push(status);
         let inputs: FlowItem[];
         if (overview.strings.length >= 2) {
-            const strings = this._ready<SolarStringsSectionPayload>("strings");
-            const section = this._sections.strings;
+            const strings = this._strings.payload;
+            const section = this._strings.state;
             if (section?.status === "error") notes.push(this._t("flow.strings_failed"));
             inputs = overview.strings.map((string) => {
                 const kwh = strings?.energy.strings[String(string)]?.kwh ?? null;
                 // Integrated from five-minute means: an estimate, and said so.
-                return this._stringItem(string, kwh, kwh === null ? "–" : "≈ " + (formatKwh(Math.abs(kwh)) + " kWh"));
+                return this._stringItem(string, kwh, kwh === null ? "–" : "≈ " + energy(kwh));
             });
         } else {
-            const edges = flows ? [flows.solarToHouse, flows.solarToBattery, flows.solarToGrid, flows.solarUnresolved] : [null];
-            const produced = edges.some((edge) => edge === null) ? null : edges.reduce((sum, edge) => sum! + edge!, 0);
+            const produced = this._sumEdges(flows, ["solarToHouse", "solarToBattery", "solarToGrid", "solarUnresolved"]);
             inputs = [this._flowItem("solar", produced, energy)];
         }
-        const outputs = [
-            this._flowItem("house", flows?.solarToHouse ?? null, energy),
-            this._flowItem("battery", flows?.solarToBattery ?? null, energy),
-            this._flowItem("grid", flows?.solarToGrid ?? null, energy),
-        ];
+        const outputs = this._edgeItems(flows, DESTINATIONS, energy);
         const unresolved = flows?.solarUnresolved ?? 0;
-        if (unresolved > 0) notes.push(fillTemplate(this._t("flow.unresolved"), { kwh: (formatKwh(Math.abs(unresolved)) + " kWh") }));
-        const { sumIn, sumOut, ...totals } = this._flowTotals(inputs, outputs, energy, 0, unresolved);
-        return {
-            scopeLabel: this._todayScopeLabel(),
-            inputs,
-            outputs,
-            ...totals,
-            notes,
+        if (unresolved > 0) notes.push(fillTemplate(this._t("flow.unresolved"), { kwh: energy(unresolved) }));
+        return this._flowShell("today", inputs, outputs, {
             // Produced: every destination and the unresolved rest.
-            centreValue: energy(sumOut),
-            active: false,
-        };
+            centre: (_sumIn, sumOut) => energy(sumOut),
+            notes,
+            unresolvedOut: unresolved,
+        });
     }
 
     // Tiles -------------------------------------------------------------------
@@ -734,17 +626,6 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
         return this._t("next.none_today");
     }
 
-    /** At most one: off-grid operation or a fault the inverter reports. */
-    private _renderException(overview: SolarDetailPayload) {
-        if (!overview.condition) return nothing;
-        return html`
-            <div class="exception" role="status" data-exception>
-                <span>${fillTemplate(this._t(`exception.${overview.condition.kind}`), { state: overview.condition.runMode })}</span>
-                <button class="link-button" @click=${() => this._setOpen("limits")}>${this._t("exception.details")}</button>
-            </div>
-        `;
-    }
-
     // Production --------------------------------------------------------------
 
     private _productionPreview(model: ForecastModel | null): string | null {
@@ -784,7 +665,7 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
                     : (formatKwh(Math.abs(today + model.remainingKwh)) + " kWh"), "projection", this._t("production.projection_scope"))}
             ` : this._forecastFailed ? this._renderForecastFailed() : html`<p class="note">${this._forecastMissing()}</p>`}
             ${this._row(this._t("production.peak"), this._peakText(overview), "peak")}
-            ${this._sections.production?.status === "error" ? html`<button class="link-button" @click=${() => this._loadSection("production")}>${this._t("retry")}</button>` : nothing}
+            ${this._production.state?.status === "error" ? html`<button class="link-button" @click=${() => this._production.load()}>${this._t("retry")}</button>` : nothing}
             <p class="note">${this._t("production.explain")}</p>
             <div class="plan" data-forecast-inspector>${this._inspector("production", SOLAR_FORECAST_INSPECTOR_CONFIG)}</div>
         `;
@@ -805,10 +686,10 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
 
     private _peakText(overview: SolarDetailPayload): string {
         if (!overview.sections.includes("production")) return this._t("production.peak_no_sensor");
-        const section = this._sections.production ?? null;
+        const section = this._production.state;
         if (section === null || section.status === "loading") return this._t("loading_history");
         if (section.status === "error") return this._t("history_failed");
-        const power = this._ready<SolarProductionSectionPayload>("production")?.power;
+        const power = this._production.payload?.power;
         if (power === undefined) return this._t("loading_history");
         if (power === null) return this._t("production.peak_unit");
         if (power.max === null || power.maxAt === null || power.max <= 0) return this._t("production.peak_none");
@@ -818,7 +699,7 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
     private _renderProductionEvidence(overview: SolarDetailPayload, model: ForecastModel | null) {
         const comparison = model?.comparison;
         const bias = this._forecast?.solar.biasCorrection;
-        const power = this._ready<SolarProductionSectionPayload>("production")?.power;
+        const power = this._production.payload?.power;
         return html`
             ${comparison?.rawKwh != null ? html`
                 ${this._row(this._t("production.raw"), (formatKwh(Math.abs(comparison.rawKwh)) + " kWh"), "raw")}
@@ -841,7 +722,7 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
     // Destinations ------------------------------------------------------------
 
     private _destinationsPreview(overview: SolarDetailPayload): string | null {
-        const destinations = this._ready<SolarDestinationsSectionPayload>("destinations")?.destinations;
+        const destinations = this._destinations.payload?.destinations;
         if (destinations) {
             if (destinations.producedKwh <= 0) return this._t("destinations.none_today");
             return fillTemplate(this._t("destinations.short"), {
@@ -856,17 +737,17 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
     }
 
     private _renderDestinations() {
-        const section = this._sections.destinations ?? null;
+        const section = this._destinations.state;
         if (section === null || section.status === "loading") {
             return html`<p class="note" data-destinations-loading>${this._t("destinations.loading")}</p>`;
         }
         if (section.status === "error") {
             return html`
                 <p class="note">${this._t("destinations.failed")}</p>
-                <button class="link-button" @click=${() => this._loadSection("destinations")}>${this._t("retry")}</button>
+                <button class="link-button" @click=${() => this._destinations.load()}>${this._t("retry")}</button>
             `;
         }
-        const payload = this._ready<SolarDestinationsSectionPayload>("destinations");
+        const payload = this._destinations.payload;
         if (!payload) return html`<p class="note">${this._t("destinations.loading")}</p>`;
         const period = this._row(this._t("destinations.period_label"), this._periodText(Date.parse(payload.period.start), Date.parse(payload.asOf)), "period");
         const destinations = payload.destinations;
@@ -904,7 +785,7 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
     }
 
     private _renderDestinationsEvidence(overview: SolarDetailPayload) {
-        const payload = this._ready<SolarDestinationsSectionPayload>("destinations");
+        const payload = this._destinations.payload;
         const destinations = payload?.destinations;
         const meterToday = readEnergyKWh(this.hass, overview.entities.today_energy);
         const exportToday = readEnergyKWh(this.hass, overview.entities.today_export);
@@ -998,7 +879,7 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
         const input = power === null ? null : Math.max(0, power);
         const exportLimit = this._watts(overview, "export_limit");
         const pvLimit = this._watts(overview, "pv_power_limit");
-        const run = this._currentRun();
+        const run = currentRun(this._plan.runs, Date.now());
         const inputText = input === null
             ? this._t("unavailable")
             : rated === null
@@ -1022,7 +903,7 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
     }
 
     private _renderLimitsEvidence(overview: SolarDetailPayload) {
-        const runtime = this._currentRuntime();
+        const runtime = runtimeFor<InverterRuntimeDTO>(this._plan.schedule, INVERTER_CONTROLLABLE_ID, Date.now());
         const battery = this.params.batteryPower;
         const settings = [
             this._optionalRow(overview, "use_mode", "limits.use_mode"),
@@ -1046,7 +927,7 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
                 : Math.abs(battery) <= IDLE_W
                 ? fillTemplate(this._t("limits.battery_idle"), { power: formatPower(Math.abs(battery)).display })
                 : fillTemplate(this._t(battery > 0 ? "limits.battery_charging" : "limits.battery_discharging"), { power: formatPower(Math.abs(battery)).display }), "flow-battery")}
-            ${renderCurrentSlot(this._currentRun(), runtime, this.localize, (label, value) => this._row(label, value))}
+            ${renderCurrentSlot(currentRun(this._plan.runs, Date.now()), runtime, this.localize, (label, value) => this._row(label, value))}
             ${this._row(this._t("limits.executor"), runtime ? runtimeText(runtime, this.localize) : this._t("limits.no_runtime"), "executor")}
             <p class="note">${this._t("limits.evidence_note")}</p>
         `;
@@ -1085,17 +966,17 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
     }
 
     private _renderStringsToday() {
-        const section = this._sections.strings ?? null;
+        const section = this._strings.state;
         if (section === null || section.status === "loading") {
             return html`<p class="note" data-strings-loading>${this._t("loading_history")}</p>`;
         }
         if (section.status === "error") {
             return html`
                 <p class="note">${this._t("history_failed")}</p>
-                <button class="link-button" @click=${() => this._loadSection("strings")}>${this._t("retry")}</button>
+                <button class="link-button" @click=${() => this._strings.load()}>${this._t("retry")}</button>
             `;
         }
-        const payload = this._ready<SolarStringsSectionPayload>("strings");
+        const payload = this._strings.payload;
         if (!payload) return html`<p class="note">${this._t("loading_history")}</p>`;
         const common = payload.energy.common;
         const kwh = common.kwh;
@@ -1144,7 +1025,7 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
     }
 
     private _renderStringsEvidence(overview: SolarDetailPayload) {
-        const payload = this._ready<SolarStringsSectionPayload>("strings");
+        const payload = this._strings.payload;
         const dash = "–";
         return html`
             <table data-string-table>
@@ -1319,20 +1200,6 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
     private _forecastMissing(): string {
         if (this._forecast === null) return this._t("forecast_loading");
         return this._t(this._forecast.solar.status === "not_configured" ? "forecast_not_configured" : "forecast_unavailable");
-    }
-
-    // ── Schedule ────────────────────────────────────────────────────────────
-
-    private _runs(): ScheduleRun[] {
-        return scheduleRuns(this._schedule, Date.now());
-    }
-
-    private _currentRun(): ScheduleRun | null {
-        return currentRun(this._runs(), Date.now());
-    }
-
-    private _currentRuntime() {
-        return currentRuntime(this._schedule, Date.now());
     }
 
     // ── Readings and formatting ─────────────────────────────────────────────

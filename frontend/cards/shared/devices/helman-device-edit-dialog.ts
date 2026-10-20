@@ -5,7 +5,7 @@ import { property, state } from "lit/decorators.js";
 import { getLocalizeFunction, type LocalizeFunction } from "../../localize/localize";
 import { defineOnce } from "../define-once";
 import { loadHaForm, loadHaSortable } from "../load-ha-elements";
-import { DataChangedController } from "../../helman/data-changed";
+import { DataChangedController } from "../data/data-changed";
 import {
     cloneJson,
     setValueAtPath,

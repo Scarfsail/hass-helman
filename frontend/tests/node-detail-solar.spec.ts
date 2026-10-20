@@ -1,4 +1,4 @@
-import { prepareNodeDetailPage, mountSimpleCard, nodeDetailLocators, sectionRequestLog } from "./support/node-detail-harness";
+import { prepareNodeDetailPage, mountSimpleCard, nodeDetailLocators, sectionRequestLog, sectionReads } from "./support/node-detail-harness";
 import { cardTree, forecastPayload, scheduleSlots } from "./support/payload-builders";
 import type { ForecastPayload, ForecastStatus, ScheduleActionDTO, SchedulePayload, ScheduleSlotDTO } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
@@ -898,4 +898,28 @@ test.describe("screenshots", { tag: "@screens" }, () => {
             });
         }
     }
+});
+
+
+test("section requests: a section is read while shown, re-read on a data change and dropped once hidden", async ({ page }) => {
+    await mount(page);
+    await openDetail(page);
+    const reads = () => sectionReads(page, "solar");
+    await expect.poll(reads).toEqual({ production: 1 });
+    await today(page);
+    await expect.poll(reads).toEqual({ production: 1, strings: 1, flows: 1 });
+    await open(page, "destinations");
+    await expect.poll(reads).toEqual({ production: 1, strings: 1, flows: 1, destinations: 1 });
+    // A closed answer's figures are dropped: reopened, it is read again.
+    await header(page, "destinations").click();
+    await open(page, "destinations");
+    await expect.poll(reads).toEqual({ production: 1, strings: 1, flows: 1, destinations: 2 });
+    await page.evaluate(() => window.__fireDataChanged("config"));
+    await expect.poll(reads).toEqual({ production: 2, strings: 2, flows: 2, destinations: 3 });
+    // Back on Now the strings are no longer shown: Today reads them again.
+    await flow(page).locator("[data-scope='now']").click();
+    await today(page);
+    await expect.poll(reads).toEqual({ production: 2, strings: 3, flows: 2, destinations: 3 });
+    await page.waitForTimeout(300);
+    expect(await reads()).toEqual({ production: 2, strings: 3, flows: 2, destinations: 3 });
 });

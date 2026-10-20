@@ -1,7 +1,7 @@
 import { LitElement, TemplateResult, css, html } from "lit-element";
 import { customElement, property } from "lit/decorators.js";
 import type { HomeAssistant } from "../../types/ha";
-import { TreeItem, isItemVisible } from "./tree-item";
+import { TreeItem, isItemVisible } from "../shared/data/tree-item";
 
 /**
  * The rows in the order they are drawn, ranked by history total then by name.

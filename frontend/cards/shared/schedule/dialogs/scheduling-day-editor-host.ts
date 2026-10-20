@@ -6,8 +6,8 @@ import type {
     EntityActualHistorySlotDTO,
     ForecastPayload,
 } from "../../../helman-api";
-import { ForecastLoader } from "../../../helman/forecast-loader";
-import { getSharedHelmanStore } from "../../../helman/store";
+import { ForecastLoader } from "../../data/forecast-loader";
+import { getSharedHelmanStore } from "../../data/store";
 import { getLocalizeFunction, type LocalizeFunction } from "../../../localize/localize";
 import { dispatchWatchedEntities } from "../../hass-change";
 import { startNowClock } from "../../now-clock";
@@ -482,7 +482,7 @@ export class SchedulingDayEditorHost extends LitElement {
                 ids.add(controllable.controls.ecoGear.entityId);
             }
         }
-        dispatchWatchedEntities(this, [...ids]);
+        dispatchWatchedEntities(this, "schedule-editor", [...ids]);
     }
 
     private async _loadControllables(): Promise<void> {

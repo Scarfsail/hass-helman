@@ -1,11 +1,12 @@
-import type { TreeItem } from "../helman/tree-item";
-import type { LiveFlows } from "../helman-simple/live-flows";
+import type { TreeItem } from "../shared/data/tree-item";
+import { liveFlows, type LiveFlows } from "./live-flows";
 import type { EnergyNodeFlowParams, NodeDetailParams, NodeType } from "./node-detail-types";
+import type { EnergyReadings } from "./node-detail-readings";
 
 export interface NodeDetailContext {
     /** The card's live power split, W. */
     flows: LiveFlows;
-    flowScaleW: number;
+    flowScaleW: number | null;
     batteryPower: number;
     /** The battery meter, positive charging; `null` without a reading. */
     batteryPowerReading: number | null;
@@ -20,6 +21,36 @@ export interface NodeDetailContext {
     houseNode: TreeItem | null;
     historyBuckets: number;
     historyBucketDuration: number;
+}
+
+/** Build node detail context from energy readings (the only input to readings fields) and options. */
+export function buildNodeDetailContext(
+    readings: EnergyReadings,
+    options: {
+        houseNode: TreeItem | null | undefined;
+        historyBuckets: number;
+        historyBucketDuration: number;
+    },
+): NodeDetailContext {
+    return {
+        flows: liveFlows({
+            solarPower: readings.solarPowerReading ?? 0,
+            housePower: readings.housePower,
+            batteryPower: readings.batteryPowerReading ?? 0,
+            gridPower: readings.gridPowerSigned ?? 0,
+        }),
+        flowScaleW: readings.flowScaleW,
+        batteryPower: readings.batteryPower,
+        batteryPowerReading: readings.batteryPowerReading,
+        solarPowerReading: readings.solarPowerReading,
+        gridPower: readings.gridPowerSigned,
+        housePower: readings.housePower,
+        houseReadable: readings.houseReadable,
+        solarPower: readings.solarPower,
+        houseNode: options.houseNode ?? null,
+        historyBuckets: options.historyBuckets,
+        historyBucketDuration: options.historyBucketDuration,
+    };
 }
 
 /** The params of an energy node's detail, or of a device opened from its name. */

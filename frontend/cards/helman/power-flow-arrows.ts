@@ -1,6 +1,6 @@
 import { LitElement, css, html, unsafeCSS } from "lit-element";
 import { customElement, property } from "lit/decorators.js";
-import { TreeItem } from "./tree-item";
+import { TreeItem } from "../shared/data/tree-item";
 import { nothing } from "lit-html";
 import { NEUTRAL_LIGHT_COLOR, canonicalSourceColor } from "../color-utils";
 import { FLOW_BAND_LENGTH, FLOW_BAND_PEAK_OPACITY, FLOW_RIBBON_OPACITY, FLOW_SWEEP_DURATION } from "../shared/flow-style";

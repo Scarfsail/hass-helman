@@ -1,4 +1,4 @@
-import type { ConfigDocument, ForecastPayload, InspectorPayload, SchedulePayload, TreeItemDTO, TreePayload, ValueType } from "../../cards/helman-api";
+import type { ConfigDocument, ForecastPayload, InspectorPayload, SchedulePayload, TreeItemDTO, TreePayload } from "../../cards/helman-api";
 import type { ConfigSnapshot } from "../../cards/shared/config/types";
 import type {
     ExplanationConditionColumnRow,
@@ -54,7 +54,6 @@ export function treeNode(overrides: Partial<TreeItemDTO> = {}): TreeItemDTO {
         displayName: "Test",
         powerSensorId: null,
         valueType: "default",
-        sourceConfig: null,
         sourceType: null,
         switchEntityId: null,
         isSource: false,
@@ -75,6 +74,15 @@ export function treeNode(overrides: Partial<TreeItemDTO> = {}): TreeItemDTO {
         energyEntityId: null,
         isEstimated: false,
         phase: null,
+        power: null,
+        maxPowerW: null,
+        socEntityId: null,
+        minSocEntityId: null,
+        maxSocEntityId: null,
+        remainingEnergyEntityId: null,
+        todayEnergyEntityId: null,
+        todayImportEntityId: null,
+        todayExportEntityId: null,
         ...overrides,
     };
 }
@@ -90,11 +98,26 @@ export function treePayload(overrides: Partial<TreePayload> = {}): TreePayload {
     };
 }
 
+/**
+ * The typed fields the backend resolves for an energy node at its max-power
+ * defaults, its power on `sensor.<device>`. The grid meter reads positive
+ * importing (`sign: -1` in Helman's export-positive convention) unless
+ * `gridSign` says otherwise.
+ */
+export function energyFields(device: string, gridSign: 1 | -1 = -1): Partial<TreeItemDTO> {
+    switch (device) {
+        case "solar": return { maxPowerW: 5000 };
+        case "grid": return { maxPowerW: 11500, power: { entityId: "sensor.grid", sign: gridSign } };
+        case "battery": return { maxPowerW: 5000, power: { entityId: "sensor.battery", sign: 1 } };
+        default: return {};
+    }
+}
+
 /** The four power-card roots used by node-detail specs. */
-export function cardTree(gridValueType: ValueType = "default"): TreePayload {
+export function cardTree(gridSign: 1 | -1 = -1): TreePayload {
     const node = (id: string, sensor: string, sourceType: string | null) => treeNode({
         id, displayName: id, powerSensorId: sensor, sourceType, isSource: sourceType !== null,
-        ...(id === "grid" ? { valueType: gridValueType } : {}),
+        ...energyFields(id, gridSign),
     });
     return treePayload({
         sources: [node("solar", "sensor.solar", "solar"), node("grid", "sensor.grid", "grid"), node("battery", "sensor.battery", "battery")],

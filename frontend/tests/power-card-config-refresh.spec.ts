@@ -32,9 +32,9 @@ for (const tag of ["helman-card", "helman-simple-card"] as const) {
         const overview = () => page.evaluate((name) => {
             const card = document.querySelector(name) as any;
             return {
-                id: card._inverter?.entities.link_success_rate,
-                oldWatched: card._watchedEntityIds.has("sensor.old_inverter"),
-                newWatched: card._watchedEntityIds.has("sensor.new_inverter"),
+                id: card._host.inverter?.entities.link_success_rate,
+                oldWatched: card._host.watchedEntityIds.has("sensor.old_inverter"),
+                newWatched: card._host.watchedEntityIds.has("sensor.new_inverter"),
             };
         }, tag);
         const overviewRequests = () => page.evaluate(() => window.__mockRequests.filter((request) => request.type === "helman/get_node_detail" && request.node === "inverter").length);
@@ -89,9 +89,9 @@ for (const tag of ["helman-card", "helman-simple-card"] as const) {
             const overview = () => page.evaluate((name) => {
                 const card = document.querySelector(name) as any;
                 return {
-                    id: card._inverter?.entities.link_success_rate,
-                    oldWatched: card._watchedEntityIds.has("sensor.old_inverter"),
-                    newWatched: card._watchedEntityIds.has("sensor.new_inverter"),
+                    id: card._host.inverter?.entities.link_success_rate,
+                    oldWatched: card._host.watchedEntityIds.has("sensor.old_inverter"),
+                    newWatched: card._host.watchedEntityIds.has("sensor.new_inverter"),
                 };
             }, tag);
             const oldOverview = { id: "sensor.old_inverter", oldWatched: true, newWatched: false };
@@ -146,15 +146,15 @@ for (const tag of ["helman-card", "helman-simple-card"] as const) {
             card.id = "late-card";
             document.body.appendChild(card);
         }, tag);
-        await expect.poll(() => page.evaluate(() => !!(document.getElementById("late-card") as any)?._historyEngine)).toBe(true);
+        await expect.poll(() => page.evaluate(() => !!(document.getElementById("late-card") as any)?._host.historyEngine)).toBe(true);
         expect(await inverterRequests()).toBe(2);
         await page.evaluate(() => (window as any).__releaseInverter(1));
-        await expect.poll(() => page.evaluate((name) => (document.querySelector(name) as any)._inverter?.entities.link_success_rate, tag)).toBe("sensor.new_inverter");
-        await expect.poll(() => page.evaluate(() => (document.getElementById("late-card") as any)._inverter?.entities.link_success_rate)).toBe("sensor.new_inverter");
+        await expect.poll(() => page.evaluate((name) => (document.querySelector(name) as any)._host.inverter?.entities.link_success_rate, tag)).toBe("sensor.new_inverter");
+        await expect.poll(() => page.evaluate(() => (document.getElementById("late-card") as any)._host.inverter?.entities.link_success_rate)).toBe("sensor.new_inverter");
         await page.evaluate(() => (window as any).__releaseInverter(0));
         expect(await page.evaluate((name) => {
             const card = document.querySelector(name) as any;
-            return { inverter: card._inverter?.entities.link_success_rate, oldWatched: card._watchedEntityIds.has("sensor.old_inverter"), newWatched: card._watchedEntityIds.has("sensor.new_inverter") };
+            return { inverter: card._host.inverter?.entities.link_success_rate, oldWatched: card._host.watchedEntityIds.has("sensor.old_inverter"), newWatched: card._host.watchedEntityIds.has("sensor.new_inverter") };
         }, tag)).toEqual({ inverter: "sensor.new_inverter", oldWatched: false, newWatched: true });
     });
 
@@ -179,23 +179,26 @@ for (const tag of ["helman-card", "helman-simple-card"] as const) {
         }, tag);
         await expect.poll(() => page.evaluate((name) => {
             const card = document.querySelector(name) as any;
-            return name === "helman-card" ? card._deviceTree[1]?.children[0]?.children.length : card._houseNode?.children.length;
+            return name === "helman-card" ? card._deviceTree[1]?.children[0]?.children.length : card._host.energyNodes.houseNode?.children.length;
         }, tag)).toBe(1);
         await page.evaluate((name) => {
             const card = document.querySelector(name) as any;
-            card._dialogRequest = name === "helman-card" ? card._deviceTree[1].children[0].children[0] : card._houseNode.children[0];
-            card._detailEntityIds = ["sensor.old_appliance"];
-            card._rebuildWatchedEntityIds();
+            card._host.openNode(name === "helman-card" ? card._deviceTree[1].children[0].children[0] : card._host.energyNodes.houseNode.children[0]);
+            card.dispatchEvent(new CustomEvent("helman-watched-entities", {
+                bubbles: true,
+                composed: true,
+                detail: { source: "node-detail", entityIds: ["sensor.old_appliance"] },
+            }));
             const next = structuredClone((window as any).__tree);
             next.consumers[0].children[0].displayName = "New appliance";
             next.consumers[0].children[0].powerSensorId = "sensor.new_appliance";
             (window as any).__tree = next;
             window.__fireDataChanged("config");
         }, tag);
-        await expect.poll(() => page.evaluate((name) => (document.querySelector(name) as any)._dialogRequest?.name, tag)).toBe("New appliance");
+        await expect.poll(() => page.evaluate((name) => (document.querySelector(name) as any)._host.dialogRequest?.name, tag)).toBe("New appliance");
         expect(await page.evaluate((name) => {
             const card = document.querySelector(name) as any;
-            return { sensor: card._dialogRequest?.powerSensorId, oldWatched: card._watchedEntityIds.has("sensor.old_appliance"), newWatched: card._watchedEntityIds.has("sensor.new_appliance") };
+            return { sensor: card._host.dialogRequest?.powerSensorId, oldWatched: card._host.watchedEntityIds.has("sensor.old_appliance"), newWatched: card._host.watchedEntityIds.has("sensor.new_appliance") };
         }, tag)).toEqual({ sensor: "sensor.new_appliance", oldWatched: false, newWatched: true });
         await page.evaluate(() => {
             const next = structuredClone((window as any).__tree);
@@ -203,8 +206,8 @@ for (const tag of ["helman-card", "helman-simple-card"] as const) {
             (window as any).__tree = next;
             window.__fireDataChanged("config");
         });
-        await expect.poll(() => page.evaluate((name) => (document.querySelector(name) as any)._dialogRequest, tag)).toBeNull();
-        expect(await page.evaluate((name) => (document.querySelector(name) as any)._watchedEntityIds.has("sensor.new_appliance"), tag)).toBe(false);
+        await expect.poll(() => page.evaluate((name) => (document.querySelector(name) as any)._host.dialogRequest, tag)).toBeNull();
+        expect(await page.evaluate((name) => (document.querySelector(name) as any)._host.watchedEntityIds.has("sensor.new_appliance"), tag)).toBe(false);
     });
 
     test(`${tag} relocalizes nested unmeasured rows`, async ({ page }) => {
@@ -218,10 +221,10 @@ for (const tag of ["helman-card", "helman-simple-card"] as const) {
             card.setConfig({ type: `custom:${name}` });
             card.hass = { ...window.__mockHass({ "helman/get_device_tree": tree, "helman/get_history": { entity_history: {} } }), language: "en", locale: { language: "en" }, config: { time_zone: "UTC" }, states: {} };
             document.body.appendChild(card);
-            const remainder = () => name === "helman-card" ? card._deviceTree[1]?.children[0]?.children[0] : card._houseNode?.children[0];
+            const remainder = () => name === "helman-card" ? card._deviceTree[1]?.children[0]?.children[0] : card._host.energyNodes.houseNode?.children[0];
             while (!remainder()) await new Promise((resolve) => setTimeout(resolve, 10));
             const before = remainder().name;
-            card.hass = { ...card._latestHass, language: "cs", locale: { language: "cs" } };
+            card.hass = { ...card._host.latestHass, language: "cs", locale: { language: "cs" } };
             await card.updateComplete;
             return { before, after: remainder().name };
         }, { name: tag, tree });
@@ -243,7 +246,7 @@ for (const tag of ["helman-card", "helman-simple-card"] as const) {
             card.hass = { ...window.__mockHass({ "helman/get_device_tree": tree, "helman/get_history": { entity_history: {} } }), language: "en", locale: { language: "en" }, config: { time_zone: "UTC" }, states: {} };
             document.body.appendChild(card);
             while (!card._deviceTree[1]?.children[0]?.children.length) await new Promise((resolve) => setTimeout(resolve, 10));
-            card.hass = { ...card._latestHass, language: "cs", locale: { language: "cs" } };
+            card.hass = { ...card._host.latestHass, language: "cs", locale: { language: "cs" } };
             await card.updateComplete;
             return { roots: card._deviceTree.map((root: any) => root.name), nested: card._deviceTree[1].children[0].children.map((child: any) => child.name) };
         }, tree);
@@ -283,7 +286,7 @@ for (const tag of ["helman-card", "helman-simple-card"] as const) {
             const card = document.getElementById(id) as any;
             return name === "helman-card"
                 ? card._deviceTree[0]?.children[0]?.name
-                : card._entityMap?.solarPowerEntityId;
+                : card._host.energyNodes.solarNode?.powerSensorId;
         }, { name: tag, id });
         const expected = tag === "helman-card" ? "New solar meter" : "sensor.new_solar";
 
@@ -337,7 +340,7 @@ for (const tag of ["helman-card", "helman-simple-card"] as const) {
         const historyRequests = () => page.evaluate(() => window.__mockRequests.filter((request) => request.type === "helman/get_history").length);
         const solarHistory = (id: string) => page.evaluate(({ name, id }) => {
             const card = document.getElementById(id) as any;
-            const solar = name === "helman-card" ? card._deviceTree[0]?.children[0] : card._solarNode;
+            const solar = name === "helman-card" ? card._deviceTree[0]?.children[0] : card._host.energyNodes.solarNode;
             return { sensor: solar?.powerSensorId, firstBucket: solar?.powerHistory[0] };
         }, { name: tag, id });
 
@@ -390,7 +393,7 @@ for (const tag of ["helman-card", "helman-simple-card"] as const) {
             const card = document.querySelector(name) as any;
             return name === "helman-card"
                 ? card._deviceTree[0]?.children[0]?.name
-                : card._entityMap?.solarPowerEntityId;
+                : card._host.energyNodes.solarNode?.powerSensorId;
         }, tag);
         const expected = tag === "helman-card" ? "New solar meter" : "sensor.new_solar";
         await expect.poll(treeRequests).toBe(1);
@@ -444,7 +447,7 @@ for (const tag of ["helman-card", "helman-simple-card"] as const) {
             const card = document.querySelector(name) as any;
             return name === "helman-card"
                 ? card._deviceTree[0]?.children[0]?.name
-                : card._entityMap?.solarPowerEntityId;
+                : card._host.energyNodes.solarNode?.powerSensorId;
         }, tag)).toBe(tag === "helman-card" ? "New solar meter" : "sensor.new_solar");
         if (tag === "helman-card") {
             await expect(page.locator("helman-card")).toContainText("New solar meter");
@@ -485,7 +488,7 @@ for (const tag of ["helman-card", "helman-simple-card"] as const) {
             await card.updateComplete;
             const before = card._localize("card.loading");
             const beforeRendered = name === "helman-card" ? card._deviceTree[1]?.name : card.shadowRoot?.textContent ?? "";
-            card.hass = { ...card._latestHass, language: "cs", locale: { language: "cs" } };
+            card.hass = { ...card._host.latestHass, language: "cs", locale: { language: "cs" } };
             await card.updateComplete;
             const after = card._localize("card.loading");
             return { before, after, beforeRendered, rendered: name === "helman-card" ? card._deviceTree[1]?.name : card.shadowRoot?.textContent ?? "" };
@@ -514,7 +517,7 @@ test("simple card forwards schedule editor watched entity changes", async ({ pag
         card.hass = hass;
         document.body.appendChild(card);
         card.dispatchEvent(new CustomEvent("helman-watched-entities", {
-            detail: { entityIds: ["sensor.schedule"] }, bubbles: true, composed: true,
+            detail: { source: "schedule", entityIds: ["sensor.schedule"] }, bubbles: true, composed: true,
         }));
         const next = { ...hass, states: {
             ...hass.states, "sensor.schedule": { state: "on", attributes: {} },
@@ -542,16 +545,16 @@ test("simple card forwards the latest hass when schedule watches arrive late", a
         }, config: { time_zone: "UTC" } };
         document.body.appendChild(card);
     }, cardTree());
-    await expect.poll(() => page.evaluate(() => !!(document.querySelector("helman-simple-card") as any)._entityMap)).toBe(true);
+    await expect.poll(() => page.evaluate(() => !!(document.querySelector("helman-simple-card") as any)._host.loaded)).toBe(true);
     const state = await page.evaluate(async () => {
         const card = document.querySelector("helman-simple-card") as any;
-        const old = card._latestHass;
+        const old = card._host.latestHass;
         card.hass = { ...old, states: {
             ...old.states, "sensor.schedule": { state: "on", attributes: {} },
         } };
         const before = card._hass.states["sensor.schedule"].state;
         card.dispatchEvent(new CustomEvent("helman-watched-entities", {
-            detail: { entityIds: ["sensor.schedule"] }, bubbles: true, composed: true,
+            detail: { source: "schedule", entityIds: ["sensor.schedule"] }, bubbles: true, composed: true,
         }));
         await card.updateComplete;
         return { before, after: card._hass.states["sensor.schedule"].state };

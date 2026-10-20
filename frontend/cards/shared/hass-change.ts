@@ -64,26 +64,31 @@ export function hassContextChanged(
  * must watch, so the card at the top can filter `hass` without duplicating the
  * fetch that discovered them.
  *
- * The detail carries the dispatcher's *whole* set, never a delta, and the card
- * unions the sets it receives. Composed as well as bubbling: every dispatcher is
- * at least one shadow root deep inside its card.
+ * The detail carries a `source` key and that dispatcher's *whole* set, never a
+ * delta. The card maintains a map keyed by source with replace-per-source
+ * semantics (the inspector card unions as a documented special case). Composed
+ * as well as bubbling: every dispatcher is at least one shadow root deep inside
+ * its card.
  */
 export const WATCHED_ENTITIES_EVENT = "helman-watched-entities";
 
 export interface WatchedEntitiesDetail {
+    source: string;
     entityIds: readonly string[];
 }
 
 /** Dispatch a watched-entity set from inside a card's shadow tree. */
 export function dispatchWatchedEntities(
     element: EventTarget,
-    entityIds: readonly string[],
+    source: string,
+    entityIds: Iterable<string | null | undefined>,
 ): void {
+    const ids = [...new Set([...entityIds].filter((id): id is string => !!id))];
     element.dispatchEvent(
         new CustomEvent<WatchedEntitiesDetail>(WATCHED_ENTITIES_EVENT, {
             bubbles: true,
             composed: true,
-            detail: { entityIds },
+            detail: { source, entityIds: ids },
         }),
     );
 }

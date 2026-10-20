@@ -1,9 +1,8 @@
-import { EnergyNodeConfig } from "./energy-node-config";
-import type { DevicePhase, ValueType } from "../helman-api";
-import type { ValueKind } from "../shared/format";
+import type { DevicePhase, SignedPower, ValueType } from "../../helman-api";
+import type { ValueKind } from "../format";
 
 export class TreeItem {
-    constructor(id: string, name: string, powerSensorId: string | null, switchEntityId: string | null, historyBuckets: number, nodeConfig?: EnergyNodeConfig) {
+    constructor(id: string, name: string, powerSensorId: string | null, switchEntityId: string | null, historyBuckets: number) {
         this.id = id;
         this.name = name;
         this.powerSensorId = powerSensorId;
@@ -15,7 +14,6 @@ export class TreeItem {
         this.valueType = 'default';
         this.isSource = false;
         this.icon = undefined;
-        this.nodeConfig = nodeConfig;
     }
 
     public id: string;
@@ -57,7 +55,17 @@ export class TreeItem {
     public ratioSensorId?: string;
     public icon?: string;
     public sortChildrenByPower?: boolean;
-    public nodeConfig?: EnergyNodeConfig;
+    // What the cards read off an energy node, resolved by the backend
+    // (`EnergyNodeFields`); null on every item a field does not apply to.
+    public power: SignedPower | null = null;
+    public maxPowerW: number | null = null;
+    public socEntityId: string | null = null;
+    public minSocEntityId: string | null = null;
+    public maxSocEntityId: string | null = null;
+    public remainingEnergyEntityId: string | null = null;
+    public todayEnergyEntityId: string | null = null;
+    public todayImportEntityId: string | null = null;
+    public todayExportEntityId: string | null = null;
     // What powerValue/powerHistory carry. The power card reads live sensors and
     // leaves this at watts; the solar inspector builds items from a past slot's
     // energy and sets "energy" so the box is labelled in Wh.

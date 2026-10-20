@@ -10,19 +10,9 @@ by comparing identity. So two habits are forbidden in this codebase.
 `language`, and it carries `states`. A component may hold it and read through
 it, but it must never re-render merely because it was handed a new one.
 
-The card at the top of each tree decides what a change *is* — the identity of
-`connection`, the value of the fields it reads, and the state objects of the
-entities it actually looks up — and only then passes the new `hass` down.
-`helman-card.set hass` is the worked example; the two predicates in
-[`shared/hass-change.ts`](shared/hass-change.ts) are the shared, policy-free
-half of it.
+The card at the top of each tree decides what a change *is* — the identity of `connection`, the value of the fields it reads, and the state objects of the entities it actually looks up — and only then passes the new `hass` down. `EnergyCardHost.setHass` in [`shared/energy-card-host.ts`](shared/energy-card-host.ts), which both `helman-card` and `helman-simple-card` hand their `hass` to, is the worked example; the two predicates in [`shared/hass-change.ts`](shared/hass-change.ts) are the shared, policy-free half of it.
 
-What an *empty* watch set means is a per-card policy and stays in that card's
-setter. `helman-card` and `helman-simple-card` read it as "the device tree has
-not hydrated yet" and pass everything through. `helman-solar-inspector-card`
-reads it as "watch nothing" — its subtree can legitimately watch no entity for a
-long time, or forever while the schedule band is collapsed, and passing
-everything through would mean never filtering at all.
+What an *empty* watch set means is a per-card policy and stays where that card's `hass` is filtered. `EnergyCardHost.setHass` reads it, for `helman-card` and `helman-simple-card` both, as "the device tree has not hydrated yet" and passes everything through. `helman-solar-inspector-card` reads it as "watch nothing" — its subtree can legitimately watch no entity for a long time, or forever while the schedule band is collapsed, and passing everything through would mean never filtering at all.
 
 ## A value crossing a component boundary keeps its identity while its meaning is unchanged
 

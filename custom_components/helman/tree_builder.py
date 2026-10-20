@@ -3,12 +3,20 @@ from __future__ import annotations
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
 from functools import partial
-from typing import Literal
+from typing import Any, Literal
 from types import MappingProxyType
 
 from homeassistant.core import HomeAssistant
 
-from .const import CONSUMPTION_TOTAL_ENTITY_ID, PRODUCTION_TOTAL_ENTITY_ID
+from .config_read import read_entity_id, read_mapping
+from .const import (
+    BATTERY_DEFAULT_MAX_POWER_W,
+    CONSUMPTION_TOTAL_ENTITY_ID,
+    GRID_DEFAULT_MAX_POWER_W,
+    PRODUCTION_TOTAL_ENTITY_ID,
+    SOLAR_DEFAULT_MAX_POWER_W,
+)
+from .node_details.solar import _positive
 from .visualization import read_visualization
 from .controllables.config import (
     Device,
@@ -28,12 +36,59 @@ from .controllables.config import (
     resolve_device_name,
     running_signal,
 )
-from .power_polarity import consumer_value_type, source_value_type
+from .power_polarity import consumer_value_type, power_sign, source_value_type
 
 
 def share_power_entity_id(device_id: str) -> str:
     """The Helman sensor publishing a meterless child's share of its parent's power."""
     return f"sensor.helman_share_power_{share_sensor_slug(device_id)}"
+
+
+_DEFAULT_MAX_POWER_W = {
+    "solar": SOLAR_DEFAULT_MAX_POWER_W,
+    "battery": BATTERY_DEFAULT_MAX_POWER_W,
+    "grid": GRID_DEFAULT_MAX_POWER_W,
+}
+
+
+def _max_power_w(config: Mapping[str, Any], device: str) -> float:
+    """``device``'s configured ``max_power`` above zero, else its default, W."""
+    value = _positive(config.get("max_power"))
+    return value if value is not None else float(_DEFAULT_MAX_POWER_W[device])
+
+
+def energy_node_fields(device: str, config: Mapping[str, Any]) -> dict[str, Any]:
+    """The resolved fields a card reads off ``device``'s nodes, as ``TreeItemDTO`` kwargs.
+
+    The stored config never reaches the card: a renamed key is renamed here and
+    nowhere else, and every default is the backend's own. Both halves of a
+    battery or grid carry the same fields.
+    """
+    entities = read_mapping(config.get("entities"))
+
+    def entity(key: str) -> str | None:
+        return read_entity_id(entities.get(key))
+
+    if device == "house":
+        return {"today_energy_entity_id": entity("today_energy")}
+    fields: dict[str, Any] = {"max_power_w": _max_power_w(config, device)}
+    if device == "solar":
+        fields["today_energy_entity_id"] = entity("today_energy")
+        return fields
+    fields["power"] = {"entityId": entity("power"), "sign": power_sign(config, device)}
+    if device == "battery":
+        fields.update(
+            soc_entity_id=entity("capacity"),
+            min_soc_entity_id=entity("min_soc"),
+            max_soc_entity_id=entity("max_soc"),
+            remaining_energy_entity_id=entity("remaining_energy"),
+        )
+    else:
+        fields.update(
+            today_import_entity_id=entity("today_import"),
+            today_export_entity_id=entity("today_export"),
+        )
+    return fields
 
 
 def unmeasured_power_entity_id(node_id: str) -> str:
@@ -120,7 +175,6 @@ class TreeItemDTO:
     is_unmeasured: bool
     is_virtual: bool
     value_type: Literal["default", "positive", "negative"]
-    source_config: dict | None
     icon: str | None
     compact: bool
     show_additional_info: bool
@@ -159,6 +213,20 @@ class TreeItemDTO:
     # wiring the house detail estimates per-phase load from; ``None`` when
     # unassigned and for every other item.
     phase: str | None = None
+    # What the cards read off an energy node, resolved from the active config
+    # by ``energy_node_fields``; ``None`` on every node a field does not apply
+    # to. ``power`` is a battery's or grid's sensor with the sign that reads it
+    # in Helman's convention (``{"entityId", "sign": 1 | -1}``): ``value_type``
+    # keeps only one half's magnitude, and the cards need the signed reading.
+    power: dict | None = None
+    max_power_w: float | None = None
+    soc_entity_id: str | None = None
+    min_soc_entity_id: str | None = None
+    max_soc_entity_id: str | None = None
+    remaining_energy_entity_id: str | None = None
+    today_energy_entity_id: str | None = None
+    today_import_entity_id: str | None = None
+    today_export_entity_id: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -172,7 +240,6 @@ class TreeItemDTO:
             "valueType": self.value_type,
             "groups": self.groups,
             "groupBadgeTexts": self.group_badge_texts,
-            "sourceConfig": self.source_config,
             "icon": self.icon,
             "compact": self.compact,
             "showAdditionalInfo": self.show_additional_info,
@@ -188,6 +255,15 @@ class TreeItemDTO:
             "energyEntityId": self.energy_entity_id,
             "isEstimated": self.is_estimated,
             "phase": self.phase,
+            "power": self.power,
+            "maxPowerW": self.max_power_w,
+            "socEntityId": self.soc_entity_id,
+            "minSocEntityId": self.min_soc_entity_id,
+            "maxSocEntityId": self.max_soc_entity_id,
+            "remainingEnergyEntityId": self.remaining_energy_entity_id,
+            "todayEnergyEntityId": self.today_energy_entity_id,
+            "todayImportEntityId": self.today_import_entity_id,
+            "todayExportEntityId": self.today_export_entity_id,
         }
 
 
@@ -261,7 +337,6 @@ class HelmanTreeBuilder:
                 is_unmeasured=False,
                 is_virtual=False,
                 value_type=consumer_value_type(house_config, "house"),
-                source_config=house_config,
                 source_type="house",
                 icon="mdi:home",
                 compact=True,
@@ -271,6 +346,7 @@ class HelmanTreeBuilder:
                 hide_children_indicator=True,
                 sort_children_by_power=True,
                 children=house_children,
+                **energy_node_fields("house", house_config),
             )
             self._add_unmeasured_items(house_node, own_carved)
             consumers.append(house_node)
@@ -326,7 +402,6 @@ class HelmanTreeBuilder:
             is_unmeasured=False,
             is_virtual=False,
             value_type=value_type,
-            source_config=config,
             icon=icon,
             compact=True,
             show_additional_info=True,
@@ -336,6 +411,7 @@ class HelmanTreeBuilder:
             sort_children_by_power=False,
             ratio_sensor_id=f"sensor.helman_{source_type}_source_ratio",
             source_type=source_type,
+            **energy_node_fields(source_type, config),
         )
 
     def _make_consumer_node(
@@ -355,7 +431,6 @@ class HelmanTreeBuilder:
             is_unmeasured=False,
             is_virtual=False,
             value_type=value_type,
-            source_config=config,
             icon=icon,
             compact=True,
             show_additional_info=True,
@@ -364,6 +439,7 @@ class HelmanTreeBuilder:
             hide_children_indicator=False,
             sort_children_by_power=False,
             source_type=source_type,
+            **energy_node_fields(source_type, config),
         )
 
     def _build_house_children(
@@ -428,7 +504,6 @@ class HelmanTreeBuilder:
                 is_unmeasured=False,
                 is_virtual=False,
                 value_type="default",
-                source_config=None,
                 icon=icon,
                 compact=False,
                 show_additional_info=False,
@@ -485,7 +560,6 @@ class HelmanTreeBuilder:
             is_unmeasured=False,
             is_virtual=False,
             value_type="default",
-            source_config=None,
             icon=resolve_device_icon(device, entity_icon=self._entity_icon),
             compact=False,
             show_additional_info=False,
@@ -537,7 +611,6 @@ class HelmanTreeBuilder:
                 is_unmeasured=True,
                 is_virtual=False,
                 value_type="default",
-                source_config=None,
                 icon=None,
                 compact=False,
                 show_additional_info=False,

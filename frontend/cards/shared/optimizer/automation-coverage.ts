@@ -1,7 +1,7 @@
 import { callHelman } from "../data/helman-commands";
 import type { HomeAssistant } from "../../../types/ha";
 import type { AutomationCoverageStateDTO } from "../../helman-api";
-import { getSharedDataChangedFeed } from "../../helman/data-changed";
+import { getSharedDataChangedFeed } from "../data/data-changed";
 
 /**
  * Which automations drive one controllable, and whether any of them is live.

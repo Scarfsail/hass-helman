@@ -1,9 +1,8 @@
 import { pad2 } from "../shared/time/slot-time";
 import { LitElement, css, html } from "lit-element";
 import { customElement, property } from "lit/decorators.js";
-import { TreeItem } from "./tree-item";
+import { TreeItem } from "../shared/data/tree-item";
 import { nothing, TemplateResult } from "lit-html";
-import { BatteryNodeConfig, GridNodeConfig, HouseNodeConfig, SolarNodeConfig } from "./energy-node-config";
 import type { HomeAssistant } from "../../types/ha";
 import { sharedStyles } from "./shared-styles";
 import { convertToKWh, getDisplayEnergyUnit } from "./energy-unit-converter";
@@ -122,30 +121,29 @@ export class HelmanTreeItemInfo extends LitElement {
     }
 
     private _renderDeviceInfo(device: TreeItem): TemplateResult | typeof nothing {
-        const batteryConfig = device.nodeConfig as BatteryNodeConfig;
-        if (batteryConfig.entities.capacity)
-            return this._renderBatteryInfo(device, batteryConfig)
+        if (device.socEntityId)
+            return this._renderBatteryInfo(device)
 
         if (device.sourceType === "solar")
-            return this._renderSolarInfo(device, device.nodeConfig as SolarNodeConfig)
+            return this._renderSolarInfo(device)
 
-        const gridConfig = device.nodeConfig as GridNodeConfig;
-        if (gridConfig.entities.today_export || gridConfig.entities.today_import)
-            return this._renderGridInfo(device, gridConfig)
+        if (device.todayExportEntityId || device.todayImportEntityId)
+            return this._renderGridInfo(device)
 
-        const houseConfig = device.nodeConfig as HouseNodeConfig;
-        if (device.id === "house" && houseConfig.entities.today_energy)
-            return this._renderHouseInfo(houseConfig)
+        if (device.id === "house" && device.todayEnergyEntityId)
+            return this._renderHouseInfo(device)
 
         return nothing;
     }
 
-    private _renderGridInfo(device: TreeItem, gridConfig: GridNodeConfig): TemplateResult | typeof nothing {
-        if (!gridConfig.entities.today_export || !gridConfig.entities.today_import) {
+    private _renderGridInfo(device: TreeItem): TemplateResult | typeof nothing {
+        const todayImportEntityId = device.todayImportEntityId;
+        const todayExportEntityId = device.todayExportEntityId;
+        if (!todayExportEntityId || !todayImportEntityId) {
             return nothing;
         }
-        const todayImportState = this.hass.states[gridConfig.entities.today_import];
-        const todayExportState = this.hass.states[gridConfig.entities.today_export];
+        const todayImportState = this.hass.states[todayImportEntityId];
+        const todayExportState = this.hass.states[todayExportEntityId];
 
         if (!todayImportState || !todayExportState) {
             return nothing;
@@ -164,21 +162,22 @@ export class HelmanTreeItemInfo extends LitElement {
         if (device.isSource) {
             const importDisplay = getDisplayEnergyUnit(todayImportKWh);
             return html`
-                <span class="clickable" @click=${() => this._showMoreInfo(gridConfig.entities.today_import!)}>⚡ ${importDisplay.value.toFixed(1)} <span class="units">${importDisplay.unit}</span></span>
+                <span class="clickable" @click=${() => this._showMoreInfo(todayImportEntityId)}>⚡ ${importDisplay.value.toFixed(1)} <span class="units">${importDisplay.unit}</span></span>
             `;
         } else {
             const exportDisplay = getDisplayEnergyUnit(todayExportKWh);
             return html`
-                <span class="clickable" @click=${() => this._showMoreInfo(gridConfig.entities.today_export!)}>⚡ ${exportDisplay.value.toFixed(1)} <span class="units">${exportDisplay.unit}</span></span>
+                <span class="clickable" @click=${() => this._showMoreInfo(todayExportEntityId)}>⚡ ${exportDisplay.value.toFixed(1)} <span class="units">${exportDisplay.unit}</span></span>
             `;
         }
     }
 
-    private _renderSolarInfo(device: TreeItem, solarConfig: SolarNodeConfig): TemplateResult | typeof nothing {
-        if (!solarConfig.entities.today_energy) {
+    private _renderSolarInfo(device: TreeItem): TemplateResult | typeof nothing {
+        const todayEnergyEntityId = device.todayEnergyEntityId;
+        if (!todayEnergyEntityId) {
             return nothing;
         }
-        const todayEnergyState = this.hass.states[solarConfig.entities.today_energy];
+        const todayEnergyState = this.hass.states[todayEnergyEntityId];
         const forecastEnergyState = this.hass.states[SOLAR_REMAINING_TODAY_ENERGY_ENTITY_ID];
 
         if (!todayEnergyState || !forecastEnergyState) {
@@ -200,17 +199,18 @@ export class HelmanTreeItemInfo extends LitElement {
         const forecastDisplay = getDisplayEnergyUnit(forecastEnergyKWh);
 
         return html`
-            <span class="clickable" @click=${() => this._showMoreInfo(solarConfig.entities.today_energy!)}>⚡${todayDisplay.value.toFixed(1)} <span class="units">${todayDisplay.unit}</span></span>
+            <span class="clickable" @click=${() => this._showMoreInfo(todayEnergyEntityId)}>⚡${todayDisplay.value.toFixed(1)} <span class="units">${todayDisplay.unit}</span></span>
             <span class="clickable" @click=${() => this._showMoreInfo(SOLAR_REMAINING_TODAY_ENERGY_ENTITY_ID)}>✨${forecastDisplay.value.toFixed(1)} <span class="units">${forecastDisplay.unit}</span></span>
         `;
     }
 
-    private _renderHouseInfo(houseConfig: HouseNodeConfig): TemplateResult | typeof nothing {
-        if (!houseConfig.entities.today_energy) {
+    private _renderHouseInfo(device: TreeItem): TemplateResult | typeof nothing {
+        const todayEnergyEntityId = device.todayEnergyEntityId;
+        if (!todayEnergyEntityId) {
             return nothing;
         }
 
-        const todayEnergyState = this.hass.states[houseConfig.entities.today_energy];
+        const todayEnergyState = this.hass.states[todayEnergyEntityId];
         if (!todayEnergyState) {
             return nothing;
         }
@@ -224,12 +224,12 @@ export class HelmanTreeItemInfo extends LitElement {
         const todayDisplay = getDisplayEnergyUnit(todayEnergyKWh);
 
         return html`
-            <span class="clickable" @click=${() => this._showMoreInfo(houseConfig.entities.today_energy!)}>⚡ ${todayDisplay.value.toFixed(1)} <span class="units">${todayDisplay.unit}</span></span>
+            <span class="clickable" @click=${() => this._showMoreInfo(todayEnergyEntityId)}>⚡ ${todayDisplay.value.toFixed(1)} <span class="units">${todayDisplay.unit}</span></span>
         `;
     }
 
-    private _renderBatteryInfo(device: TreeItem, cfg: BatteryNodeConfig): TemplateResult | typeof nothing {
-        const targetSocEntityId = device.isSource ? cfg.entities.min_soc : cfg.entities.max_soc;
+    private _renderBatteryInfo(device: TreeItem): TemplateResult | typeof nothing {
+        const targetSocEntityId = device.isSource ? device.minSocEntityId : device.maxSocEntityId;
         const targetSocState = targetSocEntityId ? this.hass?.states[targetSocEntityId] : null;
         const targetSoc = targetSocState ? parseFloat(targetSocState.state) : NaN;
 
