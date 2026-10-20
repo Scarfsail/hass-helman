@@ -4,7 +4,7 @@ import type { ConfigSnapshot, JsonObject, SaveConfigResponse, ValidationReport, 
 import type { ConfigDefaults } from "../config/config-defaults";
 import type { EntityInspectionResult } from "../config/entity-group";
 import type { OptimizerSchemaDocument } from "../optimizer/optimizer-schema";
-import type { NavigationRange } from "../../helman-solar-inspector/helman-solar-aggregate-chart";
+import type { NavigationRange } from "../../helman-solar-inspector/inspector-navigation";
 import type { ApplianceComponent } from "../../helman-solar-inspector/solar-inspector-model";
 import type { TrainingStatus } from "../../../config-editor/training-status";
 

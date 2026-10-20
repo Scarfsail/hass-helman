@@ -6,26 +6,20 @@ import { LitElement, css, html, svg, unsafeCSS, type PropertyValues, type Templa
 import { property, query, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../types/ha";
 import { toAveragePower, type ChartEntry } from "./chart-power";
-import { symmetricPowerAxis } from "./chart-axis";
 import { renderSlotGridlines, slotGridTicks, type SlotGridTick } from "../shared/slot-gridlines";
 import { hourAnchorOffset, selectLabelledColumns, stripValueLabel } from "../shared/strip-value-labels";
 import {
   SLOT_MINUTES,
   accumulateBands,
   bandRuns,
-  lastStackSlot,
   stackSlots,
-  stackTotals,
-  toSlotMap,
   type StackBand,
-  type StackLayer,
   type StackSet,
 } from "./chart-stack";
 import {
   buildSocBars,
   slotToMinutes,
   type SocBar,
-  type SocBoundsPoint,
 } from "./chart-soc";
 import { SOC_COLUMN_OPACITY, SOC_DIRECTION_COLOR } from "../shared/soc-columns";
 import {
@@ -46,7 +40,7 @@ import {
 } from "../shared/hover-tooltip";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import { dispatchWatchedEntities } from "../shared/hass-change";
-import { formatIsoDate, todayKey, addDays, daysBetween, parseDayKey } from "../shared/time/day-key";
+import { todayKey } from "../shared/time/day-key";
 import "./helman-solar-schedule-band-strip";
 import "../shared/schedule/dialogs/scheduling-day-editor-host";
 import type {
@@ -71,7 +65,6 @@ import { buildForecastHealthItems } from "../shared/forecast-health-banner";
 import { fetchDayAggregates, type ForecastPayload } from "../helman-api";
 import {
   buildHistoryDaysFromAggregates,
-  calendarWindow,
   resolveFirstWeekdayIndex,
   type SolarInspectorHistoryDay,
 } from "./day-pill-model";
@@ -82,11 +75,10 @@ import type {
   AggregateBucketOpenDetail,
   AggregateBucketSelectDetail,
   AggregateBucketHoverDetail,
-  NavigationRange,
   SpanAggregatePayload,
   SpanAggregateRow,
 } from "./helman-solar-aggregate-chart";
-import type { PriceColumn, PriceColumnsDetail, PriceRailPoint } from "./helman-solar-price-strip";
+import type { PriceColumnsDetail } from "./helman-solar-price-strip";
 import {
   currencyFromPriceUnit,
   sumMoney,
@@ -103,40 +95,25 @@ import {
   houseForecastError,
   resolveSelectedTrainingDate,
   resolveSelectedImpactSlot,
-  type BatterySocPoint,
-  type FactorPoint,
   type ApplianceComponent,
   type HouseBreakdownPoint,
-  type ImpactPoint,
   type InspectorPoint,
-  type TrainingExplainability,
   type TrainingSlotExplainability,
   type ContributionRow,
 } from "./solar-inspector-model.js";
 import type { BucketSourceMix } from "../shared/power-history-bars";
 import {
-  actualsCoverUntil,
   aggregateBreakdownOverSlots,
-  aggregateBreakdownSeries,
   applianceKey,
   breakdownCoversSlots,
   consumerBarsOverSlots,
   partBarsOverSlots,
   expandSlotsToNative,
   houseSourceMixBySlot,
-  dropPartialBuckets,
-  seriesCoverage,
-  missingMinutesByBucket,
-  type CoverageSeries,
   aggregateImpactOverSlots,
-  aggregateImpactSeries,
-  aggregateWhSeries,
   minutesToSlot,
-  sampleBounds,
   socBarAtSelectionEnd,
   sumWhOverSlots,
-  sampleBucketEndOnGrid,
-  sampleOnGrid,
   snapSlotToGrid,
   splitHouseByDeferrable,
 } from "./slot-aggregation.js";
@@ -158,48 +135,41 @@ import { getSharedScheduleOwner, type SharedScheduleOwner } from "../shared/sche
 import type { ScheduleOwnerSnapshot } from "../shared/schedule/schedule-types";
 import type { ScheduleHoverTooltipContent } from "./helman-solar-schedule-band-strip";
 import { EMPTY_SELECTED_MINUTES, type ScheduleStripGeometry } from "./strip-geometry";
+import { memoOne } from "../shared/memo-one";
+import {
+  MINUTES_PER_DAY,
+  buildDayView,
+  buildStacks,
+  chartLayout,
+  dayCoverage,
+  dayHasSeries,
+  isSeriesEnabled,
+  isSeriesVisible,
+  payloadGranularity,
+  selectedMinutes,
+  socBars,
+  stripGeometry,
+  type ChartLayout,
+  type ChartStacks,
+  type DayCoverage,
+  type DayView,
+  type InspectorPayload,
+  type PriceColumn,
+  type PriceRailPoint,
+  type SeriesKey,
+} from "./inspector-day-model";
+import {
+  monthBounds,
+  parseOrToday as navigationParseOrToday,
+  pillWindow as navigationPillWindow,
+  spanBounds,
+  viewStopGroups,
+  type InspectorViewMode,
+  type NavigationRange,
+} from "./inspector-navigation";
 
 /** Slot widths the header toggle and card config offer, in minutes. */
 const SLOT_SIZE_OPTIONS = [15, 30, 60] as const;
-
-/** Day view, or one of the two history-only aggregate widths. */
-type InspectorViewMode = "day" | "month" | "year";
-
-/** One stop of the width toggle: a view to be in, and how wide its slots are. */
-interface ViewStop {
-  label: string;
-  mode: InspectorViewMode;
-  minutes?: 15 | 30 | 60;
-}
-
-/**
- * The five stops the width toggle offers, narrowest first, in three groups.
- *
- * One control, because widening the axis is one idea to a reader: quarter hour,
- * half hour, hour, day, month. It is deliberately *not* five slot widths.
- * `_slotMinutes` means minutes everywhere -- some twenty arithmetic sites read
- * it as a number and three child strips re-floor by it -- and a month has no
- * fixed minute count, so the two wider stops carry a view mode instead and the
- * minutes field simply stops applying. Keeping them in one list is what makes
- * the toggle read as one axis while the states behind it stay honest.
- *
- * The grouping says which stops are the same thing. A group is one read of one
- * subject: the day view's slots drawn at three resolutions, a month of days, a
- * year of months. Moving within a group re-draws what is already on screen;
- * moving between groups fetches something else and swaps the chart under the
- * reader. The five stops looked identical while meaning those two very
- * different things, so the frame around each group is the toggle saying which
- * presses are which.
- */
-const VIEW_STOP_GROUPS: readonly (readonly ViewStop[])[] = [
-  [
-    { label: "15", mode: "day", minutes: 15 },
-    { label: "30", mode: "day", minutes: 30 },
-    { label: "60", mode: "day", minutes: 60 },
-  ],
-  [{ label: "D", mode: "month" }],
-  [{ label: "M", mode: "year" }],
-];
 
 /** Below this page width the chart opens at the coarser default. */
 const NARROW_VIEWPORT_PX = 768;
@@ -213,19 +183,6 @@ function defaultSlotMinutesForViewport(): number {
   const width = typeof window !== "undefined" ? window.innerWidth : 0;
   return width > 0 && width < NARROW_VIEWPORT_PX ? 60 : 30;
 }
-
-export type SeriesKey =
-  | "raw"
-  | "corrected"
-  | "actual"
-  | "houseForecast"
-  | "houseActual"
-  | "batterySocForecast"
-  | "batterySocActual"
-  | "gridForecast"
-  | "gridActual"
-  | "batteryForecast"
-  | "batteryActual";
 
 const DEFAULT_HIDDEN_SERIES: readonly SeriesKey[] = ["raw"];
 
@@ -251,35 +208,6 @@ const SERIES_LABEL_KEYS: Record<SeriesKey, string> = {
 /** Every series name, in one list, for the card's `chart_series` selector. */
 export const SERIES_KEYS = Object.keys(SERIES_LABEL_KEYS) as SeriesKey[];
 
-/**
- * The series that stack. The SoC series and the raw forecast are drawn
- * elsewhere and stack nothing, so they are not in here.
- */
-type StackedSeriesKey = Extract<
-  SeriesKey,
-  | "corrected"
-  | "actual"
-  | "houseForecast"
-  | "houseActual"
-  | "gridForecast"
-  | "gridActual"
-  | "batteryForecast"
-  | "batteryActual"
->;
-
-/**
- * Flip a consumption-positive payload series into the chart's sign convention.
- *
- * The payload counts energy leaving the house's demand as positive: the house
- * consuming, the grid taking an export, the battery charging. The chart instead
- * draws whatever *supplies* the house upwards and whatever *draws from it*
- * downwards, so grid import, battery discharge and solar all rise above zero.
- * Solar is production-positive already and needs no flip.
- */
-function asSupplyPositive(points: InspectorPoint[]): InspectorPoint[] {
-  return points.map((point) => ({ ...point, valueWh: -point.valueWh }));
-}
-
 function negateWh(value: number | null): number | null {
   return value === null || !Number.isFinite(value) ? value : -value;
 }
@@ -290,8 +218,6 @@ const MUTED_FORECAST_OPACITY = 0.35;
 type StrokeStyle = { width: number; opacity: number };
 
 const POWER_STROKE: StrokeStyle = { width: 2, opacity: 1 };
-
-const MINUTES_PER_DAY = 1440;
 
 /**
  * The stand-in for a rail an older payload does not carry. A shared frozen array
@@ -367,8 +293,6 @@ function hatchId(color: string): string {
   return `stack-hatch-${color.replace("#", "")}`;
 }
 
-type ChartStacks = { forecast: StackSet; actual: StackSet };
-
 /**
  * Close an interval series with a vertex at the end of its last slot.
  *
@@ -420,27 +344,6 @@ function splitForecastAtActuals<T>(
 
 type RatioBounds = { min: number; max: number; maxAbsDeviation: number };
 
-type ChartLayout = {
-  width: number;
-  height: number;
-  margin: { top: number; right: number; bottom: number; left: number };
-  plotWidth: number;
-  plotHeight: number;
-  minKw: number;
-  maxKw: number;
-  yTicks: number[];
-  /** Minute-of-day at the left edge of the plot; 0 unless the day is cropped. */
-  dayStartMinutes: number;
-  /** Minute-of-day at the right edge of the plot; 1440 unless the day is cropped. */
-  dayEndMinutes: number;
-  /** Pixel width of one 15-minute slot under the current x scale. */
-  slotWidth: number;
-  xForMinutes: (m: number) => number;
-  yForW: (w: number) => number;
-  /** Inverse of `yForW`: the watts a plot-space y coordinate reads as. */
-  wForY: (y: number) => number;
-};
-
 /** The four things the combined chart stacks; one popup section per family. */
 type SeriesFamily = "solar" | "house" | "battery" | "grid";
 
@@ -454,84 +357,6 @@ const FAMILY_SERIES: Record<SeriesFamily, readonly [SeriesKey, SeriesKey]> = {
   house: ["houseActual", "houseForecast"],
   battery: ["batteryActual", "batteryForecast"],
   grid: ["gridActual", "gridForecast"],
-};
-
-export type InspectorPayload = {
-  date: string;
-  timezone: string;
-  /**
-   * How wide one point of every measured series is: 15 for a day still held in
-   * raw recorder states, 60 for one read back from hourly long-term statistics
-   * after the recorder purged those states.
-   *
-   * Optional only for an older backend that predates the field; absent reads as
-   * 15, which is what every day was before the statistics source existed.
-   */
-  dataGranularityMinutes?: number;
-  status: string;
-  effectiveVariant: string | null;
-  trainedAt: string | null;
-  range: NavigationRange & {
-    canGoPrevious: boolean;
-    canGoNext: boolean;
-    isToday: boolean;
-    isFuture: boolean;
-  };
-  series: {
-    raw: InspectorPoint[];
-    corrected: InspectorPoint[];
-    actual: InspectorPoint[];
-    invalidated: InspectorPoint[];
-    factors: FactorPoint[];
-    impact: ImpactPoint[];
-    houseForecast: InspectorPoint[];
-    houseActual: InspectorPoint[];
-    houseActualBreakdown: HouseBreakdownPoint[];
-    /** The same shape ahead of the clock: the base load plus each scheduled appliance. */
-    houseForecastBreakdown: HouseBreakdownPoint[];
-    batterySocForecast: BatterySocPoint[];
-    batterySocActual: BatterySocPoint[];
-    gridForecast: InspectorPoint[];
-    gridActual: InspectorPoint[];
-    batteryForecast: InspectorPoint[];
-    batteryActual: InspectorPoint[];
-    /**
-     * What the grid charged and paid per slot. Unlike the forecast/actual pairs
-     * above, each rail already spans the whole day: the backend joins recorder
-     * history behind the clock with the live feed ahead of it.
-     */
-    importPrice: PriceRailPoint[];
-    exportPrice: PriceRailPoint[];
-    /**
-     * What each slot cost and earned, priced in Python from the two grid
-     * directions and the rails above. Drawn series: the actual one stops at the
-     * slot in progress, like every other actual, while `totals` below counts it.
-     */
-    moneyActual: MoneyPoint[];
-    moneyForecast: MoneyPoint[];
-  };
-  totals: {
-    rawWh: number | null;
-    correctedWh: number | null;
-    actualWh: number | null;
-    houseForecastWh: number | null;
-    houseActualWh: number | null;
-    gridForecastWh: number | null;
-    gridActualWh: number | null;
-    batteryForecastWh: number | null;
-    batteryActualWh: number | null;
-    /** Null where the day priced nothing for that vintage. */
-    moneyActual: MoneyTotals | null;
-    moneyForecast: MoneyTotals | null;
-  };
-  availability: {
-    hasProfile: boolean;
-  };
-  /** Per-slot SoC window the battery is driven within; empty when unconfigured. */
-  batterySocBounds: SocBoundsPoint[];
-  /** The currency-per-energy unit both price rails are quoted in. */
-  priceUnit: string | null;
-  trainingExplainability: TrainingExplainability | null;
 };
 
 /**
@@ -688,7 +513,7 @@ export class HelmanSolarInspector extends LitElement {
   /**
    * Which width the toggle is on: the day view, or one of the two aggregate
    * ones. Its own state rather than a wider `_slotMinutes`, for the reason
-   * :data:`VIEW_STOP_GROUPS` gives.
+   * `VIEW_STOP_GROUPS` in `inspector-navigation.ts` gives.
    */
   @state() private _viewMode: InspectorViewMode = "day";
   /**
@@ -768,40 +593,22 @@ export class HelmanSolarInspector extends LitElement {
   private _slotMinutesInitialized = false;
   private _fallbackLocalize: LocalizeFunction = (key: string) => key;
   /**
-   * The day view's derived model, and the inputs each half of it was derived
-   * from.
+   * The day view's derived model.
    *
    * Everything below the payload -- the re-bucketed view, the coverage marks,
    * the two stacks, the axis, the SoC columns, the strips' geometry and the
    * selection the strips band -- used to be built inside `render()`, so a
    * pointer report over the chart rebuilt the whole day at the rate a mouse
-   * moves. It is built in `willUpdate` instead, behind keys naming exactly the
-   * inputs each step reads: a resize does not re-bucket the day, a legend
-   * toggle does not re-derive an axis it cannot move, and a hover rebuilds
-   * nothing at all.
+   * moves. It is built in `willUpdate` instead, each step a pure function of
+   * `inspector-day-model.ts` remembered on exactly the arguments it reads: a
+   * resize does not re-bucket the day, a legend toggle does not re-derive an
+   * axis it cannot move, and a hover rebuilds nothing at all.
    *
-   * Keys are compared field by field, and every field in one is itself
-   * identity-stable -- see `../README.md`, "Card rendering discipline".
+   * Every argument is itself identity-stable -- see `../README.md`, "Card
+   * rendering discipline".
    */
-  private _view: InspectorPayload | null = null;
-  private _viewFor: { payload: InspectorPayload; slot: number } | null = null;
-  private _coverageFor:
-    | {
-        payload: InspectorPayload;
-        slot: number;
-        hidden: ReadonlySet<SeriesKey>;
-        enabled: readonly SeriesKey[] | undefined;
-      }
-    | null = null;
+  private _view: DayView | null = null;
   private _stacks: ChartStacks | null = null;
-  private _stacksFor:
-    | {
-        view: InspectorPayload;
-        hidden: ReadonlySet<SeriesKey>;
-        enabled: readonly SeriesKey[] | undefined;
-        houseFocus: boolean;
-      }
-    | null = null;
   /**
    * The first slot the forecast has to speak for alone, off the current stacks.
    * The SoC columns and the popup's actual/forecast split read it, so it is
@@ -809,58 +616,33 @@ export class HelmanSolarInspector extends LitElement {
    */
   private _forecastFillFromMinutes = Number.NEGATIVE_INFINITY;
   private _layout: ChartLayout | null = null;
-  private _layoutFor:
-    | {
-        view: InspectorPayload;
-        stacks: ChartStacks;
-        width: number;
-        slot: number;
-        daylightOnly: boolean;
-        threshold: number;
-        hidden: ReadonlySet<SeriesKey>;
-        enabled: readonly SeriesKey[] | undefined;
-      }
-    | null = null;
   /** The x scale the three strips share, one object per layout. */
   private _stripGeometry: ScheduleStripGeometry | null = null;
   private _socBarsModel: readonly SocBar[] = EMPTY_SOC_BARS;
-  private _socBarsFor:
-    | {
-        view: InspectorPayload;
-        hidden: ReadonlySet<SeriesKey>;
-        enabled: readonly SeriesKey[] | undefined;
-        fillFrom: number;
-      }
-    | null = null;
   private _selectedMinutesModel: readonly number[] = EMPTY_SELECTED_MINUTES;
-  private _selectedMinutesFor:
-    | { view: InspectorPayload; selection: SlotSelectionState }
-    | null = null;
+  private readonly _viewOf = memoOne(buildDayView);
+  private readonly _coverageOf = memoOne(dayCoverage);
+  private readonly _stacksOf = memoOne(buildStacks);
+  private readonly _layoutOf = memoOne(chartLayout);
+  private readonly _stripGeometryOf = memoOne(stripGeometry);
+  private readonly _socBarsOf = memoOne(socBars);
+  private readonly _selectedMinutesOf = memoOne(selectedMinutes);
   /** The combined chart's popup, one build per hovered slot. */
   private _chartTooltip: { rows: TooltipRow[]; title: string } | null = null;
   private _chartTooltipFor:
     | { payload: InspectorPayload; slot: string; enabled: readonly SeriesKey[] | undefined }
     | null = null;
   /**
-   * The wider-bucket starts the current view drew over a hole in one of its
-   * Wh series, each mapped to how many native slots each short series is
-   * missing there — the breakdown, not just a count, because the mark has to
-   * name what is missing and not only how much of it — set
-   * once per `_computeCoverage` call, alongside `_partialSeries`, so the
-   * chart's scrim and the selected-slot panel's caveat read off one
-   * computation rather than two that could drift apart.
+   * The day's coverage, as `dayCoverage` last returned it: the wider-bucket
+   * starts the current view drew over a hole, per short series, with the
+   * native width those counts were taken at, and the totals series short
+   * anywhere in the day. The chart's scrim and the selected-slot panel's
+   * caveat read off this one computation rather than two that could drift
+   * apart.
    */
-  private _partialBuckets = new Map<number, Map<SeriesKey, number>>();
-  /** The native sample width `_partialBuckets`' counts were computed at. */
+  private _partialBuckets: DayCoverage["buckets"] = new Map();
   private _partialBucketGranularityMinutes = SLOT_MINUTES;
-  /**
-   * The totals series with at least one interior hole anywhere in the day,
-   * each with how many readings it is short of the span it covers --
-   * independent of the chart's current slot width, since a day total is one
-   * number for the whole day and cannot be more or less complete depending on
-   * how the chart above happens to be drawn.
-   */
-  private _partialSeries = new Map<SeriesKey, { missing: number; expected: number }>();
+  private _partialSeries: DayCoverage["series"] = new Map();
   private readonly _dayRequest = new LatestRequest<string>();
   private _loadedConnection: unknown = null;
   private _stopNowClock?: () => void;
@@ -1714,7 +1496,19 @@ export class HelmanSolarInspector extends LitElement {
     }
     this._calendarWasOpen = open;
     this._calendarSelection = this._selectedDate;
-    const pillWindow = this._pillWindow(this._todayKey);
+    const pillWindow = navigationPillWindow({
+      today: this._todayKey,
+      selectedDate: this._selectedDate,
+      mode: this._viewMode,
+      expanded: this._navExpanded,
+      calendarAnchor: this._calendarAnchor,
+      focusBucket: this._navExpanded && this._viewMode !== "day" ? this._focusBucket() : null,
+      dayRange: this._dayRange,
+      firstWeekday: this._navExpanded && this._viewMode === "day"
+        ? resolveFirstWeekdayIndex(this.hass?.locale)
+        : 0,
+      houseFocus: this.houseFocus,
+    });
     this._pillWindowStart = pillWindow.start;
     this._pillWindowEnd = pillWindow.end;
     // Only for a row that is going to be drawn. At M there is none, and the
@@ -2047,7 +1841,7 @@ export class HelmanSolarInspector extends LitElement {
             @click=${() => { this._navExpanded = !this._navExpanded; }}
           ><ha-icon icon="mdi:calendar-month"></ha-icon></button>`}
           <div class="slot-size-toggle" role="group" title=${this._t("bias_correction.inspector.slot_size")}>
-            ${this._viewStopGroups().map((group) => html`
+            ${viewStopGroups(this.hideAggregateViews).map((group) => html`
               <div class="stop-group">${group.map((stop) => {
                 const active = stop.minutes === undefined
                   ? this._viewMode === stop.mode
@@ -2090,7 +1884,7 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   private _renderContent(payload: InspectorPayload | null) {
-    // The one branch, and it is the first thing here for a reason: `_viewForSlot`
+    // The one branch, and it is the first thing here for a reason: `buildDayView`
     // below takes an `InspectorPayload`, and the span payload is not one. Every
     // day-shaped strip -- price, schedule actions, SoC, impact, the house
     // breakdown, the now marker -- lives past this line and never runs for an
@@ -2111,7 +1905,7 @@ export class HelmanSolarInspector extends LitElement {
     const hasAnySeries = stacks !== null && layout !== null;
 
     return html`
-      ${this._payloadGranularity(payload) > 15
+      ${payloadGranularity(payload) > 15
         ? html`<div class="note">${this._t("bias_correction.inspector.hourly_only")}</div>`
         : ""}
       ${!view.availability.hasProfile && !this.houseFocus
@@ -2143,21 +1937,9 @@ export class HelmanSolarInspector extends LitElement {
     `;
   }
 
-  /**
-   * The narrowest width a payload's data can honestly be drawn at.
-   *
-   * 15 for anything a backend does not say otherwise about, including one that
-   * predates the field: every day was fifteen minutes before the statistics
-   * source existed, and reading an absent field as "coarse" would lock a whole
-   * card to hourly against an older Helman.
-   */
-  private _payloadGranularity(payload: InspectorPayload | null): number {
-    return payload?.dataGranularityMinutes ?? 15;
-  }
-
   /** The floor the width toggle may not go below on the day currently loaded. */
   private _slotMinutesFloor(): number {
-    return this._viewMode === "day" ? this._payloadGranularity(this._payload) : 15;
+    return this._viewMode === "day" ? payloadGranularity(this._payload) : 15;
   }
 
   /** The configured opening slot width, or null when the card leaves it to auto. */
@@ -2180,13 +1962,6 @@ export class HelmanSolarInspector extends LitElement {
       this._slotSelection,
       (slot) => snapSlotToGrid(slot, minutes),
     ));
-  }
-
-  /** The toggle's stop groups, without the aggregate ones where the config hides them. */
-  private _viewStopGroups(): readonly (readonly ViewStop[])[] {
-    return this.hideAggregateViews
-      ? VIEW_STOP_GROUPS.filter((group) => group.every((stop) => stop.mode === "day"))
-      : VIEW_STOP_GROUPS;
   }
 
   /**
@@ -2253,10 +2028,10 @@ export class HelmanSolarInspector extends LitElement {
         : null;
       return day !== null
         ? { date: day, bucket: day }
-        : { date: this._monthBounds(anchor).start, bucket: null };
+        : { date: monthBounds(anchor, today).start, bucket: null };
     }
     // Into M, whose columns are months: the month around whatever was picked.
-    return { date: anchor, bucket: this._monthBounds(anchor).start };
+    return { date: anchor, bucket: monthBounds(anchor, today).start };
   }
 
   /**
@@ -2281,7 +2056,7 @@ export class HelmanSolarInspector extends LitElement {
     const selected = this._selectedDate || today;
     let day = column ?? selected;
     if (column === null && month !== null) {
-      const bounds = this._monthBounds(month);
+      const bounds = monthBounds(month, today);
       day = selected >= bounds.start && selected <= bounds.end ? selected : bounds.start;
     }
     const floor = this._dayRange?.minDate ?? "";
@@ -2309,47 +2084,6 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   /**
-   * The first and last day of the calendar month a day falls in.
-   *
-   * View-independent on purpose, unlike `_spanStart`/`_spanEnd` below: the
-   * expanded pill row is a month of days whichever view is on screen, and
-   * asking those for a month while the year view is up would answer with a
-   * year. Both callers go through here so a month has one definition.
-   */
-  private _monthBounds(dayKey: string): { start: string; end: string } {
-    const { year, month } = this._parseIsoDate(dayKey);
-    // Day zero of the next month is the last of this one, leap years included.
-    const last = new Date(Date.UTC(year, month, 0));
-    return {
-      start: formatIsoDate(year, month, 1),
-      end: formatIsoDate(year, month, last.getUTCDate()),
-    };
-  }
-
-  /**
-   * The first day of the span the given day falls in.
-   *
-   * A day in the day view, the containing month in the month view, the
-   * containing year in the year view. The forward stop and the span request
-   * both key off this one definition, so they cannot disagree about where a
-   * span begins.
-   */
-  private _spanStart(dayKey: string): string {
-    const { year } = this._parseIsoDate(dayKey);
-    if (this._viewMode === "month") return this._monthBounds(dayKey).start;
-    if (this._viewMode === "year") return formatIsoDate(year, 1, 1);
-    return dayKey;
-  }
-
-  /** The last day of the span the given day falls in. */
-  private _spanEnd(dayKey: string): string {
-    const { year } = this._parseIsoDate(dayKey);
-    if (this._viewMode === "month") return this._monthBounds(dayKey).end;
-    if (this._viewMode === "year") return formatIsoDate(year, 12, 31);
-    return dayKey;
-  }
-
-  /**
    * Put a span on screen, whichever pill asked for it.
    *
    * The ways in must agree on what changing span means -- the date moves,
@@ -2366,11 +2100,12 @@ export class HelmanSolarInspector extends LitElement {
    * rather than the day the reader came from.
    */
   private _showSpan(spanKey: string, mode: InspectorViewMode = this._viewMode) {
+    const today = this._todayIso();
     // The mode is checked first and separately: picking a month from the year
     // view lands on a span the year view would call unchanged, and it is still
     // a move -- to a different view of it.
     if (mode === this._viewMode
-      && spanKey === this._spanStart(this._selectedDate || this._todayIso())) {
+      && spanKey === spanBounds(this._viewMode, this._selectedDate || today, today).start) {
       return;
     }
     this._viewMode = mode;
@@ -2468,8 +2203,7 @@ export class HelmanSolarInspector extends LitElement {
     if (!this.hass) return;
     if (!this._selectedDate) this._selectedDate = this._todayIso();
     const bucket = this._spanBucket();
-    const start = this._spanStart(this._selectedDate);
-    const end = this._spanEnd(this._selectedDate);
+    const { start, end } = spanBounds(this._viewMode, this._selectedDate, this._todayIso());
     const key = `${bucket}:${start}..${end}`;
     const request = this._spanRequest.begin(key);
     if (request === null) {
@@ -3154,243 +2888,55 @@ export class HelmanSolarInspector extends LitElement {
     const payload = this._viewMode === "day" ? this._drawablePayload() : null;
     if (payload === null) {
       this._view = null;
-      this._viewFor = null;
-      this._coverageFor = null;
       this._stacks = null;
-      this._stacksFor = null;
       this._layout = null;
-      this._layoutFor = null;
       this._stripGeometry = null;
       this._socBarsModel = EMPTY_SOC_BARS;
-      this._socBarsFor = null;
       this._selectedMinutesModel = EMPTY_SELECTED_MINUTES;
-      this._selectedMinutesFor = null;
       return;
     }
 
     const slot = this._slotMinutes;
     const hidden = this._hiddenSeries;
-    // `_isSeriesVisible` reads the allowlist as well as the legend, so every
-    // step keyed on `hidden` is keyed on this too.
+    // Visibility reads the allowlist as well as the legend, so every step
+    // handed `hidden` is handed this too.
     const enabled = this.chartSeries;
 
-    if (this._viewFor === null
-      || this._viewFor.payload !== payload
-      || this._viewFor.slot !== slot) {
-      this._viewFor = { payload, slot };
-      this._view = this._viewForSlot(payload);
-    }
-    const view = this._view!;
+    const view = this._viewOf(payload, slot);
+    this._view = view;
 
-    if (this._coverageFor === null
-      || this._coverageFor.payload !== payload
-      || this._coverageFor.slot !== slot
-      || this._coverageFor.hidden !== hidden
-      || this._coverageFor.enabled !== enabled) {
-      this._coverageFor = { payload, slot, hidden, enabled };
-      this._computeCoverage(payload);
-    }
+    const coverage = this._coverageOf(payload, slot, hidden, enabled);
+    this._partialBuckets = coverage.buckets;
+    this._partialSeries = coverage.series;
+    this._partialBucketGranularityMinutes = coverage.granularityMinutes;
 
-    if (this._stacksFor === null
-      || this._stacksFor.view !== view
-      || this._stacksFor.hidden !== hidden
-      || this._stacksFor.enabled !== enabled
-      || this._stacksFor.houseFocus !== this.houseFocus) {
-      this._stacksFor = { view, hidden, enabled, houseFocus: this.houseFocus };
-      // "Nothing to draw" is a fact about the view alone, so it is decided
-      // here with the stacks rather than beside them in the render.
-      const series = payload.series;
-      const hasAnySeries = (series.raw?.length ?? 0) > 0
-        || (series.corrected?.length ?? 0) > 0
-        || (series.actual?.length ?? 0) > 0
-        || (series.invalidated?.length ?? 0) > 0
-        || (this.houseFocus && ((series.houseForecast?.length ?? 0) > 0 || (series.houseActual?.length ?? 0) > 0));
-      this._stacks = hasAnySeries ? this._buildStacks(view) : null;
-      this._forecastFillFromMinutes = this._stacks === null
-        ? Number.NEGATIVE_INFINITY
-        : this._forecastFillFrom(this._stacks);
-    }
+    // "Nothing to draw" is a fact about the payload alone, so it is decided
+    // here with the stacks rather than beside them in the render.
+    const stacks = dayHasSeries(payload, this.houseFocus)
+      ? this._stacksOf(view, slot, hidden, enabled)
+      : null;
+    this._stacks = stacks;
+    this._forecastFillFromMinutes = stacks?.fillFromMinutes ?? Number.NEGATIVE_INFINITY;
 
-    const stacks = this._stacks;
     if (stacks === null) {
       this._layout = null;
-      this._layoutFor = null;
       this._stripGeometry = null;
-    } else if (this._layoutFor === null
-      || this._layoutFor.view !== view
-      || this._layoutFor.stacks !== stacks
-      || this._layoutFor.width !== this._chartWidth
-      || this._layoutFor.slot !== slot
-      || this._layoutFor.daylightOnly !== this._daylightOnly
-      || this._layoutFor.threshold !== this.daylightThresholdW
-      || this._layoutFor.hidden !== hidden
-      || this._layoutFor.enabled !== enabled) {
-      this._layoutFor = {
-        view,
-        stacks,
-        width: this._chartWidth,
-        slot,
-        daylightOnly: this._daylightOnly,
-        threshold: this.daylightThresholdW,
-        hidden,
-        enabled,
-      };
-      const layout = this._computeChartLayout(view, stacks);
-      this._layout = layout;
+    } else {
+      this._layout = this._layoutOf(
+        view, stacks, slot, this._chartWidth, this._daylightOnly, this.daylightThresholdW, hidden, enabled,
+      );
       // One object per layout: the three strips compare it by identity, and a
       // fresh literal per render would re-render all three on every hover.
-      this._stripGeometry = {
-        width: layout.width,
-        marginLeft: layout.margin.left,
-        plotWidth: layout.plotWidth,
-        startMinutes: layout.dayStartMinutes,
-        endMinutes: layout.dayEndMinutes,
-      };
+      this._stripGeometry = this._stripGeometryOf(this._layout);
     }
 
-    const fillFrom = this._forecastFillFromMinutes;
-    if (this._socBarsFor === null
-      || this._socBarsFor.view !== view
-      || this._socBarsFor.hidden !== hidden
-      || this._socBarsFor.enabled !== enabled
-      || this._socBarsFor.fillFrom !== fillFrom) {
-      this._socBarsFor = { view, hidden, enabled, fillFrom };
-      this._socBarsModel = this._socBars(view);
-    }
-
-    if (this._selectedMinutesFor === null
-      || this._selectedMinutesFor.view !== view
-      || this._selectedMinutesFor.selection !== this._slotSelection) {
-      this._selectedMinutesFor = { view, selection: this._slotSelection };
-      const minutes = this._selectedMinutes(view);
-      this._selectedMinutesModel = minutes.length === 0 ? EMPTY_SELECTED_MINUTES : minutes;
-    }
+    this._socBarsModel = this._socBarsOf(view, hidden, enabled, this._forecastFillFromMinutes);
+    this._selectedMinutesModel = this._selectedMinutesOf(view, this._slotSelection.selectedSlots);
   }
 
-  /**
-   * Which native slots the day is short of, and where.
-   *
-   * Its own step rather than a side effect of the re-bucketing below, because
-   * its inputs are not the same: the marks follow the legend, which cannot
-   * move a single bucketed sum.
-   */
-  private _computeCoverage(payload: InspectorPayload): void {
-    const slot = this._slotMinutes;
-    const s = payload.series;
-    // Coverage is read off the series as the backend actually served them, not
-    // the re-bucketed sums below — a hole is a fact about the 15-minute data,
-    // and bucketing it first would let a run of present-but-hole-adjacent
-    // buckets blur which native slot was actually missing. Every Wh series the
-    // day can draw is included so one rule marks forecast and actual columns
-    // alike; SoC and impact are levels and ratios, not sums, so a hole in them
-    // does not misstate an energy total and is left out. So is `invalidated`,
-    // which is not a series that covers the day but a set of annotations on
-    // the slots that were thrown out — the slots between two of them are
-    // absent because nothing was invalidated there, and reading that as a
-    // hole would mark the whole stretch.
-    const granularity = this._payloadGranularity(payload);
-    const whSeries: CoverageSeries[] = [
-      { key: "raw", points: s.raw },
-      { key: "corrected", points: s.corrected },
-      { key: "actual", points: s.actual },
-      { key: "houseForecast", points: s.houseForecast },
-      { key: "houseActual", points: s.houseActual },
-      { key: "gridForecast", points: s.gridForecast },
-      { key: "gridActual", points: s.gridActual },
-      { key: "batteryForecast", points: s.batteryForecast },
-      { key: "batteryActual", points: s.batteryActual },
-    ];
-    this._partialBucketGranularityMinutes = granularity;
-    // The scrim marks what the chart is drawing, so a series the legend has
-    // switched off cannot mark a column: nothing of it is on screen to be
-    // short, and a wash over a column for an invisible reason is worse than no
-    // wash at all. `_hiddenSeries` is reactive state and this runs from render,
-    // so toggling a series recomputes the marks with it.
-    this._partialBuckets = missingMinutesByBucket(
-      whSeries.filter(({ key }) => this._isSeriesVisible(key as SeriesKey)),
-      slot,
-      granularity,
-    ) as Map<number, Map<SeriesKey, number>>;
-    // Independent of `slot` — and of visibility, unlike the scrim above. A
-    // hidden series still prints its daily total, and a number on screen has
-    // to carry its own caveat whether or not its curve is drawn.
-    this._partialSeries = new Map(
-      whSeries
-        .map(({ key, points }) => [key as SeriesKey, seriesCoverage(points, granularity)] as const)
-        .filter(([, coverage]) => coverage.missing.length > 0)
-        .map(([key, coverage]) => [key, { missing: coverage.missing.length, expected: coverage.expected }]),
-    );
-  }
-
-  /**
-   * The payload re-bucketed to the active slot width. Daily totals, availability
-   * and the 15-minute training explainability are slot-width independent and
-   * carry through untouched; only the time series are collapsed.
-   */
-  private _viewForSlot(payload: InspectorPayload): InspectorPayload {
-    const slot = this._slotMinutes;
-    const s = payload.series;
-    if (slot <= SLOT_MINUTES) return payload;
-    // A wider bucket is only history once the measurements span all of it; the
-    // slot we are still inside would otherwise sum a part-hour of actuals into a
-    // full-hour column and read as a collapse against the forecast.
-    const coverUntil = actualsCoverUntil(
-      [s.actual, s.invalidated, s.houseActual, s.gridActual, s.batteryActual],
-      this._payloadGranularity(payload),
-    );
-    const measured = (points: InspectorPoint[]) =>
-      dropPartialBuckets(aggregateWhSeries(points, slot), slot, coverUntil, (p) =>
-        slotMinutes(p.slot));
-    return {
-      ...payload,
-      series: {
-        ...s,
-        raw: aggregateWhSeries(s.raw, slot),
-        corrected: aggregateWhSeries(s.corrected, slot),
-        actual: measured(s.actual),
-        invalidated: measured(s.invalidated),
-        impact: aggregateImpactSeries(s.impact, slot),
-        houseForecast: aggregateWhSeries(s.houseForecast, slot),
-        // A bucket the composition only partly covers is kept rather than
-        // dropped: on today, a wide bucket straddles elapsed slots — which keep a
-        // forecast scalar but leave no composition behind — and the slots from the
-        // one in progress on, which have both. Dropping it would leave the bucket
-        // the user is looking at as the only one with no composition at all. What
-        // the composition does not reach lands in the panel's base row, which is
-        // drawn as the residual against the forecast total for exactly this reason.
-        houseForecastBreakdown: aggregateBreakdownSeries(s.houseForecastBreakdown, slot),
-        houseActual: measured(s.houseActual),
-        houseActualBreakdown: dropPartialBuckets(
-          aggregateBreakdownSeries(s.houseActualBreakdown, slot),
-          slot, coverUntil, (p) => slotToMinutes(p.slot),
-        ),
-        gridForecast: aggregateWhSeries(s.gridForecast, slot),
-        gridActual: measured(s.gridActual),
-        batteryForecast: aggregateWhSeries(s.batteryForecast, slot),
-        batteryActual: measured(s.batteryActual),
-        // The forecast reports the level its slot ends at, so a wider bucket
-        // takes its last reading; the actual is an instantaneous reading at the
-        // slot start, so its bucket takes the first.
-        batterySocForecast: sampleBucketEndOnGrid(s.batterySocForecast, slot),
-        batterySocActual: sampleOnGrid(s.batterySocActual, slot),
-      },
-      batterySocBounds: sampleBounds(payload.batterySocBounds, slot),
-    };
-  }
-
-  /**
-   * Whether the config allows this series at all. The one gate every other
-   * visibility question goes through, so a disabled series cannot be reached by
-   * the legend, a stack, an axis range or a tile.
-   */
+  /** Whether the config allows this series at all; see `isSeriesEnabled`. */
   private _isSeriesEnabled(series: SeriesKey) {
-    // An empty list reads as "unset": the multi-select emits `[]` when the last
-    // option is unchecked, and a card with no series at all and nothing to say
-    // why is worse than the full one.
-    if (this.chartSeries === undefined || this.chartSeries.length === 0) {
-      return true;
-    }
-    return this.chartSeries.includes(series);
+    return isSeriesEnabled(this.chartSeries, series);
   }
 
   /**
@@ -3415,7 +2961,7 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   private _isSeriesVisible(series: SeriesKey) {
-    return this._isSeriesEnabled(series) && !this._hiddenSeries.has(series);
+    return isSeriesVisible(this._hiddenSeries, this.chartSeries, series);
   }
 
   private _toggleSeries(series: SeriesKey) {
@@ -3434,86 +2980,6 @@ export class HelmanSolarInspector extends LitElement {
       else next.delete(key);
     }
     this._hiddenSeries = next;
-  }
-
-  private _computeChartLayout(payload: InspectorPayload, stacks: ChartStacks): ChartLayout {
-    const width = this._chartWidth;
-    const height = 260;
-    const margin = { top: 18, right: 24, bottom: 34, left: 48 };
-    const plotWidth = width - margin.left - margin.right;
-    const plotHeight = height - margin.top - margin.bottom;
-
-    const powerFor = (series: SeriesKey, entries: ChartEntry[]) =>
-      this._isSeriesVisible(series) ? entries.map((e) => e.powerW) : [];
-    const invalidatedPoints = toAveragePower(payload.series.invalidated, { bucketMinutes: this._slotMinutes });
-    // The stacks decide the axis: a band's outer edge is the sum beneath it, so
-    // the tallest slot total is what has to fit, not the tallest single series.
-    const allPower = [
-      ...powerFor("raw", toAveragePower(payload.series.raw)),
-      ...powerFor("actual", invalidatedPoints),
-      ...stackTotals(stacks.forecast),
-      ...stackTotals(stacks.actual),
-    ];
-    // Every watt supplied is a watt consumed, so the two stacks are mirror
-    // images and the axis has to be too: a slot that reaches 3 kW of production
-    // reaches 3 kW of consumption. One bound serves both directions.
-    const peakW = Math.max(1000, ...allPower.map((w) => Math.abs(w)));
-    const { maxKw, yTicks } = symmetricPowerAxis(peakW);
-    const minKw = -maxKw;
-    const spanW = (maxKw - minKw) * 1000;
-    const { start: dayStartMinutes, end: dayEndMinutes } = this._daylightOnly
-      ? this._solarWindow(payload)
-      : { start: 0, end: MINUTES_PER_DAY };
-    const daySpan = dayEndMinutes - dayStartMinutes;
-    const slotWidth = (plotWidth * this._slotMinutes) / daySpan;
-    const xForMinutes = (minutes: number) =>
-      margin.left + ((minutes - dayStartMinutes) / daySpan) * plotWidth;
-    const yForW = (powerW: number) =>
-      margin.top + plotHeight - ((powerW - minKw * 1000) / spanW) * plotHeight;
-    const wForY = (y: number) =>
-      minKw * 1000 + ((margin.top + plotHeight - y) / plotHeight) * spanW;
-
-    return {
-      width, height, margin, plotWidth, plotHeight, minKw, maxKw, yTicks,
-      dayStartMinutes, dayEndMinutes, slotWidth, xForMinutes, yForW, wForY,
-    };
-  }
-
-  /**
-   * The hour-aligned span of the day that carries solar production — the first
-   * hour any of the raw, corrected or actual solar series reaches the daylight
-   * threshold to the hour past the last. Cropping to this window fills the plot
-   * with the daylight curve instead of squeezing it between empty night hours on
-   * either side. With no solar above the threshold anywhere (a fully clouded
-   * winter day, or no forecast yet) it falls back to the whole day so the other
-   * series still have somewhere to sit.
-   */
-  private _solarWindow(payload: InspectorPayload): { start: number; end: number } {
-    const threshold = Number.isFinite(this.daylightThresholdW) ? this.daylightThresholdW : 100;
-    let first = Number.POSITIVE_INFINITY;
-    let last = Number.NEGATIVE_INFINITY;
-    // No fixed bucket: infer each series' own sample spacing so the threshold is
-    // read against true average watts, whether the series is 15-minute or hourly.
-    // Only the solar series actually drawn may crop the day -- drawn, not merely
-    // allowed: `raw` is hidden by default, so a card that allowed it and nothing
-    // else solar would otherwise crop to solar hours while showing none of them,
-    // hiding the hours its visible series live in. The `!isFinite` fallback below
-    // already means "show the whole day", which is what no visible solar wants.
-    for (const key of ["raw", "corrected", "actual"] as const) {
-      if (!this._isSeriesVisible(key)) continue;
-      for (const entry of toAveragePower(payload.series[key])) {
-        if (entry.powerW < threshold) continue;
-        if (entry.minutes < first) first = entry.minutes;
-        if (entry.minutes > last) last = entry.minutes;
-      }
-    }
-    if (!Number.isFinite(first) || !Number.isFinite(last)) {
-      return { start: 0, end: MINUTES_PER_DAY };
-    }
-    const start = Math.max(0, Math.floor(first / 60) * 60);
-    // `last` is the start of a slot, so include the hour it falls in.
-    const end = Math.min(MINUTES_PER_DAY, (Math.floor(last / 60) + 1) * 60);
-    return end > start ? { start, end } : { start: 0, end: MINUTES_PER_DAY };
   }
 
   /** The schedule row under the charts: one track per entity. */
@@ -3627,19 +3093,6 @@ export class HelmanSolarInspector extends LitElement {
         @slot-tooltip=${this._handleScheduleTooltip}
       ></helman-solar-schedule-band-strip>
     `;
-  }
-
-  /** Minute-of-day of every selected slot, for the strips' bands. */
-  private _selectedMinutes(payload: InspectorPayload): number[] {
-    const minutes: number[] = [];
-    for (const slot of this._slotSelection.selectedSlots) {
-      const resolved = resolveSelectedImpactSlot(payload.series.impact, slot);
-      const value = resolved === null ? null : slotToMinutes(resolved);
-      if (value !== null) {
-        minutes.push(value);
-      }
-    }
-    return minutes;
   }
 
   /**
@@ -4110,71 +3563,6 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   /**
-   * The two stacks, in the order they build outwards from the zero baseline:
-   * solar, battery discharge and grid import above; house, battery charge and
-   * grid export below.
-   *
-   * House is drawn as two bands rather than one, on both sides of now —
-   * non-deferrable against the baseline, the shiftable part stacked on top of it
-   * in the lighter house shade. Each pair sums to the same house total, so every
-   * band above them keeps its place and the day's shape is unchanged; only its
-   * subdivision appears.
-   */
-  private _buildStacks(payload: InspectorPayload): ChartStacks {
-    const series = payload.series;
-    // One helper, one shape, both sides of now: measured demand splits by what
-    // the meters say ran, forecast demand by what the planner scheduled.
-    const actualSplit = splitHouseByDeferrable(series.houseActual, series.houseActualBreakdown);
-    const forecastSplit = splitHouseByDeferrable(series.houseForecast, series.houseForecastBreakdown);
-    const solarForecast = this._stackLayer("corrected", CHART_COLORS.corrected, series.corrected, false);
-    const solarActual = this._stackLayer("actual", CHART_COLORS.actual, series.actual, false);
-    // Each family's two bands share one `SeriesKey` and its single legend entry,
-    // so hiding house still collapses the pair.
-    const houseForecastNonDeferrable = this._stackLayer("houseForecast", CHART_COLORS.house, forecastSplit.nonDeferrable, true);
-    const houseForecastDeferrable = this._stackLayer("houseForecast", CHART_COLORS.houseDeferrable, forecastSplit.deferrable, true);
-    const houseActualNonDeferrable = this._stackLayer("houseActual", CHART_COLORS.house, actualSplit.nonDeferrable, true);
-    const houseActualDeferrable = this._stackLayer("houseActual", CHART_COLORS.houseDeferrable, actualSplit.deferrable, true);
-    const batteryForecast = this._stackLayer("batteryForecast", CHART_COLORS.battery, series.batteryForecast, true);
-    const batteryActual = this._stackLayer("batteryActual", CHART_COLORS.battery, series.batteryActual, true);
-    const gridForecast = this._stackLayer("gridForecast", CHART_COLORS.grid, series.gridForecast, true);
-    const gridActual = this._stackLayer("gridActual", CHART_COLORS.grid, series.gridActual, true);
-    return {
-      forecast: {
-        positive: [solarForecast, batteryForecast, gridForecast],
-        negative: [houseForecastNonDeferrable, houseForecastDeferrable, batteryForecast, gridForecast],
-      },
-      actual: {
-        positive: [solarActual, batteryActual, gridActual],
-        negative: [houseActualNonDeferrable, houseActualDeferrable, batteryActual, gridActual],
-      },
-    };
-  }
-
-  /**
-   * The first slot the forecast has to speak for alone: one past the last
-   * measured slot. With no actuals at all the forecast fills the whole day.
-   */
-  private _forecastFillFrom(stacks: ChartStacks): number {
-    const lastActual = lastStackSlot(stacks.actual);
-    return lastActual === null ? Number.NEGATIVE_INFINITY : lastActual + this._slotMinutes;
-  }
-
-  /** A hidden series yields an empty layer, so toggling it collapses its band. */
-  private _stackLayer(
-    key: StackedSeriesKey,
-    color: string,
-    points: InspectorPoint[],
-    consumptionPositive: boolean,
-  ): StackLayer {
-    if (!this._isSeriesVisible(key)) return { color, values: new Map() };
-    const oriented = consumptionPositive ? asSupplyPositive(points) : points;
-    return {
-      color,
-      values: toSlotMap(toAveragePower(oriented, { bucketMinutes: this._slotMinutes })),
-    };
-  }
-
-  /**
    * A stacked area. Slots from `fillFrom` onwards are drawn as filled bands;
    * everything before it is drawn as dashed band edges only.
    *
@@ -4460,15 +3848,6 @@ export class HelmanSolarInspector extends LitElement {
         </g>
       </svg>
     `;
-  }
-
-  /** The columns of the strip: measured where measured, forecast beyond. */
-  private _socBars(payload: InspectorPayload): SocBar[] {
-    const actual = this._isSeriesVisible("batterySocActual") ? payload.series.batterySocActual : [];
-    const forecast = this._isSeriesVisible("batterySocForecast")
-      ? payload.series.batterySocForecast
-      : [];
-    return buildSocBars(actual, forecast, this._forecastFillFromMinutes);
   }
 
   /**
@@ -5911,8 +5290,8 @@ export class HelmanSolarInspector extends LitElement {
         // grid the same way a manual press does it -- otherwise a selection
         // carried in from a 15-minute day would point at slots this day has no
         // columns for.
-        if (this._payloadGranularity(payload) > this._slotMinutes) {
-          this._setSlotMinutes(this._payloadGranularity(payload));
+        if (payloadGranularity(payload) > this._slotMinutes) {
+          this._setSlotMinutes(payloadGranularity(payload));
         }
         const reconciled = reconcileSlotSelection(
           this._orderedSlots(null),
@@ -5936,52 +5315,6 @@ export class HelmanSolarInspector extends LitElement {
       }
       this.requestUpdate();
     }
-  }
-
-  /**
-   * The days the pill row offers, derived from the selected one.
-   *
-   * Expanded detail uses a three-month buffer around the browsing anchor.
-   * Aggregate views keep their single month around the focused bucket.
-   *
-   * Collapsed, the row is what it has always been: today to the end of the
-   * forecast when the selection is not behind, and otherwise a fixed seven-day
-   * block. The block is a function of the selection alone — no offset to keep
-   * in step with it — and every day inside one block maps back to that same
-   * block, so clicking a pill never moves the row out from under the click.
-   */
-  private _pillWindow(today: string): { start: string; end: string } {
-    const selected = this._selectedDate || today;
-    if (this._navExpanded && this._viewMode === "day") {
-      return calendarWindow(this._calendarAnchor || selected, this._dayRange?.minDate ?? selected,
-        this._dayRange?.maxDate ?? today, resolveFirstWeekdayIndex(this.hass?.locale));
-    }
-    if (this._navExpanded) {
-      // Anchored on the bucket the aggregate views have selected, when they
-      // have one, and only otherwise on the date. In the year view
-      // `_selectedDate` is the span start, so anchoring on it alone drew
-      // January under every month of the year -- and dropped the reader into a
-      // January day when they clicked one.
-      return this._monthBounds(
-        this._viewMode === "day" ? selected : (this._focusBucket() ?? selected),
-      );
-    }
-    if (this.houseFocus) {
-      // House pills only carry elapsed days, so the row is a seven-day block
-      // ending today rather than one starting there -- otherwise the panel
-      // opens on a row of unavailable gauges.
-      const daysBack = Math.max(0, daysBetween(selected, today));
-      const end = addDays(today, -7 * Math.floor(daysBack / 7));
-      return { start: addDays(end, -6), end };
-    }
-    if (selected >= today) {
-      return { start: today, end: this._dayRange?.maxDate ?? today };
-    }
-
-    const daysBack = daysBetween(selected, today);
-    const weeksBack = Math.ceil(daysBack / 7);
-    const start = addDays(today, -7 * weeksBack);
-    return { start, end: addDays(start, 6) };
   }
 
   /**
@@ -6144,7 +5477,7 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   private _parseIsoDate(value: string): { year: number; month: number; day: number } {
-    return parseDayKey(value) ?? parseDayKey(this._todayIso())!;
+    return navigationParseOrToday(value, this._todayIso());
   }
 
   private _formatDay(value: string) {

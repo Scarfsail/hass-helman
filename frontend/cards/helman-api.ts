@@ -2,7 +2,7 @@ import { type DayAggregateRow, type DayAggregatesPayload, type HelmanCommands, c
 import type { HomeAssistant } from "../types/ha";
 import type { JsonObject, ValidationReport } from "./shared/config/types";
 export type { ConfigDocument } from "./shared/config/types";
-export type { InspectorPayload } from "./helman-solar-inspector/helman-solar-inspector";
+export type { InspectorPayload } from "./helman-solar-inspector/inspector-day-model";
 /**
  * Backend API types for the helman integration.
  *
