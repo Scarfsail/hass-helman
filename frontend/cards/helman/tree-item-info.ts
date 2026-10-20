@@ -1,7 +1,7 @@
 import { pad2 } from "../shared/time/slot-time";
 import { LitElement, css, html } from "lit-element";
 import { customElement, property } from "lit/decorators.js";
-import { TreeItem } from "./tree-item";
+import { TreeItem } from "../shared/data/tree-item";
 import { nothing, TemplateResult } from "lit-html";
 import { BatteryNodeConfig, GridNodeConfig, HouseNodeConfig, SolarNodeConfig } from "./energy-node-config";
 import type { HomeAssistant } from "../../types/ha";

@@ -1,6 +1,6 @@
-import { callHelman } from "../shared/data/helman-commands";
-import type { HomeAssistant } from "../../types/ha";
-import type { ForecastPayload } from "../helman-api";
+import { callHelman } from "./helman-commands";
+import type { HomeAssistant } from "../../../types/ha";
+import type { ForecastPayload } from "../../helman-api";
 
 /**
  * A burst-coalescing fuse, not a polling policy. Nothing calls `load()` on a

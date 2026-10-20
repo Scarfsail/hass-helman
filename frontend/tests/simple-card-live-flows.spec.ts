@@ -1,7 +1,7 @@
 import { installMockHass } from "./support/mock-hass";
 import { cardTree } from "./support/payload-builders";
 import { test, expect, type Page } from "@playwright/test";
-import { IDLE_W, liveFlows } from "../cards/helman-simple/live-flows";
+import { IDLE_W, liveFlows } from "../cards/node-detail/live-flows";
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
 import { installFixedClock } from "./support/fixed-clock";
 import { CARD_BUNDLE } from "./support/card-page";

@@ -1,7 +1,7 @@
-import { formatKwh, formatPower } from "../../shared/format";
+import { formatKwh, formatPower } from "../shared/format";
 import { css, html, nothing, svg } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import { fillTemplate } from "../../localize/localize";
+import { fillTemplate } from "../localize/localize";
 import type {
     InverterDetailPayload,
     InverterModesSectionPayload,
@@ -9,19 +9,19 @@ import type {
     ScheduleActionKind,
     SchedulePayload,
     TodayFlowsDTO,
-} from "../../helman-api";
-import type { HelmanSolarInspectorCardConfig } from "../../helman-solar-inspector/HelmanSolarInspectorCardConfig";
-import { helmanColorVars } from "../../color-vars";
-import { getSharedHelmanStore } from "../../helman/store";
-import { commandedModeKind } from "../../helman-api";
+} from "../helman-api";
+import type { HelmanSolarInspectorCardConfig } from "../helman-solar-inspector/HelmanSolarInspectorCardConfig";
+import { helmanColorVars } from "../color-vars";
+import { getSharedHelmanStore } from "../shared/data/store";
+import { commandedModeKind } from "../helman-api";
 
-import "../../shared/mode-strip";
-import { modeStripWindow, type ModeChange, type ModeSegment } from "../../shared/mode-strip";
-import { inverterGlyph } from "../../shared/node-glyphs";
-import { getScheduleActionTone, scheduleActionToneStyles, type ScheduleActionTone } from "../../shared/schedule/action-tones";
-import { getSharedScheduleOwner } from "../../shared/schedule/schedule-owner";
-import "../../shared/day-line-chart";
-import type { DayLineSeries } from "../../shared/day-line-chart";
+import "../shared/mode-strip";
+import { modeStripWindow, type ModeChange, type ModeSegment } from "../shared/mode-strip";
+import { inverterGlyph } from "../shared/node-glyphs";
+import { getScheduleActionTone, scheduleActionToneStyles, type ScheduleActionTone } from "../shared/schedule/action-tones";
+import { getSharedScheduleOwner } from "../shared/schedule/schedule-owner";
+import "../shared/day-line-chart";
+import type { DayLineSeries } from "../shared/day-line-chart";
 import { NodeDetailContentBase, TODAY_REFRESH_MS, type NodeFlow, type SectionState } from "./node-detail-base";
 import {
     currentRun,
@@ -35,7 +35,7 @@ import {
     todayAndTomorrow,
     type ScheduleRun,
 } from "./node-detail-schedule";
-import { powerUnitFactor } from "../../shared/power-reading";
+import { powerUnitFactor } from "../shared/power-reading";
 import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { InverterDetailParams } from "./node-detail-types";
 

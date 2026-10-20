@@ -1,18 +1,18 @@
-import { formatPower } from "../../shared/format";
-import { callHelman } from "../../shared/data/helman-commands";
+import { formatPower } from "../shared/format";
+import { callHelman } from "../shared/data/helman-commands";
 import { LitElement, css, html, nothing, type PropertyValues } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import type { HomeAssistant } from "../../../types/ha";
-import type { LocalizeFunction } from "../../localize/localize";
-import type { TreeItem } from "../../helman/tree-item";
+import type { HomeAssistant } from "../../types/ha";
+import type { LocalizeFunction } from "../localize/localize";
+import type { TreeItem } from "../shared/data/tree-item";
 import type { DeviceDetailParams } from "./node-detail-types";
 import { nodeDetailSharedStyles } from "./node-detail-shared-styles";
-import { readPowerW } from "../../shared/power-reading";
+import { readPowerW } from "../shared/power-reading";
 
-import "../../appliance-switch-badge";
-import { type DeviceStats, type DeviceStatsSpread } from "../../helman-api";
-import type { HelmanDeviceEditDialog } from "../../shared/devices/helman-device-edit-dialog";
-import "../../shared/devices/helman-device-edit-dialog";
+import "../appliance-switch-badge";
+import { type DeviceStats, type DeviceStatsSpread } from "../helman-api";
+import type { HelmanDeviceEditDialog } from "../shared/devices/helman-device-edit-dialog";
+import "../shared/devices/helman-device-edit-dialog";
 import {
     deviceEnergyFigure,
     deviceEnergyLabel,
@@ -21,7 +21,7 @@ import {
     deviceEnergyStyles,
     formatDeviceEnergyWatts,
     renderDeviceEnergyValue,
-} from "../../shared/devices/device-energy";
+} from "../shared/devices/device-energy";
 
 type HistoryGraphCard = HTMLElement & { hass?: HomeAssistant };
 

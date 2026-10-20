@@ -2,7 +2,7 @@ import { LitElement, css, html, nothing, unsafeCSS } from "lit-element";
 import { nodeAccentColor } from "../color-utils";
 import { customElement, property, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../types/ha";
-import { TreeItem } from "./tree-item";
+import { TreeItem } from "../shared/data/tree-item";
 import "./tree-item-list";
 import type { DeviceGrouping, HelmanUiConfig } from "../helman-api";
 import { getLocalizeFunction, LocalizeFunction } from "../localize/localize";

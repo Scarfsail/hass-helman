@@ -3,7 +3,7 @@ import { styleMap } from 'lit/directives/style-map.js';
 import { customElement, property, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../types/ha";
 import { DEFERRABLE_HOUSE_COLOR, nodeAccentColor, withAlpha } from "../color-utils";
-import { TreeItem, isItemVisible } from "./tree-item";
+import { TreeItem, isItemVisible } from "../shared/data/tree-item";
 import "./tree-item-row";
 import "./tree-item-list";
 import "../shared/power-history-bars";

@@ -1,5 +1,5 @@
-import type { TreeItem } from "../helman/tree-item";
-import type { LiveFlows } from "../helman-simple/live-flows";
+import type { TreeItem } from "../shared/data/tree-item";
+import type { LiveFlows } from "./live-flows";
 
 export type NodeType = "solar" | "battery" | "grid" | "house" | "inverter";
 

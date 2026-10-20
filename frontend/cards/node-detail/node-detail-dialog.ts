@@ -4,17 +4,17 @@ import { customElement, property, state } from "lit/decorators.js";
 import { nothing, TemplateResult } from "lit-html";
 import type { HomeAssistant } from "../../types/ha";
 import type { LocalizeFunction } from "../localize/localize";
-import type { NodeDetailParams } from "./node-detail/node-detail-types";
-import type { TreeItem } from "../helman/tree-item";
-import { getSharedHelmanStore } from "../helman/store";
-import "./node-detail/node-detail-battery-content";
-import "./node-detail/node-detail-solar-content";
-import "./node-detail/node-detail-grid-content";
-import "./node-detail/node-detail-house-content";
-import "./node-detail/node-detail-inverter-content";
-import "./node-detail/node-detail-ev-charger-content";
-import type { NodeDetailDeviceContent } from "./node-detail/node-detail-device-content";
-import "./node-detail/node-detail-device-content";
+import type { NodeDetailParams } from "./node-detail-types";
+import type { TreeItem } from "../shared/data/tree-item";
+import { getSharedHelmanStore } from "../shared/data/store";
+import "./node-detail-battery-content";
+import "./node-detail-solar-content";
+import "./node-detail-grid-content";
+import "./node-detail-house-content";
+import "./node-detail-inverter-content";
+import "./node-detail-ev-charger-content";
+import type { NodeDetailDeviceContent } from "./node-detail-device-content";
+import "./node-detail-device-content";
 
 @customElement("node-detail-dialog")
 export class NodeDetailDialog extends LitElement {

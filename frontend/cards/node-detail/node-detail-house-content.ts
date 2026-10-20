@@ -1,10 +1,10 @@
-import { formatKwh, formatPower } from "../../shared/format";
-import { callHelman } from "../../shared/data/helman-commands";
-import { pad2, SLOT_MS } from "../../shared/time/slot-time";
-import { phaseSign } from "../../shared/power-reading";
+import { formatKwh, formatPower } from "../shared/format";
+import { callHelman } from "../shared/data/helman-commands";
+import { pad2, SLOT_MS } from "../shared/time/slot-time";
+import { phaseSign } from "../shared/power-reading";
 import { css, html, nothing, unsafeCSS } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import { fillTemplate } from "../../localize/localize";
+import { fillTemplate } from "../localize/localize";
 import {
     isDeviceReportUnavailable,
     type DevicePhase,
@@ -15,31 +15,31 @@ import {
     type RankingReportPayload,
     type ScheduleApplianceActionDTO,
     type SchedulePayload,
-} from "../../helman-api";
-import type { HelmanSolarInspectorCardConfig } from "../../helman-solar-inspector/HelmanSolarInspectorCardConfig";
-import { currencyFromPriceUnit } from "../../helman-solar-inspector/money-model";
-import { BATT_COLOR, GRID_COLOR, HOUSE_COLOR, NEUTRAL_LIGHT_COLOR, SOLAR_COLOR } from "../../color-utils";
-import { helmanColorVars } from "../../color-vars";
-import type { TreeItem } from "../../helman/tree-item";
-import { getSharedHelmanStore } from "../../helman/store";
+} from "../helman-api";
+import type { HelmanSolarInspectorCardConfig } from "../helman-solar-inspector/HelmanSolarInspectorCardConfig";
+import { currencyFromPriceUnit } from "../helman-solar-inspector/money-model";
+import { BATT_COLOR, GRID_COLOR, HOUSE_COLOR, NEUTRAL_LIGHT_COLOR, SOLAR_COLOR } from "../color-utils";
+import { helmanColorVars } from "../color-vars";
+import type { TreeItem } from "../shared/data/tree-item";
+import { getSharedHelmanStore } from "../shared/data/store";
 
-import type { FlowItem } from "../../shared/node-flow";
-import { houseGlyph, type HouseShare } from "../../shared/node-glyphs";
-import { scheduleActionToneStyles, type ScheduleActionTone } from "../../shared/schedule/action-tones";
-import { getScheduleApplianceActionPresentation } from "../../shared/schedule/model/schedule-appliance-action-presentation";
-import { resolveScheduleSlotBoundaries } from "../../shared/schedule/model/schedule-time";
-import { getSharedScheduleOwner } from "../../shared/schedule/schedule-owner";
+import type { FlowItem } from "../shared/node-flow";
+import { houseGlyph, type HouseShare } from "../shared/node-glyphs";
+import { scheduleActionToneStyles, type ScheduleActionTone } from "../shared/schedule/action-tones";
+import { getScheduleApplianceActionPresentation } from "../shared/schedule/model/schedule-appliance-action-presentation";
+import { resolveScheduleSlotBoundaries } from "../shared/schedule/model/schedule-time";
+import { getSharedScheduleOwner } from "../shared/schedule/schedule-owner";
 import {
     INVERTER_CONTROLLABLE_ID,
     isScheduleApplianceActionEnabled,
     isScheduleClimateApplianceAction,
     isScheduleEvChargerAction,
-} from "../../shared/schedule/schedule-types";
-import { todayKey } from "../../shared/time/day-key";
-import "../../helman-device-reports/device-report-ranking";
+} from "../shared/schedule/schedule-types";
+import { todayKey } from "../shared/time/day-key";
+import "../helman-device-reports/device-report-ranking";
 import { IDLE_W, NodeDetailContentBase, NEW_DAY_RETRY_MS, TODAY_REFRESH_MS, type NodeFlow, type SectionState } from "./node-detail-base";
 import { readingNumber } from "./node-detail-readings";
-import { powerUnitFactor, readPowerW } from "../../shared/power-reading";
+import { powerUnitFactor, readPowerW } from "../shared/power-reading";
 import { dayKey, todayAndTomorrow } from "./node-detail-schedule";
 import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { HouseDetailParams } from "./node-detail-types";

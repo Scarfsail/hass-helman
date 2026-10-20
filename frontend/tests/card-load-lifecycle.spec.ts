@@ -205,9 +205,9 @@ for (const tag of ["helman-card", "helman-simple-card"] as const) {
 
                 return {
                     connected: card.isConnected,
-                    interval: card._historyEngine?._interval,
-                    engine: !!card._historyEngine,
-                    committedTree: (card._deviceTree?.length ?? 0) + (card._entityMap ? 1 : 0),
+                    interval: card._host.historyEngine?._interval,
+                    engine: !!card._host.historyEngine,
+                    committedTree: card._host.deviceTree.length,
                     ...window.__sinceMark(),
                     liveBucketIntervals: window.__liveBucketIntervals().length,
                 };
@@ -245,8 +245,8 @@ for (const tag of ["helman-card", "helman-simple-card"] as const) {
                 return {
                     historyWasPending,
                     connected: card.isConnected,
-                    interval: card._historyEngine?._interval,
-                    engine: !!card._historyEngine,
+                    interval: card._host.historyEngine?._interval,
+                    engine: !!card._host.historyEngine,
                     ...window.__sinceMark(),
                     liveBucketIntervals: window.__liveBucketIntervals().length,
                 };
@@ -283,7 +283,7 @@ for (const tag of ["helman-card", "helman-simple-card"] as const) {
 
                 return {
                     connected: card.isConnected,
-                    interval: card._historyEngine?._interval,
+                    interval: card._host.historyEngine?._interval,
                     liveBucketIntervals: window.__liveBucketIntervals(),
                 };
             }, tag);
@@ -309,17 +309,17 @@ for (const tag of ["helman-card", "helman-simple-card"] as const) {
                 await new Promise<void>((done) => window.__rawRaf(() => setTimeout(done, 0)));
 
                 return {
-                    interval: card._historyEngine?._interval,
+                    interval: card._host.historyEngine?._interval,
                     liveBucketIntervals: window.__liveBucketIntervals().length,
-                    committed: (card._deviceTree?.length ?? 0) + (card._entityMap ? 1 : 0),
-                    loading: card._loading,
+                    committed: card._host.deviceTree.length,
+                    loaded: card._host.loaded,
                 };
             }, tag);
 
             expect(result.interval).toBeDefined();
             expect(result.liveBucketIntervals).toBe(1);
             expect(result.committed).toBeGreaterThan(0);
-            if (result.loading !== undefined) expect(result.loading).toBe(false);
+            expect(result.loaded).toBe(true);
         });
     });
 }
@@ -351,11 +351,11 @@ for (const tag of ["helman-card", "helman-simple-card"] as const) {
             await page.evaluate(() => window.__resolveTreeAt(1));
             await expect.poll(() => page.evaluate(() => window.__pending().history)).toBe(1);
             await page.evaluate(() => window.__resolveHistory());
-            await expect.poll(() => page.evaluate((name) => !!(document.querySelector(name) as any)._historyEngine, tag)).toBe(true);
+            await expect.poll(() => page.evaluate((name) => !!(document.querySelector(name) as any)._host.historyEngine, tag)).toBe(true);
             await page.evaluate(() => window.__resolveTreeAt(0));
             expect(await page.evaluate((name) => {
                 const card = document.querySelector(name) as any;
-                return { buckets: card._uiConfig.history_buckets, engines: window.__liveBucketIntervals().length };
+                return { buckets: card._host.uiConfig.history_buckets, engines: window.__liveBucketIntervals().length };
             }, tag)).toEqual({ buckets: 4, engines: 1 });
         });
     }
@@ -403,7 +403,7 @@ for (const tag of ["helman-card", "helman-simple-card"] as const) {
             card.remove();
             window.__resolveTree();
             await new Promise<void>((done) => setTimeout(done, 0));
-            return { engine: !!card._historyEngine, pending: window.__pending(), intervals: window.__liveBucketIntervals().length };
+            return { engine: !!card._host.historyEngine, pending: window.__pending(), intervals: window.__liveBucketIntervals().length };
         }, tag);
         expect(result).toEqual({ engine: false, pending: { tree: 0, history: 0, inverter: 0 }, intervals: 0 });
     });
@@ -424,12 +424,10 @@ for (const tag of ["helman-card", "helman-simple-card"] as const) {
                     await new Promise<void>((done) => setTimeout(done, 0));
                     window.__resolveHistory();
                     await new Promise<void>((done) => setTimeout(done, 0));
-                    const oldEngine = card._historyEngine;
+                    const oldEngine = card._host.historyEngine;
                     const pendingBeforeRefresh = window.__pending().inverter;
 
-                    const refresh = tag === "helman-card"
-                        ? card._loadBackendData(true)
-                        : card._loadFromBackend(true);
+                    const refresh = card._host.loadBackendData(true);
                     await new Promise<void>((done) => setTimeout(done, 0));
                     if (failedRead === "tree") window.__rejectTree();
                     else {
@@ -438,16 +436,16 @@ for (const tag of ["helman-card", "helman-simple-card"] as const) {
                         window.__rejectHistory();
                     }
                     await refresh;
-                    const retained = card._historyEngine === oldEngine && card._inverter === null;
+                    const retained = card._host.historyEngine === oldEngine && card._host.inverter === null;
                     if (detach) card.remove();
                     window.__resolveInverter();
                     await new Promise<void>((done) => setTimeout(done, 0));
                     const result = {
                         pendingBeforeRefresh,
                         retained,
-                        inverterLoaded: card._inverter?.node === "inverter",
-                        watching: card._watchedEntityIds.has("select.inverter_mode")
-                            && card._watchedEntityIds.has("sensor.inverter_link_success_rate"),
+                        inverterLoaded: card._host.inverter?.node === "inverter",
+                        watching: card._host.watchedEntityIds.has("select.inverter_mode")
+                            && card._host.watchedEntityIds.has("sensor.inverter_link_success_rate"),
                     };
                     if (!detach) card.remove();
                     return result;
@@ -476,10 +474,10 @@ for (const tag of ["helman-card", "helman-simple-card"] as const) {
                 await drain();
                 window.__resolveInverter();
                 await drain();
-                const inverter = card._inverter;
-                const watched = [...card._watchedEntityIds];
-                const engine = card._historyEngine;
-                const refresh = tag === "helman-card" ? card._loadBackendData(true) : card._loadFromBackend(true);
+                const inverter = card._host.inverter;
+                const watched = [...card._host.watchedEntityIds];
+                const engine = card._host.historyEngine;
+                const refresh = card._host.loadBackendData(true);
                 await drain();
                 if (failedRead === "tree") window.__rejectTree();
                 else {
@@ -494,8 +492,8 @@ for (const tag of ["helman-card", "helman-simple-card"] as const) {
                 await drain();
                 const result = {
                     pending,
-                    retained: !!inverter && card._inverter === inverter && card._historyEngine === engine,
-                    watched: JSON.stringify([...card._watchedEntityIds]) === JSON.stringify(watched),
+                    retained: !!inverter && card._host.inverter === inverter && card._host.historyEngine === engine,
+                    watched: JSON.stringify([...card._host.watchedEntityIds]) === JSON.stringify(watched),
                 };
                 card.remove();
                 return result;
@@ -515,16 +513,14 @@ for (const tag of ["helman-card", "helman-simple-card"] as const) {
                 window.__resolveHistory();
                 await new Promise<void>((done) => setTimeout(done, 0));
 
-                const oldEngine = card._historyEngine;
+                const oldEngine = card._host.historyEngine;
                 const oldNode = tag === "helman-card"
                     ? card._deviceTree[1].children[0]
-                    : card._houseNode;
-                const refresh = () => tag === "helman-card"
-                    ? card._loadBackendData(true)
-                    : card._loadFromBackend(true);
+                    : card._host.energyNodes.houseNode;
+                const refresh = () => card._host.loadBackendData(true);
                 const first = refresh();
                 await new Promise<void>((done) => setTimeout(done, 0));
-                const duringTree = card._historyEngine === oldEngine
+                const duringTree = card._host.historyEngine === oldEngine
                     && window.__liveBucketIntervals().includes(oldEngine._interval);
                 if (failedRead === "tree") window.__rejectTree();
                 else {
@@ -534,15 +530,15 @@ for (const tag of ["helman-card", "helman-simple-card"] as const) {
                     window.__rejectHistory();
                 }
                 await first;
-                const afterFailure = card._historyEngine === oldEngine
+                const afterFailure = card._host.historyEngine === oldEngine
                     && window.__liveBucketIntervals().length === 1
                     && window.__liveBucketIntervals()[0] === oldEngine._interval
-                    && (tag === "helman-card" ? card._deviceTree[1].children[0] : card._houseNode) === oldNode;
+                    && (tag === "helman-card" ? card._deviceTree[1].children[0] : card._host.energyNodes.houseNode) === oldNode;
 
                 (window.__hass as any).states["sensor.house"] = { state: "250", attributes: {} };
                 oldEngine.advanceBuckets(
-                    tag === "helman-card" ? card._deviceTree : card._topLevelNodes(),
-                    card._sourceNodes,
+                    card._host.deviceTree,
+                    card._host.sourceNodes,
                 );
                 const updatedPower = oldNode.powerValue;
 
@@ -552,7 +548,7 @@ for (const tag of ["helman-card", "helman-simple-card"] as const) {
                 await new Promise<void>((done) => setTimeout(done, 0));
                 window.__resolveHistory();
                 await second;
-                const newEngine = card._historyEngine;
+                const newEngine = card._host.historyEngine;
                 const replaced = newEngine !== oldEngine
                     && oldEngine._interval === undefined
                     && window.__liveBucketIntervals().length === 1
@@ -591,7 +587,7 @@ test("helman-card: children use the incoming bucket count on mount and refresh",
             child: card._deviceTree[1].children[0].historyBuckets,
         };
         window.__setTreeBuckets(5);
-        const refresh = card._loadBackendData(true);
+        const refresh = card._host.loadBackendData(true);
         await new Promise<void>((done) => setTimeout(done, 0));
         window.__resolveTree();
         await new Promise<void>((done) => setTimeout(done, 0));

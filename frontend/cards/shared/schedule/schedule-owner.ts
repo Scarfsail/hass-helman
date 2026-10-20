@@ -1,7 +1,7 @@
 import type { HomeAssistant } from "../../../types/ha";
 import type { SchedulePayload } from "../../helman-api";
-import { getSharedDataChangedFeed } from "../../helman/data-changed";
-import { getSharedHelmanStore, type HelmanStore } from "../../helman/store";
+import { getSharedDataChangedFeed } from "../data/data-changed";
+import { getSharedHelmanStore, type HelmanStore } from "../data/store";
 import { getNextScheduleBoundaryDelayMs } from "./model/schedule-time";
 import type {
     ScheduleOwnerError,

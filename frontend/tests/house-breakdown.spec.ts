@@ -582,7 +582,7 @@ test.describe("solar inspector house composition", () => {
                 await card.setConfig({ type: `custom:${name}` });
                 card.hass = hass;
                 document.body.appendChild(card);
-                const nodes = () => walk(card._deviceTree ?? (card._houseNode ? [card._houseNode] : []));
+                const nodes = () => walk(card._host.deviceTree);
                 for (let i = 0; i < 100 && !nodes().some((node) => node.isUnmeasured); i++) {
                     await new Promise((done) => setTimeout(done, 20));
                 }
