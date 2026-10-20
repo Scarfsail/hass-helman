@@ -1,4 +1,4 @@
-import { prepareNodeDetailPage, mountSimpleCard, nodeDetailLocators, sectionRequestLog } from "./support/node-detail-harness";
+import { prepareNodeDetailPage, mountSimpleCard, nodeDetailLocators, sectionRequestLog, sectionReads, expectKeepRule } from "./support/node-detail-harness";
 import { cardTree, forecastPayload } from "./support/payload-builders";
 import type { ForecastPayload } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
@@ -696,4 +696,62 @@ test.describe("screenshots", { tag: "@screens" }, () => {
             });
         }
     }
+});
+
+
+test("section requests: a section is read while shown and re-read on a data change", async ({ page }) => {
+    await mount(page);
+    await openDetail(page);
+    const reads = () => sectionReads(page, "grid", ["helman/solar_bias/day_aggregates"]);
+    const MONEY = "helman/solar_bias/day_aggregates";
+    await expect.poll(reads).toEqual({ [MONEY]: 1, voltage: 1 });
+    // An opened money answer shows today's figures as they are now.
+    await open(page, "money");
+    await expect.poll(reads).toEqual({ [MONEY]: 2, voltage: 1 });
+    await flow(page).locator("[data-scope='today']").click();
+    await expect.poll(reads).toEqual({ [MONEY]: 2, voltage: 1, flows: 1 });
+    await page.evaluate(() => window.__fireDataChanged("config"));
+    await expect.poll(reads).toEqual({ [MONEY]: 3, voltage: 2, flows: 2 });
+    await flow(page).locator("[data-scope='now']").click();
+    await flow(page).locator("[data-scope='today']").click();
+    await expect(flowLabel(page, "in", "solar")).toContainText("kWh");
+    await page.waitForTimeout(300);
+    expect(await reads()).toEqual({ [MONEY]: 3, voltage: 2, flows: 2 });
+});
+
+
+test("today's voltages stay while they refresh within the day and on a failure, and give way on a new day", async ({ page }) => {
+    await mount(page);
+    await openDetail(page);
+    await expectKeepRule(page, "node-detail-grid-content", "grid", "voltage", "_voltage");
+});
+
+
+test("money that failed to load is read again once stale, never on every update", async ({ page }) => {
+    await mount(page);
+    await page.evaluate(() => {
+        const hass = window.__GridHass;
+        const original = hass.callWS;
+        (window as any).__moneyFail = true;
+        hass.callWS = (request: any) => {
+            if (request.type !== "helman/solar_bias/day_aggregates" || !(window as any).__moneyFail) return original(request);
+            window.__GridRequests.push({ ...request });
+            return Promise.reject(new Error("recorder down"));
+        };
+    });
+    const status = () => content(page).evaluate((element: any) => element._money.state?.status);
+    const moneyReads = () => page.evaluate(() => window.__GridRequests.filter((r) => r.type === "helman/solar_bias/day_aggregates").length);
+    await openDetail(page);
+    await expect.poll(status).toBe("error");
+    const failed = await moneyReads();
+    await page.evaluate(() => { (window as any).__moneyFail = false; });
+    // Within the refresh interval the failure stands, however often the detail updates.
+    for (let i = 0; i < 3; i++) await content(page).evaluate(async (element: any) => { element.requestUpdate(); await element.updateComplete; });
+    await page.waitForTimeout(300);
+    expect(await moneyReads()).toBe(failed);
+    expect(await status()).toBe("error");
+    await page.clock.setFixedTime(new Date("2026-10-21T12:05:01Z"));
+    await content(page).evaluate((element: any) => element.requestUpdate());
+    await expect.poll(status).toBe("ready");
+    expect(await moneyReads()).toBe(failed + 1);
 });

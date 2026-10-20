@@ -248,6 +248,25 @@ test.describe("device detail from the power card", () => {
         }]);
     });
 
+    test("section requests: each figure is read once per opened device, never on a live tick", async ({ page }) => {
+        await clickInRow(page, "Boiler", ".deviceName");
+        await expect.poll(() => openDialog(page)).toEqual({ title: "Boiler", tiles: ["Today 1.25 kWh", "Last hour 0.30 kWh"], hasChart: true });
+        const reads = () => page.evaluate(() => ({
+            energy: (window as any).__statRequests.length,
+            stats: (window as any).__deviceStatsRequests.length,
+            chart: (window as any).__chartConfigs.length,
+        }));
+        const opened = await reads();
+        expect(opened).toEqual({ energy: 2, stats: 1, chart: 1 });
+        await page.evaluate(async () => {
+            const content = (window as any).__deepAll(document, "node-detail-device-content")[0];
+            content.hass = { ...content.hass, states: { ...content.hass.states, "sensor.boiler_power": { state: "1300", attributes: { unit_of_measurement: "W" } } } };
+            await content.updateComplete;
+        });
+        await page.waitForTimeout(300);
+        expect(await reads()).toEqual(opened);
+    });
+
     for (const [unit, value, expected] of [
         ["kW", "3", "3.0 kW"],
         ["KW", "3", "3.0 kW"],

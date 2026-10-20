@@ -1,4 +1,4 @@
-import { prepareNodeDetailPage, mountSimpleCard, nodeDetailLocators, sectionRequestLog } from "./support/node-detail-harness";
+import { prepareNodeDetailPage, mountSimpleCard, nodeDetailLocators, sectionRequestLog, sectionReads } from "./support/node-detail-harness";
 import { cardTree, scheduleSlots } from "./support/payload-builders";
 import type { ScheduleActionDTO, SchedulePayload, ScheduleSlotDTO } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
@@ -42,6 +42,8 @@ type Variant = {
     /** The rating in kW rather than W. */
     ratedKw?: boolean;
     modesFail?: boolean;
+    /** The first read of today's modes answers; every read after it fails. */
+    modesThenFail?: boolean;
     /** The first read of today's modes is yesterday's, as after midnight; every read after it fails. */
     modesYesterdayThenFail?: boolean;
     /** No mode of the profile binds: the section answers without modes. */
@@ -212,6 +214,8 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                     if (msg.section === "modes") {
                         window.__modesCalls += 1;
                         if (window.__modesFail)
+                            throw new Error("recorder down");
+                        if (v.modesThenFail && window.__modesCalls > 1)
                             throw new Error("recorder down");
                         if (v.modesYesterdayThenFail) {
                             if (window.__modesCalls > 1)
@@ -627,8 +631,23 @@ test.describe("today's modes on a data change, a new day and a changed config", 
     });
 
     test("yesterday's modes give way on a new day, so a failed read says so", async ({ page }) => {
+        await mount(page, { modesThenFail: true });
+        await openDetail(page);
+        await expect.poll(async () => (await segments(page)).filter((segment) => segment.planned === "false").length).toBe(3);
+        await page.clock.setFixedTime(new Date("2026-10-22T00:01:00Z"));
+        await content(page).evaluate((element: any) => element.requestUpdate());
+        await expect(content(page).locator("[data-strip-failed]")).toContainText("Today's modes could not be read.");
+        expect((await segments(page)).every((segment) => segment.planned === "true")).toBe(true);
+    });
+
+    test("yesterday's modes from a lagging backend are never today's, so a failed retry says so", async ({ page }) => {
         await mount(page, { modesYesterdayThenFail: true });
         await openDetail(page);
+        await expect.poll(() => page.evaluate(() => window.__modesCalls)).toBe(1);
+        // An answer for another day is retried once the new-day retry interval passed.
+        await page.clock.setFixedTime(new Date("2026-10-21T12:00:31Z"));
+        await content(page).evaluate((element: any) => element.requestUpdate());
+        await expect.poll(() => page.evaluate(() => window.__modesCalls)).toBe(2);
         await expect(content(page).locator("[data-strip-failed]")).toContainText("Today's modes could not be read.");
         expect((await segments(page)).every((segment) => segment.planned === "true")).toBe(true);
     });
@@ -915,4 +934,41 @@ test("the load share converts a rating in kW and phases in W to one unit", async
     await mount(page, { ratedKw: true });
     await openDetail(page);
     await expect(tile(page, "operating").locator(".detail")).toHaveText("AC 3.5 kW · 35 % of rating");
+});
+
+
+test("section requests: a section is read while shown, re-read on a data change and dropped once hidden", async ({ page }) => {
+    await mount(page);
+    await openDetail(page);
+    const reads = () => sectionReads(page, "inverter");
+    await expect.poll(reads).toEqual({ modes: 1 });
+    await open(page, "operating");
+    await expect.poll(reads).toEqual({ modes: 1, temperature: 1 });
+    // A closed answer's figures are dropped: reopened, it is read again.
+    await header(page, "operating").click();
+    await open(page, "operating");
+    await expect.poll(reads).toEqual({ modes: 1, temperature: 2 });
+    await flow(page).locator("[data-scope='today']").click();
+    await expect.poll(reads).toEqual({ modes: 1, temperature: 2, flows: 1 });
+    await announceChange(page);
+    await expect.poll(reads).toEqual({ modes: 2, temperature: 3, flows: 2 });
+    await flow(page).locator("[data-scope='now']").click();
+    await flow(page).locator("[data-scope='today']").click();
+    await expect(flowLabel(page, "in", "solar")).toContainText("kWh");
+    await page.waitForTimeout(300);
+    expect(await reads()).toEqual({ modes: 2, temperature: 3, flows: 2 });
+});
+
+
+test("the temperature is read on opening and on a data change, never by its age", async ({ page }) => {
+    await mount(page);
+    await openDetail(page);
+    await open(page, "operating");
+    await expect.poll(async () => (await sectionReads(page, "inverter")).temperature).toBe(1);
+    await page.clock.setFixedTime(new Date("2026-10-21T12:06:00Z"));
+    await content(page).evaluate((element: any) => element.requestUpdate());
+    // The modes refresh by their age; the temperature does not.
+    await expect.poll(async () => (await sectionReads(page, "inverter")).modes).toBe(2);
+    await page.waitForTimeout(300);
+    expect((await sectionReads(page, "inverter")).temperature).toBe(1);
 });

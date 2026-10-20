@@ -1,4 +1,4 @@
-import { prepareNodeDetailPage, mountSimpleCard, nodeDetailLocators, sectionRequestLog, treeNode, holdSection, powerTick, reconnectDetail } from "./support/node-detail-harness";
+import { prepareNodeDetailPage, mountSimpleCard, nodeDetailLocators, sectionRequestLog, sectionReads, expectKeepRule, treeNode, holdSection, powerTick, reconnectDetail } from "./support/node-detail-harness";
 import { energyFields, scheduleSlots, treePayload } from "./support/payload-builders";
 import type { EvChargerUseMode, ScheduleControllableActionsDTO, SchedulePayload, ScheduleSlotDTO, TreeItemDTO } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
@@ -1175,7 +1175,7 @@ test("Today across midnight throttles power ticks and accepts a late answer", as
     await powerTick(page, "node-detail-ev-charger-content", 31);
     expect((await sectionRequestLog(page, "ev_charger", "today")).length - before).toBe(2);
     await page.evaluate(() => (window as any).__releaseSection(true));
-    await expect.poll(() => content(page).evaluate((element: any) => element._today?.status)).toBe("ready");
+    await expect.poll(() => content(page).evaluate((element: any) => element._today.state?.status)).toBe("ready");
 });
 
 
@@ -1183,9 +1183,65 @@ test("a disconnected loading section can recover after reconnect", async ({ page
     await openCharger(page);
     await holdSection(page, "ev_charger", "today");
     await flow(page).locator("[data-scope='today']").click();
-    await expect.poll(() => content(page).evaluate((element: any) => element._today?.status)).toBe("loading");
+    await expect.poll(() => content(page).evaluate((element: any) => element._today.state?.status)).toBe("loading");
     expect(await reconnectDetail(page, "node-detail-ev-charger-content", "_today")).toBeNull();
-    await expect.poll(() => content(page).evaluate((element: any) => element._today?.status)).toBe("loading");
+    await expect.poll(() => content(page).evaluate((element: any) => element._today.state?.status)).toBe("loading");
     await page.evaluate(() => { (window as any).__releaseSection(); (window as any).__releaseSection(); });
-    await expect.poll(() => content(page).evaluate((element: any) => element._today?.status)).toBe("ready");
+    await expect.poll(() => content(page).evaluate((element: any) => element._today.state?.status)).toBe("ready");
+});
+
+
+test("section requests: a section is read while shown, re-read on a data change and dropped once hidden", async ({ page }) => {
+    await openCharger(page);
+    const PROJECTION = "helman/get_appliance_projections";
+    const reads = () => sectionReads(page, "ev_charger", [PROJECTION]);
+    await expect.poll(reads).toEqual({ [PROJECTION]: 1, segment: 1 });
+    await open(page, "today");
+    await expect.poll(reads).toEqual({ [PROJECTION]: 1, segment: 1, today: 1 });
+    await header(page, "today").click();
+    await open(page, "today");
+    await flow(page).locator("[data-scope='today']").click();
+    await expect(flowLabel(page, "in", "solar")).toContainText("kWh");
+    await page.waitForTimeout(300);
+    expect(await reads()).toEqual({ [PROJECTION]: 1, segment: 1, today: 1 });
+    await page.evaluate(() => window.__fireDataChanged("config"));
+    await expect.poll(reads).toEqual({ [PROJECTION]: 2, segment: 2, today: 2 });
+    await header(page, "today").click();
+    await flow(page).locator("[data-scope='now']").click();
+    await flow(page).locator("[data-scope='today']").click();
+    await expect(flowLabel(page, "in", "solar")).toContainText("kWh");
+    await page.waitForTimeout(300);
+    expect(await reads()).toEqual({ [PROJECTION]: 2, segment: 2, today: 2 });
+});
+
+
+test("today's figures stay while they refresh within the day and on a failure, and give way on a new day", async ({ page }) => {
+    await openCharger(page);
+    await flow(page).locator("[data-scope='today']").click();
+    await expectKeepRule(page, "node-detail-ev-charger-content", "ev_charger", "today", "_today");
+});
+
+
+test("an appliance read a disconnect overtook announces no watched entities", async ({ page }) => {
+    await openCharger(page);
+    await page.evaluate(() => {
+        const hass = window.__EvChargerHass;
+        const original = hass.callWS;
+        const held: Array<() => void> = [];
+        (window as any).__heldAppliances = held;
+        hass.callWS = (request: any) => request.type !== "helman/get_appliances" ? original(request)
+            : new Promise((resolve, reject) => held.push(() => original(request).then(resolve, reject)));
+    });
+    // A data change re-reads the roster after the overview, which announces on its own.
+    await page.evaluate(() => window.__fireDataChanged("config"));
+    await expect.poll(() => page.evaluate(() => (window as any).__heldAppliances.length)).toBeGreaterThan(0);
+    await content(page).evaluate((element: any) => {
+        const announced: unknown[] = [];
+        (window as any).__announced = announced;
+        element.addEventListener("helman-watched-entities", (event: CustomEvent) => announced.push(event.detail));
+        element.remove();
+    });
+    await page.evaluate(() => { for (const release of (window as any).__heldAppliances.splice(0)) release(); });
+    await page.waitForTimeout(300);
+    expect(await page.evaluate(() => (window as any).__announced)).toEqual([]);
 });

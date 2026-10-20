@@ -21,7 +21,6 @@ import { currencyFromPriceUnit } from "../helman-solar-inspector/money-model";
 import { BATT_COLOR, GRID_COLOR, HOUSE_COLOR, NEUTRAL_LIGHT_COLOR, SOLAR_COLOR } from "../color-utils";
 import { helmanColorVars } from "../color-vars";
 import type { TreeItem } from "../shared/data/tree-item";
-import { getSharedHelmanStore } from "../shared/data/store";
 
 import type { FlowItem } from "../shared/node-flow";
 import { houseGlyph, type HouseShare } from "../shared/node-glyphs";
@@ -37,7 +36,7 @@ import {
 } from "../shared/schedule/schedule-types";
 import { todayKey } from "../shared/time/day-key";
 import "../helman-device-reports/device-report-ranking";
-import { IDLE_W, NodeDetailContentBase, NEW_DAY_RETRY_MS, TODAY_REFRESH_MS, type NodeFlow, type SectionState } from "./node-detail-base";
+import { IDLE_W, NodeDetailContentBase, type NodeFlow } from "./node-detail-base";
 import { readingNumber } from "./node-detail-readings";
 import { powerUnitFactor, readPowerW } from "../shared/power-reading";
 import { dayKey, todayAndTomorrow } from "./node-detail-schedule";
@@ -296,49 +295,33 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
     @property({ attribute: false }) public params!: HouseDetailParams;
 
     @state() private _schedule: SchedulePayload | null = null;
-    /** Today's report figures, shown on the overview; `null` before the first request. */
-    @state() private _today: SectionState<HouseTodaySectionPayload> | null = null;
-    /** The pattern answer's history, `null` while it is closed. */
-    @state() private _pattern: SectionState<HousePatternSectionPayload> | null = null;
-    /** Today's full ranking, behind the consumers answer's evidence. */
-    @state() private _ranking: SectionState<RankingReportPayload | null> | null = null;
+    /** Today's report figures, shown on the overview and drawn by Today. */
+    private readonly _today = this._section<HouseTodaySectionPayload>("today", {
+        fetch: () => this._readSection("today"),
+        shown: () => this._offers("today"),
+    });
+    /** The pattern answer's history, while it is open. */
+    private readonly _pattern = this._section<HousePatternSectionPayload>("pattern", {
+        fetch: () => this._readSection("pattern"),
+        shown: () => this._open === "pattern" && this._offers("pattern"),
+    });
+    /** Today's full ranking, while the consumers answer's evidence is open; `null` when the reports cannot build it. */
+    private readonly _ranking = this._section<RankingReportPayload | null>("ranking", {
+        fetch: async () => {
+            const today = todayKey(this._timeZone);
+            const payload = await callHelman(this.hass, "helman/device_report", { report: "ranking", start_date: today, end_date: today });
+            return isDeviceReportUnavailable(payload) ? null : payload as RankingReportPayload;
+        },
+        shown: () => this._open === "consumers" && this._evidenceOpen,
+    });
 
     private _unsubscribeSchedule?: () => void;
-    private _todayRequest = 0;
-    private _todayRequestedAt = 0;
-    private _patternRequest = 0;
-    private _patternRequestedAt = 0;
-    private _rankingRequest = 0;
-    private _rankingRequestedAt = 0;
-    /** The day the shown ranking was requested for. */
-    private _rankingDate = "";
     /** The planned runs, read several times a render; cleared before each update. */
     private _runsCache?: PlannedRun[];
 
     willUpdate(changed: Map<string, unknown>): void {
         this._runsCache = undefined;
         super.willUpdate(changed);
-        // "Today so far" is re-read on a new day, and otherwise at most every
-        // few minutes, only while the page is visible.
-        if (document.hidden) return;
-        // The house re-renders on every device's power tick: a new day is
-        // retried at most every NEW_DAY_RETRY_MS, never once per render while
-        // a request is in flight or after one failed.
-        const stale = (isToday: boolean, requestedAt: number) => {
-            const age = Date.now() - requestedAt;
-            return age > TODAY_REFRESH_MS || (!isToday && age > NEW_DAY_RETRY_MS);
-        };
-        if (this._today?.status === "ready" && this._todayStale()) void this._loadToday();
-        if (this._pattern?.status === "ready" && stale(this._isToday(this._pattern.payload.period.start), this._patternRequestedAt)) void this._loadPattern();
-        // The full ranking only while its evidence is open.
-        if (this._open === "consumers" && this._evidenceOpen && this._ranking?.status === "ready"
-            && stale(this._rankingDate === todayKey(this._timeZone), this._rankingRequestedAt)) void this._loadRanking();
-    }
-
-    protected updated(changed: Map<string, unknown>): void {
-        super.updated(changed);
-        // Today's full ranking is fetched only once its evidence is open.
-        if (this._open === "consumers" && this._evidenceOpen && this._ranking === null) void this._loadRanking();
     }
 
     protected _start(): void {
@@ -351,26 +334,6 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
     protected _stop(): void {
         this._unsubscribeSchedule?.();
         this._unsubscribeSchedule = undefined;
-        this._todayRequest += 1;
-        this._patternRequest += 1;
-        this._rankingRequest += 1;
-        if (this._today?.status === "loading") this._today = null;
-        if (this._pattern?.status === "loading") this._pattern = null;
-        if (this._ranking?.status === "loading") this._ranking = null;
-    }
-
-    protected _onDataChanged(): void {
-        // The base reloads the overview and the forecast; the schedule owner reloads itself.
-        super._onDataChanged();
-        if (this._today !== null) void this._loadToday();
-        if (this._pattern !== null) void this._loadPattern();
-        if (this._ranking !== null) void this._loadRanking();
-    }
-
-    /** The run mode the overview's condition was computed from. */
-    protected _overviewSignature(payload: HouseDetailPayload): string {
-        const entityId = payload.entities.run_mode;
-        return entityId ? this.hass.states[entityId]?.state ?? "" : "";
     }
 
     /** The overview's entities, and every load the phase estimate reads. */
@@ -385,12 +348,6 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         yield* walk(this.params.houseNode?.children ?? []);
     }
 
-    protected _overviewLoaded(payload: HouseDetailPayload): void {
-        if (this._today === null && payload.sections.includes("today")) void this._loadToday();
-        // An answer may already be open, waiting for the overview's sections.
-        if (this._open === "pattern" && this._pattern === null) void this._loadPattern();
-    }
-
     /** The rest of today's forecast moves at each slot boundary; the next planned load at each run. */
     protected *_clockBoundaries(): Iterable<number> {
         const now = Date.now();
@@ -401,76 +358,10 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         }
     }
 
-    // ── Data ────────────────────────────────────────────────────────────────
-
-    private async _loadToday(): Promise<void> {
-        const request = ++this._todayRequest;
-        if (this._today?.status !== "ready") this._today = { status: "loading" };
-        this._todayRequestedAt = Date.now();
-        try {
-            const payload = await getSharedHelmanStore(this.hass)
-                .getNodeDetail<HouseTodaySectionPayload>({ node: "house", section: "today" }, { fresh: true });
-            if (request !== this._todayRequest) return;
-            this._today = { status: "ready", payload };
-        } catch (error) {
-            if (request !== this._todayRequest) return;
-            console.error("node-detail-house: failed to load today's figures", error);
-            if (this._today?.status !== "ready") this._today = { status: "error" };
-        }
-    }
-
-    private async _loadPattern(): Promise<void> {
-        const overview = this._overview.status === "ready" ? this._overview.payload : null;
-        if (!overview?.sections.includes("pattern")) return;
-        const request = ++this._patternRequest;
-        if (this._pattern?.status !== "ready") this._pattern = { status: "loading" };
-        this._patternRequestedAt = Date.now();
-        try {
-            const payload = await getSharedHelmanStore(this.hass)
-                .getNodeDetail<HousePatternSectionPayload>({ node: "house", section: "pattern" }, { fresh: true });
-            if (request !== this._patternRequest) return;
-            this._pattern = { status: "ready", payload };
-        } catch (error) {
-            if (request !== this._patternRequest) return;
-            console.error("node-detail-house: failed to load the pattern section", error);
-            if (this._pattern?.status !== "ready") this._pattern = { status: "error" };
-        }
-    }
-
-    private async _loadRanking(): Promise<void> {
-        const request = ++this._rankingRequest;
-        if (this._ranking?.status !== "ready") this._ranking = { status: "loading" };
-        const today = todayKey(this._timeZone);
-        this._rankingRequestedAt = Date.now();
-        try {
-            const payload = await callHelman(this.hass, "helman/device_report", {
-                report: "ranking",
-                ...{ start_date: today, end_date: today },
-            });
-            if (request !== this._rankingRequest) return;
-            this._rankingDate = today;
-            this._ranking = { status: "ready", payload: isDeviceReportUnavailable(payload) ? null : payload as RankingReportPayload };
-        } catch (error) {
-            if (request !== this._rankingRequest) return;
-            console.error("node-detail-house: failed to load today's ranking", error);
-            if (this._ranking?.status !== "ready") this._ranking = { status: "error" };
-        }
-    }
-
-    private _todayPayload(): HouseTodaySectionPayload | null {
-        return this._today?.status === "ready" ? this._today.payload : null;
-    }
-
     // ── Disclosure ──────────────────────────────────────────────────────────
 
     protected _setOpen(id: QuestionId | null): void {
         super._setOpen(id);
-        // A closed answer's requests are obsolete; they are re-read on reopen.
-        this._patternRequest += 1;
-        this._pattern = null;
-        this._rankingRequest += 1;
-        this._ranking = null;
-        if (id === "pattern") void this._loadPattern();
         // An opened forecast answer shows the forecast as it is now.
         if (id === "next") void this._loadForecast();
     }
@@ -522,7 +413,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         return html`
             <div class="summary" data-overview>
                 <p class="status pill action-tone-neutral">${status}</p>
-                ${this._renderException(overview)}
+                ${overview.condition ? this._exceptionBanner(fillTemplate(this._t(`exception.${overview.condition.kind}`), { state: overview.condition.runMode }), "phases") : nothing}
             </div>
         `;
     }
@@ -585,7 +476,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
      * footnote, an estimate.
      */
     private _todayFlow(): { flow: NodeFlow; shares: HouseShare[] | null } {
-        const today = this._todayPayload();
+        const today = this._today.payload;
         const house = today?.house ?? null;
         const energy = (value: number | null) => value === null ? "–" : (formatKwh(Math.abs(value)) + " kWh");
         const inputs = SOURCES.map(([key]) => this._flowItem(key, house ? house.sources[key] : null, energy));
@@ -637,7 +528,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
 
     /** Why Today has nothing to draw: loading, failed or unavailable; `null` once it has the house's figures. */
     private _todayFlowStatus(): string | null {
-        const today = this._today;
+        const today = this._today.state;
         if (today === null || today.status === "loading") return this._t("today.loading");
         if (today.status === "error") return this._t("today.failed");
         if (!today.payload.house) {
@@ -648,12 +539,8 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
     }
 
     /** Today is the `today` section, read with the overview and kept current. */
-    protected _todaySection() {
-        return { state: this._today, requestedAt: this._todayRequestedAt };
-    }
-
-    protected _loadTodayFlows(): Promise<void> {
-        return this._loadToday();
+    protected _todayResource() {
+        return this._today;
     }
 
     // Tiles -------------------------------------------------------------------
@@ -679,7 +566,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
 
     /** Today's energy so far, with today against the usual once the comparison is read. */
     private _renderPatternTile() {
-        const house = this._todayPayload()?.house;
+        const house = this._today.payload?.house;
         return this._tile("pattern", house ? (formatKwh(Math.abs(house.kwh)) + " kWh") : "–", this._patternPreview() ?? this._t("tile.today_so_far"));
     }
 
@@ -707,25 +594,14 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
             this._t(measured ? "tile.phase_highest" : "tile.phase_highest_estimated"), graphic);
     }
 
-    /** At most one: off-grid operation or a fault the inverter reports, linked to the phase answer. */
-    private _renderException(overview: HouseDetailPayload) {
-        if (!overview.condition) return nothing;
-        return html`
-            <div class="exception" role="status" data-exception>
-                <span>${fillTemplate(this._t(`exception.${overview.condition.kind}`), { state: overview.condition.runMode })}</span>
-                <button class="link-button" @click=${() => this._setOpen("phases")}>${this._t("exception.details")}</button>
-            </div>
-        `;
-    }
-
     /** Why today's report figures are not shown, or `null` once they are. */
     private _todayNotReady() {
-        const today = this._today;
+        const today = this._today.state;
         if (today === null || today.status === "loading") return html`<p class="note" data-today-loading>${this._t("today.loading")}</p>`;
         if (today.status === "error") {
             return html`
                 <p class="note">${this._t("today.failed")}</p>
-                <button class="link-button" @click=${() => this._loadToday()}>${this._t("retry")}</button>
+                <button class="link-button" @click=${() => this._today.load()}>${this._t("retry")}</button>
             `;
         }
         if (!today.payload.house) {
@@ -740,7 +616,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
     // Sources -----------------------------------------------------------------
 
     private _sourcesPreview(): string | null {
-        const house = this._todayPayload()?.house;
+        const house = this._today.payload?.house;
         if (!house || house.kwh <= 0) return null;
         return SOURCES.map(([key]) => fillTemplate(this._t(`mix.${key}`), { share: this._share(house.sources[key] / house.kwh) })).join(" · ");
     }
@@ -748,7 +624,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
     private _renderSources() {
         const notReady = this._todayNotReady();
         if (notReady) return notReady;
-        const today = this._todayPayload()!;
+        const today = this._today.payload!;
         const house = today.house!;
         const period = this._row(this._t("period_label"), this._periodText(today), "period");
         if (house.kwh <= 0) return html`${period}<p class="note" data-no-usage>${this._t("sources.none")}</p>`;
@@ -784,7 +660,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
     }
 
     private _renderSourcesEvidence() {
-        const today = this._todayPayload();
+        const today = this._today.payload;
         const house = today?.house;
         if (!today || !house) return html`<p class="note">${this._t("sources.no_evidence")}</p>`;
         const money = house.money;
@@ -814,7 +690,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
     // Consumers ---------------------------------------------------------------
 
     private _consumersPreview(): string | null {
-        const consumers = this._todayPayload()?.consumers;
+        const consumers = this._today.payload?.consumers;
         const top = consumers?.top[0];
         if (!top) return null;
         return fillTemplate(this._t("consumers.top_short"), { name: this._loadName(top), kwh: (formatKwh(Math.abs(top.kwh)) + " kWh") });
@@ -823,7 +699,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
     private _renderConsumers() {
         const notReady = this._todayNotReady();
         if (notReady) return notReady;
-        const today = this._todayPayload()!;
+        const today = this._today.payload!;
         const consumers = today.consumers;
         const period = this._row(this._t("period_label"), this._periodText(today), "period");
         if (!consumers || !consumers.top.length) return html`${period}<p class="note" data-no-consumers>${this._t("consumers.none")}</p>`;
@@ -859,7 +735,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
     }
 
     private _renderConsumersEvidence() {
-        const today = this._todayPayload();
+        const today = this._today.payload;
         const consumers = today?.consumers;
         return html`
             ${consumers?.top.length ? html`
@@ -882,12 +758,12 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
 
     /** The device reports' own ranking of today: the full list, as the reports card shows it. */
     private _renderRanking() {
-        const ranking = this._ranking;
+        const ranking = this._ranking.state;
         if (ranking === null || ranking.status === "loading") return html`<p class="note">${this._t("consumers.ranking_loading")}</p>`;
         if (ranking.status === "error") {
             return html`
                 <p class="note">${this._t("consumers.ranking_failed")}</p>
-                <button class="link-button" @click=${() => this._loadRanking()}>${this._t("retry")}</button>
+                <button class="link-button" @click=${() => this._ranking.load()}>${this._t("retry")}</button>
             `;
         }
         if (!ranking.payload) return html`<p class="note">${this._t("today.unavailable_not_loaded")}</p>`;
@@ -1074,12 +950,8 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
 
     // Pattern -----------------------------------------------------------------
 
-    private _patternReady(): HousePatternSectionPayload | null {
-        return this._pattern?.status === "ready" ? this._pattern.payload : null;
-    }
-
     private _patternPreview(): string | null {
-        const comparison = this._patternReady()?.comparison;
+        const comparison = this._pattern.payload?.comparison;
         if (!comparison || comparison.ratio === null) return null;
         return fillTemplate(this._t("pattern.short"), {
             change: this._signedShare(comparison.ratio - 1),
@@ -1091,12 +963,12 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
     private _renderPattern() {
         const overview = this._overview.status === "ready" ? this._overview.payload : null;
         if (!overview?.sections.includes("pattern")) return html`<p class="note" data-pattern-unavailable>${this._t("pattern.no_meters")}</p>`;
-        const section = this._pattern;
+        const section = this._pattern.state;
         if (section === null || section.status === "loading") return html`<p class="note" data-pattern-loading>${this._t("loading_history")}</p>`;
         if (section.status === "error") {
             return html`
                 <p class="note">${this._t("history_failed")}</p>
-                <button class="link-button" @click=${() => this._loadPattern()}>${this._t("retry")}</button>
+                <button class="link-button" @click=${() => this._pattern.load()}>${this._t("retry")}</button>
             `;
         }
         const payload = section.payload;
@@ -1164,7 +1036,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
     }
 
     private _renderPatternEvidence() {
-        const payload = this._patternReady();
+        const payload = this._pattern.payload;
         if (!payload) return html`<p class="note">${this._t("loading_history")}</p>`;
         const comparison = payload.comparison;
         const until = Date.parse(comparison.until);
