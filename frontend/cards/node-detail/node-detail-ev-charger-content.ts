@@ -179,8 +179,8 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
     /** This charger's appliance metadata; `null` in the payload when the roster has no such charger. */
     private readonly _appliance = this._section<EvChargerApplianceMetadataDTO | null>("appliance", {
         fetch: async () => {
-            const roster = await getSharedHelmanStore(this.hass).getAppliances();
-            const appliance = (roster?.appliances ?? []).find((item) => item.id === this.deviceId && item.kind === "ev_charger");
+            const roster = await getSharedHelmanStore(this.hass).getControllableRoster();
+            const appliance = roster.find((item) => item.id === this.deviceId && item.kind === "ev_charger");
             return (appliance as EvChargerApplianceMetadataDTO | undefined) ?? null;
         },
         shown: () => true,

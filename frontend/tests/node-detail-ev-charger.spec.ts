@@ -1214,6 +1214,29 @@ test("section requests: a section is read while shown, re-read on a data change 
     expect(await reads()).toEqual({ [PROJECTION]: 2, segment: 2, today: 2 });
 });
 
+test("a config change refreshes cached charger vehicle metadata", async ({ page }) => {
+    await openCharger(page);
+    await expect.poll(() => content(page).evaluate((element: any) => element._appliance.payload?.vehicles.length)).toBe(1);
+    const initialReads = await page.evaluate(() => window.__EvChargerRequests.filter((request) => request.type === "helman/get_appliances").length);
+    await page.evaluate(() => {
+        const hass = window.__EvChargerHass;
+        const original = hass.callWS;
+        hass.callWS = async (request: any) => {
+            const payload = await original(request);
+            if (request.type !== "helman/get_appliances") return payload;
+            const updated = structuredClone(payload);
+            updated.appliances.find((item: any) => item.id === "garage-ev").vehicles.push({
+                id: "ioniq", name: "Ioniq", telemetry: { socEntityId: "sensor.ioniq_soc" },
+                metadata: { batteryCapacityKwh: 64, maxChargingPowerKw: 11 },
+            });
+            return updated;
+        };
+        window.__fireDataChanged("config");
+    });
+    await expect.poll(() => content(page).evaluate((element: any) => element._appliance.payload?.vehicles.map((vehicle: any) => vehicle.name))).toEqual(["Kona", "Ioniq"]);
+    expect(await page.evaluate(() => window.__EvChargerRequests.filter((request) => request.type === "helman/get_appliances").length)).toBe(initialReads + 1);
+});
+
 
 test("today's figures stay while they refresh within the day and on a failure, and give way on a new day", async ({ page }) => {
     await openCharger(page);
