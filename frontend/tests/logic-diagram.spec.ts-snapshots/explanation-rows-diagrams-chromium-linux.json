@@ -1,0 +1,681 @@
+[
+  {
+    "terminal": "execute",
+    "blocks": [
+      {
+        "id": "input-0-0",
+        "state": "false",
+        "decisive": "false",
+        "group": "0"
+      },
+      {
+        "id": "input-0-1",
+        "state": "true",
+        "decisive": "false",
+        "group": "0"
+      },
+      {
+        "id": "and-0",
+        "state": "false",
+        "decisive": "false",
+        "group": "0"
+      },
+      {
+        "id": "input-1-0",
+        "state": "true",
+        "decisive": "true",
+        "group": "1"
+      },
+      {
+        "id": "input-1-1",
+        "state": "true",
+        "decisive": "true",
+        "group": "1"
+      },
+      {
+        "id": "and-1",
+        "state": "true",
+        "decisive": "true",
+        "group": "1"
+      },
+      {
+        "id": "input-2-0",
+        "state": "true",
+        "decisive": "false",
+        "group": "2"
+      },
+      {
+        "id": "input-2-1",
+        "state": "true",
+        "decisive": "false",
+        "group": "2"
+      },
+      {
+        "id": "and-2",
+        "state": "true",
+        "decisive": "false",
+        "group": "2"
+      },
+      {
+        "id": "or",
+        "state": "true",
+        "decisive": "true",
+        "group": null
+      },
+      {
+        "id": "final",
+        "state": "true",
+        "decisive": "true",
+        "group": null
+      },
+      {
+        "id": "verdict",
+        "state": "true",
+        "decisive": "true",
+        "group": null
+      },
+      {
+        "id": "custom",
+        "state": "n/a",
+        "decisive": "false",
+        "group": "1"
+      },
+      {
+        "id": "exec",
+        "state": "true",
+        "decisive": "true",
+        "group": null
+      },
+      {
+        "id": "terminal",
+        "state": "true",
+        "decisive": "true",
+        "group": null
+      }
+    ],
+    "edges": [
+      {
+        "from": "input-0-0",
+        "to": "and-0",
+        "decisive": "false"
+      },
+      {
+        "from": "input-0-1",
+        "to": "and-0",
+        "decisive": "false"
+      },
+      {
+        "from": "input-1-0",
+        "to": "and-1",
+        "decisive": "true"
+      },
+      {
+        "from": "input-1-1",
+        "to": "and-1",
+        "decisive": "true"
+      },
+      {
+        "from": "input-2-0",
+        "to": "and-2",
+        "decisive": "false"
+      },
+      {
+        "from": "input-2-1",
+        "to": "and-2",
+        "decisive": "false"
+      },
+      {
+        "from": "and-0",
+        "to": "or",
+        "decisive": "false"
+      },
+      {
+        "from": "and-1",
+        "to": "or",
+        "decisive": "true"
+      },
+      {
+        "from": "and-2",
+        "to": "or",
+        "decisive": "false"
+      },
+      {
+        "from": "or",
+        "to": "final",
+        "decisive": "true"
+      },
+      {
+        "from": "final",
+        "to": "verdict",
+        "decisive": "true"
+      },
+      {
+        "from": "verdict",
+        "to": "exec",
+        "decisive": "true"
+      },
+      {
+        "from": "custom",
+        "to": "exec",
+        "decisive": "false"
+      },
+      {
+        "from": "exec",
+        "to": "terminal",
+        "decisive": "true"
+      }
+    ]
+  },
+  {
+    "terminal": "not_eligible",
+    "blocks": [
+      {
+        "id": "input-0-0",
+        "state": "true",
+        "decisive": "false",
+        "group": "0"
+      },
+      {
+        "id": "input-0-1",
+        "state": "false",
+        "decisive": "true",
+        "group": "0"
+      },
+      {
+        "id": "and-0",
+        "state": "false",
+        "decisive": "true",
+        "group": "0"
+      },
+      {
+        "id": "input-1-0",
+        "state": "false",
+        "decisive": "true",
+        "group": "1"
+      },
+      {
+        "id": "input-1-1",
+        "state": "true",
+        "decisive": "false",
+        "group": "1"
+      },
+      {
+        "id": "and-1",
+        "state": "false",
+        "decisive": "true",
+        "group": "1"
+      },
+      {
+        "id": "input-2-0",
+        "state": "false",
+        "decisive": "true",
+        "group": "2"
+      },
+      {
+        "id": "input-2-1",
+        "state": "true",
+        "decisive": "false",
+        "group": "2"
+      },
+      {
+        "id": "and-2",
+        "state": "false",
+        "decisive": "true",
+        "group": "2"
+      },
+      {
+        "id": "or",
+        "state": "false",
+        "decisive": "true",
+        "group": null
+      },
+      {
+        "id": "final",
+        "state": "false",
+        "decisive": "true",
+        "group": null
+      },
+      {
+        "id": "verdict",
+        "state": "false",
+        "decisive": "true",
+        "group": null
+      },
+      {
+        "id": "custom",
+        "state": "n/a",
+        "decisive": "false",
+        "group": null
+      },
+      {
+        "id": "exec",
+        "state": "false",
+        "decisive": "true",
+        "group": null
+      },
+      {
+        "id": "terminal",
+        "state": "false",
+        "decisive": "true",
+        "group": null
+      }
+    ],
+    "edges": [
+      {
+        "from": "input-0-0",
+        "to": "and-0",
+        "decisive": "false"
+      },
+      {
+        "from": "input-0-1",
+        "to": "and-0",
+        "decisive": "true"
+      },
+      {
+        "from": "input-1-0",
+        "to": "and-1",
+        "decisive": "true"
+      },
+      {
+        "from": "input-1-1",
+        "to": "and-1",
+        "decisive": "false"
+      },
+      {
+        "from": "input-2-0",
+        "to": "and-2",
+        "decisive": "true"
+      },
+      {
+        "from": "input-2-1",
+        "to": "and-2",
+        "decisive": "false"
+      },
+      {
+        "from": "and-0",
+        "to": "or",
+        "decisive": "true"
+      },
+      {
+        "from": "and-1",
+        "to": "or",
+        "decisive": "true"
+      },
+      {
+        "from": "and-2",
+        "to": "or",
+        "decisive": "true"
+      },
+      {
+        "from": "or",
+        "to": "final",
+        "decisive": "true"
+      },
+      {
+        "from": "final",
+        "to": "verdict",
+        "decisive": "true"
+      },
+      {
+        "from": "verdict",
+        "to": "exec",
+        "decisive": "true"
+      },
+      {
+        "from": "custom",
+        "to": "exec",
+        "decisive": "false"
+      },
+      {
+        "from": "exec",
+        "to": "terminal",
+        "decisive": "true"
+      }
+    ]
+  },
+  {
+    "terminal": "candidate",
+    "blocks": [
+      {
+        "id": "input-0-0",
+        "state": "true",
+        "decisive": "true",
+        "group": "0"
+      },
+      {
+        "id": "input-0-1",
+        "state": "true",
+        "decisive": "true",
+        "group": "0"
+      },
+      {
+        "id": "and-0",
+        "state": "true",
+        "decisive": "true",
+        "group": "0"
+      },
+      {
+        "id": "input-1-0",
+        "state": "true",
+        "decisive": "false",
+        "group": "1"
+      },
+      {
+        "id": "input-1-1",
+        "state": "true",
+        "decisive": "false",
+        "group": "1"
+      },
+      {
+        "id": "and-1",
+        "state": "true",
+        "decisive": "false",
+        "group": "1"
+      },
+      {
+        "id": "input-2-0",
+        "state": "true",
+        "decisive": "false",
+        "group": "2"
+      },
+      {
+        "id": "input-2-1",
+        "state": "true",
+        "decisive": "false",
+        "group": "2"
+      },
+      {
+        "id": "and-2",
+        "state": "true",
+        "decisive": "false",
+        "group": "2"
+      },
+      {
+        "id": "or",
+        "state": "true",
+        "decisive": "true",
+        "group": null
+      },
+      {
+        "id": "final",
+        "state": "true",
+        "decisive": "true",
+        "group": null
+      },
+      {
+        "id": "verdict",
+        "state": "true",
+        "decisive": "true",
+        "group": null
+      },
+      {
+        "id": "custom",
+        "state": "false",
+        "decisive": "true",
+        "group": "1"
+      },
+      {
+        "id": "exec",
+        "state": "false",
+        "decisive": "true",
+        "group": null
+      },
+      {
+        "id": "terminal",
+        "state": "not_evaluated",
+        "decisive": "true",
+        "group": null
+      }
+    ],
+    "edges": [
+      {
+        "from": "input-0-0",
+        "to": "and-0",
+        "decisive": "true"
+      },
+      {
+        "from": "input-0-1",
+        "to": "and-0",
+        "decisive": "true"
+      },
+      {
+        "from": "input-1-0",
+        "to": "and-1",
+        "decisive": "false"
+      },
+      {
+        "from": "input-1-1",
+        "to": "and-1",
+        "decisive": "false"
+      },
+      {
+        "from": "input-2-0",
+        "to": "and-2",
+        "decisive": "false"
+      },
+      {
+        "from": "input-2-1",
+        "to": "and-2",
+        "decisive": "false"
+      },
+      {
+        "from": "and-0",
+        "to": "or",
+        "decisive": "true"
+      },
+      {
+        "from": "and-1",
+        "to": "or",
+        "decisive": "false"
+      },
+      {
+        "from": "and-2",
+        "to": "or",
+        "decisive": "false"
+      },
+      {
+        "from": "or",
+        "to": "final",
+        "decisive": "true"
+      },
+      {
+        "from": "final",
+        "to": "verdict",
+        "decisive": "true"
+      },
+      {
+        "from": "verdict",
+        "to": "exec",
+        "decisive": "true"
+      },
+      {
+        "from": "custom",
+        "to": "exec",
+        "decisive": "true"
+      },
+      {
+        "from": "exec",
+        "to": "terminal",
+        "decisive": "true"
+      }
+    ]
+  },
+  {
+    "terminal": "blocked",
+    "blocks": [
+      {
+        "id": "input-0-0",
+        "state": "true",
+        "decisive": "false",
+        "group": "0"
+      },
+      {
+        "id": "input-0-1",
+        "state": "true",
+        "decisive": "false",
+        "group": "0"
+      },
+      {
+        "id": "and-0",
+        "state": "true",
+        "decisive": "false",
+        "group": "0"
+      },
+      {
+        "id": "input-1-0",
+        "state": "true",
+        "decisive": "false",
+        "group": "1"
+      },
+      {
+        "id": "input-1-1",
+        "state": "true",
+        "decisive": "false",
+        "group": "1"
+      },
+      {
+        "id": "and-1",
+        "state": "true",
+        "decisive": "false",
+        "group": "1"
+      },
+      {
+        "id": "input-2-0",
+        "state": "true",
+        "decisive": "false",
+        "group": "2"
+      },
+      {
+        "id": "input-2-1",
+        "state": "true",
+        "decisive": "false",
+        "group": "2"
+      },
+      {
+        "id": "and-2",
+        "state": "true",
+        "decisive": "false",
+        "group": "2"
+      },
+      {
+        "id": "or",
+        "state": "true",
+        "decisive": "false",
+        "group": null
+      },
+      {
+        "id": "gate-0",
+        "state": "false",
+        "decisive": "true",
+        "group": null
+      },
+      {
+        "id": "final",
+        "state": "false",
+        "decisive": "true",
+        "group": null
+      },
+      {
+        "id": "verdict",
+        "state": "false",
+        "decisive": "true",
+        "group": null
+      },
+      {
+        "id": "custom",
+        "state": "n/a",
+        "decisive": "false",
+        "group": "0"
+      },
+      {
+        "id": "exec",
+        "state": "false",
+        "decisive": "true",
+        "group": null
+      },
+      {
+        "id": "terminal",
+        "state": "false",
+        "decisive": "true",
+        "group": null
+      }
+    ],
+    "edges": [
+      {
+        "from": "input-0-0",
+        "to": "and-0",
+        "decisive": "false"
+      },
+      {
+        "from": "input-0-1",
+        "to": "and-0",
+        "decisive": "false"
+      },
+      {
+        "from": "input-1-0",
+        "to": "and-1",
+        "decisive": "false"
+      },
+      {
+        "from": "input-1-1",
+        "to": "and-1",
+        "decisive": "false"
+      },
+      {
+        "from": "input-2-0",
+        "to": "and-2",
+        "decisive": "false"
+      },
+      {
+        "from": "input-2-1",
+        "to": "and-2",
+        "decisive": "false"
+      },
+      {
+        "from": "and-0",
+        "to": "or",
+        "decisive": "false"
+      },
+      {
+        "from": "and-1",
+        "to": "or",
+        "decisive": "false"
+      },
+      {
+        "from": "and-2",
+        "to": "or",
+        "decisive": "false"
+      },
+      {
+        "from": "or",
+        "to": "final",
+        "decisive": "false"
+      },
+      {
+        "from": "gate-0",
+        "to": "final",
+        "decisive": "true"
+      },
+      {
+        "from": "final",
+        "to": "verdict",
+        "decisive": "true"
+      },
+      {
+        "from": "verdict",
+        "to": "exec",
+        "decisive": "true"
+      },
+      {
+        "from": "custom",
+        "to": "exec",
+        "decisive": "false"
+      },
+      {
+        "from": "exec",
+        "to": "terminal",
+        "decisive": "true"
+      }
+    ]
+  }
+]
