@@ -36,8 +36,9 @@ here directly:
 * solar bias correction's curtailment filter, which loads grid power straight
   from the recorder and whose ``InvalidationInputs`` contract is
   positive-is-export;
-* the simple card, which needs battery power *signed* rather than as the
-  magnitude ``value_type`` yields;
+* the cards, which need battery and grid power *signed* rather than as the
+  magnitude ``value_type`` yields, and read it through the tree node's
+  ``power`` sign from :func:`power_sign`;
 * the config editor's entity inspection, which reports what a picked sensor
   currently reads, through :func:`interpret_power_reading` below.
 
@@ -113,6 +114,15 @@ def source_value_type(device_config: Mapping[str, Any] | None, device: str) -> V
 def consumer_value_type(device_config: Mapping[str, Any] | None, device: str) -> ValueType:
     """``value_type`` for ``device``'s consumer node, honouring its polarity."""
     return _CONSUMER_VALUE_TYPES[device][is_power_inverted(device_config, device)]
+
+
+def power_sign(device_config: Mapping[str, Any] | None, device: str) -> Literal[1, -1]:
+    """What ``device``'s raw power reading multiplies by to read in Helman's convention.
+
+    Positive flows into the consumer side: a battery charging, the grid
+    exporting. Lossless where ``value_type`` keeps one sign's magnitude.
+    """
+    return -1 if is_power_inverted(device_config, device) else 1
 
 
 def watts_for_value_type(raw: float, value_type: str) -> float:

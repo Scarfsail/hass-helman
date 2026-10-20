@@ -511,7 +511,8 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
         const forecast = (model?.todaySlots ?? []).map((slot) => ({ t: slot.start + SLOT_MS / 2, w: Math.max(0, slot.wh) / (SLOT_MS / 3_600_000) }));
         const rated = this._ratedW(overview);
         const scale = rated ?? this.params.flowScaleW;
-        const top = Math.max(scale, ...points.map((point) => point.w), ...forecast.map((point) => point.w));
+        // Without a rating or a solar node there is no scale: the curve fills the plot.
+        const top = Math.max(scale ?? 0, ...points.map((point) => point.w), ...forecast.map((point) => point.w)) || 1;
         const x = (t: number) => (t - start) / span * W;
         const y = (w: number) => H - w / top * (H - 4);
         // Each run of buckets without a gap is one filled shape; a gap stays a gap.
@@ -529,10 +530,10 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
         }).join("");
         const forecastPath = forecast.map((point, index) => `${index ? "L" : "M"}${x(point.t).toFixed(1)},${y(point.w).toFixed(1)}`).join("");
         const now = Date.now();
-        // Only a rating or a configured maximum is named; the card's default scale is not a figure of the install.
+        // Only a rating or a configured maximum is named; the default scale is not a figure of the install.
         const ratingLabel = rated !== null
-            ? fillTemplate(this._t("limits.rating_short"), { power: formatPower(scale).display })
-            : overview.configuredMaxPowerW !== null
+            ? fillTemplate(this._t("limits.rating_short"), { power: formatPower(rated).display })
+            : scale !== null && overview.configuredMaxPowerW !== null
             ? fillTemplate(this._t("curve.maximum"), { power: formatPower(scale).display })
             : null;
         // Wall-clock hours in Home Assistant's zone: the day starts at its
@@ -547,14 +548,14 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
             <span class="plot">
                 <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
                     <line class="baseline" x1="0" x2=${W} y1=${H} y2=${H} vector-effect="non-scaling-stroke"></line>
-                    <line class="rating" data-rating data-w=${scale} x1="0" x2=${W} y1=${y(scale)} y2=${y(scale)} vector-effect="non-scaling-stroke"></line>
+                    ${scale !== null ? svg`<line class="rating" data-rating data-w=${scale} x1="0" x2=${W} y1=${y(scale)} y2=${y(scale)} vector-effect="non-scaling-stroke"></line>` : nothing}
                     ${actual ? svg`<path data-actual d=${actual} fill=${CHART_COLORS.actual} fill-opacity=${ACTUAL_FILL_OPACITY}
                         stroke=${CHART_COLORS.actual} stroke-width="1.5" vector-effect="non-scaling-stroke"></path>` : nothing}
                     ${forecastPath ? svg`<path data-forecast d=${forecastPath} fill="none" stroke=${this._forecastColor(model)}
                         stroke-width="2" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"></path>` : nothing}
                     ${now >= start && now < end ? svg`<g data-now>${renderNowMarker(x(now), 0, H, this._time(now))}</g>` : nothing}
                 </svg>
-                ${ratingLabel ? html`<span class="rating-label" style="top: ${(y(scale) / H * 100).toFixed(1)}%">${ratingLabel}</span>` : nothing}
+                ${ratingLabel && scale !== null ? html`<span class="rating-label" style="top: ${(y(scale) / H * 100).toFixed(1)}%">${ratingLabel}</span>` : nothing}
             </span>
             <span class="hours" aria-hidden="true">
                 ${hours.map(({ hour, t }) => html`<span style="left: ${(x(t) / W * 100).toFixed(2)}%">${pad2(hour)}</span>`)}

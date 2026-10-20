@@ -214,6 +214,11 @@ BATTERY_CAPACITY_FORECAST_CACHE_TTL_SECONDS = 300
 BATTERY_CAPACITY_FORECAST_DEFAULT_CHARGE_EFFICIENCY = 0.95
 BATTERY_CAPACITY_FORECAST_DEFAULT_DISCHARGE_EFFICIENCY = 0.95
 BATTERY_CAPACITY_FORECAST_MODEL_ID = "battery_net_load_fractional_hour_v1"
+#: The power each energy node's flow is drawn at full scale when its config
+#: names no ``max_power``, W.
+SOLAR_DEFAULT_MAX_POWER_W = 5000
+BATTERY_DEFAULT_MAX_POWER_W = 5000
+GRID_DEFAULT_MAX_POWER_W = 11500
 DEFAULT_APPLIANCE_ICON = "mdi:lightning-bolt"
 #: How far back an appliance's energy history is read when its config names
 #: no ``lookback_days``, and a shared meter's window when no member names one.

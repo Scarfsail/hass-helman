@@ -1,7 +1,6 @@
 import { isReadableState, applyValueType, powerUnitFactor, readPowerW } from "../shared/power-reading";
 import type { HomeAssistant } from "../../types/ha";
 import { convertToKWh, isSupportedEnergyUnit } from "../helman/energy-unit-converter";
-import { DEFAULT_SOLAR_MAX_W } from "./live-flows";
 import type { TreeItem } from "../shared/data/tree-item";
 import type { InverterDetailPayload } from "../helman-api";
 
@@ -60,12 +59,13 @@ export interface EnergyReadings {
     batteryPowerReading: number | null;
     batterySoc: number;
     batteryMinSoc: number | null;
-    solarMaxPower: number;
-    gridMaxPower: number;
-    batteryMaxPower: number;
+    /** Each node's full flow scale, W; `null` when the node is absent. */
+    solarMaxPower: number | null;
+    gridMaxPower: number | null;
+    batteryMaxPower: number | null;
     housePower: number;
     houseReadable: boolean;
-    flowScaleW: number;
+    flowScaleW: number | null;
 }
 
 function findHouse(items: TreeItem[]): TreeItem | null {
@@ -102,7 +102,7 @@ export function resolveEnergyNodes(items: TreeItem[]): EnergyNodes {
 
 /**
  * Returns the superset of readings (signed live-sensor readings, SoC, min SoC,
- * max powers, flowScaleW = inverter rated power else solar max).
+ * max powers, flowScaleW = inverter rated power else solar max, else null).
  * Only input to the node-detail context builder (D11).
  */
 export function readEnergyReadings(
@@ -126,29 +126,30 @@ export function readEnergyReadings(
     const solarRaw = raw(solarNode?.powerSensorId);
     const solarPower = solarRaw === null ? 0 : applyValueType(solarRaw, solarNode?.valueType ?? "default");
     const solarPowerReading = solarRaw === null ? null : solarPower;
-    const solarConfig = solarNode?.nodeConfig as { max_power?: number } | undefined;
-    const solarMaxPower = Math.max(1, solarConfig?.max_power ?? DEFAULT_SOLAR_MAX_W);
+    const solarMaxPower = solarNode?.maxPowerW ?? null;
+
+    // The signed readings, in Helman's convention by the node's own sign:
+    // positive charges the battery, positive exports to the grid.
+    const signed = (node: TreeItem | null | undefined): number | null => {
+        const power = node?.power;
+        const reading = raw(power?.entityId);
+        return power && reading !== null ? reading * power.sign : null;
+    };
 
     const gridNode = gridProducerNode ?? gridConsumerNode;
     const gridReading = raw(gridNode?.powerSensorId);
     const gridPower = applyValueType(gridReading ?? 0, gridProducerNode?.valueType ?? "default");
-    const gridPowerSigned = gridReading === null ? null : gridProducerNode?.valueType === "negative" ? -gridReading : gridReading;
-    const gridConfig = gridNode?.nodeConfig as { max_power?: number } | undefined;
-    const gridMaxPower = Math.max(1, gridConfig?.max_power ?? 11500);
+    const gridExport = signed(gridNode);
+    const gridPowerSigned = gridExport === null ? null : -gridExport;
+    const gridMaxPower = gridNode?.maxPowerW ?? null;
 
     const batteryNode = batteryProducerNode ?? batteryConsumerNode;
-    const batteryRaw = raw(batteryNode?.powerSensorId);
-    const batteryInverted = batteryProducerNode?.valueType === "positive";
-    const batteryPower = batteryInverted ? -(batteryRaw ?? 0) : (batteryRaw ?? 0);
-    const batteryPowerReading = batteryRaw === null ? null : batteryInverted ? -batteryRaw : batteryRaw;
-    const batteryConfig = batteryNode?.nodeConfig as {
-        max_power?: number;
-        entities?: { capacity?: string; min_soc?: string; remaining_energy?: string };
-    } | undefined;
-    const socRaw = readingNumber(hass, batteryConfig?.entities?.capacity);
+    const batteryPowerReading = signed(batteryNode);
+    const batteryPower = batteryPowerReading ?? 0;
+    const socRaw = readingNumber(hass, batteryNode?.socEntityId);
     const batterySoc = socRaw === null ? 0 : Math.max(0, Math.min(100, socRaw));
-    const batteryMinSoc = readingNumber(hass, batteryConfig?.entities?.min_soc);
-    const batteryMaxPower = Math.max(1, batteryConfig?.max_power ?? 5000);
+    const batteryMinSoc = readingNumber(hass, batteryNode?.minSocEntityId);
+    const batteryMaxPower = batteryNode?.maxPowerW ?? null;
 
     const houseRaw = raw(houseNode?.powerSensorId);
     const housePower = houseRaw === null ? 0 : Math.max(0, applyValueType(houseRaw, houseNode?.valueType ?? "default"));

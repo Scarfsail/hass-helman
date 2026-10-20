@@ -1,5 +1,5 @@
 import { prepareNodeDetailPage, mountSimpleCard, nodeDetailLocators, sectionRequestLog, treeNode, holdSection, powerTick, reconnectDetail } from "./support/node-detail-harness";
-import { scheduleSlots, treePayload } from "./support/payload-builders";
+import { energyFields, scheduleSlots, treePayload } from "./support/payload-builders";
 import type { EvChargerUseMode, ScheduleControllableActionsDTO, SchedulePayload, ScheduleSlotDTO, TreeItemDTO } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
 import { expectReducedMotionStill } from "./support/node-flow";
@@ -81,9 +81,9 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
         const dto = (overrides: Partial<TreeItemDTO>) => treeNode({ childrenFullWidth: true, ...overrides });
         const tree = treePayload({
             sources: [
-                dto({ id: "solar", displayName: "Solar", powerSensorId: "sensor.solar", isSource: true, sourceType: "solar" }),
-                dto({ id: "battery", displayName: "Battery", powerSensorId: "sensor.battery", isSource: true, sourceType: "battery" }),
-                dto({ id: "grid", displayName: "Grid", powerSensorId: "sensor.grid", isSource: true, sourceType: "grid" }),
+                dto({ id: "solar", displayName: "Solar", powerSensorId: "sensor.solar", isSource: true, sourceType: "solar", ...energyFields("solar") }),
+                dto({ id: "battery", displayName: "Battery", powerSensorId: "sensor.battery", isSource: true, sourceType: "battery", ...energyFields("battery") }),
+                dto({ id: "grid", displayName: "Grid", powerSensorId: "sensor.grid", isSource: true, sourceType: "grid", ...energyFields("grid") }),
             ],
             consumers: [dto({
                 id: "house", displayName: "House", powerSensorId: "sensor.house",
@@ -1077,13 +1077,13 @@ test.describe("review fixes", () => {
         await expect(flow(page).locator("[data-total='out']")).toHaveText("Out 4.3 kW");
     });
 
-    test("opened without the card's live split, the sources are unknown on the default scale", async ({ page }) => {
+    test("opened without the card's live split, the sources are unknown and there is no scale", async ({ page }) => {
         await openCharger(page);
         // As the solar inspector opens a device: its item alone.
         await content(page).evaluate((element: any) => { element.params = { nodeType: "device", item: element.params.item }; });
         await expect(flowLabel(page, "in", "solar").locator(".value")).toHaveText("–");
         await expect(flow(page).locator("[data-side='in'] [data-ribbon]")).toHaveCount(0);
-        expect(await flow(page).evaluate((element: any) => element.scale)).toBe(5000);
+        expect(await flow(page).evaluate((element: any) => element.scale)).toBeNull();
     });
 
     test("a fresh Today is reused on the next toggle and by its answer", async ({ page }) => {

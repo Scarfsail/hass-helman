@@ -108,11 +108,11 @@ export class EnergyCardHost implements ReactiveController {
 
     /** Built from the stored readings; reading state here would assign it during render. */
     public get dialogParams(): NodeDetailParams | null {
-        if (this._dialogRequest === null || this._readings === null) return null;
+        if (this._dialogRequest === null || this._readings === null || this._uiConfig === null) return null;
         const context = buildNodeDetailContext(this._readings, {
             houseNode: this._energyNodes.houseNode,
-            historyBuckets: this._uiConfig?.history_buckets ?? 60,
-            historyBucketDuration: this._uiConfig?.history_bucket_duration ?? 60,
+            historyBuckets: this._uiConfig.history_buckets,
+            historyBucketDuration: this._uiConfig.history_bucket_duration,
         });
         return buildNodeDetailParams(context, this._dialogRequest);
     }
@@ -272,12 +272,9 @@ export class EnergyCardHost implements ReactiveController {
         visit(nodesToWalk);
 
         const batteryNode = this._energyNodes.batteryProducerNode ?? this._energyNodes.batteryConsumerNode;
-        const batteryConfig = batteryNode?.nodeConfig as {
-            entities?: { capacity?: string; min_soc?: string; remaining_energy?: string };
-        } | undefined;
-        if (batteryConfig?.entities?.capacity) ids.add(batteryConfig.entities.capacity);
-        if (batteryConfig?.entities?.min_soc) ids.add(batteryConfig.entities.min_soc);
-        if (batteryConfig?.entities?.remaining_energy) ids.add(batteryConfig.entities.remaining_energy);
+        for (const id of [batteryNode?.socEntityId, batteryNode?.minSocEntityId, batteryNode?.remainingEnergyEntityId]) {
+            if (id) ids.add(id);
+        }
 
         for (const id of inverterCellEntityIds(this.inverter)) ids.add(id);
 

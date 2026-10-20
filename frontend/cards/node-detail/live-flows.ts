@@ -1,9 +1,6 @@
 /** Below this many watts either way a flow counts as idle, on the card and in every detail. */
 export const IDLE_W = 50;
 
-/** The solar maximum assumed when the solar node configures none, W. */
-export const DEFAULT_SOLAR_MAX_W = 5000;
-
 /** What the live split reads: the card's own power figures, W. */
 export interface LiveFlowInputs {
     solarPower: number;

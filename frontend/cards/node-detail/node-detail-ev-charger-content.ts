@@ -28,7 +28,6 @@ import { scheduleActionToneStyles, type ScheduleActionTone } from "../shared/sch
 import { getScheduleApplianceActionPresentation } from "../shared/schedule/model/schedule-appliance-action-presentation";
 import { resolveScheduleSlotBoundaries, type ScheduleSlotBoundary } from "../shared/schedule/model/schedule-time";
 import { getSharedScheduleOwner } from "../shared/schedule/schedule-owner";
-import { DEFAULT_SOLAR_MAX_W } from "./live-flows";
 import { IDLE_W, NodeDetailContentBase, TODAY_REFRESH_MS, type FlowNode, type NodeFlow, type SectionState } from "./node-detail-base";
 import { readEnergyKWh, readingNumber } from "./node-detail-readings";
 import { dispatchWatchedEntities } from "../shared/hass-change";
@@ -637,8 +636,8 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
     private _renderCarFlow(overview: EvChargerDetailPayload, selection: VehicleSelection) {
         const flow = this._flowScope === "now" ? this._nowFlow(overview) : this._todayFlow();
         const car = selection.kind === "selected" ? selection.car : null;
-        // A device opened without the card's live split (the solar inspector's) has no scale of its own.
-        return this._renderFlow(flow, this.params?.flowScaleW ?? DEFAULT_SOLAR_MAX_W, "today", html`
+        // A device opened without the card's live split (the solar inspector's) has no scale: minimum widths.
+        return this._renderFlow(flow, this.params?.flowScaleW ?? null, "today", html`
             <button
                 slot="centre"
                 class="glyph"

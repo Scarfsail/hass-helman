@@ -1,5 +1,5 @@
 import { prepareNodeDetailPage, mountSimpleCard, nodeDetailLocators, sectionRequestLog, treeNode, holdSection, powerTick, reconnectDetail } from "./support/node-detail-harness";
-import { forecastPayload, scheduleSlots, treePayload } from "./support/payload-builders";
+import { energyFields, forecastPayload, scheduleSlots, treePayload } from "./support/payload-builders";
 import type { DevicePhase, ForecastPayload, ScheduleControllableActionsDTO, SchedulePayload, ScheduleSlotDTO, TreeItemDTO } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
 import { FIXED_NOW_ISO } from "./support/fixed-clock";
@@ -75,7 +75,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             }),
             rest("house"),
         ];
-        const source = (id: string, sensor: string, sourceType: string) => ({ ...item(id, id, sensor), sourceType, isSource: true });
+        const source = (id: string, sensor: string, sourceType: string) => ({ ...item(id, id, sensor, energyFields(id)), sourceType, isSource: true });
         const tree = treePayload({
             sources: [source("solar", "sensor.solar", "solar"), source("grid", "sensor.grid", "grid"), source("battery", "sensor.battery", "battery")],
             consumers: [{ ...item("house", "House", "sensor.house"), children: houseChildren }],

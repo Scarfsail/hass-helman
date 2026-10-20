@@ -6,7 +6,7 @@ import type { EnergyReadings } from "./node-detail-readings";
 export interface NodeDetailContext {
     /** The card's live power split, W. */
     flows: LiveFlows;
-    flowScaleW: number;
+    flowScaleW: number | null;
     batteryPower: number;
     /** The battery meter, positive charging; `null` without a reading. */
     batteryPowerReading: number | null;
@@ -26,10 +26,10 @@ export interface NodeDetailContext {
 /** Build node detail context from energy readings (the only input to readings fields) and options. */
 export function buildNodeDetailContext(
     readings: EnergyReadings,
-    options?: {
-        houseNode?: TreeItem | null;
-        historyBuckets?: number;
-        historyBucketDuration?: number;
+    options: {
+        houseNode: TreeItem | null | undefined;
+        historyBuckets: number;
+        historyBucketDuration: number;
     },
 ): NodeDetailContext {
     return {
@@ -47,9 +47,9 @@ export function buildNodeDetailContext(
         housePower: readings.housePower,
         houseReadable: readings.houseReadable,
         solarPower: readings.solarPower,
-        houseNode: options?.houseNode ?? null,
-        historyBuckets: options?.historyBuckets ?? 60,
-        historyBucketDuration: options?.historyBucketDuration ?? 60,
+        houseNode: options.houseNode ?? null,
+        historyBuckets: options.historyBuckets,
+        historyBucketDuration: options.historyBucketDuration,
     };
 }
 

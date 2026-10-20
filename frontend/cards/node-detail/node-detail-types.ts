@@ -10,8 +10,8 @@ export type NodeType = "solar" | "battery" | "grid" | "house" | "inverter";
 export interface EnergyNodeFlowParams {
     /** The card's live power split, W; `null` while the solar or battery meter has no reading. */
     flows: LiveFlows | null;
-    /** The power the Now flow draws at full height, W: the inverter's AC rating, else the solar node's maximum. */
-    flowScaleW: number;
+    /** The power the Now flow draws at full height, W: the inverter's AC rating, else the solar node's maximum; `null` with neither. */
+    flowScaleW: number | null;
 }
 
 /**
