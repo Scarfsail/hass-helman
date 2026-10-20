@@ -790,6 +790,15 @@ export class HelmanSolarDayPills extends LitElement {
     }
 
     private _applyOwnerSnapshot(snapshot: ScheduleOwnerSnapshot): void {
+        if (snapshot === this._ownerSnapshot) {
+            // A clock tick: only the current slot or day can have moved, and
+            // the normalized model is the same object until one does.
+            if (this._scheduleOwner?.getNormalized(this.timeZone, this._locale) !== this._normalized) {
+                this.requestUpdate();
+            }
+            return;
+        }
+
         const scheduleChanged = snapshot.schedule !== this._ownerSnapshot.schedule;
         this._ownerSnapshot = snapshot;
         if (scheduleChanged && snapshot.schedule !== null) {

@@ -103,12 +103,25 @@ test.describe("the inspector's clock", () => {
         await mountInspector(page);
         await selectPreviousDay(page);
         const before = await cardNowMs(page);
+        // The shared schedule owner ticks too. Its snapshot did not move, so the
+        // object each card holds in a `@state` must not either.
+        await page.evaluate(() => {
+            const inspector = document.querySelector("helman-solar-inspector") as any;
+            const pills = inspector.shadowRoot.querySelector("helman-solar-day-pills");
+            (window as any).__snapshotsBefore = [inspector._scheduleSnapshot, pills._ownerSnapshot];
+        });
 
         await page.clock.runFor(TICK_SPAN_MS);
 
         // Nothing on screen reads it: there is no "now" line on a day that has
         // finished, and the day has not rolled over.
         expect(await cardNowMs(page)).toBe(before);
+        expect(await page.evaluate(() => {
+            const inspector = document.querySelector("helman-solar-inspector") as any;
+            const pills = inspector.shadowRoot.querySelector("helman-solar-day-pills");
+            const [inspectorBefore, pillsBefore] = (window as any).__snapshotsBefore;
+            return inspector._scheduleSnapshot === inspectorBefore && pills._ownerSnapshot === pillsBefore;
+        })).toBe(true);
     });
 
     test("a hidden page stops the clock, and coming back catches it up in one step", async ({ page }) => {

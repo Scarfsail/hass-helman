@@ -544,7 +544,7 @@ export class SchedulingEntityDayEditor extends LitElement {
         // every renderer that needs them -- during a drag this runs per frame.
         const days = this._days();
         const day = this._selectedDay(days);
-        if (this._lanes.length === 0 || day === null) {
+        if (this.lanes.length === 0 || day === null) {
             return nothing;
         }
 
@@ -768,7 +768,7 @@ export class SchedulingEntityDayEditor extends LitElement {
         // config editor, and the lane already knows its name -- so the
         // explanation can name them the same way without asking the backend
         // for the config it would otherwise need.
-        const lane = this._lanes.find((entry) => entry.key === selection.laneKey);
+        const lane = this.lanes.find((entry) => entry.key === selection.laneKey);
         return html`
             <div class="panel">
                 <scheduling-explanation-panel
@@ -968,16 +968,8 @@ export class SchedulingEntityDayEditor extends LitElement {
         `;
     }
 
-    /**
-     * Every lane to stack, falling back to the single target the dialog was
-     * opened with when the card has not supplied a roster.
-     */
-    private get _lanes(): EntityScheduleLane[] {
-        return [...this.lanes];
-    }
-
     private get _selectedLane(): EntityScheduleLane | null {
-        return this._lanes.find((lane) => lane.key === this._selectedLaneKey) ?? null;
+        return this.lanes.find((lane) => lane.key === this._selectedLaneKey) ?? null;
     }
 
     /** The selected lane's pending edits. */
@@ -1022,7 +1014,7 @@ export class SchedulingEntityDayEditor extends LitElement {
         draft: EntityScheduleDraft,
     ): EntityScheduleBlockSplits {
         const stored = splits[laneKey];
-        const lane = this._lanes.find((candidate) => candidate.key === laneKey);
+        const lane = this.lanes.find((candidate) => candidate.key === laneKey);
         if (stored === undefined || stored.size === 0 || lane === undefined) {
             return splits;
         }
@@ -1042,7 +1034,7 @@ export class SchedulingEntityDayEditor extends LitElement {
     }
 
     private _laneDrafts(): { target: EntityScheduleTarget; draft: EntityScheduleDraft }[] {
-        return this._lanes.flatMap((lane) => {
+        return this.lanes.flatMap((lane) => {
             const draft = this._drafts[lane.key];
             return draft === undefined ? [] : [{ target: lane.target, draft }];
         });
@@ -1178,7 +1170,7 @@ export class SchedulingEntityDayEditor extends LitElement {
             return previous.result;
         }
         const result = buildEntityDayBandLanes({
-            lanes: this._lanes,
+            lanes: this.lanes,
             slots: this._baselineSlots,
             day,
             drafts: this._drafts,
@@ -1232,7 +1224,7 @@ export class SchedulingEntityDayEditor extends LitElement {
     /** The same, for every lane at once, as the band lane builder wants it. */
     private _allBlockSplits(): EntityScheduleBlockSplits {
         const splits: Record<string, ReadonlySet<number>> = {};
-        for (const lane of this._lanes) {
+        for (const lane of this.lanes) {
             const laneSplits = this._laneBlockSplits(lane.key);
             if (laneSplits.size > 0) {
                 splits[lane.key] = laneSplits;
@@ -1309,7 +1301,7 @@ export class SchedulingEntityDayEditor extends LitElement {
             return;
         }
 
-        for (const lane of this._lanes) {
+        for (const lane of this.lanes) {
             void this._loadExplanation(lane.key, day.dayKey);
         }
     }

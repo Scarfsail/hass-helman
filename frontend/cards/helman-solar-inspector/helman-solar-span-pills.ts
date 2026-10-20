@@ -428,7 +428,7 @@ export class HelmanSolarSpanPills extends LitElement {
         return this._localizeFn ?? ((key: string) => key);
     }
 
-    private get _locale(): string | undefined {
+    private get _locale(): string {
         return resolveLocale(this.hass);
     }
 }

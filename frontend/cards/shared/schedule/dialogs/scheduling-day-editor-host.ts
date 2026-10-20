@@ -244,12 +244,8 @@ export class SchedulingDayEditorHost extends LitElement {
             if (this._loadedConnection !== this.hass.connection) {
                 this._loadedConnection = this.hass.connection;
                 this._unsubscribeRoster?.();
-                this._unsubscribeRoster = getSharedHelmanStore(this.hass).subscribeRosterInvalidation(() => {
-                    this._controllables = [];
-                    this._actualHistory = {};
-                    this._emitWatchedEntities();
-                    void this._loadControllables();
-                });
+                this._unsubscribeRoster = undefined;
+                this._subscribeRoster();
                 this._actualHistory = {};
                 this._projectionLoadGeneration += 1;
                 this._projectionIndex = EMPTY_SCHEDULE_APPLIANCE_PROJECTION_INDEX;
@@ -262,6 +258,20 @@ export class SchedulingDayEditorHost extends LitElement {
         this._rebuildNormalizedIfNeeded();
         this.clockSlotMs = _resolveClockSlotMs(this._normalized.slots, this._nowMs);
         this._rebuildDerivedIfNeeded();
+    }
+
+    connectedCallback(): void {
+        super.connectedCallback();
+        // Back in the DOM on the connection it was loaded for: `willUpdate`
+        // will not take the new-connection branch, and the card above filters
+        // `hass`, so it may not run at all for a while. Pick the subscriptions
+        // back up here, and re-read the roster an invalidation may have
+        // replaced while nobody was listening -- the store caches it.
+        if (this.hass && this._loadedConnection === this.hass.connection) {
+            this._subscribeRoster();
+            this._syncOwner();
+            void this._loadControllables();
+        }
     }
 
     disconnectedCallback(): void {
@@ -363,6 +373,19 @@ export class SchedulingDayEditorHost extends LitElement {
 
         this._editorOpen = false;
     };
+
+    private _subscribeRoster(): void {
+        if (!this.hass) {
+            return;
+        }
+
+        this._unsubscribeRoster ??= getSharedHelmanStore(this.hass).subscribeRosterInvalidation(() => {
+            this._controllables = [];
+            this._actualHistory = {};
+            this._emitWatchedEntities();
+            void this._loadControllables();
+        });
+    }
 
     private _syncOwner(): void {
         const hass = this.hass;

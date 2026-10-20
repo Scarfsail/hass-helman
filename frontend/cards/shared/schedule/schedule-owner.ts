@@ -277,25 +277,42 @@ class ScheduleOwnerImpl implements SharedScheduleOwner {
     }
 
     /**
-     * Rebuild the snapshot, then hand it to whoever is listening.
+     * Rebuild the snapshot if a field moved, then hand it to whoever is listening.
      *
-     * The rebuild is unconditional on purpose. Dropping the last listener while
-     * a refresh is in flight is possible -- that request's `finally` still
-     * writes the fields and emits -- and a no-listener early return here would
-     * leave the cached snapshot stale for good, for the next reader to pick up.
-     * One object literal per mutation event is a cheap price for that.
+     * The rebuild does not wait for listeners on purpose. Dropping the last
+     * listener while a refresh is in flight is possible -- that request's
+     * `finally` still writes the fields and emits -- and a no-listener early
+     * return here would leave the cached snapshot stale for good, for the next
+     * reader to pick up.
+     *
+     * Listeners are told even when nothing in the snapshot moved: a clock tick
+     * changes only `getNowMs()` and `getNormalized()`, and whoever reads those
+     * needs the cue. Handing them the same object keeps a `@state` assignment
+     * from re-rendering a card that reads neither.
      */
     private _emit(): void {
-        this._snapshot = {
-            schedule: this._schedule,
-            loading: this._loading,
-            refreshing: this._refreshing,
-            writing: this._writing,
-            togglingExecution: this._togglingExecution,
-            error: this._error,
-            updatedAt: this._updatedAt,
-            stale: this._stale,
-        };
+        const current = this._snapshot;
+        if (
+            current.schedule !== this._schedule
+            || current.loading !== this._loading
+            || current.refreshing !== this._refreshing
+            || current.writing !== this._writing
+            || current.togglingExecution !== this._togglingExecution
+            || current.error !== this._error
+            || current.updatedAt !== this._updatedAt
+            || current.stale !== this._stale
+        ) {
+            this._snapshot = {
+                schedule: this._schedule,
+                loading: this._loading,
+                refreshing: this._refreshing,
+                writing: this._writing,
+                togglingExecution: this._togglingExecution,
+                error: this._error,
+                updatedAt: this._updatedAt,
+                stale: this._stale,
+            };
+        }
 
         for (const listener of this._listeners) {
             listener(this._snapshot);
