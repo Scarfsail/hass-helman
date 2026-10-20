@@ -41,8 +41,13 @@ type Variant = {
     todayUnavailable?: boolean;
     /** Schedule execution is switched off. */
     executionOff?: boolean;
+    noSlots?: boolean;
     /** Today misses one of its completed hours. */
     partialToday?: boolean;
+    /** The EV's run switches from Fast to ECO at 15:30, its condition met. */
+    evModeChange?: boolean;
+    /** The boiler's 13:30 slot was set by the user, its settings unchanged. */
+    boilerSetByUser?: boolean;
 };
 
 declare global {
@@ -238,11 +243,15 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             const at = new Date(Date.parse("2026-10-21T11:45:00Z") + i * 900_000);
             const hour = at.getUTCHours();
             const controllables: ScheduleControllableActionsDTO = { inverter: { kind: "normal", setBy: "automation" } };
-            if (hour === 13) controllables.boiler = { on: true, setBy: "automation" };
-            if (hour === 15) controllables.ev = { charge: true, useMode: "Fast", setBy: "automation", conditionMet: false };
+            if (hour === 13) controllables.boiler = { on: true, setBy: v.boilerSetByUser && at.getUTCMinutes() === 30 ? "user" : "automation" };
+            if (hour === 15) {
+                controllables.ev = v.evModeChange
+                    ? { charge: true, useMode: at.getUTCMinutes() < 30 ? "Fast" : "ECO", setBy: "automation" }
+                    : { charge: true, useMode: "Fast", setBy: "automation", conditionMet: false };
+            }
             slots.push({ id: at.toISOString().replace(".000Z", "+00:00"), controllables });
         }
-        const schedule: SchedulePayload = { ...scheduleDefaults, executionEnabled: !v.executionOff, slots, runtime: { activeSlotId: "2026-10-21T12:00:00+00:00", controllables: {} } };
+        const schedule: SchedulePayload = { ...scheduleDefaults, executionEnabled: !v.executionOff, slots: (v.noSlots ? undefined : slots) as SchedulePayload["slots"], runtime: { activeSlotId: "2026-10-21T12:00:00+00:00", controllables: {} } };
         // The house forecast: 0.3 kWh in the slot in progress, 0.25 kWh in every later one.
         const houseSlot = (ms: number, kwh: number) => ({
             timestamp: new Date(ms).toISOString().replace(".000Z", "+00:00"),
@@ -589,11 +598,42 @@ test.describe("what comes next", () => {
         await expect(next.locator("[data-row='plan-2']")).toContainText("not met");
     });
 
+    test("a run whose settings change mid-run shows as two runs", async ({ page }) => {
+        await mount(page, { evModeChange: true });
+        await openDetail(page);
+        await open(page, "next");
+        const next = question(page, "next");
+        await expect(next.locator("[data-row='run-1']")).toContainText("Boiler");
+        await expect(next.locator("[data-row='run-2']")).toContainText("EV");
+        await expect(next.locator("[data-row='run-2']")).toContainText("15:00–15:30");
+        await expect(next.locator("[data-row='run-3']")).toContainText("EV");
+        await expect(next.locator("[data-row='run-3']")).toContainText("15:30–16:00");
+        await expect(next.locator("[data-row^='run-']")).toHaveCount(3);
+    });
+
+    test("a run whose slots differ only in who set them shows as one run", async ({ page }) => {
+        await mount(page, { boilerSetByUser: true });
+        await openDetail(page);
+        await open(page, "next");
+        const next = question(page, "next");
+        await expect(next.locator("[data-row='run-1']")).toContainText("Boiler");
+        await expect(next.locator("[data-row='run-1']")).toContainText("13:00–14:00");
+        await expect(next.locator("[data-row^='run-']")).toHaveCount(2);
+    });
+
     test("with execution switched off the plan says it is not carried out", async ({ page }) => {
         await mount(page, { executionOff: true });
         await openDetail(page);
         await open(page, "next");
         await expect(question(page, "next").locator("[data-execution-off]")).toContainText("does not carry it out");
+    });
+
+    test("a plan without slots renders with no planned runs", async ({ page }) => {
+        await mount(page, { noSlots: true });
+        await openDetail(page);
+        await open(page, "next");
+        await expect(question(page, "next").locator("[data-row='rest']")).toContainText("12 kWh");
+        await expect(question(page, "next").locator("[data-row^='run-']")).toHaveCount(0);
     });
 });
 

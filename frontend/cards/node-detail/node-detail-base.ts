@@ -1,9 +1,9 @@
-import { formatMoney } from "../shared/format";
+import { formatKwh, formatMoney, formatPower } from "../shared/format";
 import { LitElement, html, nothing, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../types/ha";
 import { fillTemplate, type LocalizeFunction } from "../localize/localize";
-import type { FlowsSectionPayload, ForecastPayload, GetNodeDetailRequest, NodeDetailNode, ScheduleActionDTO } from "../helman-api";
+import type { FlowsSectionPayload, ForecastPayload, GetNodeDetailRequest, NodeDetailNode, ScheduleActionDTO, SchedulePayload } from "../helman-api";
 import { getScheduleActionLabel } from "../shared/schedule/model/schedule-labels";
 import type { HelmanSolarInspectorCardConfig } from "../helman-solar-inspector/HelmanSolarInspectorCardConfig";
 import { DataChangedController } from "../shared/data/data-changed";
@@ -12,6 +12,7 @@ import { startNowClock } from "../shared/now-clock";
 import { isoDateInTimeZone, todayKey } from "../shared/time/day-key";
 import { getSharedHelmanStore } from "../shared/data/store";
 import { NEW_DAY_RETRY_MS, SectionResource, TODAY_REFRESH_MS, timeZone, type SectionOptions, type SectionState } from "./section-resource";
+import { ScheduleController, type PlanSpan } from "./schedule-controller";
 import { formatScheduleTime } from "../shared/schedule/model/schedule-time";
 import {
     EVIDENCE_TOGGLE_EVENT,
@@ -49,6 +50,18 @@ export interface NodeFlow {
 
 /** An energy node a flow's ribbon can lead to; its colour is `--helman-<node>`. */
 export type FlowNode = "solar" | "grid" | "battery" | "house";
+
+/** What a flow builder adds to its sides: footnotes, unknown routes, the centre value. */
+interface FlowExtras {
+    /** The node's figure under its glyph, from each side's sum. */
+    centre: (sumIn: number | null, sumOut: number | null) => string | null;
+    /** Whether the node is working now; never on Today. */
+    active?: boolean;
+    notes?: string[];
+    /** Energy that went in or out by no known route, added to its side's total. */
+    unresolvedIn?: number;
+    unresolvedOut?: number;
+}
 
 /** What the Today flow draws: a section of today so far. */
 type TodaySection = { period: { start: string }; asOf: string };
@@ -90,6 +103,9 @@ type InspectorCardElement = HTMLElement & {
  * `_clockBoundaries` passes, and at least every {@link TODAY_REFRESH_MS}.
  * The forecast, once a subclass asks for it, is reloaded on every shared
  * data change; a load that fails with nothing to show sets `_forecastFailed`.
+ * The plan, once a subclass asks for it with `_useSchedule`, is followed while
+ * started, its runs read once per update, and the detail renders again as a
+ * run starts or ends.
  *
  * The node's flow opens on Now, from the card's live split. Today draws
  * `_todayResource()`: the node's `flows` section by default, read only while
@@ -122,6 +138,8 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
     /** When the clock next moves something shown; the now-clock re-renders then. */
     private _nextBoundary = Infinity;
     private _stopClock?: () => void;
+    /** The plan, for a detail that reads it. */
+    private _scheduleController: ScheduleController<PlanSpan> | null = null;
     /** Every section the detail reads, in the order they are read; the base reads, refreshes and drops them. */
     protected readonly _sections: SectionResource<unknown>[] = [];
     /** Today's flows, the node's `flows` section, while Today draws them. */
@@ -156,10 +174,12 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
         this._overviewRequest += 1;
         this._forecastRequest += 1;
         for (const section of this._sections) section.cancel();
+        this._scheduleController?.stop();
         this._stop();
     }
 
     willUpdate(changed: Map<string, unknown>): void {
+        this._scheduleController?.reset();
         if (changed.has("hass") && this.hass) {
             if (!this._started) this._start();
             else if (this._overview.status === "ready" && this._overviewSignature(this._overview.payload) !== this._overviewStates) {
@@ -175,6 +195,7 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
 
     protected _start(): void {
         this._started = true;
+        this._scheduleController?.start(this.hass);
         // Paused while the page is hidden; a returning reader catches up at once.
         this._stopClock = startNowClock(() => {
             if (Date.now() >= this._nextBoundary) this.requestUpdate();
@@ -219,6 +240,7 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
             if (retryAt > now && retryAt < next) next = retryAt;
         }
         for (const at of this._clockBoundaries()) if (at > now && at < next) next = at;
+        for (const at of this._scheduleController?.boundaries() ?? []) if (at > now && at < next) next = at;
         this._nextBoundary = next;
     }
 
@@ -272,6 +294,13 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
     /** The `helman/get_node_detail` request for the overview, or for `section`. */
     protected _detailRequest(section?: string): GetNodeDetailRequest {
         return section ? { node: this._node, section } : { node: this._node };
+    }
+
+    /** Read the plan, with `read` making its runs; the base follows it and renders again at their boundaries. */
+    protected _useSchedule<R extends PlanSpan>(read: (schedule: SchedulePayload, now: number) => R[]): ScheduleController<R> {
+        const controller = new ScheduleController(this, read);
+        this._scheduleController = controller;
+        return controller;
     }
 
     /** Declare a section the detail reads; the base reads, refreshes and drops it. */
@@ -476,6 +505,43 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
         return null;
     }
 
+    /** How the flow in `scope` shows a figure: W on Now, kWh on Today; unknown is "–". */
+    protected _fmt(scope: FlowScope): (value: number | null) => string {
+        return scope === "now"
+            ? (value) => value === null ? "–" : formatPower(value).display
+            : (value) => value === null ? "–" : formatKwh(Math.abs(value)) + " kWh";
+    }
+
+    /** One item per edge of `source`, each in the colour of the node at its other end; unknown without `source`. */
+    protected _edgeItems<K extends string>(
+        source: Partial<Record<K, number | null>> | null,
+        edges: ReadonlyArray<readonly [FlowNode, K]>,
+        format: (value: number | null) => string,
+    ): FlowItem[] {
+        return edges.map(([node, key]) => this._flowItem(node, source?.[key] ?? null, format));
+    }
+
+    /** The sum of `source`'s `keys`; unknown without `source` or when any of them is. */
+    protected _sumEdges<K extends string>(source: Partial<Record<K, number | null>> | null, keys: readonly K[]): number | null {
+        const values = keys.map((key) => source?.[key] ?? null);
+        return values.some((value) => value === null) ? null : values.reduce((total: number, value) => total + value!, 0);
+    }
+
+    /** The flow in `scope` around its sides: the scope label, each side's total, and what the builder adds. */
+    protected _flowShell(scope: FlowScope, inputs: FlowItem[], outputs: FlowItem[], extras: FlowExtras): NodeFlow {
+        const { sumIn, sumOut, totalIn, totalOut } = this._flowTotals(inputs, outputs, this._fmt(scope), extras.unresolvedIn, extras.unresolvedOut);
+        return {
+            scopeLabel: scope === "now" ? this._nowScopeLabel() : this._todayScopeLabel(),
+            inputs,
+            outputs,
+            totalIn,
+            totalOut,
+            notes: extras.notes ?? [],
+            centreValue: extras.centre(sumIn, sumOut),
+            active: extras.active ?? false,
+        };
+    }
+
     /** A source or destination, in the colour of the node at its other end. */
     protected _flowItem(node: FlowNode, value: number | null, format: (value: number | null) => string): FlowItem {
         return {
@@ -502,7 +568,7 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
      * added to its side, as a number (`sumIn`, `sumOut`) and as shown; a side
      * is unknown when any of its items is.
      */
-    protected _flowTotals(inputs: FlowItem[], outputs: FlowItem[], format: (value: number | null) => string, unresolvedIn = 0, unresolvedOut = 0) {
+    private _flowTotals(inputs: FlowItem[], outputs: FlowItem[], format: (value: number | null) => string, unresolvedIn = 0, unresolvedOut = 0) {
         const sum = (items: FlowItem[]) => items.some((item) => item.value === null) ? null : items.reduce((total, item) => total + item.value!, 0);
         const total = (key: "total_in" | "total_out", value: number | null) =>
             value === null ? null : fillTemplate(this.localize(`node_detail.flow.${key}`), { value: format(value) });

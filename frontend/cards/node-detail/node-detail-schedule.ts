@@ -1,5 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
-import type { InverterRuntimeDTO, ScheduleActionDTO, SchedulePayload } from "../helman-api";
+import type { ControllableRuntimeDTO, InverterRuntimeDTO, ScheduleActionDTO, SchedulePayload, ScheduleSlotDTO } from "../helman-api";
 import type { LocalizeFunction } from "../localize/localize";
 import {
     addDaysToDayKey,
@@ -8,36 +8,46 @@ import {
 } from "../shared/schedule/model/schedule-time";
 import { getScheduleActionLabel, getScheduleReasonLabel } from "../shared/schedule/model/schedule-labels";
 import { INVERTER_CONTROLLABLE_ID } from "../shared/schedule/schedule-types";
+import { SLOT_MS } from "../shared/time/slot-time";
 
 /**
- * The inverter's plan as the node details read it: runs of equal actions, the
- * one in progress, the executor's record for it and the next change.
+ * The plan as the node details read it: one controllable's runs of equal
+ * actions, the executor's record for the slot in progress and, for the
+ * inverter, the run in progress and the next change.
  *
- * The plan is the inverter controllable's, whichever node shows it, so the
- * battery detail reads it through the same functions and the same strings as
- * the inverter detail.
+ * The inverter's plan is the inverter controllable's, whichever node shows it,
+ * so the battery and solar details read it through the same functions and the
+ * same strings as the inverter detail.
  */
 
-export interface ScheduleRun {
+export interface ScheduleRun<A = ScheduleActionDTO> {
     startMs: number;
     endMs: number | null;
-    action: ScheduleActionDTO;
+    action: A;
 }
 
-/** The inverter's actions from the slot in progress at `now` on, merged into runs. */
-export function scheduleRuns(schedule: SchedulePayload | null, now: number): ScheduleRun[] {
-    if (!schedule?.slots?.length) return [];
-    const { slots } = schedule;
-    const byId = new Map(slots.map((slot) => [slot.id, slot]));
-    const slotDurationMs = schedule.slotMinutes * 60_000;
-    const runs: ScheduleRun[] = [];
-    for (const { id, startMs } of resolveScheduleSlotBoundaries(slots.map((slot) => slot.id))) {
-        const endMs = startMs + slotDurationMs;
-        if (endMs <= now) continue;
-        const action = (byId.get(id)?.controllables[INVERTER_CONTROLLABLE_ID] as ScheduleActionDTO | undefined)
-            ?? { kind: "empty" as const };
+/**
+ * Controllable `id`'s actions in the slots `boundaries` name, merged into
+ * runs: consecutive slots whose actions are `same` as the run's first. A slot
+ * whose action `include` refuses ends a run; one without an action does too,
+ * unless `fillEmpty` reads it as an empty stretch.
+ */
+export function mergeRuns<A>(
+    boundaries: ReadonlyArray<{ id: string; startMs: number }>,
+    slotsById: ReadonlyMap<string, ScheduleSlotDTO>,
+    id: string,
+    include: (action: A) => boolean,
+    same: (left: A, right: A) => boolean,
+    { fillEmpty = false }: { fillEmpty?: boolean } = {},
+): ScheduleRun<A>[] {
+    const runs: ScheduleRun<A>[] = [];
+    for (const { id: slotId, startMs } of boundaries) {
+        const action = (slotsById.get(slotId)?.controllables[id] as A | undefined)
+            ?? (fillEmpty ? { kind: "empty" } as A : undefined);
+        if (action === undefined || !include(action)) continue;
+        const endMs = startMs + SLOT_MS;
         const last = runs[runs.length - 1];
-        if (last && last.endMs === startMs && sameAction(last.action, action)) {
+        if (last && last.endMs === startMs && same(last.action, action)) {
             last.endMs = endMs;
         } else {
             runs.push({ startMs, endMs, action });
@@ -46,21 +56,36 @@ export function scheduleRuns(schedule: SchedulePayload | null, now: number): Sch
     return runs;
 }
 
+/** The runs still going at `now` that started before it, today or tomorrow. */
+export function withinTodayTomorrow<R extends { startMs: number; endMs: number | null }>(runs: R[], now: number, timeZone: string): R[] {
+    const days = todayAndTomorrow(now, timeZone);
+    // A run started yesterday and still going is kept: it is running now.
+    return runs.filter((run) => (run.endMs === null || run.endMs > now)
+        && (run.startMs <= now || days.includes(dayKey(run.startMs, timeZone))));
+}
+
+/** The inverter's actions from the slot in progress at `now` on, merged into runs. */
+export function inverterRuns(schedule: SchedulePayload, now: number): ScheduleRun[] {
+    const boundaries = resolveScheduleSlotBoundaries(schedule.slots.map((slot) => slot.id))
+        .filter((slot) => slot.startMs + SLOT_MS > now);
+    const slotsById = new Map(schedule.slots.map((slot) => [slot.id, slot]));
+    return mergeRuns<ScheduleActionDTO>(boundaries, slotsById, INVERTER_CONTROLLABLE_ID, () => true, sameAction, { fillEmpty: true });
+}
+
 /** The run in progress at `now`, unless it is an empty stretch. */
 export function currentRun(runs: ScheduleRun[], now: number): ScheduleRun | null {
     const run = runs[0];
     return run && run.startMs <= now && run.action.kind !== "empty" ? run : null;
 }
 
-/** The executor's record, only when it is for the slot in progress at `now`. */
-export function currentRuntime(schedule: SchedulePayload | null, now: number): InverterRuntimeDTO | null {
+/** The executor's record for controllable `id`, only when it is for the slot in progress at `now`. */
+export function runtimeFor<T extends ControllableRuntimeDTO>(schedule: SchedulePayload | null, id: string, now: number): T | null {
     const runtime = schedule?.runtime;
     if (!schedule || !runtime) return null;
-    const slotDurationMs = schedule.slotMinutes * 60_000;
     const slots = resolveScheduleSlotBoundaries((schedule.slots ?? []).map((slot) => slot.id));
-    const current = slots.find((slot) => slot.startMs <= now && now < slot.startMs + slotDurationMs);
+    const current = slots.find((slot) => slot.startMs <= now && now < slot.startMs + SLOT_MS);
     if (!current || current.id !== runtime.activeSlotId) return null;
-    return (runtime.controllables[INVERTER_CONTROLLABLE_ID] as InverterRuntimeDTO | undefined) ?? null;
+    return (runtime.controllables[id] as T | undefined) ?? null;
 }
 
 /**
