@@ -226,14 +226,21 @@ export function aggregateImpactSeries(
   }
   return [...buckets.entries()]
     .sort((a, b) => a[0] - b[0])
-    .map(([start, group]) => {
-      const rawWh = sumNullable(group.map((p) => p.rawWh));
-      const correctedWh = sumNullable(group.map((p) => p.correctedWh));
-      const impactWh = sumNullable(group.map((p) => p.impactWh));
-      const factor =
-        rawWh !== null && correctedWh !== null && rawWh !== 0 ? correctedWh / rawWh : null;
-      return { slot: minutesToSlot(start), rawWh, correctedWh, impactWh, factor };
-    });
+    .map(([start, group]) => ({ slot: minutesToSlot(start), ...mergeImpact(group) }));
+}
+
+/**
+ * One group of impact points as one: raw, corrected and impact energy sum
+ * null-aware, and the factor -- a ratio -- is recomputed from the two sums
+ * rather than averaged. Shared by the bucket and the selection collapse.
+ */
+export function mergeImpact(group: readonly ImpactPoint[]): Omit<ImpactPoint, "slot"> {
+  const rawWh = sumNullable(group.map((p) => p.rawWh));
+  const correctedWh = sumNullable(group.map((p) => p.correctedWh));
+  const impactWh = sumNullable(group.map((p) => p.impactWh));
+  const factor =
+    rawWh !== null && correctedWh !== null && rawWh !== 0 ? correctedWh / rawWh : null;
+  return { rawWh, correctedWh, impactWh, factor };
 }
 
 /**
@@ -247,37 +254,41 @@ export function aggregateBreakdownSeries(
   slotMinutes: number,
 ): HouseBreakdownPoint[] {
   if (slotMinutes <= SLOT_MINUTES) return points;
-  const buckets = new Map<
-    number,
-    { unmeasuredWh: number; appliances: Map<string, ApplianceComponent> }
-  >();
+  const buckets = new Map<number, HouseBreakdownPoint[]>();
   for (const point of points) {
     const minutes = slotToMinutes(point.slot);
     if (minutes === null) continue;
     const start = bucketStart(minutes, slotMinutes);
-    let bucket = buckets.get(start);
-    if (!bucket) {
-      bucket = { unmeasuredWh: 0, appliances: new Map() };
-      buckets.set(start, bucket);
-    }
-    if (Number.isFinite(point.unmeasuredWh)) bucket.unmeasuredWh += point.unmeasuredWh;
-    for (const appliance of point.appliances) {
-      const key = applianceKey(appliance);
-      const existing = bucket.appliances.get(key);
-      if (existing) {
-        existing.wh += Number.isFinite(appliance.wh) ? appliance.wh : 0;
-      } else {
-        bucket.appliances.set(key, { ...appliance });
-      }
-    }
+    (buckets.get(start) ?? buckets.set(start, []).get(start)!).push(point);
   }
   return [...buckets.entries()]
     .sort((a, b) => a[0] - b[0])
-    .map(([start, bucket]) => ({
-      slot: minutesToSlot(start),
-      unmeasuredWh: bucket.unmeasuredWh,
-      appliances: [...bucket.appliances.values()],
-    }));
+    .map(([start, group]) => ({ slot: minutesToSlot(start), ...mergeBreakdown(group) }));
+}
+
+/**
+ * One group of breakdown points as one: the unmeasured remainder sums, and
+ * appliances merge by {@link applianceKey} so the group carries one row per
+ * appliance whichever of its points each ran in.
+ */
+export function mergeBreakdown(
+  group: readonly HouseBreakdownPoint[],
+): Omit<HouseBreakdownPoint, "slot"> {
+  let unmeasuredWh = 0;
+  const appliances = new Map<string, ApplianceComponent>();
+  for (const point of group) {
+    if (Number.isFinite(point.unmeasuredWh)) unmeasuredWh += point.unmeasuredWh;
+    for (const appliance of point.appliances) {
+      const key = applianceKey(appliance);
+      const existing = appliances.get(key);
+      if (existing) {
+        existing.wh += Number.isFinite(appliance.wh) ? appliance.wh : 0;
+      } else {
+        appliances.set(key, { ...appliance });
+      }
+    }
+  }
+  return { unmeasuredWh, appliances: [...appliances.values()] };
 }
 
 /**
@@ -371,14 +382,9 @@ export function aggregateImpactOverSlots(
   const wanted = new Set(slots);
   const group = points.filter((point) => wanted.has(point.slot));
   if (group.length === 0) return null;
-  const rawWh = sumNullable(group.map((p) => p.rawWh));
-  const correctedWh = sumNullable(group.map((p) => p.correctedWh));
-  const impactWh = sumNullable(group.map((p) => p.impactWh));
-  const factor =
-    rawWh !== null && correctedWh !== null && rawWh !== 0 ? correctedWh / rawWh : null;
   // The slot key names where the selection starts, matching how a wider bucket
   // is stamped at its own start.
-  return { slot: slots[0] ?? group[0].slot, rawWh, correctedWh, impactWh, factor };
+  return { slot: slots[0] ?? group[0].slot, ...mergeImpact(group) };
 }
 
 /**
@@ -396,27 +402,41 @@ export function splitHouseByDeferrable(
   points: readonly InspectorPoint[],
   breakdown: readonly HouseBreakdownPoint[],
 ): { deferrable: InspectorPoint[]; nonDeferrable: InspectorPoint[] } {
-  const deferrableBySlot = new Map<string, number>();
+  const appliancesBySlot = new Map<string, ApplianceComponent[]>();
   for (const point of breakdown) {
-    const wh = point.appliances.reduce(
-      (sum, appliance) =>
-        appliance.deferrable && Number.isFinite(appliance.wh) ? sum + appliance.wh : sum,
-      0,
-    );
-    deferrableBySlot.set(point.slot, (deferrableBySlot.get(point.slot) ?? 0) + wh);
+    let list = appliancesBySlot.get(point.slot);
+    if (!list) {
+      list = [];
+      appliancesBySlot.set(point.slot, list);
+    }
+    list.push(...point.appliances);
   }
   const deferrable: InspectorPoint[] = [];
   const nonDeferrable: InspectorPoint[] = [];
   for (const point of points) {
     const total = Number.isFinite(point.valueWh) ? point.valueWh : 0;
-    const shiftable = Math.min(
-      Math.max(0, deferrableBySlot.get(point.slot) ?? 0),
-      Math.max(0, total),
-    );
+    const shiftable = deferrableShare(total, appliancesBySlot.get(point.slot) ?? []);
     deferrable.push({ slot: point.slot, valueWh: shiftable });
     nonDeferrable.push({ slot: point.slot, valueWh: total - shiftable });
   }
   return { deferrable, nonDeferrable };
+}
+
+/**
+ * The shiftable part of a house total: its deferrable appliances' energy,
+ * floored at zero and capped at the total, so a consumer meter that
+ * over-reports can never claim more than the house it sits inside.
+ */
+export function deferrableShare(
+  houseWh: number,
+  appliances: readonly ApplianceComponent[],
+): number {
+  const shiftable = appliances.reduce(
+    (sum, appliance) =>
+      appliance.deferrable && Number.isFinite(appliance.wh) ? sum + appliance.wh : sum,
+    0,
+  );
+  return Math.min(Math.max(0, shiftable), Math.max(0, houseWh));
 }
 
 /**
@@ -460,25 +480,7 @@ export function aggregateBreakdownOverSlots(
   const wanted = new Set(slots);
   const group = points.filter((point) => wanted.has(point.slot));
   if (group.length === 0) return null;
-  let unmeasuredWh = 0;
-  const appliances = new Map<string, ApplianceComponent>();
-  for (const point of group) {
-    if (Number.isFinite(point.unmeasuredWh)) unmeasuredWh += point.unmeasuredWh;
-    for (const appliance of point.appliances) {
-      const key = applianceKey(appliance);
-      const existing = appliances.get(key);
-      if (existing) {
-        existing.wh += Number.isFinite(appliance.wh) ? appliance.wh : 0;
-      } else {
-        appliances.set(key, { ...appliance });
-      }
-    }
-  }
-  return {
-    slot: slots[0] ?? group[0].slot,
-    unmeasuredWh,
-    appliances: [...appliances.values()],
-  };
+  return { slot: slots[0] ?? group[0].slot, ...mergeBreakdown(group) };
 }
 
 /**

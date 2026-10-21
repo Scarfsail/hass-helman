@@ -1,5 +1,5 @@
 import { formatMoney } from "../shared/format";
-import { slotMinutes, formatClock } from "../shared/time/slot-time";
+import { formatClock } from "../shared/time/slot-time";
 import { LitElement, css, html, svg, type PropertyValues, type TemplateResult } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { nothing } from "lit-html";
@@ -17,6 +17,7 @@ import { nowMinutesOnDay, renderNowMarker } from "./now-marker.js";
 import { renderSlotGridlines, slotGridTicks } from "../shared/slot-gridlines";
 import { helmanColorVars } from "../color-vars";
 import { hourAnchorOffset, selectLabelledColumns, stripValueLabel } from "../shared/strip-value-labels";
+import { priceColumns, type PriceColumn, type PriceRailPoint } from "./inspector-day-model";
 
 const MINUTES_PER_DAY = 1440;
 
@@ -47,19 +48,6 @@ function _inkOn(bar: { value: number; side: "import" | "export" } | null): strin
     if (bar === null) return "var(--secondary-text-color)";
     if (bar.value < 0) return INK_ON_NEGATIVE;
     return bar.side === "export" ? INK_ON_EXPORT : INK_ON_IMPORT;
-}
-
-/** One rail's sample as the day payload serves it: an `HH:MM` slot and a rate. */
-export interface PriceRailPoint {
-    slot: string;
-    value: number;
-}
-
-/** A single price sample placed on the selected day's timeline. */
-export interface PriceColumn {
-    startMinutes: number;
-    endMinutes: number;
-    value: number;
 }
 
 /**
@@ -191,8 +179,10 @@ export class HelmanSolarPriceStrip extends LitElement {
             return;
         }
         this._columnsFor = { importPrice: this.importPrice, exportPrice: this.exportPrice, slot };
-        this._importColumns = this._buildColumns(this.importPrice);
-        this._exportColumns = this._buildColumns(this.exportPrice);
+        // Laid out by the day model's own rule, so these are the columns the
+        // inspector's day view carries.
+        this._importColumns = priceColumns(this.importPrice, slot);
+        this._exportColumns = priceColumns(this.exportPrice, slot);
     }
 
     protected updated(changed: PropertyValues<this>): void {
@@ -235,52 +225,6 @@ export class HelmanSolarPriceStrip extends LitElement {
             return nothing;
         }
         return this._renderStrip(importColumns, exportColumns, this.geometry);
-    }
-
-    /**
-     * One rail's samples bucketed onto the inspector's current slot grid.
-     *
-     * Both rails use this same grid, which is the point: a cell is split in half
-     * to hold one bar per rail, so the two must agree on where cells begin or
-     * the halves belong to different spans. Coalescing equal neighbours into
-     * natural cells — an hourly export price into one column, a fixed import
-     * window into a morning-long one — was tried first and gives each rail its
-     * own grid, which draws as a wide backdrop with unrelated bars across it
-     * rather than a pair per slot.
-     *
-     * Density is therefore the slot-size control's business, not this element's:
-     * at 15 minutes the day is 96 narrow pairs, at 60 it is 24 wide ones.
-     * Several samples landing in one cell average, a price being a rate rather
-     * than a quantity to accumulate.
-     */
-    private _buildColumns(points: readonly PriceRailPoint[]): PriceColumn[] {
-        const slot = this._slotSpan();
-        const cells = new Map<number, { total: number; count: number }>();
-        for (const point of points) {
-            const value = Number(point.value);
-            if (!Number.isFinite(value)) {
-                continue;
-            }
-            const minutes = slotMinutes(point.slot);
-            if (minutes === null) {
-                continue;
-            }
-            const start = Math.floor(minutes / slot) * slot;
-            const cell = cells.get(start);
-            if (cell) {
-                cell.total += value;
-                cell.count += 1;
-            } else {
-                cells.set(start, { total: value, count: 1 });
-            }
-        }
-        return [...cells.entries()]
-            .sort((a, b) => a[0] - b[0])
-            .map(([startMinutes, { total, count }]) => ({
-                startMinutes,
-                endMinutes: Math.min(startMinutes + slot, MINUTES_PER_DAY),
-                value: total / count,
-            }));
     }
 
     /** The inspector's current slot width, guarded against a nonsense value. */

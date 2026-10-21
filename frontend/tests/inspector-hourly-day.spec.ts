@@ -148,7 +148,7 @@ test.describe("a day drawn from hourly statistics", () => {
         // totals, which are slot-width independent, still counted it.
         const lastSlot = await page.evaluate(() => {
             const el = document.querySelector("helman-solar-inspector") as any;
-            const view = el._viewForSlot(el._payload);
+            const view = el._view;
             const points = view.series.actual;
             return points[points.length - 1]?.slot ?? null;
         });

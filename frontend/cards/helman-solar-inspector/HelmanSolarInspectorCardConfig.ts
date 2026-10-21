@@ -1,5 +1,5 @@
 import type { LovelaceCardConfig } from "../../types/ha";
-import type { SeriesKey } from "./helman-solar-inspector";
+import type { SeriesKey } from "./inspector-day-model";
 
 export interface HelmanSolarInspectorCardConfig extends LovelaceCardConfig {
     /** When true, the card background is transparent. Default: false. */
