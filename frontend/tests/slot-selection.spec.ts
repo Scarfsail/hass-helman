@@ -123,7 +123,7 @@ async function mountInspector(page: Page): Promise<void> {
     // Wait for the chart to render (data loads async via the stubbed callWS).
     await page.waitForFunction(() => {
         const el = document.querySelector("helman-solar-inspector") as any;
-        return !!el?.shadowRoot?.querySelector(".chart-wrap svg");
+        return !!el?.shadowRoot?.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".chart-wrap svg");
     });
 }
 
@@ -146,7 +146,7 @@ type ChartGeom = {
 async function chartGeom(page: Page): Promise<ChartGeom> {
     return page.evaluate(() => {
         const el = document.querySelector("helman-solar-inspector") as any;
-        const svg = el.shadowRoot.querySelector(".chart-wrap svg") as SVGSVGElement;
+        const svg = el.shadowRoot.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".chart-wrap svg") as SVGSVGElement;
         const r = svg.getBoundingClientRect();
         const layout = el._layout;
         return {

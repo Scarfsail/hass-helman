@@ -82,7 +82,7 @@ async function mountInspector(page: Page, granularity: number): Promise<void> {
 
     await page.waitForFunction(() => {
         const el = document.querySelector("helman-solar-inspector") as any;
-        return !!el?.shadowRoot?.querySelector(".chart-wrap svg");
+        return !!el?.shadowRoot?.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".chart-wrap svg");
     });
 }
 
@@ -163,7 +163,7 @@ test.describe("a day drawn from hourly statistics", () => {
         // series would prove nothing about the actuals-only case.
         const bars = await page.evaluate(() => {
             const el = document.querySelector("helman-solar-inspector") as any;
-            return el.shadowRoot.querySelectorAll(".chart-wrap svg rect").length;
+            return el.shadowRoot.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelectorAll(".chart-wrap svg rect").length;
         });
         expect(bars).toBeGreaterThan(0);
         expect((await notes(page)).some((text) => text.includes("No data is available"))).toBe(

@@ -369,7 +369,7 @@ test.describe("solar inspector aggregate views", () => {
         const before = await page.evaluate(() => {
             const root = (document.querySelector("helman-solar-inspector") as any).shadowRoot;
             return {
-                paths: root.querySelectorAll(".chart-wrap svg path").length,
+                paths: root.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelectorAll(".chart-wrap svg path").length,
                 requests: ((window as any).__dayRequests as string[]).length,
             };
         });
@@ -383,7 +383,7 @@ test.describe("solar inspector aggregate views", () => {
         const after = await page.evaluate(() => {
             const root = (document.querySelector("helman-solar-inspector") as any).shadowRoot;
             return {
-                hasChart: !!root.querySelector(".chart-wrap svg"),
+                hasChart: !!root.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".chart-wrap svg"),
                 hasAggregate: !!root.querySelector("helman-solar-aggregate-chart"),
                 hasPrice: !!root.querySelector("helman-solar-price-strip"),
                 requests: ((window as any).__dayRequests as string[]).length,
@@ -416,7 +416,7 @@ test.describe("solar inspector aggregate views", () => {
             const root = (document.querySelector("helman-solar-inspector") as any).shadowRoot;
             const requests = (window as any).__dayRequests as string[];
             return {
-                hasChart: !!root.querySelector(".chart-wrap svg"),
+                hasChart: !!root.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".chart-wrap svg"),
                 lastRequest: requests[requests.length - 1],
             };
         });
@@ -438,7 +438,7 @@ test.describe("solar inspector aggregate views", () => {
         await waitForDayChart(page);
 
         expect(await page.evaluate(() => !!(document.querySelector("helman-solar-inspector") as any)
-            .shadowRoot.querySelector(".chart-wrap svg"))).toBe(true);
+            .shadowRoot.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".chart-wrap svg"))).toBe(true);
     });
 
     test("a real click on the coloured stack selects the column under it", async ({ page }) => {
@@ -568,7 +568,7 @@ test.describe("solar inspector aggregate views", () => {
         await waitForDayChart(page);
         const chartBox = await page.evaluate(() => {
             const svg = (document.querySelector("helman-solar-inspector") as any)
-                .shadowRoot.querySelector(".chart-wrap svg") as SVGElement;
+                .shadowRoot.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".chart-wrap svg") as SVGElement;
             const box = svg.getBoundingClientRect();
             return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
         });
@@ -711,6 +711,20 @@ test.describe("solar inspector aggregate views", () => {
         expect(bucket["Export gain"]).toBe("12.00 CZK");
         expect(bucket["Net cost"]).toBe("28.00 CZK");
         expect(bucket["SoC range"]).toBe("20–90 %");
+    });
+
+    test("the span pair lists one row order, the selection adding the SoC range", async ({ page }) => {
+        // One renderer draws both panels; the SoC range is the selection's
+        // alone, so the span totals must not grow it and the selection must
+        // not lose it.
+        await clickStop(page, STOP_MONTH_VIEW);
+        await waitForAggregateChart(page);
+        await selectColumn(page, 2);
+
+        const meters = ["Solar production", "House", "Grid import", "Grid export", "Battery charge", "Battery discharge"];
+        const money = ["Import cost", "Export gain", "Net cost"];
+        expect(Object.keys(await sectionMetrics(page, 0))).toEqual([...meters, "SoC range", ...money]);
+        expect(Object.keys(await sectionMetrics(page, 1))).toEqual([...meters, ...money]);
     });
 
     test("a bucket with no price and no SoC bounds says so rather than showing zero", async ({ page }) => {

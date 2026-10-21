@@ -141,7 +141,7 @@ async function mountInspector(page: Page): Promise<void> {
     await page.waitForFunction(() => {
         const el = document.querySelector("helman-solar-inspector") as
             (Element & { shadowRoot: ShadowRoot | null }) | null;
-        return !!el?.shadowRoot?.querySelector(".chart-wrap svg");
+        return !!el?.shadowRoot?.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".chart-wrap svg");
     });
     // The price strip lands a render after the chart -- it echoes its columns
     // back up -- so let the opening sequence finish before anything is counted.
@@ -209,7 +209,7 @@ async function installCounters(page: Page): Promise<void> {
         };
         watch("helman-solar-inspector", inspector, {
             view: "_view",
-            coverage: "_partialBuckets",
+            coverage: "_coverage",
             stacks: "_stacks",
             layout: "_layout",
             socBars: "_socBarsModel",
@@ -239,7 +239,7 @@ async function sweep(
         const el = document.querySelector("helman-solar-inspector") as unknown as
             Record<string, any>;
         const root = el.shadowRoot as ShadowRoot;
-        const svg = root.querySelector(".chart-wrap svg") as SVGSVGElement;
+        const svg = root.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".chart-wrap svg") as SVGSVGElement;
         const rect = svg.getBoundingClientRect();
         // Whichever name the layout is kept under, so the same sweep can be run
         // against a build from before it was hoisted out of `render()`.

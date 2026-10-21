@@ -50,7 +50,7 @@ async function mountInspector(page: Page): Promise<void> {
     await expect.poll(() => page.evaluate(() => window.__pendingInspector())).toBe(1);
     await page.evaluate(() => window.__releaseInspector());
     await expect.poll(() => page.evaluate(() => !!document
-        .querySelector("helman-solar-inspector")?.shadowRoot?.querySelector(".chart-wrap")))
+        .querySelector("helman-solar-inspector")?.shadowRoot?.querySelector("helman-solar-day-chart")))
         .toBe(true);
 }
 

@@ -80,7 +80,7 @@ async function mountInspector(page: Page, slotMinutes: number): Promise<void> {
 
     await page.waitForFunction(() => {
         const el = document.querySelector("helman-solar-inspector") as any;
-        return !!el?.shadowRoot?.querySelector(".chart-wrap svg");
+        return !!el?.shadowRoot?.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".chart-wrap svg");
     });
 }
 
@@ -94,7 +94,7 @@ async function gridLines(
 ): Promise<Array<{ x: number; opacity: number }>> {
     return page.evaluate((sel) => {
         const el = document.querySelector("helman-solar-inspector") as any;
-        const svg = el.shadowRoot.querySelector(sel) as SVGSVGElement;
+        const svg = el.shadowRoot.querySelector("helman-solar-day-chart").shadowRoot.querySelector(sel) as SVGSVGElement;
         return [...svg.querySelectorAll("line")]
             .filter((line) => line.getAttribute("x1") === line.getAttribute("x2"))
             .map((line) => ({
@@ -110,7 +110,7 @@ async function gridLines(
 async function hourLabels(page: Page): Promise<string[]> {
     return page.evaluate(() => {
         const el = document.querySelector("helman-solar-inspector") as any;
-        return [...el.shadowRoot.querySelectorAll(".chart-wrap svg text")]
+        return [...el.shadowRoot.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelectorAll(".chart-wrap svg text")]
             .map((text) => text.textContent ?? "")
             .filter((text) => /^\d{2}$/.test(text));
     });
@@ -174,7 +174,7 @@ test.describe("solar inspector slot grid", () => {
         expect(muted).toHaveLength(72);
         const labelXs = await page.evaluate(() => {
             const el = document.querySelector("helman-solar-inspector") as any;
-            return [...el.shadowRoot.querySelectorAll(".chart-wrap svg text")]
+            return [...el.shadowRoot.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelectorAll(".chart-wrap svg text")]
                 .filter((text) => /^\d{2}$/.test(text.textContent ?? ""))
                 .map((text) => Math.round(Number(text.getAttribute("x"))));
         });

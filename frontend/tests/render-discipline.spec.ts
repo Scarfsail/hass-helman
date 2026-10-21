@@ -104,7 +104,7 @@ async function mountCard(page: Page): Promise<void> {
 
 function hasChart(page: Page): Promise<boolean> {
     return page.evaluate(
-        () => !!window.__inspectorRoot()?.querySelector(".chart-wrap"),
+        () => !!window.__inspectorRoot()?.querySelector("helman-solar-day-chart"),
     );
 }
 

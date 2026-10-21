@@ -132,7 +132,7 @@ async function mountInspector(page: Page, date: string): Promise<void> {
 
     await page.waitForFunction(() => {
         const el = document.querySelector("helman-solar-inspector") as any;
-        return !!el?.shadowRoot?.querySelector(".chart-wrap svg");
+        return !!el?.shadowRoot?.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".chart-wrap svg");
     });
 }
 
@@ -159,7 +159,7 @@ async function mountBand(page: Page, date: string): Promise<void> {
         // The strip sits inside the card, so it is exactly as wide as the chart
         // above it; anything else would compare two different time axes.
         const chartWrap = (document.querySelector("helman-solar-inspector") as any)
-            .shadowRoot.querySelector(".chart-wrap") as HTMLElement;
+            .shadowRoot.querySelector("helman-solar-day-chart") as HTMLElement;
         wrap.style.width = `${chartWrap.getBoundingClientRect().width}px`;
         const band = document.createElement("scheduling-entity-day-band") as any;
         band.localize = (key: string) => key;
@@ -200,11 +200,11 @@ async function mountBand(page: Page, date: string): Promise<void> {
 /** The line `renderNowMarker` draws, as every chart and strip of the stack carries it. */
 const NOW_LINE = "line[stroke='var(--primary-color)']";
 
-/** viewBox x of every now-marker line drawn in the given container. */
+/** viewBox x of every now-marker line drawn in the given container of the day chart. */
 async function markerXs(page: Page, selector: string): Promise<number[]> {
     return page.evaluate(({ sel, nowLine }) => {
         const el = document.querySelector("helman-solar-inspector") as any;
-        const root = el.shadowRoot.querySelector(sel) as Element | null;
+        const root = el.shadowRoot.querySelector("helman-solar-day-chart").shadowRoot.querySelector(sel) as Element | null;
         if (root === null) return [];
         return Array.from(root.querySelectorAll(nowLine))
             .map((line) => Number(line.getAttribute("x1")));
@@ -244,7 +244,8 @@ async function markerRects(page: Page, hour: number) {
         await band.updateComplete;
 
         const line = (sel: string) => {
-            const found = (inspector.shadowRoot as ShadowRoot).querySelector(`${sel} ${nowLine}`);
+            const chart = inspector.shadowRoot.querySelector("helman-solar-day-chart").shadowRoot as ShadowRoot;
+            const found = chart.querySelector(`${sel} ${nowLine}`);
             const rect = (found as SVGLineElement).getBoundingClientRect();
             return { center: rect.left + rect.width / 2 };
         };
@@ -301,7 +302,7 @@ test.describe("solar inspector now marker", () => {
 
         const drawn = await page.evaluate((nowLine: string) => {
             const el = document.querySelector("helman-solar-inspector") as any;
-            const root = el.shadowRoot as ShadowRoot;
+            const root = el.shadowRoot.querySelector("helman-solar-day-chart").shadowRoot as ShadowRoot;
             const line = root.querySelector(`.chart-wrap ${nowLine}`)!;
             // In the SoC strip, paint order is DOM order: every percentage has
             // to come after the marker for the line to pass behind the digits.
@@ -348,16 +349,17 @@ test.describe("solar inspector now marker", () => {
         // draw theirs inside their own shadow roots.
         const rows = await page.evaluate(async (nowLine: string) => {
             const root = document.querySelector("helman-solar-inspector")!.shadowRoot!;
+            const chart = () => root.querySelector("helman-solar-day-chart")?.shadowRoot;
             const scopes: Record<string, () => ParentNode | null | undefined> = {
-                chart: () => root.querySelector(".chart-wrap"),
-                soc: () => root.querySelector(".soc-strip-wrap"),
+                chart: () => chart()?.querySelector(".chart-wrap"),
+                soc: () => chart()?.querySelector(".soc-strip-wrap"),
                 price: () => root.querySelector("helman-solar-price-strip")?.shadowRoot,
                 money: () => root.querySelector("helman-solar-money-strip")?.shadowRoot,
             };
             while (!Object.values(scopes).every((scope) => scope()?.querySelector(nowLine))) {
                 await new Promise(requestAnimationFrame);
             }
-            const card = (root.querySelector(".chart-wrap") as HTMLElement).getBoundingClientRect().width;
+            const card = (root.querySelector("helman-solar-day-chart") as HTMLElement).getBoundingClientRect().width;
             return {
                 card,
                 rows: Object.entries(scopes).map(([name, scope]) => {
