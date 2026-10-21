@@ -616,30 +616,27 @@ export class HelmanConfigEditorPanel
   }
 
   private _setEntitiesOnly(next: boolean): void {
-    if (this._entitiesOnly === next) return;
-    if (next) {
-      for (const section of this._tabBodyDetails()) {
-        this._sectionOpenBeforeEntitiesOnly.set(section, section.open);
-      }
-    }
+    if (next === this._entitiesOnly) return;
     this._entitiesOnly = next;
   }
 
   private _applyEntitiesOnlyOpenState(): void {
-    for (const section of this._tabBodyDetails()) {
-      if (this._entitiesOnly) {
-        if (!this._sectionOpenBeforeEntitiesOnly.has(section)) {
-          this._sectionOpenBeforeEntitiesOnly.set(section, section.open);
-        }
+    const sections = this._tabBodyDetails();
+    if (this._entitiesOnly) {
+      for (const section of sections) {
+        if (this._sectionOpenBeforeEntitiesOnly.has(section)) continue;
+        this._sectionOpenBeforeEntitiesOnly.set(section, section.open);
         section.open = true;
-      } else {
-        const wasOpen = this._sectionOpenBeforeEntitiesOnly.get(section);
-        if (wasOpen !== undefined) {
-          section.open = wasOpen;
-          this._sectionOpenBeforeEntitiesOnly.delete(section);
-        }
+      }
+      return;
+    }
+    for (const section of sections) {
+      const previous = this._sectionOpenBeforeEntitiesOnly.get(section);
+      if (previous !== undefined) {
+        section.open = previous;
       }
     }
+    this._sectionOpenBeforeEntitiesOnly = new WeakMap();
   }
 
   public _renderSectionScope(
@@ -1261,11 +1258,12 @@ export class HelmanConfigEditorPanel
   }
 
   private _handleReloadClick = async (): Promise<void> => {
-    if (this._dirty) {
-      const confirmDiscard = window.confirm(this._t("editor.confirm.discard_unsaved"));
-      if (!confirmDiscard) {
-        return;
-      }
+    if (this._saving) return;
+    if (
+      (this._dirty || this._hasBlockingYamlErrors()) &&
+      !window.confirm(this._t("editor.confirm.discard_changes"))
+    ) {
+      return;
     }
     await this._loadConfig({ showMessage: true });
   };

@@ -211,3 +211,79 @@ test("F2: training appliance table device names become clickable after device tr
   await expect(button).toHaveCount(1);
   await expect(button).toContainText("Dishwasher");
 });
+
+test("F3: reload asks for confirmation when clean config has blocking YAML errors", async ({
+  page,
+}) => {
+  await loadBundle(page, "helman-config-editor-panel", EDITOR_BUNDLE);
+
+  await page.evaluate(({ config }: { config: unknown }) => {
+    if (!customElements.get("ha-yaml-editor")) {
+      customElements.define("ha-yaml-editor", class extends HTMLElement {
+        connectedCallback() {
+          this.style.display = "block";
+          this.style.height = "100px";
+        }
+      });
+    }
+    const w = window as any;
+    w.__stored = JSON.parse(JSON.stringify(config));
+    const element = document.createElement(
+      "helman-config-editor-panel",
+    ) as HTMLElement & Record<string, unknown>;
+    element.hass = {
+      language: "en",
+      locale: { language: "en" },
+      user: { is_admin: true },
+      connection: window.__mockHass().connection,
+      callWS: window.__mockHass({
+        "helman/get_config": async () => JSON.parse(JSON.stringify(w.__stored)),
+        "helman/inspect_entities": async () => ({ results: [] }),
+      }).callWS,
+    };
+    document.body.appendChild(element);
+  }, { config: BASE_CONFIG as unknown });
+
+  const panel = page.locator("helman-config-editor-panel");
+  await expect(panel).toBeVisible();
+
+  // Switch document scope to YAML mode
+  const docYamlBtn = panel.locator(".header .actions .mode-toggle button", { hasText: "YAML" });
+  await expect(docYamlBtn).toBeVisible();
+  await docYamlBtn.click();
+
+  // Find the mounted ha-yaml-editor
+  const yamlEditor = panel.locator("ha-yaml-editor").first();
+  await expect(yamlEditor).toBeVisible();
+
+  // Dispatch invalid YAML event (e.g. parse error)
+  await yamlEditor.evaluate((editor) => {
+    editor.dispatchEvent(
+      new CustomEvent("value-changed", {
+        detail: { isValid: false, errorMsg: "Invalid YAML syntax" },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  });
+
+  // Verify YAML error is visible and config is not marked dirty
+  const errorMsg = panel.locator(".yaml-error");
+  await expect(errorMsg).toContainText("Invalid YAML syntax");
+  await expect(panel.locator(".status-row .badge", { hasText: "Unsaved changes" })).toHaveCount(0);
+
+  // Set up dialog handler to verify confirmation prompt
+  let dialogMessage = "";
+  page.once("dialog", async (dialog) => {
+    dialogMessage = dialog.message();
+    await dialog.dismiss();
+  });
+
+  // Click Reload button
+  const reloadBtn = panel.locator(".header .actions button", { hasText: "Reload stored config" });
+  await reloadBtn.click();
+
+  // Must have prompted with the discard confirmation message
+  expect(dialogMessage).toBe("Discard unsaved changes and reload the stored config?");
+});
+

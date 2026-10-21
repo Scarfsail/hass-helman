@@ -174,19 +174,27 @@ export class AutomationTabController implements ReactiveController {
 
   addOptimizer(schema: OptimizerSchema): void {
     const bucket = this.bucketKindOf(schema);
+    // Ids are unique across both buckets, not just the one being added to --
+    // `config_validation.py`'s `_read_optimizer_buckets` rejects a collision
+    // either way, so the draft must not offer one.
     const existingIds = [
       ...(asJsonArray(this.host._getValue(["automation", "appliance_optimizers"])) ?? []),
       ...(asJsonArray(this.host._getValue(["automation", "system_optimizers"])) ?? []),
     ]
-      .map((item) => asJsonObject(item)?.id)
-      .filter((id): id is string => typeof id === "string" && id.length > 0);
-
+      .map((optimizer) => stringValue(asJsonObject(optimizer)?.id))
+      .filter((value) => value.length > 0);
+    const draftOptimizer = createOptimizerDraft(existingIds, schema.kind, schema.newDraft);
     this.host._applyMutation((draft) => {
-      appendListItem(
-        draft,
-        ["automation", bucket],
-        createOptimizerDraft(existingIds, schema.kind, schema.newDraft),
-      );
+      const automationObject = asJsonObject(getValueAtPath(draft, ["automation"]));
+      if (!automationObject) {
+        setValueAtPath(draft, ["automation"], {
+          enabled: true,
+          appliance_optimizers: bucket === "appliance_optimizers" ? [draftOptimizer] : [],
+          system_optimizers: bucket === "system_optimizers" ? [draftOptimizer] : [],
+        });
+        return;
+      }
+      appendListItem(draft, ["automation", bucket], draftOptimizer);
     });
   }
 
