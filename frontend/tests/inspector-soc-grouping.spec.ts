@@ -93,7 +93,7 @@ async function mountInspector(page: Page, slotMinutes: number): Promise<void> {
 
     await page.waitForFunction(() => {
         const el = document.querySelector("helman-solar-inspector") as any;
-        return !!el?.shadowRoot?.querySelector(".soc-strip-wrap svg");
+        return !!el?.shadowRoot?.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".soc-strip-wrap svg");
     });
 }
 
@@ -105,7 +105,7 @@ async function chargingColumnMinutes(page: Page): Promise<number[]> {
         const span = layout.dayEndMinutes - layout.dayStartMinutes;
         const minutesForX = (x: number) =>
             layout.dayStartMinutes + ((x - 0.5 - layout.margin.left) / layout.plotWidth) * span;
-        const svg = el.shadowRoot.querySelector(".soc-strip-wrap svg") as SVGSVGElement;
+        const svg = el.shadowRoot.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".soc-strip-wrap svg") as SVGSVGElement;
         return [...svg.querySelectorAll("rect")]
             .filter((rect) => (rect.getAttribute("style") ?? "").includes("--helman-charge"))
             .map((rect) => Math.round(minutesForX(Number(rect.getAttribute("x")))))
@@ -131,7 +131,7 @@ test.describe("solar inspector SoC strip grouping", () => {
         await mountInspector(page, 60);
         const labels = await page.evaluate(() => {
             const el = document.querySelector("helman-solar-inspector") as any;
-            const svg = el.shadowRoot.querySelector(".soc-strip-wrap svg") as SVGSVGElement;
+            const svg = el.shadowRoot.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".soc-strip-wrap svg") as SVGSVGElement;
             // A column's own label is the centred one; the strip's percentage
             // axis is drawn with the same element on the left margin.
             return [...svg.querySelectorAll('text[text-anchor="middle"]')]

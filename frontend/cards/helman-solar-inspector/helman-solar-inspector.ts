@@ -1,52 +1,21 @@
-import { formatEnergyWh, formatMoney, orNa } from "../shared/format";
 import { LatestRequest } from "../shared/data/latest-request";
 import { callHelman } from "../shared/data/helman-commands";
-import { pad2, slotMinutes, formatClock } from "../shared/time/slot-time";
-import { LitElement, css, html, svg, unsafeCSS, type PropertyValues, type TemplateResult } from "lit";
+import { formatClock, pad2 } from "../shared/time/slot-time";
+import { LitElement, css, html, unsafeCSS, type PropertyValues } from "lit";
 import { property, query, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../types/ha";
-import { toAveragePower, type ChartEntry } from "./chart-power";
-import { symmetricPowerAxis } from "./chart-axis";
-import { renderSlotGridlines, slotGridTicks, type SlotGridTick } from "../shared/slot-gridlines";
-import { hourAnchorOffset, selectLabelledColumns, stripValueLabel } from "../shared/strip-value-labels";
+import type { SocBar } from "./chart-soc";
+import { CHART_COLORS } from "./chart-colors";
 import {
-  SLOT_MINUTES,
-  accumulateBands,
-  bandRuns,
-  lastStackSlot,
-  stackSlots,
-  stackTotals,
-  toSlotMap,
-  type StackBand,
-  type StackLayer,
-  type StackSet,
-} from "./chart-stack";
-import {
-  buildSocBars,
-  slotToMinutes,
-  type SocBar,
-  type SocBoundsPoint,
-} from "./chart-soc";
-import { SOC_COLUMN_OPACITY, SOC_DIRECTION_COLOR } from "../shared/soc-columns";
-import {
-  GRID_EXPORT_COLOR,
-  GRID_IMPORT_COLOR,
-  NEUTRAL_COLOR,
-  nodeAccentColor,
-} from "../color-utils";
-import { ACTUAL_FILL_OPACITY, CHART_COLORS } from "./chart-colors";
-
-import {
+  HoverTooltipController,
   hoverTooltipStyles,
-  renderHoverTooltip,
-  sameTooltipContent,
   type TooltipCell,
   type TooltipContent,
   type TooltipRow,
 } from "../shared/hover-tooltip";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import { dispatchWatchedEntities } from "../shared/hass-change";
-import { formatIsoDate, todayKey, addDays, daysBetween, parseDayKey } from "../shared/time/day-key";
+import { todayKey } from "../shared/time/day-key";
 import "./helman-solar-schedule-band-strip";
 import "../shared/schedule/dialogs/scheduling-day-editor-host";
 import type {
@@ -55,7 +24,6 @@ import type {
 } from "../shared/schedule/dialogs/scheduling-day-editor-host";
 import "./helman-solar-day-pills";
 import type {
-  DayPillForecastHealthDetail,
   DayPillHoverDetail,
   DayPillOpenDetail,
   DayPillSelectDetail,
@@ -71,10 +39,11 @@ import { buildForecastHealthItems } from "../shared/forecast-health-banner";
 import { fetchDayAggregates, type ForecastPayload } from "../helman-api";
 import {
   buildHistoryDaysFromAggregates,
-  calendarWindow,
   resolveFirstWeekdayIndex,
   type SolarInspectorHistoryDay,
 } from "./day-pill-model";
+import "./helman-solar-day-chart";
+import { chartGridTicks, type DayChartTooltipDetail } from "./helman-solar-day-chart";
 import "./helman-solar-price-strip";
 import "./helman-solar-money-strip";
 import "./helman-solar-aggregate-chart";
@@ -82,124 +51,73 @@ import type {
   AggregateBucketOpenDetail,
   AggregateBucketSelectDetail,
   AggregateBucketHoverDetail,
-  NavigationRange,
   SpanAggregatePayload,
   SpanAggregateRow,
 } from "./helman-solar-aggregate-chart";
-import type { PriceColumn, PriceColumnsDetail, PriceRailPoint } from "./helman-solar-price-strip";
-import {
-  currencyFromPriceUnit,
-  sumMoney,
-  UNPRICED_MONEY,
-  type MoneyPoint,
-  type MoneyTotals,
-} from "./money-model";
+import { currencyFromPriceUnit } from "./money-model";
 import "../helman/tree-item-list";
 import "../node-detail/node-detail-dialog";
 import { TreeItem } from "../shared/data/tree-item";
-import {
-  findTrainingSlot,
-  formatHouseForecastErrorPct,
-  houseForecastError,
-  resolveSelectedTrainingDate,
-  resolveSelectedImpactSlot,
-  type BatterySocPoint,
-  type FactorPoint,
-  type ApplianceComponent,
-  type HouseBreakdownPoint,
-  type ImpactPoint,
-  type InspectorPoint,
-  type TrainingExplainability,
-  type TrainingSlotExplainability,
-  type ContributionRow,
-} from "./solar-inspector-model.js";
-import type { BucketSourceMix } from "../shared/power-history-bars";
-import {
-  actualsCoverUntil,
-  aggregateBreakdownOverSlots,
-  aggregateBreakdownSeries,
-  applianceKey,
-  breakdownCoversSlots,
-  consumerBarsOverSlots,
-  partBarsOverSlots,
-  expandSlotsToNative,
-  houseSourceMixBySlot,
-  dropPartialBuckets,
-  seriesCoverage,
-  missingMinutesByBucket,
-  type CoverageSeries,
-  aggregateImpactOverSlots,
-  aggregateImpactSeries,
-  aggregateWhSeries,
-  minutesToSlot,
-  sampleBounds,
-  socBarAtSelectionEnd,
-  sumWhOverSlots,
-  sampleBucketEndOnGrid,
-  sampleOnGrid,
-  snapSlotToGrid,
-  splitHouseByDeferrable,
-} from "./slot-aggregation.js";
+import { findTrainingSlot, resolveSelectedTrainingDate } from "./solar-inspector-model.js";
+import { minutesToSlot, snapSlotToGrid } from "./slot-aggregation.js";
 import {
   EMPTY_SLOT_SELECTION,
   applySlotSelection,
   reconcileSlotSelection,
-  slotSelectionModeForEvent,
   type SlotPickDetail,
   type SlotSelectionMode,
   type SlotSelectionState,
 } from "./slot-selection.js";
-import { nowMinutesOnDay, renderNowMarker } from "./now-marker.js";
 import { helmanColorVars } from "../color-vars";
 import { schedulingSharedStyles } from "../shared/schedule/styles/scheduling-shared-styles";
 import { DataChangedController } from "../shared/data/data-changed";
 import { startNowClock } from "../shared/now-clock";
 import { getSharedScheduleOwner, type SharedScheduleOwner } from "../shared/schedule/schedule-owner";
-import type { ScheduleOwnerSnapshot } from "../shared/schedule/schedule-types";
+import type { NormalizedScheduleModel, ScheduleOwnerSnapshot } from "../shared/schedule/schedule-types";
+import { EMPTY_NORMALIZED_SCHEDULE } from "../shared/schedule/model/schedule-normalizer";
+import { ForecastLoader } from "../shared/data/forecast-loader";
+import { resolveLocale } from "../shared/resolve-locale";
 import type { ScheduleHoverTooltipContent } from "./helman-solar-schedule-band-strip";
 import { EMPTY_SELECTED_MINUTES, type ScheduleStripGeometry } from "./strip-geometry";
+import { memoOne } from "../shared/memo-one";
+import {
+  EMPTY_DAY_COVERAGE,
+  buildDayView,
+  buildStacks,
+  chartLayout,
+  dayCoverage,
+  dayHasSeries,
+  isSeriesEnabled,
+  isSeriesVisible,
+  payloadGranularity,
+  selectedMinutes,
+  socBars,
+  stripGeometry,
+  type ChartLayout,
+  type ChartStacks,
+  type DayCoverage,
+  type DayView,
+  type InspectorPayload,
+  type SeriesKey,
+} from "./inspector-day-model";
+import {
+  monthBounds,
+  parseOrToday as navigationParseOrToday,
+  pillWindow as navigationPillWindow,
+  spanBounds,
+  viewStopGroups,
+  type InspectorViewMode,
+  type NavigationRange,
+} from "./inspector-navigation";
+import { formatWh } from "./inspector-format";
+import { chartFrameStyles, panelStyles } from "./inspector-styles";
+import type { PanelContext } from "./panels/metrics";
+import { renderSelectedSlotDetails } from "./panels/selection";
+import { renderTotals } from "./panels/totals";
+import { formatSocRange, formatSpanMoney, renderSelectedBucket, renderSpanTotals, spanMoney } from "./panels/span";
 
 /** Slot widths the header toggle and card config offer, in minutes. */
 const SLOT_SIZE_OPTIONS = [15, 30, 60] as const;
-
-/** Day view, or one of the two history-only aggregate widths. */
-type InspectorViewMode = "day" | "month" | "year";
-
-/** One stop of the width toggle: a view to be in, and how wide its slots are. */
-interface ViewStop {
-  label: string;
-  mode: InspectorViewMode;
-  minutes?: 15 | 30 | 60;
-}
-
-/**
- * The five stops the width toggle offers, narrowest first, in three groups.
- *
- * One control, because widening the axis is one idea to a reader: quarter hour,
- * half hour, hour, day, month. It is deliberately *not* five slot widths.
- * `_slotMinutes` means minutes everywhere -- some twenty arithmetic sites read
- * it as a number and three child strips re-floor by it -- and a month has no
- * fixed minute count, so the two wider stops carry a view mode instead and the
- * minutes field simply stops applying. Keeping them in one list is what makes
- * the toggle read as one axis while the states behind it stay honest.
- *
- * The grouping says which stops are the same thing. A group is one read of one
- * subject: the day view's slots drawn at three resolutions, a month of days, a
- * year of months. Moving within a group re-draws what is already on screen;
- * moving between groups fetches something else and swaps the chart under the
- * reader. The five stops looked identical while meaning those two very
- * different things, so the frame around each group is the toggle saying which
- * presses are which.
- */
-const VIEW_STOP_GROUPS: readonly (readonly ViewStop[])[] = [
-  [
-    { label: "15", mode: "day", minutes: 15 },
-    { label: "30", mode: "day", minutes: 30 },
-    { label: "60", mode: "day", minutes: 60 },
-  ],
-  [{ label: "D", mode: "month" }],
-  [{ label: "M", mode: "year" }],
-];
 
 /** Below this page width the chart opens at the coarser default. */
 const NARROW_VIEWPORT_PX = 768;
@@ -214,118 +132,7 @@ function defaultSlotMinutesForViewport(): number {
   return width > 0 && width < NARROW_VIEWPORT_PX ? 60 : 30;
 }
 
-export type SeriesKey =
-  | "raw"
-  | "corrected"
-  | "actual"
-  | "houseForecast"
-  | "houseActual"
-  | "batterySocForecast"
-  | "batterySocActual"
-  | "gridForecast"
-  | "gridActual"
-  | "batteryForecast"
-  | "batteryActual";
-
 const DEFAULT_HIDDEN_SERIES: readonly SeriesKey[] = ["raw"];
-
-/**
- * What each series is called, as the localisation key under
- * `bias_correction.inspector`. These are the names the daily totals already
- * use, so a series named anywhere else on the card is named the same way.
- */
-const SERIES_LABEL_KEYS: Record<SeriesKey, string> = {
-  raw: "raw_forecast",
-  corrected: "corrected_forecast",
-  actual: "actual_production",
-  houseForecast: "house_forecast",
-  houseActual: "house_actual",
-  batterySocForecast: "battery_soc_forecast",
-  batterySocActual: "battery_soc_actual",
-  gridForecast: "grid_forecast",
-  gridActual: "grid_actual",
-  batteryForecast: "battery_forecast",
-  batteryActual: "battery_actual",
-};
-
-/** Every series name, in one list, for the card's `chart_series` selector. */
-export const SERIES_KEYS = Object.keys(SERIES_LABEL_KEYS) as SeriesKey[];
-
-/**
- * The series that stack. The SoC series and the raw forecast are drawn
- * elsewhere and stack nothing, so they are not in here.
- */
-type StackedSeriesKey = Extract<
-  SeriesKey,
-  | "corrected"
-  | "actual"
-  | "houseForecast"
-  | "houseActual"
-  | "gridForecast"
-  | "gridActual"
-  | "batteryForecast"
-  | "batteryActual"
->;
-
-/**
- * Flip a consumption-positive payload series into the chart's sign convention.
- *
- * The payload counts energy leaving the house's demand as positive: the house
- * consuming, the grid taking an export, the battery charging. The chart instead
- * draws whatever *supplies* the house upwards and whatever *draws from it*
- * downwards, so grid import, battery discharge and solar all rise above zero.
- * Solar is production-positive already and needs no flip.
- */
-function asSupplyPositive(points: InspectorPoint[]): InspectorPoint[] {
-  return points.map((point) => ({ ...point, valueWh: -point.valueWh }));
-}
-
-function negateWh(value: number | null): number | null {
-  return value === null || !Number.isFinite(value) ? value : -value;
-}
-
-/** Stroke opacity for forecast the actuals have already superseded. */
-const MUTED_FORECAST_OPACITY = 0.35;
-
-type StrokeStyle = { width: number; opacity: number };
-
-const POWER_STROKE: StrokeStyle = { width: 2, opacity: 1 };
-
-const MINUTES_PER_DAY = 1440;
-
-/**
- * The stand-in for a rail an older payload does not carry. A shared frozen array
- * rather than a fresh `[]` per render: the strip's properties are compared by
- * identity, and a new empty array every time would make it re-render for nothing.
- */
-const EMPTY_PRICE_RAIL: readonly PriceRailPoint[] = Object.freeze([]);
-
-/** The SoC strip's own geometry; it borrows only the x scale from the chart. */
-const SOC_STRIP = { height: 65, padTop: 8, padBottom: 8 } as const;
-
-const SOC_UNUSABLE_HATCH_ID = "soc-unusable-hatch";
-
-/**
- * The forecast's own fill, past the last actual. Its muting comes from the
- * hatch pattern being mostly transparent, so the paint itself stays near solid.
- */
-const FORECAST_BAND_FILL_OPACITY = 0.9;
-const FORECAST_OUTLINE: StrokeStyle = { width: 1.4, opacity: 0.55 };
-
-/**
- * Band colours needing a hatch pattern; solar's forecast reuses the solar hue.
- *
- * Every colour a forecast band can be drawn in must be here: the fill is
- * `url(#hatchId(colour))`, and an unregistered pattern is not a fallback to the
- * flat colour — it paints the band black.
- */
-const STACK_HATCH_COLORS = [
-  CHART_COLORS.corrected,
-  CHART_COLORS.house,
-  CHART_COLORS.houseDeferrable,
-  CHART_COLORS.battery,
-  CHART_COLORS.grid,
-] as const;
 
 /**
  * One array for every "no measured days" answer.
@@ -362,183 +169,11 @@ const EMPTY_SCHEDULE_SNAPSHOT: ScheduleOwnerSnapshot = {
   stale: false,
 };
 
-/** Patterns are referenced by url(#id), so each colour needs a stable id. */
-function hatchId(color: string): string {
-  return `stack-hatch-${color.replace("#", "")}`;
-}
-
-type ChartStacks = { forecast: StackSet; actual: StackSet };
-
-/**
- * Close an interval series with a vertex at the end of its last slot.
- *
- * Each entry is the average power over the slot *starting* at it, so the final
- * slot has only one vertex and no segment gets drawn across it. Battery SoC
- * needs no such closing: it is an instantaneous reading, not an interval.
- */
-function closeIntervalSeries(points: ChartEntry[], slotMinutes: number): ChartEntry[] {
-  if (!points.length) return points;
-  const last = points[points.length - 1];
-  const slotEnd = last.minutes + slotMinutes;
-  if (slotEnd > MINUTES_PER_DAY) return points;
-  return [...points, { ...last, minutes: slotEnd }];
-}
-
-/** Minutes past midnight of the last actual sample, or null when there are none. */
-function lastActualMinutes<T>(
-  actual: readonly T[],
-  minutesOf: (point: T) => number | null,
-): number | null {
-  for (let index = actual.length - 1; index >= 0; index--) {
-    const minutes = minutesOf(actual[index]);
-    if (minutes !== null) return minutes;
-  }
-  return null;
-}
-
-/**
- * Split a forecast into the part the actuals already cover and the part still
- * ahead of them. The boundary point belongs to both so the two paths join with
- * no visible seam.
- */
-function splitForecastAtActuals<T>(
-  forecast: readonly T[],
-  cutoff: number | null,
-  minutesOf: (point: T) => number | null,
-): { covered: T[]; ahead: T[] } {
-  if (cutoff === null) return { covered: [], ahead: [...forecast] };
-  let split = 0;
-  while (split < forecast.length) {
-    const minutes = minutesOf(forecast[split]);
-    if (minutes === null || minutes > cutoff) break;
-    split++;
-  }
-  if (split === 0) return { covered: [], ahead: [...forecast] };
-  if (split >= forecast.length) return { covered: [...forecast], ahead: [] };
-  return { covered: forecast.slice(0, split), ahead: forecast.slice(split - 1) };
-}
-
-type RatioBounds = { min: number; max: number; maxAbsDeviation: number };
-
-type ChartLayout = {
-  width: number;
-  height: number;
-  margin: { top: number; right: number; bottom: number; left: number };
-  plotWidth: number;
-  plotHeight: number;
-  minKw: number;
-  maxKw: number;
-  yTicks: number[];
-  /** Minute-of-day at the left edge of the plot; 0 unless the day is cropped. */
-  dayStartMinutes: number;
-  /** Minute-of-day at the right edge of the plot; 1440 unless the day is cropped. */
-  dayEndMinutes: number;
-  /** Pixel width of one 15-minute slot under the current x scale. */
-  slotWidth: number;
-  xForMinutes: (m: number) => number;
-  yForW: (w: number) => number;
-  /** Inverse of `yForW`: the watts a plot-space y coordinate reads as. */
-  wForY: (y: number) => number;
-};
-
-/** The four things the combined chart stacks; one popup section per family. */
-type SeriesFamily = "solar" | "house" | "battery" | "grid";
-
-/**
- * Which two series each tooltip family speaks for, as [actual, forecast]. The
- * popup reads families rather than series, so this is what lets the config's
- * allowlist reach it without every branch of the row builder checking.
- */
-const FAMILY_SERIES: Record<SeriesFamily, readonly [SeriesKey, SeriesKey]> = {
-  solar: ["actual", "corrected"],
-  house: ["houseActual", "houseForecast"],
-  battery: ["batteryActual", "batteryForecast"],
-  grid: ["gridActual", "gridForecast"],
-};
-
-export type InspectorPayload = {
-  date: string;
-  timezone: string;
-  /**
-   * How wide one point of every measured series is: 15 for a day still held in
-   * raw recorder states, 60 for one read back from hourly long-term statistics
-   * after the recorder purged those states.
-   *
-   * Optional only for an older backend that predates the field; absent reads as
-   * 15, which is what every day was before the statistics source existed.
-   */
-  dataGranularityMinutes?: number;
-  status: string;
-  effectiveVariant: string | null;
-  trainedAt: string | null;
-  range: NavigationRange & {
-    canGoPrevious: boolean;
-    canGoNext: boolean;
-    isToday: boolean;
-    isFuture: boolean;
-  };
-  series: {
-    raw: InspectorPoint[];
-    corrected: InspectorPoint[];
-    actual: InspectorPoint[];
-    invalidated: InspectorPoint[];
-    factors: FactorPoint[];
-    impact: ImpactPoint[];
-    houseForecast: InspectorPoint[];
-    houseActual: InspectorPoint[];
-    houseActualBreakdown: HouseBreakdownPoint[];
-    /** The same shape ahead of the clock: the base load plus each scheduled appliance. */
-    houseForecastBreakdown: HouseBreakdownPoint[];
-    batterySocForecast: BatterySocPoint[];
-    batterySocActual: BatterySocPoint[];
-    gridForecast: InspectorPoint[];
-    gridActual: InspectorPoint[];
-    batteryForecast: InspectorPoint[];
-    batteryActual: InspectorPoint[];
-    /**
-     * What the grid charged and paid per slot. Unlike the forecast/actual pairs
-     * above, each rail already spans the whole day: the backend joins recorder
-     * history behind the clock with the live feed ahead of it.
-     */
-    importPrice: PriceRailPoint[];
-    exportPrice: PriceRailPoint[];
-    /**
-     * What each slot cost and earned, priced in Python from the two grid
-     * directions and the rails above. Drawn series: the actual one stops at the
-     * slot in progress, like every other actual, while `totals` below counts it.
-     */
-    moneyActual: MoneyPoint[];
-    moneyForecast: MoneyPoint[];
-  };
-  totals: {
-    rawWh: number | null;
-    correctedWh: number | null;
-    actualWh: number | null;
-    houseForecastWh: number | null;
-    houseActualWh: number | null;
-    gridForecastWh: number | null;
-    gridActualWh: number | null;
-    batteryForecastWh: number | null;
-    batteryActualWh: number | null;
-    /** Null where the day priced nothing for that vintage. */
-    moneyActual: MoneyTotals | null;
-    moneyForecast: MoneyTotals | null;
-  };
-  availability: {
-    hasProfile: boolean;
-  };
-  /** Per-slot SoC window the battery is driven within; empty when unconfigured. */
-  batterySocBounds: SocBoundsPoint[];
-  /** The currency-per-energy unit both price rails are quoted in. */
-  priceUnit: string | null;
-  trainingExplainability: TrainingExplainability | null;
-};
-
 /**
  * Floor for the content shell on a cold mount, where there is no stale
- * payload to hold the box open: the chart's fixed 260px (`.chart-wrap svg`,
- * in `static styles`) plus the strips and totals a day view typically draws
- * below it.
+ * payload to hold the box open: the day chart's fixed 260px (`.chart-wrap svg`
+ * in `helman-solar-day-chart`) plus the strips and totals a day view typically
+ * draws below it.
  */
 const INSPECTOR_CONTENT_MIN_HEIGHT = 520;
 
@@ -671,10 +306,13 @@ export class HelmanSolarInspector extends LitElement {
   @state() private _loading = false;
   @state() private _error = "";
   /**
-   * The forecast payload the day pills fetched. It backs the health banner —
-   * the card's only view of how fresh the forecast behind the pills is.
+   * The forecast the day pills draw their gauges from, and the health banner's
+   * only view of how fresh it is. Read here, once the schedule has slots to
+   * draw it against, rather than by the pills -- so it is current whichever
+   * view is on screen, the ones that draw no pills included.
    */
   @state() private _forecast: ForecastPayload | null = null;
+  private readonly _forecastLoader = new ForecastLoader();
   /**
    * The one slot selection every surface shares: the charts highlight each selected
    * slot, and the schedule-actions strip both renders it and bulk-edits it.
@@ -688,7 +326,7 @@ export class HelmanSolarInspector extends LitElement {
   /**
    * Which width the toggle is on: the day view, or one of the two aggregate
    * ones. Its own state rather than a wider `_slotMinutes`, for the reason
-   * :data:`VIEW_STOP_GROUPS` gives.
+   * `VIEW_STOP_GROUPS` in `inspector-navigation.ts` gives.
    */
   @state() private _viewMode: InspectorViewMode = "day";
   /**
@@ -741,126 +379,72 @@ export class HelmanSolarInspector extends LitElement {
   @state() private _hiddenSeries: ReadonlySet<SeriesKey> = new Set(DEFAULT_HIDDEN_SERIES);
   @state() private _hoveredMinutes: number | null = null;
   /**
-   * Content for the floating popup that follows the cursor over a chart. `null`
-   * hides it; set only once the pointer sits over a bar/band's own rendered
-   * area, not just its slot's x-range, so a hover over empty space above a
-   * short column shows nothing.
+   * The floating popup that follows the cursor over a chart or strip, and the
+   * frame the hovered minute lands in with it. Shown only once the pointer sits
+   * over a bar/band's own rendered area, not just its slot's x-range, so a hover
+   * over empty space above a short column shows nothing.
    */
-  @state() private _tooltip: TooltipContent | null = null;
+  private readonly _tooltip = new HoverTooltipController(this);
   /**
-   * The selected day's price columns, echoed up from the price strip -- the only
-   * place that lays the rails out on the timeline -- so the selected-slot panel
-   * can show both prices for the slot even while the strip itself is collapsed
-   * or off-screen.
+   * The card's one subscription to the shared schedule owner: the execution
+   * switch in the scheduled-actions header reads the snapshot, the day pills
+   * the schedule normalized on the owner's clock, and a new schedule is what
+   * re-reads the forecast. The band strip draws its day off the editor host.
+   *
+   * Not reactive: only the execution switch renders it, so an owner refresh
+   * asks for an update only when what that switch shows moved -- see
+   * `_applyScheduleSnapshot`.
    */
-  @state() private _importPriceColumns: PriceColumn[] = [];
-  @state() private _exportPriceColumns: PriceColumn[] = [];
-  @state() private _priceUnit = "";
-  /**
-   * The shared schedule owner's state, for the execution switch in the
-   * scheduled-actions header. The band strip below subscribes on its own; this
-   * one has to be here because the switch stays visible while the strip is
-   * collapsed.
-   */
-  @state() private _scheduleSnapshot: ScheduleOwnerSnapshot = EMPTY_SCHEDULE_SNAPSHOT;
+  private _scheduleSnapshot: ScheduleOwnerSnapshot = EMPTY_SCHEDULE_SNAPSHOT;
+  @state() private _normalizedSchedule: NormalizedScheduleModel = EMPTY_NORMALIZED_SCHEDULE;
+  /** The zone and locale `_normalizedSchedule` was built in: a change of either rebuilds it. */
+  private _normalizedFor = "";
+  /** Bumped per forecast load: only the latest one may write `_forecast`. */
+  private _forecastRequest = 0;
+  /** The day view the open popup describes: a new one hides it. */
+  private _tooltipView: DayView | null = null;
 
   /** Whether the opening slot width has been seeded from config or page width. */
   private _slotMinutesInitialized = false;
   private _fallbackLocalize: LocalizeFunction = (key: string) => key;
   /**
-   * The day view's derived model, and the inputs each half of it was derived
-   * from.
+   * The day view's derived model.
    *
    * Everything below the payload -- the re-bucketed view, the coverage marks,
    * the two stacks, the axis, the SoC columns, the strips' geometry and the
    * selection the strips band -- used to be built inside `render()`, so a
    * pointer report over the chart rebuilt the whole day at the rate a mouse
-   * moves. It is built in `willUpdate` instead, behind keys naming exactly the
-   * inputs each step reads: a resize does not re-bucket the day, a legend
-   * toggle does not re-derive an axis it cannot move, and a hover rebuilds
-   * nothing at all.
+   * moves. It is built in `willUpdate` instead, each step a pure function of
+   * `inspector-day-model.ts` remembered on exactly the arguments it reads: a
+   * resize does not re-bucket the day, a legend toggle does not re-derive an
+   * axis it cannot move, and a hover rebuilds nothing at all.
    *
-   * Keys are compared field by field, and every field in one is itself
-   * identity-stable -- see `../README.md`, "Card rendering discipline".
+   * Every argument is itself identity-stable -- see `../README.md`, "Card
+   * rendering discipline".
    */
-  private _view: InspectorPayload | null = null;
-  private _viewFor: { payload: InspectorPayload; slot: number } | null = null;
-  private _coverageFor:
-    | {
-        payload: InspectorPayload;
-        slot: number;
-        hidden: ReadonlySet<SeriesKey>;
-        enabled: readonly SeriesKey[] | undefined;
-      }
-    | null = null;
+  private _view: DayView | null = null;
   private _stacks: ChartStacks | null = null;
-  private _stacksFor:
-    | {
-        view: InspectorPayload;
-        hidden: ReadonlySet<SeriesKey>;
-        enabled: readonly SeriesKey[] | undefined;
-        houseFocus: boolean;
-      }
-    | null = null;
-  /**
-   * The first slot the forecast has to speak for alone, off the current stacks.
-   * The SoC columns and the popup's actual/forecast split read it, so it is
-   * derived with the stacks rather than by whichever render got there first.
-   */
-  private _forecastFillFromMinutes = Number.NEGATIVE_INFINITY;
   private _layout: ChartLayout | null = null;
-  private _layoutFor:
-    | {
-        view: InspectorPayload;
-        stacks: ChartStacks;
-        width: number;
-        slot: number;
-        daylightOnly: boolean;
-        threshold: number;
-        hidden: ReadonlySet<SeriesKey>;
-        enabled: readonly SeriesKey[] | undefined;
-      }
-    | null = null;
   /** The x scale the three strips share, one object per layout. */
   private _stripGeometry: ScheduleStripGeometry | null = null;
   private _socBarsModel: readonly SocBar[] = EMPTY_SOC_BARS;
-  private _socBarsFor:
-    | {
-        view: InspectorPayload;
-        hidden: ReadonlySet<SeriesKey>;
-        enabled: readonly SeriesKey[] | undefined;
-        fillFrom: number;
-      }
-    | null = null;
   private _selectedMinutesModel: readonly number[] = EMPTY_SELECTED_MINUTES;
-  private _selectedMinutesFor:
-    | { view: InspectorPayload; selection: SlotSelectionState }
-    | null = null;
-  /** The combined chart's popup, one build per hovered slot. */
-  private _chartTooltip: { rows: TooltipRow[]; title: string } | null = null;
-  private _chartTooltipFor:
-    | { payload: InspectorPayload; slot: string; enabled: readonly SeriesKey[] | undefined }
-    | null = null;
+  private readonly _viewOf = memoOne(buildDayView);
+  private readonly _coverageOf = memoOne(dayCoverage);
+  private readonly _stacksOf = memoOne(buildStacks);
+  private readonly _layoutOf = memoOne(chartLayout);
+  private readonly _stripGeometryOf = memoOne(stripGeometry);
+  private readonly _socBarsOf = memoOne(socBars);
+  private readonly _selectedMinutesOf = memoOne(selectedMinutes);
   /**
-   * The wider-bucket starts the current view drew over a hole in one of its
-   * Wh series, each mapped to how many native slots each short series is
-   * missing there — the breakdown, not just a count, because the mark has to
-   * name what is missing and not only how much of it — set
-   * once per `_computeCoverage` call, alongside `_partialSeries`, so the
-   * chart's scrim and the selected-slot panel's caveat read off one
-   * computation rather than two that could drift apart.
+   * The day's coverage, as `dayCoverage` last returned it: the wider-bucket
+   * starts the current view drew over a hole, per short series, with the
+   * native width those counts were taken at, and the totals series short
+   * anywhere in the day. The chart's scrim, the selected-slot panel's caveat
+   * and the totals' marks read off this one computation rather than several
+   * that could drift apart.
    */
-  private _partialBuckets = new Map<number, Map<SeriesKey, number>>();
-  /** The native sample width `_partialBuckets`' counts were computed at. */
-  private _partialBucketGranularityMinutes = SLOT_MINUTES;
-  /**
-   * The totals series with at least one interior hole anywhere in the day,
-   * each with how many readings it is short of the span it covers --
-   * independent of the chart's current slot width, since a day total is one
-   * number for the whole day and cannot be more or less complete depending on
-   * how the chart above happens to be drawn.
-   */
-  private _partialSeries = new Map<SeriesKey, { missing: number; expected: number }>();
+  private _coverage: DayCoverage = EMPTY_DAY_COVERAGE;
   private readonly _dayRequest = new LatestRequest<string>();
   private _loadedConnection: unknown = null;
   private _stopNowClock?: () => void;
@@ -872,48 +456,12 @@ export class HelmanSolarInspector extends LitElement {
    * for nobody. Returning to the day view is what spends the request.
    */
   private _dayStale = false;
-  /**
-   * Where the popup sits, kept out of reactive state on purpose.
-   *
-   * The coordinates change with every pixel the mouse travels while the
-   * content they carry changes only at a slot boundary, so putting them in
-   * `_tooltip` made a re-render of the whole card the price of moving a popup
-   * 3 px. They are written straight onto the popup's own element instead
-   * (`_positionTooltip`), and the template reads this field so the first frame
-   * of a popup still lands under the cursor.
-   */
-  private _tooltipPoint: { x: number; y: number } | null = null;
-  /**
-   * Pointer reports, coalesced to one frame.
-   *
-   * A mouse reports more often than the screen repaints, and each report used
-   * to be its own Lit update. The hovered minute and the popup's contents are
-   * staged here and applied once per frame; the popup's position is applied
-   * within that same frame, so it still follows the cursor smoothly.
-   */
-  private _pendingPointer: { minutes?: number | null; tooltip?: TooltipContent | null } | null = null;
-  private _pointerFrame = 0;
-  /**
-   * Scrolling invalidates the popup, because the popup is `position: fixed`.
-   *
-   * It is placed at the pointer's viewport coordinates, so once the page moves
-   * under it the slot it describes is no longer where it points. A mouse fixes
-   * that by itself -- the next move re-places it -- but a touch leaves the
-   * popup pinned to a stale spot with nothing to correct it, which is exactly
-   * how it is read on a phone: tap a slot, then scroll to see the rest.
-   */
-  private _dismissTooltipOnScroll = () => {
-    // Only the popup goes: the hover highlight is drawn inside the chart, so it
-    // scrolls with the slot it marks and stays true.
-    if (this._pendingPointer !== null) delete this._pendingPointer.tooltip;
-    if (this._tooltip) this._applyTooltip(null);
-  };
   private _chartResizeObserver: ResizeObserver | null = null;
   private _observedChartWrap: HTMLElement | null = null;
   private _scheduleOwner?: SharedScheduleOwner;
   private _unsubscribeScheduleOwner?: () => void;
 
-  static styles = [helmanColorVars, schedulingSharedStyles, hoverTooltipStyles, css`
+  static styles = [helmanColorVars, schedulingSharedStyles, hoverTooltipStyles, chartFrameStyles, panelStyles, css`
     :host {
       display: block;
       width: 100%;
@@ -1093,11 +641,6 @@ export class HelmanSolarInspector extends LitElement {
       cursor: not-allowed;
     }
 
-    .day-state {
-      color: var(--secondary-text-color);
-      font-size: 0.9rem;
-    }
-
     .note {
       padding: 12px;
       border-radius: 6px;
@@ -1107,154 +650,11 @@ export class HelmanSolarInspector extends LitElement {
       line-height: 1.35;
     }
 
-    .interpolation-note {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      margin-left: 8px;
-      padding: 1px 6px;
-      border: 1px dashed var(--primary-text-color);
-      border-radius: 999px;
-      font-size: 0.75rem;
-      color: var(--secondary-text-color);
-      background: var(--secondary-background-color);
-    }
-
-    .contribution-row.synthetic {
-      cursor: default;
-      font-style: italic;
-      color: var(--secondary-text-color);
-    }
-
-    .contribution-row.synthetic:hover td,
-    .contribution-row.synthetic:focus-within td {
-      background: transparent;
-    }
-
-    .contribution-row.muted td {
-      color: color-mix(in srgb, var(--secondary-text-color) 70%, transparent);
-    }
-
-    .contribution-row.selected.muted td {
-      color: color-mix(in srgb, var(--secondary-text-color) 90%, var(--primary-text-color));
-    }
-
-    .contribution-table td.ratio {
-      padding: 4px 6px;
-      width: 1%;
-      min-width: 140px;
-    }
-
-    .contribution-row.muted td.ratio {
-      padding: 8px 10px;
-      text-align: right;
-    }
-
-    .ratio-gauge {
-      box-sizing: border-box;
-      position: relative;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      overflow: hidden;
-      width: 100%;
-      min-height: 18px;
-      padding: 1px 6px;
-      border-radius: 4px;
-      font-size: 0.78rem;
-      font-weight: 600;
-      line-height: 1.2;
-      white-space: nowrap;
-      background: linear-gradient(
-        90deg,
-        color-mix(in srgb, var(--helman-discharge) 8%, transparent),
-        color-mix(in srgb, var(--card-background-color) 90%, transparent),
-        color-mix(in srgb, var(--helman-charge) 8%, transparent)
-      );
-      box-shadow: inset 0 0 0 1px var(--divider-color);
-      font-variant-numeric: tabular-nums;
-    }
-
-    .ratio-gauge-center {
-      position: absolute;
-      top: 3px;
-      bottom: 3px;
-      left: 50%;
-      width: 1px;
-      z-index: 1;
-      background: color-mix(in srgb, var(--primary-text-color) 26%, transparent);
-      transform: translateX(-50%);
-    }
-
-    .ratio-gauge-fill {
-      position: absolute;
-      top: 0;
-      bottom: 0;
-      z-index: 0;
-      pointer-events: none;
-    }
-
-    .ratio-gauge-fill.positive {
-      left: 50%;
-      background: linear-gradient(
-        90deg,
-        color-mix(in srgb, var(--helman-charge) 60%, transparent),
-        color-mix(in srgb, var(--helman-charge) 25%, transparent)
-      );
-      border-radius: 0 4px 4px 0;
-    }
-
-    .ratio-gauge-fill.negative {
-      right: 50%;
-      background: linear-gradient(
-        270deg,
-        color-mix(in srgb, var(--helman-discharge) 60%, transparent),
-        color-mix(in srgb, var(--helman-discharge) 25%, transparent)
-      );
-      border-radius: 4px 0 0 4px;
-    }
-
-    .ratio-gauge-text {
-      position: relative;
-      z-index: 2;
-      color: var(--primary-text-color);
-    }
-
-    .contribution-row.muted .ratio-gauge-text {
-      color: color-mix(in srgb, var(--secondary-text-color) 70%, transparent);
-    }
-
-    .chart-wrap {
-      /* An outline rather than a border: a border would inset the svg by a
-         pixel and narrow it by two, so every hour on this chart would sit a
-         fraction off the same hour on the strips and the band below, which
-         share the card's full width. */
-      outline: 1px solid var(--divider-color);
-      outline-offset: -1px;
-      border-radius: 6px;
-      overflow-x: auto;
-      overflow-y: hidden;
-      background: var(--card-background-color);
-    }
-
-    .chart-wrap svg {
-      display: block;
-      width: 100%;
-      max-width: none;
-      height: 260px;
-    }
-
-    .main-chart-wrap {
-      position: relative;
-      outline: none;
-      border-radius: 0;
-    }
-
     /* Holds the card's height across a navigation: the shell keeps rendering
        whatever content it had -- dimmed and inert -- instead of collapsing to
        the loading note, and only supplies its own height (INSPECTOR_CONTENT_
-       MIN_HEIGHT, sized off the svg height above) on a cold mount that has
-       nothing stale to hold open. */
+       MIN_HEIGHT, sized off the day chart's svg height) on a cold mount that
+       has nothing stale to hold open. */
     .content-shell {
       position: relative;
     }
@@ -1353,33 +753,6 @@ export class HelmanSolarInspector extends LitElement {
       width: 100%;
     }
 
-    .compact-strip-section {
-      position: relative;
-      width: 100%;
-    }
-
-    .chart-separator {
-      border-top: 1px solid color-mix(
-        in srgb,
-        var(--divider-color, #8a8a8a) 55%,
-        var(--primary-text-color, #000) 45%
-      );
-    }
-
-    .compact-strip-label {
-      position: absolute;
-      inset: 0 auto 0 0;
-      width: 22px;
-      align-self: stretch;
-      color: var(--secondary-text-color);
-      font-size: 0.85em;
-      line-height: 1;
-      pointer-events: none;
-      text-align: center;
-      writing-mode: vertical-rl;
-      transform: rotate(180deg);
-    }
-
     .strip-header-row {
       display: flex;
       flex-wrap: wrap;
@@ -1416,217 +789,6 @@ export class HelmanSolarInspector extends LitElement {
       white-space: nowrap;
       cursor: pointer;
     }
-
-    .soc-strip-wrap {
-      margin-top: 0;
-      width: 100%;
-    }
-
-    .soc-strip-wrap svg {
-      display: block;
-      width: 100%;
-      height: 65px;
-    }
-
-    .impact-strip-wrap {
-      margin-top: 4px;
-      width: 100%;
-    }
-
-    .impact-strip-wrap svg {
-      display: block;
-      width: 100%;
-      height: 24px;
-    }
-
-    .metrics-section {
-      display: grid;
-      gap: 6px;
-    }
-
-    .metric-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
-      gap: 6px;
-      min-width: 0;
-    }
-
-    .metric-card {
-      border: 1px solid var(--divider-color);
-      border-radius: 6px;
-      padding: 6px 7px;
-      min-width: 0;
-    }
-
-    .metric-card.legend-toggle {
-      font: inherit;
-      text-align: left;
-      cursor: pointer;
-      display: block;
-      width: 100%;
-    }
-
-    .metric-card.legend-toggle:focus-visible {
-      outline: 2px solid var(--primary-color, #2563eb);
-      outline-offset: 1px;
-    }
-
-    .metric-card.hidden-series {
-      background: none !important;
-      opacity: 0.5;
-    }
-
-    .metric-card.hidden-series .metric-label {
-      text-decoration: line-through;
-    }
-
-    .metric-card.hidden-series {
-      border-left-color: var(--divider-color) !important;
-    }
-
-    .metric-card.hidden-series .metric-chip {
-      background: none !important;
-    }
-
-    .metric-chips {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 4px;
-    }
-
-    .metric-chip {
-      display: inline-block;
-      padding: 1px 6px;
-      border-radius: 4px;
-    }
-
-    .metric-label {
-      color: var(--secondary-text-color);
-      font-size: 0.72rem;
-      line-height: 1.15;
-      min-height: 1.7em;
-    }
-
-    .metric-value {
-      color: var(--primary-text-color);
-      font-weight: 700;
-      font-size: 0.92rem;
-      line-height: 1.2;
-      overflow-wrap: anywhere;
-    }
-
-    /* The day-total counterpart of the chart's partial-bucket scrim: a sum
-       whose series has an interior hole is real but short, so it keeps its
-       own colour rather than being greyed out like a genuinely missing value
-       -- only the mark says it should be read as a lower bound. */
-    .incomplete-mark {
-      color: var(--secondary-text-color);
-      font-weight: 700;
-      margin-left: 1px;
-    }
-
-    .contribution-summary {
-      display: grid;
-      gap: 2px;
-    }
-
-    .contribution-toggle {
-      background: none;
-      border: none;
-      cursor: pointer;
-      color: var(--primary-text-color);
-      display: flex;
-      align-items: center;
-      gap: 5px;
-      padding: 0;
-      font: inherit;
-      font-weight: bold;
-      text-align: left;
-    }
-
-    .contribution-toggle-icon {
-      display: inline-block;
-      font-style: normal;
-      transition: transform 0.2s;
-      font-size: 0.7em;
-      opacity: 0.7;
-    }
-
-    .contribution-toggle-icon.expanded {
-      transform: rotate(90deg);
-    }
-
-    .impact-strip-switch {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      margin-top: 4px;
-      cursor: pointer;
-      color: var(--secondary-text-color);
-      font-size: 0.85em;
-    }
-
-    .impact-strip-switch input {
-      margin: 0;
-      cursor: pointer;
-    }
-
-    .contribution-table-wrap {
-      overflow-x: auto;
-    }
-
-    .contribution-table {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 0.86rem;
-    }
-
-    .contribution-table th,
-    .contribution-table td {
-      padding: 8px 10px;
-      border-bottom: 1px solid var(--divider-color);
-      text-align: left;
-      white-space: nowrap;
-    }
-
-    .contribution-table th.numeric,
-    .contribution-table td.numeric {
-      text-align: right;
-    }
-
-    .contribution-row {
-      cursor: pointer;
-    }
-
-    .contribution-row:hover td,
-    .contribution-row:focus-within td {
-      background: var(--secondary-background-color);
-    }
-
-    .contribution-row.selected td {
-      background: rgba(21, 101, 192, 0.12);
-    }
-
-    .house-breakdown {
-      display: grid;
-      gap: 6px;
-      padding: 8px 10px;
-      border: 1px solid var(--divider-color);
-      border-left: 3px solid var(--helman-house);
-      border-radius: 6px;
-      background: color-mix(in srgb, var(--helman-house) 8%, transparent);
-      /* Every box here is a breakdown of the house, so it carries the house
-         tint — the same declaration the power card's house section makes. The
-         boxes set no --device-tint of their own, so helman-tree-item's fallback
-         inherits this one across the shadow boundary. */
-      --device-tint: ${unsafeCSS(nodeAccentColor("house"))};
-    }
-
-    .house-breakdown-title {
-      color: var(--secondary-text-color);
-      font-size: 0.78rem;
-      font-weight: 600;
-    }
   `];
 
   constructor() {
@@ -1646,23 +808,15 @@ export class HelmanSolarInspector extends LitElement {
     // hidden, which is `now-clock`'s half of the arrangement. `_tickNow` owns
     // the other half: which ticks are worth a render.
     this._stopNowClock = startNowClock(this._tickNow);
-    // Capture, because the scroller is an ancestor of this card (HA's view), not
-    // the window: a bubbling listener would never hear it.
-    window.addEventListener("scroll", this._dismissTooltipOnScroll, { capture: true, passive: true });
-    window.addEventListener("resize", this._dismissTooltipOnScroll, { passive: true });
+    // HA reinserts a card on a view switch with no fresh `hass` to resubscribe
+    // on, and the pills and the banner read the schedule behind this one.
+    if (this.hass) this._syncScheduleOwner();
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
     this._stopNowClock?.();
     this._stopNowClock = undefined;
-    window.removeEventListener("scroll", this._dismissTooltipOnScroll, { capture: true });
-    window.removeEventListener("resize", this._dismissTooltipOnScroll);
-    if (this._pointerFrame !== 0) {
-      cancelAnimationFrame(this._pointerFrame);
-      this._pointerFrame = 0;
-      this._pendingPointer = null;
-    }
     this._disconnectChartResizeObserver();
     this._unsubscribeScheduleOwner?.();
     this._unsubscribeScheduleOwner = undefined;
@@ -1714,7 +868,19 @@ export class HelmanSolarInspector extends LitElement {
     }
     this._calendarWasOpen = open;
     this._calendarSelection = this._selectedDate;
-    const pillWindow = this._pillWindow(this._todayKey);
+    const pillWindow = navigationPillWindow({
+      today: this._todayKey,
+      selectedDate: this._selectedDate,
+      mode: this._viewMode,
+      expanded: this._navExpanded,
+      calendarAnchor: this._calendarAnchor,
+      focusBucket: this._navExpanded && this._viewMode !== "day" ? this._focusBucket() : null,
+      dayRange: this._dayRange,
+      firstWeekday: this._navExpanded && this._viewMode === "day"
+        ? resolveFirstWeekdayIndex(this.hass?.locale)
+        : 0,
+      houseFocus: this.houseFocus,
+    });
     this._pillWindowStart = pillWindow.start;
     this._pillWindowEnd = pillWindow.end;
     // Only for a row that is going to be drawn. At M there is none, and the
@@ -1725,6 +891,13 @@ export class HelmanSolarInspector extends LitElement {
       void this._loadDayAggregates(pillWindow.start, pillWindow.end);
     }
     this._rebuildDayModelIfNeeded();
+    if (this._view !== this._tooltipView) {
+      this._tooltipView = this._view;
+      if (this._tooltip.content !== null) this._tooltip.hide();
+    }
+    if (this._scheduleOwner && this._normalizedFor !== this._normalizationKey()) {
+      this._renormalizeSchedule();
+    }
   }
 
   /**
@@ -1818,26 +991,10 @@ export class HelmanSolarInspector extends LitElement {
       }
 
     }
-    // A hidden schedule strip holds no schedule subscription. Keyed on the flag
-    // as well as on `hass`, because the flag can flip on its own -- the card
-    // wrapper filters most `hass` updates away -- and a strip that came back
-    // without a re-sync would render with an empty snapshot for good.
-    // The slot detail's price tiles are gated on the columns the strip reports,
-    // so a strip hidden after it had already reported would leave them drawn
-    // from a cache nothing refills. Clearing is the gate: one fact, one place.
-    if (changed.has("hidePriceStrip") && this.hidePriceStrip) {
-      this._importPriceColumns = [];
-      this._exportPriceColumns = [];
-    }
-    if (changed.has("hass") || changed.has("hideScheduleStrip")) {
-      if (this.hideScheduleStrip) {
-        this._unsubscribeScheduleOwner?.();
-        this._unsubscribeScheduleOwner = undefined;
-        this._scheduleOwner = undefined;
-        this._scheduleSnapshot = EMPTY_SCHEDULE_SNAPSHOT;
-      } else {
-        this._syncScheduleOwner();
-      }
+    // Held whatever the strip flags say: the day pills and the forecast behind
+    // the health banner read the schedule too, and they are on every card.
+    if (changed.has("hass")) {
+      this._syncScheduleOwner();
     }
     this._syncChartResizeObserver();
   }
@@ -1918,9 +1075,9 @@ export class HelmanSolarInspector extends LitElement {
             `
           : ""}
         ${this._renderNavigation()}
-        <!-- One per card. The pills and the schedule band each read the
-             forecast, but the warning is about the card's data as a whole, so
-             it is drawn here rather than inside either strip. The house
+        <!-- One per card, over the forecast this card reads for the pills:
+             the warning is about the card's data as a whole, so it is drawn
+             here and in every view rather than inside the pill row. The house
              embed judges the house forecast alone, so it keeps that half. -->
         <helman-forecast-health-banner
           .items=${buildForecastHealthItems(this._forecast, this._localize).filter((item) =>
@@ -2020,12 +1177,13 @@ export class HelmanSolarInspector extends LitElement {
             .selectedBuckets=${this._shapedKeys("day")}
             .selectsSlot=${this._correlatedRow() === "day"}
             .historyDays=${this._historyDays}
+            .normalizedSchedule=${this._normalizedSchedule}
+            .forecast=${this._forecast}
             .houseFocus=${this.houseFocus}
             .timeZone=${this._haTimeZone() ?? "UTC"}
             @day-pill-select=${this._handleDayPillSelect}
             @day-pill-open=${this._handleDayPillOpen}
             @day-pill-hover=${this._handleDayPillHover}
-            @forecast-health=${this._handleForecastHealth}
           ></helman-solar-day-pills>`}
         </div>
         <div class="nav-actions">
@@ -2047,7 +1205,7 @@ export class HelmanSolarInspector extends LitElement {
             @click=${() => { this._navExpanded = !this._navExpanded; }}
           ><ha-icon icon="mdi:calendar-month"></ha-icon></button>`}
           <div class="slot-size-toggle" role="group" title=${this._t("bias_correction.inspector.slot_size")}>
-            ${this._viewStopGroups().map((group) => html`
+            ${viewStopGroups(this.hideAggregateViews).map((group) => html`
               <div class="stop-group">${group.map((stop) => {
                 const active = stop.minutes === undefined
                   ? this._viewMode === stop.mode
@@ -2090,7 +1248,7 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   private _renderContent(payload: InspectorPayload | null) {
-    // The one branch, and it is the first thing here for a reason: `_viewForSlot`
+    // The one branch, and it is the first thing here for a reason: `buildDayView`
     // below takes an `InspectorPayload`, and the span payload is not one. Every
     // day-shaped strip -- price, schedule actions, SoC, impact, the house
     // breakdown, the now marker -- lives past this line and never runs for an
@@ -2099,19 +1257,21 @@ export class HelmanSolarInspector extends LitElement {
     if (this._viewMode !== "day") {
       return this._renderAggregateContent();
     }
-    if (!payload) {
-      return "";
-    }
     // Everything below renders from the slot-collapsed view; only the daily
     // totals it carries through are slot-width independent. All three were
-    // derived in `willUpdate`; nothing is built or assigned here.
-    const view = this._view ?? payload;
+    // derived in `willUpdate` from this same payload; nothing is built or
+    // assigned here.
+    const view = this._view;
+    if (!payload || !view) {
+      return "";
+    }
     const stacks = this._stacks;
     const layout = this._layout;
     const hasAnySeries = stacks !== null && layout !== null;
+    const panel = this._panelContext();
 
     return html`
-      ${this._payloadGranularity(payload) > 15
+      ${payloadGranularity(payload) > 15
         ? html`<div class="note">${this._t("bias_correction.inspector.hourly_only")}</div>`
         : ""}
       ${!view.availability.hasProfile && !this.houseFocus
@@ -2123,41 +1283,65 @@ export class HelmanSolarInspector extends LitElement {
                  three -- the order the day editor stacks the same four things
                  in, so moving between the two is not a re-read. -->
             ${this._renderTooltip()}
-            <div class="chart-wrap main-chart-wrap">
-              <span class="compact-strip-label">${this._t("bias_correction.inspector.energy_strip_compact")}</span>
-              ${this._renderChart(view, stacks, layout)}
-            </div>
-            ${this._impactStripVisible
-              ? html`<div class="impact-strip-wrap">${this._renderImpactStrip(view, layout)}</div>`
-              : ""}
-            ${this._socBarsModel.length
-              ? this._renderSocSection(view, layout)
-              : ""}
-            ${this.hidePriceStrip ? "" : this._renderPriceStrip(view, layout)}
+            <helman-solar-day-chart
+              .hass=${this.hass}
+              .view=${view}
+              .stacks=${stacks}
+              .layout=${layout}
+              .socBars=${this._socBarsModel}
+              .slotMinutes=${this._slotMinutes}
+              .hiddenSeries=${this._hiddenSeries}
+              .chartSeries=${this.chartSeries}
+              .selection=${this._slotSelection}
+              .hoverMinutes=${this._hoveredMinutes}
+              .coverage=${this._coverage}
+              .dimIncompleteSlots=${this.dimIncompleteSlots}
+              .impactVisible=${this._impactStripVisible}
+              .houseFocus=${this.houseFocus}
+              .date=${this._selectedDate}
+              .timeZone=${this._haTimeZone() ?? "UTC"}
+              .nowMs=${this._nowMs}
+              @slot-pick=${(event: CustomEvent<SlotPickDetail>) => this._handleStripSlotPick(event)}
+              @slot-hover=${this._handleStripHover}
+              @slot-tooltip=${this._handleChartTooltip}
+            ></helman-solar-day-chart>
+            ${this.hidePriceStrip ? "" : this._renderPriceStrip(view)}
             ${this.hideMoneyStrip ? "" : this._renderMoneyStrip(view)}
             ${this.hideScheduleStrip ? "" : this._renderScheduleActionsStrip(view, layout)}
-            ${this._renderSelectedSlotDetails(view)}
-            ${this._renderTotals(view)}
+            ${renderSelectedSlotDetails(panel, view, {
+              slots: this._selectedSlotsIn(view),
+              focusSlot: this._selectedSlot,
+              slotMinutes: this._slotMinutes,
+              coverage: this._coverage,
+              native: payload.series,
+              houseFocus: this.houseFocus,
+              hidePriceStrip: this.hidePriceStrip,
+              hideMoneyStrip: this.hideMoneyStrip,
+              groups: this._breakdownGroups,
+              contribution: {
+                collapsed: this._trainingTableCollapsed,
+                impactStripVisible: this._impactStripVisible,
+                selectedDate: this._selectedDate,
+                selectedTrainingDate: this._selectedTrainingDate,
+                toggleCollapsed: () => { this._trainingTableCollapsed = !this._trainingTableCollapsed; },
+                toggleImpactStrip: () => { this._impactStripVisible = !this._impactStripVisible; },
+                selectTrainingDate: (date) => this._selectTrainingDate(date),
+              },
+            })}
+            ${renderTotals(panel, view, {
+              coverage: this._coverage,
+              past: view.date < this._todayIso(),
+              houseFocus: this.houseFocus,
+              hideMoneyStrip: this.hideMoneyStrip,
+            })}
           `
         : html`<div class="note">${this._t("bias_correction.inspector.no_data", { date: this._formatDay(view.date) })}</div>`}
     `;
   }
 
-  /**
-   * The narrowest width a payload's data can honestly be drawn at.
-   *
-   * 15 for anything a backend does not say otherwise about, including one that
-   * predates the field: every day was fifteen minutes before the statistics
-   * source existed, and reading an absent field as "coarse" would lock a whole
-   * card to hourly against an older Helman.
-   */
-  private _payloadGranularity(payload: InspectorPayload | null): number {
-    return payload?.dataGranularityMinutes ?? 15;
-  }
-
   /** The floor the width toggle may not go below on the day currently loaded. */
   private _slotMinutesFloor(): number {
-    return this._viewMode === "day" ? this._payloadGranularity(this._payload) : 15;
+    return this._viewMode === "day" ? payloadGranularity(this._payload) : 15;
   }
 
   /** The configured opening slot width, or null when the card leaves it to auto. */
@@ -2180,13 +1364,6 @@ export class HelmanSolarInspector extends LitElement {
       this._slotSelection,
       (slot) => snapSlotToGrid(slot, minutes),
     ));
-  }
-
-  /** The toggle's stop groups, without the aggregate ones where the config hides them. */
-  private _viewStopGroups(): readonly (readonly ViewStop[])[] {
-    return this.hideAggregateViews
-      ? VIEW_STOP_GROUPS.filter((group) => group.every((stop) => stop.mode === "day"))
-      : VIEW_STOP_GROUPS;
   }
 
   /**
@@ -2253,10 +1430,10 @@ export class HelmanSolarInspector extends LitElement {
         : null;
       return day !== null
         ? { date: day, bucket: day }
-        : { date: this._monthBounds(anchor).start, bucket: null };
+        : { date: monthBounds(anchor, today).start, bucket: null };
     }
     // Into M, whose columns are months: the month around whatever was picked.
-    return { date: anchor, bucket: this._monthBounds(anchor).start };
+    return { date: anchor, bucket: monthBounds(anchor, today).start };
   }
 
   /**
@@ -2281,7 +1458,7 @@ export class HelmanSolarInspector extends LitElement {
     const selected = this._selectedDate || today;
     let day = column ?? selected;
     if (column === null && month !== null) {
-      const bounds = this._monthBounds(month);
+      const bounds = monthBounds(month, today);
       day = selected >= bounds.start && selected <= bounds.end ? selected : bounds.start;
     }
     const floor = this._dayRange?.minDate ?? "";
@@ -2309,47 +1486,6 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   /**
-   * The first and last day of the calendar month a day falls in.
-   *
-   * View-independent on purpose, unlike `_spanStart`/`_spanEnd` below: the
-   * expanded pill row is a month of days whichever view is on screen, and
-   * asking those for a month while the year view is up would answer with a
-   * year. Both callers go through here so a month has one definition.
-   */
-  private _monthBounds(dayKey: string): { start: string; end: string } {
-    const { year, month } = this._parseIsoDate(dayKey);
-    // Day zero of the next month is the last of this one, leap years included.
-    const last = new Date(Date.UTC(year, month, 0));
-    return {
-      start: formatIsoDate(year, month, 1),
-      end: formatIsoDate(year, month, last.getUTCDate()),
-    };
-  }
-
-  /**
-   * The first day of the span the given day falls in.
-   *
-   * A day in the day view, the containing month in the month view, the
-   * containing year in the year view. The forward stop and the span request
-   * both key off this one definition, so they cannot disagree about where a
-   * span begins.
-   */
-  private _spanStart(dayKey: string): string {
-    const { year } = this._parseIsoDate(dayKey);
-    if (this._viewMode === "month") return this._monthBounds(dayKey).start;
-    if (this._viewMode === "year") return formatIsoDate(year, 1, 1);
-    return dayKey;
-  }
-
-  /** The last day of the span the given day falls in. */
-  private _spanEnd(dayKey: string): string {
-    const { year } = this._parseIsoDate(dayKey);
-    if (this._viewMode === "month") return this._monthBounds(dayKey).end;
-    if (this._viewMode === "year") return formatIsoDate(year, 12, 31);
-    return dayKey;
-  }
-
-  /**
    * Put a span on screen, whichever pill asked for it.
    *
    * The ways in must agree on what changing span means -- the date moves,
@@ -2366,11 +1502,12 @@ export class HelmanSolarInspector extends LitElement {
    * rather than the day the reader came from.
    */
   private _showSpan(spanKey: string, mode: InspectorViewMode = this._viewMode) {
+    const today = this._todayIso();
     // The mode is checked first and separately: picking a month from the year
     // view lands on a span the year view would call unchanged, and it is still
     // a move -- to a different view of it.
     if (mode === this._viewMode
-      && spanKey === this._spanStart(this._selectedDate || this._todayIso())) {
+      && spanKey === spanBounds(this._viewMode, this._selectedDate || today, today).start) {
       return;
     }
     this._viewMode = mode;
@@ -2468,8 +1605,7 @@ export class HelmanSolarInspector extends LitElement {
     if (!this.hass) return;
     if (!this._selectedDate) this._selectedDate = this._todayIso();
     const bucket = this._spanBucket();
-    const start = this._spanStart(this._selectedDate);
-    const end = this._spanEnd(this._selectedDate);
+    const { start, end } = spanBounds(this._viewMode, this._selectedDate, this._todayIso());
     const key = `${bucket}:${start}..${end}`;
     const request = this._spanRequest.begin(key);
     if (request === null) {
@@ -2541,6 +1677,9 @@ export class HelmanSolarInspector extends LitElement {
         ? ""
         : html`<div class="note">${this._t("bias_correction.inspector.no_span_data", { span: this._spanLabel() })}</div>`;
     }
+    const selected = this._selectedBucketRows(rows);
+    const currency = this._span?.currency ?? "";
+    const panel = this._panelContext();
     return html`
       ${this._renderTooltip()}
       <div class="chart-wrap">
@@ -2550,15 +1689,19 @@ export class HelmanSolarInspector extends LitElement {
           .bucket=${this._spanBucket()}
           .selectedKeys=${this._bucketSelection.selectedSlots}
           .hoveredKey=${this._hoveredBucketKey}
-          .currency=${this._span?.currency ?? ""}
+          .currency=${currency}
           .width=${this._chartWidth}
           @aggregate-bucket-select=${this._handleBucketSelect}
           @aggregate-bucket-open=${this._handleBucketOpen}
           @aggregate-bucket-hover=${this._handleBucketHover}
         ></helman-solar-aggregate-chart>
       </div>
-      ${this._renderSelectedBucket(rows)}
-      ${this._renderSpanTotals(rows)}
+      ${renderSelectedBucket(panel, this._breakdownGroups, selected, {
+        heading: this._formatBucketRange(selected.map((row) => row.date)),
+        currency,
+        bucket: this._spanBucket(),
+      })}
+      ${renderSpanTotals(panel, rows, currency)}
     `;
   }
 
@@ -2657,7 +1800,7 @@ export class HelmanSolarInspector extends LitElement {
    *
    * The chart reports which and with which modifiers; what that does to the
    * selection is decided here and only here, by the same two calls the day
-   * view's `_handleChartClick` makes -- `applySlotSelection` for a column,
+   * view's slot press makes -- `applySlotSelection` for a column,
    * an empty selection for a press that missed them all.
    */
   private _handleBucketSelect = (event: CustomEvent<AggregateBucketSelectDetail>) => {
@@ -2764,86 +1907,6 @@ export class HelmanSolarInspector extends LitElement {
     return (floor === "" || dayKey >= floor) && (horizon === "" || dayKey <= horizon);
   }
 
-  /**
-   * What the selected buckets came to, headed by the buckets themselves.
-   *
-   * The day view's panel over a coarser grid: every figure is summed across the
-   * selection, exactly as `_renderSelectedSlotDetails` sums its series, and the
-   * heading names the whole selection rather than one column. There is no
-   * control to open a bucket -- the width toggle carries the focus bucket into
-   * the finer view in both directions, so a second path to the same place would
-   * be a second thing to keep in step.
-   */
-  private _renderSelectedBucket(rows: readonly SpanAggregateRow[]) {
-    const selected = this._selectedBucketRows(rows);
-    if (selected.length === 0) return "";
-    return html`
-      <div class="metrics-section selection-section">
-        <strong>${this._formatBucketRange(selected.map((row) => row.date))}</strong>
-        <div class="metric-grid">${this._renderBucketMetrics(selected)}</div>
-      </div>
-      ${this._renderBucketHouseBreakdown(selected)}
-    `;
-  }
-
-  /**
-   * What the house was doing over the selected buckets.
-   *
-   * The same panel the day view opens for a slot selection, over the same boxes
-   * and the same base/shiftable groups -- a day column at D itemises the
-   * appliances that day's slots itemise at 60, and to the same total. Only the
-   * bars are coarser: one per selected bucket rather than one per native sample,
-   * because hourly statistics are the finest grain the span read has and a bar
-   * per hour of a day column would be a far heavier read for a shape the next
-   * stop of the toggle already draws.
-   *
-   * Actual only. The panel's forecast variant compares scheduled appliances
-   * against a house forecast, and a span payload is measured history end to end.
-   */
-  private _renderBucketHouseBreakdown(rows: readonly SpanAggregateRow[]) {
-    // The selection in draw order, which is the order the bars are read in.
-    const keys = rows.map((row) => row.date);
-    // Bucket-keyed breakdown points, in the shape the day view's own helpers
-    // parse: `slot` is an opaque key to all of them, so a bucket date does the
-    // job a "HH:MM" does there.
-    const series: HouseBreakdownPoint[] = [];
-    const mixes = new Map<string, BucketSourceMix>();
-    for (const row of rows) {
-      const breakdown = row.houseBreakdown;
-      if (!breakdown) continue;
-      series.push({
-        slot: row.date,
-        unmeasuredWh: breakdown.unmeasuredWh,
-        appliances: breakdown.appliances,
-      });
-      if (row.houseSourceMix) {
-        const sm = row.houseSourceMix;
-        const mix: BucketSourceMix = {};
-        if (sm.solar > 0) mix.solar = { power: sm.solar, color: nodeAccentColor("solar") };
-        if (sm.battery > 0) mix.battery = { power: sm.battery, color: nodeAccentColor("battery") };
-        if (sm.grid > 0) mix.grid = { power: sm.grid, color: nodeAccentColor("grid") };
-        if (sm.unattributed > 0) {
-          mix.unattributed = { power: sm.unattributed, color: nodeAccentColor("unattributed") };
-        }
-        if (Object.keys(mix).length > 0) mixes.set(row.date, mix);
-      }
-    }
-    const breakdown = aggregateBreakdownOverSlots(series, keys);
-    if (!breakdown) return "";
-    return this._renderBreakdownPanel({
-      breakdown,
-      barSlots: keys,
-      breakdownSeries: series,
-      mixes,
-      variant: "actual",
-      // A bar is a whole bucket wide. A month is not a fixed number of days, so
-      // this is the nominal width the power card labels its bars with rather
-      // than a claim about any particular month.
-      barSeconds: (this._spanBucket() === "month" ? 30 : 1) * MINUTES_PER_DAY * 60,
-      unmeasuredFor: null,
-    });
-  }
-
   /** The selected buckets, in the order the span draws them. */
   private _selectedBucketRows(rows: readonly SpanAggregateRow[]): SpanAggregateRow[] {
     const wanted = new Set(this._bucketSelection.selectedSlots);
@@ -2851,7 +1914,7 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   /**
-   * The selection in words: the bucket-key analogue of `_formatSelectionRange`.
+   * The selection in words: the bucket-key analogue of `formatSlotRange`.
    *
    * Adjacent buckets merge into one run, because a selection that reads
    * "3 Mar – 7 Mar" says what its sums are for where a list of five dates makes
@@ -2900,17 +1963,17 @@ export class HelmanSolarInspector extends LitElement {
     // popup needs the numbers.
     this._setHoveredBucket(key);
     if (key === null) {
-      this._reportPointer({ tooltip: null });
+      this._tooltip.hide();
       return;
     }
     const row = (this._span?.days ?? []).find((candidate) => candidate.date === key);
     if (!row) {
-      this._reportPointer({ tooltip: null });
+      this._tooltip.hide();
       return;
     }
     const kwhToWh = (value: number | null) => (value === null ? null : value * 1000);
     const cell = (wh: number | null, color: string): TooltipCell =>
-      wh === null ? null : { value: this._formatWh(wh), color };
+      wh === null ? null : { value: formatWh(this._localize, wh), color };
     const measured = (label: string, wh: number | null, color: string): TooltipRow => ({
       label,
       actual: null,
@@ -2927,8 +1990,8 @@ export class HelmanSolarInspector extends LitElement {
     // The popup says everything the three panels below it do, or hovering a
     // column would answer half the question and leave the reader to click for
     // the rest. The SoC range and the money are formatted rather than passed
-    // through `_formatWh`, so each carries its own unit.
-    const socRange = this._formatSocRange([row]);
+    // through `formatWh`, so each carries its own unit.
+    const socRange = formatSocRange([row]);
     if (socRange !== null) {
       rows.push({
         label: this._t("bias_correction.inspector.soc_range"),
@@ -2936,12 +1999,12 @@ export class HelmanSolarInspector extends LitElement {
         forecast: { value: socRange, color: CHART_COLORS.battery },
       });
     }
-    const money = this._spanMoney([row], [row.date]);
+    const money = spanMoney([row], [row.date]);
     if (money !== null) {
       const amount = (labelKey: string, value: number | null, color: string) => rows.push({
         label: this._t(`bias_correction.inspector.${labelKey}`),
         actual: null,
-        forecast: { value: this._formatSpanMoney(value), color },
+        forecast: { value: formatSpanMoney(value, this._span?.currency ?? ""), color },
       });
       amount("import_cost", money.cost, CHART_COLORS.gridImport);
       amount("export_gain", money.gain, CHART_COLORS.gridExport);
@@ -2949,151 +2012,8 @@ export class HelmanSolarInspector extends LitElement {
       // repeat -- and the net is the figure a reader is usually after.
       amount("net_cost", money.net, CHART_COLORS.grid);
     }
-    this._reportPointer({
-      tooltip: { x, y, title: this._formatBucket(key), hasActual: false, rows },
-    });
+    this._tooltip.showAt({ x, y }, { title: this._formatBucket(key), hasActual: false, rows }, event.currentTarget);
   };
-
-  /**
-   * The span's money as `MoneyPoint`s keyed by bucket.
-   *
-   * `sumMoney` matches a point's `slot` against a set of keys and never parses
-   * it, so a `YYYY-MM-DD` bucket key stands in for an `HH:MM` slot label with no
-   * change to the model -- which is why the aggregate views sum money through
-   * the same function the day view's selection does rather than growing a second
-   * one that could disagree with it.
-   *
-   * A bucket the backend could price neither side of is left out entirely, so
-   * "no priced bucket in the selection" stays distinguishable from "priced, and
-   * it came to nothing". A bucket priced on only one side carries its null
-   * through unchanged: `sumMoney` skips the unpriced direction and reports it
-   * as unknown, which is the same rule the day view's slots follow.
-   */
-  private _spanMoneyPoints(rows: readonly SpanAggregateRow[]): MoneyPoint[] {
-    const points: MoneyPoint[] = [];
-    for (const row of rows) {
-      const cost = Number.isFinite(row.moneyCost as number) ? (row.moneyCost as number) : null;
-      const gain = Number.isFinite(row.moneyGain as number) ? (row.moneyGain as number) : null;
-      if (cost === null && gain === null) continue;
-      points.push({ slot: row.date, cost, gain });
-    }
-    return points;
-  }
-
-  /**
-   * The three money figures over a set of buckets, each independently nullable.
-   *
-   * The backend reserves `null` for "this side could not be priced" and says so
-   * in as many words -- an export entity with no statistics earns `moneyGain:
-   * null`, because "earned nothing" is a claim the data does not support. A
-   * side is a figure here only if some bucket in the selection actually priced
-   * it; otherwise it stays null and renders as an em dash.
-   *
-   * The net follows both: subtracting an unknown gain from a known cost would
-   * restate the whole import bill as what the grid came to, which is the same
-   * unsupported claim wearing a different label. In a healthy setup neither side
-   * is ever null -- a working export meter on a day that exported nothing prices
-   * a real 0.00 -- so this costs the ordinary reader nothing.
-   *
-   * All of which `sumMoney` now does, for the day view's slots and these buckets
-   * alike; the only thing left here is the difference between a selection with
-   * no priced bucket in it and a bucket that priced nothing, which the span
-   * views render as no panel rather than as three em dashes.
-   */
-  private _spanMoney(
-    rows: readonly SpanAggregateRow[],
-    keys: readonly string[],
-  ): MoneyTotals | null {
-    const points = this._spanMoneyPoints(rows);
-    const wanted = new Set(keys);
-    if (!points.some((point) => wanted.has(point.slot))) return null;
-    return sumMoney(points, keys);
-  }
-
-  /** Missing money is an em dash, matching the day view's own money rail. */
-  private _formatSpanMoney(value: number | null): string {
-    if (value === null || !Number.isFinite(value)) {
-      return "—";
-    }
-    return `${value.toFixed(2)} ${this._span?.currency ?? ""}`.trim();
-  }
-
-  /**
-   * How low the battery got and how high it came back, over a set of buckets.
-   *
-   * Both bounds or nothing, per bucket: half a range is not a range, and writing
-   * the known end alone would read as a battery that sat still. Same rule the
-   * chart's SoC row draws by.
-   */
-  private _formatSocRange(rows: readonly SpanAggregateRow[]): string | null {
-    let low: number | null = null;
-    let high: number | null = null;
-    for (const row of rows) {
-      const min = row.batteryMinSocPct;
-      const max = row.batteryMaxSocPct;
-      if (min === null || max === null) continue;
-      if (!Number.isFinite(min) || !Number.isFinite(max)) continue;
-      // The lowest low and the highest high, which is what a range over several
-      // buckets is: how low the battery got at all, and how high it came back.
-      // Averaging the bounds would invent a range no day actually had.
-      const bottom = Math.min(min, max);
-      const top = Math.max(min, max);
-      low = low === null ? bottom : Math.min(low, bottom);
-      high = high === null ? top : Math.max(high, top);
-    }
-    if (low === null || high === null) return null;
-    return `${low.toFixed(0)}–${high.toFixed(0)} %`;
-  }
-
-  /** The selection's six meters, in the chart's own order and colours. */
-  private _renderBucketMetrics(rows: readonly SpanAggregateRow[]) {
-    const money = this._spanMoney(rows, rows.map((row) => row.date));
-    const socRange = this._formatSocRange(rows);
-    return html`
-      ${this._renderMetric(this._t("bias_correction.inspector.merged.solar"), this._formatWh(this._sumBuckets(rows, (row) => row.solarWh)), CHART_COLORS.corrected)}
-      ${this._renderMetric(this._t("bias_correction.inspector.merged.house"), this._formatWh(this._sumBuckets(rows, (row) => row.houseWh)), CHART_COLORS.house)}
-      ${this._renderMetric(this._t("bias_correction.inspector.grid_import"), this._formatWh(this._sumBucketsKwh(rows, (row) => row.gridImportKwh)), CHART_COLORS.gridImport)}
-      ${this._renderMetric(this._t("bias_correction.inspector.grid_export"), this._formatWh(this._sumBucketsKwh(rows, (row) => row.gridExportKwh)), CHART_COLORS.gridExport)}
-      ${this._renderMetric(this._t("bias_correction.inspector.battery_charge"), this._formatWh(this._sumBuckets(rows, (row) => row.batteryChargeWh)), CHART_COLORS.battery)}
-      ${this._renderMetric(this._t("bias_correction.inspector.battery_discharge"), this._formatWh(this._sumBuckets(rows, (row) => row.batteryDischargeWh)), CHART_COLORS.battery)}
-      ${socRange === null
-        ? ""
-        : this._renderMetric(this._t("bias_correction.inspector.soc_range"), socRange, CHART_COLORS.battery)}
-      ${this._renderMetric(this._t("bias_correction.inspector.import_cost"), this._formatSpanMoney(money?.cost ?? null), CHART_COLORS.gridImport)}
-      ${this._renderMetric(this._t("bias_correction.inspector.export_gain"), this._formatSpanMoney(money?.gain ?? null), CHART_COLORS.gridExport)}
-      ${this._renderMetric(this._t("bias_correction.inspector.net_cost"), this._formatSpanMoney(money?.net ?? null), NEUTRAL_COLOR)}
-    `;
-  }
-
-  /**
-   * One meter summed over a set of buckets.
-   *
-   * Null unless some bucket in the set actually measured it: a set of buckets
-   * the meter has no reading for totals to "nothing known", not to zero. The
-   * same rule every panel here follows, which is why both of them sum through
-   * this rather than through a local copy each.
-   */
-  private _sumBuckets(
-    rows: readonly SpanAggregateRow[],
-    read: (row: SpanAggregateRow) => number | null,
-  ): number | null {
-    let total: number | null = null;
-    for (const row of rows) {
-      const value = read(row);
-      if (value === null || !Number.isFinite(value)) continue;
-      total = (total ?? 0) + value;
-    }
-    return total;
-  }
-
-  /** The same, for a meter the payload carries in kWh where the panel wants Wh. */
-  private _sumBucketsKwh(
-    rows: readonly SpanAggregateRow[],
-    read: (row: SpanAggregateRow) => number | null,
-  ): number | null {
-    const total = this._sumBuckets(rows, read);
-    return total === null ? null : total * 1000;
-  }
 
   /**
    * Fetch the day view's payload unless it already holds the selected day.
@@ -3113,32 +2033,6 @@ export class HelmanSolarInspector extends LitElement {
     }
   }
 
-  /** What the whole span came to, summed from the buckets already on screen. */
-  private _renderSpanTotals(rows: readonly SpanAggregateRow[]) {
-    const sum = (read: (row: SpanAggregateRow) => number | null) => this._sumBuckets(rows, read);
-    const kwhSum = (read: (row: SpanAggregateRow) => number | null) => this._sumBucketsKwh(rows, read);
-    // Summed through `sumMoney` over every bucket on screen, so the span's
-    // money and a single bucket's follow one rule -- the same one the day view's
-    // selection follows.
-    const money = this._spanMoney(rows, rows.map((row) => row.date));
-    return html`
-      <div class="metrics-section">
-        <strong>${this._t("bias_correction.inspector.span_totals")}</strong>
-        <div class="metric-grid">
-          ${this._renderMetric(this._t("bias_correction.inspector.merged.solar"), this._formatWh(sum((row) => row.solarWh)), CHART_COLORS.corrected)}
-          ${this._renderMetric(this._t("bias_correction.inspector.merged.house"), this._formatWh(sum((row) => row.houseWh)), CHART_COLORS.house)}
-          ${this._renderMetric(this._t("bias_correction.inspector.grid_import"), this._formatWh(kwhSum((row) => row.gridImportKwh)), CHART_COLORS.gridImport)}
-          ${this._renderMetric(this._t("bias_correction.inspector.grid_export"), this._formatWh(kwhSum((row) => row.gridExportKwh)), CHART_COLORS.gridExport)}
-          ${this._renderMetric(this._t("bias_correction.inspector.battery_charge"), this._formatWh(sum((row) => row.batteryChargeWh)), CHART_COLORS.battery)}
-          ${this._renderMetric(this._t("bias_correction.inspector.battery_discharge"), this._formatWh(sum((row) => row.batteryDischargeWh)), CHART_COLORS.battery)}
-          ${this._renderMetric(this._t("bias_correction.inspector.import_cost"), this._formatSpanMoney(money?.cost ?? null), CHART_COLORS.gridImport)}
-          ${this._renderMetric(this._t("bias_correction.inspector.export_gain"), this._formatSpanMoney(money?.gain ?? null), CHART_COLORS.gridExport)}
-          ${this._renderMetric(this._t("bias_correction.inspector.net_cost"), this._formatSpanMoney(money?.net ?? null), NEUTRAL_COLOR)}
-        </div>
-      </div>
-    `;
-  }
-
   /**
    * Derive everything the day view draws from, once per change of its inputs.
    *
@@ -3154,243 +2048,65 @@ export class HelmanSolarInspector extends LitElement {
     const payload = this._viewMode === "day" ? this._drawablePayload() : null;
     if (payload === null) {
       this._view = null;
-      this._viewFor = null;
-      this._coverageFor = null;
       this._stacks = null;
-      this._stacksFor = null;
       this._layout = null;
-      this._layoutFor = null;
       this._stripGeometry = null;
       this._socBarsModel = EMPTY_SOC_BARS;
-      this._socBarsFor = null;
       this._selectedMinutesModel = EMPTY_SELECTED_MINUTES;
-      this._selectedMinutesFor = null;
       return;
     }
 
     const slot = this._slotMinutes;
     const hidden = this._hiddenSeries;
-    // `_isSeriesVisible` reads the allowlist as well as the legend, so every
-    // step keyed on `hidden` is keyed on this too.
+    // Visibility reads the allowlist as well as the legend, so every step
+    // handed `hidden` is handed this too.
     const enabled = this.chartSeries;
 
-    if (this._viewFor === null
-      || this._viewFor.payload !== payload
-      || this._viewFor.slot !== slot) {
-      this._viewFor = { payload, slot };
-      this._view = this._viewForSlot(payload);
-    }
-    const view = this._view!;
+    const view = this._viewOf(payload, slot);
+    this._view = view;
 
-    if (this._coverageFor === null
-      || this._coverageFor.payload !== payload
-      || this._coverageFor.slot !== slot
-      || this._coverageFor.hidden !== hidden
-      || this._coverageFor.enabled !== enabled) {
-      this._coverageFor = { payload, slot, hidden, enabled };
-      this._computeCoverage(payload);
-    }
+    this._coverage = this._coverageOf(payload, slot, hidden, enabled);
 
-    if (this._stacksFor === null
-      || this._stacksFor.view !== view
-      || this._stacksFor.hidden !== hidden
-      || this._stacksFor.enabled !== enabled
-      || this._stacksFor.houseFocus !== this.houseFocus) {
-      this._stacksFor = { view, hidden, enabled, houseFocus: this.houseFocus };
-      // "Nothing to draw" is a fact about the view alone, so it is decided
-      // here with the stacks rather than beside them in the render.
-      const series = payload.series;
-      const hasAnySeries = (series.raw?.length ?? 0) > 0
-        || (series.corrected?.length ?? 0) > 0
-        || (series.actual?.length ?? 0) > 0
-        || (series.invalidated?.length ?? 0) > 0
-        || (this.houseFocus && ((series.houseForecast?.length ?? 0) > 0 || (series.houseActual?.length ?? 0) > 0));
-      this._stacks = hasAnySeries ? this._buildStacks(view) : null;
-      this._forecastFillFromMinutes = this._stacks === null
-        ? Number.NEGATIVE_INFINITY
-        : this._forecastFillFrom(this._stacks);
-    }
+    // "Nothing to draw" is a fact about the payload alone, so it is decided
+    // here with the stacks rather than beside them in the render.
+    const stacks = dayHasSeries(payload, this.houseFocus)
+      ? this._stacksOf(view, slot, hidden, enabled)
+      : null;
+    this._stacks = stacks;
 
-    const stacks = this._stacks;
     if (stacks === null) {
       this._layout = null;
-      this._layoutFor = null;
       this._stripGeometry = null;
-    } else if (this._layoutFor === null
-      || this._layoutFor.view !== view
-      || this._layoutFor.stacks !== stacks
-      || this._layoutFor.width !== this._chartWidth
-      || this._layoutFor.slot !== slot
-      || this._layoutFor.daylightOnly !== this._daylightOnly
-      || this._layoutFor.threshold !== this.daylightThresholdW
-      || this._layoutFor.hidden !== hidden
-      || this._layoutFor.enabled !== enabled) {
-      this._layoutFor = {
-        view,
-        stacks,
-        width: this._chartWidth,
-        slot,
-        daylightOnly: this._daylightOnly,
-        threshold: this.daylightThresholdW,
-        hidden,
-        enabled,
-      };
-      const layout = this._computeChartLayout(view, stacks);
-      this._layout = layout;
+    } else {
+      this._layout = this._layoutOf(
+        view, stacks, slot, this._chartWidth, this._daylightOnly, this.daylightThresholdW, hidden, enabled,
+      );
       // One object per layout: the three strips compare it by identity, and a
       // fresh literal per render would re-render all three on every hover.
-      this._stripGeometry = {
-        width: layout.width,
-        marginLeft: layout.margin.left,
-        plotWidth: layout.plotWidth,
-        startMinutes: layout.dayStartMinutes,
-        endMinutes: layout.dayEndMinutes,
-      };
+      this._stripGeometry = this._stripGeometryOf(this._layout);
     }
 
-    const fillFrom = this._forecastFillFromMinutes;
-    if (this._socBarsFor === null
-      || this._socBarsFor.view !== view
-      || this._socBarsFor.hidden !== hidden
-      || this._socBarsFor.enabled !== enabled
-      || this._socBarsFor.fillFrom !== fillFrom) {
-      this._socBarsFor = { view, hidden, enabled, fillFrom };
-      this._socBarsModel = this._socBars(view);
-    }
-
-    if (this._selectedMinutesFor === null
-      || this._selectedMinutesFor.view !== view
-      || this._selectedMinutesFor.selection !== this._slotSelection) {
-      this._selectedMinutesFor = { view, selection: this._slotSelection };
-      const minutes = this._selectedMinutes(view);
-      this._selectedMinutesModel = minutes.length === 0 ? EMPTY_SELECTED_MINUTES : minutes;
-    }
+    // Off the seam the stacks put the forecast at, so the SoC columns turn
+    // forecast where the stacks above turn hatched.
+    this._socBarsModel = this._socBarsOf(view, hidden, enabled, stacks?.fillFromMinutes ?? Number.NEGATIVE_INFINITY);
+    this._selectedMinutesModel = this._selectedMinutesOf(view, this._slotSelection.selectedSlots);
   }
 
-  /**
-   * Which native slots the day is short of, and where.
-   *
-   * Its own step rather than a side effect of the re-bucketing below, because
-   * its inputs are not the same: the marks follow the legend, which cannot
-   * move a single bucketed sum.
-   */
-  private _computeCoverage(payload: InspectorPayload): void {
-    const slot = this._slotMinutes;
-    const s = payload.series;
-    // Coverage is read off the series as the backend actually served them, not
-    // the re-bucketed sums below — a hole is a fact about the 15-minute data,
-    // and bucketing it first would let a run of present-but-hole-adjacent
-    // buckets blur which native slot was actually missing. Every Wh series the
-    // day can draw is included so one rule marks forecast and actual columns
-    // alike; SoC and impact are levels and ratios, not sums, so a hole in them
-    // does not misstate an energy total and is left out. So is `invalidated`,
-    // which is not a series that covers the day but a set of annotations on
-    // the slots that were thrown out — the slots between two of them are
-    // absent because nothing was invalidated there, and reading that as a
-    // hole would mark the whole stretch.
-    const granularity = this._payloadGranularity(payload);
-    const whSeries: CoverageSeries[] = [
-      { key: "raw", points: s.raw },
-      { key: "corrected", points: s.corrected },
-      { key: "actual", points: s.actual },
-      { key: "houseForecast", points: s.houseForecast },
-      { key: "houseActual", points: s.houseActual },
-      { key: "gridForecast", points: s.gridForecast },
-      { key: "gridActual", points: s.gridActual },
-      { key: "batteryForecast", points: s.batteryForecast },
-      { key: "batteryActual", points: s.batteryActual },
-    ];
-    this._partialBucketGranularityMinutes = granularity;
-    // The scrim marks what the chart is drawing, so a series the legend has
-    // switched off cannot mark a column: nothing of it is on screen to be
-    // short, and a wash over a column for an invisible reason is worse than no
-    // wash at all. `_hiddenSeries` is reactive state and this runs from render,
-    // so toggling a series recomputes the marks with it.
-    this._partialBuckets = missingMinutesByBucket(
-      whSeries.filter(({ key }) => this._isSeriesVisible(key as SeriesKey)),
-      slot,
-      granularity,
-    ) as Map<number, Map<SeriesKey, number>>;
-    // Independent of `slot` — and of visibility, unlike the scrim above. A
-    // hidden series still prints its daily total, and a number on screen has
-    // to carry its own caveat whether or not its curve is drawn.
-    this._partialSeries = new Map(
-      whSeries
-        .map(({ key, points }) => [key as SeriesKey, seriesCoverage(points, granularity)] as const)
-        .filter(([, coverage]) => coverage.missing.length > 0)
-        .map(([key, coverage]) => [key, { missing: coverage.missing.length, expected: coverage.expected }]),
-    );
-  }
-
-  /**
-   * The payload re-bucketed to the active slot width. Daily totals, availability
-   * and the 15-minute training explainability are slot-width independent and
-   * carry through untouched; only the time series are collapsed.
-   */
-  private _viewForSlot(payload: InspectorPayload): InspectorPayload {
-    const slot = this._slotMinutes;
-    const s = payload.series;
-    if (slot <= SLOT_MINUTES) return payload;
-    // A wider bucket is only history once the measurements span all of it; the
-    // slot we are still inside would otherwise sum a part-hour of actuals into a
-    // full-hour column and read as a collapse against the forecast.
-    const coverUntil = actualsCoverUntil(
-      [s.actual, s.invalidated, s.houseActual, s.gridActual, s.batteryActual],
-      this._payloadGranularity(payload),
-    );
-    const measured = (points: InspectorPoint[]) =>
-      dropPartialBuckets(aggregateWhSeries(points, slot), slot, coverUntil, (p) =>
-        slotMinutes(p.slot));
+  /** What the panels read off the card. */
+  private _panelContext(): PanelContext {
     return {
-      ...payload,
-      series: {
-        ...s,
-        raw: aggregateWhSeries(s.raw, slot),
-        corrected: aggregateWhSeries(s.corrected, slot),
-        actual: measured(s.actual),
-        invalidated: measured(s.invalidated),
-        impact: aggregateImpactSeries(s.impact, slot),
-        houseForecast: aggregateWhSeries(s.houseForecast, slot),
-        // A bucket the composition only partly covers is kept rather than
-        // dropped: on today, a wide bucket straddles elapsed slots — which keep a
-        // forecast scalar but leave no composition behind — and the slots from the
-        // one in progress on, which have both. Dropping it would leave the bucket
-        // the user is looking at as the only one with no composition at all. What
-        // the composition does not reach lands in the panel's base row, which is
-        // drawn as the residual against the forecast total for exactly this reason.
-        houseForecastBreakdown: aggregateBreakdownSeries(s.houseForecastBreakdown, slot),
-        houseActual: measured(s.houseActual),
-        houseActualBreakdown: dropPartialBuckets(
-          aggregateBreakdownSeries(s.houseActualBreakdown, slot),
-          slot, coverUntil, (p) => slotToMinutes(p.slot),
-        ),
-        gridForecast: aggregateWhSeries(s.gridForecast, slot),
-        gridActual: measured(s.gridActual),
-        batteryForecast: aggregateWhSeries(s.batteryForecast, slot),
-        batteryActual: measured(s.batteryActual),
-        // The forecast reports the level its slot ends at, so a wider bucket
-        // takes its last reading; the actual is an instantaneous reading at the
-        // slot start, so its bucket takes the first.
-        batterySocForecast: sampleBucketEndOnGrid(s.batterySocForecast, slot),
-        batterySocActual: sampleOnGrid(s.batterySocActual, slot),
-      },
-      batterySocBounds: sampleBounds(payload.batterySocBounds, slot),
+      hass: this.hass,
+      t: this._localize,
+      isSeriesEnabled: (series) => this._isSeriesEnabled(series),
+      isSeriesVisible: (series) => this._isSeriesVisible(series),
+      toggleSeries: (series) => this._toggleSeries(series),
+      toggleSeriesGroup: (series, visible) => this._toggleSeriesGroup(series, visible),
     };
   }
 
-  /**
-   * Whether the config allows this series at all. The one gate every other
-   * visibility question goes through, so a disabled series cannot be reached by
-   * the legend, a stack, an axis range or a tile.
-   */
+  /** Whether the config allows this series at all; see `isSeriesEnabled`. */
   private _isSeriesEnabled(series: SeriesKey) {
-    // An empty list reads as "unset": the multi-select emits `[]` when the last
-    // option is unchecked, and a card with no series at all and nothing to say
-    // why is worse than the full one.
-    if (this.chartSeries === undefined || this.chartSeries.length === 0) {
-      return true;
-    }
-    return this.chartSeries.includes(series);
+    return isSeriesEnabled(this.chartSeries, series);
   }
 
   /**
@@ -3415,7 +2131,7 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   private _isSeriesVisible(series: SeriesKey) {
-    return this._isSeriesEnabled(series) && !this._hiddenSeries.has(series);
+    return isSeriesVisible(this._hiddenSeries, this.chartSeries, series);
   }
 
   private _toggleSeries(series: SeriesKey) {
@@ -3434,86 +2150,6 @@ export class HelmanSolarInspector extends LitElement {
       else next.delete(key);
     }
     this._hiddenSeries = next;
-  }
-
-  private _computeChartLayout(payload: InspectorPayload, stacks: ChartStacks): ChartLayout {
-    const width = this._chartWidth;
-    const height = 260;
-    const margin = { top: 18, right: 24, bottom: 34, left: 48 };
-    const plotWidth = width - margin.left - margin.right;
-    const plotHeight = height - margin.top - margin.bottom;
-
-    const powerFor = (series: SeriesKey, entries: ChartEntry[]) =>
-      this._isSeriesVisible(series) ? entries.map((e) => e.powerW) : [];
-    const invalidatedPoints = toAveragePower(payload.series.invalidated, { bucketMinutes: this._slotMinutes });
-    // The stacks decide the axis: a band's outer edge is the sum beneath it, so
-    // the tallest slot total is what has to fit, not the tallest single series.
-    const allPower = [
-      ...powerFor("raw", toAveragePower(payload.series.raw)),
-      ...powerFor("actual", invalidatedPoints),
-      ...stackTotals(stacks.forecast),
-      ...stackTotals(stacks.actual),
-    ];
-    // Every watt supplied is a watt consumed, so the two stacks are mirror
-    // images and the axis has to be too: a slot that reaches 3 kW of production
-    // reaches 3 kW of consumption. One bound serves both directions.
-    const peakW = Math.max(1000, ...allPower.map((w) => Math.abs(w)));
-    const { maxKw, yTicks } = symmetricPowerAxis(peakW);
-    const minKw = -maxKw;
-    const spanW = (maxKw - minKw) * 1000;
-    const { start: dayStartMinutes, end: dayEndMinutes } = this._daylightOnly
-      ? this._solarWindow(payload)
-      : { start: 0, end: MINUTES_PER_DAY };
-    const daySpan = dayEndMinutes - dayStartMinutes;
-    const slotWidth = (plotWidth * this._slotMinutes) / daySpan;
-    const xForMinutes = (minutes: number) =>
-      margin.left + ((minutes - dayStartMinutes) / daySpan) * plotWidth;
-    const yForW = (powerW: number) =>
-      margin.top + plotHeight - ((powerW - minKw * 1000) / spanW) * plotHeight;
-    const wForY = (y: number) =>
-      minKw * 1000 + ((margin.top + plotHeight - y) / plotHeight) * spanW;
-
-    return {
-      width, height, margin, plotWidth, plotHeight, minKw, maxKw, yTicks,
-      dayStartMinutes, dayEndMinutes, slotWidth, xForMinutes, yForW, wForY,
-    };
-  }
-
-  /**
-   * The hour-aligned span of the day that carries solar production — the first
-   * hour any of the raw, corrected or actual solar series reaches the daylight
-   * threshold to the hour past the last. Cropping to this window fills the plot
-   * with the daylight curve instead of squeezing it between empty night hours on
-   * either side. With no solar above the threshold anywhere (a fully clouded
-   * winter day, or no forecast yet) it falls back to the whole day so the other
-   * series still have somewhere to sit.
-   */
-  private _solarWindow(payload: InspectorPayload): { start: number; end: number } {
-    const threshold = Number.isFinite(this.daylightThresholdW) ? this.daylightThresholdW : 100;
-    let first = Number.POSITIVE_INFINITY;
-    let last = Number.NEGATIVE_INFINITY;
-    // No fixed bucket: infer each series' own sample spacing so the threshold is
-    // read against true average watts, whether the series is 15-minute or hourly.
-    // Only the solar series actually drawn may crop the day -- drawn, not merely
-    // allowed: `raw` is hidden by default, so a card that allowed it and nothing
-    // else solar would otherwise crop to solar hours while showing none of them,
-    // hiding the hours its visible series live in. The `!isFinite` fallback below
-    // already means "show the whole day", which is what no visible solar wants.
-    for (const key of ["raw", "corrected", "actual"] as const) {
-      if (!this._isSeriesVisible(key)) continue;
-      for (const entry of toAveragePower(payload.series[key])) {
-        if (entry.powerW < threshold) continue;
-        if (entry.minutes < first) first = entry.minutes;
-        if (entry.minutes > last) last = entry.minutes;
-      }
-    }
-    if (!Number.isFinite(first) || !Number.isFinite(last)) {
-      return { start: 0, end: MINUTES_PER_DAY };
-    }
-    const start = Math.max(0, Math.floor(first / 60) * 60);
-    // `last` is the start of a slot, so include the hour it falls in.
-    const end = Math.min(MINUTES_PER_DAY, (Math.floor(last / 60) + 1) * 60);
-    return end > start ? { start, end } : { start: 0, end: MINUTES_PER_DAY };
   }
 
   /** The schedule row under the charts: one track per entity. */
@@ -3542,7 +2178,7 @@ export class HelmanSolarInspector extends LitElement {
 
   /** The schedule header repeats the chart axis's labelled ticks behind its controls. */
   private _renderScheduleHeaderHours(layout: ChartLayout) {
-    return this._slotGridTicks(layout).map((tick) => {
+    return chartGridTicks(layout, this._slotMinutes).map((tick) => {
       if (tick.hour === null) return "";
       const left = (layout.xForMinutes(tick.minutes) / layout.width) * 100;
       return html`
@@ -3565,16 +2201,64 @@ export class HelmanSolarInspector extends LitElement {
 
     const owner = getSharedScheduleOwner(hass);
     if (this._scheduleOwner === owner) {
-      this._scheduleSnapshot = owner.getSnapshot();
+      this._applyScheduleSnapshot(owner.getSnapshot());
       return;
     }
 
     this._unsubscribeScheduleOwner?.();
     this._scheduleOwner = owner;
-    this._scheduleSnapshot = owner.getSnapshot();
-    this._unsubscribeScheduleOwner = owner.subscribe((snapshot) => {
-      this._scheduleSnapshot = snapshot;
-    });
+    this._unsubscribeScheduleOwner = owner.subscribe((snapshot) => this._applyScheduleSnapshot(snapshot));
+  }
+
+  /**
+   * Take the owner's latest word. A clock tick hands back the same snapshot,
+   * and the normalized model is the same object until the current slot or day
+   * moves, so a tick that moved neither writes nothing reactive.
+   */
+  private _applyScheduleSnapshot(snapshot: ScheduleOwnerSnapshot): void {
+    const previous = this._scheduleSnapshot;
+    const scheduleChanged = snapshot.schedule !== previous.schedule;
+    this._scheduleSnapshot = snapshot;
+    if (!this.hideScheduleStrip && (
+      scheduleChanged
+      || snapshot.loading !== previous.loading
+      || snapshot.togglingExecution !== previous.togglingExecution
+    )) {
+      this.requestUpdate();
+    }
+    this._renormalizeSchedule();
+    if (scheduleChanged && snapshot.schedule !== null) {
+      void this._loadForecast();
+    }
+  }
+
+  /** The zone and locale the pills' schedule is normalized in. */
+  private _normalizationKey(): string {
+    return `${this._haTimeZone() ?? "UTC"}|${resolveLocale(this.hass)}`;
+  }
+
+  /** The schedule on the owner's clock, in the zone and locale the pills are drawn in. */
+  private _renormalizeSchedule(): void {
+    this._normalizedFor = this._normalizationKey();
+    this._normalizedSchedule = this._scheduleOwner?.getNormalized(this._haTimeZone() ?? "UTC", resolveLocale(this.hass))
+      ?? EMPTY_NORMALIZED_SCHEDULE;
+  }
+
+  /** The forecast, once the schedule has slots to draw it against. */
+  private async _loadForecast(): Promise<void> {
+    const hass = this.hass;
+    if (!hass || !this._scheduleSnapshot.schedule?.slots?.length) {
+      return;
+    }
+    const request = ++this._forecastRequest;
+    try {
+      const forecast = await this._forecastLoader.load(hass);
+      if (request === this._forecastRequest && this.hass?.connection === hass.connection) {
+        this._forecast = forecast;
+      }
+    } catch (error) {
+      console.error("helman-solar-inspector: failed to load forecast", error);
+    }
   }
 
   /**
@@ -3629,263 +2313,6 @@ export class HelmanSolarInspector extends LitElement {
     `;
   }
 
-  /** Minute-of-day of every selected slot, for the strips' bands. */
-  private _selectedMinutes(payload: InspectorPayload): number[] {
-    const minutes: number[] = [];
-    for (const slot of this._slotSelection.selectedSlots) {
-      const resolved = resolveSelectedImpactSlot(payload.series.impact, slot);
-      const value = resolved === null ? null : slotToMinutes(resolved);
-      if (value !== null) {
-        minutes.push(value);
-      }
-    }
-    return minutes;
-  }
-
-  /**
-   * Publish the pointer's minute-of-day over any chart so every row can light its
-   * own slot around it. The value is shared raw, not snapped to a slot: each row
-   * decides how wide its highlight is, so an hour-wide price cell reads as the whole
-   * hour while the chart above still tracks the 15-minute slot under the cursor.
-   * Positions in the axis gutter clear the hover.
-   */
-  private _handleChartHover(event: MouseEvent, _payload: InspectorPayload) {
-    const layout = this._layout;
-    if (!layout) return;
-    const svgEl = event.currentTarget as SVGSVGElement;
-    const rect = svgEl.getBoundingClientRect();
-    const svgX = ((event.clientX - rect.left) / rect.width) * layout.width;
-    if (svgX < layout.margin.left || svgX > layout.width - layout.margin.right) {
-      this._clearHover();
-      return;
-    }
-    this._reportPointer({ minutes: this._minutesForSvgX(layout, svgX) });
-  }
-
-  /** Invert the plot's x scale: a viewBox x back to its minute-of-day. */
-  private _minutesForSvgX(layout: ChartLayout, svgX: number): number {
-    const daySpan = layout.dayEndMinutes - layout.dayStartMinutes;
-    return layout.dayStartMinutes + ((svgX - layout.margin.left) / layout.plotWidth) * daySpan;
-  }
-
-  /**
-   * Hover for the combined chart: a popup appears only once the cursor sits
-   * inside one of the stacked bands actually drawn there -- solar, house,
-   * battery or grid -- not merely somewhere in that slot's column, the way the
-   * shared highlight-only hover treats the whole column height as active.
-   */
-  private _handleMainChartHover(
-    event: MouseEvent,
-    payload: InspectorPayload,
-    stacks: ChartStacks,
-    layout: ChartLayout,
-  ) {
-    const svgEl = event.currentTarget as SVGSVGElement;
-    const rect = svgEl.getBoundingClientRect();
-    const svgX = ((event.clientX - rect.left) / rect.width) * layout.width;
-    if (svgX < layout.margin.left || svgX > layout.width - layout.margin.right) {
-      this._clearHover();
-      return;
-    }
-    const minutes = this._minutesForSvgX(layout, svgX);
-    const slot = Math.floor(minutes / this._slotMinutes) * this._slotMinutes;
-    const model = this._chartTooltipModel(payload, minutesToSlot(slot));
-    if (!model.rows.length) {
-      this._clearHover();
-      return;
-    }
-    this._reportPointer({
-      minutes: slot,
-      tooltip: this._tooltipAt(event, model.rows, slot < this._forecastFillFromMinutes, model.title),
-    });
-  }
-
-  /**
-   * The popup's contents for one slot of the combined chart, built once per
-   * slot rather than once per pointer report: sweeping across a column asks
-   * this the same question thirty times over.
-   */
-  private _chartTooltipModel(payload: InspectorPayload, slot: string): { rows: TooltipRow[]; title: string } {
-    if (this._chartTooltipFor === null
-      || this._chartTooltipFor.payload !== payload
-      || this._chartTooltipFor.slot !== slot
-      || this._chartTooltipFor.enabled !== this.chartSeries) {
-      this._chartTooltipFor = { payload, slot, enabled: this.chartSeries };
-      this._chartTooltip = {
-        rows: this._allSeriesTooltipRows(payload, slot),
-        title: this._formatSelectionRange([slot]),
-      };
-    }
-    return this._chartTooltip!;
-  }
-
-  /** EXPERIMENT: every series' row for the hovered slot, in one popup. */
-  private _allSeriesTooltipRows(payload: InspectorPayload, slot: string): TooltipRow[] {
-    const families: SeriesFamily[] = ["solar", "house", "battery", "grid"];
-    return families
-      .flatMap((family) => {
-        // A series the config left out is not quoted here either: a popup is as
-        // much a reading of the series as the band it is taken from. Whole
-        // families drop out, and a half-dropped pair loses that column -- the
-        // rows of one family all speak for the same two series, so this is the
-        // one place it has to be said.
-        const [actualSeries, forecastSeries] = FAMILY_SERIES[family];
-        const actualOn = this._isSeriesEnabled(actualSeries);
-        const forecastOn = this._isSeriesEnabled(forecastSeries);
-        if (!actualOn && !forecastOn) return [];
-        const rows = this._seriesTooltipRows(payload, family, slot);
-        if (actualOn && forecastOn) return rows;
-        return rows.map((row) => ({
-          ...row,
-          actual: actualOn ? row.actual : null,
-          forecast: forecastOn ? row.forecast : null,
-        }));
-      })
-      .filter((row) => row.actual !== null || row.forecast !== null);
-  }
-
-  /** One row's actual/forecast pair as Wh, formatted, colour-matched to its series. */
-  private _powerRow(
-    label: string,
-    color: string,
-    actualWh: number | null,
-    forecastWh: number | null,
-  ): TooltipRow {
-    return {
-      label,
-      actual: actualWh === null ? null : { value: this._formatWh(actualWh), color },
-      forecast: forecastWh === null ? null : { value: this._formatWh(forecastWh), color },
-    };
-  }
-
-  /** The forecast/actual pair for one hovered family, at the single hovered slot. */
-  private _seriesTooltipRows(
-    payload: InspectorPayload,
-    family: SeriesFamily,
-    slot: string,
-  ): TooltipRow[] {
-    const slots = [slot];
-    switch (family) {
-      case "solar":
-        return [
-          this._powerRow(
-            this._t("bias_correction.inspector.merged.solar"),
-            CHART_COLORS.actual,
-            // An invalidated slot is still a measurement -- the chart draws it
-            // -- only one training ignores. The backend moves it out of
-            // `actual`, so the two never overlap.
-            sumWhOverSlots([...payload.series.actual, ...payload.series.invalidated], slots),
-            sumWhOverSlots(payload.series.corrected, slots),
-          ),
-        ];
-      case "house": {
-        // Both columns are split the same way the two bands are, so each row
-        // compares like with like: what was shifted against what was scheduled,
-        // and the rest of the house against the rest of the forecast. With
-        // nothing shiftable on either side the pair collapses back to the single
-        // house row it always was, rather than growing a permanent zero row.
-        //
-        // Over elapsed slots the forecast has no composition to split by -- only
-        // its scalar survives in the recorder. Splitting the actual there would
-        // leave the forecast column empty under a drawn forecast line, and
-        // quoting that scalar as the non-deferrable half would understate one
-        // row by what it overstates the other; so the pair collapses to the two
-        // totals. The house embed always quotes the totals: they are what it
-        // judges.
-        const actual = splitHouseByDeferrable(
-          payload.series.houseActual,
-          payload.series.houseActualBreakdown,
-        );
-        const forecast = splitHouseByDeferrable(
-          payload.series.houseForecast,
-          payload.series.houseForecastBreakdown,
-        );
-        const forecastSplit = breakdownCoversSlots(
-          payload.series.houseForecastBreakdown,
-          slots,
-        );
-        const actualDeferrableWh = sumWhOverSlots(actual.deferrable, slots);
-        const forecastDeferrableWh = forecastSplit
-          ? sumWhOverSlots(forecast.deferrable, slots)
-          : null;
-        const forecastWh = sumWhOverSlots(payload.series.houseForecast, slots);
-        if (this.houseFocus
-          || (forecastWh !== null && !forecastSplit)
-          || (!actualDeferrableWh && !forecastDeferrableWh)) {
-          return [
-            this._powerRow(
-              this._t("bias_correction.inspector.merged.house"),
-              CHART_COLORS.house,
-              negateWh(sumWhOverSlots(payload.series.houseActual, slots)),
-              negateWh(forecastWh),
-            ),
-          ];
-        }
-        return [
-          this._powerRow(
-            this._t("bias_correction.inspector.merged.house_non_deferrable"),
-            CHART_COLORS.house,
-            negateWh(sumWhOverSlots(actual.nonDeferrable, slots)),
-            forecastSplit ? negateWh(sumWhOverSlots(forecast.nonDeferrable, slots)) : null,
-          ),
-          this._powerRow(
-            this._t("bias_correction.inspector.merged.house_deferrable"),
-            CHART_COLORS.houseDeferrable,
-            negateWh(actualDeferrableWh),
-            negateWh(forecastDeferrableWh),
-          ),
-        ];
-      }
-      case "grid":
-        return [
-          this._powerRow(
-            this._t("bias_correction.inspector.merged.grid"),
-            CHART_COLORS.grid,
-            negateWh(sumWhOverSlots(payload.series.gridActual, slots)),
-            negateWh(sumWhOverSlots(payload.series.gridForecast, slots)),
-          ),
-        ];
-      case "battery":
-        // SoC has its own strip right below with its own popup; this one is
-        // about power, so it stops at the battery's watts like the others.
-        return [
-          this._powerRow(
-            this._t("bias_correction.inspector.merged.battery"),
-            CHART_COLORS.battery,
-            negateWh(sumWhOverSlots(payload.series.batteryActual, slots)),
-            negateWh(sumWhOverSlots(payload.series.batteryForecast, slots)),
-          ),
-        ];
-    }
-  }
-
-  /**
-   * Stage one pointer report, and apply it on the next frame.
-   *
-   * A mouse reports far more often than the screen repaints, and every report
-   * used to be its own Lit update. Reports are merged here field by field --
-   * the rows report the hovered minute and the popup as two separate events on
-   * one move -- and applied once per frame. The popup's *position* is applied
-   * in that same frame without going through Lit at all, so it keeps following
-   * the cursor while nothing re-renders.
-   */
-  private _reportPointer(update: { minutes?: number | null; tooltip?: TooltipContent | null }): void {
-    this._pendingPointer = { ...(this._pendingPointer ?? {}), ...update };
-    if (update.tooltip) {
-      this._tooltipPoint = { x: update.tooltip.x, y: update.tooltip.y };
-    }
-    if (this._pointerFrame !== 0) return;
-    this._pointerFrame = requestAnimationFrame(() => {
-      this._pointerFrame = 0;
-      const pending = this._pendingPointer;
-      this._pendingPointer = null;
-      if (pending === null) return;
-      if ("minutes" in pending) this._setHoverMinutes(pending.minutes ?? null);
-      if ("tooltip" in pending) this._applyTooltip(pending.tooltip ?? null);
-      this._positionTooltip();
-    });
-  }
-
   /** Store the hovered minute at whole-minute resolution, skipping redundant updates. */
   private _setHoverMinutes(minutes: number | null) {
     const next = minutes === null ? null : Math.round(minutes);
@@ -3894,44 +2321,50 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   /**
-   * Adopt what the popup says, but only when it actually differs.
+   * Publish the minute under the pointer, in the popup's own frame.
    *
-   * The coordinates are deliberately not part of the comparison: they move
-   * with every pixel and are written straight onto the element. What is left
-   * is what the popup *says*, which changes only when the pointer crosses into
-   * another slot -- so a sweep across one column re-renders nothing.
+   * A mouse reports far more often than the screen repaints, and the rows
+   * report the minute and the popup as two separate events on one move; both
+   * land in the controller's next frame, as one update.
    */
-  private _applyTooltip(next: TooltipContent | null) {
-    if (sameTooltipContent(this._tooltip, next)) return;
-    this._tooltip = next;
+  private _hover(minutes: number | null) {
+    this._tooltip.inNextFrame(() => this._setHoverMinutes(minutes));
   }
 
-  /** Move the popup to the pointer without re-rendering anything. */
-  private _positionTooltip() {
-    const point = this._tooltipPoint;
-    const popup = this.renderRoot?.querySelector(".hover-tooltip") as HTMLElement | null;
-    if (point === null || popup === null) return;
-    popup.style.left = point.x + "px";
-    popup.style.top = point.y + "px";
-  }
-
-  private _clearHover() {
-    this._reportPointer({ minutes: null, tooltip: null });
-  }
-
-  /** The popup's contents for a hovered slot, at the pointer's viewport position. */
-  private _tooltipAt(event: MouseEvent, rows: TooltipRow[], hasActual: boolean, title?: string): TooltipContent {
-    return { x: event.clientX, y: event.clientY, title, hasActual, rows };
+  /** A popup some other element measured, at the viewport point it reported. */
+  private _showReported(content: TooltipContent | null, anchor: EventTarget | null) {
+    if (content === null) {
+      this._tooltip.hide();
+      return;
+    }
+    const { x, y, ...body } = content;
+    this._tooltip.showAt({ x, y }, body, anchor);
   }
 
   /** A strip reported the minute under its pointer. */
   private _handleStripHover = (event: CustomEvent<{ minutes: number | null }>): void => {
-    this._reportPointer({ minutes: event.detail?.minutes ?? null });
+    this._hover(event.detail?.minutes ?? null);
+  };
+
+  /**
+   * The day chart's popup, shown off the pointer event it follows: a hover
+   * shows it and a tap toggles it -- and the tap that closes it takes the
+   * hover band with it.
+   */
+  private _handleChartTooltip = (event: CustomEvent<DayChartTooltipDetail | null>): void => {
+    const detail = event.detail;
+    if (detail === null) {
+      this._tooltip.hide();
+    } else if (!detail.tap) {
+      this._tooltip.show(detail.event, detail.body);
+    } else if (!this._tooltip.toggle(detail.event, detail.body)) {
+      this._hover(null);
+    }
   };
 
   /** A strip reported its own popup, already in the shared shape. */
   private _handleStripTooltip = (event: CustomEvent<TooltipContent | null>): void => {
-    this._reportPointer({ tooltip: event.detail ?? null });
+    this._showReported(event.detail ?? null, event.currentTarget);
   };
 
   /**
@@ -3941,8 +2374,8 @@ export class HelmanSolarInspector extends LitElement {
    */
   private _handleScheduleTooltip = (event: CustomEvent<ScheduleHoverTooltipContent | null>): void => {
     const content = event.detail ?? null;
-    this._reportPointer({
-      tooltip: content === null
+    this._showReported(
+      content === null
         ? null
         : {
             x: content.x,
@@ -3955,49 +2388,26 @@ export class HelmanSolarInspector extends LitElement {
               forecast: { value: row.value, toneClass: row.toneClass },
             })),
           },
-    });
+      event.currentTarget,
+    );
   };
 
   /** The shared popup, its two columns captioned actual and forecast. */
   private _renderTooltip() {
-    if (!this._tooltip) return "";
-    return renderHoverTooltip(
-      this._tooltip,
-      this._tooltipPoint ?? { x: this._tooltip.x, y: this._tooltip.y },
+    return this._tooltip.render(
       [this._t("bias_correction.inspector.column_actual"), this._t("bias_correction.inspector.column_forecast")],
     );
   }
 
-  /**
-   * The hovered slot on a 15-minute chart, drawn from the shared hover minute. The
-   * strips below compute their own wider bands from the same minute, so each row
-   * highlights the true width of its slot. Orange, distinct from the blue selection.
-   */
-  private _renderHoverHighlight(layout: ChartLayout, y: number, height: number) {
-    if (this._hoveredMinutes === null) return "";
-    const start = Math.floor(this._hoveredMinutes / this._slotMinutes) * this._slotMinutes;
-    const x = layout.xForMinutes(start);
-    const w = Math.max(2, layout.xForMinutes(start + this._slotMinutes) - x);
-    return svg`
-      <rect
-        x=${x} y=${y} width=${w} height=${height}
-        style="fill: color-mix(in srgb, var(--helman-selection) 14%, transparent); stroke: var(--helman-selection);"
-        stroke-width="1" stroke-opacity="0.55"
-        rx="1"
-        pointer-events="none"
-      ></rect>
-    `;
-  }
-
   /** The two-rail price and money strips. */
-  private _renderPriceStrip(payload: InspectorPayload, layout: ChartLayout) {
+  private _renderPriceStrip(payload: DayView) {
     return html`
       <div class="compact-strip-section chart-separator">
         <span class="compact-strip-label">${this._t("bias_correction.inspector.price_strip_compact")}</span>
         <helman-solar-price-strip
           .hass=${this.hass}
-          .importPrice=${payload.series.importPrice ?? EMPTY_PRICE_RAIL}
-          .exportPrice=${payload.series.exportPrice ?? EMPTY_PRICE_RAIL}
+          .importColumns=${payload.importPriceColumns}
+          .exportColumns=${payload.exportPriceColumns}
           .unit=${payload.priceUnit ?? ""}
           .date=${payload.date}
           .timeZone=${this._haTimeZone() ?? "UTC"}
@@ -4007,14 +2417,9 @@ export class HelmanSolarInspector extends LitElement {
           .slotMinutes=${this._slotMinutes}
           .nowMs=${this._nowMs}
           @slot-pick=${(event: CustomEvent<SlotPickDetail>) =>
-            this._handleStripSlotPick(event, payload)}
+            this._handleStripSlotPick(event)}
           @slot-hover=${this._handleStripHover}
           @slot-tooltip=${this._handleStripTooltip}
-          @price-columns=${(event: CustomEvent<PriceColumnsDetail>) => {
-            this._importPriceColumns = event.detail.importColumns;
-            this._exportPriceColumns = event.detail.exportColumns;
-            this._priceUnit = event.detail.unit;
-          }}
         ></helman-solar-price-strip>
       </div>
     `;
@@ -4038,7 +2443,7 @@ export class HelmanSolarInspector extends LitElement {
           .slotMinutes=${this._slotMinutes}
           .nowMs=${this._nowMs}
           @slot-pick=${(event: CustomEvent<SlotPickDetail>) =>
-            this._handleStripSlotPick(event, payload)}
+            this._handleStripSlotPick(event)}
           @slot-hover=${this._handleStripHover}
           @slot-tooltip=${this._handleStripTooltip}
         ></helman-solar-money-strip>
@@ -4047,10 +2452,7 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   /** Resolve a strip click to the slot it lands in, or clear the selection. */
-  private _handleStripSlotPick(
-    event: CustomEvent<SlotPickDetail>,
-    payload: InspectorPayload,
-  ) {
+  private _handleStripSlotPick(event: CustomEvent<SlotPickDetail>) {
     const minutes = event.detail?.minutes ?? null;
     if (minutes === null) {
       this._deselectSlot();
@@ -4059,720 +2461,7 @@ export class HelmanSolarInspector extends LitElement {
     this._selectSlot(
       this._slotLabelForMinutes(minutes),
       event.detail?.mode ?? "replace",
-      payload,
     );
-  }
-
-  /** The battery SoC strip. */
-  private _renderSocSection(payload: InspectorPayload, layout: ChartLayout) {
-    return html`
-      <div class="compact-strip-section chart-separator">
-        <span class="compact-strip-label">${this._t("bias_correction.inspector.battery_soc_strip_compact")}</span>
-        <div class="soc-strip-wrap">${this._renderSocStrip(payload, layout)}</div>
-      </div>
-    `;
-  }
-
-  private _renderChart(payload: InspectorPayload, stacks: ChartStacks, layout: ChartLayout) {
-    // The seam is derived with the stacks in `willUpdate`; the strips below
-    // read the same field, so their columns turn forecast where the stacks
-    // above turn hatched.
-    const forecastFillFrom = this._forecastFillFromMinutes;
-    return svg`
-      <svg
-        viewBox="0 0 ${layout.width} ${layout.height}"
-        role="img"
-        aria-label=${this._t("bias_correction.inspector.title")}
-        style="cursor: pointer;"
-        @click=${(e: MouseEvent) => this._handleChartClick(e, payload)}
-        @mousemove=${(e: MouseEvent) => this._handleMainChartHover(e, payload, stacks, layout)}
-        @mouseleave=${() => this._clearHover()}
-      >
-        ${this._renderChartBackground(layout)}
-        ${this._plotClipDef("plot-clip-chart", layout, layout.height)}
-        ${this._renderHoverHighlight(layout, layout.margin.top, layout.plotHeight)}
-        ${this._renderSlotHighlights(layout, layout.margin.top, layout.plotHeight)}
-        ${this._renderLeftAxis(layout)}
-        ${this._renderXAxis(layout)}
-        <g clip-path="url(#plot-clip-chart)">
-          ${this._renderStackSet(layout, stacks.actual, "actual", Number.NEGATIVE_INFINITY)}
-          ${this._renderStackSet(layout, stacks.forecast, "forecast", forecastFillFrom)}
-          ${this._renderSolarLayer(payload, layout)}
-        </g>
-        <!-- Over the bands, not under them: the mark has to take colour out of
-             the column it covers, and a wash painted underneath only lightens
-             the empty background around the bars, which reads as a highlight --
-             the opposite of what a short column should look like. -->
-        ${this._renderPartialBuckets(layout, layout.margin.top, layout.plotHeight)}
-        ${this._renderNowMarker(layout, layout.margin.top, layout.plotHeight)}
-      </svg>
-    `;
-  }
-
-  /**
-   * The two stacks, in the order they build outwards from the zero baseline:
-   * solar, battery discharge and grid import above; house, battery charge and
-   * grid export below.
-   *
-   * House is drawn as two bands rather than one, on both sides of now —
-   * non-deferrable against the baseline, the shiftable part stacked on top of it
-   * in the lighter house shade. Each pair sums to the same house total, so every
-   * band above them keeps its place and the day's shape is unchanged; only its
-   * subdivision appears.
-   */
-  private _buildStacks(payload: InspectorPayload): ChartStacks {
-    const series = payload.series;
-    // One helper, one shape, both sides of now: measured demand splits by what
-    // the meters say ran, forecast demand by what the planner scheduled.
-    const actualSplit = splitHouseByDeferrable(series.houseActual, series.houseActualBreakdown);
-    const forecastSplit = splitHouseByDeferrable(series.houseForecast, series.houseForecastBreakdown);
-    const solarForecast = this._stackLayer("corrected", CHART_COLORS.corrected, series.corrected, false);
-    const solarActual = this._stackLayer("actual", CHART_COLORS.actual, series.actual, false);
-    // Each family's two bands share one `SeriesKey` and its single legend entry,
-    // so hiding house still collapses the pair.
-    const houseForecastNonDeferrable = this._stackLayer("houseForecast", CHART_COLORS.house, forecastSplit.nonDeferrable, true);
-    const houseForecastDeferrable = this._stackLayer("houseForecast", CHART_COLORS.houseDeferrable, forecastSplit.deferrable, true);
-    const houseActualNonDeferrable = this._stackLayer("houseActual", CHART_COLORS.house, actualSplit.nonDeferrable, true);
-    const houseActualDeferrable = this._stackLayer("houseActual", CHART_COLORS.houseDeferrable, actualSplit.deferrable, true);
-    const batteryForecast = this._stackLayer("batteryForecast", CHART_COLORS.battery, series.batteryForecast, true);
-    const batteryActual = this._stackLayer("batteryActual", CHART_COLORS.battery, series.batteryActual, true);
-    const gridForecast = this._stackLayer("gridForecast", CHART_COLORS.grid, series.gridForecast, true);
-    const gridActual = this._stackLayer("gridActual", CHART_COLORS.grid, series.gridActual, true);
-    return {
-      forecast: {
-        positive: [solarForecast, batteryForecast, gridForecast],
-        negative: [houseForecastNonDeferrable, houseForecastDeferrable, batteryForecast, gridForecast],
-      },
-      actual: {
-        positive: [solarActual, batteryActual, gridActual],
-        negative: [houseActualNonDeferrable, houseActualDeferrable, batteryActual, gridActual],
-      },
-    };
-  }
-
-  /**
-   * The first slot the forecast has to speak for alone: one past the last
-   * measured slot. With no actuals at all the forecast fills the whole day.
-   */
-  private _forecastFillFrom(stacks: ChartStacks): number {
-    const lastActual = lastStackSlot(stacks.actual);
-    return lastActual === null ? Number.NEGATIVE_INFINITY : lastActual + this._slotMinutes;
-  }
-
-  /** A hidden series yields an empty layer, so toggling it collapses its band. */
-  private _stackLayer(
-    key: StackedSeriesKey,
-    color: string,
-    points: InspectorPoint[],
-    consumptionPositive: boolean,
-  ): StackLayer {
-    if (!this._isSeriesVisible(key)) return { color, values: new Map() };
-    const oriented = consumptionPositive ? asSupplyPositive(points) : points;
-    return {
-      color,
-      values: toSlotMap(toAveragePower(oriented, { bucketMinutes: this._slotMinutes })),
-    };
-  }
-
-  /**
-   * A stacked area. Slots from `fillFrom` onwards are drawn as filled bands;
-   * everything before it is drawn as dashed band edges only.
-   *
-   * The measured stack fills throughout. The forecast stack fills only the part
-   * of the day the actuals never reached, and recedes to bare edges over the
-   * measured hours, where it is a claim to compare against rather than the
-   * account of what happened.
-   */
-  private _renderStackSet(
-    layout: ChartLayout,
-    set: StackSet,
-    variant: "actual" | "forecast",
-    fillFrom: number,
-  ) {
-    const slots = stackSlots(set, this._slotMinutes);
-    if (!slots.length) return "";
-    const { xForMinutes, yForW } = layout;
-    // Each slot's power is an average over the interval that starts at it, so a
-    // band is a run of rectangles, not a sloped ribbon between sample points.
-    const stepEdge = (slot: number, level: Map<number, number>) => [
-      [xForMinutes(slot), yForW(level.get(slot)!)] as const,
-      [xForMinutes(slot + this._slotMinutes), yForW(level.get(slot)!)] as const,
-    ];
-    const toPath = (points: readonly (readonly [number, number])[]) =>
-      points.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
-    const forecast = variant === "forecast";
-    const dash = forecast ? "4 3" : "";
-
-    const outline = (run: number[], band: StackBand) => svg`
-      <path d=${toPath(run.flatMap((slot) => stepEdge(slot, band.top)))} fill="none"
-            stroke=${band.layer.color} stroke-width=${FORECAST_OUTLINE.width}
-            stroke-dasharray=${dash} stroke-opacity=${FORECAST_OUTLINE.opacity}></path>
-    `;
-    const area = (run: number[], band: StackBand) => {
-      const outer = run.flatMap((slot) => stepEdge(slot, band.top));
-      const inner = [...run].reverse().flatMap((slot) => [...stepEdge(slot, band.base)].reverse());
-      // Measured hours read as solid colour; the forecast is hatched, so it is
-      // legible as a projection even where no actual line sits beside it.
-      const fill = forecast ? `url(#${hatchId(band.layer.color)})` : band.layer.color;
-      const fillOpacity = forecast ? FORECAST_BAND_FILL_OPACITY : ACTUAL_FILL_OPACITY;
-      return svg`
-        <path d=${`${toPath([...outer, ...inner])} Z`} fill=${fill}
-              fill-opacity=${fillOpacity} stroke=${band.layer.color} stroke-width="0.75"
-              stroke-dasharray=${dash} stroke-opacity="0.6"></path>
-      `;
-    };
-
-    return [1, -1].flatMap((sign) => {
-      const layers = sign > 0 ? set.positive : set.negative;
-      return accumulateBands(layers, slots, sign as 1 | -1).flatMap((band) =>
-        // Slots where the band is flat carry no information and would stroke
-        // over the band beneath them, so each run of real height stands alone.
-        bandRuns(band, slots).flatMap((run) => {
-          // `fillFrom` is monotonic across a sorted run, so each side stays
-          // contiguous and the two pieces abut at the boundary with no seam.
-          const outlined = run.filter((slot) => slot < fillFrom);
-          const filled = run.filter((slot) => slot >= fillFrom);
-          return [
-            outlined.length ? outline(outlined, band) : "",
-            filled.length ? area(filled, band) : "",
-          ].filter(Boolean);
-        }),
-      );
-    });
-  }
-
-  /**
-   * A clip rectangle over the plot area, so series cropped to the daylight window
-   * never spill past its edges into the axis gutter. The id must be unique per
-   * `<svg>`, since a duplicate would resolve to the wrong strip's rectangle.
-   */
-  private _plotClipDef(id: string, layout: ChartLayout, height: number) {
-    return svg`
-      <defs>
-        <clipPath id=${id}>
-          <rect x=${layout.margin.left} y="0" width=${layout.plotWidth} height=${height}></rect>
-        </clipPath>
-      </defs>
-    `;
-  }
-
-  private _renderChartBackground(layout: ChartLayout) {
-    return svg`
-      <rect x="0" y="0" width=${layout.width} height=${layout.height} fill="var(--card-background-color)"></rect>
-      <defs>
-        ${STACK_HATCH_COLORS.map((color) => svg`
-          <pattern id=${hatchId(color)} patternUnits="userSpaceOnUse" width="5" height="5" patternTransform="rotate(45)">
-            <rect width="5" height="5" fill=${color} fill-opacity="0.12"></rect>
-            <line x1="0" y1="0" x2="0" y2="5" stroke=${color} stroke-width="1.5" stroke-opacity="0.7"></line>
-          </pattern>
-        `)}
-        <pattern id="impact-interpolated-positive" patternUnits="userSpaceOnUse" width="4" height="4" patternTransform="rotate(45)">
-          <rect width="4" height="4" fill=${CHART_COLORS.impactPositive} fill-opacity="0.12"></rect>
-          <line x1="0" y1="0" x2="0" y2="4" stroke=${CHART_COLORS.impactPositive} stroke-width="1.6" stroke-opacity="0.85"></line>
-        </pattern>
-        <pattern id="impact-interpolated-negative" patternUnits="userSpaceOnUse" width="4" height="4" patternTransform="rotate(45)">
-          <rect width="4" height="4" fill=${CHART_COLORS.impactNegative} fill-opacity="0.12"></rect>
-          <line x1="0" y1="0" x2="0" y2="4" stroke=${CHART_COLORS.impactNegative} stroke-width="1.6" stroke-opacity="0.85"></line>
-        </pattern>
-      </defs>
-    `;
-  }
-
-  private _renderLeftAxis(layout: ChartLayout) {
-    const { margin, width, yTicks, yForW } = layout;
-    return svg`
-      <text x="12" y="16" fill="var(--secondary-text-color)" font-size="11">${this._t("bias_correction.inspector.power_axis_label")}</text>
-      ${yTicks.map((tick) => {
-        const y = yForW(tick * 1000);
-        const isZeroBaseline = tick === 0 && layout.minKw < 0;
-        return svg`
-          <line x1=${margin.left} y1=${y} x2=${width - margin.right} y2=${y}
-                stroke=${isZeroBaseline ? "var(--secondary-text-color)" : "var(--divider-color)"}
-                stroke-width="1"
-                opacity=${isZeroBaseline ? "0.6" : "1"}></line>
-          <text x=${margin.left - 8} y=${y + 4} text-anchor="end" fill="var(--secondary-text-color)" font-size="11">${tick.toFixed(1)}</text>
-        `;
-      })}
-    `;
-  }
-
-  private _renderXAxis(layout: ChartLayout) {
-    const { margin, height, xForMinutes } = layout;
-    return renderSlotGridlines({
-      ticks: this._slotGridTicks(layout),
-      xForMinutes,
-      top: margin.top,
-      bottom: height - margin.bottom,
-      labelY: height - 10,
-    });
-  }
-
-  /**
-   * The time grid for this layout: a line per slot, hours labelled as densely
-   * as the plot's width allows. Every row under the chart draws the same ticks,
-   * so the whole inspector is ruled by one grid.
-   */
-  private _slotGridTicks(layout: ChartLayout): SlotGridTick[] {
-    return slotGridTicks({
-      startMinutes: layout.dayStartMinutes,
-      endMinutes: layout.dayEndMinutes,
-      slotMinutes: this._slotMinutes,
-      plotWidth: layout.plotWidth,
-    });
-  }
-
-  /**
-   * The solar diagnostics that sit outside the stacks: the uncorrected forecast,
-   * and the slots whose measurement was thrown away. Corrected forecast and
-   * actual production are the bottom band of their respective stack.
-   */
-  private _renderSolarLayer(payload: InspectorPayload, layout: ChartLayout) {
-    const { xForMinutes, yForW } = layout;
-    const visible = (series: SeriesKey, points: ChartEntry[]) =>
-      this._isSeriesVisible(series) ? points : [];
-    const rawPoints = visible("raw", toAveragePower(payload.series.raw));
-    const actualPoints = visible("actual", toAveragePower(payload.series.actual, { bucketMinutes: this._slotMinutes }));
-    const invalidatedPoints = visible("actual", toAveragePower(payload.series.invalidated, { bucketMinutes: this._slotMinutes }));
-
-    const linePath = (points: ChartEntry[]) =>
-      points
-        .map((entry, index) => {
-          const command = index === 0 ? "M" : "L";
-          return `${command}${xForMinutes(entry.minutes).toFixed(1)},${yForW(entry.powerW).toFixed(1)}`;
-        })
-        .join(" ");
-
-    // Invalidated slots are measurements too, so they extend how far the
-    // actuals reach and therefore how much of the forecast reads as history.
-    const measured = closeIntervalSeries(
-      [...actualPoints, ...invalidatedPoints].sort((a, b) => a.minutes - b.minutes),
-      this._slotMinutes,
-    );
-
-    return svg`
-      ${rawPoints.length > 1
-        ? this._renderForecastSplit(rawPoints, measured, (entry) => entry.minutes, linePath, CHART_COLORS.raw)
-        : rawPoints.length === 1
-          ? svg`<circle cx=${xForMinutes(rawPoints[0].minutes)} cy=${yForW(rawPoints[0].powerW)} r="3.5" fill=${CHART_COLORS.raw}></circle>`
-          : ""}
-      ${invalidatedPoints.map((entry) => svg`
-        <circle cx=${xForMinutes(entry.minutes)} cy=${yForW(entry.powerW)} r="3.5" style="fill: var(--helman-neutral-light);" opacity="0.55">
-          <title>${this._t("bias_correction.inspector.invalidated_production")}</title>
-        </circle>
-      `)}
-    `;
-  }
-
-  /**
-   * Battery state of charge, as a column per slot below the power chart.
-   *
-   * SoC is a level, not a flow, so it does not belong in a plot whose y axis is
-   * watts. Given its own strip it keeps the chart's x scale — a column sits
-   * under the power it produced — while its height reads against the battery's
-   * own scale: empty, the configured floor and ceiling it is held between, and
-   * full.
-   */
-  private _renderSocStrip(payload: InspectorPayload, layout: ChartLayout) {
-    const bars = this._socBarsModel;
-    if (!bars.length) return "";
-    const { height } = SOC_STRIP;
-    const yForPct = (pct: number) => this._yForSocPct(pct);
-    const barWidth = Math.max(3, layout.slotWidth);
-    return svg`
-      <svg
-        viewBox="0 0 ${layout.width} ${height}"
-        role="img"
-        aria-label=${this._t("bias_correction.inspector.battery_soc_strip")}
-        style="cursor: pointer;"
-        @click=${(e: MouseEvent) => this._handleChartClick(e, payload)}
-        @mousemove=${(e: MouseEvent) => this._handleSocHover(e, payload, layout, bars)}
-        @mouseleave=${() => this._clearHover()}
-      >
-        <defs>
-          <!-- The scrim darkens whatever it covers, so the strokes are light in
-               both themes: dark-on-dark would read as a solid band, not a hatch. -->
-          <pattern id=${SOC_UNUSABLE_HATCH_ID} patternUnits="userSpaceOnUse"
-                   width="5" height="5" patternTransform="rotate(45)">
-            <rect width="5" height="5" fill="#000" fill-opacity="0.45"></rect>
-            <line x1="0" y1="0" x2="0" y2="5" stroke="#fff"
-                  stroke-width="1.8" stroke-opacity="0.4"></line>
-          </pattern>
-        </defs>
-        ${this._plotClipDef("plot-clip-soc", layout, height)}
-        ${this._renderSocGridlines(layout, yForPct)}
-        ${renderSlotGridlines({
-          ticks: this._slotGridTicks(layout),
-          xForMinutes: layout.xForMinutes,
-          top: 0,
-          bottom: height,
-        })}
-        ${this._renderHoverHighlight(layout, 0, height)}
-        ${this._renderSlotHighlights(layout, 0, height)}
-        <g clip-path="url(#plot-clip-soc)">
-        ${bars.map((bar) => {
-          const top = yForPct(bar.pct);
-          const color = SOC_DIRECTION_COLOR[bar.direction];
-          const opacity = bar.forecast
-            ? SOC_COLUMN_OPACITY.forecast
-            : SOC_COLUMN_OPACITY.measured;
-          const x = layout.xForMinutes(bar.minutes) + 0.5;
-          return svg`
-            <rect
-              x=${x} y=${top}
-              width=${Math.max(2, barWidth - 1)} height=${Math.max(1, yForPct(0) - top)}
-              style=${`fill: ${color}; stroke: ${color};`}
-              fill-opacity=${opacity}
-              stroke-width=${bar.forecast ? 0.9 : 0}
-              stroke-dasharray=${bar.forecast ? "2 2" : ""}
-            ></rect>
-          `;
-        })}
-        ${this._renderSocForecastLine(payload, bars, layout, yForPct)}
-        ${this._renderSocUnusableZones(payload, layout, yForPct)}
-        </g>
-        ${this._renderNowMarker(layout, 0, height)}
-        <!-- The percentages come after the marker so the line runs behind the
-             two digits it crosses rather than through them. -->
-        <g clip-path="url(#plot-clip-soc)">
-        ${(() => {
-          // Scoped to the window the plot draws, not the whole day: the columns
-          // beyond it are clipped away, and letting them into the selection
-          // spends the "keep the two ends" rule on midnight and 23:45 -- ends
-          // nobody can see -- and judges the series on hours nobody is reading.
-          const labels = bars.map((bar) => bar.minutes < layout.dayStartMinutes
-            || bar.minutes >= layout.dayEndMinutes
-            ? { value: null, text: null }
-            : { value: bar.pct, text: `${Math.round(bar.pct)}%` });
-          const labelled = selectLabelledColumns(labels, {
-            // The pitch the labels are laid out on, which is the slot width --
-            // `barWidth` is floored at 3 so a hairline column still draws, and
-            // striding on that floor would space the numbers closer than they
-            // actually sit.
-            columnWidthPx: layout.slotWidth,
-            anchorOffset: hourAnchorOffset(bars.map((bar) => bar.minutes)),
-          });
-          return bars.map((bar, index) => labelled[index] ? stripValueLabel({
-            x: layout.xForMinutes(bar.minutes) + 0.5 + Math.max(2, barWidth - 1) / 2,
-            y: Math.max(yForPct(bar.pct) - 3, 9),
-            text: labels[index].text!,
-          }) : "");
-        })()}
-        </g>
-      </svg>
-    `;
-  }
-
-  /** The columns of the strip: measured where measured, forecast beyond. */
-  private _socBars(payload: InspectorPayload): SocBar[] {
-    const actual = this._isSeriesVisible("batterySocActual") ? payload.series.batterySocActual : [];
-    const forecast = this._isSeriesVisible("batterySocForecast")
-      ? payload.series.batterySocForecast
-      : [];
-    return buildSocBars(actual, forecast, this._forecastFillFromMinutes);
-  }
-
-  /**
-   * One series' columns across the whole day, for the selected-slot panel.
-   *
-   * The panel reports the two series side by side, so neither may yield to the
-   * other at the seam the way the strip's columns do: each is built as if it
-   * were the only one there. The forecast still rides along when the measured
-   * columns are built, since a measured column at the edge of the recording
-   * borrows the forecast's step across its own slot -- exactly as the strip
-   * does. With nothing measured there is no measured column to speak of; the
-   * empty list keeps `buildSocBars` from handing the forecast the whole day.
-   */
-  private _socSelectionBars(payload: InspectorPayload, series: "actual" | "forecast"): SocBar[] {
-    if (series === "forecast") {
-      return buildSocBars([], payload.series.batterySocForecast, Number.NEGATIVE_INFINITY);
-    }
-    if (!payload.series.batterySocActual.length) return [];
-    return buildSocBars(
-      payload.series.batterySocActual,
-      payload.series.batterySocForecast,
-      Number.POSITIVE_INFINITY,
-    );
-  }
-
-  /**
-   * The forecast's own level at every slot of the day, not just the ones it
-   * speaks for alone -- so it can be traced as a dashed line over the measured
-   * columns too, the same way the chart above keeps drawing the forecast's
-   * outline over the hours the actuals have already filled in.
-   */
-  private _socForecastBars(payload: InspectorPayload): SocBar[] {
-    if (!this._isSeriesVisible("batterySocForecast")) return [];
-    return buildSocBars([], payload.series.batterySocForecast, Number.NEGATIVE_INFINITY);
-  }
-
-  /**
-   * A dashed step-line tracing the forecast's SoC across the measured part of
-   * the day -- the part its own column no longer represents, since that column
-   * now shows the actual reading instead.
-   *
-   * Keyed off the strip's own measured/forecast split (`socBars`), not the
-   * power chart's seam: the SoC actuals can lag or lead the power actuals, so
-   * the two do not necessarily turn forecast at the same slot.
-   */
-  private _renderSocForecastLine(
-    payload: InspectorPayload,
-    socBars: readonly SocBar[],
-    layout: ChartLayout,
-    yForPct: (pct: number) => number,
-  ) {
-    const measuredMinutes = new Set(
-      socBars.filter((bar) => !bar.forecast).map((bar) => bar.minutes),
-    );
-    if (!measuredMinutes.size) return "";
-    const bars = this._socForecastBars(payload)
-      .filter((bar) => measuredMinutes.has(bar.minutes))
-      .sort((a, b) => a.minutes - b.minutes);
-    if (!bars.length) return "";
-    // Each bar is its own flat tread, joined to the previous one by a vertical
-    // step. A bar that does not butt up against its predecessor is on the far
-    // side of a stretch nothing was forecast for -- since the history readers
-    // stopped holding across an `unavailable`, those slots are simply absent --
-    // so the pen lifts there rather than ramping across the hole and drawing a
-    // trajectory the forecast never held.
-    const path = bars
-      .map((bar, index) => {
-        const previous = bars[index - 1];
-        const contiguous =
-          previous !== undefined && previous.minutes + this._slotMinutes === bar.minutes;
-        const y = yForPct(bar.pct).toFixed(1);
-        const start = layout.xForMinutes(bar.minutes).toFixed(1);
-        const end = layout.xForMinutes(bar.minutes + this._slotMinutes).toFixed(1);
-        return `${contiguous ? "L" : "M"}${start},${y} L${end},${y}`;
-      })
-      .join(" ");
-    // A fixed battery hue would sit almost on top of the "charging" column
-    // colour (both greens), so the line reads against the theme's own text
-    // colour instead -- contrast that holds regardless of a bar's direction.
-    // Width and dash match the chart above's own forecast outline exactly.
-    return svg`
-      <path d=${path} fill="none" stroke="var(--primary-text-color, #fff)"
-            stroke-width=${FORECAST_OUTLINE.width} stroke-dasharray="4 3"
-            stroke-opacity=${FORECAST_OUTLINE.opacity}></path>
-    `;
-  }
-
-  /** The SoC strip's own y scale: 0% at the baseline, 100% at the top. */
-  private _yForSocPct(pct: number): number {
-    const { padTop, padBottom, height } = SOC_STRIP;
-    const innerHeight = height - padTop - padBottom;
-    return padTop + (1 - Math.max(0, Math.min(100, pct)) / 100) * innerHeight;
-  }
-
-  /**
-   * Hover for the SoC strip: the whole slot-wide column counts as "on" it, not
-   * just the sliver its own reading fills -- a single-series bar (unlike the
-   * combined chart's stacked bands) has nothing else there to disambiguate,
-   * so a value near 0% would otherwise be nearly impossible to point at.
-   */
-  private _handleSocHover(
-    event: MouseEvent,
-    payload: InspectorPayload,
-    layout: ChartLayout,
-    bars: readonly SocBar[],
-  ) {
-    const svgEl = event.currentTarget as SVGSVGElement;
-    const rect = svgEl.getBoundingClientRect();
-    const svgX = ((event.clientX - rect.left) / rect.width) * layout.width;
-    if (svgX < layout.margin.left || svgX > layout.width - layout.margin.right) {
-      this._clearHover();
-      return;
-    }
-    const minutes = this._minutesForSvgX(layout, svgX);
-    const index = bars.findIndex(
-      (bar) => minutes >= bar.minutes && minutes < bar.minutes + this._slotMinutes,
-    );
-    const bar = index >= 0 ? bars[index] : null;
-    if (!bar) {
-      this._clearHover();
-      return;
-    }
-    // The bar itself is either the actual reading or, ahead of it, the
-    // forecast standing in alone -- never both -- so only a measured bar has
-    // a real actual column to show.
-    const hasActual = !bar.forecast;
-    // Each column already carries both ends of its own slot, so the levels it
-    // moved between read straight off it -- no neighbour to consult.
-    const forecastBar =
-      this._socForecastBars(payload).find((fc) => fc.minutes === bar.minutes) ?? null;
-    const rows: TooltipRow[] = [
-      {
-        label: this._t("bias_correction.inspector.soc_direction_label"),
-        actual: hasActual
-          ? { value: this._t(`bias_correction.inspector.soc_direction.${bar.direction}`), color: SOC_DIRECTION_COLOR[bar.direction] }
-          : null,
-        forecast: forecastBar
-          ? { value: this._t(`bias_correction.inspector.soc_direction.${forecastBar.direction}`), color: SOC_DIRECTION_COLOR[forecastBar.direction] }
-          : null,
-      },
-      {
-        label: this._t("bias_correction.inspector.soc_from"),
-        actual: hasActual ? { value: this._formatPct(bar.fromPct) } : null,
-        forecast: forecastBar ? { value: this._formatPct(forecastBar.fromPct) } : null,
-      },
-      {
-        label: this._t("bias_correction.inspector.soc_to"),
-        actual: hasActual ? { value: this._formatPct(bar.pct) } : null,
-        forecast: forecastBar ? { value: this._formatPct(forecastBar.pct) } : null,
-      },
-    ];
-    this._reportPointer({
-      minutes: bar.minutes,
-      tooltip: this._tooltipAt(event, rows, hasActual, bar.slot),
-    });
-  }
-
-  /** The two levels a column is read against: empty and full. */
-  private _renderSocGridlines(layout: ChartLayout, yForPct: (pct: number) => number) {
-    const xLeft = layout.margin.left;
-    const xRight = layout.width - layout.margin.right;
-    return [0, 100].map((pct) => svg`
-      <line x1=${xLeft} y1=${yForPct(pct)} x2=${xRight} y2=${yForPct(pct)}
-            stroke="var(--divider-color)" stroke-width="1"></line>
-      <text x=${xLeft - 8} y=${yForPct(pct) + 4} text-anchor="end"
-            fill="var(--secondary-text-color)" font-size="11">${pct}%</text>
-    `);
-  }
-
-  /**
-   * The SoC a slot could never reach: below its floor and above its ceiling.
-   *
-   * Both bounds are entities the day can move, so each slot is hatched against
-   * its own window rather than the whole strip against one pair of lines. The
-   * hatch lies over the columns, mostly transparent, so a column that strays
-   * outside its window — a floor raised above where the battery already sat —
-   * still reads through it.
-   */
-  private _renderSocUnusableZones(
-    payload: InspectorPayload,
-    layout: ChartLayout,
-    yForPct: (pct: number) => number,
-  ) {
-    const slotWidth = layout.slotWidth;
-    /** `edge` is the side facing the SoC the battery may actually reach. */
-    const zone = (minutes: number, topPct: number, bottomPct: number, edge: "top" | "bottom") => {
-      const y = yForPct(topPct);
-      const height = yForPct(bottomPct) - y;
-      if (height <= 0) return "";
-      const x = layout.xForMinutes(minutes);
-      const edgeY = edge === "top" ? y : y + height;
-      return svg`
-        <rect x=${x} y=${y} width=${slotWidth} height=${height}
-              fill=${`url(#${SOC_UNUSABLE_HATCH_ID})`} pointer-events="none"></rect>
-        <line x1=${x} y1=${edgeY} x2=${x + slotWidth} y2=${edgeY}
-              stroke="var(--primary-text-color)" stroke-width="1" stroke-opacity="0.7"
-              pointer-events="none"></line>
-      `;
-    };
-    return payload.batterySocBounds.map((bound) => {
-      const minutes = slotToMinutes(bound.slot);
-      if (minutes === null) return "";
-      return svg`
-        ${bound.minPct === null ? "" : zone(minutes, bound.minPct, 0, "top")}
-        ${bound.maxPct === null ? "" : zone(minutes, 100, bound.maxPct, "bottom")}
-      `;
-    });
-  }
-
-  /**
-   * A dashed forecast line, dimmed where the actuals have overtaken it. Both
-   * segments keep the colour and dash pattern of the series they belong to.
-   */
-  private _renderForecastLine(d: string, color: string, muted: boolean, stroke: StrokeStyle) {
-    const opacity = muted ? MUTED_FORECAST_OPACITY * stroke.opacity : stroke.opacity;
-    return svg`
-      <path d=${d} fill="none" stroke=${color} stroke-width=${stroke.width} stroke-dasharray="4 3"
-            stroke-opacity=${opacity}></path>
-    `;
-  }
-
-  private _renderForecastSplit<T>(
-    forecast: readonly T[],
-    actual: readonly T[],
-    minutesOf: (point: T) => number | null,
-    path: (points: T[]) => string,
-    color: string,
-    stroke: StrokeStyle = POWER_STROKE,
-  ) {
-    const cutoff = lastActualMinutes(actual, minutesOf);
-    const { covered, ahead } = splitForecastAtActuals(forecast, cutoff, minutesOf);
-    return svg`
-      ${covered.length > 1 ? this._renderForecastLine(path(covered), color, true, stroke) : ""}
-      ${ahead.length > 1 ? this._renderForecastLine(path(ahead), color, false, stroke) : ""}
-    `;
-  }
-
-  private _renderImpactStrip(payload: InspectorPayload, layout: ChartLayout) {
-    if (!payload.series.impact.length) return "";
-    const stripHeight = 24;
-    const stripWidth = layout.width;
-    const values = payload.series.impact
-      .map((p) => Math.abs(p.impactWh ?? 0))
-      .filter((v) => Number.isFinite(v));
-    const maxImpact = Math.max(1, ...values);
-    const selectedSlot = resolveSelectedImpactSlot(payload.series.impact, this._selectedSlot);
-    const explainability = payload.trainingExplainability;
-    return svg`
-      <svg
-        viewBox="0 0 ${stripWidth} ${stripHeight}"
-        role="img"
-        aria-label=${this._t("bias_correction.inspector.correction_impact")}
-        style="cursor: pointer;"
-        @click=${(e: MouseEvent) => this._handleChartClick(e, payload)}
-        @mousemove=${(e: MouseEvent) => this._handleChartHover(e, payload)}
-        @mouseleave=${() => this._clearHover()}
-      >
-        ${this._plotClipDef("plot-clip-impact", layout, stripHeight)}
-        ${this._renderHoverHighlight(layout, 0, stripHeight)}
-        ${this._renderSlotHighlights(layout, 0, stripHeight)}
-        <g clip-path="url(#plot-clip-impact)">
-        ${payload.series.impact.map((point) => {
-          if (point.impactWh === null || !Number.isFinite(point.impactWh)) return "";
-          const minutes = slotMinutes(point.slot);
-          if (minutes === null) return "";
-          const x = layout.xForMinutes(minutes);
-          const w = Math.max(3, layout.slotWidth);
-          const h = Math.max(2, (Math.abs(point.impactWh) / maxImpact) * (stripHeight - 4));
-          const y = stripHeight - h - 2;
-          const trainingSlot = explainability?.slots[point.slot] ?? null;
-          const interpolated = trainingSlot?.interpolated === true;
-          const untrained = !interpolated && (trainingSlot === null || trainingSlot.factor === null);
-          const positive = point.impactWh >= 0;
-          const selected = selectedSlot === point.slot;
-          const fill = untrained
-            ? "var(--helman-neutral-light)"
-            : interpolated
-              ? positive ? "url(#impact-interpolated-positive)" : "url(#impact-interpolated-negative)"
-              : positive ? CHART_COLORS.impactPositive : CHART_COLORS.impactNegative;
-          const fillOpacity = untrained ? "0.45" : interpolated ? "1" : "0.55";
-          const strokeColor = selected ? "var(--primary-text-color)" : "transparent";
-          const strokeWidth = selected ? "1.5" : "0";
-          return svg`
-            <rect x=${x} y=${y} width=${w} height=${h}
-                  fill-opacity=${fillOpacity} stroke-width=${strokeWidth}
-                  style="fill: ${fill}; stroke: ${strokeColor}; pointer-events: none;">
-              <title>${point.slot} ${this._formatSignedWh(point.impactWh)}</title>
-            </rect>
-          `;
-        })}
-        </g>
-        ${this._renderNowMarker(layout, 0, stripHeight)}
-        <defs>
-          <pattern id="impact-interpolated-positive" patternUnits="userSpaceOnUse" width="4" height="4" patternTransform="rotate(45)">
-            <rect width="4" height="4" fill=${CHART_COLORS.impactPositive} fill-opacity="0.12"></rect>
-            <line x1="0" y1="0" x2="0" y2="4" stroke=${CHART_COLORS.impactPositive} stroke-width="1.6" stroke-opacity="0.85"></line>
-          </pattern>
-          <pattern id="impact-interpolated-negative" patternUnits="userSpaceOnUse" width="4" height="4" patternTransform="rotate(45)">
-            <rect width="4" height="4" fill=${CHART_COLORS.impactNegative} fill-opacity="0.12"></rect>
-            <line x1="0" y1="0" x2="0" y2="4" stroke=${CHART_COLORS.impactNegative} stroke-width="1.6" stroke-opacity="0.85"></line>
-          </pattern>
-        </defs>
-      </svg>
-    `;
   }
 
   /** The slot the detail panel and training table follow. */
@@ -4814,10 +2503,9 @@ export class HelmanSolarInspector extends LitElement {
   private _selectSlot(
     slot: string,
     mode: SlotSelectionMode = "replace",
-    payload?: InspectorPayload,
   ) {
     this._applySelection(applySlotSelection({
-      orderedSlots: this._orderedSlots(payload ?? null),
+      orderedSlots: this._orderedSlots(null),
       selection: this._slotSelection,
       target: slot,
       mode,
@@ -4845,60 +2533,6 @@ export class HelmanSolarInspector extends LitElement {
     }
   }
 
-  private _renderTotals(payload: InspectorPayload) {
-    return html`
-      <div class="metrics-section">
-        <strong>${this._t("bias_correction.inspector.daily_totals")}</strong>
-        <div class="metric-grid">
-          ${this._isSeriesVisible("raw")
-            ? this._renderMetric(this._t("bias_correction.inspector.raw_forecast"), this._formatWh(payload.totals.rawWh), CHART_COLORS.raw, true, "raw", this._partialTotalNote("raw"))
-            : ""}
-          ${this._renderMergedMetric(
-            this._t("bias_correction.inspector.merged.solar"),
-            CHART_COLORS.corrected,
-            this._mergedPart(payload.totals.correctedWh, (v) => this._formatWh(v), this._t("bias_correction.inspector.corrected_forecast"), this._partialTotalNote("corrected")),
-            this._mergedPart(payload.totals.actualWh, (v) => this._formatWh(v), this._t("bias_correction.inspector.actual_production"), this._partialTotalNote("actual")),
-            "corrected",
-            "actual",
-          )}
-          ${this._renderMergedMetric(
-            this._t("bias_correction.inspector.merged.house"),
-            CHART_COLORS.house,
-            this._mergedPart(negateWh(payload.totals.houseForecastWh), (v) => this._formatWh(v), this._t("bias_correction.inspector.house_forecast"), this._partialTotalNote("houseForecast")),
-            this._mergedPart(negateWh(payload.totals.houseActualWh), (v) => this._formatWh(v), this._t("bias_correction.inspector.house_actual"), this._partialTotalNote("houseActual")),
-            "houseForecast",
-            "houseActual",
-          )}
-          ${this.houseFocus && payload.date < this._todayIso()
-            ? this._renderHouseForecastErrorMetric(
-              payload.totals.houseForecastWh,
-              payload.totals.houseActualWh,
-              [this._partialTotalNote("houseForecast"), this._partialTotalNote("houseActual")]
-                .filter((note) => note !== null).join(" · ") || null,
-            )
-            : ""}
-          ${this._renderMergedMetric(
-            this._t("bias_correction.inspector.merged.grid"),
-            CHART_COLORS.grid,
-            this._mergedPart(negateWh(payload.totals.gridForecastWh), (v) => this._formatWh(v), this._t("bias_correction.inspector.grid_forecast"), this._partialTotalNote("gridForecast")),
-            this._mergedPart(negateWh(payload.totals.gridActualWh), (v) => this._formatWh(v), this._t("bias_correction.inspector.grid_actual"), this._partialTotalNote("gridActual")),
-            "gridForecast",
-            "gridActual",
-          )}
-          ${this._renderMergedMetric(
-            this._t("bias_correction.inspector.merged.battery"),
-            CHART_COLORS.battery,
-            this._mergedPart(negateWh(payload.totals.batteryForecastWh), (v) => this._formatWh(v), this._t("bias_correction.inspector.battery_forecast"), this._partialTotalNote("batteryForecast")),
-            this._mergedPart(negateWh(payload.totals.batteryActualWh), (v) => this._formatWh(v), this._t("bias_correction.inspector.battery_actual"), this._partialTotalNote("batteryActual")),
-            "batteryForecast",
-            "batteryActual",
-          )}
-          ${this.hideMoneyStrip ? "" : this._renderMoneyMetrics(payload, null)}
-        </div>
-      </div>
-    `;
-  }
-
   /**
    * The selection, narrowed to slots of the day's own grid, in chronological
    * order.
@@ -4917,194 +2551,6 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   /**
-   * The selection as the time it actually covers — "13:00 – 14:00" rather than the
-   * bare start of one slot, so the heading says what span its sums are for. Each
-   * slot runs to the next boundary at the active width; adjacent slots merge into
-   * one span, and a selection with gaps lists each run, so the label can never
-   * imply time that isn't selected. Midnight at the end of the day reads "24:00".
-   */
-  private _formatSelectionRange(slots: readonly string[]): string {
-    const runs: Array<[number, number]> = [];
-    for (const slot of slots) {
-      const start = slotToMinutes(slot);
-      if (start === null) continue;
-      const end = start + this._slotMinutes;
-      const last = runs[runs.length - 1];
-      if (last && last[1] === start) {
-        last[1] = end;
-      } else {
-        runs.push([start, end]);
-      }
-    }
-    if (runs.length === 0) return slots.join(", ");
-    return runs
-      .map(([start, end]) => `${formatClock(start)} – ${formatClock(end)}`)
-      .join(", ");
-  }
-
-  /**
-   * The metrics for the whole selection, not just the focus slot: every energy
-   * figure is the sum across the selected slots, aggregated by the same rules the
-   * slot-width buttons use. The training diagnostics below stay on the focus slot
-   * — a correction factor is fitted per slot, so there is nothing to sum.
-   */
-  private _renderSelectedSlotDetails(payload: InspectorPayload) {
-    const slots = this._selectedSlotsIn(payload);
-    const selectedSlot = resolveSelectedImpactSlot(payload.series.impact, this._selectedSlot)
-      ?? this._selectedSlot
-      ?? slots[0]
-      ?? null;
-    if (!selectedSlot || slots.length === 0) return "";
-    const impact = aggregateImpactOverSlots(payload.series.impact, slots);
-    const rawWh = sumWhOverSlots(payload.series.raw, slots);
-    const correctedWh = sumWhOverSlots(payload.series.corrected, slots);
-    const actualWh = sumWhOverSlots(payload.series.actual, slots);
-    const trainingSlot = findTrainingSlot(payload.trainingExplainability, selectedSlot);
-    const houseFcWh = sumWhOverSlots(payload.series.houseForecast, slots);
-    const houseAcWh = sumWhOverSlots(payload.series.houseActual, slots);
-    const houseBreakdown = aggregateBreakdownOverSlots(
-      payload.series.houseActualBreakdown,
-      slots,
-    );
-    const houseForecastBreakdown = aggregateBreakdownOverSlots(
-      payload.series.houseForecastBreakdown,
-      slots,
-    );
-    // Both SoC readings come off the strip's own columns, so the panel states
-    // the level the selection ends at exactly as the last column drawn under it
-    // does — rather than the level it opened on, which for a multi-slot
-    // selection is a reading from somewhere in its middle.
-    const batterySocFc = socBarAtSelectionEnd(this._socSelectionBars(payload, "forecast"), slots);
-    const batterySocAc = socBarAtSelectionEnd(this._socSelectionBars(payload, "actual"), slots);
-    const gridFcWh = sumWhOverSlots(payload.series.gridForecast, slots);
-    const gridAcWh = sumWhOverSlots(payload.series.gridActual, slots);
-    const batteryFcWh = sumWhOverSlots(payload.series.batteryForecast, slots);
-    const batteryAcWh = sumWhOverSlots(payload.series.batteryActual, slots);
-    const interpolated = trainingSlot?.interpolated === true;
-    const anchors = trainingSlot?.interpolationAnchors ?? null;
-    // Summed across every selected bucket rather than read off just the focus
-    // slot: a multi-slot selection can straddle more than one marked column,
-    // and the panel's job is to say what the sums above are short by, not just
-    // whether the first bucket happens to be short. Kept per series through the
-    // sum so the note can still name what is short.
-    const missingInSelection = new Map<SeriesKey, number>();
-    for (const slot of slots) {
-      const minutes = slotToMinutes(slot);
-      if (minutes === null) continue;
-      for (const [key, count] of this._partialBuckets.get(minutes) ?? []) {
-        missingInSelection.set(key, (missingInSelection.get(key) ?? 0) + count);
-      }
-    }
-    const impactColor = (impact?.impactWh ?? null) === null
-      ? undefined
-      : (impact!.impactWh! >= 0 ? CHART_COLORS.impactPositive : CHART_COLORS.impactNegative);
-    // The bias-correction internals (impact, factor, interpolation, training
-    // contributions) ride along with the raw forecast: hidden by default, they
-    // surface only once the raw diagnostic is turned on.
-    const showDiagnostics = this._isSeriesVisible("raw");
-    return html`
-      <div class="metrics-section">
-        <strong>
-          ${this._t("bias_correction.inspector.selected_slot", {
-            slot: this._formatSelectionRange(slots),
-          })}
-          ${interpolated && showDiagnostics
-            ? html`<span class="interpolation-note" title=${this._t("bias_correction.inspector.interpolated_explanation")}>
-                ${this._t("bias_correction.inspector.interpolated_from", {
-                  left: anchors?.left ?? this._t("bias_correction.inspector.interpolated_anchor_zero"),
-                  right: anchors?.right ?? this._t("bias_correction.inspector.interpolated_anchor_zero"),
-                })}
-              </span>`
-            : ""}
-        </strong>
-        ${interpolated && showDiagnostics
-          ? html`<div class="day-state">${this._t("bias_correction.inspector.interpolated_explanation")}</div>`
-          : ""}
-        ${missingInSelection.size
-          ? html`<div class="day-state">${this._formatPartialBucketNote(missingInSelection, slots.length)}</div>`
-          : ""}
-        <div class="metric-grid">
-          ${this._isSeriesVisible("raw")
-            ? this._renderMetric(this._t("bias_correction.inspector.raw_forecast"), this._formatWh(rawWh ?? impact?.rawWh ?? null), CHART_COLORS.raw, true, "raw")
-            : ""}
-          ${this._renderMergedMetric(
-            this._t("bias_correction.inspector.merged.solar"),
-            CHART_COLORS.corrected,
-            this._mergedPart(correctedWh ?? impact?.correctedWh ?? null, (v) => this._formatWh(v), this._t("bias_correction.inspector.corrected_forecast")),
-            this._mergedPart(actualWh, (v) => this._formatWh(v), this._t("bias_correction.inspector.actual_production")),
-            "corrected",
-            "actual",
-          )}
-          ${this._renderMergedMetric(
-            this._t("bias_correction.inspector.merged.house"),
-            CHART_COLORS.house,
-            this._mergedPart(negateWh(houseFcWh), (v) => this._formatWh(v), this._t("bias_correction.inspector.house_forecast")),
-            this._mergedPart(negateWh(houseAcWh), (v) => this._formatWh(v), this._t("bias_correction.inspector.house_actual")),
-            "houseForecast",
-            "houseActual",
-          )}
-          ${this.houseFocus
-            && this._everySlotHasActual(payload.series.houseActual, slots)
-            && !missingInSelection.has("houseActual")
-            && !missingInSelection.has("houseForecast")
-            ? this._renderHouseForecastErrorMetric(houseFcWh, houseAcWh)
-            : ""}
-          ${showDiagnostics
-            ? this._renderMetric(this._t("bias_correction.inspector.correction_impact"), this._formatSignedWh(impact?.impactWh ?? null), impactColor)
-            : ""}
-          ${showDiagnostics
-            ? this._renderMetric(this._t("bias_correction.inspector.factor"), this._formatFactor(impact?.factor ?? trainingSlot?.factor ?? null), impactColor)
-            : ""}
-          ${this._renderMergedMetric(
-            this._t("bias_correction.inspector.merged.battery_soc"),
-            CHART_COLORS.battery,
-            this._mergedPart(batterySocFc?.pct ?? null, (v) => this._formatPct(v), this._t("bias_correction.inspector.battery_soc_forecast")),
-            this._mergedPart(batterySocAc?.pct ?? null, (v) => this._formatPct(v), this._t("bias_correction.inspector.battery_soc_actual")),
-            "batterySocForecast",
-            "batterySocActual",
-          )}
-          ${this._renderMergedMetric(
-            this._t("bias_correction.inspector.merged.grid"),
-            CHART_COLORS.grid,
-            this._mergedPart(negateWh(gridFcWh), (v) => this._formatWh(v), this._t("bias_correction.inspector.grid_forecast")),
-            this._mergedPart(negateWh(gridAcWh), (v) => this._formatWh(v), this._t("bias_correction.inspector.grid_actual")),
-            "gridForecast",
-            "gridActual",
-          )}
-          ${this._renderMergedMetric(
-            this._t("bias_correction.inspector.merged.battery"),
-            CHART_COLORS.battery,
-            this._mergedPart(negateWh(batteryFcWh), (v) => this._formatWh(v), this._t("bias_correction.inspector.battery_forecast")),
-            this._mergedPart(negateWh(batteryAcWh), (v) => this._formatWh(v), this._t("bias_correction.inspector.battery_actual")),
-            "batteryForecast",
-            "batteryActual",
-          )}
-          ${this._importPriceColumns.length
-            ? this._renderMetric(
-                this._t("bias_correction.inspector.merged.import_price"),
-                this._formatPrice(this._priceAtSelectionStart(this._importPriceColumns, slots)),
-              )
-            : ""}
-          ${this._exportPriceColumns.length
-            ? this._renderMetric(
-                this._t("bias_correction.inspector.merged.export_price"),
-                this._formatPrice(this._priceAtSelectionStart(this._exportPriceColumns, slots)),
-              )
-            : ""}
-          ${this.hideMoneyStrip ? "" : this._renderMoneyMetrics(payload, slots)}
-        </div>
-      </div>
-      ${this._isSeriesEnabled("houseActual")
-        ? this._renderHouseBreakdown(houseBreakdown, slots, "actual")
-        : ""}
-      ${this._isSeriesEnabled("houseForecast")
-        ? this._renderHouseBreakdown(houseForecastBreakdown, slots, "forecast")
-        : ""}
-      ${showDiagnostics ? this._renderContributionTable(payload, selectedSlot, trainingSlot) : ""}
-    `;
-  }
-
-  /**
    * The switch entities the house-composition panel draws a live badge for,
    * bubbled up so the card at the top can watch them. This is the inspector's
    * own contribution to the watch set — the ids come from the payload, not from
@@ -5112,7 +2558,7 @@ export class HelmanSolarInspector extends LitElement {
    * anywhere else in Home Assistant would leave its badge stale indefinitely.
    *
    * Taken from the *unfiltered* breakdown, not from the `wh > 0` subset
-   * `_renderHouseBreakdown` draws: the backend's consumer roster is built from
+   * `renderHouseBreakdown` draws: the backend's consumer roster is built from
    * config and takes no date, so the unfiltered set is the same on every day,
    * while the rendered subset is not. Dispatching the rendered subset would make
    * the card's union grow as the user pages through days.
@@ -5125,748 +2571,6 @@ export class HelmanSolarInspector extends LitElement {
       }
     }
     dispatchWatchedEntities(this, "house-breakdown", [...ids]);
-  }
-
-  /**
-   * The house demand for the selected slot split into each named part plus the
-   * remainder, so the single house figure above reads as a sum. Every row carries
-   * a proportion bar sized to its share of the slot total, and the parts reconcile
-   * with the house value by construction. Rendered only when the backend supplied
-   * a breakdown, so a bare house figure simply stands alone.
-   *
-   * One renderer, both sides of now — the two series share a shape precisely so
-   * they can share it. `variant` picks which house the panel is about: `"actual"`
-   * itemises the metered consumers against the measured house, `"forecast"` the
-   * scheduled appliances against the forecast one, each reading its own source
-   * mix so a future slot's bars are coloured by the forecast supply rather than by
-   * measurements that do not exist yet. Their remainders differ in kind and so are
-   * named apart: what no meter accounted for, against the base load.
-   */
-  private _renderHouseBreakdown(
-    breakdown: HouseBreakdownPoint | null,
-    slots: readonly string[],
-    variant: "actual" | "forecast",
-  ) {
-    if (!breakdown) return "";
-    // Bars read off the backend's native 15-minute grid rather than the width the
-    // chart is drawn at, so selecting one hour shows the four samples inside it —
-    // the shape of the consumption, not a single flat block.
-    const native = this._payload?.series;
-    if (!native) return "";
-    const forecast = variant === "forecast";
-    const barSlots = expandSlotsToNative(slots, this._slotMinutes);
-    // How the house was fed in each of those samples, shared by every consumer:
-    // the mix is a house-level property, so it is derived once and then rescaled
-    // per consumer rather than recomputed box by box.
-    const mixes = houseSourceMixBySlot(
-      forecast
-        ? {
-            houseActual: native.houseForecast,
-            gridActual: native.gridForecast,
-            batteryActual: native.batteryForecast,
-          }
-        : native,
-      barSlots,
-    );
-    const breakdownSeries = forecast
-      ? native.houseForecastBreakdown
-      : native.houseActualBreakdown;
-    return this._renderBreakdownPanel({
-      breakdown,
-      barSlots,
-      breakdownSeries,
-      mixes,
-      variant,
-      barSeconds: SLOT_MINUTES * 60,
-      // The forecast's remainder is the residual against the house forecast the
-      // panel sits under, not the composed base alone. At the native width the
-      // two are the same number — every slot the forecast covers now carries a
-      // composition summing to it — but a wide bucket straddling elapsed slots
-      // is only partly covered, and the residual is what keeps the parts summing
-      // to the figure printed above them there.
-      unmeasuredFor: forecast
-        ? (itemised) =>
-            Math.max(0, (sumWhOverSlots(native.houseForecast, barSlots) ?? 0) - itemised)
-        : null,
-    });
-  }
-
-  /**
-   * The panel itself, over whatever buckets its caller keys the breakdown by.
-   *
-   * Everything above this is granularity-specific — which slots the bars are
-   * drawn over, which series they come from, and how the house was fed in each —
-   * and everything below is not, which is why the aggregate views reuse it
-   * rather than growing a second panel that would drift from this one. `slot` is
-   * an opaque key throughout: a native `"HH:MM"` in the day view, a bucket date
-   * at D and M.
-   *
-   * `unmeasuredFor` overrides the remainder for a caller whose composed base
-   * does not already reconcile with the figure printed above the boxes; a null
-   * override takes the breakdown's own.
-   */
-  private _renderBreakdownPanel(options: {
-    breakdown: HouseBreakdownPoint;
-    barSlots: readonly string[];
-    breakdownSeries: readonly HouseBreakdownPoint[];
-    mixes: Map<string, BucketSourceMix>;
-    variant: "actual" | "forecast";
-    barSeconds: number;
-    unmeasuredFor: ((itemisedWh: number) => number) | null;
-  }) {
-    const {
-      breakdown,
-      barSlots,
-      breakdownSeries,
-      mixes,
-      variant,
-      barSeconds,
-      unmeasuredFor,
-    } = options;
-    const forecast = variant === "forecast";
-    // Every box reads the same series over the same samples; only which part it
-    // asks for differs.
-    const barsFor = (part: ApplianceComponent | null | undefined) =>
-      consumerBarsOverSlots(breakdownSeries, barSlots, part, mixes);
-
-    const consumers = breakdown.appliances.filter(
-      (appliance) => Number.isFinite(appliance.wh) && appliance.wh > 0,
-    );
-    // What no meter claimed. This is deliberately not the forecast's
-    // non-deferrable base load — it is the same idea as the power card's
-    // "unmeasured" node, so it reads that node's very label. Like the
-    // consumer boxes it is dropped when it carries nothing, so an empty slot — or
-    // one whose whole demand is metered — shows no dead box.
-    //
-    const composedBase = Number.isFinite(breakdown.unmeasuredWh) ? breakdown.unmeasuredWh : 0;
-    const unmeasuredWh = unmeasuredFor
-      ? unmeasuredFor(consumers.reduce((sum, c) => sum + c.wh, 0))
-      : composedBase;
-    const total = consumers.reduce((sum, c) => sum + c.wh, 0) + Math.max(0, unmeasuredWh);
-    if (total <= 0) return "";
-
-    const consumerNodes: TreeItem[] = consumers.map((appliance) =>
-      this._breakdownNode(
-        appliance.entityId,
-        appliance.label,
-        appliance.wh,
-        appliance.switchEntityId ?? null,
-        appliance.powerEntityId ?? null,
-        false,
-        barsFor(appliance),
-        appliance.deferrable,
-        appliance.controllableIds ?? [],
-        // The identity the rows were merged and the bars drawn by, so four
-        // scheduled air conditioners behind one meter stay four distinct nodes
-        // rather than colliding on the entityId they share.
-        applianceKey(appliance),
-      ),
-    );
-    if (unmeasuredWh > 0) {
-      consumerNodes.push(
-        this._breakdownNode(
-          null,
-          forecast
-            ? this._t("bias_correction.inspector.house_base_load")
-            : this._t("house_section.unmeasured"),
-          unmeasuredWh,
-          null,
-          null,
-          true,
-          barsFor(null),
-        ),
-      );
-    }
-    // Ranked heaviest first so the slot's dominant load reads at a glance. The
-    // remainder sorts by size like any other box rather than being pinned last,
-    // or a large unmetered block would sit below trivial named ones. Groups sort
-    // their own children the same way, one level down.
-    consumerNodes.sort((a, b) => (b.powerValue ?? 0) - (a.powerValue ?? 0));
-
-    // The two groups the panel actually lists. What is shiftable is the question
-    // the whole feature is about, so it is the axis the rows are filed under
-    // rather than something the eye has to reassemble from colours; the
-    // remainder is not shiftable and so files under the base, whichever kind of
-    // remainder this panel's is.
-    const nodes = [
-      this._breakdownGroup(
-        variant,
-        "base",
-        consumerNodes.filter((node) => !node.deferrable),
-        partBarsOverSlots(breakdownSeries, barSlots, mixes, (point) =>
-          point.appliances.reduce((sum, a) => (a.deferrable ? sum : sum + a.wh), 0) +
-          point.unmeasuredWh,
-        ),
-      ),
-      this._breakdownGroup(
-        variant,
-        "deferrable",
-        consumerNodes.filter((node) => node.deferrable),
-        partBarsOverSlots(breakdownSeries, barSlots, mixes, (point) =>
-          point.appliances.reduce((sum, a) => (a.deferrable ? sum + a.wh : sum), 0),
-        ),
-      ),
-      // A group with nothing in it is not a story about this slot, it is an empty
-      // box; a day with nothing shiftable keeps the single list it always had.
-    ].filter((group) => group.children.length > 0);
-
-    // The house's own per-sample energy. Handing it down as the parent scales
-    // every box's bars against the house exactly as the power card scales a child
-    // against its parent, and gives each box its share-of-parent figure.
-    const houseBars = barsFor(undefined);
-
-    return html`
-      <!-- No more-info handler here: helman-tree-item already turns its children's
-           \`show-more-info\` into the \`hass-more-info\` request HA listens for, and
-           that bubbles composed straight out of this card. Re-handling it would
-           open every dialog twice. -->
-      <div class="house-breakdown">
-        <div class="house-breakdown-title">
-          ${this._t(
-            forecast
-              ? "bias_correction.inspector.house_composition_forecast"
-              : "bias_correction.inspector.house_composition",
-          )}
-        </div>
-        <helman-tree-item-list
-          .hass=${this.hass}
-          .devices=${nodes}
-          .currentParentPower=${total}
-          .parentPowerHistory=${houseBars.values}
-          .historyBuckets=${barSlots.length}
-          .historyBucketDuration=${barSeconds}
-          .devices_full_width=${true}
-        ></helman-tree-item-list>
-      </div>
-    `;
-  }
-
-  /**
-   * One of the panel's two groups, as the power card draws a virtual group: a
-   * node whose children are the boxes, collapsed until asked.
-   *
-   * The node object is cached and refilled rather than rebuilt, because that is
-   * where the expanded state lives — `helman-tree-item` toggles `childrenCollapsed`
-   * on the node it was handed, so a group rebuilt per selection would snap shut
-   * every time the user picked another slot. Cached per panel and per group, the
-   * state outlives the selection exactly as the user left it.
-   *
-   * The group carries the sum of its children and their summed bars, so the
-   * collapsed row still says how much of the slot the group accounts for and
-   * what fed it.
-   */
-  private _breakdownGroup(
-    variant: "actual" | "forecast",
-    kind: "base" | "deferrable",
-    children: TreeItem[],
-    bars: ReturnType<typeof partBarsOverSlots>,
-  ): TreeItem {
-    const id = `house-breakdown:${variant}:${kind}`;
-    let node = this._breakdownGroups.get(id);
-    if (!node) {
-      node = new TreeItem(id, "", null, null, bars.values.length);
-      node.children_full_width = true;
-      // Collapsed until the user says otherwise, like every group the power card
-      // draws: the panel's job at a glance is the two totals, not the roster.
-      node.childrenCollapsed = true;
-      this._breakdownGroups.set(id, node);
-    }
-    node.name = this._t(
-      kind === "deferrable"
-        ? "bias_correction.inspector.house_group_deferrable"
-        : "bias_correction.inspector.house_group_base",
-    );
-    node.displayName = node.name;
-    node.deferrable = kind === "deferrable";
-    node.valueKind = "energy";
-    node.historyBuckets = bars.values.length;
-    node.children = children;
-    node.powerValue = children.reduce((sum, child) => sum + (child.powerValue ?? 0), 0);
-    node.powerHistory = bars.values;
-    node.sourcePowerHistory = bars.sourceHistory.map((mix) => mix ?? {});
-    return node;
-  }
-
-  /**
-   * One breakdown consumer as a power-card device node.
-   *
-   * The node carries no `sourceType`, so it draws no glow of its own and inherits
-   * the house tint the panel sets — the same way the power card's own house
-   * children do — unless it is deferrable, in which case it paints itself in the
-   * lighter house shade instead and carries a tag naming it.
-   *
-   * Clicking the box opens the device's live power (W) sensor — the very entity
-   * the power card reads — falling back to the energy stat only where the tree
-   * resolved no power sensor; the unmetered remainder has neither and so stays
-   * inert, exactly as it did before.
-   */
-  private _breakdownNode(
-    entityId: string | null,
-    label: string,
-    wh: number,
-    switchEntityId: string | null,
-    powerEntityId: string | null,
-    isUnmeasured: boolean,
-    bars: ReturnType<typeof consumerBarsOverSlots>,
-    deferrable: boolean = false,
-    controllableIds: string[] = [],
-    nodeId: string | null = null,
-  ): TreeItem {
-    // A scheduled appliance with no meter has no entity to key on and none to
-    // open: it is named by its controllable, so the label is the only identity
-    // there is, and the box gets no sensor rather than a dialog for an entity
-    // that does not exist. A consumer passes the key its rows were merged by as
-    // `nodeId`, which already folds all of that in.
-    const node = new TreeItem(
-      nodeId ?? entityId ?? (isUnmeasured ? "house-unmeasured" : label),
-      label,
-      powerEntityId ?? entityId,
-      switchEntityId,
-      bars.values.length,
-    );
-    node.displayName = label;
-    node.isUnmeasured = isUnmeasured;
-    // Shiftable load is marked twice over: the box takes the shared lighter house
-    // shade and the card's badge channel names the shade, so the colour is not the
-    // only thing carrying the meaning. Both follow from this one flag — helman-tree-item
-    // paints it, helman-tree-item-info tags it — for every card that draws these boxes.
-    node.deferrable = deferrable;
-    // What the badge on the box asks the schedule about. The energy stat above
-    // cannot stand in for it: it is a meter, not the key assignments are stored
-    // under, and a scheduled appliance may have no meter at all.
-    node.controllableIds = controllableIds;
-    // The device this box is, for its detail dialog: the same identity
-    // applianceKey keys the box by, minus the label fallback, so a scheduled
-    // appliance with neither a single controllable nor a meter, and the
-    // unmeasured remainder, open nothing.
-    node.energyEntityId = entityId ?? undefined;
-    node.deviceKey = controllableIds.length === 1 ? controllableIds[0] : entityId ?? undefined;
-    node.deviceKeyIsMeter = controllableIds.length !== 1 && !!entityId;
-    // Energy throughout — the selection's total on the box, each sample's own on
-    // the bars — so the figures are the Wh the breakdown actually reports and no
-    // unit conversion sits between the data and what is drawn.
-    node.valueKind = "energy";
-    node.powerValue = wh;
-    node.powerHistory = bars.values;
-    node.sourcePowerHistory = bars.sourceHistory.map((mix) => mix ?? {});
-    node.hideChildren = true;
-    node.hideChildrenIndicator = true;
-    return node;
-  }
-
-  /**
-   * The tinted fill that marks a value as forecast (hatched) or actual (flat).
-   * Returns the bare CSS value so it can back either a whole card or a single
-   * value chip inside a merged card.
-   */
-  private _seriesFill(color: string, forecast: boolean): string {
-    return forecast
-      ? `repeating-linear-gradient(-45deg, color-mix(in srgb, ${color} 18%, transparent) 0px, color-mix(in srgb, ${color} 18%, transparent) 3px, transparent 3px, transparent 8px)`
-      : `color-mix(in srgb, ${color} 15%, transparent)`;
-  }
-
-  /**
-   * One value inside a merged card, tagged with whether it is present so the
-   * caller can drop the empty half. `title` names the underlying series for the
-   * hover tooltip the merged label no longer spells out. `incomplete` is the
-   * day-total counterpart of `_partialBuckets`: the sentence naming what the
-   * series behind this value is short by, or null when it is whole. The sum is
-   * real either way, so the chip keeps it and says how much of the day stands
-   * behind it rather than presenting it as the day's finished figure.
-   */
-  private _mergedPart(
-    value: number | null,
-    format: (value: number | null) => string,
-    title: string,
-    incomplete: string | null = null,
-  ): { value: string; present: boolean; title: string; incomplete: string | null } {
-    return {
-      value: format(value),
-      present: value !== null && Number.isFinite(value),
-      title,
-      incomplete,
-    };
-  }
-
-  /**
-   * A forecast/actual pair drawn as a single card: the forecast value carries
-   * the hatched fill and the actual value the flat fill, so the two read as one
-   * quantity seen twice. When only one side has data the card shows just that
-   * one. The whole card toggles both series at once.
-   */
-  /**
-   * The actual/forecast chips a metric card carries.
-   *
-   * Shared by the merged metric and the money tile, which differ only in their
-   * wrapper — one is a legend toggle, the other is not — and would otherwise
-   * drift apart in the fill rules that make a chip stand out against the card's
-   * own colour wash: the forecast keeps the hatch, the actual a flat tint one
-   * step darker again.
-   */
-  private _metricChips(
-    color: string,
-    actual: { value: string; present: boolean; title: string; incomplete?: string | null },
-    forecast: { value: string; present: boolean; title: string; incomplete?: string | null },
-    /**
-     * Which half the "neither reported" placeholder speaks for. The forecast by
-     * default, as it always did; the actual when the config left the forecast
-     * out, so the placeholder cannot name a series that is never drawn.
-     */
-    placeholder: "forecast" | "actual" = "forecast",
-  ): TemplateResult[] {
-    const chipFill = (isForecast: boolean): string =>
-      isForecast
-        ? `repeating-linear-gradient(-45deg, color-mix(in srgb, ${color} 42%, transparent) 0px, color-mix(in srgb, ${color} 42%, transparent) 3px, transparent 3px, transparent 7px)`
-        : `color-mix(in srgb, ${color} 34%, transparent)`;
-    const chip = (
-      part: { value: string; title: string; incomplete?: string | null },
-      isForecast: boolean,
-    ): TemplateResult => html`
-      <span
-        class="metric-value metric-chip"
-        style=${`background: ${chipFill(isForecast)};`}
-        title=${part.incomplete ? `${part.title} — ${part.incomplete}` : part.title}
-      >${part.value}${part.incomplete ? html`<sup class="incomplete-mark">*</sup>` : ""}</span>
-    `;
-    const chips: TemplateResult[] = [];
-    if (actual.present) chips.push(chip(actual, false));
-    if (forecast.present) chips.push(chip(forecast, true));
-    // Neither side reported: keep a single placeholder so the card still reads.
-    if (chips.length === 0) {
-      chips.push(placeholder === "forecast" ? chip(forecast, true) : chip(actual, false));
-    }
-    return chips;
-  }
-
-  private _renderMergedMetric(
-    label: string,
-    color: string,
-    forecast: { value: string; present: boolean; title: string },
-    actual: { value: string; present: boolean; title: string },
-    forecastSeries: SeriesKey,
-    actualSeries: SeriesKey,
-  ) {
-    // A series the config left out has no tile at all: a dimmed legend button
-    // that cannot be un-dimmed would read as toggled off rather than absent.
-    if (!this._isSeriesEnabled(forecastSeries) && !this._isSeriesEnabled(actualSeries)) {
-      return "";
-    }
-    // Half a pair can be dropped on its own, and then its chip would report a
-    // number for a band that is never drawn.
-    const forecastEnabled = this._isSeriesEnabled(forecastSeries);
-    const actualEnabled = this._isSeriesEnabled(actualSeries);
-    const chips = this._metricChips(
-      color,
-      actualEnabled ? actual : { ...actual, present: false },
-      forecastEnabled ? forecast : { ...forecast, present: false },
-      forecastEnabled ? "forecast" : "actual",
-    );
-    const toggled = [forecastSeries, actualSeries].filter((key) => this._isSeriesEnabled(key));
-    const visible =
-      this._isSeriesVisible(forecastSeries) || this._isSeriesVisible(actualSeries);
-    // Faint full-card wash plus a solid left rail, both in the series colour, so
-    // the box is identifiable at a glance without drowning the chips.
-    const cardStyle = `background: color-mix(in srgb, ${color} 12%, transparent); border-left: 3px solid ${color};`;
-    return html`
-      <button
-        class="metric-card legend-toggle merged ${visible ? "" : "hidden-series"}"
-        style=${cardStyle}
-        type="button"
-        aria-pressed=${visible ? "true" : "false"}
-        title=${this._t(
-          visible
-            ? "bias_correction.inspector.legend_hide_series"
-            : "bias_correction.inspector.legend_show_series",
-        )}
-        @click=${() => this._toggleSeriesGroup(toggled, visible)}
-      >
-        <div class="metric-label">${label}</div>
-        <div class="metric-chips">${chips}</div>
-      </button>
-    `;
-  }
-
-  /**
-   * A money tile: the merged metric's shape without its legend toggle, since
-   * money is derived from the series rather than being one, and there is
-   * nothing on the chart for a click to hide.
-   */
-  private _renderMoneyMetric(
-    label: string,
-    color: string,
-    actual: { value: string; present: boolean; title: string },
-    forecast: { value: string; present: boolean; title: string },
-  ) {
-    const chips = this._metricChips(color, actual, forecast);
-    const cardStyle = `background: color-mix(in srgb, ${color} 12%, transparent); border-left: 3px solid ${color};`;
-    return html`
-      <div class="metric-card merged" style=${cardStyle}>
-        <div class="metric-label">${label}</div>
-        <div class="metric-chips">${chips}</div>
-      </div>
-    `;
-  }
-
-  /**
-   * The three money tiles, over the whole day or a selection.
-   *
-   * The day reads the payload's own totals, which count the slot in progress
-   * exactly as every energy total does. A selection sums the drawn series
-   * instead, so it excludes that slot exactly as the energy figures beside it
-   * in the selection panel do. Two rules, but each tile follows the same one as
-   * the energy it sits next to — which is the whole point.
-   *
-   * An unpriced direction shows nothing rather than a zero: a day past the
-   * recorder's reach has real exported kWh at an unknown rate, and "earned 0"
-   * would be a claim the data does not support. Per *direction* and per tile,
-   * not per vintage -- a day whose import rail is filled from the configured
-   * windows and whose export rail predates the sell-price entity prices one
-   * side and not the other, and the gain tile is the one that has to admit it.
-   * The net tile then admits it too: with a direction unknown there is no
-   * honest balance, only the priced side wearing the other's name.
-   */
-  private _renderMoneyMetrics(
-    payload: InspectorPayload,
-    slots: string[] | null,
-  ): TemplateResult {
-    const currency = currencyFromPriceUnit(payload.priceUnit);
-    // The selection is on the inspector's current slot width; money is on the
-    // rails' own 15-minute grid. A 60-minute selection therefore has to claim
-    // all four quarters it spans, or its sums would count only the first.
-    const railSlots = slots === null ? null : expandSlotsToNative(slots, this._slotMinutes);
-    // Presence is asked of the *selection*, not the day. Reading it day-wide
-    // would print "0.00" against an hour tonight simply because this morning
-    // had actuals -- claiming a future hour has already cost nothing, which is
-    // the one thing every other tile in this panel is careful not to do. It
-    // needs no flag of its own: an amount is null exactly where it is unknown,
-    // and a selection nothing priced sums to three nulls.
-    const summed = (
-      points: readonly MoneyPoint[],
-      dayTotals: MoneyTotals | null,
-    ): MoneyTotals =>
-      railSlots === null
-        ? dayTotals ?? UNPRICED_MONEY
-        : sumMoney(points, railSlots);
-    const actual = summed(payload.series.moneyActual, payload.totals.moneyActual);
-    const forecast = summed(
-      payload.series.moneyForecast,
-      payload.totals.moneyForecast,
-    );
-    const part = (totals: MoneyTotals, key: keyof MoneyTotals, title: string) => {
-      const amount = totals[key];
-      const present = amount !== null && Number.isFinite(amount);
-      return {
-        value: present ? `${amount.toFixed(2)} ${currency}`.trim() : "—",
-        present,
-        title,
-      };
-    };
-    const tile = (labelKey: string, color: string, key: keyof MoneyTotals) =>
-      this._renderMoneyMetric(
-        this._t(`bias_correction.inspector.${labelKey}`),
-        color,
-        part(actual, key, this._t("bias_correction.inspector.column_actual")),
-        part(forecast, key, this._t("bias_correction.inspector.column_forecast")),
-      );
-    return html`
-      ${tile("import_cost", GRID_IMPORT_COLOR, "cost")}
-      ${tile("export_gain", GRID_EXPORT_COLOR, "gain")}
-      ${tile("net_cost", NEUTRAL_COLOR, "net")}
-    `;
-  }
-
-  /**
-   * The house forecast's miss, actual minus predicted, in energy and as a share
-   * of the actual. Takes consumption magnitudes (the payload's house series are
-   * negative). Absent where either side is missing, so it never claims a miss
-   * it cannot measure.
-   */
-  /**
-   * Whether the actual covers the whole selection. A selection running past now
-   * sums the forecast over every slot and the actual only over the elapsed
-   * ones, which would read as a miss the forecast never made. A wider bucket
-   * with native holes still has a point, so the caller also checks
-   * `_partialBuckets`.
-   */
-  private _everySlotHasActual(points: readonly InspectorPoint[], slots: readonly string[]): boolean {
-    const measured = new Set(points.map((point) => point.slot));
-    return slots.every((slot) => measured.has(slot));
-  }
-
-  private _renderHouseForecastErrorMetric(
-    forecastWh: number | null,
-    actualWh: number | null,
-    incomplete: string | null = null,
-  ) {
-    // Read off both series, so the allowlist has to let both through.
-    if (!this._isSeriesEnabled("houseForecast") || !this._isSeriesEnabled("houseActual")) return "";
-    const error = houseForecastError(forecastWh, actualWh);
-    if (error === null) return "";
-    return this._renderMetric(
-      this._t("bias_correction.inspector.house_forecast_error"),
-      `${this._formatSignedWh(error.errorWh)} (${formatHouseForecastErrorPct(error)})`,
-      CHART_COLORS.house,
-      false,
-      undefined,
-      incomplete,
-    );
-  }
-
-  private _renderMetric(
-    label: string,
-    value: string,
-    color?: string,
-    dashed?: boolean,
-    series?: SeriesKey,
-    // Raw is the one metric on this card that never goes through `_mergedPart`
-    // (it has no actual side to pair with), so it carries the same
-    // `_partialSeries` mark through its own parameter rather than a chip.
-    incomplete: string | null = null,
-  ) {
-    if (series && !this._isSeriesEnabled(series)) return "";
-    let background = "";
-    if (color) {
-      background = `background: ${this._seriesFill(color, dashed === true)};`;
-    }
-    const valueContent = incomplete
-      ? html`<span title=${incomplete}>${value}<sup class="incomplete-mark">*</sup></span>`
-      : value;
-    if (!series) {
-      return html`
-        <div class="metric-card" style=${background}>
-          <div class="metric-label">${label}</div>
-          <div class="metric-value">${valueContent}</div>
-        </div>
-      `;
-    }
-    const visible = this._isSeriesVisible(series);
-    return html`
-      <button
-        class="metric-card legend-toggle ${visible ? "" : "hidden-series"}"
-        style=${background}
-        type="button"
-        aria-pressed=${visible ? "true" : "false"}
-        title=${this._t(
-          visible
-            ? "bias_correction.inspector.legend_hide_series"
-            : "bias_correction.inspector.legend_show_series",
-        )}
-        @click=${() => this._toggleSeries(series)}
-      >
-        <div class="metric-label">${label}</div>
-        <div class="metric-value">${valueContent}</div>
-      </button>
-    `;
-  }
-
-  private _renderContributionTable(
-    payload: InspectorPayload,
-    selectedSlot: string,
-    trainingSlot: TrainingSlotExplainability | null,
-  ) {
-    if (!payload.availability.hasProfile) {
-      return html`<div class="note">${this._t("bias_correction.inspector.no_profile")}</div>`;
-    }
-    if (!payload.trainingExplainability) {
-      return html`<div class="note">${this._t("bias_correction.inspector.no_explainability")}</div>`;
-    }
-    if (!trainingSlot) {
-      return html`<div class="note">${this._t("bias_correction.inspector.no_slot_explainability", { slot: selectedSlot })}</div>`;
-    }
-    const selectedTrainingDate = this._resolveSelectedTrainingDate(selectedSlot);
-    const interpolated = trainingSlot.interpolated === true;
-    const anchors = trainingSlot.interpolationAnchors ?? null;
-    const ratioBounds = this._computeRatioBounds(trainingSlot.rows);
-    return html`
-      <div class="contribution-summary">
-        <button
-          class="contribution-toggle"
-          aria-expanded=${!this._trainingTableCollapsed}
-          @click=${() => { this._trainingTableCollapsed = !this._trainingTableCollapsed; }}
-        >
-          <span class="contribution-toggle-icon ${this._trainingTableCollapsed ? "" : "expanded"}">▶</span>
-          ${this._t("bias_correction.inspector.training_contribution")}
-        </button>
-      </div>
-      ${this._trainingTableCollapsed ? "" : html`
-        <div class="contribution-summary">
-          <div class="day-state">
-            ${this._t("bias_correction.inspector.training_contribution_meta", {
-              ratio: this._formatFactor(trainingSlot.rawRatio),
-              factor: this._formatFactor(trainingSlot.factor),
-            })}
-          </div>
-          ${interpolated
-            ? html`<div class="day-state">
-                ${this._t("bias_correction.inspector.interpolated_meta", {
-                  left: anchors?.left ?? this._t("bias_correction.inspector.interpolated_anchor_zero"),
-                  right: anchors?.right ?? this._t("bias_correction.inspector.interpolated_anchor_zero"),
-                })}
-              </div>`
-            : ""}
-          ${payload.range.isToday
-            ? html`<div class="day-state">${this._t("bias_correction.inspector.today_training_note")}</div>`
-            : ""}
-          <label class="impact-strip-switch">
-            <input
-              type="checkbox"
-              .checked=${this._impactStripVisible}
-              @change=${() => { this._impactStripVisible = !this._impactStripVisible; }}
-            />
-            ${this._t("bias_correction.inspector.show_impact_strip")}
-          </label>
-        </div>
-        <div class="contribution-table-wrap">
-          <table class="contribution-table">
-            <thead>
-              <tr>
-                <th>${this._t("bias_correction.inspector.date")}</th>
-                <th class="numeric">${this._t("bias_correction.inspector.forecast_wh")}</th>
-                <th class="numeric">${this._t("bias_correction.inspector.actual_wh")}</th>
-                <th class="numeric">${this._t("bias_correction.inspector.ratio")}</th>
-                <th>${this._t("bias_correction.inspector.status")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${this._sortContributionRows(trainingSlot.rows).map((row) => {
-                if (row.status === "interpolated") {
-                  return html`
-                    <tr class="contribution-row synthetic" aria-disabled="true">
-                      <td>—</td>
-                      <td class="numeric">—</td>
-                      <td class="numeric">—</td>
-                      <td class="ratio">—</td>
-                      <td>${this._formatContributionStatus(row.status, row.reason)}</td>
-                    </tr>
-                  `;
-                }
-                const selected = row.date === selectedTrainingDate;
-                const muted = row.status === "invalidated";
-                const classes = [
-                  "contribution-row",
-                  selected ? "selected" : "",
-                  muted ? "muted" : "",
-                ].filter(Boolean).join(" ");
-                return html`
-                <tr
-                  class=${classes}
-                  aria-selected=${selected ? "true" : "false"}
-                  tabindex="0"
-                  @click=${() => this._selectTrainingDate(row.date)}
-                  @keydown=${(event: KeyboardEvent) => this._handleContributionRowKeydown(event, row.date)}
-                >
-                  <td>${row.date || "-"}</td>
-                  <td class="numeric">${this._formatWh(row.forecastWh)}</td>
-                  <td class="numeric">${this._formatWh(row.actualWh)}</td>
-                  <td class="ratio">${muted ? this._formatFactor(row.ratio) : this._renderRatioGauge(row.ratio, ratioBounds)}</td>
-                  <td>${this._formatContributionStatus(row.status, row.reason)}</td>
-                </tr>
-              `;})}
-            </tbody>
-          </table>
-        </div>
-      `}
-    `;
   }
 
   /**
@@ -5911,8 +2615,8 @@ export class HelmanSolarInspector extends LitElement {
         // grid the same way a manual press does it -- otherwise a selection
         // carried in from a 15-minute day would point at slots this day has no
         // columns for.
-        if (this._payloadGranularity(payload) > this._slotMinutes) {
-          this._setSlotMinutes(this._payloadGranularity(payload));
+        if (payloadGranularity(payload) > this._slotMinutes) {
+          this._setSlotMinutes(payloadGranularity(payload));
         }
         const reconciled = reconcileSlotSelection(
           this._orderedSlots(null),
@@ -5936,52 +2640,6 @@ export class HelmanSolarInspector extends LitElement {
       }
       this.requestUpdate();
     }
-  }
-
-  /**
-   * The days the pill row offers, derived from the selected one.
-   *
-   * Expanded detail uses a three-month buffer around the browsing anchor.
-   * Aggregate views keep their single month around the focused bucket.
-   *
-   * Collapsed, the row is what it has always been: today to the end of the
-   * forecast when the selection is not behind, and otherwise a fixed seven-day
-   * block. The block is a function of the selection alone — no offset to keep
-   * in step with it — and every day inside one block maps back to that same
-   * block, so clicking a pill never moves the row out from under the click.
-   */
-  private _pillWindow(today: string): { start: string; end: string } {
-    const selected = this._selectedDate || today;
-    if (this._navExpanded && this._viewMode === "day") {
-      return calendarWindow(this._calendarAnchor || selected, this._dayRange?.minDate ?? selected,
-        this._dayRange?.maxDate ?? today, resolveFirstWeekdayIndex(this.hass?.locale));
-    }
-    if (this._navExpanded) {
-      // Anchored on the bucket the aggregate views have selected, when they
-      // have one, and only otherwise on the date. In the year view
-      // `_selectedDate` is the span start, so anchoring on it alone drew
-      // January under every month of the year -- and dropped the reader into a
-      // January day when they clicked one.
-      return this._monthBounds(
-        this._viewMode === "day" ? selected : (this._focusBucket() ?? selected),
-      );
-    }
-    if (this.houseFocus) {
-      // House pills only carry elapsed days, so the row is a seven-day block
-      // ending today rather than one starting there -- otherwise the panel
-      // opens on a row of unavailable gauges.
-      const daysBack = Math.max(0, daysBetween(selected, today));
-      const end = addDays(today, -7 * Math.floor(daysBack / 7));
-      return { start: addDays(end, -6), end };
-    }
-    if (selected >= today) {
-      return { start: today, end: this._dayRange?.maxDate ?? today };
-    }
-
-    const daysBack = daysBetween(selected, today);
-    const weeksBack = Math.ceil(daysBack / 7);
-    const start = addDays(today, -7 * weeksBack);
-    return { start, end: addDays(start, 6) };
   }
 
   /**
@@ -6046,11 +2704,6 @@ export class HelmanSolarInspector extends LitElement {
     this.requestUpdate();
   }
 
-  private _handleForecastHealth = (event: CustomEvent<DayPillForecastHealthDetail>) => {
-    event.stopPropagation();
-    this._forecast = event.detail.forecast;
-  };
-
   /**
    * A day pill was pressed. What that means depends on what the chart is
    * drawing, and in no case is it a change of granularity.
@@ -6084,16 +2737,9 @@ export class HelmanSolarInspector extends LitElement {
     this._load();
   }
 
-  private _handleContributionRowKeydown(event: KeyboardEvent, date: string) {
-    if (event.key !== "Enter" && event.key !== " ") {
-      return;
-    }
-    event.preventDefault();
-    this._selectTrainingDate(date);
-  }
-
   private _syncChartResizeObserver() {
-    const chartWrap = this.renderRoot.querySelector<HTMLElement>(".chart-wrap");
+    // The aggregate chart's frame, or the day chart: either spans the card.
+    const chartWrap = this.renderRoot.querySelector<HTMLElement>(".chart-wrap, helman-solar-day-chart");
     if (!chartWrap) {
       this._disconnectChartResizeObserver();
       return;
@@ -6144,7 +2790,7 @@ export class HelmanSolarInspector extends LitElement {
   }
 
   private _parseIsoDate(value: string): { year: number; month: number; day: number } {
-    return parseDayKey(value) ?? parseDayKey(this._todayIso())!;
+    return navigationParseOrToday(value, this._todayIso());
   }
 
   private _formatDay(value: string) {
@@ -6164,59 +2810,6 @@ export class HelmanSolarInspector extends LitElement {
     return this._payload?.timezone ?? this.hass?.config?.time_zone;
   }
 
-  private _formatWh(value: number | null) {
-    return orNa(value, v => formatEnergyWh(v).display, this._t("bias_correction.inspector.actual_not_available"));
-  }
-
-  private _formatSignedWh(value: number | null) {
-    return orNa(value, v => formatEnergyWh(v, { signed: true }).display, this._t("bias_correction.inspector.actual_not_available"));
-  }
-
-  private _formatFactor(value: number | null) {
-    return orNa(value, v => v.toFixed(3), "-");
-  }
-
-  private _formatPct(value: number | null): string {
-    return orNa(value, v => `${v.toFixed(1)} %`, this._t("bias_correction.inspector.actual_not_available"));
-  }
-
-  private _formatPrice(value: number | null): string {
-    return orNa(value, v => formatMoney(v, this._priceUnit), this._t("bias_correction.inspector.actual_not_available"));
-  }
-
-  /**
-   * The price the selection opens on -- a rate, not an energy, so it is read at
-   * the first slot rather than summed, the same rule the SoC box follows.
-   */
-  private _priceAtSelectionStart(
-    columns: readonly PriceColumn[],
-    slots: readonly string[],
-  ): number | null {
-    for (const slot of slots) {
-      const minutes = slotToMinutes(slot);
-      if (minutes === null) continue;
-      const column = columns.find(
-        (c) => minutes >= c.startMinutes && minutes < c.endMinutes,
-      );
-      if (column) return column.value;
-    }
-    return null;
-  }
-
-  private _sortContributionRows(rows: ContributionRow[]): ContributionRow[] {
-    const dated: ContributionRow[] = [];
-    const synthetic: ContributionRow[] = [];
-    for (const row of rows) {
-      if (row.status === "interpolated" || !row.date) {
-        synthetic.push(row);
-      } else {
-        dated.push(row);
-      }
-    }
-    dated.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
-    return [...dated, ...synthetic];
-  }
-
   /**
    * The slot of the day a pointer minute falls in, as an `HH:MM` label.
    *
@@ -6234,255 +2827,6 @@ export class HelmanSolarInspector extends LitElement {
     const width = this._slotMinutes > 0 ? this._slotMinutes : 15;
     const start = Math.floor(minutes / width) * width;
     return formatClock(start);
-  }
-
-  private _handleChartClick(event: MouseEvent, payload: InspectorPayload) {
-    const layout = this._layout;
-    if (!layout) return;
-    const svgEl = event.currentTarget as SVGSVGElement;
-    const rect = svgEl.getBoundingClientRect();
-    const svgX = ((event.clientX - rect.left) / rect.width) * layout.width;
-    if (svgX < layout.margin.left || svgX > layout.width - layout.margin.right) {
-      this._deselectSlot();
-      return;
-    }
-    // Snap to the slot the pointer sits *inside* before resolving, so a click
-    // anywhere across a slot's width selects it — the same slot hover highlights.
-    // Resolving the raw pointer minute to the nearest slot *start* instead biased
-    // the right half of every slot onto the next slot's start.
-    const minutes = this._minutesForSvgX(layout, svgX);
-    this._selectSlot(
-      this._slotLabelForMinutes(minutes),
-      slotSelectionModeForEvent(event),
-      payload,
-    );
-  }
-
-  /**
-   * The vertical "now" line, on whichever chart of the stack asks for it.
-   *
-   * Only today gets one, and only while the moment falls inside the drawn
-   * window — the daylight crop can put it off the axis entirely, and a line
-   * pinned to the edge would claim a time the chart is not showing.
-   */
-  private _renderNowMarker(layout: ChartLayout, y: number, height: number) {
-    const minutes = nowMinutesOnDay(
-      this._selectedDate,
-      this._haTimeZone() ?? "UTC",
-      this._nowMs,
-    );
-    if (minutes === null) return "";
-    if (minutes < layout.dayStartMinutes || minutes > layout.dayEndMinutes) return "";
-    return renderNowMarker(layout.xForMinutes(minutes), y, y + height, this._t("scheduling.badge.now"));
-  }
-
-  /** One highlight band per selected slot. */
-  private _renderSlotHighlights(layout: ChartLayout, y: number, height: number) {
-    return this._slotSelection.selectedSlots.map(
-      (slot) => this._renderSlotHighlight(layout, y, height, slot),
-    );
-  }
-
-  private _renderSlotHighlight(
-    layout: ChartLayout,
-    y: number,
-    height: number,
-    selectedSlot: string | null,
-  ) {
-    if (!selectedSlot) return "";
-    const minutes = slotMinutes(selectedSlot);
-    if (minutes === null) return "";
-    // A slot cropped out of the daylight window has no place on the axis.
-    if (minutes < layout.dayStartMinutes || minutes >= layout.dayEndMinutes) return "";
-    const x = layout.xForMinutes(minutes);
-    const w = Math.max(3, layout.slotWidth);
-    return svg`
-      <rect
-        x=${x} y=${y} width=${w} height=${height}
-        style="fill: color-mix(in srgb, var(--helman-grid-import) 13%, transparent); stroke: var(--helman-grid-import);"
-        stroke-width="1" stroke-opacity="0.5"
-        rx="1"
-        pointer-events="none"
-      ></rect>
-    `;
-  }
-
-  /**
-   * A wash over every column `_partialBuckets` flagged, so one drawn short
-   * because a slot inside it went `unavailable` cannot be mistaken for one the
-   * forecast genuinely called low.
-   *
-   * The fill is the card's own background rather than a tint of the foreground:
-   * painted over the bands it takes colour *out* of the column, which is what a
-   * reader already reads as "less than the rest". A tint added on top — or the
-   * same tint painted underneath, where it only lights up the empty background
-   * around the bars — reads as a highlight instead, and a highlight says "look
-   * here, there is something", the opposite of what is being said.
-   *
-   * A rect over the whole column rather than surgery on the stack paths: the
-   * stack is built from contiguous runs per band (`_renderStackSet`) and `raw`
-   * is a line on top of it (`_renderSolarLayer`), so marking one bucket inside
-   * those would mean splitting every run at that bucket, per band, per series
-   * — and would still leave the line unmarked. `_renderSlotHighlight` already
-   * draws this exact column geometry for the selection, so this reuses it with
-   * a different, unmistakably non-selection fill.
-   */
-  private _renderPartialBuckets(layout: ChartLayout, y: number, height: number) {
-    if (!this.dimIncompleteSlots) return "";
-    return [...this._partialBuckets.entries()].map(([start, perSeries]) =>
-      this._renderPartialBucket(layout, y, height, start, perSeries));
-  }
-
-  private _renderPartialBucket(
-    layout: ChartLayout,
-    y: number,
-    height: number,
-    bucketStartMinutes: number,
-    perSeries: ReadonlyMap<SeriesKey, number>,
-  ) {
-    // Cropped out of the daylight window, exactly as a selected slot would be.
-    if (bucketStartMinutes < layout.dayStartMinutes || bucketStartMinutes >= layout.dayEndMinutes) {
-      return "";
-    }
-    const x = layout.xForMinutes(bucketStartMinutes);
-    const w = Math.max(3, layout.slotWidth);
-    const note = this._formatPartialBucketNote(perSeries, 1);
-    // The wash carries the meaning; the rule under it is only there to say the
-    // dimming is deliberate. It sits inside the column's edges so a run of
-    // marked columns reads as separate ticks rather than one long line, and it
-    // is the one thing here drawn in a foreground colour -- a border around the
-    // column, however faint, competes with the selection outline and reads as
-    // "look at this" rather than "there is less here than there looks".
-    return svg`
-      <g class="partial-bucket-mark" data-bucket-start=${bucketStartMinutes}>
-        <rect
-          x=${x} y=${y} width=${w} height=${height}
-          style="fill: color-mix(in srgb, var(--card-background-color) 62%, transparent);"
-        ><title>${note}</title></rect>
-        <rect
-          x=${x + 1.5} y=${y + height - 2} width=${Math.max(1, w - 3)} height="2"
-          style="fill: var(--secondary-text-color);" fill-opacity="0.4"
-          pointer-events="none"
-        ></rect>
-      </g>
-    `;
-  }
-
-  /**
-   * "House consumption: missing 2 of 4 readings (50%)", one line per series
-   * that is short — shared by the scrim's title and the selected-slot panel,
-   * so the two ways a reader can find out why a column is marked say the same
-   * thing. Which series it is matters as much as how many readings: the same
-   * two missing readings are a hole in the bar itself or in the SoC line above
-   * it, and the column looks identical either way.
-   *
-   * `bucketCount` is how many columns the counts cover: one for the scrim,
-   * however many the reader has selected for the panel. Without the "of N"
-   * the number is unreadable — two missing readings is nearly nothing across
-   * a selected afternoon and most of an hour on its own.
-   */
-  private _formatPartialBucketNote(
-    perSeries: ReadonlyMap<SeriesKey, number>,
-    bucketCount: number,
-  ): string {
-    const perBucket = Math.max(1, Math.round(this._slotMinutes / this._partialBucketGranularityMinutes));
-    return [...perSeries.entries()]
-      .map(([key, missing]) => `${this._seriesLabel(key)}: ${this._formatIncompleteNote(
-        "bias_correction.inspector.partial_bucket",
-        missing,
-        bucketCount * perBucket,
-      )}`)
-      .join("\n");
-  }
-
-  /**
-   * The name a series goes by in the totals grid, reused wherever else it has
-   * to be named. One lookup rather than a label per call site, so a series
-   * cannot end up called two different things in two places.
-   */
-  private _seriesLabel(series: SeriesKey): string {
-    return this._t(`bias_correction.inspector.${SERIES_LABEL_KEYS[series]}`);
-  }
-
-  /** The same sentence for a whole day's total, or null for a series with no hole. */
-  private _partialTotalNote(series: SeriesKey): string | null {
-    const coverage = this._partialSeries.get(series);
-    return coverage
-      ? this._formatIncompleteNote(
-        "bias_correction.inspector.partial_total",
-        coverage.missing,
-        coverage.expected,
-      )
-      : null;
-  }
-
-  /**
-   * Missing out of expected, with the share it works out to.
-   *
-   * The percentage is the point of the sentence — a count alone cannot tell a
-   * day that lost one reading from one that lost two thirds of them — so a
-   * share that rounds to zero is written as "<1" rather than as "0%", which
-   * would read as nothing being missing at all on a mark that only exists
-   * because something is.
-   */
-  private _formatIncompleteNote(key: string, missing: number, expected: number): string {
-    const share = expected > 0 ? (missing / expected) * 100 : 0;
-    return this._t(key, {
-      count: missing,
-      total: expected,
-      percent: share > 0 && share < 1 ? "<1" : String(Math.round(share)),
-    });
-  }
-
-  private _computeRatioBounds(rows: ContributionRow[]): RatioBounds {
-    let min = Number.POSITIVE_INFINITY;
-    let max = Number.NEGATIVE_INFINITY;
-    for (const row of rows) {
-      if (row.status === "interpolated") continue;
-      const r = row.ratio;
-      if (r === null || !Number.isFinite(r)) continue;
-      if (r < min) min = r;
-      if (r > max) max = r;
-    }
-    if (!Number.isFinite(min) || !Number.isFinite(max)) {
-      return { min: 1, max: 1, maxAbsDeviation: 0 };
-    }
-    const maxAbsDeviation = Math.max(Math.abs(max - 1), Math.abs(1 - min));
-    return { min, max, maxAbsDeviation };
-  }
-
-  private _renderRatioGauge(ratio: number | null, bounds: RatioBounds) {
-    const text = this._formatFactor(ratio);
-    if (ratio === null || !Number.isFinite(ratio) || bounds.maxAbsDeviation <= 0) {
-      return html`
-        <div class="ratio-gauge" role="img" aria-label=${text}>
-          <span class="ratio-gauge-center" aria-hidden="true"></span>
-          <span class="ratio-gauge-text">${text}</span>
-        </div>
-      `;
-    }
-    const deviation = ratio - 1;
-    const widthPct = Math.min((Math.abs(deviation) / bounds.maxAbsDeviation) * 50, 50);
-    const direction = deviation >= 0 ? "positive" : "negative";
-    return html`
-      <div class="ratio-gauge" role="img" aria-label=${text}>
-        <span class="ratio-gauge-center" aria-hidden="true"></span>
-        ${widthPct > 0
-          ? html`<span
-              class=${`ratio-gauge-fill ${direction}`}
-              style=${`width:${widthPct}%;`}
-              aria-hidden="true"
-            ></span>`
-          : ""}
-        <span class="ratio-gauge-text">${text}</span>
-      </div>
-    `;
-  }
-
-  private _formatContributionStatus(status: string, reason: string | null) {
-    const translated = this._t(`bias_correction.inspector.contribution_status.${status}`);
-    if (!reason) return translated;
-    return `${translated} (${reason})`;
   }
 
   /** `_t` as a stable function reference, for components taking a localizer. */

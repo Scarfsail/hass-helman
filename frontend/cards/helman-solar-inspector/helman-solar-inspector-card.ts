@@ -7,7 +7,7 @@ import {
     watchedEntityChanged,
     type WatchedEntitiesDetail,
 } from "../shared/hass-change";
-import { SERIES_KEYS } from "./helman-solar-inspector";
+import { SERIES_KEYS } from "./inspector-format";
 import "./helman-solar-inspector";
 
 @customElement("helman-solar-inspector-card")

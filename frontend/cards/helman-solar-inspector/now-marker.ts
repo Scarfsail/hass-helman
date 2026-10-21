@@ -1,4 +1,4 @@
-import { svg } from "lit";
+import { nothing, svg } from "lit";
 import { getScheduleLocalTimeParts } from "../shared/schedule/model/schedule-time";
 
 /**
@@ -47,4 +47,25 @@ export function renderNowMarker(x: number, top: number, bottom: number, title: s
             pointer-events="none"
         ><title>${title}</title></line>
     `;
+}
+
+/**
+ * The line on one chart of the stack, or nothing: only today gets one, and only
+ * while the moment falls inside the drawn window -- the daylight crop can put it
+ * off the axis entirely, and a line pinned to the edge would claim a time the
+ * chart is not showing.
+ */
+export function renderNowMarkerOnDay(
+    day: { date: string; timeZone: string; nowMs: number },
+    window: { start: number; end: number },
+    xForMinutes: (minutes: number) => number,
+    top: number,
+    bottom: number,
+    title: string,
+) {
+    const minutes = nowMinutesOnDay(day.date, day.timeZone, day.nowMs);
+    if (minutes === null || minutes < window.start || minutes > window.end) {
+        return nothing;
+    }
+    return renderNowMarker(xForMinutes(minutes), top, bottom, title);
 }

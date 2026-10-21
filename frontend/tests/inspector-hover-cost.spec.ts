@@ -45,6 +45,8 @@ type Counts = {
     stacks: number;
     layout: number;
     socBars: number;
+    selectedMinutes: number;
+    stripGeometry: number;
     priceColumns: number;
     moneyCells: number;
 };
@@ -139,7 +141,7 @@ async function mountInspector(page: Page): Promise<void> {
     await page.waitForFunction(() => {
         const el = document.querySelector("helman-solar-inspector") as
             (Element & { shadowRoot: ShadowRoot | null }) | null;
-        return !!el?.shadowRoot?.querySelector(".chart-wrap svg");
+        return !!el?.shadowRoot?.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".chart-wrap svg");
     });
     // The price strip lands a render after the chart -- it echoes its columns
     // back up -- so let the opening sequence finish before anything is counted.
@@ -147,15 +149,51 @@ async function mountInspector(page: Page): Promise<void> {
 }
 
 /**
- * Wrap the derivations on the prototypes, so the count is of the real calls
- * and not of a stand-in. Installed after the mount: what the opening sequence
- * costs is not what this test is about.
+ * Count the derivations that actually ran. Installed after the mount: what the
+ * opening sequence costs is not what this test is about.
+ *
+ * The day model is pure functions the card memoises (`inspector-day-model.ts`),
+ * so a rebuild is visible as a new identity on the field the card stores its
+ * result in -- each step returns a fresh object whenever it runs, and the very
+ * same one whenever it does not. Those fields are compared after every update.
+ * The money strip still builds its cells in a method of its own, so that one
+ * is counted by wrapping it on the prototype.
  */
 async function installCounters(page: Page): Promise<void> {
     await page.evaluate(() => {
         window.__hoverCounts = {
             view: 0, coverage: 0, stacks: 0, layout: 0,
-            socBars: 0, priceColumns: 0, moneyCells: 0,
+            socBars: 0, selectedMinutes: 0, stripGeometry: 0, priceColumns: 0, moneyCells: 0,
+        };
+        const inspector = document.querySelector("helman-solar-inspector") as unknown as
+            Element & { shadowRoot: ShadowRoot };
+        const watch = (
+            tag: string,
+            element: Element,
+            fields: Partial<Record<keyof Counts, string>>,
+        ): void => {
+            const proto = customElements.get(tag)!.prototype as unknown as
+                Record<string, (...args: unknown[]) => unknown>;
+            const original = proto.updated;
+            const snapshot = (el: Record<string, unknown>) => {
+                const values: Record<string, unknown> = {};
+                for (const [key, field] of Object.entries(fields)) {
+                    if (!(field in el)) throw new Error(`${tag} has no ${field} to watch`);
+                    values[key] = el[field];
+                }
+                return values;
+            };
+            const seen = new WeakMap<object, Record<string, unknown>>();
+            seen.set(element, snapshot(element as unknown as Record<string, unknown>));
+            proto.updated = function counted(this: Record<string, unknown>, ...args: unknown[]) {
+                const last = seen.get(this);
+                const now = snapshot(this);
+                for (const key of Object.keys(now)) {
+                    if (last && last[key] !== now[key]) window.__hoverCounts[key as keyof Counts] += 1;
+                }
+                seen.set(this, now);
+                return original.apply(this, args);
+            };
         };
         const wrap = (tag: string, method: string, key: keyof Counts): void => {
             const proto = customElements.get(tag)!.prototype as unknown as
@@ -169,12 +207,18 @@ async function installCounters(page: Page): Promise<void> {
                 return original.apply(this, args);
             };
         };
-        wrap("helman-solar-inspector", "_viewForSlot", "view");
-        wrap("helman-solar-inspector", "_computeCoverage", "coverage");
-        wrap("helman-solar-inspector", "_buildStacks", "stacks");
-        wrap("helman-solar-inspector", "_computeChartLayout", "layout");
-        wrap("helman-solar-inspector", "_socBars", "socBars");
-        wrap("helman-solar-price-strip", "_buildColumns", "priceColumns");
+        watch("helman-solar-inspector", inspector, {
+            view: "_view",
+            coverage: "_coverage",
+            stacks: "_stacks",
+            layout: "_layout",
+            socBars: "_socBarsModel",
+            selectedMinutes: "_selectedMinutesModel",
+            stripGeometry: "_stripGeometry",
+        });
+        watch("helman-solar-price-strip", inspector.shadowRoot.querySelector("helman-solar-price-strip")!, {
+            priceColumns: "importColumns",
+        });
         wrap("helman-solar-money-strip", "_buildCells", "moneyCells");
     });
 }
@@ -195,7 +239,7 @@ async function sweep(
         const el = document.querySelector("helman-solar-inspector") as unknown as
             Record<string, any>;
         const root = el.shadowRoot as ShadowRoot;
-        const svg = root.querySelector(".chart-wrap svg") as SVGSVGElement;
+        const svg = root.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".chart-wrap svg") as SVGSVGElement;
         const rect = svg.getBoundingClientRect();
         // Whichever name the layout is kept under, so the same sweep can be run
         // against a build from before it was hoisted out of `render()`.
@@ -229,7 +273,7 @@ async function sweep(
 
 const NO_REBUILDS: Counts = {
     view: 0, coverage: 0, stacks: 0, layout: 0,
-    socBars: 0, priceColumns: 0, moneyCells: 0,
+    socBars: 0, selectedMinutes: 0, stripGeometry: 0, priceColumns: 0, moneyCells: 0,
 };
 
 test.describe("what a hover over the inspector costs", () => {

@@ -10,22 +10,13 @@ import { slotSelectionModeForEvent, type SlotSelectionMode } from "./slot-select
 import { selectLabelledColumns, stripValueLabel } from "../shared/strip-value-labels";
 import { symmetricEnergyAxis } from "./chart-axis";
 import { accumulateBands, clampToSign, stackSlots, type StackBand, type StackLayer, type StackSet } from "./chart-stack";
+import { deferrableShare } from "./slot-aggregation";
+import { SLOT_BAND_STYLE } from "./strip-geometry";
 
 /** The chart reads the measured composition and totals from each bucket. */
 export type SpanAggregateRow = Pick<DayAggregateRow,
     "date" | "solarWh" | "gridImportKwh" | "gridExportKwh" | "batteryMinSocPct" | "batteryMaxSocPct"
     | "houseWh" | "batteryChargeWh" | "batteryDischargeWh" | "moneyCost" | "moneyGain" | "houseBreakdown" | "houseSourceMix">;
-
-/**
- * How far the inspector may be navigated, in either direction.
- *
- * Both payloads carry it, so a card that opened straight into a span view
- * navigates against the same floor a day view would have given it.
- */
-export interface NavigationRange {
-    minDate: string;
-    maxDate: string;
-}
 
 /** What `helman/solar_bias/day_aggregates` answers with. */
 export type SpanAggregatePayload = Pick<DayAggregatesPayload, "bucket" | "currency" | "range"> & {
@@ -86,17 +77,15 @@ const CHART = { height: 240, marginTop: 16, marginRight: 16, marginBottom: 24, m
 
 /**
  * How a picked column is drawn, and how a pointed-at one is -- the day view's
- * own two treatments, character for character.
+ * own two treatments, from the one definition `renderSlotBand` draws with.
  *
  * Selected is the blue `_renderSlotHighlight` paints a selected slot in; hover
  * is the amber the day chart's hover band uses. Keeping them apart by *hue*
  * rather than by opacity is the point: a selection that wore the hover colour
  * left the two tellable apart only by how strong they were.
  */
-const SELECTED_STYLE = "fill: color-mix(in srgb, var(--helman-grid-import) 13%, transparent);"
-    + " stroke: var(--helman-grid-import); stroke-width: 1; stroke-opacity: 0.5;";
-const HOVER_STYLE = "fill: color-mix(in srgb, var(--helman-selection) 14%, transparent);"
-    + " stroke: var(--helman-selection); stroke-width: 1;";
+const SELECTED_STYLE = SLOT_BAND_STYLE.selected;
+const HOVER_STYLE = SLOT_BAND_STYLE.hover;
 
 /**
  * Room a bucket's date label needs, which is less than a value label's.
@@ -341,23 +330,16 @@ export class HelmanSolarAggregateChart extends LitElement {
         /**
          * The shiftable part of a bucket's house, and what is left under it.
          *
-         * Capped at the house total and floored at zero the way
-         * `splitHouseByDeferrable` caps a slot's, so a consumer meter that
-         * over-reports can never draw a band wider than the house it is inside.
-         * A bucket with no breakdown has no shiftable part to claim -- null, so
+         * Capped and floored by `deferrableShare`, the rule the day chart
+         * splits a slot by, so a consumer meter that over-reports can never
+         * draw a band wider than the house it is inside. A bucket with no breakdown has no shiftable part to claim -- null, so
          * the layer simply has no band there rather than a zero that would read
          * as "measured nothing shiftable".
          */
         const deferrableWh = (row: SpanAggregateRow): number | null => {
             const breakdown = row.houseBreakdown;
             if (!breakdown || row.houseWh === null || !Number.isFinite(row.houseWh)) return null;
-            const shiftable = breakdown.appliances.reduce(
-                (sum, appliance) => (appliance.deferrable && Number.isFinite(appliance.wh)
-                    ? sum + appliance.wh
-                    : sum),
-                0,
-            );
-            return Math.min(Math.max(0, shiftable), Math.max(0, row.houseWh));
+            return deferrableShare(row.houseWh, breakdown.appliances);
         };
         const baseWh = (row: SpanAggregateRow): number | null => {
             if (row.houseWh === null || !Number.isFinite(row.houseWh)) return null;

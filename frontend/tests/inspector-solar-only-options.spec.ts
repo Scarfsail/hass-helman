@@ -128,7 +128,7 @@ function rowsPresent(page: Page): Promise<Record<string, boolean>> {
         }).__inspectorRoot();
         const has = (selector: string) => !!root?.querySelector(selector);
         return {
-            soc: has(".soc-strip-wrap svg"),
+            soc: !!root?.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".soc-strip-wrap svg"),
             price: has("helman-solar-price-strip"),
             money: has("helman-solar-money-strip"),
             schedule: has("helman-solar-schedule-band-strip"),
@@ -167,7 +167,7 @@ function chartColors(page: Page): Promise<string[]> {
         const root = (window as unknown as {
             __inspectorRoot: () => ShadowRoot | null | undefined;
         }).__inspectorRoot();
-        const svg = root?.querySelector(".main-chart-wrap svg");
+        const svg = root?.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".main-chart-wrap svg");
         const colors = new Set<string>();
         for (const node of svg?.querySelectorAll("*") ?? []) {
             // A hatch pattern is defined for the whole palette whether its
@@ -360,40 +360,42 @@ async function reconfigure(page: Page, config: Record<string, unknown>): Promise
     }, config);
 }
 
-test("hiding the price strip takes the slot detail's price tiles with it", async ({ page }) => {
+test("the slot detail's price tiles follow the price strip, hidden and shown again", async ({ page }) => {
     await mountCard(page, {});
     await seedEverySeries(page);
-    // The fake backend serves no price entities, so the strip publishes nothing;
-    // stand in for the `price-columns` event a real day would have delivered.
+    // The fake backend serves no price rails, so the day gets two here. The
+    // tiles read the day view's columns, the same ones the strip draws.
     await page.evaluate(async () => {
         const root = (window as unknown as {
             __inspectorRoot: () => ShadowRoot | null | undefined;
         }).__inspectorRoot();
         const el = root?.host as any;
+        const payload = JSON.parse(JSON.stringify(el._payload));
         const rail = (value: number) => Array.from({ length: 24 }, (_, hour) => ({
-            startMinutes: hour * 60,
-            endMinutes: (hour + 1) * 60,
+            slot: `${String(hour).padStart(2, "0")}:00`,
             value,
         }));
-        el._importPriceColumns = rail(6);
-        el._exportPriceColumns = rail(2);
-        el._priceUnit = "CZK/kWh";
+        payload.series.importPrice = rail(6);
+        payload.series.exportPrice = rail(2);
+        payload.priceUnit = "CZK/kWh";
+        el._payload = payload;
         el.requestUpdate();
         await el.updateComplete;
     });
     await selectSlot(page, "12:00");
-    // The tiles are gated on the columns the strip reports, so they have to be
-    // there first for their absence below to mean anything.
-    expect(await metricLabels(page)).toContain("Import price");
+    const priceTiles = async () => (await metricLabels(page))
+        .filter((label) => label === "Import price" || label === "Export price");
+    expect((await rowsPresent(page)).price).toBe(true);
+    expect(await priceTiles()).toEqual(["Import price", "Export price"]);
 
-    // Hidden after the strip had already reported: the cache it filled is not
-    // refilled and not cleared by the strip going away, so the flag has to.
     await reconfigure(page, { hide_price_strip: true });
-
     expect((await rowsPresent(page)).price).toBe(false);
-    const labels = await metricLabels(page);
-    expect(labels).not.toContain("Import price");
-    expect(labels).not.toContain("Export price");
+    expect(await priceTiles()).toEqual([]);
+
+    // And back: nothing about hiding the strip took the columns with it.
+    await reconfigure(page, {});
+    expect((await rowsPresent(page)).price).toBe(true);
+    expect(await priceTiles()).toEqual(["Import price", "Export price"]);
 });
 
 test("an actual-only pair places no chip for the forecast it dropped", async ({ page }) => {
@@ -519,7 +521,8 @@ function tooltipRows(page: Page, slot: string): Promise<
             __inspectorRoot: () => ShadowRoot | null | undefined;
         }).__inspectorRoot();
         const el = root?.host as any;
-        return el._chartTooltipModel(el._payload, wanted).rows.map((row: any) => ({
+        const chart = root?.querySelector("helman-solar-day-chart") as any;
+        return chart._chartTooltipModel(el._payload, wanted).rows.map((row: any) => ({
             label: row.label,
             actual: row.actual !== null,
             forecast: row.forecast !== null,
@@ -851,15 +854,28 @@ test("the house embed's slot detail drops the forecast error over a partial buck
     await mountCard(page, HOUSE_ONLY);
     await seedEverySeries(page);
     // A bucket missing native house-actual samples still carries a point once
-    // aggregated; the coverage record is what says it is incomplete.
-    await page.evaluate(() => {
+    // aggregated; the coverage record (read off the payload) is what says it is
+    // incomplete. The house forecast stays whole, so only the actual gates.
+    await page.evaluate(async () => {
         const root = (window as unknown as {
             __inspectorRoot: () => ShadowRoot | null | undefined;
         }).__inspectorRoot();
         const el = root?.host as any;
-        el._partialBuckets = new Map([[12 * 60, new Map([["houseActual", 2]])]]);
+        const payload = JSON.parse(JSON.stringify(el._payload));
+        const quarters: string[] = [];
+        for (let minutes = 0; minutes < 24 * 60; minutes += 15) {
+            quarters.push(`${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`);
+        }
+        payload.dataGranularityMinutes = 15;
+        payload.series.houseForecast = quarters.map((slot) => ({ slot, valueWh: 300 }));
+        payload.series.houseActual = quarters
+            .filter((slot) => slot !== "12:45")
+            .map((slot) => ({ slot, valueWh: 320 }));
+        el._payload = payload;
+        el.requestUpdate();
+        await el.updateComplete;
     });
-    await selectSlot(page, "12:00");
+    await selectSlot(page, "12:30");
 
     expect(await metricLabels(page)).not.toContain("Forecast error");
 });

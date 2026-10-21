@@ -85,7 +85,7 @@ function dimmedColumns(page: Page): Promise<number> {
         const root = (window as unknown as {
             __inspectorRoot: () => ShadowRoot | null | undefined;
         }).__inspectorRoot();
-        return root?.querySelectorAll(".chart-wrap svg g.partial-bucket-mark").length ?? 0;
+        return root?.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelectorAll(".chart-wrap svg g.partial-bucket-mark").length ?? 0;
     });
 }
 

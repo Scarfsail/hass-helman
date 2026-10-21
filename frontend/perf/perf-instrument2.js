@@ -31,11 +31,11 @@
 
   const out = {};
   out.inspector = timeIt("inspector", customElements.get("helman-solar-inspector"), [
-    "_viewForSlot", "_buildStacks", "_computeChartLayout", "_renderContent",
+    "_rebuildDayModelIfNeeded", "_renderContent",
     "_renderChart", "_renderStackSet", "_renderSocSection", "_renderPriceStrip",
     "_renderScheduleActionsStrip", "_renderSelectedSlotDetails", "_renderTotals",
     "_renderContributionTable", "_renderNavigation", "_loadDayAggregates",
-    "_syncScheduleOwner", "_syncChartResizeObserver", "_solarWindow",
+    "_syncScheduleOwner", "_syncChartResizeObserver",
   ]);
   out.band = timeIt("bandStrip", customElements.get("helman-solar-schedule-band-strip"), [
     "_rebuildNormalizedIfNeeded", "_rebuildDerivedIfNeeded", "_buildBandLanes",

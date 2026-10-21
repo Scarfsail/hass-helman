@@ -74,7 +74,7 @@ function readCard(page: Page): Promise<CardReadout> {
         const pills = root?.querySelector("helman-solar-day-pills")?.shadowRoot;
         const pressed = pills?.querySelector('.pill[aria-pressed="true"]');
         return {
-            hasChart: !!root?.querySelector(".chart-wrap"),
+            hasChart: !!root?.querySelector(".chart-wrap, helman-solar-day-chart"),
             notes: Array.from(root?.querySelectorAll(".body > .note") ?? []).map(
                 (note) => note.textContent?.trim() ?? "",
             ),
