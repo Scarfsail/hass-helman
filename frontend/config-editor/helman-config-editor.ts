@@ -315,12 +315,24 @@ export class HelmanConfigEditorPanel
   connectedCallback(): void {
     super.connectedCallback();
     window.addEventListener("beforeunload", this._guardCloseWhileSaving);
+    // Not awaited with the form elements: a list that cannot be dragged is a
+    // far smaller loss than a panel whose every form stays unrendered.
     void loadHaSortable().then(() => {
       this.requestUpdate();
     });
-    void loadHaForm().then(() => {
-      this.requestUpdate();
-    });
+    void loadHaForm()
+      .then(() => {
+        this.requestUpdate();
+      })
+      .catch((error) => {
+        this._message = {
+          kind: "error",
+          text: formatError(
+            error,
+            this._t("editor.messages.load_ha_form_failed"),
+          ),
+        };
+      });
   }
 
   disconnectedCallback(): void {
