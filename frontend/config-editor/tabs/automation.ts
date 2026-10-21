@@ -40,6 +40,7 @@ import type { OptimizerConfigChangedDetail } from "../../cards/shared/optimizer/
 import "../../cards/shared/optimizer/helman-optimizer-editor";
 import { SECTION_SCOPE_IDS } from "../config-editor-scopes";
 import type { HelmanConfigEditorPanel } from "../helman-config-editor";
+import { preventSummaryToggle } from "./devices";
 
 /** The two config buckets `automation` splits its optimizers into (#271, P1). */
 export type OptimizerBucket = OptimizerConfigBucket;
@@ -286,7 +287,7 @@ export function renderOptimizerListActions(
   enabled: boolean,
 ): TemplateResult {
   return html`
-    <div class="list-actions" @click=${(event: Event) => event.stopPropagation()}>
+    <div class="list-actions" @click=${preventSummaryToggle}>
       ${renderDragHandle(host)}
       ${renderOptimizerEnabledToggle(host, [...basePath, "enabled"], enabled)}
       ${renderRemoveButton(host, {

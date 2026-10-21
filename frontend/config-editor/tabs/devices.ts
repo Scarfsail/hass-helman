@@ -91,6 +91,12 @@ const GROUPING_CHEVRON_PATH = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8
 /** A group's device chips move between lists but never sort within one. */
 const MEMBER_SORTABLE_OPTIONS = { sort: false };
 
+/** Keeps a click on a summary's action row from toggling the card, padding and gaps included. */
+export const preventSummaryToggle = (event: Event): void => {
+  event.preventDefault();
+  event.stopPropagation();
+};
+
 const stopEvent = (event: Event): void => event.stopPropagation();
 
 /** Which device sits at which path; changes only when an edit moves devices. */
@@ -564,7 +570,7 @@ export function renderDeviceListActions(
   path: PathSegment[],
 ): TemplateResult {
   return html`
-    <div class="list-actions" @click=${stopEvent}>
+    <div class="list-actions" @click=${preventSummaryToggle}>
       ${renderDragHandle(host)}
       ${renderDeviceModeToggle(host, controller, path)}
       ${renderRemoveButton(host, {
@@ -595,7 +601,7 @@ export function renderUnsupportedDevice(
               <span class="card-subtitle">${subtitle}</span>
             </div>
           </div>
-          <div class="list-actions" @click=${stopEvent}>
+          <div class="list-actions" @click=${preventSummaryToggle}>
             ${renderRemoveButton(host, {
               onRemove: () => controller.removeDevice(path),
             })}
@@ -1041,7 +1047,7 @@ export function renderGrouping(
       ${renderBoardSummary(
         stringValue(grouping.name),
         host._t("editor.card.grouping"),
-        html`<div class="list-actions" @click=${stopEvent}>
+        html`<div class="list-actions" @click=${preventSummaryToggle}>
           ${renderRemoveButton(host, {
             className: "remove-grouping",
             onRemove: () => controller.handleRemoveGrouping(index),
