@@ -61,7 +61,7 @@ async function mountInspector(
     await expect.poll(() => page.evaluate(() => window.__pendingInspector())).toBe(1);
     await page.evaluate(() => window.__releaseInspector());
     await expect.poll(() => page.evaluate(() => !!document
-        .querySelector("helman-solar-inspector")?.shadowRoot?.querySelector(".chart-wrap svg")))
+        .querySelector("helman-solar-inspector")?.shadowRoot?.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".chart-wrap svg")))
         .toBe(true);
 }
 
@@ -126,7 +126,7 @@ test.describe("the day chart on a touch screen", () => {
     function chartPoint(page: Page, minutes: number): Promise<{ x: number; y: number }> {
         return page.evaluate((at) => {
             const el = document.querySelector("helman-solar-inspector") as any;
-            const svg = el.shadowRoot.querySelector(".chart-wrap svg") as SVGSVGElement;
+            const svg = el.shadowRoot.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".chart-wrap svg") as SVGSVGElement;
             const rect = svg.getBoundingClientRect();
             const layout = el._layout;
             const span = layout.dayEndMinutes - layout.dayStartMinutes;

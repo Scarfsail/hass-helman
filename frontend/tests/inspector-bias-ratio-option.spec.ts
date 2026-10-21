@@ -76,7 +76,7 @@ function impactStripShown(page: Page): Promise<boolean> {
         const root = (window as unknown as {
             __inspectorRoot: () => ShadowRoot | null | undefined;
         }).__inspectorRoot();
-        return !!root?.querySelector(".impact-strip-wrap");
+        return !!root?.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".impact-strip-wrap");
     });
 }
 

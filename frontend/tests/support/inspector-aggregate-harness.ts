@@ -291,7 +291,7 @@ export async function mountInspector(
 
     await page.waitForFunction(() => {
         const el = document.querySelector("helman-solar-inspector") as any;
-        return !!el?.shadowRoot?.querySelector(".chart-wrap svg");
+        return !!el?.shadowRoot?.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".chart-wrap svg");
     });
 }
 
@@ -562,7 +562,7 @@ export async function pageBackAndWait(page: Page): Promise<void> {
 
 export async function waitForDayChart(page: Page): Promise<void> {
     await page.waitForFunction(() => !!(document.querySelector("helman-solar-inspector") as any)
-        .shadowRoot.querySelector(".chart-wrap svg"));
+        .shadowRoot.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".chart-wrap svg"));
 }
 
 export async function waitForAggregateChart(page: Page): Promise<void> {
@@ -963,7 +963,7 @@ export async function selectDaySlots(
 ): Promise<void> {
     const geom = await page.evaluate(() => {
         const el = document.querySelector("helman-solar-inspector") as any;
-        const svg = el.shadowRoot.querySelector(".chart-wrap svg") as SVGSVGElement;
+        const svg = el.shadowRoot.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".chart-wrap svg") as SVGSVGElement;
         const r = svg.getBoundingClientRect();
         const layout = el._layout;
         return {

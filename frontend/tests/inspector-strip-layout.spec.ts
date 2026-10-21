@@ -65,7 +65,7 @@ async function mountInspector(page: Page): Promise<void> {
 
     await page.waitForFunction(() => {
         const root = (document.querySelector("helman-solar-inspector") as any)?.shadowRoot;
-        return !!root?.querySelector(".soc-strip-wrap svg")
+        return !!root?.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".soc-strip-wrap svg")
             && !!root.querySelector("helman-solar-price-strip")
             && !!root.querySelector("helman-solar-money-strip")
             && !!root.querySelector("helman-solar-schedule-band-strip");
@@ -77,7 +77,10 @@ test.describe("solar inspector strip layout", () => {
         await mountInspector(page);
         const layout = await page.evaluate(() => {
             const root = (document.querySelector("helman-solar-inspector") as any).shadowRoot;
-            const labels = [...root.querySelectorAll(".compact-strip-label")].map((label: Element) => ({
+            // The day chart draws its own rows above the strips, in its own shadow root.
+            const chart = root.querySelector("helman-solar-day-chart").shadowRoot;
+            const both = (selector: string) => [...chart.querySelectorAll(selector), ...root.querySelectorAll(selector)];
+            const labels = both(".compact-strip-label").map((label: Element) => ({
                 text: label.textContent?.trim(),
                 writingMode: getComputedStyle(label).writingMode,
                 transform: getComputedStyle(label).transform,
@@ -85,12 +88,12 @@ test.describe("solar inspector strip layout", () => {
             const scheduleHeader = root.querySelector(".strip-header-row") as HTMLElement;
             const scheduleHours = [...scheduleHeader.querySelectorAll(".schedule-header-hour")]
                 .map((hour: Element) => hour.textContent?.trim());
-            const chartHours = [...root.querySelectorAll(".chart-wrap svg text")]
+            const chartHours = [...root.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelectorAll(".chart-wrap svg text")]
                 .map((text: Element) => text.textContent?.trim())
                 .filter((text): text is string => /^\d{2}$/.test(text ?? ""));
             return {
                 bodies: {
-                    soc: !!root.querySelector(".soc-strip-wrap svg"),
+                    soc: !!root.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".soc-strip-wrap svg"),
                     prices: !!root.querySelector("helman-solar-price-strip"),
                     money: !!root.querySelector("helman-solar-money-strip"),
                     schedule: !!root.querySelector("helman-solar-schedule-band-strip"),
@@ -106,19 +109,19 @@ test.describe("solar inspector strip layout", () => {
                 chartHours,
                 scheduleHourFontSizes: [...scheduleHeader.querySelectorAll(".schedule-header-hour")]
                     .map((hour: Element) => getComputedStyle(hour).fontSize),
-                mainChartOutline: getComputedStyle(root.querySelector(".main-chart-wrap") as HTMLElement).outlineStyle,
-                separators: [...root.querySelectorAll(".chart-separator")]
+                mainChartOutline: getComputedStyle(root.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".main-chart-wrap") as HTMLElement).outlineStyle,
+                separators: both(".chart-separator")
                     .map((separator: Element) => getComputedStyle(separator).borderTopWidth),
-                separatorWidths: [...root.querySelectorAll(".chart-separator")]
+                separatorWidths: both(".chart-separator")
                     .map((separator: Element) => (separator as HTMLElement).getBoundingClientRect().width),
                 widths: {
-                    chart: (root.querySelector(".chart-wrap svg") as SVGSVGElement).getBoundingClientRect().width,
-                    soc: (root.querySelector(".soc-strip-wrap svg") as SVGSVGElement).getBoundingClientRect().width,
+                    chart: (root.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".chart-wrap svg") as SVGSVGElement).getBoundingClientRect().width,
+                    soc: (root.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".soc-strip-wrap svg") as SVGSVGElement).getBoundingClientRect().width,
                     prices: (root.querySelector("helman-solar-price-strip") as HTMLElement).getBoundingClientRect().width,
                     money: (root.querySelector("helman-solar-money-strip") as HTMLElement).getBoundingClientRect().width,
                 },
                 heights: {
-                    soc: (root.querySelector(".soc-strip-wrap svg") as SVGSVGElement).getBoundingClientRect().height,
+                    soc: (root.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".soc-strip-wrap svg") as SVGSVGElement).getBoundingClientRect().height,
                     prices: (root.querySelector("helman-solar-price-strip") as HTMLElement).getBoundingClientRect().height,
                     money: (root.querySelector("helman-solar-money-strip") as HTMLElement).getBoundingClientRect().height,
                 },

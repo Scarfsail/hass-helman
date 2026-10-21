@@ -247,7 +247,7 @@ async function mountInspector(
 
     await page.waitForFunction(() => {
         const el = document.querySelector("helman-solar-inspector") as any;
-        return !!el?.shadowRoot?.querySelector(".chart-wrap svg");
+        return !!el?.shadowRoot?.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".chart-wrap svg");
     });
 }
 
@@ -263,7 +263,7 @@ type ChartGeom = {
 async function chartGeom(page: Page): Promise<ChartGeom> {
     return page.evaluate(() => {
         const el = document.querySelector("helman-solar-inspector") as any;
-        const svg = el.shadowRoot.querySelector(".chart-wrap svg") as SVGSVGElement;
+        const svg = el.shadowRoot.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".chart-wrap svg") as SVGSVGElement;
         const r = svg.getBoundingClientRect();
         const layout = el._layout;
         return {
@@ -940,7 +940,7 @@ async function bandExtent(
 ): Promise<{ top: number; bottom: number; baseline: number } | null> {
     return page.evaluate((wanted) => {
         const el = document.querySelector("helman-solar-inspector") as any;
-        const svg = el.shadowRoot.querySelector(".chart-wrap svg") as SVGSVGElement;
+        const svg = el.shadowRoot.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".chart-wrap svg") as SVGSVGElement;
         const ys: number[] = [];
         for (const path of svg.querySelectorAll("path")) {
             if (path.getAttribute("fill") !== wanted) continue;
@@ -971,7 +971,7 @@ async function forecastBandOutline(
 ): Promise<{ y: number; baseline: number } | null> {
     return page.evaluate((wanted) => {
         const el = document.querySelector("helman-solar-inspector") as any;
-        const svg = el.shadowRoot.querySelector(".chart-wrap svg") as SVGSVGElement;
+        const svg = el.shadowRoot.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".chart-wrap svg") as SVGSVGElement;
         const ys: number[] = [];
         for (const path of svg.querySelectorAll("path")) {
             if (path.getAttribute("stroke") !== wanted) continue;

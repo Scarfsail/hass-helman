@@ -93,7 +93,7 @@ async function mountInspector(page: Page, gap: boolean): Promise<void> {
 
     await page.waitForFunction(() => {
         const el = document.querySelector("helman-solar-inspector") as any;
-        return !!el?.shadowRoot?.querySelector(".soc-strip-wrap svg");
+        return !!el?.shadowRoot?.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".soc-strip-wrap svg");
     });
 }
 
@@ -101,7 +101,7 @@ async function mountInspector(page: Page, gap: boolean): Promise<void> {
 async function forecastLinePath(page: Page): Promise<string> {
     return page.evaluate(() => {
         const el = document.querySelector("helman-solar-inspector") as any;
-        const svg = el.shadowRoot.querySelector(".soc-strip-wrap svg") as SVGSVGElement;
+        const svg = el.shadowRoot.querySelector("helman-solar-day-chart")?.shadowRoot?.querySelector(".soc-strip-wrap svg") as SVGSVGElement;
         const dashed = [...svg.querySelectorAll("path")].find(
             (path) => path.getAttribute("stroke-dasharray") === "4 3",
         );

@@ -228,6 +228,13 @@ export type DayCoverage = {
   granularityMinutes: number;
 };
 
+/** No coverage marks: the day before one is loaded. */
+export const EMPTY_DAY_COVERAGE: DayCoverage = {
+  buckets: new Map(),
+  series: new Map(),
+  granularityMinutes: SLOT_MINUTES,
+};
+
 /**
  * Whether the config allows this series at all. The one gate every other
  * visibility question goes through, so a disabled series cannot be reached by
@@ -640,6 +647,14 @@ export function socBars(
     ? view.series.batterySocForecast
     : [];
   return buildSocBars(actual, forecast, fillFromMinutes);
+}
+
+/**
+ * The forecast's own level at every slot of the day, with no measured column to
+ * speak of -- so `buildSocBars` does not hand it only the part past the seam.
+ */
+export function socForecastBars(payload: InspectorPayload): SocBar[] {
+  return buildSocBars([], payload.series.batterySocForecast, Number.NEGATIVE_INFINITY);
 }
 
 /** Minute-of-day of every selected slot, for the strips' bands. */

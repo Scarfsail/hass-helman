@@ -63,7 +63,7 @@ type ShellReadout = {
     hasChart: boolean;
     isLoading: boolean;
     overlayText: string;
-    /** The chart-wrap's own opacity, read through `getComputedStyle` -- the
+    /** The chart's own opacity, read through `getComputedStyle` -- the
      *  dimming rule targets the shell's children, so this is what shows it
      *  actually landed on the content and not just on the shell. */
     contentOpacity: string;
@@ -74,7 +74,8 @@ async function readShell(page: Page): Promise<ShellReadout> {
     return page.evaluate(() => {
         const root = document.querySelector("helman-solar-inspector")?.shadowRoot;
         const body = root?.querySelector(".body");
-        const chartWrap = root?.querySelector(".chart-wrap");
+        // The aggregate chart's frame or the day chart: whichever view is up.
+        const chartWrap = root?.querySelector(".chart-wrap, helman-solar-day-chart");
         return {
             bodyHeight: body?.getBoundingClientRect().height ?? 0,
             hasChart: !!chartWrap,
