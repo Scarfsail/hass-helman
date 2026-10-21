@@ -53,6 +53,7 @@ import {
 import {
     formatError,
     renameObjectKeyError,
+    renderBooleanField,
     renderHelpDialog,
     renderHelpIcon,
     renderOptionalTextField,
@@ -830,16 +831,20 @@ export class HelmanDeviceEditor extends LitElement implements HardwareProfileHos
             <div class="field toggle-field ha-device-field">
                 <label>${this.t("editor.fields.ha_device")}</label>
                 <input class="ha-device-name" .value=${name} readonly />
-                <ha-formfield .label=${this.t("editor.fields.ha_device_show_all")}>
-                    <ha-switch
-                        class="ha-device-show-all"
-                        .checked=${this._showAllDevicesFor === id}
-                        @change=${(event: Event) => {
-                            const checked = (event.currentTarget as HTMLElement & { checked: boolean }).checked;
+                ${renderBooleanField(
+                    this,
+                    [],
+                    "editor.fields.ha_device_show_all",
+                    false,
+                    {
+                        variant: "formfield",
+                        switchClass: "ha-device-show-all",
+                        explicitValue: this._showAllDevicesFor === id,
+                        onChange: (checked) => {
                             this._showAllDevicesFor = checked ? id : null;
-                        }}
-                    ></ha-switch>
-                </ha-formfield>
+                        },
+                    },
+                )}
                 <div class="helper">${this.t("editor.helpers.ha_device")}</div>
             </div>
         `;

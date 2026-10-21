@@ -244,6 +244,74 @@ export function renderOptionalNumberField(
     `;
 }
 
+export interface RenderBooleanFieldOptions {
+    helpKey?: string;
+    explicitValue?: boolean;
+    switchClass?: string;
+    variant?: "field" | "formfield" | "summary-toggle";
+    onToggleClick?: (event: Event) => void;
+    onChange?(checked: boolean): void;
+}
+
+export function renderBooleanField(
+    host: Pick<FormFieldHost, "t"> & Partial<Pick<FormFieldHost, "getValue" | "setValue" | "openHelp">>,
+    path: PathSegment[],
+    labelKey: string,
+    defaultValue = false,
+    options?: string | RenderBooleanFieldOptions,
+): TemplateResult {
+    const opts: RenderBooleanFieldOptions =
+        typeof options === "string" ? { helpKey: options } : options ?? {};
+    const checked =
+        opts.explicitValue !== undefined
+            ? opts.explicitValue
+            : booleanValue(host.getValue?.(path), defaultValue);
+
+    const handleChange = (event: Event) => {
+        const nextChecked = (event.currentTarget as HTMLElement & { checked: boolean }).checked;
+        if (opts.onChange) {
+            opts.onChange(nextChecked);
+        } else {
+            host.setValue?.(path, nextChecked);
+        }
+    };
+
+    if (opts.variant === "summary-toggle") {
+        return html`
+            <div class="summary-toggle" @click=${opts.onToggleClick}>
+                <span>${host.t(labelKey)}</span>
+                <ha-switch
+                    class=${opts.switchClass ?? nothing}
+                    .checked=${checked}
+                    @change=${handleChange}
+                ></ha-switch>
+            </div>
+        `;
+    }
+
+    const toggle = html`
+        <ha-formfield .label=${host.t(labelKey)}>
+            <ha-switch
+                class=${opts.switchClass ?? nothing}
+                .checked=${checked}
+                @change=${handleChange}
+            ></ha-switch>
+        </ha-formfield>
+    `;
+
+    if (opts.variant === "formfield") {
+        return toggle;
+    }
+
+    return html`
+        <div class="field toggle-field">
+            ${opts.helpKey && host.openHelp
+                ? html`<div class="field-label-row">${toggle}${renderHelpIcon(host as FormFieldHost, labelKey, opts.helpKey)}</div>`
+                : toggle}
+        </div>
+    `;
+}
+
 /**
  * A select whose blank state *shows* the default rather than showing nothing.
  *

@@ -133,7 +133,14 @@ export type ItemYamlParseResult =
  * no one can edit their way out of. Pasting a `system_optimizers:` list into an
  * optimizer is the easy way to do it by accident.
  */
-export function parseItemYaml(detail: YamlEditorValueChangedDetail): ItemYamlParseResult {
+export interface ParseItemYamlOptions {
+    allowArray?: boolean;
+}
+
+export function parseItemYaml(
+    detail: YamlEditorValueChangedDetail,
+    options?: ParseItemYamlOptions,
+): ItemYamlParseResult {
     if (!detail.isValid) {
         return { ok: false, errorKey: "editor.yaml.errors.parse_failed" };
     }
@@ -142,9 +149,10 @@ export function parseItemYaml(detail: YamlEditorValueChangedDetail): ItemYamlPar
         return { ok: false, errorKey: "editor.yaml.errors.non_json_value" };
     }
     if (
-        normalized.value === null ||
-        typeof normalized.value !== "object" ||
-        Array.isArray(normalized.value)
+        !options?.allowArray &&
+        (normalized.value === null ||
+            typeof normalized.value !== "object" ||
+            Array.isArray(normalized.value))
     ) {
         return { ok: false, errorKey: "editor.yaml.errors.expected_object" };
     }
