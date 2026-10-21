@@ -103,12 +103,13 @@ test.describe("the inspector's clock", () => {
         await mountInspector(page);
         await selectPreviousDay(page);
         const before = await cardNowMs(page);
-        // The shared schedule owner ticks too. Its snapshot did not move, so the
-        // object each card holds in a `@state` must not either.
+        // The shared schedule owner ticks too. Its snapshot did not move, nor did
+        // the slot it normalizes on, so neither object the card holds in a
+        // `@state` -- nor the one it hands the pills -- may either.
         await page.evaluate(() => {
             const inspector = document.querySelector("helman-solar-inspector") as any;
             const pills = inspector.shadowRoot.querySelector("helman-solar-day-pills");
-            (window as any).__snapshotsBefore = [inspector._scheduleSnapshot, pills._ownerSnapshot];
+            (window as any).__snapshotsBefore = [inspector._scheduleSnapshot, pills.normalizedSchedule];
         });
 
         await page.clock.runFor(TICK_SPAN_MS);
@@ -120,7 +121,7 @@ test.describe("the inspector's clock", () => {
             const inspector = document.querySelector("helman-solar-inspector") as any;
             const pills = inspector.shadowRoot.querySelector("helman-solar-day-pills");
             const [inspectorBefore, pillsBefore] = (window as any).__snapshotsBefore;
-            return inspector._scheduleSnapshot === inspectorBefore && pills._ownerSnapshot === pillsBefore;
+            return inspector._scheduleSnapshot === inspectorBefore && pills.normalizedSchedule === pillsBefore;
         })).toBe(true);
     });
 

@@ -212,14 +212,15 @@ export function renderHoverTooltip(
 }
 
 /**
- * One element's hover popup, as a Lit controller: the device reports' (the
- * inspector keeps its own plumbing, which couples the popup to the hover
- * minute it shares across strips).
+ * One element's hover popup, as a Lit controller.
  *
  * The host binds `show` on `mousemove`, `hide` on `mouseleave` and `toggle` on
  * `click` of each hover target, and renders `render()` once. Moves are applied
  * once per frame; a move that says the same thing only moves the popup, without
- * re-rendering anything.
+ * re-rendering anything. A target that measures its own pointer and reports
+ * only where it was (the inspector's strips) goes through `showAt`, and a host
+ * whose own state follows the pointer as well (the inspector's hover minute)
+ * hands it to `inNextFrame`, so both land in the one update.
  *
  * A tap toggles: the first opens the popup, the second closes it, and a press
  * anywhere outside the target it was opened on closes it too. The mouse events
@@ -239,10 +240,31 @@ export class HoverTooltipController implements ReactiveController {
 
     private _pending: { next: TooltipContent | null } | null = null;
     private _frame = 0;
+    /** The host's own pointer-following update, run at the head of the next frame. */
+    private _frameHook: (() => void) | null = null;
     /** The kind of the last pointer pressed or moved: a tap's emulated mouse events are not a hover. */
     private _pointerType: string | null = null;
     /** The target the popup describes: a press anywhere else closes it. */
     private _anchor: EventTarget | null = null;
+    /**
+     * What `_position` last placed: the popup element, the point and content it
+     * was placed for, and the inline styles it wrote. A host update that left
+     * all of them standing has nothing to move, so it costs no second layout.
+     */
+    /**
+     * The point the current content was first rendered at. Later moves of the
+     * same content are written by `_position` alone, so a host render in
+     * between must not re-bind the popup's style over them.
+     */
+    private _renderPoint: { x: number; y: number } | null = null;
+    private _placed: {
+        popup: HTMLElement;
+        point: { x: number; y: number };
+        content: TooltipContent;
+        left: string;
+        top: string;
+        maxWidth: string;
+    } | null = null;
 
     constructor(private readonly _host: ReactiveElement) {
         _host.addController(this);
@@ -265,6 +287,7 @@ export class HoverTooltipController implements ReactiveController {
         cancelAnimationFrame(this._frame);
         this._frame = 0;
         this._pending = null;
+        this._frameHook = null;
         // HA detaches and reinserts a card on a view switch, shadow DOM intact:
         // an open popup must not come back describing what it was opened on.
         if (this.content !== null) {
@@ -272,6 +295,8 @@ export class HoverTooltipController implements ReactiveController {
             this._host.requestUpdate();
         }
         this.point = null;
+        this._renderPoint = null;
+        this._placed = null;
         this._anchor = null;
     }
 
@@ -281,7 +306,7 @@ export class HoverTooltipController implements ReactiveController {
             this.hide();
             return;
         }
-        this._position();
+        if (!this._stillPlaced()) this._position();
     }
 
     show(event: MouseEvent, body: TooltipBody): void {
@@ -290,26 +315,52 @@ export class HoverTooltipController implements ReactiveController {
         this._schedule({ ...body, ...this._pointOf(event) });
     }
 
+    /**
+     * Show `body` at a viewport point a target measured itself, described by `anchor`.
+     *
+     * Not held back for a touch the way `show` is: such a target reports from
+     * its own `mousemove` and has no `click` of its own to toggle on, so the
+     * move a tap emulates is the only way its popup opens there at all.
+     */
+    showAt(point: { x: number; y: number }, body: TooltipBody, anchor: EventTarget | null = null): void {
+        this._anchor = anchor;
+        this._schedule({ ...body, ...point });
+    }
+
+    /**
+     * Run `apply` at the head of the next frame, replacing whatever an earlier
+     * call left pending: host state that follows the pointer then lands in the
+     * same update as the popup, once per frame however often the pointer reports.
+     */
+    inNextFrame(apply: () => void): void {
+        this._frameHook = apply;
+        this._requestFrame();
+    }
+
     hide(): void {
         this._anchor = null;
         this._schedule(null);
     }
 
-    /** A tap: open the popup, or close it when it already says this. */
-    toggle(event: MouseEvent, body: TooltipBody): void {
+    /** A tap: open the popup, or close it when it already says this. False when it closed it. */
+    toggle(event: MouseEvent, body: TooltipBody): boolean {
         // A mouse or pen is already hovering what it clicks: the click must not close it.
         // A pending close (a press elsewhere just queued it) is what the popup is about to be.
         const current = this._pending !== null ? this._pending.next : this.content;
         if (this._pointerType === "touch" && sameTooltipContent(current, body)) {
             this.hide();
-            return;
+            return false;
         }
         this._anchor = event.currentTarget;
         this._schedule({ ...body, ...this._pointOf(event) });
+        return true;
     }
 
-    render() {
-        return this.content ? renderHoverTooltip(this.content, this.point ?? this.content) : nothing;
+    /** The popup, its two columns captioned by `headers` when both show. */
+    render(headers?: readonly [string, string]) {
+        return this.content
+            ? renderHoverTooltip(this.content, this._renderPoint ?? this.point ?? this.content, headers)
+            : nothing;
     }
 
     private _onViewportChange = (): void => {
@@ -340,9 +391,16 @@ export class HoverTooltipController implements ReactiveController {
     private _schedule(next: TooltipContent | null): void {
         this._pending = { next };
         if (next !== null) this.point = { x: next.x, y: next.y };
+        this._requestFrame();
+    }
+
+    private _requestFrame(): void {
         if (this._frame !== 0) return;
         this._frame = requestAnimationFrame(() => {
             this._frame = 0;
+            const hook = this._frameHook;
+            this._frameHook = null;
+            hook?.();
             const pending = this._pending;
             this._pending = null;
             if (pending === null) return;
@@ -351,15 +409,32 @@ export class HoverTooltipController implements ReactiveController {
                 return;
             }
             this.content = pending.next;
+            this._renderPoint = this.point;
             this._host.requestUpdate();
         });
+    }
+
+    /**
+     * Whether the popup still stands where `_position` put it: same element,
+     * point and content, and none of its inline styles rewritten by a render
+     * (a new point re-binds its style attribute). Reads styles only, no layout.
+     */
+    private _stillPlaced(): boolean {
+        const placed = this._placed;
+        if (placed === null || placed.point !== this.point || placed.content !== this.content) return false;
+        const popup = this._host.renderRoot?.querySelector(".hover-tooltip") as HTMLElement | null;
+        return popup === placed.popup
+            && popup.style.left === placed.left
+            && popup.style.top === placed.top
+            && popup.style.maxWidth === placed.maxWidth;
     }
 
     /** Move the popup to the pointer, inside the viewport, without re-rendering anything. */
     private _position(): void {
         const point = this.point;
         const popup = this._host.renderRoot?.querySelector(".hover-tooltip") as HTMLElement | null;
-        if (point === null || popup === null) return;
+        this._placed = null;
+        if (point === null || popup === null || this.content === null) return;
         const margin = 8;
         // Wider than the viewport (a long device name): cap it, padding and border
         // included, and let it wrap -- inside a word too, when one alone is wider.
@@ -383,5 +458,13 @@ export class HoverTooltipController implements ReactiveController {
         const top = Math.max(margin + height + 10, Math.min(window.innerHeight - margin + 10, wanted));
         popup.style.left = x + "px";
         popup.style.top = top + "px";
+        this._placed = {
+            popup,
+            point,
+            content: this.content,
+            left: popup.style.left,
+            top: popup.style.top,
+            maxWidth: popup.style.maxWidth,
+        };
     }
 }

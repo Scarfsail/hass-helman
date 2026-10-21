@@ -5,15 +5,18 @@ import { customElement, property } from "lit/decorators.js";
 import { nothing } from "lit-html";
 import type { HomeAssistant } from "../../types/ha";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
-import { getScheduleLocalTimeParts } from "../shared/schedule/model/schedule-time";
-import { slotSelectionModeForEvent, type SlotPickDetail } from "./slot-selection.js";
+import type { SlotPickDetail } from "./slot-selection.js";
 import {
     EMPTY_SELECTED_MINUTES,
+    renderCellBand,
+    seamMinutes,
+    stripClickDetail,
     stripMinutesForSvgX,
     stripWindow,
+    svgXFromEvent,
     type ScheduleStripGeometry,
 } from "./strip-geometry";
-import { nowMinutesOnDay, renderNowMarker } from "./now-marker.js";
+import { renderNowMarkerOnDay } from "./now-marker.js";
 import { renderSlotGridlines, slotGridTicks } from "../shared/slot-gridlines";
 import { helmanColorVars } from "../color-vars";
 import { hourAnchorOffset, selectLabelledColumns, stripValueLabel } from "../shared/strip-value-labels";
@@ -146,7 +149,7 @@ export class HelmanSolarMoneyStrip extends LitElement {
 
     private _rebuildCellsIfNeeded(): void {
         const previous = this._cellsFor;
-        const slot = this._slotSpan();
+        const slot = this.slotMinutes;
         const seam = this._seamMinutes();
         if (
             previous !== null
@@ -173,11 +176,6 @@ export class HelmanSolarMoneyStrip extends LitElement {
         return this._renderStrip(cells, this.geometry);
     }
 
-    /** The inspector's current slot width, guarded against a nonsense value. */
-    private _slotSpan(): number {
-        return this.slotMinutes > 0 ? this.slotMinutes : 15;
-    }
-
     /**
      * Both vintages bucketed onto the inspector's slot grid, actual taking the
      * elapsed slots and forecast the rest.
@@ -191,7 +189,7 @@ export class HelmanSolarMoneyStrip extends LitElement {
      * the other as unknown.
      */
     private _buildCells(seam: number): MoneyCell[] {
-        const slot = this._slotSpan();
+        const slot = this.slotMinutes;
         const cells = new Map<number, MoneyCell>();
         const add = (points: readonly MoneyPoint[], wantElapsed: boolean) => {
             for (const point of points) {
@@ -220,22 +218,9 @@ export class HelmanSolarMoneyStrip extends LitElement {
         return [...cells.values()].sort((a, b) => a.startMinutes - b.startMinutes);
     }
 
-    /** Turn an `HH:MM` slot label into its minute-of-day, or null if malformed. */
-
-    /**
-     * Minute-of-day the day turns from measured into upcoming — the same rule
-     * the price strip and the chart apply, so the whole inspector changes
-     * vintage on one line.
-     */
+    /** Where elapsed money gives way to projected money: see `seamMinutes`. */
     private _seamMinutes(): number {
-        const now = getScheduleLocalTimeParts(this.nowMs, this.timeZone);
-        if (now === null) return MINUTES_PER_DAY;
-        if (now.dayKey === this.date) {
-            const minutes = now.hour * 60 + now.minute;
-            const slot = this._slotSpan();
-            return Math.floor(minutes / slot) * slot;
-        }
-        return this.date < now.dayKey ? MINUTES_PER_DAY : 0;
+        return seamMinutes(this.nowMs, this.date, this.timeZone, this.slotMinutes);
     }
 
     private _renderStrip(cells: MoneyCell[], geometry: ScheduleStripGeometry): TemplateResult {
@@ -310,9 +295,9 @@ export class HelmanSolarMoneyStrip extends LitElement {
                         top: 0,
                         bottom: height,
                     })}
-                    ${this._renderBand(cells, this.hoverMinutes, "hover", height, xForMinutes)}
+                    ${renderCellBand(cells, this.hoverMinutes, "hover", height, xForMinutes)}
                     ${this.selectedMinutes.map((minutes) =>
-                        this._renderBand(cells, minutes, "selected", height, xForMinutes))}
+                        renderCellBand(cells, minutes, "selected", height, xForMinutes))}
                     <g clip-path="url(#money-plot-clip)">
                     ${this._renderBars(cells, { zeroY, yForValue, seam, xForMinutes })}
                     </g>
@@ -322,7 +307,7 @@ export class HelmanSolarMoneyStrip extends LitElement {
                         window: { start: windowStart, end: windowEnd },
                     })}
                     </g>
-                    ${this._renderNowMarker(xForMinutes, windowStart, windowEnd, height)}
+                    ${renderNowMarkerOnDay(this, { start: windowStart, end: windowEnd }, xForMinutes, 0, height, this._t("scheduling.badge.now"))}
                 </svg>
             `}
             </div>
@@ -476,57 +461,12 @@ export class HelmanSolarMoneyStrip extends LitElement {
         `;
     }
 
-    private _renderNowMarker(
-        xForMinutes: (minutes: number) => number,
-        windowStart: number,
-        windowEnd: number,
-        height: number,
-    ) {
-        const minutes = nowMinutesOnDay(this.date, this.timeZone, this.nowMs);
-        if (minutes === null || minutes < windowStart || minutes > windowEnd) {
-            return nothing;
-        }
-        return renderNowMarker(xForMinutes(minutes), 0, height, this._t("scheduling.badge.now"));
-    }
-
-    private _renderBand(
-        cells: MoneyCell[],
-        minutes: number | null,
-        kind: "selected" | "hover",
-        height: number,
-        xForMinutes: (minutes: number) => number,
-    ) {
-        if (minutes === null) return nothing;
-        const cell = cells.find((c) => minutes >= c.startMinutes && minutes < c.endMinutes);
-        if (!cell) return nothing;
-        const x = xForMinutes(cell.startMinutes);
-        const width = Math.max(2, xForMinutes(cell.endMinutes) - x);
-        const fill = kind === "hover"
-            ? "color-mix(in srgb, var(--helman-selection) 14%, transparent)"
-            : "color-mix(in srgb, var(--helman-grid-import) 13%, transparent)";
-        const stroke = kind === "hover" ? "var(--helman-selection)" : "var(--helman-grid-import)";
-        return svg`
-            <rect
-                x=${x} y="0" width=${width} height=${height}
-                style="fill: ${fill}; stroke: ${stroke};"
-                stroke-width="1" stroke-opacity=${kind === "hover" ? "0.55" : "0.5"}
-                rx="1"
-                pointer-events="none"
-            ></rect>
-        `;
-    }
 
     /** A click resolves to a minute-of-day, or null in the gutter to deselect. */
     private _handleClick(event: MouseEvent, geometry: ScheduleStripGeometry): void {
-        const svgEl = event.currentTarget as SVGSVGElement;
-        const rect = svgEl.getBoundingClientRect();
-        const svgX = ((event.clientX - rect.left) / rect.width) * geometry.width;
         this.dispatchEvent(
             new CustomEvent<SlotPickDetail>("slot-pick", {
-                detail: {
-                    minutes: stripMinutesForSvgX(geometry, svgX),
-                    mode: slotSelectionModeForEvent(event),
-                },
+                detail: stripClickDetail(event, geometry),
                 bubbles: true,
                 composed: true,
             }),
@@ -538,10 +478,7 @@ export class HelmanSolarMoneyStrip extends LitElement {
         geometry: ScheduleStripGeometry,
         cells: MoneyCell[],
     ): void {
-        const svgEl = event.currentTarget as SVGSVGElement;
-        const rect = svgEl.getBoundingClientRect();
-        const svgX = ((event.clientX - rect.left) / rect.width) * geometry.width;
-        const minutes = stripMinutesForSvgX(geometry, svgX);
+        const minutes = stripMinutesForSvgX(geometry, svgXFromEvent(event, geometry.width));
         const cell = minutes === null
             ? undefined
             : cells.find((c) => minutes >= c.startMinutes && minutes < c.endMinutes);

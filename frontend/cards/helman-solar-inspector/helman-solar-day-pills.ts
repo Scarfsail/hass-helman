@@ -5,9 +5,7 @@ import { nothing } from "lit-html";
 import { repeat } from "lit/directives/repeat.js";
 import type { HomeAssistant } from "../../types/ha";
 import type { ForecastPayload } from "../helman-api";
-import { ForecastLoader } from "../shared/data/forecast-loader";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
-import { EMPTY_SCHEDULE_OWNER_SNAPSHOT, getSharedScheduleOwner, type SharedScheduleOwner } from "../shared/schedule/schedule-owner";
 import { resolveLocale } from "../shared/resolve-locale";
 import { EMPTY_NORMALIZED_SCHEDULE } from "../shared/schedule/model/schedule-normalizer";
 import { buildScheduleTimelineModel } from "../shared/schedule/model/schedule-timeline-builder";
@@ -16,10 +14,7 @@ import {
     EMPTY_SLOT_FORECAST_MAP,
     type SlotForecastMap,
 } from "../shared/schedule/model/slot-forecast-model";
-import type {
-    NormalizedScheduleModel,
-    ScheduleOwnerSnapshot,
-} from "../shared/schedule/schedule-types";
+import type { NormalizedScheduleModel } from "../shared/schedule/schedule-types";
 import { dayAggregateGaugeStyles, renderDayAggregateGauge } from "../shared/day-aggregate-gauge";
 import {
     buildDayPillCalendarCells,
@@ -77,18 +72,6 @@ export interface DayPillOpenDetail {
  */
 export interface DayPillHoverDetail {
     date: string | null;
-}
-
-/**
- * The forecast payload's health, handed up to the inspector.
- *
- * The pills are the only always-mounted part of the inspector that fetches the
- * forecast, so they are where its health becomes known — but the warning is
- * about the card, not about the pill row, so it is raised rather than drawn
- * here.
- */
-export interface DayPillForecastHealthDetail {
-    forecast: ForecastPayload;
 }
 
 @customElement("helman-solar-day-pills")
@@ -392,15 +375,16 @@ export class HelmanSolarDayPills extends LitElement {
     private _restore?: { day: string; offset: number };
     private _revealed = -1;
 
-    @state() private _ownerSnapshot: ScheduleOwnerSnapshot = EMPTY_SCHEDULE_OWNER_SNAPSHOT;
-    @state() private _forecast: ForecastPayload | null = null;
+    /**
+     * The schedule, normalized on the shared owner's clock, and the forecast the
+     * gauges are filled from. Both are the inspector's: it holds the one schedule
+     * subscription and the one forecast read for the whole card, so the row and
+     * the health banner above it never disagree about which forecast is current.
+     */
+    @property({ attribute: false }) public normalizedSchedule: NormalizedScheduleModel = EMPTY_NORMALIZED_SCHEDULE;
+    @property({ attribute: false }) public forecast: ForecastPayload | null = null;
 
     private _localizeFn?: LocalizeFunction;
-    private _scheduleOwner?: SharedScheduleOwner;
-    private _unsubscribeOwner?: () => void;
-    private _forecastLoader: ForecastLoader | null = null;
-
-    private _normalized: NormalizedScheduleModel = EMPTY_NORMALIZED_SCHEDULE;
     private _model: SolarInspectorDayPillModel = EMPTY_DAY_PILL_MODEL;
     private _modelFor: {
         normalized: unknown;
@@ -427,9 +411,7 @@ export class HelmanSolarDayPills extends LitElement {
         }
         if (this.hass) {
             this._localizeFn = getLocalizeFunction(this.hass);
-            this._syncOwner();
         }
-        this._rebuildNormalizedIfNeeded();
         this._rebuildModelIfNeeded();
     }
 
@@ -469,8 +451,6 @@ export class HelmanSolarDayPills extends LitElement {
 
     disconnectedCallback(): void {
         super.disconnectedCallback();
-        this._unsubscribeOwner?.();
-        this._unsubscribeOwner = undefined;
         cancelAnimationFrame(this._frame);
         this._frame = 0;
         this._resize?.disconnect();
@@ -771,78 +751,6 @@ export class HelmanSolarDayPills extends LitElement {
         }));
     }
 
-    private _syncOwner(): void {
-        const hass = this.hass;
-        if (!hass) {
-            return;
-        }
-
-        const owner = getSharedScheduleOwner(hass);
-        if (this._scheduleOwner === owner) {
-            this._applyOwnerSnapshot(owner.getSnapshot());
-            return;
-        }
-
-        this._unsubscribeOwner?.();
-        this._scheduleOwner = owner;
-        this._applyOwnerSnapshot(owner.getSnapshot());
-        this._unsubscribeOwner = owner.subscribe((snapshot) => this._applyOwnerSnapshot(snapshot));
-    }
-
-    private _applyOwnerSnapshot(snapshot: ScheduleOwnerSnapshot): void {
-        if (snapshot === this._ownerSnapshot) {
-            // A clock tick: only the current slot or day can have moved, and
-            // the normalized model is the same object until one does.
-            if (this._scheduleOwner?.getNormalized(this.timeZone, this._locale) !== this._normalized) {
-                this.requestUpdate();
-            }
-            return;
-        }
-
-        const scheduleChanged = snapshot.schedule !== this._ownerSnapshot.schedule;
-        this._ownerSnapshot = snapshot;
-        if (scheduleChanged && snapshot.schedule !== null) {
-            // The forecast is what fills the gauges, and there is nothing to
-            // draw it against until the schedule has slots.
-            void this._loadForecast();
-        }
-    }
-
-    private async _loadForecast(): Promise<void> {
-        const hass = this.hass;
-        const schedule = this._ownerSnapshot.schedule;
-        if (!hass || schedule === null) {
-            return;
-        }
-
-        // Nothing to draw a forecast against until the schedule has slots.
-        if (schedule.slots.length === 0) {
-            return;
-        }
-
-        this._forecastLoader ??= new ForecastLoader();
-
-        try {
-            const forecast = await this._forecastLoader.load(hass);
-            if (this.hass?.connection === hass.connection) {
-                this._forecast = forecast;
-                this.dispatchEvent(new CustomEvent<DayPillForecastHealthDetail>("forecast-health", {
-                    bubbles: true,
-                    composed: true,
-                    detail: { forecast },
-                }));
-            }
-        } catch (error) {
-            console.error("helman-solar-day-pills: failed to load forecast", error);
-        }
-    }
-
-    /** Read the owner's shared clock and normalized schedule. */
-    private _rebuildNormalizedIfNeeded(): void {
-        this._normalized = this._scheduleOwner?.getNormalized(this.timeZone, this._locale)
-            ?? EMPTY_NORMALIZED_SCHEDULE;
-    }
-
     /**
      * The pills survive an empty schedule or a forecast that has not landed:
      * the row is built from the date range alone and the gauges render
@@ -852,8 +760,8 @@ export class HelmanSolarDayPills extends LitElement {
         const previous = this._modelFor;
         if (
             previous !== null
-            && previous.normalized === this._normalized
-            && previous.forecast === this._forecast
+            && previous.normalized === this.normalizedSchedule
+            && previous.forecast === this.forecast
             && previous.historyDays === this.historyDays
             && previous.startDate === this.startDate
             && previous.endDate === this.endDate
@@ -865,8 +773,8 @@ export class HelmanSolarDayPills extends LitElement {
         }
 
         this._modelFor = {
-            normalized: this._normalized,
-            forecast: this._forecast,
+            normalized: this.normalizedSchedule,
+            forecast: this.forecast,
             historyDays: this.historyDays,
             startDate: this.startDate,
             endDate: this.endDate,
@@ -886,14 +794,14 @@ export class HelmanSolarDayPills extends LitElement {
         // of the horizon with forecast-only slots, which is how the schedule card
         // fills its later day rows, and is what the later pills need too.
         const slots = buildScheduleTimelineModel({
-            normalizedSchedule: this._normalized,
-            forecast: this._forecast,
+            normalizedSchedule: this.normalizedSchedule,
+            forecast: this.forecast,
             locale: this._locale,
             timeZone: this.timeZone,
         }).slots;
-        const slotForecastMap: SlotForecastMap = this._forecast === null || slots.length === 0
+        const slotForecastMap: SlotForecastMap = this.forecast === null || slots.length === 0
             ? EMPTY_SLOT_FORECAST_MAP
-            : buildSlotForecastMap(this._forecast, slots);
+            : buildSlotForecastMap(this.forecast, slots);
 
         this._model = buildSolarInspectorDayPills({
             dayKeys,
@@ -903,7 +811,7 @@ export class HelmanSolarDayPills extends LitElement {
             // The card's own "today" leads: `startDate` is only today while the
             // row looks forward, and a past week must not label its first day
             // "Today".
-            currentDayKey: this.currentDate || this._normalized.currentDayKey || this.startDate,
+            currentDayKey: this.currentDate || this.normalizedSchedule.currentDayKey || this.startDate,
             locale: this._locale,
             timeZone: this.timeZone,
             todayLabel: this._localize("scheduling.day.today"),

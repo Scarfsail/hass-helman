@@ -11,6 +11,7 @@ import { selectLabelledColumns, stripValueLabel } from "../shared/strip-value-la
 import { symmetricEnergyAxis } from "./chart-axis";
 import { accumulateBands, clampToSign, stackSlots, type StackBand, type StackLayer, type StackSet } from "./chart-stack";
 import { deferrableShare } from "./slot-aggregation";
+import { SLOT_BAND_STYLE } from "./strip-geometry";
 
 /** The chart reads the measured composition and totals from each bucket. */
 export type SpanAggregateRow = Pick<DayAggregateRow,
@@ -76,17 +77,15 @@ const CHART = { height: 240, marginTop: 16, marginRight: 16, marginBottom: 24, m
 
 /**
  * How a picked column is drawn, and how a pointed-at one is -- the day view's
- * own two treatments, character for character.
+ * own two treatments, from the one definition `renderSlotBand` draws with.
  *
  * Selected is the blue `_renderSlotHighlight` paints a selected slot in; hover
  * is the amber the day chart's hover band uses. Keeping them apart by *hue*
  * rather than by opacity is the point: a selection that wore the hover colour
  * left the two tellable apart only by how strong they were.
  */
-const SELECTED_STYLE = "fill: color-mix(in srgb, var(--helman-grid-import) 13%, transparent);"
-    + " stroke: var(--helman-grid-import); stroke-width: 1; stroke-opacity: 0.5;";
-const HOVER_STYLE = "fill: color-mix(in srgb, var(--helman-selection) 14%, transparent);"
-    + " stroke: var(--helman-selection); stroke-width: 1;";
+const SELECTED_STYLE = SLOT_BAND_STYLE.selected;
+const HOVER_STYLE = SLOT_BAND_STYLE.hover;
 
 /**
  * Room a bucket's date label needs, which is less than a value label's.
