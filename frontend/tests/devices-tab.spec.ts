@@ -917,6 +917,139 @@ for (const ancestor of ["card", "tab"] as const) {
     });
 }
 
+for (const editKind of ["form", "device_yaml", "scope_yaml", "section_scope_yaml"] as const) {
+    test(`draft change via ${editKind} marks draft dirty and stales validation through draft door`, async ({ page }) => {
+        await mountEditor(page);
+        await openTab(page, "Devices");
+        const panel = page.locator("helman-config-editor-panel");
+
+        const readBadges = () =>
+            panel.locator(".status-row .badge").allTextContents();
+
+        // 1. Validate clean draft: validation passes, success message shown, not dirty
+        await panel.locator(".header .actions button", { hasText: "Validate" }).click();
+        await expect.poll(readBadges).toContain("Last validation passed");
+        expect(await readBadges()).toContain("Stored config loaded");
+        expect(await readBadges()).not.toContain("Unsaved changes");
+        await expect(panel.locator(".message.success")).toHaveText("Validation passed in the backend.");
+        expect(await panel.evaluate((el: any) => el._dirty)).toBe(false);
+
+        // 2. Perform edit
+        if (editKind === "form") {
+            const settings = panel.locator("details.section-card").first();
+            await settings.evaluate((details) => ((details as HTMLDetailsElement).open = true));
+            const regex = settings.locator(".field").filter({ hasText: "Device name cleaner regex" }).locator("input");
+            await regex.fill("\\sbreaker$");
+            await regex.dispatchEvent("change");
+        } else if (editKind === "device_yaml") {
+            await page.evaluate(() => {
+                const button = (window as any)
+                    .__own("pc", "summary .mode-toggle button")
+                    .find((candidate: HTMLElement) => candidate.textContent?.trim() === "YAML");
+                button?.click();
+            });
+            const pcYaml = await panel
+                .locator("ha-yaml-editor")
+                .evaluate((editor) => (editor as any).defaultValue);
+            await panel.locator("ha-yaml-editor").evaluate((editor, value) => {
+                editor.dispatchEvent(
+                    new CustomEvent("value-changed", {
+                        detail: { value, isValid: true },
+                        bubbles: true,
+                        composed: true,
+                    }),
+                );
+            }, { ...pcYaml, name: "Workstation PC" });
+        } else if (editKind === "scope_yaml") {
+            await panel.locator(".scope-toolbar .mode-toggle button", { hasText: "YAML" }).click();
+            const tabYaml = (await panel
+                .locator("ha-yaml-editor")
+                .evaluate((editor) => (editor as any).defaultValue)) as { consumers: any[] };
+            await panel.locator("ha-yaml-editor").evaluate((editor, value) => {
+                editor.dispatchEvent(
+                    new CustomEvent("value-changed", {
+                        detail: { value, isValid: true },
+                        bubbles: true,
+                        composed: true,
+                    }),
+                );
+            }, { ...tabYaml, consumers: [{ ...tabYaml.consumers[0], name: "Renamed Breaker" }, ...tabYaml.consumers.slice(1)] });
+        } else {
+            const consumersSection = panel.locator("details.section-card", {
+                has: page.locator(":scope > summary .section-summary-label", { hasText: "Consumers" }),
+            });
+            await consumersSection.locator(":scope > summary .mode-toggle button", { hasText: "YAML" }).click();
+            const sectionYaml = (await consumersSection
+                .locator("ha-yaml-editor")
+                .evaluate((editor) => (editor as any).defaultValue)) as any[];
+            await consumersSection.locator("ha-yaml-editor").evaluate((editor, value) => {
+                editor.dispatchEvent(
+                    new CustomEvent("value-changed", {
+                        detail: { value, isValid: true },
+                        bubbles: true,
+                        composed: true,
+                    }),
+                );
+            }, [{ ...sectionYaml[0], name: "Renamed Breaker" }, ...sectionYaml.slice(1)]);
+        }
+
+        // 3. Assert what _markDraftChanged drives:
+        // - Dirty flag set
+        // - Validation cleared (stale notice shown, clean & passed notices gone)
+        // - Success message cleared
+        // - Save button enabled
+        await expect.poll(readBadges).toContain("Unsaved changes");
+        expect(await readBadges()).toContain("Validation results are stale until you validate or save");
+        expect(await readBadges()).not.toContain("Last validation passed");
+        expect(await readBadges()).not.toContain("Stored config loaded");
+        expect(await panel.evaluate((el: any) => el._dirty)).toBe(true);
+        expect(await panel.evaluate((el: any) => el._validation)).toBeNull();
+        expect(await panel.evaluate((el: any) => el._message)).toBeNull();
+        await expect(panel.locator(".page > .message")).toHaveCount(0);
+        await expect(panel.locator(".header button", { hasText: "Save" })).toBeEnabled();
+    });
+}
+
+test("array section scope YAML shows expected_array error on null or scalar input", async ({ page }) => {
+    await mountEditor(page);
+    await openTab(page, "Devices");
+    const panel = page.locator("helman-config-editor-panel");
+
+    const consumersSection = panel.locator("details.section-card", {
+        has: page.locator(":scope > summary .section-summary-label", { hasText: "Consumers" }),
+    });
+    await consumersSection.locator(":scope > summary .mode-toggle button", { hasText: "YAML" }).click();
+    const editor = consumersSection.locator("ha-yaml-editor");
+    await expect(editor).toHaveCount(1);
+
+    const fireYaml = async (value: unknown) => {
+        await editor.evaluate((el, val) => {
+            el.dispatchEvent(
+                new CustomEvent("value-changed", {
+                    detail: { value: val, isValid: true },
+                    bubbles: true,
+                    composed: true,
+                }),
+            );
+        }, value);
+    };
+
+    // null input (e.g. comment-only or empty editor)
+    await fireYaml(null);
+    await expect(consumersSection.locator(".yaml-error")).toContainText("YAML for this scope must be a list.");
+    await expect(panel.locator(".header button", { hasText: "Save" })).toBeDisabled();
+
+    // scalar input (e.g. string or number)
+    await fireYaml("invalid scalar");
+    await expect(consumersSection.locator(".yaml-error")).toContainText("YAML for this scope must be a list.");
+    await expect(panel.locator(".header button", { hasText: "Save" })).toBeDisabled();
+
+    // valid list input clears the error and enables save
+    await fireYaml([{ ...BREAKER, name: "Valid Breaker" }]);
+    await expect(consumersSection.locator(".yaml-error")).toHaveCount(0);
+    await expect(panel.locator(".header button", { hasText: "Save" })).toBeEnabled();
+});
+
 test("validation errors surface on the nested card they name", async ({ page }) => {
     const issue = (path: string, message: string) => ({
         section: "devices",
