@@ -110,6 +110,7 @@ import { loadHaForm, loadHaSortable, loadHaYamlEditor } from "./load-ha-elements
 import { configFormStyles } from "../cards/shared/config/form-styles";
 import {
   booleanValue,
+  renderBooleanField,
   renderHelpDialog,
   renderHelpIcon,
   renderOptionalNumberField,
@@ -209,7 +210,6 @@ import type {
   VendorProfileInfo,
 } from "../cards/shared/config/types";
 import type { ScopeAdapterValidationError } from "./config-scope-adapters";
-import { normalizeYamlValue } from "../cards/shared/config/yaml-codec";
 
 const APPLIANCE_RUNTIME_OPTIMIZER_KIND = "appliance_runtime";
 
@@ -226,6 +226,22 @@ function devicePathSignature(config: JsonObject | null): string {
   return iterDevices(config)
     .map(({ device, path }) => `${entityGroupKey(path)}=${stringValue(device.id)}`)
     .join("|");
+}
+
+/**
+ * Replace all contents of target with source in place.
+ *
+ * Used by whole-document replacement callers so draft mutations still funnel
+ * through _applyMutation and preserve the in-place mutator contract.
+ */
+function replaceObjectContents(target: JsonObject, source: JsonObject): void {
+  if (target === source) {
+    return;
+  }
+  for (const key of Object.keys(target)) {
+    delete target[key];
+  }
+  Object.assign(target, source);
 }
 
 /** The two config buckets `automation` splits its optimizers into (#271, P1). */
@@ -1138,7 +1154,7 @@ export class HelmanConfigEditorPanel
       .catch((error) => {
         this._message = {
           kind: "error",
-          text: this._formatError(
+          text: formatError(
             error,
             this._t("editor.messages.load_ha_form_failed"),
           ),
@@ -1313,7 +1329,7 @@ export class HelmanConfigEditorPanel
 
         ${this._config ? this._renderDocumentBody(issueCounts) : nothing}
       </div>
-      ${this._renderHelpDialog()}
+      ${renderHelpDialog(this, this._helpDialog, this._closeHelp)}
       ${this._deviceDetail
         ? html`
             <node-detail-dialog
@@ -1359,7 +1375,7 @@ export class HelmanConfigEditorPanel
                 }
               }}
             >
-              ${this._renderSvgIcon(TAB_ICONS[tab.id], "tab-icon")}
+              ${renderSvgIcon(TAB_ICONS[tab.id], "tab-icon")}
               <span>${this._t(tab.labelKey)}</span>
               ${tab.id === "training" ? this._renderTrainingBadge() : nothing}
               ${counts.errors > 0
@@ -1600,14 +1616,14 @@ export class HelmanConfigEditorPanel
         <summary>
           <div class="section-summary-row">
             <div class="section-summary-left">
-              ${sectionIcon ? this._renderSvgIcon(sectionIcon, "section-icon") : nothing}
+              ${sectionIcon ? renderSvgIcon(sectionIcon, "section-icon") : nothing}
               <span class="section-summary-label">${this._t(scope.labelKey)}</span>
             </div>
             ${options.badge ? html`<div class="device-badges">${options.badge}</div>` : nothing}
             <div style="display:flex;align-items:center;gap:8px;" @click=${this._preventSummaryToggle}>
               ${this._renderModeToggle(scopeId, { inSummary: false })}
             </div>
-            ${this._renderSvgIcon(chevronPath, "section-chevron")}
+            ${renderSvgIcon(chevronPath, "section-chevron")}
           </div>
         </summary>
         <div class="section-content">
@@ -1617,33 +1633,6 @@ export class HelmanConfigEditorPanel
         </div>
       </details>
     `;
-  }
-
-  private _renderSvgIcon(path: string, className: string): TemplateResult {
-    return renderSvgIcon(path, className);
-  }
-
-  /**
-   * A plain panel: no YAML scope behind it, so no visual/YAML toggle. `icon`
-   * is an SVG path shown before the label; `badge` sits in the summary row
-   * just before the chevron.
-   *
-   * `onToggle` hears the panel being opened and closed. A collapsed `details`
-   * renders its content all the same, so anything that must not run until a
-   * reader asks for it -- a fetch, a lazily loaded bundle -- has to hang off
-   * this rather than off the template.
-   */
-  private _renderSimpleSection(
-    label: string,
-    content: TemplateResult,
-    options: {
-      open?: boolean;
-      icon?: string;
-      badge?: TemplateResult;
-      onToggle?: (open: boolean) => void;
-    } = {},
-  ): TemplateResult {
-    return renderSimpleSection(label, content, options);
   }
 
   private _getDeviceMode(path: PathSegment[]): EditorMode {
@@ -1676,7 +1665,7 @@ export class HelmanConfigEditorPanel
     } catch (error) {
       this._message = {
         kind: "error",
-        text: this._formatError(error, this._t("editor.messages.load_ha_yaml_editor_failed")),
+        text: formatError(error, this._t("editor.messages.load_ha_yaml_editor_failed")),
       };
     }
   }
@@ -1749,13 +1738,10 @@ export class HelmanConfigEditorPanel
       return;
     }
     try {
-      const nextConfig = cloneJson(this._config ?? {});
-      setValueAtPath(nextConfig, path, cloneJson(parsed.value));
+      this._applyMutation((draft) => {
+        setValueAtPath(draft, path, cloneJson(parsed.value));
+      });
       this._clearDescendantDeviceModes(path);
-      this._config = nextConfig as JsonObject;
-      this._dirty = true;
-      this._validation = null;
-      this._message = null;
       this._deviceYamlValues = { ...this._deviceYamlValues, [key]: parsed.value };
       const nextErrors = { ...this._deviceYamlErrors };
       delete nextErrors[key];
@@ -1763,7 +1749,7 @@ export class HelmanConfigEditorPanel
     } catch (error) {
       this._deviceYamlErrors = {
         ...this._deviceYamlErrors,
-        [key]: this._formatError(error, this._t("editor.yaml.errors.apply_failed")),
+        [key]: formatError(error, this._t("editor.yaml.errors.apply_failed")),
       };
     }
   }
@@ -1896,24 +1882,24 @@ export class HelmanConfigEditorPanel
         SECTION_SCOPE_IDS.visualization.card_labels_and_history,
         html`
           <div class="field-grid">
-            ${this._renderOptionalNumberField(
+            ${renderOptionalNumberField(this, 
               ["visualization", "history_buckets"],
               "editor.fields.history_buckets",
               "editor.helpers.history_buckets",
               "editor.help.history_buckets",
             )}
-            ${this._renderOptionalNumberField(
+            ${renderOptionalNumberField(this, 
               ["visualization", "history_bucket_duration"],
               "editor.fields.history_bucket_duration",
               "editor.helpers.history_bucket_duration",
               "editor.help.history_bucket_duration",
             )}
-            ${this._renderBooleanField(
+            ${renderBooleanField(this, 
               ["visualization", "show_empty_groups"],
               "editor.fields.show_empty_groups",
               false,
             )}
-            ${this._renderBooleanField(
+            ${renderBooleanField(this, 
               ["visualization", "show_others_group"],
               "editor.fields.show_others_group",
               true,
@@ -1992,7 +1978,7 @@ export class HelmanConfigEditorPanel
                 helpKey: "editor.help.solar_today_energy_entity",
               },
             )}
-            ${this._renderOptionalNumberField(
+            ${renderOptionalNumberField(this, 
               ["energy_nodes", "solar", "max_power"],
               "editor.fields.max_power",
               undefined,
@@ -2088,7 +2074,7 @@ export class HelmanConfigEditorPanel
                 helpKey: "editor.help.battery_max_soc_entity",
               },
             )}
-            ${this._renderOptionalNumberField(
+            ${renderOptionalNumberField(this, 
               ["energy_nodes", "battery", "max_power"],
               "editor.fields.max_power",
               undefined,
@@ -2101,25 +2087,25 @@ export class HelmanConfigEditorPanel
             SECTION_SCOPE_IDS.energy_nodes.battery_forecast,
             html`
               <div class="field-grid">
-                ${this._renderOptionalNumberField(
+                ${renderOptionalNumberField(this, 
                   ["energy_nodes", "battery", "forecast", "charge_efficiency"],
                   "editor.fields.charge_efficiency",
                   undefined,
                   "editor.help.battery_charge_efficiency",
                 )}
-                ${this._renderOptionalNumberField(
+                ${renderOptionalNumberField(this, 
                   ["energy_nodes", "battery", "forecast", "discharge_efficiency"],
                   "editor.fields.discharge_efficiency",
                   undefined,
                   "editor.help.battery_discharge_efficiency",
                 )}
-                ${this._renderOptionalNumberField(
+                ${renderOptionalNumberField(this, 
                   ["energy_nodes", "battery", "forecast", "max_charge_power_w"],
                   "editor.fields.max_charge_power_w",
                   undefined,
                   "editor.help.battery_max_charge_power_w",
                 )}
-                ${this._renderOptionalNumberField(
+                ${renderOptionalNumberField(this, 
                   ["energy_nodes", "battery", "forecast", "max_discharge_power_w"],
                   "editor.fields.max_discharge_power_w",
                   undefined,
@@ -2142,14 +2128,14 @@ export class HelmanConfigEditorPanel
               "editor.fields.power_entity",
               "editor.help.grid_power_entity",
             )}
-            ${this._renderOptionalNumberField(
+            ${renderOptionalNumberField(this, 
               ["energy_nodes", "grid", "max_allowed_export_power"],
               "editor.fields.max_allowed_export_power",
               undefined,
               "editor.help.grid_max_allowed_export_power",
               { min: 0, suffix: "W" },
             )}
-            ${this._renderOptionalNumberField(
+            ${renderOptionalNumberField(this, 
               ["energy_nodes", "grid", "max_power"],
               "editor.fields.max_power",
               undefined,
@@ -2170,7 +2156,7 @@ export class HelmanConfigEditorPanel
                     helpKey: "editor.help.grid_sell_price_entity",
                   },
                 )}
-                ${this._renderOptionalTextField(
+                ${renderOptionalTextField(this, 
                   ["energy_nodes", "grid", "forecast", "import_price_unit"],
                   "editor.fields.import_price_unit",
                   "editor.helpers.import_price_unit",
@@ -2237,7 +2223,7 @@ export class HelmanConfigEditorPanel
   private _renderTrainingTab(): TemplateResult {
     const applianceDevices = this._applianceEnergyDepthDevices();
     return html`
-      ${this._renderSimpleSection(
+      ${renderSimpleSection(
         this._t("editor.sections.training_settings"),
         html`
           <helman-info-callout
@@ -2254,7 +2240,7 @@ export class HelmanConfigEditorPanel
             SECTION_SCOPE_IDS.training.settings,
             html`
               <div class="field-grid">
-                ${this._renderOptionalTextField(
+                ${renderOptionalTextField(this, 
                   ["training", "training_time"],
                   "editor.fields.training_time",
                   "editor.helpers.training_time",
@@ -2279,19 +2265,19 @@ export class HelmanConfigEditorPanel
               .text=${this._t("editor.notes.training_solar_bias")}
             ></helman-info-callout>
             <div class="field-grid">
-              ${this._renderOptionalNumberField(
+              ${renderOptionalNumberField(this, 
                 ["training", "solar_bias", "min_history_days"],
                 "editor.fields.solar_bias_min_history_days",
                 "editor.helpers.solar_bias_min_history_days",
                 "editor.help.solar_bias_min_history_days",
               )}
-              ${this._renderOptionalNumberField(
+              ${renderOptionalNumberField(this, 
                 ["training", "solar_bias", "max_training_window_days"],
                 "editor.fields.solar_bias_max_training_window_days",
                 "editor.helpers.solar_bias_max_training_window_days",
                 "editor.help.solar_bias_max_training_window_days",
               )}
-              ${this._renderOptionalNumberField(
+              ${renderOptionalNumberField(this, 
                 ["training", "solar_bias", "min_valid_slot_days"],
                 "editor.fields.solar_bias_min_valid_slot_days",
                 "editor.helpers.solar_bias_min_valid_slot_days",
@@ -2300,19 +2286,19 @@ export class HelmanConfigEditorPanel
             </div>
             <p class="inline-note">${this._t("editor.notes.training_solar_bias_min_valid_slot_days")}</p>
             <div class="field-grid">
-              ${this._renderBooleanField(
+              ${renderBooleanField(this, 
                 ["training", "solar_bias", "enabled"],
                 "editor.fields.bias_correction_enabled",
-                this._configDefaultValue(["training", "solar_bias", "enabled"]) === true,
+                configDefaultValue(this._configDefaults, ["training", "solar_bias", "enabled"]) === true,
                 "editor.help.bias_correction_enabled",
               )}
-              ${this._renderOptionalNumberField(
+              ${renderOptionalNumberField(this, 
                 ["training", "solar_bias", "clamp_min"],
                 "editor.fields.bias_correction_clamp_min",
                 undefined,
                 "editor.help.bias_correction_clamp_min",
               )}
-              ${this._renderOptionalNumberField(
+              ${renderOptionalNumberField(this, 
                 ["training", "solar_bias", "clamp_max"],
                 "editor.fields.bias_correction_clamp_max",
                 undefined,
@@ -2326,10 +2312,10 @@ export class HelmanConfigEditorPanel
                   { value: "ratio_of_sums", label: this._optionLabel("editor.fields.bias_correction_aggregation_method_ratio_of_sums", "Ratio of Sums") },
                   { value: "trimmed_mean", label: this._optionLabel("editor.fields.bias_correction_aggregation_method_trimmed_mean", "Trimmed Mean") }
                 ],
-                String(this._configDefaultValue(["training", "solar_bias", "aggregation_method"]) ?? ""),
+                String(configDefaultValue(this._configDefaults, ["training", "solar_bias", "aggregation_method"]) ?? ""),
                 "editor.help.bias_correction_aggregation_method",
               )}
-              ${this._renderOptionalNumberField(
+              ${renderOptionalNumberField(this, 
                 ["training", "solar_bias", "max_interpolated_consecutive_slots"],
                 "editor.fields.bias_correction_max_interpolated_consecutive_slots",
                 "editor.helpers.bias_correction_max_interpolated_consecutive_slots",
@@ -2354,42 +2340,42 @@ export class HelmanConfigEditorPanel
                   .text=${this._t("editor.notes.training_solar_bias_slot_invalidation")}
                 ></helman-info-callout>
                 <div class="field-grid">
-                  ${this._renderOptionalNumberField(
+                  ${renderOptionalNumberField(this, 
                     ["training", "solar_bias", "slot_invalidation", "max_battery_soc_percent"],
                     "editor.fields.bias_correction_slot_invalidation_max_battery_soc_percent",
                     "editor.helpers.bias_correction_slot_invalidation_max_battery_soc_percent",
                     "editor.help.bias_correction_slot_invalidation_max_battery_soc_percent",
                     { min: 0, max: 100, suffix: "%" },
                   )}
-                  ${this._renderOptionalNumberField(
+                  ${renderOptionalNumberField(this, 
                     ["training", "solar_bias", "slot_invalidation", "curtailment_max_export_w"],
                     "editor.fields.bias_correction_slot_invalidation_curtailment_max_export_w",
                     "editor.helpers.bias_correction_slot_invalidation_curtailment_max_export_w",
                     "editor.help.bias_correction_slot_invalidation_curtailment_max_export_w",
                     { min: 0, suffix: "W" },
                   )}
-                  ${this._renderOptionalNumberField(
+                  ${renderOptionalNumberField(this, 
                     ["training", "solar_bias", "slot_invalidation", "curtailment_max_actual_forecast_ratio"],
                     "editor.fields.bias_correction_slot_invalidation_curtailment_max_actual_forecast_ratio",
                     "editor.helpers.bias_correction_slot_invalidation_curtailment_max_actual_forecast_ratio",
                     "editor.help.bias_correction_slot_invalidation_curtailment_max_actual_forecast_ratio",
                     { min: 0, max: 1 },
                   )}
-                  ${this._renderOptionalNumberField(
+                  ${renderOptionalNumberField(this, 
                     ["training", "solar_bias", "slot_invalidation", "data_glitch_max_slot_wh"],
                     "editor.fields.bias_correction_slot_invalidation_data_glitch_max_slot_wh",
                     "editor.helpers.bias_correction_slot_invalidation_data_glitch_max_slot_wh",
                     "editor.help.bias_correction_slot_invalidation_data_glitch_max_slot_wh",
                     { min: 0, suffix: "Wh" },
                   )}
-                  ${this._renderOptionalNumberField(
+                  ${renderOptionalNumberField(this, 
                     ["training", "solar_bias", "slot_invalidation", "data_glitch_min_neighbour_forecast_wh"],
                     "editor.fields.bias_correction_slot_invalidation_data_glitch_min_neighbour_forecast_wh",
                     "editor.helpers.bias_correction_slot_invalidation_data_glitch_min_neighbour_forecast_wh",
                     "editor.help.bias_correction_slot_invalidation_data_glitch_min_neighbour_forecast_wh",
                     { min: 0, suffix: "Wh" },
                   )}
-                  ${this._renderOptionalNumberField(
+                  ${renderOptionalNumberField(this, 
                     ["training", "solar_bias", "slot_invalidation", "data_glitch_backfill_max_minutes"],
                     "editor.fields.bias_correction_slot_invalidation_data_glitch_backfill_max_minutes",
                     "editor.helpers.bias_correction_slot_invalidation_data_glitch_backfill_max_minutes",
@@ -2425,13 +2411,13 @@ export class HelmanConfigEditorPanel
               .text=${this._t("editor.notes.training_house_consumption")}
             ></helman-info-callout>
             <div class="field-grid">
-              ${this._renderOptionalNumberField(
+              ${renderOptionalNumberField(this, 
                 ["training", "house_consumption", "min_history_days"],
                 "editor.fields.house_consumption_min_history_days",
                 "editor.helpers.house_consumption_min_history_days",
                 "editor.help.house_consumption_min_history_days",
               )}
-              ${this._renderOptionalNumberField(
+              ${renderOptionalNumberField(this, 
                 ["training", "house_consumption", "training_window_days"],
                 "editor.fields.house_consumption_training_window_days",
                 "editor.helpers.house_consumption_training_window_days",
@@ -2484,7 +2470,7 @@ export class HelmanConfigEditorPanel
     const hasDiagnostics =
       hasIssues || depthRows.length > 0 || extraDiagnostics !== nothing;
     const attentionLabel = this._t("editor.training_depth.attention");
-    return this._renderSimpleSection(
+    return renderSimpleSection(
       this._t(`editor.sections.${id}`),
       html`
         <helman-info-callout
@@ -2494,7 +2480,7 @@ export class HelmanConfigEditorPanel
         ${this._renderTrainingJobStatus(id)}
         ${configuration}
         ${hasDiagnostics
-          ? this._renderSimpleSection(
+          ? renderSimpleSection(
               this._t("editor.sections.diagnostics"),
               html`
                 <helman-training-issues .hass=${this.hass} .job=${job}></helman-training-issues>
@@ -2511,7 +2497,7 @@ export class HelmanConfigEditorPanel
                       role="img"
                       title=${attentionLabel}
                       aria-label=${attentionLabel}
-                    >${this._renderSvgIcon(mdiAlertOutline, "training-attention-icon")}</span>`
+                    >${renderSvgIcon(mdiAlertOutline, "training-attention-icon")}</span>`
                   : undefined,
               },
             )
@@ -2573,7 +2559,7 @@ export class HelmanConfigEditorPanel
         // its own it would not say which part of the page had gone missing.
         this._inspectorCardError = [
           this._t("editor.messages.load_inspector_card_failed"),
-          this._formatError(error, ""),
+          formatError(error, ""),
         ]
           .filter(Boolean)
           .join(" ");
@@ -2647,8 +2633,8 @@ export class HelmanConfigEditorPanel
           (parent !== null && isCarvedMeterOwner(parent) && ownMeter(device) !== "");
         if (!read) return [];
         const name =
-          this._stringValue(device.name) ||
-          this._stringValue(device.id) ||
+          stringValue(device.name) ||
+          stringValue(device.id) ||
           `${this._t("editor.training_depth.controllable_fallback_name")} ${index + 1}`;
         return [
           {
@@ -2745,10 +2731,10 @@ export class HelmanConfigEditorPanel
       const drawsFromParent = parent !== null && !ownMeter(device);
       return {
         index,
-        id: this._stringValue(device.id),
+        id: stringValue(device.id),
         name:
-          this._stringValue(device.name) ||
-          this._stringValue(device.id) ||
+          stringValue(device.name) ||
+          stringValue(device.id) ||
           `${this._t("editor.training_depth.controllable_fallback_name")} ${index + 1}`,
         path,
         parent: drawsFromParent ? parent : null,
@@ -2774,14 +2760,14 @@ export class HelmanConfigEditorPanel
         // Its own power sensor: how its runs are found. A meterless child
         // has none; its runs are its share of the meter.
         powerPath:
-          !drawsFromParent && this._stringValue(consumption.power_entity_id)
+          !drawsFromParent && stringValue(consumption.power_entity_id)
             ? [...path, "consumption", "power_entity_id"]
             : null,
         // The control whose history tells when it ran: the same running signal
         // the backend reads (`running_signal`), first configured of these.
         activity:
           (kind === "ev_charger" ? ["switch", "charge", "climate"] : ["switch", "climate"]).find(
-            (key) => this._stringValue(asJsonObject(controls[key])?.entity_id),
+            (key) => stringValue(asJsonObject(controls[key])?.entity_id),
           ) ?? null,
         learns: isSchedulable(device) && projection.strategy === "history_average",
         // The backend trains on 30 days when the key is absent.
@@ -2845,7 +2831,7 @@ export class HelmanConfigEditorPanel
    */
   private _deviceEnergyEstimate(device: JsonObject): DeviceEnergyInput {
     const job = this._trainingJob("appliance_energy");
-    const id = this._stringValue(device.id);
+    const id = stringValue(device.id);
     const recordKey = this._deviceKey(device);
     const projection = asJsonObject(asJsonObject(device.consumption)?.projection);
     const hourly = projection?.hourly_energy_kwh;
@@ -2984,8 +2970,8 @@ export class HelmanConfigEditorPanel
           )}
         </td>
         <td class="training-depth-role">${row.roleKey ? this._t(row.roleKey) : nothing}</td>
-        <td class="training-depth-number">${this._trainingDepthCell(rawStates)}</td>
-        <td class="training-depth-number">${this._trainingDepthCell(statistics)}</td>
+        <td class="training-depth-number">${trainingDepthCell(rawStates)}</td>
+        <td class="training-depth-number">${trainingDepthCell(statistics)}</td>
       </tr>
     `;
   }
@@ -3004,8 +2990,8 @@ export class HelmanConfigEditorPanel
     heading: TemplateResult | typeof nothing,
   ): TemplateResult {
     const entityId =
-      this._stringValue(this._getValue(row.path)) ||
-      this._stringValue(this._trainingDepthInspection(row).draft?.entityId);
+      stringValue(this._getValue(row.path)) ||
+      stringValue(this._trainingDepthInspection(row).draft?.entityId);
     return entityId
       ? html`<button
           type="button"
@@ -3124,7 +3110,7 @@ export class HelmanConfigEditorPanel
    * also the hydrator's deviceKey, which `_deviceTreeKey` qualifies.
    */
   private _deviceKey(device: JsonObject): string {
-    return ownMeter(device) || this._stringValue(device.id);
+    return ownMeter(device) || stringValue(device.id);
   }
 
   /**
@@ -3146,13 +3132,13 @@ export class HelmanConfigEditorPanel
    */
   private _savedDeviceUnchanged(device: JsonObject): boolean {
     const key = this._deviceTreeKey(device);
-    const id = this._stringValue(device.id);
-    const name = this._stringValue(device.name);
+    const id = stringValue(device.id);
+    const name = stringValue(device.name);
     return iterDevices(resolvedDraft(this._savedConfig, this._vendors.vendors)).some(
       ({ device: saved }) =>
         this._deviceTreeKey(saved) === key &&
-        this._stringValue(saved.id) === id &&
-        this._stringValue(saved.name) === name,
+        stringValue(saved.id) === id &&
+        stringValue(saved.name) === name,
     );
   }
 
@@ -3210,7 +3196,7 @@ export class HelmanConfigEditorPanel
       // Both halves, as for the inspector: the import error names only a URL.
       this._message = {
         kind: "error",
-        text: [this._t("editor.messages.load_device_detail_failed"), this._formatError(error, "")]
+        text: [this._t("editor.messages.load_device_detail_failed"), formatError(error, "")]
           .filter(Boolean)
           .join(" "),
       };
@@ -3260,11 +3246,6 @@ export class HelmanConfigEditorPanel
       : `${template} ${entityId}`;
   }
 
-  /** A measured cell: the number, or a dash while it is unknown. */
-  private _trainingDepthCell(value: unknown): string {
-    return trainingDepthCell(value);
-  }
-
   private _renderAutomationTab(): TemplateResult {
     return html`
       ${this._renderSectionScope(
@@ -3275,14 +3256,14 @@ export class HelmanConfigEditorPanel
           </p>
           <div class="field-grid">
             ${this._renderAutomationEnabledField()}
-            ${this._renderOptionalNumberField(
+            ${renderOptionalNumberField(this, 
               ["automation", "day_context", "deficit_below_ratio"],
               "editor.fields.day_context_deficit_ratio",
               "editor.helpers.day_context_deficit_ratio",
               "editor.help.day_context_deficit_ratio",
               { min: 0 },
             )}
-            ${this._renderOptionalNumberField(
+            ${renderOptionalNumberField(this, 
               ["automation", "day_context", "surplus_above_ratio"],
               "editor.fields.day_context_surplus_ratio",
               "editor.helpers.day_context_surplus_ratio",
@@ -3441,10 +3422,9 @@ export class HelmanConfigEditorPanel
     if (!detail?.config) {
       return;
     }
-    // The edit came from a child element, but it is still an edit of this
-    // draft, so it goes through the same bookkeeping rather than repeating it.
-    this._config = detail.config;
-    this._markDraftChanged();
+    this._applyMutation((draft) => {
+      replaceObjectContents(draft, detail.config);
+    });
   };
 
   private _renderAutomationEnabledField(): TemplateResult {
@@ -3495,19 +3475,11 @@ export class HelmanConfigEditorPanel
     path: PathSegment[],
     enabled: boolean,
   ): TemplateResult {
-    return html`
-      <div class="summary-toggle" @click=${this._stopSummaryToggle}>
-        <span>${this._t("editor.fields.optimizer_enabled")}</span>
-        <ha-switch
-          .checked=${enabled}
-          @change=${(event: Event) =>
-            this._setBoolean(
-              path,
-              (event.currentTarget as HTMLElement & { checked: boolean }).checked,
-            )}
-        ></ha-switch>
-      </div>
-    `;
+    return renderBooleanField(this, path, "editor.fields.optimizer_enabled", false, {
+      variant: "summary-toggle",
+      explicitValue: enabled,
+      onToggleClick: this._stopSummaryToggle,
+    });
   }
 
   /**
@@ -3526,17 +3498,17 @@ export class HelmanConfigEditorPanel
         SECTION_SCOPE_IDS.devices.settings,
         html`
           <div class="field-grid">
-            ${this._renderOptionalTextField(
+            ${renderOptionalTextField(this, 
               ["devices", "name_cleaner_regex"],
               "editor.fields.power_sensor_name_cleaner_regex",
               "editor.helpers.power_sensor_name_cleaner_regex",
               "editor.help.power_sensor_name_cleaner_regex",
             )}
-            ${this._renderOptionalTextField(
+            ${renderOptionalTextField(this, 
               ["devices", "power_sensor_label"],
               "editor.fields.power_sensor_label",
             )}
-            ${this._renderOptionalTextField(
+            ${renderOptionalTextField(this, 
               ["devices", "power_switch_label"],
               "editor.fields.power_switch_label",
             )}
@@ -3608,7 +3580,7 @@ export class HelmanConfigEditorPanel
         this._energyImport = { preview, draft };
     } catch (error) {
       if (this._config === draft && this._energyImportRequest.isCurrent(request))
-        this._deviceActionMessage = this._formatError(error, this._t("editor.messages.import_energy_failed"));
+        this._deviceActionMessage = formatError(error, this._t("editor.messages.import_energy_failed"));
     } finally {
       if (this._energyImportRequest.isCurrent(request)) this._importLoading = false;
     }
@@ -3883,7 +3855,7 @@ export class HelmanConfigEditorPanel
     const meterlessIds = parent !== null && domain !== "sensor"
       ? iterDevices(this._resolvedConfig())
           .filter((entry) => entry.parent !== null && !ownMeter(entry.device))
-          .map((entry) => this._stringValue(entry.device.id))
+          .map((entry) => stringValue(entry.device.id))
       : [];
     const id = deviceIdFor(entityId, [CONTROLLABLE_ID_INVERTER, ...this._deviceIds()], meterlessIds);
     let device: JsonObject;
@@ -3960,7 +3932,7 @@ export class HelmanConfigEditorPanel
       <summary>
         <div class="appliance-summary-row">
           <div class="appliance-summary-left">
-            ${this._renderSvgIcon(GROUPING_CHEVRON_PATH, "appliance-chevron")}
+            ${renderSvgIcon(GROUPING_CHEVRON_PATH, "appliance-chevron")}
             <div class="card-title">
               <strong>${title}</strong>
               <span class="card-subtitle">${subtitle}</span>
@@ -3990,7 +3962,7 @@ export class HelmanConfigEditorPanel
           const grouping = asJsonObject(value) ?? {};
           // ha-sortable reads its drag group only when created: a card reused for
           // another grouping would keep the old one, so each grouping keeps its own.
-          return keyed(this._stringValue(grouping.id), this._renderGrouping(grouping, index));
+          return keyed(stringValue(grouping.id), this._renderGrouping(grouping, index));
         })}
       </div>
     `;
@@ -3999,15 +3971,15 @@ export class HelmanConfigEditorPanel
   private _renderGrouping(grouping: JsonObject, index: number): TemplateResult {
     const path: PathSegment[] = ["devices", "groupings", index];
     const groups = asJsonArray(grouping.groups) ?? [];
-    const groupingId = this._stringValue(grouping.id);
+    const groupingId = stringValue(grouping.id);
     const members = consumerGroups(this._config, groupingId);
-    const groupIds = new Set(groups.map((group) => this._stringValue(asJsonObject(group)?.id)));
+    const groupIds = new Set(groups.map((group) => stringValue(asJsonObject(group)?.id)));
     const nameLabel = this._t("editor.fields.grouping_name");
     const idLabel = this._t("editor.fields.grouping_id");
     return html`
       <details class="list-card grouping-card" data-grouping-id=${groupingId}>
         ${this._renderBoardSummary(
-          this._stringValue(grouping.name),
+          stringValue(grouping.name),
           this._t("editor.card.grouping"),
           html`<div class="list-actions" @click=${this._preventSummaryToggle}>
             ${renderRemoveButton(this, {
@@ -4020,7 +3992,7 @@ export class HelmanConfigEditorPanel
         <div class="grouping-name">
           <input
             class="grouping-name-input"
-            .value=${this._stringValue(grouping.name)}
+            .value=${stringValue(grouping.name)}
             title=${nameLabel}
             aria-label=${nameLabel}
             @change=${(event: Event) =>
@@ -4083,7 +4055,7 @@ export class HelmanConfigEditorPanel
     members: GroupedDeviceEntry[],
   ): TemplateResult {
     const path: PathSegment[] = ["devices", "groupings", groupingIndex, "groups", groupIndex];
-    const groupId = this._stringValue(group.id);
+    const groupId = stringValue(group.id);
     const nameLabel = this._t("editor.fields.group_name");
     const idLabel = this._t("editor.fields.group_id");
     const shortNameLabel = this._t("editor.fields.group_short_name");
@@ -4093,7 +4065,7 @@ export class HelmanConfigEditorPanel
         <div class="field field-compact group-name-cell">
           <input
             class="group-name-input"
-            .value=${this._stringValue(group.name)}
+            .value=${stringValue(group.name)}
             aria-label=${nameLabel}
             @change=${(event: Event) =>
               this._setRequiredString([...path, "name"], (event.currentTarget as HTMLInputElement).value)}
@@ -4111,7 +4083,7 @@ export class HelmanConfigEditorPanel
         <div class="field field-compact group-short-name-cell">
           <input
             class="group-short-name-input"
-            .value=${this._stringValue(group.short_name)}
+            .value=${stringValue(group.short_name)}
             aria-label=${shortNameLabel}
             @change=${(event: Event) =>
               this._setRequiredString([...path, "short_name"], (event.currentTarget as HTMLInputElement).value)}
@@ -4179,8 +4151,8 @@ export class HelmanConfigEditorPanel
   private _renderMemberChip(entry: GroupedDeviceEntry): TemplateResult {
     const { device, parent, path } = entry;
     return html`
-      <div class="member-chip draggable" data-device-id=${this._stringValue(device.id)} .sortableData=${path}>
-        ${this._renderSvgIcon(mdiDragVertical, "member-chip-glyph")}
+      <div class="member-chip draggable" data-device-id=${stringValue(device.id)} .sortableData=${path}>
+        ${renderSvgIcon(mdiDragVertical, "member-chip-glyph")}
         <span class="member-name">${deviceName(this, this._inspections.results, device, path)}</span>
         ${parent
           ? html`<span class="member-parent">${deviceName(this, this._inspections.results, parent, path.slice(0, -2))}</span>`
@@ -4270,11 +4242,11 @@ export class HelmanConfigEditorPanel
           <div class="field">
             <div class="field-label-row">
               <label>${this._t("editor.fields.start")}</label>
-              ${this._renderHelpIcon("editor.fields.start", "editor.help.import_window_start")}
+              ${renderHelpIcon(this, "editor.fields.start", "editor.help.import_window_start")}
             </div>
             <input
               type="time"
-              .value=${this._stringValue(windowObject.start)}
+              .value=${stringValue(windowObject.start)}
               @change=${(event: Event) =>
                 this._setRequiredString(
                   [...basePath, "start"],
@@ -4285,11 +4257,11 @@ export class HelmanConfigEditorPanel
           <div class="field">
             <div class="field-label-row">
               <label>${this._t("editor.fields.end")}</label>
-              ${this._renderHelpIcon("editor.fields.end", "editor.help.import_window_end")}
+              ${renderHelpIcon(this, "editor.fields.end", "editor.help.import_window_end")}
             </div>
             <input
               type="time"
-              .value=${this._stringValue(windowObject.end)}
+              .value=${stringValue(windowObject.end)}
               @change=${(event: Event) =>
                 this._setRequiredString(
                   [...basePath, "end"],
@@ -4297,7 +4269,7 @@ export class HelmanConfigEditorPanel
                 )}
             />
           </div>
-          ${this._renderRequiredNumberField([...basePath, "price"], "editor.fields.price", undefined, "any", "editor.help.import_window_price")}
+          ${renderRequiredNumberField(this, [...basePath, "price"], "editor.fields.price", undefined, "any", "editor.help.import_window_price")}
         </div>
       </div>
     `;
@@ -4317,7 +4289,7 @@ export class HelmanConfigEditorPanel
     const mode = asJsonObject(asJsonObject(inverter.controls)?.mode) ?? {};
     const options = asJsonObject(mode.options) ?? {};
     const optionCount = INVERTER_ACTION_OPTIONS.filter(
-      (option) => this._stringValue(options[option.key]) !== "",
+      (option) => stringValue(options[option.key]) !== "",
     ).length;
     const profileLabel = deviceProfile(this._vendors.vendors, inverter, CONTROLLABLE_ID_INVERTER)?.label ?? "";
     // A profile that owns the mode control maps every action itself: only the
@@ -4349,7 +4321,7 @@ export class HelmanConfigEditorPanel
               },
             )}
           </div>`,
-          this._stringValue(mode.entity_id)
+          stringValue(mode.entity_id)
             ? [{ key: "mode", text: this._t("editor.section_badges.mode") }]
             : [],
         )}
@@ -4359,7 +4331,7 @@ export class HelmanConfigEditorPanel
               "action_options",
               html`<div class="field-grid">
                 ${INVERTER_ACTION_OPTIONS.map((option) =>
-                  this._renderOptionalTextField(
+                  renderOptionalTextField(this, 
                     [...modePath, "options", option.key],
                     option.labelKey,
                     undefined,
@@ -4399,7 +4371,7 @@ export class HelmanConfigEditorPanel
   private _renderUnsupportedDevice(device: JsonObject, path: PathSegment[]): TemplateResult {
     const chevronPath = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
     const subtitle = this._t("editor.dynamic.unsupported_appliance_kind", {
-      kind: this._stringValue(device.kind) || this._t("editor.values.unknown"),
+      kind: stringValue(device.kind) || this._t("editor.values.unknown"),
     });
     return html`
       <details class="list-card device-card" ?hidden=${!this._deviceMatchesFilter(device)}>
@@ -4407,7 +4379,7 @@ export class HelmanConfigEditorPanel
           <div class="appliance-summary-row">
             <div class="appliance-summary-left">
               ${renderDragHandle(this)}
-              ${this._renderSvgIcon(chevronPath, "appliance-chevron")}
+              ${renderSvgIcon(chevronPath, "appliance-chevron")}
               <div class="card-title">
                 <strong>${deviceName(this, this._inspections.results, device, path)}</strong>
                 <span class="card-subtitle">${subtitle}</span>
@@ -4522,36 +4494,6 @@ export class HelmanConfigEditorPanel
     `;
   }
 
-  private _renderOptionalTextField(
-    path: PathSegment[],
-    labelKey: string,
-    helperKey?: string,
-    helpKey?: string,
-    placeholder?: string,
-  ): TemplateResult {
-    return renderOptionalTextField(this, path, labelKey, helperKey, helpKey, placeholder);
-  }
-
-  private _renderOptionalNumberField(
-    path: PathSegment[],
-    labelKey: string,
-    helperKey?: string,
-    helpKey?: string,
-    options: { min?: number; max?: number; suffix?: string } = {},
-  ): TemplateResult {
-    return renderOptionalNumberField(this, path, labelKey, helperKey, helpKey, options);
-  }
-
-  private _renderRequiredNumberField(
-    path: PathSegment[],
-    labelKey: string,
-    explicitValue?: unknown,
-    step = "any",
-    helpKey?: string,
-  ): TemplateResult {
-    return renderRequiredNumberField(this, path, labelKey, explicitValue, step, helpKey);
-  }
-
   /**
    * The polarity select shown under a power device's power-entity picker.
    *
@@ -4610,34 +4552,6 @@ export class HelmanConfigEditorPanel
   private _optionLabel(key: string, fallback: string): string {
     const t = getLocalizeFunction(this.hass);
     return t.has(key) ? t(key) : fallback;
-  }
-
-  private _renderBooleanField(
-    path: PathSegment[],
-    labelKey: string,
-    defaultValue: boolean,
-    helpKey?: string,
-  ): TemplateResult {
-    const checked = this._booleanValue(this._getValue(path), defaultValue);
-    const toggle = html`
-      <ha-formfield .label=${this._t(labelKey)}>
-        <ha-switch
-          .checked=${checked}
-          @change=${(event: Event) =>
-            this._setBoolean(
-              path,
-              (event.currentTarget as HTMLElement & { checked: boolean }).checked,
-            )}
-        ></ha-switch>
-      </ha-formfield>
-    `;
-    return html`
-      <div class="field toggle-field">
-        ${helpKey
-          ? html`<div class="field-label-row">${toggle}${this._renderHelpIcon(labelKey, helpKey)}</div>`
-          : toggle}
-      </div>
-    `;
   }
 
   /**
@@ -4699,14 +4613,6 @@ export class HelmanConfigEditorPanel
       },
       this._renderPolarityField(device),
     );
-  }
-
-  private _renderHelpIcon(labelKey: string, contentKey: string): TemplateResult {
-    return renderHelpIcon(this, labelKey, contentKey);
-  }
-
-  private _renderHelpDialog(): TemplateResult | typeof nothing {
-    return renderHelpDialog(this, this._helpDialog, this._closeHelp);
   }
 
   private _closeHelp = (): void => {
@@ -4840,7 +4746,7 @@ export class HelmanConfigEditorPanel
       this._liveApplianceMetadata = null;
       this._message = {
         kind: "error",
-        text: this._formatError(error, this._t("editor.messages.load_config_failed")),
+        text: formatError(error, this._t("editor.messages.load_config_failed")),
       };
     } finally {
       this._loading = false;
@@ -4882,7 +4788,7 @@ export class HelmanConfigEditorPanel
     } catch (error) {
       this._message = {
         kind: "error",
-        text: this._formatError(error, this._t("editor.messages.validate_config_failed")),
+        text: formatError(error, this._t("editor.messages.validate_config_failed")),
       };
     } finally {
       this._validating = false;
@@ -4958,7 +4864,7 @@ export class HelmanConfigEditorPanel
     } catch (error) {
       this._message = {
         kind: "error",
-        text: this._formatError(error, this._t("editor.messages.save_failed")),
+        text: formatError(error, this._t("editor.messages.save_failed")),
       };
     } finally {
       this._saving = false;
@@ -5051,7 +4957,7 @@ export class HelmanConfigEditorPanel
     } catch (error) {
       this._message = {
         kind: "error",
-        text: this._formatError(
+        text: formatError(
           error,
           this._t("editor.messages.load_ha_yaml_editor_failed"),
         ),
@@ -5084,25 +4990,17 @@ export class HelmanConfigEditorPanel
   ): void {
     event.stopPropagation();
 
-    if (!event.detail.isValid) {
+    const parsed = parseItemYaml(event.detail, { allowArray: true });
+    if (!parsed.ok) {
       this._scopeYamlErrors = {
         ...this._scopeYamlErrors,
-        [scopeId]: event.detail.errorMsg ?? this._t("editor.yaml.errors.parse_failed"),
-      };
-      return;
-    }
-
-    const normalizedValue = normalizeYamlValue(event.detail.value);
-    if (!normalizedValue.ok) {
-      this._scopeYamlErrors = {
-        ...this._scopeYamlErrors,
-        [scopeId]: this._t("editor.yaml.errors.non_json_value"),
+        [scopeId]: event.detail.errorMsg ?? this._t(parsed.errorKey),
       };
       return;
     }
 
     const adapter = getScope(scopeId).adapter;
-    const validationError = adapter.validate(normalizedValue.value);
+    const validationError = adapter.validate(parsed.value);
     if (validationError) {
       this._scopeYamlErrors = {
         ...this._scopeYamlErrors,
@@ -5112,8 +5010,10 @@ export class HelmanConfigEditorPanel
     }
 
     try {
-      const nextValue = cloneJson(normalizedValue.value);
-      this._config = adapter.apply(this._config ?? {}, nextValue);
+      const nextValue = cloneJson(parsed.value);
+      this._applyMutation((draft) => {
+        replaceObjectContents(draft, adapter.apply(draft, nextValue));
+      });
       if (
         scopeId === DOCUMENT_SCOPE_ID ||
         scopeId === TAB_SCOPE_IDS.devices ||
@@ -5121,9 +5021,6 @@ export class HelmanConfigEditorPanel
       ) {
         this._resetDeviceModes();
       }
-      this._dirty = true;
-      this._validation = null;
-      this._message = null;
       this._scopeYamlValues = {
         ...this._scopeYamlValues,
         [scopeId]: nextValue,
@@ -5134,7 +5031,7 @@ export class HelmanConfigEditorPanel
     } catch (error) {
       this._scopeYamlErrors = {
         ...this._scopeYamlErrors,
-        [scopeId]: this._formatError(error, this._t("editor.yaml.errors.apply_failed")),
+        [scopeId]: formatError(error, this._t("editor.yaml.errors.apply_failed")),
       };
     }
   }
@@ -5195,7 +5092,7 @@ export class HelmanConfigEditorPanel
   private _handleAddGrouping = (): void => {
     const groupings = asJsonArray(this._getValue(["devices", "groupings"])) ?? [];
     const name = this._t("editor.dynamic.new_grouping", { index: groupings.length + 1 });
-    const id = slugId(name, groupings.map((grouping) => this._stringValue(asJsonObject(grouping)?.id)), "grouping");
+    const id = slugId(name, groupings.map((grouping) => stringValue(asJsonObject(grouping)?.id)), "grouping");
     this._applyMutation((draft) => {
       appendListItem(draft, ["devices", "groupings"], { id, name, groups: [] });
     });
@@ -5206,7 +5103,7 @@ export class HelmanConfigEditorPanel
     const groups = asJsonArray(this._getValue(groupsPath)) ?? [];
     const number = groups.length + 1;
     const name = this._t("editor.dynamic.new_group", { index: number });
-    const id = slugId(name, groups.map((group) => this._stringValue(asJsonObject(group)?.id)), "group");
+    const id = slugId(name, groups.map((group) => stringValue(asJsonObject(group)?.id)), "group");
     this._applyMutation((draft) => {
       appendListItem(draft, groupsPath, { id, name, short_name: String(number) });
     });
@@ -5214,7 +5111,7 @@ export class HelmanConfigEditorPanel
 
   /** Removes a grouping and, in the same mutation, every device's reference to it. */
   private _handleRemoveGrouping(index: number): void {
-    const groupingId = this._stringValue(this._getValue(["devices", "groupings", index, "id"]));
+    const groupingId = stringValue(this._getValue(["devices", "groupings", index, "id"]));
     this._applyMutation((draft) => {
       removeListItem(draft, ["devices", "groupings"], index);
       stripGroupReferences(draft, groupingId);
@@ -5240,7 +5137,7 @@ export class HelmanConfigEditorPanel
   /** Commits a typed group id among its sibling groups -- see {@link _commitId}. */
   private _handleRenameGroup(groupingIndex: number, groupIndex: number, input: HTMLInputElement): void {
     const groupingPath: PathSegment[] = ["devices", "groupings", groupingIndex];
-    const groupingId = this._stringValue(this._getValue([...groupingPath, "id"]));
+    const groupingId = stringValue(this._getValue([...groupingPath, "id"]));
     this._commitId([...groupingPath, "groups"], groupIndex, input, "group", (draft, oldId, id) =>
       renameGroupReferences(draft, groupingId, id, oldId),
     );
@@ -5264,10 +5161,10 @@ export class HelmanConfigEditorPanel
     rewrite: (draft: JsonObject, oldId: string, newId: string) => void,
   ): string | null {
     const entries = asJsonArray(this._getValue(listPath)) ?? [];
-    const oldId = this._stringValue(asJsonObject(entries[index])?.id);
+    const oldId = stringValue(asJsonObject(entries[index])?.id);
     const siblings = entries
       .filter((_, otherIndex) => otherIndex !== index)
-      .map((entry) => this._stringValue(asJsonObject(entry)?.id));
+      .map((entry) => stringValue(asJsonObject(entry)?.id));
     const raw = input.value;
     const newId = raw.trim() ? slugId(raw, siblings, fallback) : oldId;
     if (newId === oldId) {
@@ -5289,8 +5186,8 @@ export class HelmanConfigEditorPanel
   /** Removes one group and, in the same mutation, every device's reference to it. */
   private _handleRemoveGroup(groupingIndex: number, groupIndex: number): void {
     const groupingPath: PathSegment[] = ["devices", "groupings", groupingIndex];
-    const groupingId = this._stringValue(this._getValue([...groupingPath, "id"]));
-    const groupId = this._stringValue(this._getValue([...groupingPath, "groups", groupIndex, "id"]));
+    const groupingId = stringValue(this._getValue([...groupingPath, "id"]));
+    const groupId = stringValue(this._getValue([...groupingPath, "groups", groupIndex, "id"]));
     this._applyMutation((draft) => {
       removeListItem(draft, [...groupingPath, "groups"], groupIndex);
       stripGroupReferences(draft, groupingId, groupId);
@@ -5326,7 +5223,7 @@ export class HelmanConfigEditorPanel
       ...(asJsonArray(this._getValue(["automation", "appliance_optimizers"])) ?? []),
       ...(asJsonArray(this._getValue(["automation", "system_optimizers"])) ?? []),
     ]
-      .map((optimizer) => this._stringValue(asJsonObject(optimizer)?.id))
+      .map((optimizer) => stringValue(asJsonObject(optimizer)?.id))
       .filter((value) => value.length > 0);
     const draftOptimizer = createOptimizerDraft(existingIds, schema.kind, schema.newDraft);
     this._applyMutation((draft) => {
@@ -5347,7 +5244,7 @@ export class HelmanConfigEditorPanel
   /** Every draft device id, trimmed as the backend compares them. */
   private _deviceIds(): string[] {
     return iterDevices(this._config)
-      .map(({ device }) => this._stringValue(device.id).trim())
+      .map(({ device }) => stringValue(device.id).trim())
       .filter((value) => value.length > 0);
   }
 
@@ -5373,7 +5270,7 @@ export class HelmanConfigEditorPanel
       return false;
     }
 
-    return this._booleanValue(automation["enabled"], true);
+    return booleanValue(automation["enabled"], true);
   }
 
   private _setAutomationEnabled(enabled: boolean): void {
@@ -5404,12 +5301,6 @@ export class HelmanConfigEditorPanel
     });
   }
 
-  private _setBoolean(path: PathSegment[], value: boolean): void {
-    this._applyMutation((draft) => {
-      setValueAtPath(draft, path, value);
-    });
-  }
-
   /**
    * Keep each group member's `climate_mode` consistent with the controllable it names.
    *
@@ -5425,7 +5316,7 @@ export class HelmanConfigEditorPanel
     let changed = false;
     optimizers.forEach((optimizer, index) => {
       const optimizerObject = asJsonObject(optimizer);
-      const optimizerKind = this._stringValue(optimizerObject?.kind);
+      const optimizerKind = stringValue(optimizerObject?.kind);
       if (!optimizerObject || optimizerKind !== APPLIANCE_RUNTIME_OPTIMIZER_KIND) {
         return;
       }
@@ -5441,10 +5332,10 @@ export class HelmanConfigEditorPanel
       const members = asJsonArray(getValueAtPath(config, listPath)) ?? [];
       members.forEach((_member, memberIndex) => {
         const targetPath: PathSegment[] = [...listPath, memberIndex];
-        const applianceId = this._stringValue(
+        const applianceId = stringValue(
           getValueAtPath(config, [...targetPath, "controllable_id"]),
         );
-        const currentClimateMode = this._stringValue(
+        const currentClimateMode = stringValue(
           getValueAtPath(config, [...targetPath, "climate_mode"]),
         );
         const selectionState = buildControllableSelectionState(
@@ -5480,13 +5371,11 @@ export class HelmanConfigEditorPanel
   }
 
   /**
-   * How every `_set*` helper writes into the draft document.
+   * The single door through which every draft modification passes.
    *
-   * They all funnel through here, which is why the entity groups' re-read is
-   * wired into `_markDraftChanged` below rather than into the individual
-   * renderers: a field added tomorrow gets a live reading for free and cannot
-   * forget to ask for one. It is not the *only* door into the draft, though --
-   * see `_markDraftChanged`.
+   * Form fields, YAML edits, and external document changes all funnel through
+   * here, so `_markDraftChanged` runs consistently for every edit: dirty
+   * state, stale validation clearing, and live entity inspections.
    */
   private _applyMutation(mutator: (draft: JsonObject) => void | boolean): void {
     const draft = cloneJson(this._config ?? {});
@@ -5497,14 +5386,9 @@ export class HelmanConfigEditorPanel
   }
 
   /**
-   * What every change to the draft owes, wherever the change came from.
-   *
-   * The panel's own fields all funnel through `_applyMutation`, but the
-   * optimizer editor hands back a whole document of its own, and an entity
-   * added there would otherwise never get a live reading. Keeping the
-   * bookkeeping in one function is what stops the two paths drifting -- the
-   * previous version of this comment claimed `_applyMutation` was the only
-   * door, and it was already wrong.
+   * Bookkeeping run on every change to the draft, called by `_applyMutation`:
+   * clears pending energy import, marks dirty, resets validation state and
+   * success messages, and requests a live entity inspection pass.
    */
   private _markDraftChanged(): void {
     this._energyImport = null;
@@ -5548,27 +5432,11 @@ export class HelmanConfigEditorPanel
     return configDefaultHint(this._configDefaults, path);
   }
 
-  /**
-   * The backend's default for a control that always renders some state.
-   *
-   * A checkbox drawn unchecked, or a select drawn blank, states that the
-   * setting is off while the backend has it on -- a user who wants it off
-   * would change nothing and leave it running. So these read the default
-   * rather than falling back to an empty value.
-   */
-  private _configDefaultValue(path: PathSegment[]): string | number | boolean | undefined {
-    return configDefaultValue(this._configDefaults, path);
-  }
-
   private _getValue(path: PathSegment[]): unknown {
     if (!this._config) {
       return undefined;
     }
     return getValueAtPath(this._config, path);
-  }
-
-  private _stringValue(value: unknown): string {
-    return stringValue(value);
   }
 
   private async _loadLiveApplianceMetadata(): Promise<ApplianceMetadataResponse | null> {
@@ -5581,10 +5449,6 @@ export class HelmanConfigEditorPanel
     } catch {
       return null;
     }
-  }
-
-  private _booleanValue(value: unknown, fallback: boolean): boolean {
-    return booleanValue(value, fallback);
   }
 
   private _t(key: string, values?: Record<string, string | number>): string {
@@ -5604,9 +5468,5 @@ export class HelmanConfigEditorPanel
           key: error.key ?? "",
         });
     }
-  }
-
-  private _formatError(error: unknown, fallback: string): string {
-    return formatError(error, fallback);
   }
 }

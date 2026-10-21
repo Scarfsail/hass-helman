@@ -14,6 +14,7 @@ import {
     setValueAtPath,
 } from "../config/config-document";
 import { ConfigSession } from "../config/config-session";
+import { renderBooleanField } from "../config/form-fields";
 import { describeError } from "../describe-error";
 import type {
     ApplianceMetadataResponse,
@@ -352,17 +353,22 @@ export class HelmanOptimizerEditDialog extends LitElement {
         // browser's own "collapse this card".
         return html`
             <div class="list-actions" @click=${preventSummaryToggle}>
-                <div class="summary-toggle" @click=${stopSummaryToggle}>
-                    <span>${this._translate("editor.fields.optimizer_enabled")}</span>
-                    <ha-switch
-                        .checked=${enabled}
-                        @change=${(event: Event) =>
+                ${renderBooleanField(
+                    { t: (key) => this._translate(key) },
+                    [...basePath, "enabled"],
+                    "editor.fields.optimizer_enabled",
+                    false,
+                    {
+                        variant: "summary-toggle",
+                        explicitValue: enabled,
+                        onToggleClick: stopSummaryToggle,
+                        onChange: (checked) =>
                             this._setEnabled(
                                 [...basePath, "enabled"],
-                                (event.currentTarget as HTMLElement & { checked: boolean }).checked,
-                            )}
-                    ></ha-switch>
-                </div>
+                                checked,
+                            ),
+                    },
+                )}
             </div>
         `;
     }
