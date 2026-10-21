@@ -360,40 +360,42 @@ async function reconfigure(page: Page, config: Record<string, unknown>): Promise
     }, config);
 }
 
-test("hiding the price strip takes the slot detail's price tiles with it", async ({ page }) => {
+test("the slot detail's price tiles follow the price strip, hidden and shown again", async ({ page }) => {
     await mountCard(page, {});
     await seedEverySeries(page);
-    // The fake backend serves no price entities, so the strip publishes nothing;
-    // stand in for the `price-columns` event a real day would have delivered.
+    // The fake backend serves no price rails, so the day gets two here. The
+    // tiles read the day view's columns, the same ones the strip draws.
     await page.evaluate(async () => {
         const root = (window as unknown as {
             __inspectorRoot: () => ShadowRoot | null | undefined;
         }).__inspectorRoot();
         const el = root?.host as any;
+        const payload = JSON.parse(JSON.stringify(el._payload));
         const rail = (value: number) => Array.from({ length: 24 }, (_, hour) => ({
-            startMinutes: hour * 60,
-            endMinutes: (hour + 1) * 60,
+            slot: `${String(hour).padStart(2, "0")}:00`,
             value,
         }));
-        el._importPriceColumns = rail(6);
-        el._exportPriceColumns = rail(2);
-        el._priceUnit = "CZK/kWh";
+        payload.series.importPrice = rail(6);
+        payload.series.exportPrice = rail(2);
+        payload.priceUnit = "CZK/kWh";
+        el._payload = payload;
         el.requestUpdate();
         await el.updateComplete;
     });
     await selectSlot(page, "12:00");
-    // The tiles are gated on the columns the strip reports, so they have to be
-    // there first for their absence below to mean anything.
-    expect(await metricLabels(page)).toContain("Import price");
+    const priceTiles = async () => (await metricLabels(page))
+        .filter((label) => label === "Import price" || label === "Export price");
+    expect((await rowsPresent(page)).price).toBe(true);
+    expect(await priceTiles()).toEqual(["Import price", "Export price"]);
 
-    // Hidden after the strip had already reported: the cache it filled is not
-    // refilled and not cleared by the strip going away, so the flag has to.
     await reconfigure(page, { hide_price_strip: true });
-
     expect((await rowsPresent(page)).price).toBe(false);
-    const labels = await metricLabels(page);
-    expect(labels).not.toContain("Import price");
-    expect(labels).not.toContain("Export price");
+    expect(await priceTiles()).toEqual([]);
+
+    // And back: nothing about hiding the strip took the columns with it.
+    await reconfigure(page, {});
+    expect((await rowsPresent(page)).price).toBe(true);
+    expect(await priceTiles()).toEqual(["Import price", "Export price"]);
 });
 
 test("an actual-only pair places no chip for the forecast it dropped", async ({ page }) => {

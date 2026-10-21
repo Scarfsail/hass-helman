@@ -217,7 +217,7 @@ async function installCounters(page: Page): Promise<void> {
             stripGeometry: "_stripGeometry",
         });
         watch("helman-solar-price-strip", inspector.shadowRoot.querySelector("helman-solar-price-strip")!, {
-            priceColumns: "_importColumns",
+            priceColumns: "importColumns",
         });
         wrap("helman-solar-money-strip", "_buildCells", "moneyCells");
     });

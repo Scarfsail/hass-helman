@@ -561,8 +561,8 @@ test.describe("solar inspector aggregate views", () => {
     /**
      * The popup is placed from the pointer report that opened it, not from
      * whatever the day view left behind: both views stage their hovers through
-     * the same coalescer, so an aggregate column hovered after a day slot still
-     * puts the popup under the cursor.
+     * the same controller, so an aggregate column hovered after a day slot still
+     * puts the popup at the cursor.
      */
     test("a column popup follows the pointer even after a day-view hover", async ({ page }) => {
         await waitForDayChart(page);
@@ -590,10 +590,16 @@ test.describe("solar inspector aggregate views", () => {
         const placed = await page.evaluate(() => {
             const popup = (document.querySelector("helman-solar-inspector") as any)
                 .shadowRoot.querySelector(".hover-tooltip") as HTMLElement;
-            return { left: parseFloat(popup.style.left), top: parseFloat(popup.style.top) };
+            const box = popup.getBoundingClientRect();
+            return { centre: box.left + box.width / 2, top: box.top, bottom: box.bottom };
         });
-        expect(Math.abs(placed.left - point.x)).toBeLessThan(2);
-        expect(Math.abs(placed.top - point.y)).toBeLessThan(2);
+        expect(Math.abs(placed.centre - point.x)).toBeLessThan(2);
+        // Hung 10px above the pointer, or -- with no room for it there -- 10px
+        // below it; either way off this pointer, not the day view's.
+        expect(Math.min(
+            Math.abs(placed.bottom - (point.y - 10)),
+            Math.abs(placed.top - (point.y + 10)),
+        )).toBeLessThan(2);
     });
     /**
      * The SoC row draws two grounded bars per bucket, the way the day view's SoC

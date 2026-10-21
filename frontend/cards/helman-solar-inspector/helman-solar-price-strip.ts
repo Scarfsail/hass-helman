@@ -1,25 +1,26 @@
 import { formatMoney } from "../shared/format";
 import { formatClock } from "../shared/time/slot-time";
-import { LitElement, css, html, svg, type PropertyValues, type TemplateResult } from "lit";
+import { LitElement, css, html, svg, type TemplateResult } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { nothing } from "lit-html";
 import type { HomeAssistant } from "../../types/ha";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
-import { getScheduleLocalTimeParts } from "../shared/schedule/model/schedule-time";
-import { slotSelectionModeForEvent, type SlotPickDetail } from "./slot-selection.js";
+import type { SlotPickDetail } from "./slot-selection.js";
 import {
     EMPTY_SELECTED_MINUTES,
+    renderCellBand,
+    seamMinutes,
+    stripClickDetail,
     stripMinutesForSvgX,
     stripWindow,
+    svgXFromEvent,
     type ScheduleStripGeometry,
 } from "./strip-geometry";
-import { nowMinutesOnDay, renderNowMarker } from "./now-marker.js";
+import { renderNowMarkerOnDay } from "./now-marker.js";
 import { renderSlotGridlines, slotGridTicks } from "../shared/slot-gridlines";
 import { helmanColorVars } from "../color-vars";
 import { hourAnchorOffset, selectLabelledColumns, stripValueLabel } from "../shared/strip-value-labels";
-import { priceColumns, type PriceColumn, type PriceRailPoint } from "./inspector-day-model";
-
-const MINUTES_PER_DAY = 1440;
+import type { PriceColumn } from "./inspector-day-model";
 
 /** The strip's own geometry; it borrows only the x scale from the chart. */
 const PRICE_STRIP = { height: 65, padTop: 8, padBottom: 8 } as const;
@@ -50,24 +51,12 @@ function _inkOn(bar: { value: number; side: "import" | "export" } | null): strin
     return bar.side === "export" ? INK_ON_EXPORT : INK_ON_IMPORT;
 }
 
-/**
- * The day's price columns for both directions, published so the inspector can
- * look either one up by slot. Kept as two sequences rather than one merged
- * series because the rails coalesce independently: a window-shaped import rate
- * holds for hours while a spot export price moves every quarter of one.
- */
 /** One slot's two rates, zipped so the strip can draw them as a single column. */
 interface PriceCell {
     startMinutes: number;
     endMinutes: number;
     importValue: number | null;
     exportValue: number | null;
-}
-
-export interface PriceColumnsDetail {
-    importColumns: PriceColumn[];
-    exportColumns: PriceColumn[];
-    unit: string;
 }
 
 /**
@@ -97,7 +86,9 @@ export interface PriceTooltipContent {
  * payload, and that is what makes the strip work on days other than today: the
  * backend serves elapsed slots out of recorder history (and, for import, out of
  * the window config where history cannot answer), so navigating back a week
- * shows the prices that applied then rather than an empty strip.
+ * shows the prices that applied then rather than an empty strip. They arrive
+ * already laid out on the slot grid -- the day view's columns, the same ones the
+ * inspector's selected-slot tiles quote -- so the strip only draws them.
  *
  * `hass` is held only to read through — it is a conduit for localization, never
  * a change signal (see `../README.md`).
@@ -126,7 +117,6 @@ export class HelmanSolarPriceStrip extends LitElement {
     @property({ type: String }) public date = "";
     @property({ type: String }) public timeZone = "UTC";
     @property({ attribute: false }) public geometry: ScheduleStripGeometry | null = null;
-    /** Minute-of-day of the selected slot; its price cell reads as selected (blue). */
     /** Minute-of-day of every selected slot; each gets a blue band. */
     @property({ attribute: false }) public selectedMinutes: readonly number[] = EMPTY_SELECTED_MINUTES;
     /** Minute-of-day under the pointer; its price cell reads as hovered (orange). */
@@ -140,127 +130,25 @@ export class HelmanSolarPriceStrip extends LitElement {
     @property({ type: Number }) public nowMs = Date.now();
 
     /** What a kilowatt-hour bought from the grid cost, per slot of this day. */
-    @property({ attribute: false }) public importPrice: readonly PriceRailPoint[] = [];
+    @property({ attribute: false }) public importColumns: readonly PriceColumn[] = [];
     /** What a kilowatt-hour sold to the grid earned, per slot of this day. */
-    @property({ attribute: false }) public exportPrice: readonly PriceRailPoint[] = [];
+    @property({ attribute: false }) public exportColumns: readonly PriceColumn[] = [];
     /** The currency-per-energy unit both rails are quoted in, e.g. `CZK/kWh`. */
     @property({ type: String }) public unit = "";
-
-    /**
-     * Both rails laid out on the slot grid, and the inputs they were laid out
-     * from.
-     *
-     * The columns are a function of the rails and the slot width alone, and
-     * every other property here -- the hover minute above all -- moves without
-     * touching either. Built once per change of those two, so a pointer sweep
-     * across the strip re-renders it without re-bucketing a single price.
-     */
-    private _importColumns: PriceColumn[] = [];
-    private _exportColumns: PriceColumn[] = [];
-    private _columnsFor: {
-        importPrice: readonly PriceRailPoint[];
-        exportPrice: readonly PriceRailPoint[];
-        slot: number;
-    } | null = null;
-
-    protected willUpdate(): void {
-        this._rebuildColumnsIfNeeded();
-    }
-
-    private _rebuildColumnsIfNeeded(): void {
-        const previous = this._columnsFor;
-        const slot = this._slotSpan();
-        if (
-            previous !== null
-            && previous.importPrice === this.importPrice
-            && previous.exportPrice === this.exportPrice
-            && previous.slot === slot
-        ) {
-            return;
-        }
-        this._columnsFor = { importPrice: this.importPrice, exportPrice: this.exportPrice, slot };
-        // Laid out by the day model's own rule, so these are the columns the
-        // inspector's day view carries.
-        this._importColumns = priceColumns(this.importPrice, slot);
-        this._exportColumns = priceColumns(this.exportPrice, slot);
-    }
-
-    protected updated(changed: PropertyValues<this>): void {
-        // The inspector's own selected-slot panel wants this day's prices already
-        // laid out on the 0..1440 timeline, which only happens here, so every
-        // change that could move a value at a given minute is echoed up.
-        if (
-            changed.has("importPrice")
-            || changed.has("exportPrice")
-            || changed.has("unit")
-            || changed.has("slotMinutes")
-        ) {
-            this._emitColumns();
-        }
-    }
-
-    /** Publish this day's price columns, so the inspector can look one up by slot. */
-    private _emitColumns(): void {
-        this.dispatchEvent(
-            new CustomEvent<PriceColumnsDetail>("price-columns", {
-                detail: {
-                    importColumns: this._importColumns,
-                    exportColumns: this._exportColumns,
-                    unit: this.unit,
-                },
-                bubbles: true,
-                composed: true,
-            }),
-        );
-    }
 
     render() {
         if (!this.hass || this.geometry === null) {
             return nothing;
         }
-        // Built in `willUpdate`; nothing is derived here.
-        const importColumns = this._importColumns;
-        const exportColumns = this._exportColumns;
-        if (importColumns.length === 0 && exportColumns.length === 0) {
+        if (this.importColumns.length === 0 && this.exportColumns.length === 0) {
             return nothing;
         }
-        return this._renderStrip(importColumns, exportColumns, this.geometry);
-    }
-
-    /** The inspector's current slot width, guarded against a nonsense value. */
-    private _slotSpan(): number {
-        return this.slotMinutes > 0 ? this.slotMinutes : 15;
-    }
-
-    /** Turn an `HH:MM` slot label into its minute-of-day, or null if malformed. */
-
-    /**
-     * Minute-of-day the day turns from measured into upcoming: the start of the
-     * slot we are currently inside when the selected day is today, otherwise the
-     * whole day is past (an earlier day) or entirely upcoming (a later day).
-     *
-     * The seam snaps back to the slot start rather than sitting on the exact
-     * minute because a slot only counts as measured once it has fully elapsed —
-     * the same rule the chart above applies to its actuals. Splitting the price
-     * mid-column would claim part of a slot as history while the chart still
-     * draws that slot as a projection.
-     */
-    private _seamMinutes(): number {
-        const now = getScheduleLocalTimeParts(this.nowMs, this.timeZone);
-        if (now === null) {
-            return MINUTES_PER_DAY;
-        }
-        if (now.dayKey === this.date) {
-            const minutes = now.hour * 60 + now.minute;
-            const slot = this.slotMinutes > 0 ? this.slotMinutes : 15;
-            return Math.floor(minutes / slot) * slot;
-        }
-        return this.date < now.dayKey ? MINUTES_PER_DAY : 0;
+        return this._renderStrip(this.importColumns, this.exportColumns, this.geometry);
     }
 
     private _renderStrip(
-        importColumns: PriceColumn[],
-        exportColumns: PriceColumn[],
+        importColumns: readonly PriceColumn[],
+        exportColumns: readonly PriceColumn[],
         geometry: ScheduleStripGeometry,
     ): TemplateResult {
         const { height, padTop, padBottom } = PRICE_STRIP;
@@ -283,12 +171,11 @@ export class HelmanSolarPriceStrip extends LitElement {
             value >= 0
                 ? zeroY - (value / maxPositive) * positiveBand
                 : zeroY + (-value / maxNegative) * negativeBand;
-        const seam = this._seamMinutes();
+        const seam = seamMinutes(this.nowMs, this.date, this.timeZone, this.slotMinutes);
         const { start: windowStart, end: windowEnd } = stripWindow(geometry);
         const windowSpan = windowEnd - windowStart;
         const xForMinutes = (minutes: number) =>
             geometry.marginLeft + ((minutes - windowStart) / windowSpan) * geometry.plotWidth;
-        const bandColumns = this._bandColumns(importColumns, exportColumns);
         const cells = this._pairCells(importColumns, exportColumns);
 
         return html`
@@ -321,13 +208,13 @@ export class HelmanSolarPriceStrip extends LitElement {
                         top: 0,
                         bottom: height,
                     })}
-                    ${this._renderBand(bandColumns, this.hoverMinutes, "hover", height, xForMinutes)}
+                    ${renderCellBand(cells, this.hoverMinutes, "hover", height, xForMinutes)}
                     ${this.selectedMinutes.map((minutes) =>
-                        this._renderBand(bandColumns, minutes, "selected", height, xForMinutes))}
+                        renderCellBand(cells, minutes, "selected", height, xForMinutes))}
                     <g clip-path="url(#price-plot-clip)">
                     ${this._renderPairedBars(cells, { zeroY, yForValue, seam, xForMinutes })}
                     </g>
-                    ${this._renderNowMarker(xForMinutes, windowStart, windowEnd, height)}
+                    ${renderNowMarkerOnDay(this, { start: windowStart, end: windowEnd }, xForMinutes, 0, height, this._t("scheduling.badge.now"))}
                     <!-- The prices come after the marker so the line passes
                          behind the figure it crosses instead of through it. -->
                     <g clip-path="url(#price-plot-clip)">
@@ -346,18 +233,18 @@ export class HelmanSolarPriceStrip extends LitElement {
      * The two rails zipped into one cell each, so a slot is drawn as a single
      * column rather than a pair of half-width ones. A cell may hold only one of
      * the two — a day whose export price was never recorded still draws its
-     * import rate.
+     * import rate. Both rails sit on the one slot grid, so a cell is simply that
+     * grid's cell, and the selection and hover bands snap to the same cells.
      */
     private _pairCells(
-        importColumns: PriceColumn[],
-        exportColumns: PriceColumn[],
+        importColumns: readonly PriceColumn[],
+        exportColumns: readonly PriceColumn[],
     ): PriceCell[] {
-        const slot = this._slotSpan();
         const byStart = new Map<number, PriceCell>();
         const put = (column: PriceColumn, side: "import" | "export") => {
             const cell = byStart.get(column.startMinutes) ?? {
                 startMinutes: column.startMinutes,
-                endMinutes: Math.min(column.startMinutes + slot, MINUTES_PER_DAY),
+                endMinutes: column.endMinutes,
                 importValue: null,
                 exportValue: null,
             };
@@ -538,24 +425,6 @@ export class HelmanSolarPriceStrip extends LitElement {
         });
     }
 
-    /**
-     * The same vertical "now" line the charts above and the schedule band below
-     * draw, so the whole inspector marks the moment in one continuous stroke.
-     * Only today gets one, and only while it falls inside the drawn window.
-     */
-    private _renderNowMarker(
-        xForMinutes: (minutes: number) => number,
-        windowStart: number,
-        windowEnd: number,
-        height: number,
-    ) {
-        const minutes = nowMinutesOnDay(this.date, this.timeZone, this.nowMs);
-        if (minutes === null || minutes < windowStart || minutes > windowEnd) {
-            return nothing;
-        }
-        return renderNowMarker(xForMinutes(minutes), 0, height, this._t("scheduling.badge.now"));
-    }
-
     private _renderGuides(
         geometry: ScheduleStripGeometry,
         zeroY: number,
@@ -590,61 +459,10 @@ export class HelmanSolarPriceStrip extends LitElement {
     }
 
     /**
-     * The cells the selection and hover bands snap to. Both rails sit on the one
-     * slot grid, so a band is simply that grid's cell — the union of the two
-     * rails' starts, since either may be missing cells the other has.
-     */
-    private _bandColumns(
-        importColumns: PriceColumn[],
-        exportColumns: PriceColumn[],
-    ): PriceColumn[] {
-        const slot = this._slotSpan();
-        const starts = new Set<number>(
-            [...importColumns, ...exportColumns].map((column) => column.startMinutes),
-        );
-        return [...starts]
-            .sort((a, b) => a - b)
-            .map((startMinutes) => ({
-                startMinutes,
-                endMinutes: Math.min(startMinutes + slot, MINUTES_PER_DAY),
-                value: 0,
-            }));
-    }
-
-    /**
      * The blue selection or orange hover band. A minute falls inside one price
      * cell, and the band covers that whole cell — so an hour-long price cell
      * reads as the full hour, not the finer slot the minute came from.
      */
-    private _renderBand(
-        columns: PriceColumn[],
-        minutes: number | null,
-        kind: "selected" | "hover",
-        height: number,
-        xForMinutes: (minutes: number) => number,
-    ) {
-        if (minutes === null) {
-            return nothing;
-        }
-        const column = columns.find((c) => minutes >= c.startMinutes && minutes < c.endMinutes);
-        if (!column) {
-            return nothing;
-        }
-        const x = xForMinutes(column.startMinutes);
-        const width = Math.max(2, xForMinutes(column.endMinutes) - x);
-        const fill = kind === "hover" ? "color-mix(in srgb, var(--helman-selection) 14%, transparent)" : "color-mix(in srgb, var(--helman-grid-import) 13%, transparent)";
-        const stroke = kind === "hover" ? "var(--helman-selection)" : "var(--helman-grid-import)";
-        const strokeOpacity = kind === "hover" ? "0.55" : "0.5";
-        return svg`
-            <rect
-                x=${x} y="0" width=${width} height=${height}
-                style="fill: ${fill}; stroke: ${stroke};"
-                stroke-width="1" stroke-opacity=${strokeOpacity}
-                rx="1"
-                pointer-events="none"
-            ></rect>
-        `;
-    }
 
     /**
      * Turn a click into the minute-of-day the inspector resolves to a slot. A
@@ -652,13 +470,9 @@ export class HelmanSolarPriceStrip extends LitElement {
      * matching how clicking outside the plot on the chart deselects.
      */
     private _handleClick(event: MouseEvent, geometry: ScheduleStripGeometry): void {
-        const svgEl = event.currentTarget as SVGSVGElement;
-        const rect = svgEl.getBoundingClientRect();
-        const svgX = ((event.clientX - rect.left) / rect.width) * geometry.width;
-        const minutes = stripMinutesForSvgX(geometry, svgX);
         this.dispatchEvent(
             new CustomEvent<SlotPickDetail>("slot-pick", {
-                detail: { minutes, mode: slotSelectionModeForEvent(event) },
+                detail: stripClickDetail(event, geometry),
                 bubbles: true,
                 composed: true,
             }),
@@ -675,14 +489,11 @@ export class HelmanSolarPriceStrip extends LitElement {
     private _handleHover(
         event: MouseEvent,
         geometry: ScheduleStripGeometry,
-        importColumns: PriceColumn[],
-        exportColumns: PriceColumn[],
+        importColumns: readonly PriceColumn[],
+        exportColumns: readonly PriceColumn[],
     ): void {
-        const svgEl = event.currentTarget as SVGSVGElement;
-        const rect = svgEl.getBoundingClientRect();
-        const svgX = ((event.clientX - rect.left) / rect.width) * geometry.width;
-        const minutes = stripMinutesForSvgX(geometry, svgX);
-        const at = (columns: PriceColumn[]) =>
+        const minutes = stripMinutesForSvgX(geometry, svgXFromEvent(event, geometry.width));
+        const at = (columns: readonly PriceColumn[]) =>
             minutes === null
                 ? undefined
                 : columns.find((c) => minutes >= c.startMinutes && minutes < c.endMinutes);
