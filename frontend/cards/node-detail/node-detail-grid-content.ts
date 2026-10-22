@@ -795,7 +795,7 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
             cost,
             gain,
             net: cost === null || gain === null ? null : cost - gain,
-            currency: currencyFromPriceUnit(payload.currency),
+            currency: currencyFromPriceUnit(payload.priceUnit),
             importKwh: day.gridImportKwh,
             exportKwh: day.gridExportKwh,
             costKwh: day.moneyCostKwh,

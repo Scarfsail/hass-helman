@@ -15,11 +15,12 @@ export type ValueKind = "power" | "energy";
 
 /**
  * Formats a watt value for display.
- * - < 1000 W  → "XXX W"
- * - ≥ 1000 W  → "X.X kW"
+ * Selects the unit by absolute magnitude and preserves the sign.
+ * - |watts| < 1000 W  → "XXX W"
+ * - |watts| ≥ 1000 W  → "X.X kW"
  */
 export function formatPower(watts: number): FormattedPower {
-    if (watts >= 1000) {
+    if (Math.abs(watts) >= 1000) {
         const value = (watts / 1000).toFixed(1);
         return { value, unit: "kW", display: `${value} kW` };
     }

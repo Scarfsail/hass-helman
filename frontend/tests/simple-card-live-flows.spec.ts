@@ -1,6 +1,7 @@
 import { installMockHass } from "./support/mock-hass";
 import { cardTree } from "./support/payload-builders";
 import { test, expect, type Page } from "@playwright/test";
+import { formatPower } from "../cards/shared/format";
 import { IDLE_W, liveFlows } from "../cards/node-detail/live-flows";
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
 import { installFixedClock } from "./support/fixed-clock";
@@ -20,6 +21,15 @@ import { CARD_BUNDLE } from "./support/card-page";
 
 const flows = (solarPower: number, housePower: number, batteryPower: number, gridPower: number) =>
     liveFlows({ solarPower, housePower, batteryPower, gridPower });
+
+test("power units follow magnitude across the signed kW threshold", () => {
+    for (const [watts, display] of [
+        [-1000, "-1.0 kW"], [-999, "-999 W"], [0, "0 W"],
+        [999, "999 W"], [1000, "1.0 kW"],
+    ] as const) {
+        expect(formatPower(watts).display).toBe(display);
+    }
+});
 
 test.describe("the live split", () => {
     test("solar covers the house first, then the battery, and exports the rest", () => {
@@ -152,6 +162,16 @@ const BATTERY = "#22c55e";
 const stroke = (watts: number, max: number) => Math.max(1.5, Math.min(watts / max, 1) * 12);
 
 test.describe("the card draws the split as before", () => {
+    test("measured export keeps the grid meter value and export connectors", async ({ page }) => {
+        await mountCard(page, { solar: 3000, house: 500, battery: 0, grid: -1500 });
+        const grid = page.locator("simple-card-grid");
+        await expect(grid).toContainText("-1.5 kW");
+        const drawn = await lines(page);
+        expect(drawn.map(line => line.stroke)).toEqual([SOLAR, SOLAR]);
+        expect(drawn[0]).toMatchObject({ x1: "-22.5", x2: "53" });
+        expect(await grid.evaluate((node: any) => node.power)).toBe(-1500);
+    });
+
     test("midday: solar to the house, into the battery and out to the grid", async ({ page }) => {
         await mountCard(page, { solar: 6500, house: 900, battery: 3200, grid: -2400 });
         const drawn = await lines(page);

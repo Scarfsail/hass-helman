@@ -136,7 +136,7 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
                 )
 
     async def test_day_aggregates_defaults_to_day_buckets(self) -> None:
-        payload = {"bucket": "day", "currency": None, "days": []}
+        payload = {"bucket": "day", "priceUnit": None, "days": []}
         service = SimpleNamespace(
             async_get_span_aggregates=AsyncMock(return_value=payload)
         )
@@ -164,7 +164,7 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(connection.errors, [])
 
     async def test_day_aggregates_passes_the_month_bucket_through(self) -> None:
-        payload = {"bucket": "month", "currency": "CZK/kWh", "days": []}
+        payload = {"bucket": "month", "priceUnit": "CZK/kWh", "days": []}
         service = SimpleNamespace(
             async_get_span_aggregates=AsyncMock(return_value=payload)
         )
@@ -193,7 +193,7 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         # the aggregate views draw each bucket's composition, the day pills read
         # six scalars a bucket. The flag is how they say which, so it has to
         # reach the service rather than being defaulted away here.
-        payload = {"bucket": "month", "currency": None, "days": []}
+        payload = {"bucket": "month", "priceUnit": None, "days": []}
         service = SimpleNamespace(
             async_get_span_aggregates=AsyncMock(return_value=payload)
         )
@@ -224,7 +224,7 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         # The house-focused inspector's pills compare each day's actual house
         # energy with what was predicted for it; the flag is how they ask for the
         # prediction, so it has to reach the service.
-        payload = {"bucket": "day", "currency": None, "days": []}
+        payload = {"bucket": "day", "priceUnit": None, "days": []}
         service = SimpleNamespace(
             async_get_span_aggregates=AsyncMock(return_value=payload)
         )

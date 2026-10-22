@@ -204,7 +204,7 @@ export async function installMockHass(page: Page): Promise<void> {
             "helman/validate_config": { valid: true, errors: [], warnings: [] },
             "helman/get_forecast": forecast,
             "helman/solar_bias/inspector": (request: MockRequest) => window.__inspectorDay({ date: String(request.date ?? "") }),
-            "helman/solar_bias/day_aggregates": { days: [], bucket: "day", currency: "CZK", range: { minDate: "", maxDate: "" } },
+            "helman/solar_bias/day_aggregates": { days: [], bucket: "day", priceUnit: "CZK/kWh", range: { minDate: "", maxDate: "" } },
         };
     }, fixtureDefaults);
 }
@@ -420,7 +420,7 @@ export async function installFakeHass(page: Page, options: FakeHassOptions): Pro
                     return {
                         ...dayAggregates(String(start), String(end), msg.house_forecast === true),
                         bucket: msg.bucket ?? "day",
-                        currency: "CZK",
+                        priceUnit: "CZK/kWh",
                         // The span views navigate off the payload's own bounds,
                         // so a card taken to D or M without a day load first
                         // still knows how far back it may go.

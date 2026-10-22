@@ -255,7 +255,7 @@ export async function mountInspector(
                     (window as any).__spanRequests.push(msg);
                     const result = {
                         bucket: msg.bucket ?? "day",
-                        currency: "CZK",
+                        priceUnit: "CZK/kWh",
                         days: spanDays(
                             msg.start_date,
                             msg.end_date,

@@ -285,12 +285,12 @@ test("a slow span answer cannot land on top of a newer one", async ({ page }) =>
 
         // The same window again, and this answer is the current one.
         window.__setMockReply(hass, "helman/solar_bias/day_aggregates",
-            { currency: "CZK", days: [sample, { ...sample }] });
+            { priceUnit: "CZK/kWh", days: [sample, { ...sample }] });
         card._spanRequest.reset();
         await card._loadSpan(true);
         const afterFresh = card._span.days.length;
 
-        releaseStale!({ currency: "CZK", days: [] });
+        releaseStale!({ priceUnit: "CZK/kWh", days: [] });
         await stale;
         window.__clearMockReply(hass, "helman/solar_bias/day_aggregates");
         return { afterFresh, afterStale: card._span.days.length, loading: card._spanLoading };

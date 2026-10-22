@@ -19,7 +19,7 @@ export type SpanAggregateRow = Pick<DayAggregateRow,
     | "houseWh" | "batteryChargeWh" | "batteryDischargeWh" | "moneyCost" | "moneyGain" | "houseBreakdown" | "houseSourceMix">;
 
 /** What `helman/solar_bias/day_aggregates` answers with. */
-export type SpanAggregatePayload = Pick<DayAggregatesPayload, "bucket" | "currency" | "range"> & {
+export type SpanAggregatePayload = Pick<DayAggregatesPayload, "bucket" | "priceUnit" | "range"> & {
     days: SpanAggregateRow[];
 };
 

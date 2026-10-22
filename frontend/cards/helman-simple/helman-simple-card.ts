@@ -183,7 +183,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
 
         // One activation threshold for every flow, as the details read it.
         const battCharge    = batteryPower > IDLE_W;
-        const flows = liveFlows(energy);
+        const flows = liveFlows({ ...energy, gridPower: energy.gridPowerSigned ?? 0 });
         const effectiveGridPower = flows.gridPower;
 
         // Stroke width scales linearly from 1.5 to 12 px based on the power ratio; minimum ensures visibility.

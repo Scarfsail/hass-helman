@@ -126,7 +126,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
         };
         const aggregates = {
             bucket: "day",
-            currency: "CZK/kWh",
+            priceUnit: "CZK/kWh",
             days: [{
                 date: day, gridImportKwh: 8.4, gridExportKwh: 12.6,
                 moneyCost: 42.5, moneyGain: v.exportPartlyPriced ? 9.45 : 18.9,

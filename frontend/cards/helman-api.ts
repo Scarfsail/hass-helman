@@ -1301,7 +1301,7 @@ export interface EvChargerTodaySectionPayload {
 export type GridDayAggregateDTO = Pick<DayAggregateRow,
     "date" | "gridImportKwh" | "gridExportKwh" | "moneyCost" | "moneyGain" | "moneyCostKwh" | "moneyGainKwh">;
 
-export type GridDayAggregatesPayload = Pick<DayAggregatesPayload, "currency"> & {
+export type GridDayAggregatesPayload = Pick<DayAggregatesPayload, "priceUnit"> & {
     days: GridDayAggregateDTO[];
 };
 

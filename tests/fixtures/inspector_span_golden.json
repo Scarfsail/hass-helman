@@ -1,6 +1,6 @@
 {
   "bucket": "day",
-  "currency": null,
+  "priceUnit": null,
   "days": [
     {
       "date": "2026-04-23",
