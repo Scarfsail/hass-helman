@@ -1097,7 +1097,8 @@ class TestMoney(unittest.IsolatedAsyncioTestCase):
 
         payload = await service.async_get_span_aggregates("2026-04-23", "2026-04-24")
 
-        self.assertEqual(payload["currency"], "CZK/kWh")
+        self.assertEqual(payload["priceUnit"], "CZK/kWh")
+        self.assertNotIn("currency", payload)
         first, second = payload["days"]
         # 1 kWh at the night window's 2.0 plus 2 kWh at the recorded 7.0. Pricing
         # the day's 3 kWh at any single rate cannot produce this number.

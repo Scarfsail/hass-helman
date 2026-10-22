@@ -115,6 +115,7 @@ from .device_reports.dataset import (
     find_house_node,
 )
 from .device_reports.reports import ReportQuery, build_report
+from .entity import remove_stale_entities
 from .forecast.assembly import (
     ApplianceScheduleSignature,
     BatteryScheduleSignature,
@@ -916,6 +917,21 @@ class HelmanCoordinator:
         self._async_add_entities = async_add_entities
         self._dynamic_sensor_factories = factories
         self._sync_derived_sensors()
+        wanted_ids = {
+            f"{self._entry.entry_id}_{kind}_power_"
+            f"{node_id.removeprefix('sensor.') if kind == 'unmeasured' else node_id}"
+            for kind, sensors in self._dynamic_sensors.items()
+            for node_id in sensors
+        }
+        prefixes = tuple(
+            f"{self._entry.entry_id}_{kind}_power_" for kind in ("unmeasured", "share")
+        )
+        remove_stale_entities(
+            self._hass,
+            self._entry,
+            "sensor",
+            lambda unique_id: unique_id.startswith(prefixes) and unique_id not in wanted_ids,
+        )
 
     def _publish_solar_forecast_entities(self, *, reason: str) -> None:
         """Tell the forecast and price sensors to write their state now.
@@ -3298,21 +3314,28 @@ class HelmanCoordinator:
         cancelled waiter releases its place in the lock queue and never touches
         the build another waiter is still waiting for.
 
+        Readers acquire the canonical snapshots and corrected solar view under
+        the lock, so a waiting reader sees a refresh published while it waited.
         The preparation is inside the lock too. It is what the check reads, and
         a waiter that prepared before the winner published would be deciding
         against a schedule and a battery state that have since moved.
         """
-        if in_flight is None:
-            house_forecast = self._canonical_house_forecast()
-            solar_snapshot = self._cached_solar_forecast
-        else:
+        if in_flight is not None:
             house_forecast, solar_snapshot = in_flight
-        solar_forecast = (
-            _build_corrected_solar_forecast_view(solar_snapshot)
-            if isinstance(solar_snapshot, dict)
-            else {"status": "unavailable", "points": []}
-        )
+            solar_forecast = (
+                _build_corrected_solar_forecast_view(solar_snapshot)
+                if isinstance(solar_snapshot, dict)
+                else {"status": "unavailable", "points": []}
+            )
         async with self._appliance_forecast_pipeline_lock:
+            if in_flight is None:
+                house_forecast = self._canonical_house_forecast()
+                solar_snapshot = self._cached_solar_forecast
+                solar_forecast = (
+                    _build_corrected_solar_forecast_view(solar_snapshot)
+                    if isinstance(solar_snapshot, dict)
+                    else {"status": "unavailable", "points": []}
+                )
             prepared = await self._async_prepare_forecast_pipeline_inputs(
                 started_at=now
             )

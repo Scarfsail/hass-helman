@@ -1,7 +1,7 @@
 import { configDoc } from "./support/payload-builders";
 import { test, expect, type Page } from "@playwright/test";
 import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
-import { installFixedClock } from "./support/fixed-clock";
+import { FIXED_NOW_ISO, installFixedClock } from "./support/fixed-clock";
 
 /**
  * The Training tab's per-job status panels (issue #305).
@@ -102,7 +102,11 @@ async function mountEditor(
     trainingStatus: unknown,
     options: { fakeTimers?: boolean } = {},
 ): Promise<void> {
-    if (options.fakeTimers) await installFixedClock(page, { timers: true });
+    if (options.fakeTimers) {
+        await installFixedClock(page, { timers: true });
+        // Pause before mounting so setup time cannot consume the poll interval.
+        await page.clock.pauseAt(new Date(Date.parse(FIXED_NOW_ISO) + 1_000));
+    }
     await loadBundle(page, "helman-config-editor-panel", EDITOR_BUNDLE);
 
     await page.evaluate(

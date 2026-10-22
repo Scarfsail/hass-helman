@@ -51,7 +51,7 @@ export interface DayAggregateRow {
 
 export interface DayAggregatesPayload {
     bucket: "day" | "month";
-    currency: string | null;
+    priceUnit: string | null;
     days: DayAggregateRow[];
     range?: NavigationRange;
 }

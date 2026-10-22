@@ -399,7 +399,7 @@ class SolarInspector:
         if end_date < start_date:
             return {
                 "bucket": bucket,
-                "currency": None,
+                "priceUnit": None,
                 "days": [],
                 "range": navigation_range,
             }
@@ -445,7 +445,7 @@ class SolarInspector:
 
         return {
             "bucket": bucket,
-            "currency": await self._resolve_span_currency(import_price_config),
+            "priceUnit": await self._resolve_span_currency(import_price_config),
             "days": days,
             "range": navigation_range,
         }

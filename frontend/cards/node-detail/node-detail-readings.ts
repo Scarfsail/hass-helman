@@ -53,7 +53,6 @@ export interface EnergyNodes {
 export interface EnergyReadings {
     solarPower: number;
     solarPowerReading: number | null;
-    gridPower: number;
     gridPowerSigned: number | null;
     batteryPower: number;
     batteryPowerReading: number | null;
@@ -137,8 +136,6 @@ export function readEnergyReadings(
     };
 
     const gridNode = gridProducerNode ?? gridConsumerNode;
-    const gridReading = raw(gridNode?.powerSensorId);
-    const gridPower = applyValueType(gridReading ?? 0, gridProducerNode?.valueType ?? "default");
     const gridExport = signed(gridNode);
     const gridPowerSigned = gridExport === null ? null : -gridExport;
     const gridMaxPower = gridNode?.maxPowerW ?? null;
@@ -166,7 +163,6 @@ export function readEnergyReadings(
     return {
         solarPower,
         solarPowerReading,
-        gridPower,
         gridPowerSigned,
         batteryPower,
         batteryPowerReading,

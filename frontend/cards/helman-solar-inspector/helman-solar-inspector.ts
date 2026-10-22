@@ -1635,7 +1635,7 @@ export class HelmanSolarInspector extends LitElement {
         house_breakdown: true,
       });
       if (!this._spanRequest.isCurrent(request)) return;
-      this._span = { bucket, currency: result?.currency ?? null, days: result?.days ?? [] };
+      this._span = { bucket, priceUnit: result?.priceUnit ?? null, days: result?.days ?? [] };
       // Drop anything the new span has no column for, exactly as the day load
       // re-grids its slot selection: a selection the chart cannot draw is a
       // panel describing buckets that are not on screen.
@@ -1678,7 +1678,7 @@ export class HelmanSolarInspector extends LitElement {
         : html`<div class="note">${this._t("bias_correction.inspector.no_span_data", { span: this._spanLabel() })}</div>`;
     }
     const selected = this._selectedBucketRows(rows);
-    const currency = this._span?.currency ?? "";
+    const currency = currencyFromPriceUnit(this._span?.priceUnit);
     const panel = this._panelContext();
     return html`
       ${this._renderTooltip()}
@@ -2004,7 +2004,7 @@ export class HelmanSolarInspector extends LitElement {
       const amount = (labelKey: string, value: number | null, color: string) => rows.push({
         label: this._t(`bias_correction.inspector.${labelKey}`),
         actual: null,
-        forecast: { value: formatSpanMoney(value, this._span?.currency ?? ""), color },
+        forecast: { value: formatSpanMoney(value, currencyFromPriceUnit(this._span?.priceUnit)), color },
       });
       amount("import_cost", money.cost, CHART_COLORS.gridImport);
       amount("export_gain", money.gain, CHART_COLORS.gridExport);

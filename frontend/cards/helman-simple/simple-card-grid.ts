@@ -78,8 +78,7 @@ export class SimpleCardGrid extends LitElement {
         const exporting = this.power < -50;
         const isActive = importing || exporting;
         const stateClass = importing ? 'import' : exporting ? 'export' : '';
-        const absPower = Math.abs(this.power);
-        const { value, unit } = formatPower(absPower);
+        const { value, unit } = formatPower(this.power);
         const flowColors = getGridInternalFlowColors(importing, this.sourceColor);
         const wireColor = isActive ? flowColors.base : undefined;
         const wireGlow = isActive ? flowColors.glow : undefined;

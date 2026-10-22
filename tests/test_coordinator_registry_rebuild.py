@@ -8,7 +8,7 @@ import asyncio
 import unittest
 from collections import deque
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock, call, patch
 
 from tests._fakes import FakeHass, FakeState, make_coordinator, make_live_tracker
 from custom_components.helman import live_power as live_power_module
@@ -24,6 +24,40 @@ TREE = {
 
 
 class RegistryRebuildTests(unittest.IsolatedAsyncioTestCase):
+    async def test_factory_setup_removes_only_orphaned_dynamic_sensor_rows(self) -> None:
+        coordinator = make_coordinator(
+            _hass=FakeHass(), _entry=SimpleNamespace(entry_id="entry")
+        )
+        coordinator._tree_index = SimpleNamespace(
+            qualifying_nodes={"sensor.house": "sensor.house"},
+            share_devices={"share": ("sensor.parent", "Share")},
+        )
+        rows = [
+            SimpleNamespace(
+                domain=domain, unique_id=unique_id, entity_id=f"{domain}.{index}"
+            )
+            for index, (domain, unique_id) in enumerate([
+                ("sensor", "entry_unmeasured_power_old"),
+                ("sensor", "entry_share_power_old"),
+                ("sensor", "entry_unmeasured_power_house"),
+                ("sensor", "entry_share_power_share"),
+                ("sensor", "entry_forecast"),
+                ("switch", "entry_share_power_old"),
+            ])
+        ]
+        registry = Mock()
+        with (
+            patch("custom_components.helman.entity.er.async_get", return_value=registry),
+            patch(
+                "custom_components.helman.entity.er.async_entries_for_config_entry",
+                return_value=rows,
+            ),
+        ):
+            coordinator.set_entity_factory(Mock(), {"unmeasured": Mock(), "share": Mock()})
+        self.assertEqual(
+            registry.async_remove.call_args_list, [call("sensor.0"), call("sensor.1")]
+        )
+
     async def test_registry_rebuild_cannot_arm_tick_after_unload(self) -> None:
         coordinator = make_coordinator(_hass=FakeHass())
         coordinator._cached_tree = TREE

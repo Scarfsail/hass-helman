@@ -667,6 +667,24 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
 class PipelineReadPathTests(unittest.IsolatedAsyncioTestCase):
     """What the readers hand the pipeline when they bring no snapshots."""
 
+    async def test_waiting_reader_uses_the_latest_snapshots(self) -> None:
+        coordinator = _make_coordinator(self)
+        coordinator._cached_forecast = _make_house_forecast()
+        coordinator._cached_solar_forecast = _make_solar_forecast()
+        async with coordinator._appliance_forecast_pipeline_lock:
+            reader = asyncio.create_task(coordinator._async_current_pipeline(REFERENCE_TIME))
+            await asyncio.sleep(0)
+            latest = {**_make_house_forecast(), "generatedAt": "2026-03-20T21:08:00+01:00"}
+            coordinator._cached_forecast = latest
+            coordinator._cached_solar_forecast = {
+                **_make_solar_forecast(),
+                "correctedPoints": [{"timestamp": "2026-03-20T21:00:00+01:00", "value": 42.0}],
+            }
+        pipeline = await reader
+        self.assertEqual(pipeline.original_house_forecast, latest)
+        self.assertEqual(coordinator._pipeline_cache.key.house_generated_at, latest["generatedAt"])
+        self.assertEqual(self.build_battery_forecast.call_args.kwargs["solar_forecast"]["points"][0]["value"], 42.0)
+
     async def test_readers_build_against_the_canonical_snapshots(self) -> None:
         coordinator = _make_coordinator(self)
         house_forecast = _make_house_forecast()
