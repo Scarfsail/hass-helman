@@ -95,6 +95,7 @@ from .consumption_forecast_builder import (
     read_house_forecast_request,
 )
 from .controllables.config import (
+    CONTROLLABLE_ID_INVERTER,
     entity_friendly_name,
     is_active_state,
     iter_devices,
@@ -106,6 +107,7 @@ from .controllables.config import (
 from .controllables.spec import (
     CONTROLLABLE_KIND_CLIMATE,
     CONTROLLABLE_KIND_GENERIC,
+    CONTROLLABLE_KIND_INVERTER,
     spec_for,
 )
 from .device_reports.dataset import (
@@ -147,8 +149,9 @@ from .live_power import LivePowerTracker
 from .point_forecast_response import build_solar_forecast_response
 from .scheduling.actual_history import build_entity_actual_histories
 from .scheduling.normal_state import (
-    iter_controllable_sources,
+    build_controllable_entity,
     build_controllable_entities,
+    iter_controllable_sources,
 )
 from .scheduling.schedule import (
     ScheduleActionSetBy,
@@ -2060,22 +2063,30 @@ class HelmanCoordinator:
             reference_time=dt_util.utcnow(),
             interval_minutes=SCHEDULE_SLOT_MINUTES,
         )
-        sources = {
-            spec.control_entity_id(runtime): (spec, runtime)
-            for spec, runtime in iter_controllable_sources(
-                control_config=control_config, registry=registry
-            )
-        }
-        # Preserve roster order and empty membership after resolving raw slots.
+        # Keep each configured instance: a control entity can serve several lanes.
         result: dict[str, list[dict[str, Any]]] = {}
-        for entity in entities:
+        for spec, runtime in iter_controllable_sources(
+            control_config=control_config, registry=registry
+        ):
+            entity = build_controllable_entity(spec, runtime)
+            if entity is None:
+                continue
             entity_id = entity["entityId"]
-            spec, runtime = sources[entity_id]
-            result[entity_id] = [
-                {"slot": entry["slot"], "action": action, "ratio": entry["ratio"]}
+            controllable_id = (
+                CONTROLLABLE_ID_INVERTER
+                if spec.kind == CONTROLLABLE_KIND_INVERTER
+                else runtime.id
+            )
+            result.setdefault(entity_id, []).extend(
+                {
+                    "controllableId": controllable_id,
+                    "slot": entry["slot"],
+                    "action": action,
+                    "ratio": entry["ratio"],
+                }
                 for entry in history.get(entity_id, [])
                 if (action := spec.action_from_state(runtime, entry["state"])) is not None
-            ]
+            )
         return result
 
     def _fire_data_changed(self, kind: str) -> None:

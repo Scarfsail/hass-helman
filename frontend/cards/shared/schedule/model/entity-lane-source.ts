@@ -139,6 +139,7 @@ export function buildEntityLaneActualSlots({
     }
 
     return history.flatMap((entry) => {
+        if (entry.controllableId !== entity.id) return [];
         const startMs = new Date(entry.slot).getTime();
         const action = entry.action;
         return Number.isNaN(startMs) || action === null

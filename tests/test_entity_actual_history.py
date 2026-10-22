@@ -352,10 +352,11 @@ class ObservedActionHistoryTests(unittest.IsolatedAsyncioTestCase):
         inverter = SimpleNamespace(mode_entity_id="select.inverter", normal_option="Normal",
             options={"normal": "Normal", "charge_to_target_soc": "Custom charge", "stop_charging": "Hold"})
         appliances = [
-            SimpleNamespace(kind="generic", name="Boiler", switch_entity_id="switch.boiler"),
-            SimpleNamespace(kind="climate", name="Pool", climate_entity_id="climate.pool", stop_hvac_mode="off"),
-            SimpleNamespace(kind="ev_charger", name="Car", charge_entity_id="switch.car"),
-            SimpleNamespace(kind="generic", name="Missing", switch_entity_id="switch.missing"),
+            SimpleNamespace(id="boiler", kind="generic", name="Boiler", switch_entity_id="switch.boiler"),
+            SimpleNamespace(id="pool", kind="climate", name="Pool", climate_entity_id="climate.pool", stop_hvac_mode="off"),
+            SimpleNamespace(id="car", kind="ev_charger", name="Car", charge_entity_id="switch.car"),
+            SimpleNamespace(id="shared", kind="generic", name="Shared", switch_entity_id="switch.car"),
+            SimpleNamespace(id="missing", kind="generic", name="Missing", switch_entity_id="switch.missing"),
         ]
         def row(state, ratio=1):
             return {"slot": _local(8).isoformat(), "state": state, "ratio": ratio}
@@ -370,11 +371,14 @@ class ObservedActionHistoryTests(unittest.IsolatedAsyncioTestCase):
         with patch("custom_components.helman.coordinator.build_entity_actual_histories", read):
             result = await HelmanCoordinator.async_get_entity_actual_history(coordinator)
         self.assertEqual(list(result), ["select.inverter", "switch.boiler", "climate.pool", "switch.car", "switch.missing"])
-        self.assertEqual(result["select.inverter"], [{"slot": _local(8).isoformat(), "action": {"kind": "charge_to_target_soc"}, "ratio": .5}])
+        self.assertEqual(result["select.inverter"], [{"controllableId": "inverter", "slot": _local(8).isoformat(), "action": {"kind": "charge_to_target_soc"}, "ratio": .5}])
         self.assertEqual(result["switch.boiler"][0]["action"], {"on": True})
         self.assertEqual(result["switch.boiler"][0]["ratio"], .333)
         self.assertEqual(result["climate.pool"][0]["action"], {"mode": "heat"})
-        self.assertEqual(result["switch.car"][0]["action"], {"charge": True})
+        self.assertEqual(result["switch.car"], [
+            {"controllableId": "car", "slot": _local(8).isoformat(), "action": {"charge": True}, "ratio": 1},
+            {"controllableId": "shared", "slot": _local(8).isoformat(), "action": {"on": True}, "ratio": 1},
+        ])
         self.assertEqual(result["switch.missing"], [])
         read.assert_awaited_once()
         self.assertEqual(read.call_args.kwargs["normal_states"], {
