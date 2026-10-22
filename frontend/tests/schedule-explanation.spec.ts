@@ -68,7 +68,7 @@ const INVERTER_PAYLOAD = explanationRows({
                         actual: [1.2, 1.1, undefined, 0.9][slot],
                     }],
                 }],
-                gates: [{ key: "stop_export_supported", state: "true" }],
+                gates: [{ key: "stop_export_supported", role: "veto" as const, state: "true" }],
             })),
         },
         {
@@ -125,9 +125,9 @@ const INVERTER_PAYLOAD = explanationRows({
                 ],
                 gates: [
                     // Unreached past 14:00: absent, never false.
-                    ...(slot < 3 ? [{ key: "hold_window", state: "true" as const }] : []),
-                    ...(slot === 1 ? [{ key: "blocked_user_owned", state: "false" as const }] : []),
-                    ...(slot === 2 ? [{ key: "blocked_user_owned", state: "true" as const }] : []),
+                    ...(slot < 3 ? [{ key: "hold_window", role: "veto" as const, state: "true" as const }] : []),
+                    ...(slot === 1 ? [{ key: "blocked_user_owned", role: "veto" as const, state: "false" as const }] : []),
+                    ...(slot === 2 ? [{ key: "blocked_user_owned", role: "veto" as const, state: "true" as const }] : []),
                 ],
             })),
         },
@@ -163,7 +163,7 @@ const APPLIANCE_PAYLOAD = explanationRows({
                 }],
             }],
             gates: [{
-                key: "cheapest_rank",
+                key: "cheapest_rank", role: "veto",
                 state: slot === 0 ? "true" : "false",
                 params: { rank: slot === 0 ? 1 : 9 },
             }],
@@ -198,7 +198,7 @@ const CANDIDATE_PAYLOAD = explanationRows({
                     customResults: [slot === 1],
                     conditions: [{ key: "max_run_price", scope: "slot", state: "true", value: 2.0 }],
                 }],
-                gates: [{ key: "slot_available", state: "true" }],
+                gates: [{ key: "slot_available", role: "veto" as const, state: "true" }],
             })),
         },
         {

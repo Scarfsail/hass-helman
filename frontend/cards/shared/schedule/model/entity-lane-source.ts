@@ -2,10 +2,7 @@ import type { LocalizeFunction } from "../../../localize/localize";
 import type { EntityActualHistorySlotDTO, ForecastPayload } from "../../../helman-api";
 import { isScheduleEvChargerAction } from "../schedule-types";
 import type { ScheduleDisplaySlot, ScheduleSlot } from "../schedule-types";
-import {
-    resolveScheduleActionFromEntityState,
-    type ControllableEntityStatus,
-} from "./controllable-entity-status";
+import type { ControllableEntityStatus } from "./controllable-entity-status";
 import {
     buildElapsedScheduleSlots,
     buildEntityActualSegments,
@@ -143,7 +140,7 @@ export function buildEntityLaneActualSlots({
 
     return history.flatMap((entry) => {
         const startMs = new Date(entry.slot).getTime();
-        const action = resolveScheduleActionFromEntityState({ entity, state: entry.state });
+        const action = entry.action;
         return Number.isNaN(startMs) || action === null
             ? []
             : [{ startMs, endMs: startMs + slotDurationMs, action, ratio: entry.ratio }];

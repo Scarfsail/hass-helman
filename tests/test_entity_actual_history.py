@@ -343,5 +343,53 @@ class BuildEntityActualHistoriesTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self._calls, [])
 
 
+class ObservedActionHistoryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_resolves_each_kind_in_roster_order_with_one_batched_read(self):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, patch
+        from custom_components.helman.coordinator import HelmanCoordinator
+
+        inverter = SimpleNamespace(mode_entity_id="select.inverter", normal_option="Normal",
+            options={"normal": "Normal", "charge_to_target_soc": "Custom charge", "stop_charging": "Hold"})
+        appliances = [
+            SimpleNamespace(kind="generic", name="Boiler", switch_entity_id="switch.boiler"),
+            SimpleNamespace(kind="climate", name="Pool", climate_entity_id="climate.pool", stop_hvac_mode="off"),
+            SimpleNamespace(kind="ev_charger", name="Car", charge_entity_id="switch.car"),
+            SimpleNamespace(kind="generic", name="Missing", switch_entity_id="switch.missing"),
+        ]
+        def row(state, ratio=1):
+            return {"slot": _local(8).isoformat(), "state": state, "ratio": ratio}
+        read = AsyncMock(return_value={
+            "select.inverter": [row("Custom charge", .5), row("unmapped")],
+            "switch.boiler": [row("on", .333)],
+            "climate.pool": [row("heat")],
+            "switch.car": [row("on")],
+        })
+        coordinator = SimpleNamespace(_hass=object(),
+            _controllable_sources=lambda: (inverter, SimpleNamespace(appliances=appliances)))
+        with patch("custom_components.helman.coordinator.build_entity_actual_histories", read):
+            result = await HelmanCoordinator.async_get_entity_actual_history(coordinator)
+        self.assertEqual(list(result), ["select.inverter", "switch.boiler", "climate.pool", "switch.car", "switch.missing"])
+        self.assertEqual(result["select.inverter"], [{"slot": _local(8).isoformat(), "action": {"kind": "charge_to_target_soc"}, "ratio": .5}])
+        self.assertEqual(result["switch.boiler"][0]["action"], {"on": True})
+        self.assertEqual(result["switch.boiler"][0]["ratio"], .333)
+        self.assertEqual(result["climate.pool"][0]["action"], {"mode": "heat"})
+        self.assertEqual(result["switch.car"][0]["action"], {"charge": True})
+        self.assertEqual(result["switch.missing"], [])
+        read.assert_awaited_once()
+        self.assertEqual(read.call_args.kwargs["normal_states"], {
+            "select.inverter": "Normal", "switch.boiler": "off", "climate.pool": "off", "switch.car": "off", "switch.missing": "off"})
+
+    def test_kind_inverse_mappings_preserve_observed_state_semantics(self):
+        from types import SimpleNamespace
+        from custom_components.helman.controllables.spec import spec_for
+        source = SimpleNamespace(options={"stop_discharging": "Hold custom", "normal": "Normal"})
+        self.assertEqual(spec_for("inverter").action_from_state(source, "Hold custom"), {"kind": "stop_discharging"})
+        self.assertIsNone(spec_for("inverter").action_from_state(source, "unknown"))
+        self.assertEqual(spec_for("generic").action_from_state(source, "unexpected"), {"on": False})
+        self.assertEqual(spec_for("climate").action_from_state(source, "cool"), {"mode": "cool"})
+        self.assertEqual(spec_for("ev_charger").action_from_state(source, "off"), {"charge": False})
+
+
 if __name__ == "__main__":
     unittest.main()

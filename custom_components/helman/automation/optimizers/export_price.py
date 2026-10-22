@@ -41,7 +41,6 @@ if TYPE_CHECKING:
     from ..trace import OptimizerTrace
 
 _LOGGER = logging.getLogger(__name__)
-_ACTION = {"domain": "inverter", "kind": SCHEDULE_ACTION_STOP_EXPORT}
 
 
 @dataclass(frozen=True)
@@ -61,7 +60,7 @@ class ExportPriceOptimizer:
         eligibility = writer.eligibility
         eligible = list(eligibility.iter_slots())
         if not eligible:
-            return writer.flush(action=_ACTION)
+            return writer.flush()
 
         eligible_slot_ids = [resolved.slot_id for resolved in eligible]
         if not self.stop_export_supported:
@@ -72,11 +71,8 @@ class ExportPriceOptimizer:
                 self.id,
                 len(eligible),
             )
-            trace.note(
-                code="stop_export_unsupported",
-                params={"skippedSlots": len(eligible)},
-            )
             trace.gate(
+                role="veto",
                 slot_ids=eligible_slot_ids,
                 key=GATE_STOP_EXPORT_SUPPORTED,
                 state=STATE_FALSE,
@@ -88,29 +84,20 @@ class ExportPriceOptimizer:
             trace.set_step_status(
                 status=STATUS_SKIPPED, reason="stop_export_unsupported"
             )
-            return writer.flush(action=_ACTION)
+            return writer.flush()
 
         trace.gate(
+
+            role="veto",
             slot_ids=eligible_slot_ids,
             key=GATE_STOP_EXPORT_SUPPORTED,
             state=STATE_TRUE,
         )
 
-        applied_by_group: dict[int, list[str]] = {}
         for resolved in eligible:
-            if not writer.set(
-                resolved.slot_id, ScheduleAction(kind=SCHEDULE_ACTION_STOP_EXPORT)
-            ):
-                # User-owned: the writer vetoed it and the slot keeps its `skip`
-                # baseline. `base.py` records the veto node itself.
-                continue
-            applied_by_group.setdefault(resolved.group.index, []).append(
-                resolved.slot_id
-            )
+            writer.set(resolved.slot_id, ScheduleAction(kind=SCHEDULE_ACTION_STOP_EXPORT))
 
-        for group_index, slot_ids in applied_by_group.items():
-            trace.decision(slot_ids=slot_ids, outcome="applied", action=_ACTION)
-        return writer.flush(action=_ACTION)
+        return writer.flush()
 
 
 def build_export_price_optimizer(

@@ -32,9 +32,6 @@ class CustomConditionResult:
     met: bool
     errored: bool = False
 
-    def to_dict(self) -> dict[str, Any]:
-        return {"met": self.met, "errored": self.errored}
-
 
 @dataclass(frozen=True)
 class CustomConditionGroupResult:
@@ -49,14 +46,6 @@ class CustomConditionGroupResult:
     met: bool
     errored: bool = False
     entries: tuple[CustomConditionResult, ...] = ()
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "index": self.index,
-            "met": self.met,
-            "errored": self.errored,
-            "entries": [entry.to_dict() for entry in self.entries],
-        }
 
 
 @dataclass(frozen=True)

@@ -1,20 +1,8 @@
-"""Shared contract-test helper for optimizer decision-matrix traces.
+"""Test-only observer for retained writes and optimizer explanation rows.
 
-Import AFTER a test module has installed its ``custom_components`` import stubs.
-It drives an optimizer through a live ``OptimizerTrace`` exactly as the pipeline
-does (begin_step / optimize / end_step) and asserts the *structural* trace
-contract: decisions never overlap, every committed write is attributable, and —
-for every step that reports one — the per-slot explanation record covers the
-whole horizon.
-
-v1 (the reason catalogue) is gone. The old contract hard-asserted that every
-horizon slot carried a reason-coded decision, that every write was covered by an
-``applied`` decision, and that every emitted ``code`` belonged to a closed
-``V1_REASON_CODES`` vocabulary. Optimizers now record structured
-``trace.gate(...)`` + :mod:`custom_components.helman.automation.explain`
-records instead, and a decision carries only an outcome — so a closed reason
-vocabulary and exhaustive *decision* coverage are no longer the right
-invariants. Explanation coverage replaces them.
+Scenario contracts require every horizon slot to be explained, every committed
+write to carry an execute/candidate verdict, and gate roles to match the
+optimizer's behavior. Production needs no run-trace serializer for these tests.
 """
 
 from __future__ import annotations
@@ -62,25 +50,34 @@ def run_optimizer_with_trace(
     Returns ``(result_document, trace)``.
     """
     trace = OptimizerTrace(slot_ids=iter_horizon_slot_ids(reference_time))
-    trace.begin_step(optimizer.id, optimizer.kind)
+    trace.begin_step(optimizer.id, optimizer.kind, controllable_id=config.controllable_ids[0])
     result = optimizer.optimize(snapshot, config, trace)
+    from custom_components.helman.automation.pipeline import _collect_changed_writable_action_records
+
+    trace.record_writes(_collect_changed_writable_action_records(
+        before_document=snapshot.schedule, after_document=result))
     trace.end_step(status=status)
     return result, trace
 
 
 def trace_rows_payload(trace: OptimizerTrace) -> dict[str, Any]:
-    """``trace.to_dict()`` with each step's explanation as plain rows.
-
-    Test-only: the trace still embeds the run-length encoded explanation, and
-    the contract observes the record through
-    :meth:`~custom_components.helman.automation.explain.OptimizerExplanation.to_rows`
-    instead. A step that recorded nothing keeps no explanation key at all.
-    """
-    payload = trace.to_dict()
-    for step, explanation in zip(payload["steps"], trace.optimizer_explanations()):
-        if EXPLANATION_KEY in step:
-            step[EXPLANATION_KEY] = explanation.to_rows()
-    return payload
+    """Observe retained step facts and plain explanation rows in tests only."""
+    steps = []
+    for step, explanation in zip(trace._steps, trace.optimizer_explanations()):
+        observed = {
+            "optimizerId": step.optimizer_id,
+            "kind": step.kind,
+            "status": step.status,
+            "writes": [
+                {"slotId": write.slot_id, "domain": write.controllable_id,
+                 "before": write.before, "after": write.after}
+                for write in step.writes
+            ],
+        }
+        if step.has_explanation():
+            observed[EXPLANATION_KEY] = explanation.to_rows()
+        steps.append(observed)
+    return {"slotIds": list(trace.slot_ids), "steps": steps}
 
 
 def explanation_rows(trace: OptimizerTrace, step_index: int = 0) -> dict[str, Any]:
@@ -108,20 +105,6 @@ def assert_trace_payload_contract(testcase, payload: Mapping[str, Any]) -> None:
             continue
         prefix = f"step {step['optimizerId']} ({step['kind']})"
 
-        # --- decisions never double-claim a slot -----------------------------
-        # Structural and reason-free: whatever vocabulary a decision carries, a
-        # slot must not be claimed by two of them.
-        seen: set[str] = set()
-        applied: set[str] = set()
-        for decision in step["decisions"]:
-            for slot_id in decision["slotIds"]:
-                testcase.assertNotIn(
-                    slot_id, seen, f"{prefix} overlaps on slot {slot_id}"
-                )
-                seen.add(slot_id)
-                if decision["outcome"] == "applied":
-                    applied.add(slot_id)
-
         explanation = step.get(EXPLANATION_KEY)
 
         # --- explanation coverage (the v2 contract) --------------------------
@@ -144,14 +127,22 @@ def assert_trace_payload_contract(testcase, payload: Mapping[str, Any]) -> None:
         )
 
         # --- every committed write is attributable ---------------------------
-        # Either through an `applied` decision or through an explanation whose
-        # verdict for that slot is execute/candidate. A write nothing accounts
+        # The explanation verdict for a written slot must execute/candidate.
+        # A write nothing accounts
         # for is always a bug.
-        attributable = applied | {
+        attributable = {
             row["slotId"]
             for row in explanation["slots"]
             if row["verdict"] in (VERDICT_EXECUTE, VERDICT_CANDIDATE)
         }
+        for row in explanation["slots"]:
+            for gate in row["gates"]:
+                expected_role = (
+                    "advisory" if gate["key"] in {"placement_capacity", "cheap_window_capacity"}
+                    else "override" if gate["key"] == "consecutive_skip_override"
+                    else "veto"
+                )
+                testcase.assertEqual(gate["role"], expected_role)
         for write in step["writes"]:
             if write["slotId"] not in horizon:
                 continue
@@ -159,5 +150,5 @@ def assert_trace_payload_contract(testcase, payload: Mapping[str, Any]) -> None:
                 write["slotId"],
                 attributable,
                 f"{prefix} wrote {write['slotId']} with nothing accounting for "
-                "it (no applied decision, no execute/candidate explanation)",
+                "it (no execute/candidate explanation)",
             )

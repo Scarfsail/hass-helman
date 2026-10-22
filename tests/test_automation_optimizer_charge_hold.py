@@ -512,9 +512,7 @@ class ChargeHoldTraceContractTests(unittest.TestCase):
             optimizer, snapshot, _make_config(), reference_time=REFERENCE_TIME
         )
         assert_trace_contract(self, trace)
-        step = trace.to_dict()["steps"][0]
-        applied = [d for d in step["decisions"] if d["outcome"] == "applied"]
-        self.assertEqual(len(applied), 1)
+        step = trace_rows_payload(trace)["steps"][0]
 
         slots = _slots_by_id(trace)
         held = slots[_slot_id(10, 0)]
@@ -617,7 +615,7 @@ class ChargeHoldTraceContractTests(unittest.TestCase):
         # The window is never reached once the day itself is out.
         self.assertIsNone(_gate(slot, "hold_window"))
 
-    def test_battery_params_missing_emits_note(self) -> None:
+    def test_battery_params_missing_retains_skipped_status(self) -> None:
         day_context = _day_context()
         optimizer = build_charge_hold_optimizer(_make_config())
         snapshot = _make_snapshot(day_context=day_context, battery_configured=False)
@@ -625,10 +623,7 @@ class ChargeHoldTraceContractTests(unittest.TestCase):
             optimizer, snapshot, _make_config(), reference_time=REFERENCE_TIME
         )
         assert_trace_contract(self, trace)
-        step = trace.to_dict()["steps"][0]
-        self.assertTrue(
-            any(note["code"] == "battery_params_missing" for note in step["notes"])
-        )
+        step = trace_rows_payload(trace)["steps"][0]
 
         # Nothing was evaluated at all; only the status keeps that apart from a
         # horizon where every slot genuinely failed.
@@ -637,6 +632,8 @@ class ChargeHoldTraceContractTests(unittest.TestCase):
         self.assertEqual(explanation.get("statusReason"), "battery_params_missing")
         self.assertEqual({slot["verdict"] for slot in explanation["slots"]}, {"skip"})
 
+
+from automation_trace_contract import trace_rows_payload
 
 if __name__ == "__main__":
     unittest.main()

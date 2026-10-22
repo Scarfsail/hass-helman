@@ -218,7 +218,6 @@ class _DayAttempt:
     ranked: list[tuple[float, str]] = field(default_factory=list)
     chosen: list[tuple[float, str]] = field(default_factory=list)
     floor_rejected: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
-    not_reached: list[tuple[float, str]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -266,7 +265,6 @@ class ApplianceRuntimeOptimizer:
             pre_filters_ownership=capped,
         )
         eligibility = writer.eligibility
-        action = {"domain": appliance_id, **self.target.authored_action}
 
         # Master params decide the mode: `daily_minimum` is not something a group
         # can introduce (its required, non-overridable `max_consecutive_skips`
@@ -278,7 +276,6 @@ class ApplianceRuntimeOptimizer:
                 eligibility=eligibility,
                 writer=writer,
                 trace=trace,
-                action=action,
             )
 
         # A *copy*: the day loop writes each day's placement back into it, so the
@@ -400,7 +397,6 @@ class ApplianceRuntimeOptimizer:
             ranked = attempt.ranked
             chosen = attempt.chosen
             floor_rejected = attempt.floor_rejected
-            not_reached = attempt.not_reached
             # What this day credits to the consecutive-skip chain, written
             # before any of the early exits below so every day writes exactly
             # once. A day that met the minimum it actually *ran under* is not a
@@ -431,15 +427,16 @@ class ApplianceRuntimeOptimizer:
             if remaining_hours <= 0:
                 if window_slots:
                     trace.gate(
+                        role="veto",
                         slot_ids=window_slots,
                         key=GATE_DAILY_MINIMUM_REMAINING,
                         state=STATE_FALSE,
                         params=minimum_params,
                     )
-                    trace.decision(slot_ids=window_slots, outcome="out_of_scope")
                 continue
             if window_slots:
                 trace.gate(
+                    role="veto",
                     slot_ids=window_slots,
                     key=GATE_DAILY_MINIMUM_REMAINING,
                     state=STATE_TRUE,
@@ -459,6 +456,7 @@ class ApplianceRuntimeOptimizer:
                 # A forced day matched no group and runs anyway; the override
                 # gate is what says so, and it is absent on every ordinary day.
                 trace.gate(
+                    role="veto",
                     slot_ids=window_slots,
                     key=GATE_DAY_GROUP_MATCHED,
                     state=STATE_FALSE if plan.group_label is None else STATE_TRUE,
@@ -469,6 +467,7 @@ class ApplianceRuntimeOptimizer:
                 )
                 if plan.forced_after_skips is not None:
                     trace.gate(
+                        role="override",
                         slot_ids=window_slots,
                         key=GATE_CONSECUTIVE_SKIP_OVERRIDE,
                         state=STATE_TRUE,
@@ -484,6 +483,7 @@ class ApplianceRuntimeOptimizer:
                         },
                     )
                 trace.gate(
+                    role="advisory",
                     slot_ids=window_slots,
                     key=GATE_PLACEMENT_CAPACITY,
                     state=(
@@ -498,12 +498,6 @@ class ApplianceRuntimeOptimizer:
                     },
                 )
 
-            _trace_window_exclusions(
-                trace=trace,
-                eligibility=eligibility,
-                window_slots=window_slots,
-                placeable=set(plan.placeable_slots),
-            )
 
             # Placeable slots the user owns never enter the ranking, so the
             # writer never sees them and its own veto cannot speak for them.
@@ -515,12 +509,14 @@ class ApplianceRuntimeOptimizer:
             ]
             if unavailable:
                 trace.gate(
+                    role="veto",
                     slot_ids=unavailable,
                     key=GATE_SLOT_AVAILABLE,
                     state=STATE_FALSE,
                 )
             if rankable:
                 trace.gate(
+                    role="veto",
                     slot_ids=sorted(rankable),
                     key=GATE_SLOT_AVAILABLE,
                     state=STATE_TRUE,
@@ -541,21 +537,8 @@ class ApplianceRuntimeOptimizer:
             )
             for _cost, slot_id in chosen:
                 writer.set(slot_id, self.target.authored_action)
-            if chosen:
-                trace.decision(
-                    slot_ids=[slot_id for _cost, slot_id in chosen],
-                    outcome="applied",
-                    action=action,
-                )
-            for slot_id, _detail in floor_rejected:
-                trace.decision(slot_ids=[slot_id], outcome="rejected")
-            if not_reached:
-                trace.decision(
-                    slot_ids=[slot_id for _cost, slot_id in not_reached],
-                    outcome="rejected",
-                )
 
-        return writer.flush(action=action)
+        return writer.flush()
 
     def _attempt_day(
         self,
@@ -642,7 +625,7 @@ class ApplianceRuntimeOptimizer:
             active=snapshot.context.appliance_active_by_id.get(appliance_id, False),
             active_slot_id=format_slot_id(horizon_start),
         )
-        chosen, floor_rejected, not_reached = gate.take(
+        chosen, floor_rejected = gate.take(
             ranked,
             slots_needed=slots_needed,
             plan=plan,
@@ -652,7 +635,6 @@ class ApplianceRuntimeOptimizer:
             ranked=ranked,
             chosen=chosen,
             floor_rejected=floor_rejected,
-            not_reached=not_reached,
         )
 
     def _optimize_uncapped(
@@ -663,7 +645,6 @@ class ApplianceRuntimeOptimizer:
         eligibility: "Eligibility",
         writer: ScheduleWriter,
         trace: "OptimizerTrace",
-        action: dict[str, Any],
     ) -> ScheduleDocument:
         """Place on every eligible slot, with no deficit to size the placement.
 
@@ -691,7 +672,6 @@ class ApplianceRuntimeOptimizer:
             }
         )
 
-        applied_by_group: dict[int, list[str]] = {}
         # `iter_slots` yields in horizon order, which is what the coupled
         # self-sustainability constraint needs: uncapped mode has no ranking, so
         # chronological is the only defensible acceptance order.
@@ -699,6 +679,7 @@ class ApplianceRuntimeOptimizer:
             if window is not None:
                 inside = resolved.slot_id in window
                 trace.gate(
+                    role="veto",
                     slot_ids=[resolved.slot_id],
                     key=GATE_RUN_WINDOW,
                     state=STATE_TRUE if inside else STATE_FALSE,
@@ -726,16 +707,9 @@ class ApplianceRuntimeOptimizer:
                     group_index=resolved.group.index,
                 )
             if rejection is not None:
-                trace.decision(slot_ids=[resolved.slot_id], outcome="rejected")
                 continue
-            if writer.set(resolved.slot_id, self.target.authored_action):
-                applied_by_group.setdefault(resolved.group.index, []).append(
-                    resolved.slot_id
-                )
-
-        for slot_ids in applied_by_group.values():
-            trace.decision(slot_ids=slot_ids, outcome="applied", action=action)
-        return writer.flush(action=action)
+            writer.set(resolved.slot_id, self.target.authored_action)
+        return writer.flush()
 
     def _plan_for_day(
         self,
@@ -997,9 +971,8 @@ class _SelfSustainabilityGate:
     ) -> tuple[
         list[tuple[float, str]],
         list[tuple[str, dict[str, Any]]],
-        list[tuple[float, str]],
     ]:
-        """``(chosen, floor_rejected, not_reached)`` for one day's ranking."""
+        """Chosen slots and evaluated floor rejections for one day's ranking."""
         if plan.self_sustainability is None:
             chosen = ranked[:slots_needed]
             # The day bypasses the floor, but the energy it spends is real and
@@ -1011,16 +984,14 @@ class _SelfSustainabilityGate:
                 self._accepted_demand = _merge_demand(
                     self._accepted_demand, self._slot_demand(slot_id)
                 )
-            return chosen, [], ranked[slots_needed:]
+            return chosen, []
 
         floor = self._floor_pct(plan.margin_pct)
         chosen: list[tuple[float, str]] = []
         floor_rejected: list[tuple[str, dict[str, Any]]] = []
-        not_reached: list[tuple[float, str]] = []
         for cost, slot_id in ranked:
             if len(chosen) >= slots_needed:
-                not_reached.append((cost, slot_id))
-                continue
+                break
             reason = self._accept(
                 slot_id, floor=floor, tolerance_pct=plan.self_sustainability
             )
@@ -1028,7 +999,7 @@ class _SelfSustainabilityGate:
                 chosen.append((cost, slot_id))
             else:
                 floor_rejected.append((slot_id, reason))
-        return chosen, floor_rejected, not_reached
+        return chosen, floor_rejected
 
     def accept(
         self, slot_id: str, *, tolerance_pct: float | None, margin_pct: float
@@ -1200,9 +1171,8 @@ class _NullGate:
     ) -> tuple[
         list[tuple[float, str]],
         list[tuple[str, dict[str, Any]]],
-        list[tuple[float, str]],
     ]:
-        return ranked[:slots_needed], [], ranked[slots_needed:]
+        return ranked[:slots_needed], []
 
     def accept(
         self, slot_id: str, *, tolerance_pct: float | None, margin_pct: float
@@ -1266,6 +1236,7 @@ def _trace_run_window(
     outside = [slot_id for slot_id in day_slots if slot_id not in inside]
     if window_slots:
         trace.gate(
+            role="veto",
             slot_ids=window_slots,
             key=GATE_RUN_WINDOW,
             state=STATE_TRUE,
@@ -1273,6 +1244,7 @@ def _trace_run_window(
         )
     if outside:
         trace.gate(
+            role="veto",
             slot_ids=outside,
             key=GATE_RUN_WINDOW,
             state=STATE_FALSE,
@@ -1304,6 +1276,7 @@ def _trace_ranking(
     worst_chosen_cost = max((cost for cost, _slot_id in chosen), default=None)
     for index, (cost, slot_id) in enumerate(ranked):
         trace.gate(
+            role="veto",
             slot_ids=[slot_id],
             key=GATE_CHEAPEST_RANK,
             state=STATE_TRUE if slot_id in reached else STATE_FALSE,
@@ -1401,6 +1374,7 @@ def _trace_unmatched_day(
         return
     rejection = eligibility.rejection(window_slots[0])
     trace.gate(
+        role="veto",
         slot_ids=window_slots,
         key=GATE_DAY_GROUP_MATCHED,
         state=STATE_FALSE,
@@ -1417,49 +1391,6 @@ def _trace_unmatched_day(
             ),
         },
     )
-    if rejection is not None and rejection[0] != "run_when":
-        _trace_window_exclusions(
-            trace=trace,
-            eligibility=eligibility,
-            window_slots=window_slots,
-            placeable=set(),
-        )
-        return
-    trace.decision(slot_ids=window_slots, outcome="out_of_scope")
-
-
-def _trace_window_exclusions(
-    *,
-    trace: "OptimizerTrace",
-    eligibility: "Eligibility",
-    window_slots: list[str],
-    placeable: set[str],
-) -> None:
-    """Mark window slots the matched group does not own as rejected.
-
-    The *why* lives entirely in the condition matrix now: ``masks_by_key`` names
-    the failing condition per slot and carries the value the slot actually
-    presented — the price against ``max_run_price``, the projected SoC, the
-    solar coverage this appliance's demand achieved. What is left here is the
-    outcome vocabulary the retained trace consumers still read.
-
-    Which slots that vocabulary covers is unchanged: price and solar coverage
-    are claimed here, everything else (a SoC floor, an unmatched day) stays with
-    the frontend's own derivation. The set is now named by condition key rather
-    than by the retired ``reason_code`` — the same two conditions, so the slots
-    that get a ``rejected`` decision are exactly the slots that got one before.
-    """
-    rejected = []
-    for slot_id in window_slots:
-        if slot_id in placeable:
-            continue
-        rejection = eligibility.rejection(slot_id)
-        if rejection is None:
-            continue
-        if rejection[0] in ("min_solar_coverage_pct", "max_run_price"):
-            rejected.append(slot_id)
-    if rejected:
-        trace.decision(slot_ids=rejected, outcome="rejected")
 
 
 def _prior_consecutive_skips(

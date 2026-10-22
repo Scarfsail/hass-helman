@@ -632,8 +632,8 @@ export type GetEntityActualHistoryRequest = HelmanCommands["helman/get_entity_ac
 export interface EntityActualHistorySlotDTO {
     /** Local ISO start of the slot, on the schedule's own grid. */
     slot: string;
-    /** The entity state it spent most of that slot in. */
-    state: string;
+    /** Observed action; unrecorded settings are absent. */
+    action: ScheduleControllableActionDTO;
     /** Share of the slot it was away from rest, 0-1. */
     ratio: number;
 }

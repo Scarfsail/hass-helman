@@ -64,7 +64,7 @@ function candidatePayload(
                     customResults,
                     conditions: [{ key: "max_run_price", scope: "slot", state: "true", value: 2.0 }],
                 }],
-                gates: [{ key: "slot_available", state: "true" }],
+                gates: [{ key: "slot_available", role: "veto", state: "true" }],
             }],
         }],
     });

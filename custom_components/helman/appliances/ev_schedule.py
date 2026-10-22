@@ -124,3 +124,8 @@ def _read_optional_non_empty_string(value: object, *, path: str) -> str | None:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{path} must be a non-empty string")
     return value.strip()
+
+
+def ev_action_from_state(runtime: Any, state: str) -> dict[str, Any]:
+    """Observed charging activity; mode and current are unknown."""
+    return {"charge": state == "on"}

@@ -108,11 +108,8 @@ def read_export_price_by_bucket(
     a price for ``:00`` and nothing for ``:15``, ``:30``, ``:45``.
 
     Prices are a step function, so a bucket takes the most recent point at or
-    before its start — the same reading :func:`..trace.price_points_to_slots`
-    already gives the inspector's ``exportPrice`` rail. Reading them by exact
-    lookup instead is what let an hourly feed mark only the top-of-hour slot,
-    leaving the ``:30`` slot of a negative-priced hour unprotected while the
-    inspector displayed the negative price against it.
+    before its start. An exact lookup would leave the other quarter-hours of
+    an hourly tariff unprotected.
 
     Only the published ``points`` are read; ``currentPrice`` is a separate
     reading of the bucket containing ``now`` and is left to callers, which today

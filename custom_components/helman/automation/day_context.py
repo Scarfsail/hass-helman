@@ -81,26 +81,6 @@ class DayContext:
     #: same run (#264), so a trace has to name which denominator it used.
     denominator_optimizer_id: str | None = None
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "localDate": self.local_date.isoformat(),
-            "classification": self.classification,
-            "predictedSolarKwh": self.predicted_solar_kwh,
-            "predictedConsumptionKwh": self.predicted_consumption_kwh,
-            "ratio": None if self.ratio == float("inf") else self.ratio,
-            "denominatorOptimizerId": self.denominator_optimizer_id,
-            "exportPriceMin": self.export_price_min,
-            "exportPriceMax": self.export_price_max,
-            "importBands": [
-                {
-                    "level": band.level,
-                    "start": band.start.isoformat(),
-                    "end": band.end.isoformat(),
-                }
-                for band in self.import_bands
-            ],
-        }
-
 
 def build_day_contexts(
     *,

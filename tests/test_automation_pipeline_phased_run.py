@@ -351,11 +351,14 @@ class PhasedRunTests(unittest.IsolatedAsyncioTestCase):
         boiler_action = {"on": True, "setBy": "automation"}
         other_slot_id = "2026-03-20T21:15:00+01:00"
 
+        seen_house_kwh = {}
+
         def _build_optimizer(config, **kwargs):
             if config.id == "boiler":
                 calls = {"count": 0}
 
                 def _boiler_optimize(snapshot, current_config, trace=None):
+                    seen_house_kwh["boiler"] = snapshot.battery_forecast["series"][0]["baselineHouseKwh"]
                     calls["count"] += 1
                     slot_id = CURRENT_SLOT_ID if calls["count"] == 1 else other_slot_id
                     return ScheduleDocument(
@@ -367,6 +370,7 @@ class PhasedRunTests(unittest.IsolatedAsyncioTestCase):
 
             # charge_hold: reads, writes nothing.
             def _charge_hold_optimize(snapshot, current_config, trace=None):
+                seen_house_kwh["charge-hold"] = snapshot.battery_forecast["series"][0]["baselineHouseKwh"]
                 return snapshot.schedule
 
             return SimpleNamespace(optimize=Mock(side_effect=_charge_hold_optimize))
@@ -408,18 +412,8 @@ class PhasedRunTests(unittest.IsolatedAsyncioTestCase):
                 build_snapshot=build_snapshot,
             )
 
-        trace = result.trace.to_dict()
-        steps_by_id = {step["optimizerId"]: step for step in trace["steps"]}
-        # Phase 2 (charge-hold) reads the phase-1 estimate: boiler present at
-        # CURRENT_SLOT_ID -> houseKwh includes it.
-        charge_hold_house_kwh = steps_by_id["charge-hold"]["railsIn"]["houseKwh"][0]
-        # Phase 3 (boiler) reads the house after the phase-3 strip cleared
-        # phase 1's placement: boiler absent from CURRENT_SLOT_ID until this
-        # very step writes it (to a different slot) -> houseKwh excludes it.
-        boiler_house_kwh = steps_by_id["boiler"]["railsIn"]["houseKwh"][0]
-        self.assertEqual(charge_hold_house_kwh, 5.0)
-        self.assertEqual(boiler_house_kwh, 3.0)
-        self.assertNotEqual(charge_hold_house_kwh, boiler_house_kwh)
+        self.assertEqual(seen_house_kwh["charge-hold"], 5.0)
+        self.assertEqual(seen_house_kwh["boiler"], 3.0)
 
 
 class ApplianceGroupExpansionTests(unittest.TestCase):
@@ -570,3 +564,5 @@ class ApplianceGroupExpansionTests(unittest.TestCase):
         self.assertNotIn("ac-bedroom", slots.get(self.STALE_SLOT_ID, {}))
         self.assertNotIn("ac-living", slots.get(self.STALE_SLOT_ID, {}))
         self.assertEqual(slots[CURRENT_SLOT_ID], {"ac-living": self.ACTION})
+
+from automation_trace_contract import trace_rows_payload

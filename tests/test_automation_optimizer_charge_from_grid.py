@@ -309,12 +309,6 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
         _result, trace = self._run_with_fake_simulator(
             holds_needed=4, charges_needed=99, with_trace=True
         )
-        applied = [
-            decision for decision in trace.to_dict()["steps"][0]["decisions"]
-            if decision["outcome"] == "applied"
-        ]
-        self.assertTrue(applied)
-        self.assertEqual(applied[0]["action"]["kind"], "stop_discharging")
 
         slots = _slots_by_id(trace)
         skipped = slots[_slot_id(6)]
@@ -409,11 +403,6 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
         )
         self.assertEqual(set(_charge_slots(result).values()), {55})
         # The explanation names the action the document actually carries.
-        charge_decision = next(
-            decision for decision in trace.to_dict()["steps"][0]["decisions"]
-            if decision["action"]["kind"] == "charge_to_target_soc"
-        )
-        self.assertIn(_slot_id(7, 45), charge_decision["slotIds"])
 
     def test_legacy_target_reads_soc_entering_the_expensive_window(self) -> None:
         # The 08:00 point is the SoC *after* 08:00-08:30; the window is entered
@@ -790,10 +779,7 @@ class ChargeFromGridTraceContractTests(unittest.TestCase):
             optimizer, snapshot, _make_config(), reference_time=REFERENCE_TIME
         )
         assert_trace_contract(self, trace)
-        step = trace.to_dict()["steps"][0]
-        applied = [d for d in step["decisions"] if d["outcome"] == "applied"]
-        self.assertEqual(len(applied), 1)
-        self.assertEqual(applied[0]["slotIds"], [_slot_id(7, 0)])
+        step = trace_rows_payload(trace)["steps"][0]
 
         slots = _slots_by_id(trace)
         chosen = slots[_slot_id(7, 0)]
@@ -922,6 +908,8 @@ class ChargeFromGridTraceContractTests(unittest.TestCase):
         self.assertEqual(explanation.get("statusReason"), "battery_params_missing")
         self.assertEqual({slot["verdict"] for slot in explanation["slots"]}, {"skip"})
 
+
+from automation_trace_contract import trace_rows_payload
 
 if __name__ == "__main__":
     unittest.main()

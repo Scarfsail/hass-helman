@@ -3,6 +3,17 @@ from __future__ import annotations
 from automation_pipeline_support import *
 
 
+class OptimizationSnapshotTests(unittest.TestCase):
+    def test_context_exposes_both_charge_and_discharge_settings(self) -> None:
+        context = _make_snapshot().context
+        context = replace(context, battery=replace(
+            context.battery, max_discharge_power_w=4000.0,
+            discharge_efficiency=0.93))
+        self.assertEqual(context.battery_max_discharge_power_kw, 4.0)
+        self.assertEqual(context.battery_discharge_efficiency, 0.93)
+        self.assertEqual(context.battery_max_charge_power_kw, _make_snapshot().context.battery_max_charge_power_kw)
+
+
 class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
     async def test_run_plans_normally_when_execution_flag_is_off(self) -> None:
         # execution_enabled gates only the apply step: optimizers still run and
@@ -18,11 +29,10 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             automation_config=_make_automation_config(_make_optimizer_instance()),
         ).run(reference_time=REFERENCE_TIME)
 
-        payload = result.to_dict()
-        self.assertTrue(payload["ranAutomation"])
-        self.assertIsNotNone(payload["snapshot"])
-        self.assertEqual(len(payload["optimizers"]), 1)
-        self.assertIsInstance(payload["durationMs"], int)
+        self.assertTrue(result.ran_automation)
+        self.assertIsNotNone(result.snapshot)
+        self.assertEqual(len(result.optimizers), 1)
+        self.assertIsInstance(result.duration_ms, int)
         self.assertNotEqual(coordinator.snapshot_calls, [])
 
     async def test_run_returns_automation_disabled_when_config_disabled(self) -> None:
@@ -37,12 +47,11 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             automation_config=AutomationConfig(enabled=False),
         ).run(reference_time=REFERENCE_TIME)
 
-        payload = result.to_dict()
-        self.assertFalse(payload["ranAutomation"])
-        self.assertEqual(payload["reason"], "automation_disabled")
-        self.assertIsNone(payload["snapshot"])
-        self.assertEqual(payload["optimizers"], [])
-        self.assertIsInstance(payload["durationMs"], int)
+        self.assertFalse(result.ran_automation)
+        self.assertEqual(result.reason, "automation_disabled")
+        self.assertIsNone(result.snapshot)
+        self.assertEqual(result.optimizers, ())
+        self.assertIsInstance(result.duration_ms, int)
         self.assertEqual(coordinator.snapshot_calls, [])
 
     async def test_run_returns_inputs_unavailable_without_bundle(self) -> None:
@@ -57,12 +66,11 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
             automation_config=_make_automation_config(_make_optimizer_instance()),
         ).run(reference_time=REFERENCE_TIME)
 
-        payload = result.to_dict()
-        self.assertFalse(payload["ranAutomation"])
-        self.assertEqual(payload["reason"], "inputs_unavailable")
-        self.assertIsNone(payload["snapshot"])
-        self.assertEqual(payload["optimizers"], [])
-        self.assertIsInstance(payload["durationMs"], int)
+        self.assertFalse(result.ran_automation)
+        self.assertEqual(result.reason, "inputs_unavailable")
+        self.assertIsNone(result.snapshot)
+        self.assertEqual(result.optimizers, ())
+        self.assertIsInstance(result.duration_ms, int)
         self.assertEqual(coordinator.snapshot_calls, [])
 
     async def test_run_returns_runner_failed_when_initial_snapshot_build_raises(
@@ -552,8 +560,8 @@ class AutomationRunnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(coordinator.schedule.persist_calls, [])
         self.assertEqual(coordinator.schedule.reconcile_requests, [])
         # The "optimizer_skipped" note stays visible on the failed run's trace.
-        step = result.trace.to_dict()["steps"][0]
-        self.assertEqual(step["notes"][0]["code"], "optimizer_skipped")
+        step = trace_rows_payload(result.trace)["steps"][0]
+        self.assertEqual(step["status"], "skipped")
 
     async def test_run_returns_failure_when_optimizer_raises(self) -> None:
         coordinator = _FakeRunDeps(
@@ -815,32 +823,14 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
             ).run(reference_time=REFERENCE_TIME)
 
         self.assertIsNotNone(result.trace)
-        payload = result.to_dict()
-        self.assertIn("trace", payload)
-        trace = payload["trace"]
-        expected_len = len(iter_horizon_slot_ids(REFERENCE_TIME))
-        self.assertEqual(len(trace["slotIds"]), expected_len)
-        for rail in trace["staticRails"].values():
-            self.assertEqual(len(rail), expected_len)
-        # #272 (P2 of #270): house demand is not run-invariant once the run is
-        # phased, so it left the static rails entirely -- staticRails carries
-        # only prices and solar, and houseKwh lives on each step instead.
-        self.assertEqual(
-            set(trace["staticRails"]), {"importPrice", "exportPrice", "solarKwh"}
-        )
-        self.assertEqual(len(trace["steps"]), 1)
-        step = trace["steps"][0]
-        self.assertEqual(step["optimizerId"], "avoid-negative-export")
-        self.assertEqual(step["status"], "ok")
-        self.assertEqual(len(step["railsIn"]["availableSurplusKwh"]), expected_len)
-        self.assertIn("houseKwh", step["railsIn"])
-        self.assertEqual(len(trace["railsFinal"]["batterySocPct"]), expected_len)
-        self.assertIn("houseKwh", trace["railsFinal"])
+        self.assertEqual(result.trace.slot_ids, tuple(iter_horizon_slot_ids(REFERENCE_TIME)))
+        step = result.trace._steps[0]
+        self.assertEqual(step.optimizer_id, "avoid-negative-export")
+        self.assertEqual(step.status, "ok")
 
-    async def test_validator_never_fails_the_run_on_an_unbacked_write(self) -> None:
-        # The mocked optimizer writes the boiler on without emitting an
-        # `applied` decision for it, so the step is flagged incomplete — yet the
-        # run still completes (observability must never fail the run).
+    async def test_committed_write_is_retained_without_an_optimizer_explanation(self) -> None:
+        # A mocked optimizer supplies no explanation; actual writes still come
+        # from the framework diff and the run completes.
         written_schedule = ScheduleDocument(
             execution_enabled=True,
             slots={
@@ -869,8 +859,9 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
             ).run(reference_time=REFERENCE_TIME)
 
         self.assertTrue(result.ran_automation)
-        step = result.to_dict()["trace"]["steps"][0]
-        self.assertFalse(step["complete"])
+        step = trace_rows_payload(result.trace)["steps"][0]
+        self.assertEqual(step["status"], "ok")
+        self.assertTrue(step["writes"])
 
     async def test_appliance_write_records_serialize_before_and_after(self) -> None:
         # An optimizer that turns the boiler on for the current slot -> the
@@ -909,7 +900,7 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
                 ),
             ).run(reference_time=REFERENCE_TIME)
 
-        writes = result.to_dict()["trace"]["steps"][0]["writes"]
+        writes = trace_rows_payload(result.trace)["steps"][0]["writes"]
         boiler_writes = [w for w in writes if w["domain"] == "boiler"]
         self.assertEqual(len(boiler_writes), 1)
         self.assertIsNone(boiler_writes[0]["before"])
@@ -1033,12 +1024,10 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.reason, "optimizer_failed")
         self.assertIsNotNone(result.trace)
-        payload = result.to_dict()
-        self.assertIn("trace", payload)
-        self.assertEqual(len(payload["trace"]["steps"]), 1)
-        self.assertEqual(payload["trace"]["steps"][0]["status"], "failed")
+        self.assertEqual(len(result.trace._steps), 1)
+        self.assertEqual(result.trace._steps[0].status, "failed")
 
-    async def test_surplus_skip_collapses_column_to_skipped_note_on_the_failed_trace(
+    async def test_surplus_failure_retains_skipped_step_status(
         self,
     ) -> None:
         """#272 (P2 of #270): the run fails (see the persists-nothing test
@@ -1088,13 +1077,9 @@ class AutomationRunnerTraceTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result.ran_automation)
         self.assertEqual(result.reason, "optimizer_failed")
         self.assertIsNotNone(result.trace)
-        step = result.to_dict()["trace"]["steps"][0]
+        step = trace_rows_payload(result.trace)["steps"][0]
         self.assertEqual(step["status"], "skipped")
-        self.assertTrue(step["complete"])
-        self.assertTrue(
-            any(note["code"] == "optimizer_skipped" for note in step["notes"])
-        )
-        # the note's horizon-wide decision stands in for the whole column
-        self.assertEqual(len(step["decisions"]), 1)
+        self.assertEqual(step["writes"], [])
 
 
+from automation_trace_contract import trace_rows_payload

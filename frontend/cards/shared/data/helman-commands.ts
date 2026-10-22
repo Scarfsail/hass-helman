@@ -94,6 +94,7 @@ export interface ExplanationConditionRow {
 }
 export interface ExplanationGateRow {
     key: string;
+    role: "veto" | "advisory" | "override";
     state: ExplanationNodeState;
     params: Record<string, unknown>;
 }

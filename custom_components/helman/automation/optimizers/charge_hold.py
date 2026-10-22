@@ -84,7 +84,6 @@ if TYPE_CHECKING:
     from ..trace import OptimizerTrace
 
 _SLOT_DURATION = timedelta(minutes=SCHEDULE_SLOT_MINUTES)
-_ACTION = {"domain": "inverter", "kind": SCHEDULE_ACTION_STOP_CHARGING}
 
 # The gates this kind owns, in the order a slot meets them. None of them lives
 # in ``masks_by_key``: the conditions decide *which days* qualify, and every one
@@ -144,13 +143,12 @@ class ChargeHoldOptimizer:
             or not max_charge_power_kw > 0
         ):
             # Whole run out of scope: the column stays explained by one note.
-            trace.note_horizon(code="battery_params_missing", params={})
             # Not "every slot false": nothing was evaluated at all, and only the
             # step status keeps those two readings apart.
             trace.set_step_status(
                 status=STATUS_SKIPPED, reason="battery_params_missing"
             )
-            return writer.flush(action=_ACTION)
+            return writer.flush()
 
         surplus_by_slot = _read_surplus_by_slot(
             snapshot,
@@ -210,7 +208,6 @@ class ChargeHoldOptimizer:
             resolutions[local_date] = resolution
             return resolution
 
-        applied_by_day: dict[date, list[str]] = {}
         released_by_day: dict[date, list[str]] = {}
         no_room_by_day: dict[date, list[str]] = {}
         no_day_context: list[str] = []
@@ -244,14 +241,12 @@ class ChargeHoldOptimizer:
                 released_by_day.setdefault(local_date, []).append(slot_id)
                 continue
             held_by_day.setdefault(local_date, []).append(slot_id)
-            if writer.set(slot_id, ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING)):
-                applied_by_day.setdefault(local_date, []).append(slot_id)
+            writer.set(slot_id, ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING))
 
         _emit_charge_hold_gates(
             trace,
             eligibility=eligibility,
             resolutions=resolutions,
-            applied_by_day=applied_by_day,
             released_by_day=released_by_day,
             no_room_by_day=no_room_by_day,
             no_day_context=no_day_context,
@@ -260,20 +255,7 @@ class ChargeHoldOptimizer:
             held_by_day=held_by_day,
             day_contexts=snapshot.context.day_contexts,
         )
-        _emit_charge_hold_decisions(
-            trace,
-            applied_by_day=applied_by_day,
-            released_by_day=released_by_day,
-            no_room_by_day=no_room_by_day,
-            outside_window=[
-                slot_id
-                for slot_ids in outside_window_by_day.values()
-                for slot_id in slot_ids
-            ]
-            + no_day_context,
-            day_not_matched=day_not_matched,
-        )
-        return writer.flush(action=_ACTION)
+        return writer.flush()
 
 
 def _soc_at_window_start(
@@ -478,40 +460,11 @@ def _resolve_day_hold(
     )
 
 
-def _emit_charge_hold_decisions(
-    trace,
-    *,
-    applied_by_day: dict[date, list[str]],
-    released_by_day: dict[date, list[str]],
-    no_room_by_day: dict[date, list[str]],
-    outside_window: list[str],
-    day_not_matched: dict[date, list[str]],
-) -> None:
-    """The v1 outcome layer: which slots ended in which bucket, and nothing else.
-
-    The rationale that used to ride along as ``reason`` now lives in the gates
-    (:func:`_emit_charge_hold_gates`), where it is structured rather than
-    prose-coded. What remains is the outcome vocabulary the run explanation
-    still reads, plus the slot coverage the trace validator requires.
-    """
-    for slot_ids in applied_by_day.values():
-        trace.decision(slot_ids=slot_ids, outcome="applied", action=_ACTION)
-    for slot_ids in released_by_day.values():
-        trace.decision(slot_ids=slot_ids, outcome="out_of_scope")
-    for slot_ids in no_room_by_day.values():
-        trace.decision(slot_ids=slot_ids, outcome="rejected")
-    if outside_window:
-        trace.decision(slot_ids=outside_window, outcome="out_of_scope")
-    for slot_ids in day_not_matched.values():
-        trace.decision(slot_ids=slot_ids, outcome="out_of_scope")
-
-
 def _emit_charge_hold_gates(
     trace,
     *,
     eligibility: "Eligibility",
     resolutions: dict[date, _DayHoldResolution],
-    applied_by_day: dict[date, list[str]],
     released_by_day: dict[date, list[str]],
     no_room_by_day: dict[date, list[str]],
     no_day_context: list[str],
@@ -529,6 +482,7 @@ def _emit_charge_hold_gates(
     """
     if no_day_context:
         trace.gate(
+            role="veto",
             slot_ids=no_day_context,
             key=GATE_DAY_CONTEXT,
             state=STATE_FALSE,
@@ -548,8 +502,9 @@ def _emit_charge_hold_gates(
         # also what the explanation UI has labels for.
         key, value = eligibility.rejection(slot_ids[0]) or ("run_when", ())
         day_context = day_contexts[local_date]
-        trace.gate(slot_ids=slot_ids, key=GATE_DAY_CONTEXT, state=STATE_TRUE)
+        trace.gate(role="veto", slot_ids=slot_ids, key=GATE_DAY_CONTEXT, state=STATE_TRUE)
         trace.gate(
+            role="veto",
             slot_ids=slot_ids,
             key=GATE_DAY_GROUP_MATCHED,
             state=STATE_FALSE,
@@ -566,9 +521,10 @@ def _emit_charge_hold_gates(
 
     def _day_gates(local_date: date, slot_ids: list[str]) -> _DayHoldResolution:
         resolved = resolutions[local_date]
-        trace.gate(slot_ids=slot_ids, key=GATE_DAY_CONTEXT, state=STATE_TRUE)
+        trace.gate(role="veto", slot_ids=slot_ids, key=GATE_DAY_CONTEXT, state=STATE_TRUE)
         day_context = day_contexts.get(local_date)
         trace.gate(
+            role="veto",
             slot_ids=slot_ids,
             key=GATE_DAY_GROUP_MATCHED,
             state=STATE_TRUE,
@@ -608,6 +564,7 @@ def _emit_charge_hold_gates(
         for slot_id in slot_ids:
             record = resolved.ranked_by_slot.get(slot_id)
             trace.gate(
+                role="veto",
                 slot_ids=[slot_id],
                 key=GATE_CHEAPEST_RANK,
                 state=state,
@@ -631,6 +588,7 @@ def _emit_charge_hold_gates(
     for local_date, slot_ids in outside_window_by_day.items():
         resolved = _day_gates(local_date, slot_ids)
         trace.gate(
+            role="veto",
             slot_ids=slot_ids,
             key=GATE_HOLD_WINDOW,
             state=STATE_FALSE,
@@ -639,6 +597,7 @@ def _emit_charge_hold_gates(
     for local_date, slot_ids in no_room_by_day.items():
         resolved = _day_gates(local_date, slot_ids)
         trace.gate(
+            role="veto",
             slot_ids=slot_ids,
             key=GATE_HOLD_WINDOW,
             state=STATE_TRUE,
@@ -647,6 +606,7 @@ def _emit_charge_hold_gates(
         # Day-scoped: the day's whole remaining surplus falls short of the need,
         # so no slot of it can be held.
         trace.gate(
+            role="veto",
             slot_ids=slot_ids,
             key=GATE_HOLD_ROOM,
             state=STATE_FALSE,
@@ -655,12 +615,14 @@ def _emit_charge_hold_gates(
     for local_date, slot_ids in released_by_day.items():
         resolved = _day_gates(local_date, slot_ids)
         trace.gate(
+            role="veto",
             slot_ids=slot_ids,
             key=GATE_HOLD_WINDOW,
             state=STATE_TRUE,
             params=_window_params(resolved),
         )
         trace.gate(
+            role="veto",
             slot_ids=slot_ids,
             key=GATE_HOLD_ROOM,
             state=STATE_TRUE,
@@ -673,12 +635,14 @@ def _emit_charge_hold_gates(
         # slots the writer kept get a non-`skip` verdict.
         resolved = _day_gates(local_date, slot_ids)
         trace.gate(
+            role="veto",
             slot_ids=slot_ids,
             key=GATE_HOLD_WINDOW,
             state=STATE_TRUE,
             params=_window_params(resolved),
         )
         trace.gate(
+            role="veto",
             slot_ids=slot_ids,
             key=GATE_HOLD_ROOM,
             state=STATE_TRUE,

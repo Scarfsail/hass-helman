@@ -52,7 +52,6 @@ from custom_components.helman.automation.pipeline import (
 from _fakes import make_optimization_context
 from custom_components.helman.automation.snapshot import (
     OptimizationSnapshot,
-    snapshot_to_dict,
 )
 from custom_components.helman.automation.compute_inputs import ComputeInputs
 from custom_components.helman.battery_state import BatteryEntityConfig, BatteryLiveState
@@ -68,7 +67,6 @@ from custom_components.helman.scheduling.schedule import (
 )
 from custom_components.helman.websockets import (
     ws_get_schedule_explanation,
-    ws_run_automation,
 )
 
 def _make_executor_hass() -> SimpleNamespace:

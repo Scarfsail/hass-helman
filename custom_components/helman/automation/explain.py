@@ -16,30 +16,14 @@ Design notes:
 - **Node scope is explicit** (:data:`NODE_SCOPES`). ``reserve_floor_soc`` tests
   the expensive band while writing the preceding cheap one, so its result is
   window-scoped; rendering it as a per-slot column would be a lie.
-- The DTOs are **per slot** (one :class:`SlotExplanation` per horizon slot).
-  The encoded serialization **pivots** them into index-aligned columns keyed by
-  the single ``slotIds`` array of the :class:`RunExplanation`. Every per-slot
-  column is run-length encoded and every ``actual`` is a sparse ``{index:
-  value}`` map, so the ~90 KB of redundant ISO-8601 timestamps that
-  :mod:`.trace`'s group-encoded ``slotIds`` would cost here never materializes.
-- ``null`` in any encoded per-slot column means *the element does not exist in that
-  slot* — an absent group, an unevaluated-because-absent node, an optimizer that
-  never looked at the slot. It is distinct from ``"not_evaluated"``, which means
-  the node exists and was deliberately not consulted.
-- Builders record ``actual`` for every node that *has* one, passing or not: a
-  threshold with no reading beside it is half a test. A node whose condition
-  reports no reading at all (the self-gating pair, whose result is a
-  simulation rather than a comparison) leaves it ``None``, contributes nothing
-  to the sparse map, and the key disappears from the payload entirely.
-- The encoded serialization canonicalizes ordering: nodes and groups are
-  emitted in first-appearance order across slots, and slots in horizon order.
-- Frontend-facing keys are camelCase, matching the trace payload.
-- Two serializations exist. ``to_rows`` is the plain one that
-  ``helman/get_schedule_explanation`` serves: one row per explained slot, built
-  straight from the DTOs, with facts about a condition column (as opposed to
-  its per-slot result) listed once per optimizer under ``conditions``.
-  ``to_dict`` is the pivoted, run-length encoded one that :mod:`.trace` still
-  embeds in the ``helman/run_automation`` payload.
+- DTOs retain one record per explained slot. ``to_rows`` serves those facts
+  through ``helman/get_schedule_explanation``; condition column metadata is
+  listed once per optimizer.
+- A missing row means the optimizer said nothing about that slot. An existing
+  node with ``not_evaluated`` was deliberately not consulted.
+- Every emitted gate declares its role where the optimizer knows whether it
+  can veto, reports capacity, or overrides condition matching.
+- ``actual`` is retained for passing and failing comparisons alike.
 """
 
 from __future__ import annotations
@@ -102,9 +86,7 @@ VERDICT_SKIP = "skip"
 
 #: Terminal verdict per slot. ``candidate`` = placed but ``condition_met`` is
 #: false (kept for display, never executed).
-VERDICTS: frozenset[str] = frozenset(
-    {VERDICT_EXECUTE, VERDICT_CANDIDATE, VERDICT_SKIP}
-)
+VERDICTS: frozenset[str] = frozenset({VERDICT_EXECUTE, VERDICT_CANDIDATE, VERDICT_SKIP})
 
 STATUS_OK = "ok"
 STATUS_SKIPPED = "skipped"
@@ -132,37 +114,7 @@ def _warn_unknown(label: str, value: Any, allowed: frozenset[Any]) -> None:
         _LOGGER.warning("explanation has unknown %s %r", label, value)
 
 
-# --- index-aligned column codecs ---------------------------------------------
-
-
-def encode_runs(values: Sequence[Any]) -> list[list[Any]]:
-    """Run-length encode an index-aligned column as ``[[value, count], ...]``.
-
-    Values are compared by equality, so dicts and lists (resolved params, custom
-    condition results) collapse just as strings do. ``None`` encodes "absent in
-    this slot" and is preserved.
-    """
-    runs: list[list[Any]] = []
-    for value in values:
-        if runs and runs[-1][0] == value and type(runs[-1][0]) is type(value):
-            runs[-1][1] += 1
-            continue
-        runs.append([value, 1])
-    return runs
-
-
-def encode_sparse(values: Sequence[Any]) -> dict[str, Any]:
-    """Encode an index-aligned column as ``{index: value}``, omitting ``None``.
-
-    A condition that reports no reading carries no ``actual`` at all, so its
-    column encodes to an empty map and its key is dropped from the payload
-    entirely.
-    """
-    return {
-        str(index): value
-        for index, value in enumerate(values)
-        if value is not None
-    }
+# --- plain-row serialization ------------------------------------------------
 
 
 def _without_none(payload: dict[str, Any]) -> dict[str, Any]:
@@ -170,9 +122,7 @@ def _without_none(payload: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in payload.items() if value is not None}
 
 
-def _condition_column(
-    key: str, condition: "ConditionType | None"
-) -> dict[str, Any]:
+def _condition_column(key: str, condition: "ConditionType | None") -> dict[str, Any]:
     """One condition column's own facts; an unregistered key has only its key."""
     if condition is None:
         return {"key": key}
@@ -240,14 +190,23 @@ class GateNode:
     """
 
     key: str
+    role: str
     state: str = STATE_NOT_EVALUATED
     params: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         _warn_unknown("gate state", self.state, NODE_STATES)
+        _warn_unknown(
+            "gate role", self.role, frozenset({"veto", "advisory", "override"})
+        )
 
     def to_row(self) -> dict[str, Any]:
-        return {"key": self.key, "state": self.state, "params": dict(self.params)}
+        return {
+            "key": self.key,
+            "role": self.role,
+            "state": self.state,
+            "params": dict(self.params),
+        }
 
 
 @dataclass(frozen=True)
@@ -310,7 +269,7 @@ class SlotExplanation:
         )
 
 
-# --- record DTOs (own the pivot) ---------------------------------------------
+# --- record DTOs ------------------------------------------------------------
 
 
 def _first_appearance_keys(node_groups: Iterable[Iterable[ConditionNode]]) -> list[str]:
@@ -321,123 +280,6 @@ def _first_appearance_keys(node_groups: Iterable[Iterable[ConditionNode]]) -> li
             if node.key not in keys:
                 keys.append(node.key)
     return keys
-
-
-def _encode_condition_columns(
-    nodes_by_slot: Sequence[tuple[ConditionNode, ...] | None],
-) -> list[dict[str, Any]]:
-    """Pivot per-slot node tuples into index-aligned columns, recursively."""
-    keys = _first_appearance_keys(nodes or () for nodes in nodes_by_slot)
-
-    columns: list[dict[str, Any]] = []
-    for key in keys:
-        per_slot: list[ConditionNode | None] = [
-            next((node for node in nodes or () if node.key == key), None)
-            for nodes in nodes_by_slot
-        ]
-        present = [node for node in per_slot if node is not None]
-        column: dict[str, Any] = {
-            "key": key,
-            "scope": present[0].scope if present else SCOPE_SLOT,
-            "state": encode_runs(
-                [node.state if node is not None else None for node in per_slot]
-            ),
-        }
-        values = [node.value if node is not None else None for node in per_slot]
-        if any(value is not None for value in values):
-            column["value"] = encode_runs(values)
-        actuals = encode_sparse(
-            [node.actual if node is not None else None for node in per_slot]
-        )
-        if actuals:
-            column["actual"] = actuals
-        columns.append(column)
-    return columns
-
-
-def _encode_gate_columns(
-    gates_by_slot: Sequence[tuple[GateNode, ...] | None],
-) -> list[dict[str, Any]]:
-    keys: list[str] = []
-    for gates in gates_by_slot:
-        for gate in gates or ():
-            if gate.key not in keys:
-                keys.append(gate.key)
-
-    columns: list[dict[str, Any]] = []
-    for key in keys:
-        per_slot: list[GateNode | None] = [
-            next((gate for gate in gates or () if gate.key == key), None)
-            for gates in gates_by_slot
-        ]
-        column: dict[str, Any] = {
-            "key": key,
-            "state": encode_runs(
-                [gate.state if gate is not None else None for gate in per_slot]
-            ),
-        }
-        params = [
-            gate.params if gate is not None and gate.params else None
-            for gate in per_slot
-        ]
-        if any(entry is not None for entry in params):
-            column["params"] = encode_runs(params)
-        columns.append(column)
-    return columns
-
-
-def _encode_group_columns(
-    groups_by_slot: Sequence[tuple[GroupExplanation, ...] | None],
-) -> list[dict[str, Any]]:
-    indexes: list[int] = []
-    for groups in groups_by_slot:
-        for group in groups or ():
-            if group.index not in indexes:
-                indexes.append(group.index)
-
-    columns: list[dict[str, Any]] = []
-    for group_index in indexes:
-        per_slot: list[GroupExplanation | None] = [
-            next(
-                (group for group in groups or () if group.index == group_index),
-                None,
-            )
-            for groups in groups_by_slot
-        ]
-        present = [group for group in per_slot if group is not None]
-        column: dict[str, Any] = {
-            "index": group_index,
-            "label": present[0].label if present else "",
-            # ``paramsSource`` is the presence column: null == this group does
-            # not exist for that slot.
-            "paramsSource": encode_runs(
-                [
-                    group.params_source if group is not None else None
-                    for group in per_slot
-                ]
-            ),
-        }
-        params = [
-            group.params if group is not None and group.params else None
-            for group in per_slot
-        ]
-        if any(entry is not None for entry in params):
-            column["params"] = encode_runs(params)
-        custom = [
-            list(group.custom_results)
-            if group is not None and group.custom_results
-            else None
-            for group in per_slot
-        ]
-        if any(entry is not None for entry in custom):
-            column["customResults"] = encode_runs(custom)
-        conditions = _encode_condition_columns(
-            [group.conditions if group is not None else None for group in per_slot]
-        )
-        if conditions:
-            column["conditions"] = conditions
-        columns.append(column)
-    return columns
 
 
 @dataclass(frozen=True)
@@ -466,23 +308,6 @@ class OptimizerExplanation:
     def __post_init__(self) -> None:
         _warn_unknown("optimizer status", self.status, OPTIMIZER_STATUSES)
         _warn_unknown("optimizer phase", self.phase, OPTIMIZER_PHASES)
-
-    def _aligned_slots(
-        self, slot_ids: Sequence[str]
-    ) -> list[SlotExplanation | None]:
-        index_of = {slot_id: index for index, slot_id in enumerate(slot_ids)}
-        aligned: list[SlotExplanation | None] = [None] * len(slot_ids)
-        for slot in self.slots:
-            index = index_of.get(slot.slot_id)
-            if index is None:
-                _LOGGER.warning(
-                    "explanation for %s references off-horizon slot %s",
-                    self.optimizer_id,
-                    slot.slot_id,
-                )
-                continue
-            aligned[index] = slot
-        return aligned
 
     def to_rows(self) -> dict[str, Any]:
         """Serialize as plain rows: one per explained slot, in record order.
@@ -516,43 +341,6 @@ class OptimizerExplanation:
             }
         )
 
-    def to_dict(self, slot_ids: Sequence[str]) -> dict[str, Any]:
-        """Serialize, pivoted against the record's ``slotIds`` array."""
-        aligned = self._aligned_slots(slot_ids)
-        payload: dict[str, Any] = {
-            "optimizerId": self.optimizer_id,
-            "kind": self.kind,
-            "phase": self.phase,
-            "status": self.status,
-            # the presence column: null == this optimizer said nothing about
-            # that slot.
-            "verdict": encode_runs(
-                [slot.verdict if slot is not None else None for slot in aligned]
-            ),
-        }
-        if self.controllable_id:
-            payload["controllableId"] = self.controllable_id
-        if self.status_reason is not None:
-            payload["statusReason"] = self.status_reason
-        winners = encode_sparse(
-            [
-                slot.winning_optimizer if slot is not None else None
-                for slot in aligned
-            ]
-        )
-        if winners:
-            payload["winningOptimizer"] = winners
-        groups = _encode_group_columns(
-            [slot.groups if slot is not None else None for slot in aligned]
-        )
-        if groups:
-            payload["groups"] = groups
-        gates = _encode_gate_columns(
-            [slot.gates if slot is not None else None for slot in aligned]
-        )
-        if gates:
-            payload["gates"] = gates
-        return payload
 
 @dataclass(frozen=True)
 class RunExplanation:
@@ -562,14 +350,6 @@ class RunExplanation:
     slot_ids: tuple[str, ...] = ()
     optimizers: tuple[OptimizerExplanation, ...] = ()
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "runAt": self.run_at.isoformat(),
-            "slotIds": list(self.slot_ids),
-            "optimizers": [
-                optimizer.to_dict(self.slot_ids) for optimizer in self.optimizers
-            ],
-        }
 
 # --- the in-memory book ------------------------------------------------------
 #
@@ -601,9 +381,7 @@ class _OptimizerRecord:
     #: fields above (status greys the whole column, so it is column-scoped).
     run_at: datetime
     #: slot id -> (the run that produced this row, the row).
-    slots: dict[str, tuple[datetime, SlotExplanation]] = field(
-        default_factory=dict
-    )
+    slots: dict[str, tuple[datetime, SlotExplanation]] = field(default_factory=dict)
 
     def explanation(self, slot_ids: Sequence[str]) -> OptimizerExplanation:
         """The accumulated rows as one record, in ``slot_ids`` order."""

@@ -998,11 +998,11 @@ class TransportAndSafetyTests(unittest.TestCase):
         )
         trace.end_step(status="ok")
         self.assertEqual(len(trace.reserve_floor_observations), 1)
-        payload = trace.to_dict()
+        payload = trace_rows_payload(trace)
         self.assertNotIn("reserveFloorObservations", payload)
         self.assertNotIn("reserveFloorObservation", json.dumps(payload))
         for optimizer_explanation in trace.optimizer_explanations():
-            self.assertNotIn("reserveFloor", json.dumps(optimizer_explanation.to_dict(trace.slot_ids)))
+            self.assertNotIn("reserveFloor", json.dumps(optimizer_explanation.to_rows()))
 
     def test_boundary_demand_basis_is_the_working_document_after_the_step_writes(
         self,
@@ -1150,6 +1150,8 @@ class GoldenFileTests(unittest.TestCase):
         committed = json.loads(GOLDEN_PATH.read_text())
         self.assertEqual(golden, committed)
 
+
+from automation_trace_contract import trace_rows_payload
 
 if __name__ == "__main__":
     unittest.main()

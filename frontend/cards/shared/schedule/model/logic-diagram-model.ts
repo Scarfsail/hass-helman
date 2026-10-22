@@ -304,61 +304,6 @@ function comparisonSide(value: unknown): string | null {
 }
 
 /**
- * Gates whose `false` is a *report*, never a veto.
- *
- * Both are documented in the optimizers as "false still places, the run is
- * merely short":
- *
- * - `placement_capacity` (`appliance_runtime.py:124`) — "``false`` still places
- *   what the day allows, so it reads as 'the day will under-run', not 'nothing
- *   was placed'".
- * - `cheap_window_capacity` (`charge_from_grid.py:84`) — "False still charges —
- *   as much as the window allows — so this reads as 'the bridge is short'".
- *
- * Every other gate *can* veto, and whether it did is decided by the terminal
- * rather than by this list: see `isPlanInput`.
- */
-const ALWAYS_ADVISORY_GATES = new Set<string>([
-    "placement_capacity",
-    "cheap_window_capacity",
-]);
-
-/**
- * Gates that are neither a requirement nor a report, but an **override**.
- *
- * `consecutive_skip_override` (`appliance_runtime.py:30-35, :125-127`) is the
- * one construct in the pipeline that *defeats the whole OR chain*: after
- * `max_consecutive_skips` consecutive short days the optimizer "runs anyway,
- * past every group's `custom` conditions and past every slot condition, over the
- * full window, carrying its own `consecutive_skip_override` gate so a forced run
- * never reads as an unexplained one."
- *
- * So it does not AND with the conditions — it ORs with them, and the OR is what
- * ANDs with the real vetoes. Drawn as an AND input it would claim the opposite:
- * that a forced run *required* it, and, via `isPlanInput`'s second rule, that the
- * failed conditions it overrode were mere context. That is a run with no visible
- * cause, which is exactly what the gate exists to prevent.
- *
- * The gate is emitted only on a forced day — "absence means 'not forced'" — so
- * there is never a false one to synthesise.
- *
- * **The other gates were checked against their docstrings, not their names:**
- *
- * - `cheapest_rank` (`charge_hold.py`) — a *requirement*. The slot lost the
- *   day's export-price ranking, so it is held; `false` is stamped for the slots
- *   released to charge, which are not held. It vetoes. Note the polarity is the
- *   opposite of `charge_from_grid`'s gate of the same name, where the cut is
- *   what gets written rather than what is left alone — but both are `true` on
- *   the slots their optimizer acts on, which is what rule 2 below needs.
- * - `hold_room` (`charge_hold.py`) — a *requirement*, day-scoped. The day's
- *   remaining solar can still refill the battery at all, and where it is false
- *   "the day's whole remaining surplus falls short of the need, so no slot of
- *   it can be held". Nothing is placed, unlike the two advisory capacity gates
- *   whose `false` still places what it can.
- */
-const OVERRIDE_GATES = new Set<string>(["consecutive_skip_override"]);
-
-/**
  * The one or two numbers a gate was actually decided by, for its own face.
  *
  * Every pair here reads **have / need** — `2/2` skips of the allowed maximum,
@@ -568,8 +513,8 @@ function planHeld(terminal: LogicTerminal): boolean {
  *    covers `candidate` as well as `execute`: a candidate's own falsehood is
  *    the custom stage, which is not a term of this AND at all.
  */
-function isPlanInput(key: string, state: LogicState, terminal: LogicTerminal): boolean {
-    if (ALWAYS_ADVISORY_GATES.has(key)) return false;
+function isPlanInput(role: "veto" | "advisory", state: LogicState, terminal: LogicTerminal): boolean {
+    if (role === "advisory") return false;
     if (planHeld(terminal) && state !== "true" && state !== "not_applicable") return false;
     return true;
 }
@@ -676,7 +621,7 @@ export function buildLogicDiagram(
     const showGroupLabels = cell.groups.length > 1;
     // The override, pulled out before the gate loop: it is not a term of the
     // conjunction at all, it is the *other input of the OR*.
-    const overrideGate = cell.gates.find((gate) => OVERRIDE_GATES.has(gate.key)) ?? null;
+    const overrideGate = cell.gates.find((gate) => gate.role === "override") ?? null;
 
     // ---- geometry + states, groups first -------------------------------
     let cursorY = PAD_TOP;
@@ -889,7 +834,7 @@ export function buildLogicDiagram(
     const finalInputStates: LogicState[] = [];
 
     if (spineId !== null) {
-        if (isPlanInput("", spineState, terminal)) {
+        if (isPlanInput("veto", spineState, terminal)) {
             edges.push({ from: spineId, to: "final", decisive: false });
             finalInputIds.push(spineId);
             finalInputStates.push(spineState);
@@ -904,7 +849,7 @@ export function buildLogicDiagram(
     // would have stopped it, and a record that says otherwise is reported
     // beside the chain rather than drawn as a veto the terminal contradicts.
     for (const node of selfGating) {
-        if (!isPlanInput(node.key, node.state, terminal)) {
+        if (!isPlanInput("veto", node.state, terminal)) {
             annotations.push({ key: node.key, kind: "gate", state: node.state, params: {} });
             continue;
         }
@@ -915,10 +860,10 @@ export function buildLogicDiagram(
 
     cell.gates.forEach((gate: ExplanationGate, gatePos) => {
         // Already drawn, as the OR's other input.
-        if (OVERRIDE_GATES.has(gate.key)) {
+        if (gate.role === "override") {
             return;
         }
-        if (!isPlanInput(gate.key, gate.state, terminal)) {
+        if (!isPlanInput(gate.role, gate.state, terminal)) {
             annotations.push({
                 key: gate.key,
                 kind: "gate",

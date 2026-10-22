@@ -210,7 +210,7 @@ class ScheduleWriter:
         )
         return True
 
-    def flush(self, *, action: dict[str, Any] | None = None) -> ScheduleDocument:
+    def flush(self) -> ScheduleDocument:
         """Emit the ownership veto and return the finished document.
 
         The veto is the last thing that can decide a slot, and it sits *after*
@@ -233,6 +233,7 @@ class ScheduleWriter:
         """
         if self._written_slot_ids and not self._pre_filters_ownership:
             self._trace.gate(
+                role="veto",
                 slot_ids=self._written_slot_ids,
                 key=GATE_BLOCKED_USER_OWNED,
                 state=STATE_TRUE,
@@ -240,14 +241,10 @@ class ScheduleWriter:
             )
         if self._blocked_slot_ids:
             self._trace.gate(
+                role="veto",
                 slot_ids=self._blocked_slot_ids,
                 key=GATE_BLOCKED_USER_OWNED,
                 state=STATE_FALSE,
                 params={"domain": self._controllable_id},
-            )
-            self._trace.decision(
-                slot_ids=self._blocked_slot_ids,
-                outcome="blocked",
-                action=action,
             )
         return self.document

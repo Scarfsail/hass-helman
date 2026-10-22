@@ -145,8 +145,9 @@ from .house_device_consumers import extract_house_device_consumers
 from .house_forecast_response import build_house_forecast_response
 from .live_power import LivePowerTracker
 from .point_forecast_response import build_solar_forecast_response
-from .scheduling.actual_history import ActualHistorySlot, build_entity_actual_histories
+from .scheduling.actual_history import build_entity_actual_histories
 from .scheduling.normal_state import (
+    iter_controllable_sources,
     build_controllable_entities,
 )
 from .scheduling.schedule import (
@@ -2039,7 +2040,7 @@ class HelmanCoordinator:
 
     async def async_get_entity_actual_history(
         self,
-    ) -> dict[str, list[ActualHistorySlot]]:
+    ) -> dict[str, list[dict[str, Any]]]:
         """What each controllable entity actually did earlier today.
 
         The whole roster shares one reference time, so it shares one window --
@@ -2059,12 +2060,23 @@ class HelmanCoordinator:
             reference_time=dt_util.utcnow(),
             interval_minutes=SCHEDULE_SLOT_MINUTES,
         )
-        # Keep the roster's order and its full membership, so a caller sees the
-        # same keys it would have seen from the per-entity loop.
-        return {
-            entity["entityId"]: history.get(entity["entityId"], [])
-            for entity in entities
+        sources = {
+            spec.control_entity_id(runtime): (spec, runtime)
+            for spec, runtime in iter_controllable_sources(
+                control_config=control_config, registry=registry
+            )
         }
+        # Preserve roster order and empty membership after resolving raw slots.
+        result: dict[str, list[dict[str, Any]]] = {}
+        for entity in entities:
+            entity_id = entity["entityId"]
+            spec, runtime = sources[entity_id]
+            result[entity_id] = [
+                {"slot": entry["slot"], "action": action, "ratio": entry["ratio"]}
+                for entry in history.get(entity_id, [])
+                if (action := spec.action_from_state(runtime, entry["state"])) is not None
+            ]
+        return result
 
     def _fire_data_changed(self, kind: str) -> None:
         """Announce that something the cards draw has been rewritten.

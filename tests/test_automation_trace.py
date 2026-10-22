@@ -32,8 +32,6 @@ from custom_components.helman.automation.trace import (  # noqa: E402
     NULL_TRACE,
     OptimizerTrace,
     TraceWrite,
-    aggregate_series_to_slots,
-    price_points_to_slots,
 )
 from custom_components.helman.const import SCHEDULE_SLOT_MINUTES  # noqa: E402
 from custom_components.helman.scheduling.schedule import format_slot_id  # noqa: E402
@@ -45,190 +43,6 @@ def _slot_ids(count: int, *, start_hour: int = 6) -> list[str]:
         format_slot_id(base + timedelta(minutes=SCHEDULE_SLOT_MINUTES * i))
         for i in range(count)
     ]
-
-
-class AggregateSeriesToSlotsTests(unittest.TestCase):
-    def test_each_bucket_lands_on_its_own_slot(self) -> None:
-        """A slot and a forecast bucket are both 15 minutes, so the map is 1:1.
-
-        The regression this guards: the flooring used to be hard-coded to 30
-        minutes, which folded two buckets into every even slot -- doubling its
-        energy -- and left every odd slot with nothing.
-        """
-        slots = _slot_ids(3)  # 06:00, 06:15, 06:30
-        base = datetime(2026, 7, 12, 6, 0, tzinfo=TZ)
-        series = [
-            {"timestamp": (base).isoformat(), "solarKwh": 0.1, "socPct": 40.0},
-            {
-                "timestamp": (base + timedelta(minutes=15)).isoformat(),
-                "solarKwh": 0.2,
-                "socPct": 42.0,
-            },
-            {
-                "timestamp": (base + timedelta(minutes=30)).isoformat(),
-                "solarKwh": 0.5,
-                "socPct": 50.0,
-            },
-        ]
-        result = aggregate_series_to_slots(
-            series, slots, sum_fields=("solarKwh",), last_fields=("socPct",)
-        )
-        self.assertAlmostEqual(result["solarKwh"][0], 0.1)
-        self.assertEqual(result["socPct"][0], 40.0)
-        self.assertAlmostEqual(result["solarKwh"][1], 0.2)
-        self.assertEqual(result["socPct"][1], 42.0)
-        self.assertAlmostEqual(result["solarKwh"][2], 0.5)
-        self.assertEqual(result["socPct"][2], 50.0)
-
-    def test_a_finer_bucket_still_sums_into_its_slot(self) -> None:
-        """The sum/last reduction is the contract, not the 1:1 count.
-
-        A feed publishing below the slot length must still fold into one slot.
-        """
-        slots = _slot_ids(1)
-        base = datetime(2026, 7, 12, 6, 0, tzinfo=TZ)
-        series = [
-            {"timestamp": base.isoformat(), "solarKwh": 0.1, "socPct": 40.0},
-            {
-                "timestamp": (base + timedelta(minutes=5)).isoformat(),
-                "solarKwh": 0.2,
-                "socPct": 42.0,
-            },
-        ]
-        result = aggregate_series_to_slots(
-            series, slots, sum_fields=("solarKwh",), last_fields=("socPct",)
-        )
-        self.assertAlmostEqual(result["solarKwh"][0], 0.3)
-        self.assertEqual(result["socPct"][0], 42.0)
-
-    def test_slots_past_coverage_are_none(self) -> None:
-        slots = _slot_ids(3)
-        base = datetime(2026, 7, 12, 6, 0, tzinfo=TZ)
-        series = [{"timestamp": base.isoformat(), "solarKwh": 0.4}]
-        result = aggregate_series_to_slots(series, slots, sum_fields=("solarKwh",))
-        self.assertAlmostEqual(result["solarKwh"][0], 0.4)
-        self.assertIsNone(result["solarKwh"][1])
-        self.assertIsNone(result["solarKwh"][2])
-
-    def test_non_list_series_yields_all_none(self) -> None:
-        slots = _slot_ids(2)
-        result = aggregate_series_to_slots(None, slots, sum_fields=("x",))
-        self.assertEqual(result["x"], [None, None])
-
-
-class PricePointsToSlotsTests(unittest.TestCase):
-    def test_step_function_carries_last_price_forward(self) -> None:
-        # Enough slots to reach past the second point's hour.
-        slots = _slot_ids(60 // SCHEDULE_SLOT_MINUTES + 1)
-        base = datetime(2026, 7, 12, 6, 0, tzinfo=TZ)
-        points = [
-            {"timestamp": base.isoformat(), "value": 2.0},
-            {"timestamp": (base + timedelta(hours=1)).isoformat(), "value": 3.0},
-        ]
-        result = price_points_to_slots(points, slots)
-        self.assertEqual(result, [2.0] * (60 // SCHEDULE_SLOT_MINUTES) + [3.0])
-
-    def test_missing_points_are_none(self) -> None:
-        self.assertEqual(price_points_to_slots(None, _slot_ids(2)), [None, None])
-
-
-class OptimizerTraceCoverageTests(unittest.TestCase):
-    def test_step_that_decided_nothing_is_still_complete(self) -> None:
-        # A slot an optimizer never spoke about is not a defect: no decision is
-        # synthesized for it and the step stays complete.
-        slots = _slot_ids(3)
-        trace = OptimizerTrace(slot_ids=slots)
-        trace.begin_step("opt", "export_price")
-        trace.end_step(status="ok")
-        step = trace.to_dict()["steps"][0]
-        self.assertTrue(step["complete"])
-        self.assertEqual(step["decisions"], [])
-
-    def test_partial_coverage_is_complete(self) -> None:
-        slots = _slot_ids(3)
-        trace = OptimizerTrace(slot_ids=slots)
-        trace.begin_step("opt", "export_price")
-        trace.decision(slot_ids=[slots[0]], outcome="out_of_scope")
-        trace.end_step(status="ok")
-        step = trace.to_dict()["steps"][0]
-        self.assertTrue(step["complete"])
-        self.assertEqual(len(step["decisions"]), 1)
-
-    def test_overlap_marks_incomplete(self) -> None:
-        slots = _slot_ids(2)
-        trace = OptimizerTrace(slot_ids=slots)
-        trace.begin_step("opt", "export_price")
-        trace.decision(slot_ids=slots, outcome="out_of_scope")
-        trace.decision(slot_ids=[slots[0]], outcome="out_of_scope")
-        trace.end_step(status="ok")
-        self.assertFalse(trace.to_dict()["steps"][0]["complete"])
-
-    def test_write_without_applied_marks_incomplete(self) -> None:
-        slots = _slot_ids(2)
-        trace = OptimizerTrace(slot_ids=slots)
-        trace.begin_step("opt", "export_price")
-        # cover everything but only out_of_scope, not applied
-        trace.decision(slot_ids=slots, outcome="out_of_scope")
-        trace.record_writes(
-            [TraceWrite(slot_id=slots[0], controllable_id="inverter", before=None, after={"kind": "stop_export"})]
-        )
-        trace.end_step(status="ok")
-        self.assertFalse(trace.to_dict()["steps"][0]["complete"])
-
-    def test_applied_covering_write_is_complete(self) -> None:
-        slots = _slot_ids(2)
-        trace = OptimizerTrace(slot_ids=slots)
-        trace.begin_step("opt", "export_price")
-        trace.decision(slot_ids=[slots[0]], outcome="applied")
-        trace.decision(slot_ids=[slots[1]], outcome="out_of_scope")
-        trace.record_writes(
-            [TraceWrite(slot_id=slots[0], controllable_id="inverter", before=None, after={"kind": "stop_export"})]
-        )
-        trace.end_step(status="ok")
-        self.assertTrue(trace.to_dict()["steps"][0]["complete"])
-
-    def test_skipped_step_records_a_horizon_wide_outcome(self) -> None:
-        slots = _slot_ids(3)
-        trace = OptimizerTrace(slot_ids=slots)
-        trace.begin_step("opt", "surplus_appliance")
-        trace.note_horizon(code="optimizer_skipped", params={"applianceId": "boiler"})
-        trace.end_step(status="skipped")
-        step = trace.to_dict()["steps"][0]
-        self.assertEqual(step["status"], "skipped")
-        self.assertTrue(step["complete"])
-        self.assertEqual(step["notes"][0]["code"], "optimizer_skipped")
-        self.assertEqual(set(step["decisions"][0]["slotIds"]), set(slots))
-
-    def test_discard_step_decisions_clears_partial(self) -> None:
-        slots = _slot_ids(2)
-        trace = OptimizerTrace(slot_ids=slots)
-        trace.begin_step("opt", "surplus_appliance")
-        trace.decision(slot_ids=[slots[0]], outcome="applied")
-        trace.discard_step_decisions()
-        trace.note_horizon(code="optimizer_skipped", params={})
-        trace.end_step(status="skipped")
-        step = trace.to_dict()["steps"][0]
-        self.assertTrue(all(d["outcome"] != "applied" for d in step["decisions"]))
-
-
-class OptimizerTraceShapeTests(unittest.TestCase):
-    def test_to_dict_has_parallel_arrays_keyed_by_slot_ids(self) -> None:
-        slots = _slot_ids(4)
-        trace = OptimizerTrace(slot_ids=slots)
-        trace.set_static_rails({"importPrice": [1.0] * len(slots)})
-        trace.begin_step("opt", "export_price")
-        trace.set_rails_in({"availableSurplusKwh": [0.0] * len(slots)})
-        trace.decision(slot_ids=slots, outcome="out_of_scope")
-        trace.end_step(status="ok")
-        trace.set_rails_final({"batterySocPct": [50.0] * len(slots)})
-        payload = trace.to_dict()
-        self.assertEqual(payload["slotIds"], slots)
-        self.assertEqual(len(payload["staticRails"]["importPrice"]), len(slots))
-        self.assertEqual(len(payload["steps"]), 1)
-        self.assertEqual(
-            len(payload["steps"][0]["railsIn"]["availableSurplusKwh"]), len(slots)
-        )
-        self.assertEqual(len(payload["railsFinal"]["batterySocPct"]), len(slots))
 
 
 def _group(
@@ -281,7 +95,7 @@ class TraceGroupExplanationTests(unittest.TestCase):
 
     def test_no_open_step_is_a_no_op(self) -> None:
         NULL_TRACE.set_group_explanations({"x": [_group()]})
-        NULL_TRACE.gate(slot_ids=["x"], key="window", state=STATE_TRUE)
+        NULL_TRACE.gate(role="veto", slot_ids=["x"], key="window", state=STATE_TRUE)
         NULL_TRACE.resolve_condition(
             slot_ids=["x"], key="reserve_floor_soc", state=STATE_TRUE
         )
@@ -294,7 +108,7 @@ class TraceGateTests(unittest.TestCase):
         slots = _slot_ids(3)
         trace = OptimizerTrace(slot_ids=slots)
         trace.begin_step("opt", "export_price")
-        trace.gate(
+        trace.gate(role="veto",
             slot_ids=slots[:2],
             key="window",
             state=STATE_FALSE,
@@ -311,13 +125,13 @@ class TraceGateTests(unittest.TestCase):
         slots = _slot_ids(2)
         trace = OptimizerTrace(slot_ids=slots)
         trace.begin_step("opt", "charge_from_grid")
-        trace.gate(
+        trace.gate(role="veto",
             slot_ids=[slots[0]],
             key="cheapness_rank",
             state=STATE_TRUE,
             params={"rank": 1, "rank_of": 12},
         )
-        trace.gate(
+        trace.gate(role="veto",
             slot_ids=[slots[1]],
             key="cheapness_rank",
             state=STATE_FALSE,
@@ -333,9 +147,9 @@ class TraceGateTests(unittest.TestCase):
         slots = _slot_ids(1)
         trace = OptimizerTrace(slot_ids=slots)
         trace.begin_step("opt", "appliance_runtime")
-        trace.gate(slot_ids=slots, key="capacity", state=STATE_NOT_EVALUATED)
-        trace.gate(slot_ids=slots, key="capacity", state=STATE_TRUE)
-        trace.gate(slot_ids=slots, key="deadline", state=STATE_TRUE)
+        trace.gate(role="veto", slot_ids=slots, key="capacity", state=STATE_NOT_EVALUATED)
+        trace.gate(role="veto", slot_ids=slots, key="capacity", state=STATE_TRUE)
+        trace.gate(role="veto", slot_ids=slots, key="deadline", state=STATE_TRUE)
         trace.end_step(status="ok")
         gates = trace.optimizer_explanations()[0].slots[0].gates
         self.assertEqual([gate.key for gate in gates], ["capacity", "deadline"])
@@ -348,7 +162,7 @@ class TraceGateTests(unittest.TestCase):
         with self.assertLogs(
             "custom_components.helman.automation.trace", level="WARNING"
         ):
-            trace.gate(slot_ids=slots, key="window", state="maybe")
+            trace.gate(role="veto", slot_ids=slots, key="window", state="maybe")
         trace.end_step(status="ok")
         self.assertEqual(
             trace.optimizer_explanations()[0].slots[0].gates[0].state, "maybe"
@@ -361,7 +175,7 @@ class TraceGateTests(unittest.TestCase):
         with self.assertLogs(
             "custom_components.helman.automation.trace", level="WARNING"
         ):
-            trace.gate(slot_ids=["2020-01-01T00:00:00"], key="window",
+            trace.gate(role="veto", slot_ids=["2020-01-01T00:00:00"], key="window",
                        state=STATE_TRUE)
         trace.end_step(status="ok")
         self.assertEqual(trace.optimizer_explanations()[0].slots, ())
@@ -556,59 +370,7 @@ class TraceStepStatusTests(unittest.TestCase):
 
 
 class TraceExplanationPayloadTests(unittest.TestCase):
-    def _baseline_step(self, slots: list[str]) -> dict:
-        baseline = OptimizerTrace(slot_ids=slots)
-        baseline.begin_step("opt", "export_price")
-        baseline.decision(
-            slot_ids=slots, outcome="out_of_scope"
-        )
-        baseline.end_step(status="ok")
-        return baseline.to_dict()["steps"][0]
 
-    def test_a_step_that_records_nothing_keeps_its_payload_unchanged(self) -> None:
-        slots = _slot_ids(2)
-        trace = OptimizerTrace(slot_ids=slots)
-        trace.begin_step("opt", "export_price")
-        trace.decision(
-            slot_ids=slots, outcome="out_of_scope"
-        )
-        trace.set_step_status(status="ok")
-        trace.end_step(status="ok")
-        self.assertEqual(trace.to_dict()["steps"][0], self._baseline_step(slots))
-
-    def test_recorded_explanation_serializes_under_the_explanation_key(self) -> None:
-        slots = _slot_ids(2)
-        trace = OptimizerTrace(slot_ids=slots)
-        trace.begin_step("opt", "export_price")
-        trace.decision(
-            slot_ids=slots, outcome="out_of_scope"
-        )
-        trace.set_group_explanations(
-            {
-                slot: [_group(ConditionNode(key="min_price", state=STATE_TRUE))]
-                for slot in slots
-            }
-        )
-        trace.gate(
-            slot_ids=[slots[1]],
-            key="window",
-            state=STATE_FALSE,
-            params={"windowEnd": "22:00"},
-        )
-        trace.set_step_status(status="ok", reason=None)
-        trace.end_step(status="ok")
-
-        step = trace.to_dict()["steps"][0]
-        baseline = self._baseline_step(slots)
-        self.assertEqual({key: step[key] for key in baseline}, baseline)
-        self.assertEqual(set(step) - set(baseline), {"explanation"})
-
-        # The embedded payload is exactly the recorded explanation, encoded.
-        recorded = trace.optimizer_explanations()[0]
-        self.assertEqual(step["explanation"], recorded.to_dict(slots))
-        rows = recorded.to_rows()["slots"]
-        self.assertEqual([row["slotId"] for row in rows], slots)
-        self.assertEqual(rows[1]["gates"][0]["params"], {"windowEnd": "22:00"})
 
     def test_status_reason_survives_serialization(self) -> None:
         slots = _slot_ids(1)
@@ -617,7 +379,7 @@ class TraceExplanationPayloadTests(unittest.TestCase):
         trace.set_group_explanations({slots[0]: [_group()]})
         trace.set_step_status(status="failed", reason="battery_params_missing")
         trace.end_step(status="failed")
-        step = trace.to_dict()["steps"][0]
+        step = trace_rows_payload(trace)["steps"][0]
         self.assertEqual(step["explanation"]["status"], "failed")
         self.assertEqual(
             step["explanation"]["statusReason"], "battery_params_missing"
@@ -716,11 +478,13 @@ class TraceWinnerAttributionTests(unittest.TestCase):
         trace.set_verdict(slot_ids=slots, verdict=VERDICT_SKIP)
         trace.end_step(status="ok")
 
-        payload = trace.to_dict()["steps"][0]["explanation"]
+        payload = trace_rows_payload(trace)["steps"][0]["explanation"]
 
         self.assertEqual(payload["controllableId"], "inverter")
         self.assertEqual(trace.optimizer_explanations()[0].controllable_id, "inverter")
 
+
+from automation_trace_contract import trace_rows_payload
 
 if __name__ == "__main__":
     unittest.main()
