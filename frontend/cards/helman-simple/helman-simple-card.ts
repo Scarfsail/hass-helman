@@ -1,4 +1,4 @@
-import { LitElement, css, html, svg } from "lit-element";
+import { LitElement, css, html, svg, unsafeCSS } from "lit-element";
 import { customElement } from "lit/decorators.js";
 import type { HomeAssistant, LovelaceCard } from "../../types/ha";
 import { HelmanSimpleCardConfig } from "./HelmanSimpleCardConfig";
@@ -12,8 +12,9 @@ import "./simple-card-solar";
 import "./simple-card-battery";
 import "./simple-card-grid";
 import "./simple-card-house";
-import { computeDominantSourceColorCached } from "../color-utils";
-import { getFlowColor, getFlowGlow } from "./flow-colors";
+import { helmanColorVars } from "../color-vars";
+import { FLOW_BAND_LENGTH, FLOW_BAND_PEAK_OPACITY, FLOW_RIBBON_OPACITY, FLOW_SWEEP_DURATION } from "../shared/flow-style";
+import { dominantFlowColor, getFlowColor } from "./flow-colors";
 import { IDLE_W, liveFlows } from "../node-detail/live-flows";
 
 // ──────────────────────────────────── Card ────────────────────────────────────
@@ -46,7 +47,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
     }
 
     // 2. Static styles
-    static styles = css`
+    static styles = [helmanColorVars, css`
         :host { display: block; }
         ha-card { overflow: hidden; }
         ha-card.transparent {
@@ -96,9 +97,22 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             pointer-events: none;
             overflow: visible;
         }
-        @keyframes flow-diagonal {
-            0%   { stroke-dashoffset: 0; }
-            100% { stroke-dashoffset: -18; }
+        .flow-ribbon, .flow-band {
+            fill: none;
+            stroke-linecap: round;
+        }
+        .flow-ribbon { opacity: ${unsafeCSS(FLOW_RIBBON_OPACITY)}; }
+        .flow-band {
+            pointer-events: none;
+            transform-box: view-box;
+            animation: sweep-band ${unsafeCSS(FLOW_SWEEP_DURATION)} linear infinite;
+        }
+        @keyframes sweep-band {
+            from { transform: translate(0, 0); }
+            to { transform: translate(var(--travel-x), var(--travel-y)); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .flow-band { display: none; }
         }
 
         /* The inverter sits where the flows cross: drawn over them, kept small. */
@@ -123,9 +137,10 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             color: var(--secondary-text-color);
             font-size: 0.9rem;
         }
-    `;
+    `];
 
     // 3. Private properties & Host controller
+    private readonly _flowId = `simple-flow-${Math.random().toString(36).slice(2)}`;
     private _config?: HelmanSimpleCardConfig;
     private readonly _host = new EnergyCardHost(this, {
         whichNodesToWalk: (_tree, energyNodes) => [
@@ -138,8 +153,6 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         ].filter((n): n is TreeItem => n != null),
     });
 
-    private _flowColors?: { solar: string; grid: string; battery: string };
-    private _flowGlows?:  { solar: string; grid: string; battery: string };
 
     // Setters & Getters delegating to host
     public set hass(hass: HomeAssistant) {
@@ -154,21 +167,6 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
 
     setConfig(config: HelmanSimpleCardConfig) {
         this._config = { ...config };
-    }
-
-    willUpdate(changedProperties: Map<string | symbol, unknown>) {
-        super.willUpdate(changedProperties);
-        if (!this._flowColors || changedProperties.has('_config')) {
-            const solar   = getFlowColor("solar");
-            const grid    = getFlowColor("grid");
-            const battery = getFlowColor("battery");
-            this._flowColors = { solar, grid, battery };
-            this._flowGlows  = {
-                solar:   getFlowGlow(solar),
-                grid:    getFlowGlow(grid),
-                battery: getFlowGlow(battery),
-            };
-        }
     }
 
     // 10. Render method
@@ -203,9 +201,9 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             return { active: power > 0, width: max === null ? 1.5 : Math.max(1.5, Math.min(power / max, 1) * 12) };
         };
 
-        const solarFlowColor   = this._flowColors!.solar;
-        const gridFlowColor    = this._flowColors!.grid;
-        const batteryFlowColor = this._flowColors!.battery;
+        const solarFlowColor   = getFlowColor("solar");
+        const gridFlowColor    = getFlowColor("grid");
+        const batteryFlowColor = getFlowColor("battery");
 
         // ── Source colors for consumer components ──────────────────────────────
         // Battery charge color: derived from live power flows to avoid backend color discrepancies
@@ -213,8 +211,8 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             ? (flows.solarToBattery >= flows.gridToBattery ? solarFlowColor : gridFlowColor)
             : undefined;
         const { gridConsumerNode, houseNode } = this._host.energyNodes;
-        const gridSourceColor  = gridConsumerNode    ? computeDominantSourceColorCached(gridConsumerNode)    : undefined;
-        const houseSourceColor = houseNode           ? computeDominantSourceColorCached(houseNode)           : undefined;
+        const gridSourceColor  = dominantFlowColor(gridConsumerNode, this._host.sourceNodes);
+        const houseSourceColor = dominantFlowColor(houseNode, this._host.sourceNodes);
 
         const gridStyle = this._buildGridStyle();
 
@@ -228,7 +226,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
                             <simple-card-solar .power=${solarPower}></simple-card-solar>
                         </div>
                         <div class="connector-h">
-                            ${edge("solarToGrid").active ? this._flowH(solarFlowColor, this._flowGlows!.solar, false, edge("solarToGrid").width, 22.5, 33) : ""}
+                            ${edge("solarToGrid").active ? this._flowH("solar-grid", solarFlowColor, false, edge("solarToGrid").width, 22.5, 33) : ""}
                         </div>
                         <div class="node-cell" @click=${() => this._openNode("grid")}>
                             <simple-card-grid .power=${effectiveGridPower} .sourceColor=${gridSourceColor}></simple-card-grid>
@@ -236,7 +234,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
 
                         <!-- ── Row 2: vertical connectors ── -->
                         <div class="connector-v">
-                            ${edge("solarToHouse").active ? this._flowV(solarFlowColor, this._flowGlows!.solar, false, edge("solarToHouse").width) : ""}
+                            ${edge("solarToHouse").active ? this._flowV("solar-house", solarFlowColor, false, edge("solarToHouse").width) : ""}
                         </div>
                         <div class="center-cell">
                             <helman-inverter-cell
@@ -247,8 +245,8 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
                             ></helman-inverter-cell>
                         </div>
                         <div class="connector-v">
-                            ${edge("gridToBattery").active ? this._flowV(gridFlowColor, this._flowGlows!.grid, false, edge("gridToBattery").width) : ""}
-                            ${edge("batteryToGrid").active ? this._flowV(batteryFlowColor, this._flowGlows!.battery, true, edge("batteryToGrid").width) : ""}
+                            ${edge("gridToBattery").active ? this._flowV("grid-battery", gridFlowColor, false, edge("gridToBattery").width) : ""}
+                            ${edge("batteryToGrid").active ? this._flowV("battery-grid", batteryFlowColor, true, edge("batteryToGrid").width) : ""}
                         </div>
 
                         <!-- ── Row 3: House ─── connector ─── Battery ── -->
@@ -307,12 +305,6 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
 
     private _renderFlowOverlay(solarToBatt: { active: boolean; width: number }, gridToHouse: { active: boolean; width: number }, battToHouse: { active: boolean; width: number }) {
         if (!solarToBatt.active && !gridToHouse.active && !battToHouse.active) return "";
-        const solarFlowColor   = this._flowColors!.solar;
-        const gridFlowColor    = this._flowColors!.grid;
-        const batteryFlowColor = this._flowColors!.battery;
-        const solarFlowGlow    = this._flowGlows!.solar;
-        const gridFlowGlow     = this._flowGlows!.grid;
-        const batteryFlowGlow  = this._flowGlows!.battery;
         // SVG overlays the full energy-grid (viewBox 0 0 200 168).
         // Column centers: House=45, Grid/Battery=155. Row centers: top≈35, bottom≈133.
         // vector-effect="non-scaling-stroke" keeps stroke-width in screen pixels,
@@ -321,41 +313,13 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             <svg class="diagonal-overlay" viewBox="0 0 200 168"
                  preserveAspectRatio="none"
                  xmlns="http://www.w3.org/2000/svg">
-                ${ solarToBatt.active ? svg`
-                    <line x1="62" y1="48" x2="138" y2="120"
-                          stroke="${solarFlowColor}"
-                          stroke-width=${solarToBatt.width}
-                          stroke-linecap="round"
-                          stroke-dasharray="2 16"
-                          vector-effect="non-scaling-stroke"
-                          style="animation: flow-diagonal 1.6s linear infinite;
-                                 filter: drop-shadow(0 0 3px ${solarFlowGlow})" />
-                ` : ""}
-                ${ gridToHouse.active ? svg`
-                    <line x1="138" y1="48" x2="62" y2="120"
-                          stroke="${gridFlowColor}"
-                          stroke-width=${gridToHouse.width}
-                          stroke-linecap="round"
-                          stroke-dasharray="2 16"
-                          vector-effect="non-scaling-stroke"
-                          style="animation: flow-diagonal 1.6s linear infinite;
-                                 filter: drop-shadow(0 0 3px ${gridFlowGlow})" />
-                ` : ""}
-                ${ battToHouse.active ? svg`
-                    <line x1="130" y1="133" x2="70" y2="133"
-                          stroke="${batteryFlowColor}"
-                          stroke-width=${battToHouse.width}
-                          stroke-linecap="round"
-                          stroke-dasharray="2 16"
-                          vector-effect="non-scaling-stroke"
-                          style="animation: flow-diagonal 1.6s linear infinite;
-                                 filter: drop-shadow(0 0 3px ${batteryFlowGlow})" />
-                ` : ""}
+                ${solarToBatt.active ? this._flowLine("solar-battery", getFlowColor("solar"), solarToBatt.width, "62", "48", "138", "120", true) : ""}
+                ${gridToHouse.active ? this._flowLine("grid-house", getFlowColor("grid"), gridToHouse.width, "138", "48", "62", "120", true) : ""}
+                ${battToHouse.active ? this._flowLine("battery-house", getFlowColor("battery"), battToHouse.width, "130", "133", "70", "133", true) : ""}
             </svg>`;
     }
 
-    private _flowH(color: string, glow: string, reverse: boolean, strokeWidth: number, leftOverhang = 0, rightOverhang = 0) {
-        const sw = strokeWidth;
+    private _flowH(key: string, color: string, reverse: boolean, strokeWidth: number, leftOverhang = 0, rightOverhang = 0) {
         // connectorW matches the 20px CSS grid connector column so absolute SVG
         // coordinates (no viewBox) map 1:1 to pixels, letting us reach actual
         // picture borders on both sides via overflow:visible.
@@ -364,26 +328,54 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         const x2 = reverse ? -leftOverhang : connectorW + rightOverhang;
         return html`
             <svg width="100%" height="100%" style="display:block; overflow:visible">
-                <line x1="${x1}" y1="50%" x2="${x2}" y2="50%"
-                      stroke="${color}" stroke-width="${sw}"
-                      stroke-linecap="round" stroke-dasharray="2 16"
-                      style="animation: flow-diagonal 1.6s linear infinite;
-                             filter: drop-shadow(0 0 3px ${glow})" />
+                ${this._flowLine(key, color, strokeWidth, String(x1), "50%", String(x2), "50%")}
             </svg>`;
     }
 
-    private _flowV(color: string, glow: string, reverse: boolean, strokeWidth: number) {
-        const sw = strokeWidth;
+    private _flowV(key: string, color: string, reverse: boolean, strokeWidth: number) {
         const y1 = reverse ? "100%" : "0%";
         const y2 = reverse ? "0%" : "100%";
         return html`
             <svg width="100%" height="100%" style="display:block; overflow:visible">
-                <line x1="50%" y1="${y1}" x2="50%" y2="${y2}"
-                      stroke="${color}" stroke-width="${sw}"
-                      stroke-linecap="round" stroke-dasharray="2 16"
-                      style="animation: flow-diagonal 1.6s linear infinite;
-                             filter: drop-shadow(0 0 3px ${glow})" />
+                ${this._flowLine(key, color, strokeWidth, "50%", y1, "50%", y2)}
             </svg>`;
+    }
+
+    /** A solid ribbon and a 40%-length white band sweeping from its first endpoint to its second. */
+    private _flowLine(key: string, color: string, width: number, x1: string, y1: string, x2: string, y2: string, nonScaling = false) {
+        const gradientId = `${this._flowId}-${key}-gradient`;
+        const maskId = `${this._flowId}-${key}-mask`;
+        const along = (start: string, end: string, fraction: number) =>
+            `${parseFloat(start) + (parseFloat(end) - parseFloat(start)) * fraction}${start.endsWith("%") ? "%" : ""}`;
+        const bandX = along(x1, x2, -FLOW_BAND_LENGTH);
+        const bandY = along(y1, y2, -FLOW_BAND_LENGTH);
+        const travel = (start: string, end: string) =>
+            `${(parseFloat(end) - parseFloat(start)) * (1 + FLOW_BAND_LENGTH)}${start.endsWith("%") ? "%" : "px"}`;
+        return svg`
+            <defs>
+                <linearGradient id=${gradientId} gradientUnits="userSpaceOnUse"
+                        x1=${bandX} y1=${bandY} x2=${x1} y2=${y1}>
+                    <stop offset="0" stop-color="white" stop-opacity="0"/>
+                    <stop offset="0.5" stop-color="white" stop-opacity=${FLOW_BAND_PEAK_OPACITY}/>
+                    <stop offset="1" stop-color="white" stop-opacity="0"/>
+                </linearGradient>
+                <mask id=${maskId} maskUnits="userSpaceOnUse" x="-1000" y="-1000" width="2000" height="2000">
+                    <line x1=${x1} y1=${y1} x2=${x2} y2=${y2}
+                          stroke="white" stroke-width=${width} stroke-linecap="round"
+                          vector-effect=${nonScaling ? "non-scaling-stroke" : "none"}/>
+                </mask>
+            </defs>
+            <line class="flow-ribbon" data-flow=${key} x1=${x1} y1=${y1} x2=${x2} y2=${y2}
+                  stroke=${color} stroke-width=${width}
+                  vector-effect=${nonScaling ? "non-scaling-stroke" : "none"}
+                  style="filter: drop-shadow(0 0 3px color-mix(in srgb, ${color} 67%, transparent))"/>
+            <g mask="url(#${maskId})">
+                <line class="flow-band" x1=${bandX} y1=${bandY} x2=${x1} y2=${y1}
+                      stroke="url(#${gradientId})" stroke-width=${width}
+                      vector-effect=${nonScaling ? "non-scaling-stroke" : "none"}
+                      style="--travel-x: ${travel(x1, x2)}; --travel-y: ${travel(y1, y2)}"/>
+            </g>
+        `;
     }
 }
 

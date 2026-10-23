@@ -2,11 +2,8 @@ import { formatPower } from "../shared/format";
 import { LitElement, css, html, svg } from "lit-element";
 import { customElement, property, state } from "lit/decorators.js";
 
-import { withAlpha } from "../color-utils";
-import { SIMPLE_CARD_COLORS } from "./simple-card-colors";
+import { helmanColorVars } from "../color-vars";
 import { simpleCardSharedStyles } from "./simple-card-shared-styles";
-
-const { neutral, state: colorState } = SIMPLE_CARD_COLORS;
 
 type HouseView = {
     svgSize: number;
@@ -27,7 +24,7 @@ type HouseView = {
 @customElement("simple-card-house")
 export class SimpleCardHouse extends LitElement {
     // Static styles
-    static styles = [simpleCardSharedStyles, css`
+    static styles = [helmanColorVars, simpleCardSharedStyles, css`
         :host {
             display: flex;
             flex-direction: column;
@@ -52,12 +49,12 @@ export class SimpleCardHouse extends LitElement {
         }
         .house-body.active {
             fill: var(--simple-card-surface-light);
-            stroke: var(--simple-card-warm-color);
+            stroke: var(--simple-card-house-color);
             animation: house-glow 2.4s ease-in-out infinite;
         }
         @keyframes house-glow {
-            0%, 100% { filter: drop-shadow(0 0 4px color-mix(in srgb, var(--simple-card-warm-color) 27%, transparent)); }
-            50%       { filter: drop-shadow(0 0 14px color-mix(in srgb, var(--simple-card-warm-color) 60%, transparent)) drop-shadow(0 0 24px color-mix(in srgb, var(--simple-card-warm-color) 27%, transparent)); }
+            0%, 100% { filter: drop-shadow(0 0 4px color-mix(in srgb, var(--window-color, var(--simple-card-house-color)) 27%, transparent)); }
+            50%       { filter: drop-shadow(0 0 14px color-mix(in srgb, var(--window-color, var(--simple-card-house-color)) 60%, transparent)) drop-shadow(0 0 24px color-mix(in srgb, var(--window-color, var(--simple-card-house-color)) 27%, transparent)); }
         }
         .roof {
             fill: var(--simple-card-neutral-stroke-soft);
@@ -68,7 +65,7 @@ export class SimpleCardHouse extends LitElement {
         }
         .roof.active {
             fill: var(--simple-card-surface-lightest);
-            stroke: var(--simple-card-warm-color);
+            stroke: var(--simple-card-house-color);
         }
         .door {
             fill: var(--simple-card-surface-dark);
@@ -77,7 +74,7 @@ export class SimpleCardHouse extends LitElement {
         }
         .door.active {
             fill: var(--simple-card-surface-dark-soft);
-            stroke: color-mix(in srgb, var(--simple-card-warm-color) 53%, transparent);
+            stroke: color-mix(in srgb, var(--simple-card-house-color) 53%, transparent);
         }
         .window {
             fill: var(--simple-card-surface-dark);
@@ -86,12 +83,12 @@ export class SimpleCardHouse extends LitElement {
             transition: fill 0.6s, filter 0.6s;
         }
         .window.active {
-            fill: var(--window-color, var(--simple-card-warm-soft-color));
+            fill: var(--window-color, var(--simple-card-house-color));
             animation: window-glow 2.4s ease-in-out infinite;
         }
         @keyframes window-glow {
-            0%, 100% { filter: drop-shadow(0 0 4px var(--window-color, var(--simple-card-warm-soft-color))); opacity: 0.85; }
-            50%       { filter: drop-shadow(0 0 10px var(--window-color, var(--simple-card-warm-soft-color))); opacity: 1; }
+            0%, 100% { filter: drop-shadow(0 0 4px var(--window-color, var(--simple-card-house-color))); opacity: 0.85; }
+            50%       { filter: drop-shadow(0 0 10px var(--window-color, var(--simple-card-house-color))); opacity: 1; }
         }
         .chimney {
             fill: var(--simple-card-neutral-stroke-soft);
@@ -126,12 +123,12 @@ export class SimpleCardHouse extends LitElement {
         const { value, unit } = formatPower(this.power);
 
         const bodyStyle = (active && borderColor)
-            ? `stroke: ${borderColor}; filter: drop-shadow(0 0 8px ${withAlpha(borderColor, '44')})`
+            ? `stroke: ${borderColor}; filter: drop-shadow(0 0 8px color-mix(in srgb, ${borderColor} 27%, transparent))`
             : '';
         const roofStyle = (active && borderColor) ? `stroke: ${borderColor}` : '';
-        const doorStyle = (active && borderColor) ? `stroke: ${withAlpha(borderColor, '88')}` : '';
-        const crossColor = active ? (borderColor ? withAlpha(borderColor, '66') : withAlpha(colorState.warm, '66')) : neutral.surfaceMid;
-        const knobColor  = active ? (borderColor ? withAlpha(borderColor, '88') : withAlpha(colorState.warm, '88')) : neutral.strokeSoft;
+        const doorStyle = (active && borderColor) ? `stroke: color-mix(in srgb, ${borderColor} 53%, transparent)` : '';
+        const crossColor = active ? `color-mix(in srgb, ${borderColor ?? 'var(--simple-card-house-color)'} 40%, transparent)` : 'var(--simple-card-surface-mid)';
+        const knobColor  = active ? `color-mix(in srgb, ${borderColor ?? 'var(--simple-card-house-color)'} 53%, transparent)` : 'var(--simple-card-neutral-stroke-soft)';
 
         this._view = {
             svgSize: this.compact ? 40 : 50,
