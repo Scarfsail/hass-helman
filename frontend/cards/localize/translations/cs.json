@@ -25,6 +25,58 @@
     }
   },
   "node_detail": {
+    "control": {
+      "tabs": "Pohledy detailu",
+      "tab": {
+        "overview": "Přehled",
+        "control": "Ovládání"
+      },
+      "status": {
+        "loading": "Načítání…",
+        "unavailable": "Stav ovládání není k dispozici",
+        "execution_off": "Vykonávání vypnuto",
+        "manual": "Ručně do {time}",
+        "automatic": "Automaticky",
+        "automation_off": "Automatizace vypnuta",
+        "not_automated": "Bez automatizace"
+      },
+      "execution_off_note": "Vykonávání rozvrhu je vypnuté: Helman nemění nic na hardwaru, ať rozvrh obsahuje cokoli.",
+      "battery_lane": "Baterie se řídí rozvrhem střídače: tyto ovládací prvky mění střídač.",
+      "hardware_now": "Hardware teď",
+      "scheduled_now": "Naplánováno teď",
+      "nothing_scheduled": "Nic naplánováno",
+      "unavailable": "nedostupné",
+      "not_on_roster": "Helman pro tento uzel nemá ovladatelné zařízení.",
+      "change": "Změnit",
+      "return_to_automatic": "Vrátit automatice",
+      "returned": "Vráceno automatice.",
+      "return_failed": "Vrácení automatice se nezdařilo:",
+      "automations": "Automatizace",
+      "no_automations": "Nic z automatizací to neřídí.",
+      "automation_toggle": "Zapnout {name}",
+      "config_failed": "Konfiguraci automatizací se nepodařilo načíst:",
+      "override": {
+        "title": "Ruční zásah",
+        "from": "Od",
+        "to": "Do",
+        "choose_to": "Vyberte konec",
+        "pick": {
+          "plus_1h": "+1 h",
+          "plus_3h": "+3 h",
+          "end_of_day": "Konec dne",
+          "next_change": "Další změna plánu"
+        },
+        "no_slot": "Rozvrh nemá probíhající slot, od kterého začít.",
+        "save": "Uložit zásah",
+        "saving": "Ukládání…",
+        "cancel": "Zrušit",
+        "saved": "Zásah uložen do {time}.",
+        "saved_execution_off": "Zásah uložen do {time}. Vykonávání je vypnuté, takže se hardware nezmění.",
+        "nothing_to_save": "Není co uložit: vybrané sloty už proběhly nebo už tento zásah obsahují.",
+        "save_failed": "Zásah se nepodařilo uložit:",
+        "execution_off": "Vykonávání je vypnuté: zásah se uloží do rozvrhu, ale Helman hardware nezmění."
+      }
+    },
     "forecast_failed": "Předpověď se nepodařilo načíst.",
     "close": "Zavřít",
     "title": {

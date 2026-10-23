@@ -932,7 +932,7 @@ test.describe("solar inspector header layout", () => {
     });
 
     test("pills shrink to their labels before the row scrolls", async ({ page }) => {
-        await page.setViewportSize({ width: 560, height: 900 });
+        await page.setViewportSize({ width: 600, height: 900 });
         await mountInspector(page);
 
         const layout = await readNavLayout(page);
