@@ -14,6 +14,46 @@ from custom_components.helman.controllables.config import running_signal
 
 
 class ConfigValidationTests(unittest.TestCase):
+    def test_bounded_unknown_keys_warn_without_blocking(self) -> None:
+        config = _valid_config()
+        config["training"].update({"old_training": 1})
+        config["training"]["house_consumption"] = {"old_house": 1}
+        config["training"]["solar_bias"] = {}
+        config["training"]["solar_bias"].update({"clamp_mx": 2, "old_bias": 1})
+        config["training"]["solar_bias"]["slot_invalidation"] = {"old_slot": 1}
+        config["energy_nodes"]["battery"]["forecast"] = {"old_forecast": 1}
+
+        report = validate_config_document(config)
+
+        self.assertTrue(report.valid)
+        self.assertEqual(
+            {(issue.path, issue.code) for issue in report.warnings},
+            {
+                ("training.old_training", "unknown_key"),
+                ("training.house_consumption.old_house", "unknown_key"),
+                ("training.solar_bias.clamp_mx", "unknown_key"),
+                ("training.solar_bias.old_bias", "unknown_key"),
+                ("training.solar_bias.slot_invalidation.old_slot", "unknown_key"),
+                ("energy_nodes.battery.forecast.old_forecast", "unknown_key"),
+            },
+        )
+
+    def test_optional_reader_keys_are_not_unknown(self) -> None:
+        config = _valid_config()
+        config["training"]["solar_bias"] = {}
+        config["training"]["solar_bias"]["total_energy_entity_id"] = "sensor.solar_total"
+        config["training"]["solar_bias"]["slot_invalidation"] = {
+            "data_glitch_max_slot_wh": 10,
+        }
+        config["energy_nodes"]["battery"]["forecast"] = {
+            "max_charge_power_w": 2000,
+            "max_discharge_power_w": 2000,
+        }
+
+        report = validate_config_document(config)
+
+        self.assertEqual([issue for issue in report.warnings if issue.code == "unknown_key"], [])
+
     def test_valid_document_passes(self) -> None:
         report = validate_config_document(_valid_config())
 

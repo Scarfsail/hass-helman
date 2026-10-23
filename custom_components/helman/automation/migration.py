@@ -1072,11 +1072,9 @@ def _migrate_v17_to_v18(document: dict[str, Any]) -> tuple[dict[str, Any], list[
     and the real sections.
 
     The relocated values overwrite whatever sits under ``visualization``
-    already: a document at version 17 cannot have authored that key, so
-    anything found there came from ``DEFAULT_CONFIG`` being merged in ahead of
-    this step, and the user's own value has to win. ``training_time`` merges
-    the other way -- an existing ``training.training_time`` was authored, so it
-    is kept.
+    already: a document at version 17 cannot have authored that key, so the
+    user's top-level value wins. ``training_time`` merges the other way -- an
+    existing ``training.training_time`` was authored, so it is kept.
     """
     visualization = document.get("visualization")
     visualization = dict(visualization) if isinstance(visualization, Mapping) else {}

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from copy import deepcopy
 from typing import Any
 
 #: One default per key, and the only place they are spelled. Before v18 these
@@ -25,3 +26,17 @@ def read_visualization(config: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(visualization, Mapping):
         visualization = {}
     return {**VISUALIZATION_DEFAULTS, **visualization}
+
+
+def compact_visualization(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Copy a validated document, omitting visualization values at their defaults."""
+    compacted = deepcopy(dict(config))
+    visualization = compacted.get("visualization")
+    if not isinstance(visualization, dict):
+        return compacted
+    for key, default in VISUALIZATION_DEFAULTS.items():
+        if key in visualization and type(visualization[key]) is type(default) and visualization[key] == default:
+            del visualization[key]
+    if not visualization:
+        del compacted["visualization"]
+    return compacted

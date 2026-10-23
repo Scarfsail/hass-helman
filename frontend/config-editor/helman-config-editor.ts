@@ -163,6 +163,7 @@ export class HelmanConfigEditorPanel
   private _configRevisionDuringSave: string | undefined;
   @state() private _validating = false;
   @state() private _validation: ValidationReport | null = null;
+  private _validationGeneration = 0;
   @state() private _message: StatusMessage | null = null;
   /**
    * The stored config moved while a draft was open, and we refused to reload.
@@ -1122,6 +1123,7 @@ export class HelmanConfigEditorPanel
         ? this._automationTab.normalizeApplianceOptimizerTargets(this._config)
         : false;
       this._resetScopeYamlState();
+      void this._validateLoadedConfig(this._config);
       if (options.showMessage) {
         this._message = {
           kind: "info",
@@ -1136,6 +1138,21 @@ export class HelmanConfigEditorPanel
       };
     } finally {
       this._loading = false;
+    }
+  }
+
+  private async _validateLoadedConfig(draft: JsonObject | null): Promise<void> {
+    if (!this.hass || !draft) return;
+    const generation = ++this._validationGeneration;
+    try {
+      const validation = await callHelman(this.hass, "helman/validate_config", {
+        config: cloneJson(draft),
+      });
+      if (this._config === draft && this._validationGeneration === generation) {
+        this._validation = validation;
+      }
+    } catch {
+      // A failed background check must not replace the loaded document.
     }
   }
 
@@ -1161,6 +1178,7 @@ export class HelmanConfigEditorPanel
       };
       return;
     }
+    ++this._validationGeneration;
     this._validating = true;
     try {
       const validation = await callHelman(this.hass, "helman/validate_config", {
@@ -1196,6 +1214,7 @@ export class HelmanConfigEditorPanel
     }
     const { config } = this._prunedConfig();
     const draftAtSave = canonicalJson(this._config);
+    ++this._validationGeneration;
     this._saving = true;
     try {
       const outcome = await this._configSession.save(config);

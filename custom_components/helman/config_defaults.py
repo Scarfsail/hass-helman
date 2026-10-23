@@ -24,12 +24,13 @@ from .const import (
     SOLAR_BIAS_DEFAULT_TRAINING_TIME,
     SOLAR_DEFAULT_MAX_POWER_W,
 )
+from .visualization import VISUALIZATION_DEFAULTS
 
 #: What an unset optional config field is actually worth at runtime, keyed by
 #: its dotted path in the config document.
 #:
-#: The editor draws these as placeholders, so a field the user has never
-#: touched still shows what the backend is doing with it. Values are imported
+#: The editor draws most of these as placeholders, while visualization fields
+#: display effective values in their controls. Values are imported
 #: from ``const.py`` rather than written out here: the reader and the hint have
 #: to be the same number, and the only way to guarantee that is to have one
 #: number.
@@ -42,6 +43,7 @@ from .const import (
 #: but its control still has to *stand* on the default rather than on an empty
 #: value, so those paths belong here too and the editor reads them from here.
 CONFIG_FIELD_DEFAULTS: dict[str, object] = {
+    **{f"visualization.{key}": value for key, value in VISUALIZATION_DEFAULTS.items()},
     # ``training/batch.py`` schedules the nightly batch from what
     # ``read_bias_config`` resolves here.
     "training.training_time": SOLAR_BIAS_DEFAULT_TRAINING_TIME,

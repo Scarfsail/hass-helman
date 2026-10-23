@@ -25,6 +25,10 @@ export function renderVisualizationTab(
   host: HelmanConfigEditorPanel,
   _controller: VisualizationTabController,
 ): TemplateResult {
+  const effectiveValue = (key: string): unknown => {
+    const stored = host.getValue(["visualization", key]);
+    return stored === undefined ? host.configDefaults?.[`visualization.${key}`] : stored;
+  };
   return html`
     ${host._renderSectionScope(
       SECTION_SCOPE_IDS.visualization.card_labels_and_history,
@@ -36,6 +40,7 @@ export function renderVisualizationTab(
             "editor.fields.history_buckets",
             "editor.helpers.history_buckets",
             "editor.help.history_buckets",
+            { explicitValue: effectiveValue("history_buckets") },
           )}
           ${renderOptionalNumberField(
             host,
@@ -43,18 +48,19 @@ export function renderVisualizationTab(
             "editor.fields.history_bucket_duration",
             "editor.helpers.history_bucket_duration",
             "editor.help.history_bucket_duration",
+            { explicitValue: effectiveValue("history_bucket_duration") },
           )}
           ${renderBooleanField(
             host,
             ["visualization", "show_empty_groups"],
             "editor.fields.show_empty_groups",
-            false,
+            effectiveValue("show_empty_groups") === true,
           )}
           ${renderBooleanField(
             host,
             ["visualization", "show_others_group"],
             "editor.fields.show_others_group",
-            true,
+            effectiveValue("show_others_group") !== false,
           )}
         </div>
       `,

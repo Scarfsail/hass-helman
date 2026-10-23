@@ -31,6 +31,10 @@ const STORED_CONFIG = configDoc({
 
 /** What the backend serves for the paths this spec looks at. */
 const CONFIG_DEFAULTS = {
+    "visualization.history_buckets": 60,
+    "visualization.history_bucket_duration": 5,
+    "visualization.show_empty_groups": false,
+    "visualization.show_others_group": true,
     "training.training_time": "03:00",
     "training.solar_bias.clamp_min": 0.0,
     "training.solar_bias.clamp_max": 3.0,
@@ -44,12 +48,23 @@ const TRAINING_TIME_LABEL = "Training time (HH:MM)";
 const ENABLED_LABEL = "Enable bias correction";
 const AGGREGATION_LABEL = "Aggregation method";
 
-async function mountEditor(page: Page): Promise<void> {
+async function mountEditor(page: Page, config: unknown = STORED_CONFIG, holdValidation = false): Promise<void> {
     await loadBundle(page, "helman-config-editor-panel", EDITOR_BUNDLE);
 
-    await page.evaluate(({ config, defaults }) => {
+    await page.evaluate(({ config, defaults, holdValidation }) => {
         const calls: { type: string; config?: unknown }[] = [];
         (window as unknown as Record<string, unknown>).__calls = calls;
+        let releaseValidation: (() => void) | undefined;
+        (window as unknown as Record<string, unknown>).__releaseValidation = () => releaseValidation?.();
+        (window as unknown as Record<string, unknown>).__validationResolved = false;
+        const warningsFor = (submitted: unknown) => {
+            const bias = (submitted as { training?: { solar_bias?: Record<string, unknown> } })
+                ?.training?.solar_bias;
+            return bias && "clamp_mx" in bias
+                ? [{ section: "training", path: "training.solar_bias.clamp_mx",
+                     code: "unknown_key", message: "unrecognized key" }]
+                : [];
+        };
         const element = document.createElement(
             "helman-config-editor-panel",
         ) as HTMLElement & Record<string, unknown>;
@@ -77,11 +92,19 @@ async function mountEditor(page: Page): Promise<void> {
                 }) => {
                     return { version: 19, kinds: [] };
                 },
+                "helman/validate_config": async (request: {
+                    type: string;
+                    config?: unknown;
+                }) => {
+                    if (holdValidation) await new Promise<void>((resolve) => { releaseValidation = resolve; });
+                    (window as unknown as Record<string, unknown>).__validationResolved = true;
+                    return { valid: true, errors: [], warnings: warningsFor(request.config) };
+                },
                 "helman/save_config": async (request: {
                     type: string;
                     config?: unknown;
                 }) => {
-                    return { success: true, validation: { valid: true, errors: [], warnings: [] }, reloadStarted: false };
+                    return { success: true, validation: { valid: true, errors: [], warnings: warningsFor(request.config) }, reloadStarted: false };
                 }
             }, (request: {
                 type: string;
@@ -91,7 +114,7 @@ async function mountEditor(page: Page): Promise<void> {
             }).callWS,
         };
         document.body.appendChild(element);
-    }, { config: JSON.parse(JSON.stringify(STORED_CONFIG)), defaults: CONFIG_DEFAULTS });
+    }, { config: JSON.parse(JSON.stringify(config)), defaults: CONFIG_DEFAULTS, holdValidation });
 
     // The Training tab's panels ship collapsed, and a collapsed <details>
     // renders nothing to query.
@@ -100,7 +123,7 @@ async function mountEditor(page: Page): Promise<void> {
             page.evaluate(() => {
                 const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
                 const tab = Array.from(root?.querySelectorAll("button") ?? []).find(
-                    (button) => button.textContent?.trim() === "Training",
+                    (button) => button.textContent?.trim().startsWith("Training"),
                 );
                 if (!tab) return false;
                 tab.click();
@@ -215,4 +238,97 @@ test("saving writes no placeholder into the document", async ({ page }) => {
     expect(saved).not.toHaveProperty("energy_nodes");
     expect(saved).not.toHaveProperty("devices");
     expect(saved).not.toHaveProperty("automation");
+});
+
+test("visualization controls show effective backend defaults without writing them", async ({ page }) => {
+    await mountEditor(page);
+    await page.evaluate(() => {
+        const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+        Array.from(root?.querySelectorAll("button") ?? [])
+            .find((button) => button.textContent?.trim() === "Helman card")?.click();
+        root?.querySelectorAll("details").forEach((section) => section.setAttribute("open", ""));
+    });
+    await expect.poll(async () => {
+        return page.evaluate(() => {
+            const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+            return Array.from(root?.querySelectorAll("input[type=number]") ?? [])
+                .map((input) => (input as HTMLInputElement).value);
+        });
+    }).toEqual(["60", "5"]);
+    await page.evaluate(() => {
+        const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+        Array.from(root?.querySelectorAll("button") ?? [])
+            .find((button) => button.textContent?.trim() === "Save and reload")?.click();
+    });
+    await expect.poll(async () => (await savedConfigs(page)).length).toBe(1);
+    expect((await savedConfigs(page))[0]).not.toHaveProperty("visualization");
+});
+
+test("loaded unknown keys appear as warnings and clear on an edit", async ({ page }) => {
+    await mountEditor(page, configDoc({ training: { solar_bias: { clamp_mx: 2 } } }));
+    await expect.poll(async () => page.evaluate(() =>
+        document.querySelector("helman-config-editor-panel")?.shadowRoot
+            ?.querySelector(".issue-path")?.textContent?.trim(),
+    )).toBe("training.solar_bias.clamp_mx");
+    await page.locator("helman-config-editor-panel").getByRole("button", { name: "Validate" }).click();
+    await expect.poll(async () => page.evaluate(() =>
+        document.querySelector("helman-config-editor-panel")?.shadowRoot
+            ?.querySelector(".issue-path")?.textContent?.trim(),
+    )).toBe("training.solar_bias.clamp_mx");
+    await page.locator("helman-config-editor-panel").getByRole("button", { name: "Save and reload" }).click();
+    await expect.poll(async () => (await savedConfigs(page)).length).toBe(1);
+    await expect.poll(async () => page.evaluate(() =>
+        document.querySelector("helman-config-editor-panel")?.shadowRoot
+            ?.querySelector(".issue-path")?.textContent?.trim(),
+    )).toBe("training.solar_bias.clamp_mx");
+    await page.evaluate(() => {
+        const panel = document.querySelector("helman-config-editor-panel") as HTMLElement & {
+            setValue: (path: string[], value: unknown) => void;
+        };
+        panel.setValue(["training", "solar_bias", "clamp_min"], 0.5);
+    });
+    await expect.poll(async () => page.evaluate(() =>
+        document.querySelector("helman-config-editor-panel")?.shadowRoot
+            ?.querySelector(".issue-board") === null,
+    )).toBe(true);
+});
+
+test("a late load warning cannot replace validation for a newer draft", async ({ page }) => {
+    await mountEditor(page, configDoc({ training: { solar_bias: { clamp_mx: 2 } } }), true);
+    await page.evaluate(() => {
+        const panel = document.querySelector("helman-config-editor-panel") as HTMLElement & {
+            setValue: (path: string[], value: unknown) => void;
+        };
+        panel.setValue(["training", "solar_bias", "clamp_min"], 0.5);
+        ((window as unknown as Record<string, unknown>).__releaseValidation as () => void)();
+    });
+    await expect.poll(async () => page.evaluate(() =>
+        (window as unknown as Record<string, unknown>).__validationResolved,
+    )).toBe(true);
+    await expect.poll(async () => page.evaluate(() =>
+        document.querySelector("helman-config-editor-panel")?.shadowRoot
+            ?.querySelector(".issue-board") === null,
+    )).toBe(true);
+});
+
+test("explicit zero and false remain visible as stored visualization values", async ({ page }) => {
+    await mountEditor(page, configDoc({ visualization: { history_buckets: 0, show_others_group: false } }));
+    await page.evaluate(() => {
+        const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+        Array.from(root?.querySelectorAll("button") ?? [])
+            .find((button) => button.textContent?.trim() === "Helman card")?.click();
+        root?.querySelectorAll("details").forEach((section) => section.setAttribute("open", ""));
+    });
+    await expect.poll(async () => page.evaluate(() => {
+        const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+        return Array.from(root?.querySelectorAll("input[type=number]") ?? [])
+            .map((input) => (input as HTMLInputElement).value);
+    })).toEqual(["0", "5"]);
+    const checked = await page.evaluate(() => {
+        const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+        const formfield = Array.from(root?.querySelectorAll("ha-formfield") ?? [])
+            .find((field) => (field as HTMLElement & { label?: string }).label === "Show others group");
+        return (formfield?.querySelector("ha-switch") as HTMLElement & { checked?: boolean } | null)?.checked;
+    });
+    expect(checked).toBe(false);
 });

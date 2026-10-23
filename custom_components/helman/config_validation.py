@@ -145,6 +145,19 @@ class ValidationReport:
         }
 
 
+def _warn_unknown_keys(
+    block: Mapping[str, Any], *, path: str, section: str,
+    allowed: set[str], report: ValidationReport,
+) -> None:
+    for key in block:
+        if key not in allowed:
+            key_path = f"{path}.{key}"
+            report.add_warning(
+                section=section, path=key_path, code="unknown_key",
+                message=f"{key_path} is not recognized and will be ignored",
+            )
+
+
 def validate_config_document(config: Mapping[str, Any] | None) -> ValidationReport:
     report = ValidationReport()
     if not isinstance(config, Mapping):
@@ -382,6 +395,8 @@ def _validate_training_config(
     training = _require_mapping(raw_training, "training", section, report)
     if training is None:
         return
+    _warn_unknown_keys(training, path="training", section=section,
+                       allowed={"training_time", "house_consumption", "solar_bias"}, report=report)
 
     _validate_training_time(training.get("training_time"), report)
 
@@ -394,6 +409,8 @@ def _validate_training_config(
             report,
         )
         if house_consumption_map is not None:
+            _warn_unknown_keys(house_consumption_map, path="training.house_consumption",
+                               section=section, allowed={"min_history_days", "training_window_days"}, report=report)
             _validate_optional_positive_int(
                 report,
                 section,
@@ -424,6 +441,11 @@ def _validate_training_config(
             report,
         )
         if solar_bias_map is not None:
+            _warn_unknown_keys(solar_bias_map, path="training.solar_bias", section=section,
+                               allowed={"min_history_days", "max_training_window_days", "min_valid_slot_days",
+                                        "enabled", "total_energy_entity_id", "clamp_min", "clamp_max",
+                                        "aggregation_method", "max_interpolated_consecutive_slots",
+                                        "slot_invalidation"}, report=report)
             for key in (
                 "min_history_days",
                 "max_training_window_days",
@@ -705,6 +727,11 @@ def _validate_solar_bias_correction(
         slot_path = f"{base_path}.slot_invalidation"
         slot_map = _require_mapping(slot_invalidation, slot_path, section, report)
         if slot_map is not None:
+            _warn_unknown_keys(slot_map, path=slot_path, section=section,
+                               allowed={"max_battery_soc_percent", "curtailment_max_export_w",
+                                        "data_glitch_max_slot_wh", "data_glitch_min_neighbour_forecast_wh",
+                                        "curtailment_max_actual_forecast_ratio", "data_glitch_backfill_max_minutes"},
+                               report=report)
             max_soc_present = _has_value(slot_map.get("max_battery_soc_percent"))
             for key, bounds in (
                 ("max_battery_soc_percent", {"gt": 0, "le": 100}),
@@ -818,6 +845,10 @@ def _validate_battery_config(
     )
     if forecast_map is None:
         return
+
+    _warn_unknown_keys(forecast_map, path="energy_nodes.battery.forecast", section=section,
+                       allowed={"charge_efficiency", "discharge_efficiency", "max_charge_power_w",
+                                "max_discharge_power_w"}, report=report)
 
     _validate_optional_probability(
         report,

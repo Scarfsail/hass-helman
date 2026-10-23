@@ -55,6 +55,7 @@ def _ha_dependencies(monkeypatch):
 
 from custom_components.helman.const import CONFIG_DOCUMENT_VERSION
 from custom_components.helman.storage import HelmanStorage
+from custom_components.helman.visualization import read_visualization
 
 
 class _FakeStore:
@@ -99,15 +100,15 @@ def _load(document: dict | None) -> HelmanStorage:
     return storage
 
 
-def test_a_partial_visualization_keeps_the_defaults_it_omits() -> None:
-    # Regression (PR #302 review): the top-level merge replaced the whole nested
-    # default object, so an omitted `history_bucket_duration` fell back to 5 s
-    # in the tick and 1 s in the history payload.
+def test_a_partial_visualization_resolves_omitted_defaults_without_storing_them() -> None:
+    # Regression (PR #302 review): readers must agree on omitted values without
+    # materializing defaults in the revision-bearing stored document.
     storage = _load(
-        {"config_version": 18, "visualization": {"history_buckets": 90}}
+        {"config_version": CONFIG_DOCUMENT_VERSION, "visualization": {"history_buckets": 90}}
     )
 
-    visualization = storage.config["visualization"]
+    assert storage.config["visualization"] == {"history_buckets": 90}
+    visualization = read_visualization(storage.config)
     assert visualization["history_buckets"] == 90
     assert visualization["history_bucket_duration"] == 5
     assert visualization["show_empty_groups"] is False

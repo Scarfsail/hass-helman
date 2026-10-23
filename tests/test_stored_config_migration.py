@@ -24,6 +24,7 @@ import json
 import os
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from custom_components.helman.appliances.climate_appliance import (
     read_climate_appliance,
@@ -52,6 +53,7 @@ from custom_components.helman.controllables.config import (
     read_shared_meters,
 )
 from custom_components.helman.storage import HelmanStorage
+from custom_components.helman.visualization import VISUALIZATION_DEFAULTS, read_visualization
 from custom_components.helman.training.appliance_energy import (
     ApplianceEnergyTrainingRequest,
     SharedMeter,
@@ -698,6 +700,65 @@ class _Store:
 
     async def async_save(self, payload: dict) -> None:
         self.saved.append(payload)
+
+
+class CurrentVisualizationStorageTests(unittest.IsolatedAsyncioTestCase):
+    async def test_current_load_keeps_document_sparse_and_save_compacts(self) -> None:
+        original = {
+            "config_version": CONFIG_DOCUMENT_VERSION,
+            "energy_nodes": {},
+            "visualization": {
+                "history_buckets": 60,
+                "history_bucket_duration": 9,
+                "show_empty_groups": False,
+                "unknown_setting": "keep",
+            },
+        }
+        stor = HelmanStorage.__new__(HelmanStorage)
+        stor._store = _Store(original)
+        stor._snapshot_store = _Store()
+        stor._schedule_store = _Store()
+
+        await stor.async_load()
+        self.assertEqual(stor.config, original)
+        self.assertEqual(stor._store.saved, [])
+
+        await stor.async_save(stor.config)
+        expected = {
+            "config_version": CONFIG_DOCUMENT_VERSION,
+            "energy_nodes": {},
+            "visualization": {
+                "history_bucket_duration": 9,
+                "unknown_setting": "keep",
+            },
+        }
+        self.assertEqual(stor.config, expected)
+        self.assertEqual(stor._store.saved, [expected])
+        self.assertEqual(original["visualization"]["history_buckets"], 60)
+
+        await stor.async_save(stor.config)
+        self.assertEqual(stor._store.saved[-1], expected)
+
+        with patch.dict(VISUALIZATION_DEFAULTS, {"history_buckets": 75, "history_bucket_duration": 10}):
+            effective = read_visualization(stor.config)
+            self.assertEqual(effective["history_buckets"], 75)
+            self.assertEqual(effective["history_bucket_duration"], 9)
+
+    async def test_invalid_bool_cannot_be_compacted_as_numeric_default(self) -> None:
+        stor = HelmanStorage.__new__(HelmanStorage)
+        stor._store = _Store()
+        with self.assertRaises(ValueError):
+            await stor.async_save({"energy_nodes": {}, "visualization": {"history_buckets": True}})
+        self.assertEqual(stor._store.saved, [])
+
+    async def test_all_default_values_leave_no_visualization_mapping(self) -> None:
+        stor = HelmanStorage.__new__(HelmanStorage)
+        stor._store = _Store()
+        await stor.async_save({
+            "energy_nodes": {},
+            "visualization": dict(VISUALIZATION_DEFAULTS),
+        })
+        self.assertEqual(stor.config, {"energy_nodes": {}})
 
 
 class StoredV21LoadTests(unittest.TestCase):

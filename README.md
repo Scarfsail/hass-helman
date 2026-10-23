@@ -103,6 +103,12 @@ Config version 27 dropped the panel texts and the energy node display names, whi
 - `show_empty_groups` / `show_others_group`: control the "Others" group.
   Defaults: `false`, `true`.
 
+The editor displays these effective values even when their keys are absent. On save,
+values matching the current defaults are omitted so they follow future defaults;
+explicit differing values remain overrides. A stored value matching today's default
+starts following defaults on its next save. Opening or restarting a current config
+does not add omitted values.
+
 **`energy_nodes`**
 Defines the battery inverter and the entities for the four power endpoints. At least `house.entities.power` should be provided to
 build the consumer tree around the house. Config version 24 renamed the key from `power_devices`; a stored config is migrated on load.

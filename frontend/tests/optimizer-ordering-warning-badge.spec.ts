@@ -145,26 +145,10 @@ async function mountEditor(page: Page): Promise<void> {
 }
 
 async function openAutomationTab(page: Page): Promise<void> {
-    await expect
-        .poll(() =>
-            page.evaluate(() =>
-                Array.from(
-                    document
-                        .querySelector("helman-config-editor-panel")
-                        ?.shadowRoot?.querySelectorAll("button") ?? [],
-                ).map((tab) => tab.textContent?.trim() ?? ""),
-            ),
-        )
-        .toContain("Automation");
-
-    await page.evaluate(() => {
-        const buttons = Array.from(
-            document
-                .querySelector("helman-config-editor-panel")
-                ?.shadowRoot?.querySelectorAll("button") ?? [],
-        );
-        buttons.find((button) => button.textContent?.trim() === "Automation")?.click();
-    });
+    await page
+        .locator("helman-config-editor-panel .tabs")
+        .getByRole("button", { name: /^Automation(?:\s+\d+)?$/ })
+        .click();
 }
 
 async function clickValidate(page: Page): Promise<void> {
