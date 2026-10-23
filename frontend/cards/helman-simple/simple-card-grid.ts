@@ -1,14 +1,15 @@
 import { formatPower } from "../shared/format";
-import { LitElement, css, html, svg } from "lit-element";
+import { LitElement, css, html, svg, unsafeCSS } from "lit-element";
 import { customElement, property } from "lit/decorators.js";
 
-import { getGridInternalFlowColors } from "./flow-colors";
+import { helmanColorVars } from "../color-vars";
+import { FLOW_SWEEP_DURATION } from "../shared/flow-style";
 import { simpleCardSharedStyles } from "./simple-card-shared-styles";
 
 @customElement("simple-card-grid")
 export class SimpleCardGrid extends LitElement {
     // Static styles
-    static styles = [simpleCardSharedStyles, css`
+    static styles = [helmanColorVars, simpleCardSharedStyles, css`
         :host {
             display: flex;
             flex-direction: column;
@@ -26,18 +27,19 @@ export class SimpleCardGrid extends LitElement {
         svg { overflow: hidden; }
 
         .pole { fill: var(--simple-card-neutral-stroke); transition: fill 0.6s; }
-        .pole.import, .pole.export { fill: var(--simple-card-source-grid); filter: drop-shadow(0 0 6px color-mix(in srgb, var(--simple-card-source-grid) 60%, transparent)); }
+        .pole.import { fill: var(--simple-card-source-grid); filter: drop-shadow(0 0 6px color-mix(in srgb, var(--simple-card-source-grid) 60%, transparent)); }
+        .pole.export { fill: var(--helman-grid-export); filter: drop-shadow(0 0 6px color-mix(in srgb, var(--helman-grid-export) 60%, transparent)); }
 
         .wire { stroke: var(--simple-card-neutral-stroke-soft); stroke-width: 1.5; fill: none; transition: stroke 0.6s; }
         /* wire color when active is set dynamically via sourceColor prop */
 
         .dot-import {
             fill: var(--simple-card-grid-accent);
-            animation: flow-in 1.6s linear infinite;
+            animation: flow-in ${unsafeCSS(FLOW_SWEEP_DURATION)} linear infinite;
         }
         /* export dot color is set dynamically via sourceColor prop */
         .dot-export {
-            animation: flow-out 1.6s linear infinite;
+            animation: flow-out ${unsafeCSS(FLOW_SWEEP_DURATION)} linear infinite;
         }
 
         /* Import: dots move from right to center (toward house) */
@@ -55,7 +57,8 @@ export class SimpleCardGrid extends LitElement {
             100% { offset-distance: 0%;   opacity: 0; }
         }
 
-        .power-label.import, .power-label.export { color: var(--simple-card-source-grid); }
+        .power-label.import { color: var(--simple-card-source-grid); }
+        .power-label.export { color: var(--helman-grid-export); }
     `];
 
     // Private properties
@@ -79,16 +82,15 @@ export class SimpleCardGrid extends LitElement {
         const isActive = importing || exporting;
         const stateClass = importing ? 'import' : exporting ? 'export' : '';
         const { value, unit } = formatPower(this.power);
-        const flowColors = getGridInternalFlowColors(importing, this.sourceColor);
-        const wireColor = isActive ? flowColors.base : undefined;
-        const wireGlow = isActive ? flowColors.glow : undefined;
+        const wireColor = isActive ? (importing ? 'var(--helman-grid)' : this.sourceColor ?? 'var(--helman-grid)') : undefined;
+        const wireGlow = wireColor ? `color-mix(in srgb, ${wireColor} 60%, transparent)` : undefined;
         const svgSize = this.compact ? 40 : 50;
 
         return html`
             <div class="svg-wrapper" style="${this.compact ? 'width:40px;height:40px;' : ''}">
                 <svg viewBox="-15 -8 110 110" width="${svgSize}" height="${svgSize}" xmlns="http://www.w3.org/2000/svg">
                     ${this._renderPylon(stateClass, wireColor, wireGlow)}
-                    ${isActive ? this._renderFlowDots(importing, flowColors.accent) : ''}
+                    ${isActive ? this._renderFlowDots(importing, wireColor!) : ''}
                 </svg>
             </div>
             ${this.compact ? '' : html`
@@ -127,19 +129,19 @@ export class SimpleCardGrid extends LitElement {
         const dotStyle = importing ? '' : `fill: ${dotColor}`;
         return svg`
             <circle class="dot ${dotClass}" style="${dotStyle}" r="3">
-                <animateMotion dur="1.6s" repeatCount="indefinite" begin="0s"
+                <animateMotion dur="${FLOW_SWEEP_DURATION}" repeatCount="indefinite" begin="0s"
                     keyPoints="${importing ? '0;1' : '1;0'}" keyTimes="0;1" calcMode="linear">
                     <mpath href="#${this._wlId}"/>
                 </animateMotion>
             </circle>
             <circle class="dot ${dotClass}" style="${dotStyle}" r="3">
-                <animateMotion dur="1.6s" repeatCount="indefinite" begin="0.4s"
+                <animateMotion dur="${FLOW_SWEEP_DURATION}" repeatCount="indefinite" begin="0.6s"
                     keyPoints="${importing ? '0;1' : '1;0'}" keyTimes="0;1" calcMode="linear">
                     <mpath href="#${this._wcId}"/>
                 </animateMotion>
             </circle>
             <circle class="dot ${dotClass}" style="${dotStyle}" r="3">
-                <animateMotion dur="1.6s" repeatCount="indefinite" begin="0.8s"
+                <animateMotion dur="${FLOW_SWEEP_DURATION}" repeatCount="indefinite" begin="1.2s"
                     keyPoints="${importing ? '0;1' : '1;0'}" keyTimes="0;1" calcMode="linear">
                     <mpath href="#${this._wrId}"/>
                 </animateMotion>

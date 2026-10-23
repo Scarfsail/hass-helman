@@ -2,12 +2,13 @@ import { formatPower } from "../shared/format";
 import { LitElement, css, html, svg } from "lit-element";
 import { customElement, property } from "lit/decorators.js";
 
+import { helmanColorVars } from "../color-vars";
 import { simpleCardSharedStyles } from "./simple-card-shared-styles";
 
 @customElement("simple-card-solar")
 export class SimpleCardSolar extends LitElement {
     // Static styles
-    static styles = [simpleCardSharedStyles, css`
+    static styles = [helmanColorVars, simpleCardSharedStyles, css`
         :host {
             display: flex;
             flex-direction: column;

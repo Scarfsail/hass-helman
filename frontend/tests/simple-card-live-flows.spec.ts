@@ -144,7 +144,7 @@ async function mountCard(page: Page, powers: { solar: number; house: number; bat
 function lines(page: Page): Promise<Line[]> {
     return page.evaluate(() => {
         const root = document.querySelector("helman-simple-card")!.shadowRoot!;
-        return [...root.querySelectorAll(".energy-grid line")].map((line) => ({
+        return [...root.querySelectorAll(".energy-grid line.flow-ribbon")].map((line) => ({
             x1: line.getAttribute("x1")!,
             y1: line.getAttribute("y1")!,
             x2: line.getAttribute("x2")!,
@@ -155,9 +155,9 @@ function lines(page: Page): Promise<Line[]> {
     });
 }
 
-const SOLAR = "#facc15";
-const GRID = "#38bdf8";
-const BATTERY = "#22c55e";
+const SOLAR = "var(--helman-solar)";
+const GRID = "var(--helman-grid)";
+const BATTERY = "var(--helman-battery)";
 /** The card's stroke: 12 px at the source's maximum, never thinner than 1.5 px. */
 const stroke = (watts: number, max: number) => Math.max(1.5, Math.min(watts / max, 1) * 12);
 
@@ -234,5 +234,267 @@ test.describe("the card draws the split as before", () => {
         const drawn = await lines(page);
         expect(drawn.map((line) => line.stroke)).toEqual([SOLAR, SOLAR]);
         expect(drawn.some((line) => line.stroke === GRID)).toBe(false);
+    });
+});
+
+test("the ribbons have a shared-duration sweep in the flow direction", async ({ page }) => {
+    await mountCard(page, { solar: 6500, house: 900, battery: 3200, grid: -2400 });
+    const bands = await page.evaluate(() => {
+        const root = document.querySelector("helman-simple-card")!.shadowRoot!;
+        return [...root.querySelectorAll<SVGLineElement>("line.flow-ribbon")].map(line => {
+            const band = line.nextElementSibling!.querySelector(".flow-band") as SVGLineElement;
+            const id = band.getAttribute("stroke")!.slice(5, -1);
+            const gradient = line.ownerSVGElement!.querySelector<SVGLinearGradientElement>(`#${id}`)!;
+            return {
+                flow: line.dataset.flow,
+                width: line.getAttribute("stroke-width"),
+                bandWidth: band.getAttribute("stroke-width"),
+                opacity: getComputedStyle(line).opacity,
+                peak: gradient.querySelectorAll("stop")[1].getAttribute("stop-opacity"),
+                duration: band.getAnimations()[0]?.effect?.getTiming().duration,
+                travelX: getComputedStyle(band).getPropertyValue("--travel-x"),
+                travelY: getComputedStyle(band).getPropertyValue("--travel-y"),
+                stops: [...gradient.querySelectorAll("stop")].map(stop => stop.getAttribute("offset")),
+            };
+        });
+    });
+    expect(bands.map(band => band.flow)).toEqual(["solar-grid", "solar-house", "solar-battery"]);
+    for (const band of bands) {
+        expect(band.width).toBe(band.bandWidth);
+        expect(band.opacity).toBe("0.5");
+        expect(band.peak).toBe("0.5");
+        expect(band.duration).toBe(2400);
+        expect(band.stops).toEqual(["0", "0.5", "1"]);
+    }
+    expect(parseFloat(bands[0].travelX)).toBeGreaterThan(0);
+    expect(parseFloat(bands[2].travelX)).toBeGreaterThan(0);
+
+    const movement = await page.evaluate(async () => {
+        const band = document.querySelector("helman-simple-card")!.shadowRoot!.querySelector(".flow-band")!;
+        const before = getComputedStyle(band).transform;
+        await new Promise(resolve => setTimeout(resolve, 200));
+        return [before, getComputedStyle(band).transform];
+    });
+    expect(movement[1]).not.toBe(movement[0]);
+
+    await mountCard(page, { solar: 0, house: 500, battery: -2000, grid: 10 });
+    const reverse = await page.evaluate(() => {
+        const root = [...document.querySelectorAll("helman-simple-card")].at(-1)!.shadowRoot!;
+        return [...root.querySelectorAll(".flow-band")].map(band => ({
+            travelX: parseFloat(getComputedStyle(band).getPropertyValue("--travel-x")),
+            travelY: parseFloat(getComputedStyle(band).getPropertyValue("--travel-y")),
+        }));
+    });
+    expect(reverse[0].travelY).toBeLessThan(0); // battery → grid
+    expect(reverse[1].travelX).toBeLessThan(0); // battery → house
+});
+
+test("theme overrides reach the card and standalone illustrations without a rerender", async ({ page }) => {
+    await mountCard(page, { solar: 6500, house: 900, battery: 3200, grid: -2400 });
+    const before = await page.evaluate(async () => {
+        const card = document.querySelector("helman-simple-card")!;
+        const root = card.shadowRoot!;
+        const standalone = ["simple-card-solar", "simple-card-grid", "simple-card-battery", "simple-card-house"].map(tag => {
+            const node = document.createElement(tag) as any;
+            node.power = tag === "simple-card-grid" ? -1000 : 1000;
+            node.sourceColor = "var(--helman-solar)";
+            node.soc = 60;
+            document.body.appendChild(node);
+            return node;
+        });
+        await Promise.all(standalone.map(node => node.updateComplete));
+        const before = getComputedStyle(root.querySelector(".flow-ribbon")!).stroke;
+        document.documentElement.style.setProperty("--helman-theme-solar", "#e879f9");
+        document.documentElement.style.setProperty("--helman-theme-grid", "#fb923c");
+        document.documentElement.style.setProperty("--helman-theme-battery", "#2dd4bf");
+        return before;
+    });
+    expect(before).toBe("rgb(250, 204, 21)");
+    // The illustrations transition fill/stroke for 0.6s; poll their final colors.
+    await expect.poll(() => page.evaluate(() => {
+        const root = document.querySelector("helman-simple-card")!.shadowRoot!;
+        const standalone = ["simple-card-solar", "simple-card-grid", "simple-card-battery", "simple-card-house"]
+            .map(tag => document.body.querySelector(tag)!.shadowRoot!);
+        return {
+            ribbon: getComputedStyle(root.querySelector(".flow-ribbon")!).stroke,
+            cardSolar: getComputedStyle(root.querySelector("simple-card-solar")!.shadowRoot!.querySelector(".core.active")!).fill,
+            solar: getComputedStyle(standalone[0].querySelector(".core.active")!).fill,
+            grid: getComputedStyle(standalone[1].querySelector(".wire")!).stroke,
+            gridPole: getComputedStyle(standalone[1].querySelector(".pole.export")!).fill,
+            battery: getComputedStyle(standalone[2].querySelector(".battery-body.active")!).stroke,
+            batteryFill: getComputedStyle(standalone[2].querySelector(".fill-green")!).fill,
+            house: getComputedStyle(standalone[3].querySelector(".house-body.active")!).stroke,
+        };
+    }), { timeout: 5000 }).toEqual({
+        ribbon: "rgb(232, 121, 249)", cardSolar: "rgb(232, 121, 249)",
+        solar: "rgb(232, 121, 249)", grid: "rgb(232, 121, 249)",
+        gridPole: "rgb(125, 211, 252)", battery: "rgb(232, 121, 249)",
+        batteryFill: "rgb(45, 212, 191)", house: "rgb(232, 121, 249)",
+    });
+});
+
+test("an active house without source attribution follows the house theme hook", async ({ page }) => {
+    await mountCard(page, { solar: 0, house: 1000, battery: 0, grid: 1000 });
+    await page.evaluate(async () => {
+        const house = document.createElement("simple-card-house") as any;
+        house.power = 1000;
+        document.body.appendChild(house);
+        await house.updateComplete;
+        document.documentElement.style.setProperty("--helman-theme-house", "#a5b4fc");
+    });
+    await expect.poll(() => page.evaluate(() => {
+        const root = document.body.querySelector("simple-card-house")!.shadowRoot!;
+        const color = (selector: string, property: "stroke" | "fill") =>
+            getComputedStyle(root.querySelector(selector)!).getPropertyValue(property);
+        return {
+            body: color(".house-body.active", "stroke"),
+            roof: color(".roof.active", "stroke"),
+            window: color(".window.active", "fill"),
+        };
+    }), { timeout: 5000 }).toEqual({
+        body: "rgb(165, 180, 252)",
+        roof: "rgb(165, 180, 252)",
+        window: "rgb(165, 180, 252)",
+    });
+    const accents = await page.evaluate(() => {
+        const root = document.body.querySelector("simple-card-house")!.shadowRoot!;
+        return {
+            door: getComputedStyle(root.querySelector(".door.active")!).stroke,
+            cross: getComputedStyle(root.querySelector("line")!).stroke,
+            knob: getComputedStyle(root.querySelector("circle")!).fill,
+            glow: getComputedStyle(root.querySelector(".house-body.active")!).filter,
+        };
+    });
+    for (const accent of [accents.door, accents.cross, accents.knob]) {
+        expect(accent).toContain("0.647059 0.705882 0.988235");
+    }
+    expect(accents.glow).not.toBe("none");
+});
+
+test("grid import and export hooks color their own direction cues", async ({ page }) => {
+    await mountCard(page, { solar: 0, house: 1000, battery: 0, grid: 1000 });
+    await page.evaluate(async () => {
+        for (const [power, sourceColor] of [[1000, undefined], [-1000, "var(--helman-solar)"]] as const) {
+            const grid = document.createElement("simple-card-grid") as any;
+            grid.power = power;
+            grid.sourceColor = sourceColor;
+            document.body.appendChild(grid);
+            await grid.updateComplete;
+        }
+        const palette = { grid: "#fb923c", "grid-import": "#f97316", "grid-export": "#fdba74", solar: "#e879f9" };
+        for (const [key, value] of Object.entries(palette)) {
+            document.documentElement.style.setProperty(`--helman-theme-${key}`, value);
+        }
+    });
+    await expect.poll(() => page.evaluate(() => {
+        const [importGrid, exportGrid] = [...document.body.querySelectorAll("simple-card-grid")].map(grid => grid.shadowRoot!);
+        const color = (root: ShadowRoot, selector: string, property: "fill" | "stroke" | "color") =>
+            getComputedStyle(root.querySelector(selector)!).getPropertyValue(property);
+        return {
+            importPole: color(importGrid, ".pole.import", "fill"),
+            importWire: color(importGrid, ".wire", "stroke"),
+            importDot: color(importGrid, ".dot-import", "fill"),
+            importLabel: color(importGrid, ".power-label.import", "color"),
+            exportPole: color(exportGrid, ".pole.export", "fill"),
+            exportWire: color(exportGrid, ".wire", "stroke"),
+            exportDot: color(exportGrid, ".dot-export", "fill"),
+            exportLabel: color(exportGrid, ".power-label.export", "color"),
+        };
+    }), { timeout: 5000 }).toEqual({
+        importPole: "rgb(251, 146, 60)", importWire: "rgb(251, 146, 60)",
+        importDot: "rgb(249, 115, 22)", importLabel: "rgb(251, 146, 60)",
+        exportPole: "rgb(253, 186, 116)", exportWire: "rgb(232, 121, 249)",
+        exportDot: "rgb(232, 121, 249)", exportLabel: "rgb(253, 186, 116)",
+    });
+});
+
+test("multiple cards keep their gradient IDs inside their own shadow roots", async ({ page }) => {
+    await mountCard(page, { solar: 6500, house: 900, battery: 3200, grid: -2400 });
+    const ids = await page.evaluate(async () => {
+        const second = document.createElement("helman-simple-card") as any;
+        second.setConfig({ type: "custom:helman-simple-card" });
+        second.hass = (window as any).__hass;
+        document.body.appendChild(second);
+        await second.updateComplete;
+        await new Promise(resolve => {
+            const timer = setInterval(() => {
+                if (second.shadowRoot?.querySelector("linearGradient")) {
+                    clearInterval(timer);
+                    resolve(undefined);
+                }
+            }, 10);
+        });
+        const cards = [...document.querySelectorAll("helman-simple-card")];
+        return cards.map(card => {
+            const root = card.shadowRoot!;
+            return [...root.querySelectorAll("linearGradient, mask")].map(definition => ({
+                id: definition.id,
+                present: !!root.querySelector(`#${definition.id}`),
+            }));
+        });
+    });
+    expect(ids[0].length).toBeGreaterThan(0);
+    expect(ids[1].length).toBeGreaterThan(0);
+    expect(ids.flat().every(entry => entry.present)).toBe(true);
+    expect(new Set(ids.flat().map(entry => entry.id)).size).toBe(ids.flat().length);
+});
+
+test.describe("simple card visual evidence", { tag: "@screens" }, () => {
+    const screens = process.env.SCREENS;
+    for (const [name, powers, dark, override] of [
+        ["light-export", { solar: 6500, house: 900, battery: 3200, grid: -2400 }, false, false],
+        ["dark-export-themed", { solar: 6500, house: 900, battery: 3200, grid: -2400 }, true, true],
+        ["light-grid-charge", { solar: 600, house: 1000, battery: 2000, grid: 2400 }, false, false],
+        ["dark-grid-charge-themed", { solar: 600, house: 1000, battery: 2000, grid: 2400 }, true, true],
+        ["light-battery-discharge", { solar: 0, house: 500, battery: -2000, grid: 10 }, false, false],
+        ["dark-mixed-themed", { solar: 1200, house: 1800, battery: -500, grid: 100 }, true, true],
+    ] as const) {
+        test(name, async ({ page }) => {
+            await mountCard(page, powers);
+            await page.evaluate(({ dark, override }) => {
+                document.body.style.cssText = `background:${dark ? "#101827" : "#f7fafc"}; color:${dark ? "#f8fafc" : "#111827"}; padding:24px; zoom:2;`;
+                if (override) {
+                    const palette = {
+                        solar: "#e879f9", grid: "#fb923c", battery: "#2dd4bf",
+                        house: "#a5b4fc", "grid-import": "#f97316", "grid-export": "#fdba74",
+                    };
+                    for (const [key, value] of Object.entries(palette)) {
+                        document.documentElement.style.setProperty(`--helman-theme-${key}`, value);
+                    }
+                }
+            }, { dark, override });
+            await page.waitForTimeout(750);
+            await page.screenshot({ path: `${screens}/${name}.png` });
+        });
+    }
+
+    test("standalone illustrations and two card instances", async ({ page }) => {
+        await mountCard(page, { solar: 6500, house: 900, battery: 3200, grid: -2400 });
+        await page.evaluate(async () => {
+            document.body.style.cssText = "background:#101827;color:#f8fafc;padding:20px;zoom:1.5";
+            document.documentElement.style.setProperty("--helman-theme-solar", "#e879f9");
+            document.documentElement.style.setProperty("--helman-theme-grid", "#fb923c");
+            document.documentElement.style.setProperty("--helman-theme-battery", "#2dd4bf");
+            document.documentElement.style.setProperty("--helman-theme-house", "#a5b4fc");
+            document.documentElement.style.setProperty("--helman-theme-grid-export", "#fdba74");
+            const row = document.createElement("div");
+            row.style.cssText = "display:flex;gap:32px;margin:30px 0";
+            document.body.appendChild(row);
+            for (const tag of ["simple-card-solar", "simple-card-grid", "simple-card-battery", "simple-card-house"]) {
+                const node = document.createElement(tag) as any;
+                node.power = tag === "simple-card-grid" ? -1000 : 1000;
+                node.soc = 60;
+                if (tag !== "simple-card-house") node.sourceColor = "var(--helman-solar)";
+                row.appendChild(node);
+                await node.updateComplete;
+            }
+            const second = document.createElement("helman-simple-card") as any;
+            second.setConfig({ type: "custom:helman-simple-card" });
+            second.hass = (window as any).__hass;
+            document.body.appendChild(second);
+        });
+        await expect.poll(() => page.locator("helman-simple-card").count()).toBe(2);
+        await page.waitForTimeout(750);
+        await page.screenshot({ path: `${screens}/standalone-and-two-cards.png`, fullPage: true });
     });
 });

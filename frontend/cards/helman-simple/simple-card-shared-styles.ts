@@ -1,35 +1,34 @@
 import { css, unsafeCSS } from "lit-element";
 import { SIMPLE_CARD_COLORS } from "./simple-card-colors";
 
-const { source, neutral, state } = SIMPLE_CARD_COLORS;
+const { neutral, state } = SIMPLE_CARD_COLORS;
 
 /**
- * Every var here is generated from SIMPLE_CARD_COLORS so a color is written
- * down exactly once. Values are opaque: components that need transparency
- * apply it themselves with color-mix(), rather than the palette shipping a
- * pre-baked variant per alpha step.
+ * Illustration surfaces stay local; domain aliases read the shared palette.
+ * Values are opaque. Components apply transparency with color-mix().
  */
 export const simpleCardSharedStyles = css`
     :host {
-        --simple-card-source-solar: ${unsafeCSS(source.solar)};
-        --simple-card-source-grid: ${unsafeCSS(source.grid)};
-        --simple-card-source-battery: ${unsafeCSS(source.battery)};
+        --simple-card-source-solar: var(--helman-solar);
+        --simple-card-source-grid: var(--helman-grid);
+        --simple-card-source-battery: var(--helman-battery);
+        --simple-card-house-color: var(--helman-house);
 
-        --simple-card-neutral-stroke: ${unsafeCSS(neutral.stroke)};
+        --simple-card-neutral-stroke: var(--helman-neutral);
         --simple-card-neutral-stroke-soft: ${unsafeCSS(neutral.strokeSoft)};
         --simple-card-surface-dark: ${unsafeCSS(neutral.surfaceDark)};
         --simple-card-surface-dark-soft: ${unsafeCSS(neutral.surfaceDarkSoft)};
         --simple-card-surface-mid: ${unsafeCSS(neutral.surfaceMid)};
-        --simple-card-surface-light: ${unsafeCSS(neutral.surfaceLight)};
+        --simple-card-surface-light: var(--helman-neutral-light);
         --simple-card-surface-lightest: ${unsafeCSS(neutral.surfaceLightest)};
-        --simple-card-label-color: ${unsafeCSS(neutral.label)};
+        --simple-card-label-color: var(--helman-neutral);
 
         --simple-card-warning-color: ${unsafeCSS(state.warning)};
         --simple-card-danger-color: ${unsafeCSS(state.danger)};
         --simple-card-warm-color: ${unsafeCSS(state.warm)};
         --simple-card-warm-soft-color: ${unsafeCSS(state.warmSoft)};
-        --simple-card-solar-glow-color: ${unsafeCSS(state.solarGlow)};
-        --simple-card-grid-accent: ${unsafeCSS(state.gridAccent)};
+        --simple-card-solar-glow-color: var(--helman-solar);
+        --simple-card-grid-accent: var(--helman-grid-import);
     }
 
     .power-label {

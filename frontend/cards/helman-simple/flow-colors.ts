@@ -1,43 +1,20 @@
-import { withAlpha } from "../color-utils";
-import { SIMPLE_CARD_COLORS } from "./simple-card-colors";
+import type { TreeItem } from "../shared/data/tree-item";
 
 export type FlowSource = "solar" | "grid" | "battery";
 
-interface GridInternalFlowColors {
-    base: string;
-    glow: string;
-    accent: string;
-}
-
 export function getFlowColor(source: FlowSource): string {
-    switch (source) {
-        case "solar":
-            return SIMPLE_CARD_COLORS.source.solar;
-        case "grid":
-            return SIMPLE_CARD_COLORS.source.grid;
-        case "battery":
-            return SIMPLE_CARD_COLORS.source.battery;
-    }
+    return `var(--helman-${source})`;
 }
 
-export function getFlowGlow(color: string, alphaHex = "aa"): string {
-    return withAlpha(color, alphaHex);
-}
-
-export function getGridInternalFlowColors(importing: boolean, exportSourceColor?: string): GridInternalFlowColors {
-    if (importing) {
-        const base = SIMPLE_CARD_COLORS.source.grid;
-        return {
-            base,
-            glow: getFlowGlow(base, "99"),
-            accent: SIMPLE_CARD_COLORS.state.gridAccent,
-        };
-    }
-
-    const base = exportSourceColor ?? SIMPLE_CARD_COLORS.source.grid;
-    return {
-        base,
-        glow: getFlowGlow(base, "99"),
-        accent: base,
-    };
+/** Keep the history bucket's highest-power source; use its type for theme-aware paint. */
+export function dominantFlowColor(node: TreeItem | null | undefined, sources: readonly TreeItem[]): string | undefined {
+    const history = node?.sourcePowerHistory;
+    const bucket = history?.[history.length - 1];
+    if (!bucket) return undefined;
+    const entries = Object.entries(bucket).filter(([, entry]) => entry.power > 0);
+    if (!entries.length) return undefined;
+    const [id, dominant] = entries.reduce((max, entry) => entry[1].power > max[1].power ? entry : max);
+    const sourceType = sources.find(source => source.id === id)?.sourceType;
+    return sourceType === "solar" || sourceType === "grid" || sourceType === "battery"
+        ? getFlowColor(sourceType) : dominant.color;
 }

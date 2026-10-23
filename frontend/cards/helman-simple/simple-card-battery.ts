@@ -2,7 +2,7 @@ import { formatPower } from "../shared/format";
 import { LitElement, css, html } from "lit-element";
 import { customElement, property, state } from "lit/decorators.js";
 
-import { BATT_COLOR, withAlpha } from "../color-utils";
+import { helmanColorVars } from "../color-vars";
 import { simpleCardSharedStyles } from "./simple-card-shared-styles";
 
 const BODY_TOP = 10;
@@ -35,7 +35,7 @@ type BatteryView = {
 @customElement("simple-card-battery")
 export class SimpleCardBattery extends LitElement {
     // Static styles
-    static styles = [simpleCardSharedStyles, css`
+    static styles = [helmanColorVars, simpleCardSharedStyles, css`
         :host {
             display: flex;
             flex-direction: column;
@@ -172,8 +172,8 @@ export class SimpleCardBattery extends LitElement {
             : socClamped < this.minSoc + 10 ? 'low-orange'
             : '';
 
-        const pulseColor = isCharging ? (this.sourceColor ?? BATT_COLOR) : isDischarging ? BATT_COLOR : null;
-        const pulseColorSoft = pulseColor ? withAlpha(pulseColor, '88') : null;
+        const pulseColor = isCharging ? (this.sourceColor ?? 'var(--helman-battery)') : isDischarging ? 'var(--helman-battery)' : null;
+        const pulseColorSoft = pulseColor ? `color-mix(in srgb, ${pulseColor} 53%, transparent)` : null;
 
         const fillColorClass = socClamped < this.minSoc ? 'fill-red' : socClamped < this.minSoc + 10 ? 'fill-orange' : 'fill-green';
         const fillClass = (isCharging || isDischarging)
