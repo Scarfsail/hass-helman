@@ -550,6 +550,11 @@ export function selectEntityScheduleSlotsInRange({
  * changed the same slot have to arrive as one patch built from both -- sending
  * one patch per lane would make the last one win and silently drop the other
  * entity's edit. Elapsed slots are omitted before constructing their patches.
+ *
+ * A lane drafted with `claim` takes ownership of every drafted slot that holds
+ * an action, even one equal to the automation's: holding "normal" over an
+ * automation's "normal" is still the user saying "this is mine", which the
+ * action-equality dirty check alone would drop.
  */
 export function buildEntityScheduleLanePatches({
     slots,
@@ -557,7 +562,7 @@ export function buildEntityScheduleLanePatches({
     nowMs,
 }: {
     slots: readonly ScheduleSlot[];
-    lanes: readonly { target: EntityScheduleTarget; draft: EntityScheduleDraft }[];
+    lanes: readonly { target: EntityScheduleTarget; draft: EntityScheduleDraft; claim?: boolean }[];
     nowMs: number;
 }): ScheduleSlotPatch[] {
     const editableFromMs = _resolveEditableFromMs(slots, nowMs);
@@ -567,7 +572,11 @@ export function buildEntityScheduleLanePatches({
             continue;
         }
 
-        const dirtyLanes = lanes.filter((lane) => _isSlotDirty(slot, lane.target, lane.draft));
+        const dirtyLanes = lanes.filter((lane) => _isSlotDirty(slot, lane.target, lane.draft)
+            || (lane.claim === true
+                && slot.id in lane.draft
+                && !isEntityScheduleActionEmpty(lane.draft[slot.id])
+                && slot.assignments[lane.target]?.setBy !== "user"));
         if (dirtyLanes.length === 0) {
             continue;
         }

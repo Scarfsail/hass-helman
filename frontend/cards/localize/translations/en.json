@@ -125,6 +125,58 @@
     }
   },
   "node_detail": {
+    "control": {
+      "tabs": "Detail views",
+      "tab": {
+        "overview": "Overview",
+        "control": "Control"
+      },
+      "status": {
+        "loading": "Loading…",
+        "unavailable": "Control state unavailable",
+        "execution_off": "Execution off",
+        "manual": "Manual until {time}",
+        "automatic": "Automatic",
+        "automation_off": "Automation off",
+        "not_automated": "Not automated"
+      },
+      "execution_off_note": "Schedule execution is off: Helman makes no hardware change, whatever the schedule holds.",
+      "battery_lane": "The battery is controlled through the inverter's schedule: these controls change the inverter.",
+      "hardware_now": "Hardware now",
+      "scheduled_now": "Scheduled now",
+      "nothing_scheduled": "Nothing scheduled",
+      "unavailable": "unavailable",
+      "not_on_roster": "Helman has no controllable for this node.",
+      "change": "Change",
+      "return_to_automatic": "Return to automatic",
+      "returned": "Returned to automatic.",
+      "return_failed": "Could not return to automatic:",
+      "automations": "Automations",
+      "no_automations": "No automation drives this.",
+      "automation_toggle": "Enable {name}",
+      "config_failed": "Could not read the automations' configuration:",
+      "override": {
+        "title": "Manual override",
+        "from": "From",
+        "to": "To",
+        "choose_to": "Choose the end",
+        "pick": {
+          "plus_1h": "+1 h",
+          "plus_3h": "+3 h",
+          "end_of_day": "End of day",
+          "next_change": "Next plan change"
+        },
+        "no_slot": "The schedule has no slot in progress to start from.",
+        "save": "Save override",
+        "saving": "Saving…",
+        "cancel": "Cancel",
+        "saved": "Override saved until {time}.",
+        "saved_execution_off": "Override saved until {time}. Execution is off, so the hardware does not change.",
+        "nothing_to_save": "Nothing to save: the chosen slots have already passed or already hold this override.",
+        "save_failed": "The override could not be saved:",
+        "execution_off": "Execution is off: the override is saved in the schedule, but Helman does not change the hardware."
+      }
+    },
     "forecast_failed": "The forecast could not be loaded.",
     "device": {
       "today": "Today",
@@ -1463,6 +1515,11 @@
     }
   },
   "scheduling": {
+    "day": {
+      "today": "Today",
+      "tomorrow": "Tomorrow",
+      "yesterday": "Yesterday"
+    },
     "explanation": {
       "pipeline": {
         "label": "Automation pipeline",

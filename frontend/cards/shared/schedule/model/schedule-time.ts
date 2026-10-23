@@ -235,6 +235,30 @@ export function formatScheduleTime(
     return _getTimeFormatter(locale, timeZone).format(date);
 }
 
+/**
+ * An instant as its day and local time; a time the clock shows twice, as
+ * when daylight saving ends, also names its UTC offset.
+ */
+export function formatScheduleInstantLabel(
+    atMs: number,
+    { currentDayKey, locale, timeZone, todayLabel, tomorrowLabel }: {
+        currentDayKey: string | null;
+        locale: string;
+        timeZone: string;
+        todayLabel: string;
+        tomorrowLabel: string;
+    },
+): string {
+    const parts = getScheduleLocalTimeParts(atMs, timeZone);
+    const day = formatScheduleDayLabel({ dayKey: parts?.dayKey ?? "", currentDayKey, locale, todayLabel, tomorrowLabel });
+    const label = `${day} ${formatScheduleTime(atMs, locale, timeZone)}`;
+    const repeated = parts !== null && [atMs - 3_600_000, atMs + 3_600_000].some((otherMs) => {
+        const other = getScheduleLocalTimeParts(otherMs, timeZone);
+        return other?.dayKey === parts.dayKey && other.hour === parts.hour && other.minute === parts.minute;
+    });
+    return repeated ? `${label} (UTC${parts.offset})` : label;
+}
+
 export function getScheduleLocalTimeParts(
     value: number | string | Date,
     timeZone: string,

@@ -7,15 +7,11 @@ import { getLocalizeFunction, type LocalizeFunction } from "../../localize/local
 import { defineOnce } from "../define-once";
 import { loadHaForm, loadHaSortable } from "../load-ha-elements";
 import { DataChangedController } from "../data/data-changed";
-import {
-    asJsonArray,
-    asJsonObject,
-    cloneJson,
-    setValueAtPath,
-} from "../config/config-document";
+import { cloneJson, setValueAtPath } from "../config/config-document";
 import { ConfigSession } from "../config/config-session";
 import { renderBooleanField } from "../config/form-fields";
 import { describeError } from "../describe-error";
+import { showToast } from "../fire-event";
 import type {
     ApplianceMetadataResponse,
     JsonObject,
@@ -23,26 +19,13 @@ import type {
 } from "../config/types";
 import {
     fetchOptimizerSchema,
-    type OptimizerConfigBucket,
     type OptimizerSchemaDocument,
 } from "./optimizer-schema";
 import type { OptimizerConfigChangedDetail } from "./helman-optimizer-editor";
+import { findOptimizerLocations, type OptimizerLocation } from "./optimizer-locations";
 import "./helman-optimizer-editor";
 
 const KEY_PREFIX = "scheduling.explanation.diagram.edit";
-
-type OptimizerBucket = OptimizerConfigBucket;
-
-const OPTIMIZER_BUCKETS: readonly OptimizerBucket[] = [
-    "appliance_optimizers",
-    "system_optimizers",
-];
-
-/** Where one named optimizer sits: its bucket and its index inside it. */
-interface OptimizerLocation {
-    bucket: OptimizerBucket;
-    index: number;
-}
 
 /**
  * What the dialog is doing. The render branches on this and nothing else.
@@ -485,7 +468,7 @@ export class HelmanOptimizerEditDialog extends LitElement {
                 // makes the integration's entities briefly unavailable, which
                 // is worth knowing about, and the dialog is no longer there to
                 // say it -- so it goes to Home Assistant's own toast.
-                this._notify(this._translate(
+                showToast(this, this._translate(
                     response.reloadStarted
                         ? "editor.messages.config_saved_reload_started"
                         : "editor.messages.config_saved",
@@ -518,19 +501,6 @@ export class HelmanOptimizerEditDialog extends LitElement {
         }
     };
 
-    /**
-     * Home Assistant's own toast, for something the dialog closed before it
-     * could show. `hass-notification` is the frontend's standard channel for
-     * this and is handled at the `home-assistant` root, which every surface
-     * mounting this dialog sits inside.
-     */
-    private _notify(message: string): void {
-        this.dispatchEvent(new CustomEvent("hass-notification", {
-            bubbles: true,
-            composed: true,
-            detail: { message },
-        }));
-    }
 
     /** Throw the draft away and read the config again. */
     private _handleReload = (): void => {
@@ -540,6 +510,14 @@ export class HelmanOptimizerEditDialog extends LitElement {
         this._message = null;
         void this._load();
     };
+
+    /**
+     * Cancel's close, asking about an unsaved draft first: what a host calls
+     * when Back is pressed with this dialog on top of it.
+     */
+    public requestClose(): void {
+        this._handleCloseRequest();
+    }
 
     /** Closing on an unsaved draft asks first; the draft is the user's work. */
     private _handleCloseRequest = (): void => {
@@ -619,39 +597,6 @@ export class HelmanOptimizerEditDialog extends LitElement {
         return this._translate(`${KEY_PREFIX}.${suffix}`, values);
     }
 
-}
-
-/**
- * Where the named optimizers sit in the pipeline, in *config* order.
- *
- * Config order rather than the order the ids were asked for: the cards are read
- * top to bottom as the pipeline that produced the lane, and the pipeline's
- * order is the document's, not the caller's. Ids that no longer resolve are
- * dropped -- an empty result is what raises `not_found`. Both buckets are
- * searched -- the caller only has ids, not which bucket owns them, and a lane
- * badge names whatever actually drives that lane regardless of bucket.
- */
-function findOptimizerLocations(
-    config: JsonObject,
-    optimizerIds: readonly string[],
-): OptimizerLocation[] {
-    const wanted = new Set(optimizerIds.filter((id) => id.length > 0));
-    if (wanted.size === 0) {
-        return [];
-    }
-    return OPTIMIZER_BUCKETS.flatMap((bucket) =>
-        readOptimizers(config, bucket)
-            .map((entry, index): [number, string | undefined] => [
-                index,
-                asJsonObject(entry)?.id as string | undefined,
-            ])
-            .filter(([, id]) => id !== undefined && wanted.has(id))
-            .map(([index]): OptimizerLocation => ({ bucket, index })),
-    );
-}
-
-function readOptimizers(config: JsonObject, bucket: OptimizerBucket) {
-    return asJsonArray(asJsonObject(config.automation)?.[bucket]) ?? [];
 }
 
 /** One spelling of "this id set", so the two sides of the comparison cannot drift. */

@@ -173,6 +173,14 @@ export function applyNormalizedScheduleCurrentState(
     };
 }
 
+/**
+ * The slot in progress, as the shared clock last marked it; the runtime's
+ * active slot when no slot holds that instant. Slots stay in time order.
+ */
+export function findCurrentScheduleSlot(slots: readonly ScheduleSlot[]): ScheduleSlot | undefined {
+    return slots.find((slot) => slot.isCurrent);
+}
+
 function _normalizeSlot({
     slot,
     startMs,
