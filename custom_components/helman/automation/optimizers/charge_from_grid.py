@@ -70,8 +70,6 @@ if TYPE_CHECKING:
 
 _SLOT_DURATION = timedelta(minutes=SCHEDULE_SLOT_MINUTES)
 _SLOT_HOURS = SCHEDULE_SLOT_MINUTES / 60
-_ACTION = {"domain": "inverter", "kind": SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC}
-_HOLD_ACTION = {"domain": "inverter", "kind": SCHEDULE_ACTION_STOP_DISCHARGING}
 
 # The gates this kind owns. Every one of them is *per bridging window*: a cheap
 # slot only ever meets them because some expensive band ahead of it needs
@@ -138,14 +136,14 @@ class ChargeFromGridOptimizer:
             trace.set_step_status(
                 status=STATUS_SKIPPED, reason="battery_params_missing"
             )
-            return writer.flush(action=_ACTION)
+            return writer.flush()
 
         soc_by_bucket = read_soc_by_bucket(snapshot)
         if not soc_by_bucket:
             trace.set_step_status(
                 status=STATUS_SKIPPED, reason="soc_forecast_unavailable"
             )
-            return writer.flush(action=_ACTION)
+            return writer.flush()
         import_price_by_bucket = read_price_by_bucket(
             snapshot.context.import_price_forecast
         )
@@ -173,6 +171,7 @@ class ChargeFromGridOptimizer:
             # Kept lazy so lightweight optimizer-only consumers do not need to
             # import Home Assistant's battery-state integration.
             from .self_sustainability import build_horizon_simulator
+
             simulator = build_horizon_simulator(snapshot, appliance_id=self.id)
         except ImportError:
             # Optimizer-only callers deliberately stub the narrow scheduling
@@ -232,7 +231,7 @@ class ChargeFromGridOptimizer:
             )
 
         emit.flush()
-        return writer.flush(action=_ACTION)
+        return writer.flush()
 
     def _plan_window(
         self,
@@ -305,6 +304,7 @@ class ChargeFromGridOptimizer:
                 "expensiveWindow": expensive_window,
                 "projectedMinSoc": round(window_min_soc, 1),
             },
+            role="veto",
         )
         # The floor is read by value, not as a mask — see the module docstring.
         # It is the condition's own result, so it is resolved onto the condition
@@ -389,9 +389,7 @@ class ChargeFromGridOptimizer:
         required_energy_kwh = (
             max(soc_gap, 0.0) / 100 * usable_capacity_kwh / charge_efficiency
         )
-        slots_needed = ceil(
-            required_energy_kwh / (max_charge_power_kw * _SLOT_HOURS)
-        )
+        slots_needed = ceil(required_energy_kwh / (max_charge_power_kw * _SLOT_HOURS))
         if soc_gap <= 0 or slots_needed <= 0:
             # already at/above target entering the cheap window.
             # A cap can itself make this branch reachable: the uncapped target
@@ -407,7 +405,12 @@ class ChargeFromGridOptimizer:
                 cheap_slots,
                 gates=[
                     soc_known,
-                    _Gate(GATE_CHARGE_NEEDED, STATE_FALSE, charge_needed_params),
+                    _Gate(
+                        GATE_CHARGE_NEEDED,
+                        STATE_FALSE,
+                        charge_needed_params,
+                        role="veto",
+                    ),
                 ],
                 floor=breached,
             )
@@ -420,7 +423,7 @@ class ChargeFromGridOptimizer:
         )
         window_gates = [
             soc_known,
-            _Gate(GATE_CHARGE_NEEDED, STATE_TRUE, charge_needed_params),
+            _Gate(GATE_CHARGE_NEEDED, STATE_TRUE, charge_needed_params, role="veto"),
             _Gate(
                 GATE_CHEAP_WINDOW_CAPACITY,
                 STATE_TRUE if len(ranked) >= slots_needed else STATE_FALSE,
@@ -429,19 +432,21 @@ class ChargeFromGridOptimizer:
                     "slotsAvailable": len(ranked),
                     "requiredEnergyKwh": round(required_energy_kwh, 3),
                 },
+                role="advisory",
             ),
         ]
 
         rankable = {slot_id for _price, slot_id in ranked}
-        unavailable = [
-            slot_id for slot_id in cheap_slots if slot_id not in rankable
-        ]
+        unavailable = [slot_id for slot_id in cheap_slots if slot_id not in rankable]
         if unavailable:
             # Dropped before the ranking, so the writer never sees them and the
             # writer-level veto cannot speak for them.
             emit.slot_unavailable(
                 unavailable,
-                gates=[*window_gates, _Gate(GATE_SLOT_AVAILABLE, STATE_FALSE, {})],
+                gates=[
+                    *window_gates,
+                    _Gate(GATE_SLOT_AVAILABLE, STATE_FALSE, {}, role="veto"),
+                ],
                 floor=breached,
             )
 
@@ -455,16 +460,14 @@ class ChargeFromGridOptimizer:
             # `max_soc` alone would not close the gap either, since
             # there are not enough rankable slots to charge into regardless.
             limit=(
-                "capacity"
-                if capacity_short
-                else "cap" if capped_at_max_soc else None
+                "capacity" if capacity_short else "cap" if capped_at_max_soc else None
             ),
         )
 
         def _rank_gates(index: int, price: float, made_the_cut: bool) -> list["_Gate"]:
             return [
                 *window_gates,
-                _Gate(GATE_SLOT_AVAILABLE, STATE_TRUE, {}),
+                _Gate(GATE_SLOT_AVAILABLE, STATE_TRUE, {}, role="veto"),
                 _Gate(
                     GATE_CHEAPEST_RANK,
                     STATE_TRUE if made_the_cut else STATE_FALSE,
@@ -475,6 +478,7 @@ class ChargeFromGridOptimizer:
                         "price": None if price == float("inf") else round(price, 4),
                         "chosenPrice": round(chosen_price, 4),
                     },
+                    role="veto",
                 ),
             ]
 
@@ -496,7 +500,6 @@ class ChargeFromGridOptimizer:
                 slot_id,
                 gates=_rank_gates(index, price, made_the_cut=True),
                 floor=breached,
-                action=_ACTION,
             )
 
     def _plan_simulated_window(
@@ -530,7 +533,8 @@ class ChargeFromGridOptimizer:
         from ...scheduling.schedule import parse_slot_id
 
         writable = [
-            slot_id for slot_id in cheap_slots
+            slot_id
+            for slot_id in cheap_slots
             if not is_user_owned(
                 writer.document.slots.get(slot_id, {}).get(CONTROLLABLE_ID_INVERTER)
             )
@@ -576,14 +580,13 @@ class ChargeFromGridOptimizer:
             # carries the SoC the expensive window starts from.
             trajectory = simulator.simulate({}, action_overrides=actions)
             preceding = [
-                (key, soc) for key, soc in trajectory.soc_by_bucket.items()
+                (key, soc)
+                for key, soc in trajectory.soc_by_bucket.items()
                 if dt_util.as_utc(key) < boundary
             ]
             if not preceding:
                 return False, None
-            bucket, soc = max(
-                preceding, key=lambda item: dt_util.as_utc(item[0])
-            )
+            bucket, soc = max(preceding, key=lambda item: dt_util.as_utc(item[0]))
             return dt_util.as_utc(bucket) + _SLOT_DURATION >= boundary, soc
 
         def reaches(soc: float | None) -> bool:
@@ -591,10 +594,15 @@ class ChargeFromGridOptimizer:
 
         margin = resolved.params.get("charge_start_margin_slots", 2)
         observation = dict(
-            optimizer_id=self.id, group_index=resolved.group.index,
-            window=(format_slot_id(expensive_band.start), format_slot_id(expensive_band.end)),
+            optimizer_id=self.id,
+            group_index=resolved.group.index,
+            window=(
+                format_slot_id(expensive_band.start),
+                format_slot_id(expensive_band.end),
+            ),
             reserve_floor_soc=resolved.condition_value("reserve_floor_soc"),
-            conditions_active=resolved.condition_met, projected_min_soc=window_min_soc,
+            conditions_active=resolved.condition_met,
+            projected_min_soc=window_min_soc,
         )
 
         # The run so far (or the forecast's own overlay) may already carry the
@@ -607,18 +615,26 @@ class ChargeFromGridOptimizer:
             # final, earlier bucket as the boundary value.
             return False
         if reaches(boundary_soc):
-            emit.observe_reserve_floor(ReserveFloorObservation(
-                **observation, bridge_written=False,
-                limit="cap" if capped_at_max_soc else None,
-            ))
+            emit.observe_reserve_floor(
+                ReserveFloorObservation(
+                    **observation,
+                    bridge_written=False,
+                    limit="cap" if capped_at_max_soc else None,
+                )
+            )
             emit.charge_not_needed(
                 cheap_slots,
                 gates=[
                     soc_known,
-                    _Gate(GATE_CHARGE_NEEDED, STATE_FALSE, {
-                        "targetSoc": round(target, 1),
-                        "projectedBoundarySoc": round(boundary_soc, 1),
-                    }),
+                    _Gate(
+                        GATE_CHARGE_NEEDED,
+                        STATE_FALSE,
+                        {
+                            "targetSoc": round(target, 1),
+                            "projectedBoundarySoc": round(boundary_soc, 1),
+                        },
+                        role="veto",
+                    ),
                 ],
                 floor=floor,
             )
@@ -681,7 +697,11 @@ class ChargeFromGridOptimizer:
             required = sorted(charge_indices)
             # Extra slots are opportunities, not extra target.  They extend
             # backward only after every physically required latest slot.
-            extra = list(range(max(0, min(required, default=0) - margin), min(required, default=0)))
+            extra = list(
+                range(
+                    max(0, min(required, default=0) - margin), min(required, default=0)
+                )
+            )
             charge_indices = sorted(set(required + extra))
         else:
             charge_indices = []
@@ -691,14 +711,29 @@ class ChargeFromGridOptimizer:
         capacity_short = not reaches(boundary_soc)
         gates = [
             soc_known,
-            _Gate(GATE_CHARGE_NEEDED, STATE_TRUE, {
-                "targetSoc": round(target, 1), "projectedBoundarySoc": None if boundary_soc is None else round(boundary_soc, 1),
-                "forcedChargeSlots": len(charge_set), "chargeStartMarginSlots": margin,
-                "chargeTargetSoc": charge_soc if charge_set else None,
-            }),
-            _Gate(GATE_CHEAP_WINDOW_CAPACITY, STATE_FALSE if capacity_short else STATE_TRUE, {
-                "slotsAvailable": len(writable), "slotsNeeded": len(charge_set),
-            }),
+            _Gate(
+                GATE_CHARGE_NEEDED,
+                STATE_TRUE,
+                {
+                    "targetSoc": round(target, 1),
+                    "projectedBoundarySoc": None
+                    if boundary_soc is None
+                    else round(boundary_soc, 1),
+                    "forcedChargeSlots": len(charge_set),
+                    "chargeStartMarginSlots": margin,
+                    "chargeTargetSoc": charge_soc if charge_set else None,
+                },
+                role="veto",
+            ),
+            _Gate(
+                GATE_CHEAP_WINDOW_CAPACITY,
+                STATE_FALSE if capacity_short else STATE_TRUE,
+                {
+                    "slotsAvailable": len(writable),
+                    "slotsNeeded": len(charge_set),
+                },
+                role="advisory",
+            ),
         ]
         selected_count = len(charge_set | hold_set)
         cutoff_params = {
@@ -709,7 +744,10 @@ class ChargeFromGridOptimizer:
         if unavailable:
             emit.slot_unavailable(
                 unavailable,
-                gates=[*gates, _Gate(GATE_SLOT_AVAILABLE, STATE_FALSE, {})],
+                gates=[
+                    *gates,
+                    _Gate(GATE_SLOT_AVAILABLE, STATE_FALSE, {}, role="veto"),
+                ],
                 floor=floor,
             )
         final = compose(sorted(hold_set), sorted(charge_set), charge_soc)
@@ -720,7 +758,8 @@ class ChargeFromGridOptimizer:
             # the cap binds.  Short below it, the slots themselves ran out.
             peak_soc = max(
                 (
-                    soc for key, soc in simulator.simulate(
+                    soc
+                    for key, soc in simulator.simulate(
                         {}, action_overrides=final
                     ).soc_by_bucket.items()
                     if key in keys
@@ -738,8 +777,10 @@ class ChargeFromGridOptimizer:
                     slot_id,
                     gates=[
                         *gates,
-                        _Gate(GATE_SLOT_AVAILABLE, STATE_TRUE, {}),
-                        _Gate(GATE_LATEST_CUTOFF, STATE_FALSE, cutoff_params),
+                        _Gate(GATE_SLOT_AVAILABLE, STATE_TRUE, {}, role="veto"),
+                        _Gate(
+                            GATE_LATEST_CUTOFF, STATE_FALSE, cutoff_params, role="veto"
+                        ),
                     ],
                     floor=floor,
                 )
@@ -755,17 +796,18 @@ class ChargeFromGridOptimizer:
                 slot_id,
                 gates=[
                     *gates,
-                    _Gate(GATE_SLOT_AVAILABLE, STATE_TRUE, {}),
-                    _Gate(GATE_LATEST_CUTOFF, STATE_TRUE, cutoff_params),
+                    _Gate(GATE_SLOT_AVAILABLE, STATE_TRUE, {}, role="veto"),
+                    _Gate(GATE_LATEST_CUTOFF, STATE_TRUE, cutoff_params, role="veto"),
                 ],
                 floor=floor,
-                action=_ACTION if action.kind == SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC else _HOLD_ACTION,
             )
-        emit.observe_reserve_floor(ReserveFloorObservation(
-            **observation,
-            bridge_written=bool(charge_set or hold_set),
-            limit=limit,
-        ))
+        emit.observe_reserve_floor(
+            ReserveFloorObservation(
+                **observation,
+                bridge_written=bool(charge_set or hold_set),
+                limit=limit,
+            )
+        )
         return True
 
 
@@ -797,6 +839,7 @@ class _Gate:
     key: str
     state: str
     params: dict[str, Any]
+    role: str
 
 
 @dataclass(frozen=True)
@@ -812,10 +855,8 @@ class _FloorResolution:
 @dataclass(frozen=True)
 class _SlotRecord:
     priority: int
-    outcome: str | None
     gates: tuple[_Gate, ...]
     floor: _FloorResolution | None
-    action: dict[str, str] | None = None
 
 
 class _ChargeFromGridEmission:
@@ -860,15 +901,13 @@ class _ChargeFromGridEmission:
         ):
             self._by_slot[slot_id] = record
 
-    def applied(self, slot_id, *, gates, floor, action) -> None:
+    def applied(self, slot_id, *, gates, floor) -> None:
         self._add(
             slot_id,
             _SlotRecord(
                 priority=self._APPLIED,
-                outcome="applied",
                 gates=tuple(gates),
                 floor=floor,
-                action=action,
             ),
         )
 
@@ -877,7 +916,6 @@ class _ChargeFromGridEmission:
             slot_id,
             _SlotRecord(
                 priority=self._CHEAPER,
-                outcome="rejected",
                 gates=tuple(gates),
                 floor=floor,
             ),
@@ -889,9 +927,6 @@ class _ChargeFromGridEmission:
                 slot_id,
                 _SlotRecord(
                     priority=self._UNAVAILABLE,
-                    # The decision layer never claimed these slots — nothing was
-                    # written and nothing was rejected on their own merits.
-                    outcome=None,
                     gates=tuple(gates),
                     floor=floor,
                 ),
@@ -903,7 +938,6 @@ class _ChargeFromGridEmission:
                 slot_id,
                 _SlotRecord(
                     priority=self._COVERED,
-                    outcome="rejected",
                     gates=tuple(gates),
                     floor=floor,
                 ),
@@ -915,7 +949,6 @@ class _ChargeFromGridEmission:
                 slot_id,
                 _SlotRecord(
                     priority=self._COVERED,
-                    outcome="rejected",
                     gates=tuple(gates),
                     floor=floor,
                 ),
@@ -928,12 +961,12 @@ class _ChargeFromGridEmission:
                 slot_id,
                 _SlotRecord(
                     priority=self._COVERED,
-                    outcome=None,
                     gates=(
                         _Gate(
                             GATE_WINDOW_SOC_KNOWN,
                             STATE_FALSE,
                             {"expensiveWindow": expensive_window},
+                            role="veto",
                         ),
                     ),
                     floor=floor,
@@ -941,16 +974,12 @@ class _ChargeFromGridEmission:
             )
 
     def flush(self) -> None:
-        by_outcome: dict[str, list[str]] = {}
         by_gate: dict[str, tuple[_Gate, list[str]]] = {}
         by_floor: dict[str, tuple[_FloorResolution, list[str]]] = {}
         for slot_id, record in self._by_slot.items():
-            if record.outcome is not None:
-                key = json.dumps([record.outcome, record.action], sort_keys=True)
-                by_outcome.setdefault(key, []).append(slot_id)
             for gate in record.gates:
                 key = json.dumps(
-                    [gate.key, gate.state, gate.params], sort_keys=True
+                    [gate.key, gate.role, gate.state, gate.params], sort_keys=True
                 )
                 by_gate.setdefault(key, (gate, []))[1].append(slot_id)
             if record.floor is not None:
@@ -961,15 +990,9 @@ class _ChargeFromGridEmission:
                 )
                 by_floor.setdefault(key, (floor, []))[1].append(slot_id)
 
-        for key, slot_ids in by_outcome.items():
-            outcome, action = json.loads(key)
-            self._trace.decision(
-                slot_ids=slot_ids,
-                outcome=outcome,
-                action=action,
-            )
         for gate, slot_ids in by_gate.values():
             self._trace.gate(
+                role=gate.role,
                 slot_ids=slot_ids,
                 key=gate.key,
                 state=gate.state,

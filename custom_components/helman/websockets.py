@@ -113,7 +113,6 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     async_register_command(hass, ws_get_training_status)
     async_register_command(hass, ws_train_now)
     async_register_command(hass, ws_get_history)
-    async_register_command(hass, ws_run_automation)
     async_register_command(hass, ws_get_schedule_explanation)
     async_register_command(hass, ws_get_condition_trace)
     async_register_command(hass, ws_inspect_entities)
@@ -807,23 +806,6 @@ async def ws_get_forecast(
     connection.send_result(msg["id"], forecast)
 
 
-@websocket_api.websocket_command({
-    vol.Required("type"): "helman/run_automation",
-})
-@websocket_api.require_admin
-@websocket_api.async_response
-async def ws_run_automation(
-    hass: HomeAssistant,
-    connection: websocket_api.ActiveConnection,
-    msg: dict,
-) -> None:
-
-    coordinator = get_coordinator(hass, connection, msg)
-    if coordinator is None:
-        return
-
-    result = await coordinator.run_automation(reason="websocket")
-    connection.send_result(msg["id"], result.to_dict())
 
 
 @websocket_api.websocket_command({

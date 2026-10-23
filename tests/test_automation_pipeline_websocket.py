@@ -6,90 +6,6 @@ from automation_pipeline_support import *
 from _fakes import FakeConfigEntries
 
 
-class RunAutomationWebsocketTests(unittest.IsolatedAsyncioTestCase):
-    async def test_run_automation_returns_serialized_result(self) -> None:
-        coordinator = SimpleNamespace(
-            run_automation=AsyncMock(
-                return_value=AutomationRunResult.completed(snapshot=_make_snapshot())
-            )
-        )
-        connection = _FakeConnection(is_admin=True)
-
-        await ws_run_automation.__wrapped__.__wrapped__(
-            _FakeHass(coordinator),
-            connection,
-            {"id": 1, "type": "helman/run_automation"},
-        )
-
-        coordinator.run_automation.assert_awaited_once_with(reason="websocket")
-        self.assertEqual(connection.errors, [])
-        self.assertTrue(connection.results[0][1]["ranAutomation"])
-        self.assertIn("scheduleSlots", connection.results[0][1]["snapshot"])
-        self.assertIn("optimizers", connection.results[0][1])
-        self.assertIn("durationMs", connection.results[0][1])
-
-    async def test_run_automation_returns_skipped_result(self) -> None:
-        coordinator = SimpleNamespace(
-            run_automation=AsyncMock(
-                return_value=AutomationRunResult.skipped(reason="execution_disabled")
-            )
-        )
-        connection = _FakeConnection(is_admin=True)
-
-        await ws_run_automation.__wrapped__.__wrapped__(
-            _FakeHass(coordinator),
-            connection,
-            {"id": 1, "type": "helman/run_automation"},
-        )
-
-        self.assertFalse(connection.results[0][1]["ranAutomation"])
-        self.assertEqual(connection.results[0][1]["reason"], "execution_disabled")
-
-    async def test_run_automation_returns_failed_result(self) -> None:
-        coordinator = SimpleNamespace(
-            run_automation=AsyncMock(
-                return_value=AutomationRunResult.failed(
-                    reason="runner_failed",
-                    failure=AutomationRunFailure(
-                        stage="final_persist",
-                        message="disk full",
-                    ),
-                )
-            )
-        )
-        connection = _FakeConnection(is_admin=True)
-
-        await ws_run_automation.__wrapped__.__wrapped__(
-            _FakeHass(coordinator),
-            connection,
-            {"id": 1, "type": "helman/run_automation"},
-        )
-
-        self.assertFalse(connection.results[0][1]["ranAutomation"])
-        self.assertEqual(connection.results[0][1]["reason"], "runner_failed")
-        self.assertEqual(
-            connection.results[0][1]["failure"],
-            {
-                "stage": "final_persist",
-                "message": "disk full",
-                "unexpected": True,
-            },
-        )
-
-    async def test_run_automation_requires_admin(self) -> None:
-        coordinator = SimpleNamespace(run_automation=AsyncMock())
-        connection = _FakeConnection(is_admin=False)
-
-        with self.assertRaises(Unauthorized):
-            ws_run_automation(
-                _FakeHass(coordinator),
-                connection,
-                {"id": 1, "type": "helman/run_automation"},
-            )
-
-        coordinator.run_automation.assert_not_awaited()
-
-
 class ScheduleExplanationWebsocketTests(unittest.IsolatedAsyncioTestCase):
     """`helman/get_schedule_explanation` — the per-lane, per-day "why", read by
     the daily editor's explanation panel.
@@ -228,5 +144,3 @@ class ScheduleExplanationWebsocketTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(vol.Invalid):
             schema({**message, "controllable_id": ""})
         self.assertEqual(schema(message)["date"], "2026-07-31")
-
-

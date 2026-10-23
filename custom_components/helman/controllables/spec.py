@@ -51,6 +51,7 @@ from ..appliances.climate_appliance import (
 )
 from ..appliances.climate_schedule import (
     is_climate_action_running,
+    climate_action_from_state,
     normalize_climate_appliance_schedule_action,
 )
 from ..appliances.drivers import (
@@ -65,6 +66,7 @@ from ..appliances.ev_charger import (
 )
 from ..appliances.ev_schedule import (
     is_ev_charger_action_running,
+    ev_action_from_state,
     normalize_ev_charger_schedule_action,
 )
 from ..appliances.generic_appliance import (
@@ -73,8 +75,10 @@ from ..appliances.generic_appliance import (
 )
 from ..appliances.generic_schedule import (
     is_generic_action_running,
+    generic_action_from_state,
     normalize_generic_appliance_schedule_action,
 )
+from .inverter import inverter_action_from_state
 from .config import RUNNING_ACTIVITY_BY_CONTROL
 from .kinds import (
     CONTROLLABLE_KIND_CLIMATE,
@@ -116,6 +120,8 @@ class ControllableSpec:
     #: of ``climate_entity_id`` / ``charge_entity_id`` / ``switch_entity_id``
     #: happens to exist.
     control_entity_attr: str
+    #: Inverse mapping for recorder states; includes only observed settings.
+    action_from_state: Callable[[Any, str], dict[str, Any] | None]
     #: Resting state, as "the attribute that holds it, falling back to a
     #: constant". The two halves cover the three real cases in one shape: the
     #: inverter's rest is configured (``normal_option``, no default — an
@@ -209,6 +215,7 @@ CONTROLLABLE_SPECS: dict[str, ControllableSpec] = {
         ControllableSpec(
             kind=CONTROLLABLE_KIND_INVERTER,
             control_entity_attr="mode_entity_id",
+            action_from_state=inverter_action_from_state,
             resting_state_attr="normal_option",
             default_name="Inverter",
             optimizer_kinds=("charge_hold", "export_price", "charge_from_grid"),
@@ -216,6 +223,7 @@ CONTROLLABLE_SPECS: dict[str, ControllableSpec] = {
         ControllableSpec(
             kind=CONTROLLABLE_KIND_CLIMATE,
             control_entity_attr="climate_entity_id",
+            action_from_state=climate_action_from_state,
             resting_state_attr="stop_hvac_mode",
             resting_state_default="off",
             affects_consumption=True,
@@ -233,6 +241,7 @@ CONTROLLABLE_SPECS: dict[str, ControllableSpec] = {
             # The charge switch, not the use-mode or eco-gear selects: charging
             # is what makes a charger "running", the selects only shape how.
             control_entity_attr="charge_entity_id",
+            action_from_state=ev_action_from_state,
             resting_state_default="off",
             affects_consumption=True,
             running_control="charge",
@@ -249,6 +258,7 @@ CONTROLLABLE_SPECS: dict[str, ControllableSpec] = {
         ControllableSpec(
             kind=CONTROLLABLE_KIND_GENERIC,
             control_entity_attr="switch_entity_id",
+            action_from_state=generic_action_from_state,
             resting_state_default="off",
             affects_consumption=True,
             optimizer_kinds=("appliance_runtime",),

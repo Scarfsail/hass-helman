@@ -67,3 +67,8 @@ def is_climate_action_running(action: Mapping[str, Any]) -> bool:
     a normalized action, and this one needs no appliance to give it.
     """
     return action.get("mode") in SUPPORTED_CLIMATE_MODES
+
+
+def climate_action_from_state(runtime: Any, state: str) -> dict[str, Any]:
+    """Observed HVAC mode; temperatures were not recorded here."""
+    return {"mode": state}

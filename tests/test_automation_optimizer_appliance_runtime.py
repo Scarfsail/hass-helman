@@ -5,7 +5,6 @@ from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 
 
-
 TZ = timezone(timedelta(hours=2))
 REFERENCE_TIME = datetime(2026, 7, 10, 5, 0, tzinfo=TZ)
 DAY = date(2026, 7, 10)
@@ -1815,13 +1814,6 @@ class FloorEmptiedDayOverrideTests(unittest.TestCase):
         # against one either — and the retry must not leave the first pass's
         # rejection behind on a slot it went on to apply.
         self.assertEqual(placed["verdict"], "execute")
-        rejected = {
-            slot_id
-            for decision in trace.to_dict()["steps"][0]["decisions"]
-            if decision["outcome"] == "rejected"
-            for slot_id in decision["slotIds"]
-        }
-        self.assertNotIn(_slot_id(8, 0), rejected)
 
     def test_a_floor_emptied_day_counts_as_short_for_the_next_one(self) -> None:
         """The chain reads what the horizon planned, not only what history has.
@@ -1983,7 +1975,7 @@ class FloorEmptiedDayOverrideTests(unittest.TestCase):
             margin_pct=5.0,
         )
 
-        chosen, floor_rejected, _not_reached = gate.take(
+        chosen, floor_rejected = gate.take(
             [(1.0, _slot_id(8, 0)), (5.0, _slot_id(8, 30))],
             slots_needed=2,
             plan=plan,
@@ -2020,7 +2012,7 @@ class FloorEmptiedDayOverrideTests(unittest.TestCase):
             trigger="self_sustainability",
         )
 
-        chosen, floor_rejected, _not_reached = gate.take(
+        chosen, floor_rejected = gate.take(
             [(1.0, _slot_id(8, 0)), (5.0, _slot_id(8, 30))],
             slots_needed=1,
             plan=forced,
@@ -2445,9 +2437,7 @@ class DailyRuntimeTraceContractTests(unittest.TestCase):
             optimizer, snapshot, cfg, reference_time=REFERENCE_TIME
         )
         assert_trace_contract(self, trace)
-        step = trace.to_dict()["steps"][0]
-        applied = [d for d in step["decisions"] if d["outcome"] == "applied"]
-        self.assertEqual(len(applied), 1)
+        step = trace_rows_payload(trace)["steps"][0]
 
         slots = _slots_by_id(trace)
         placed = slots[_slot_id(12, 0)]
@@ -2555,15 +2545,7 @@ class DailyRuntimeTraceContractTests(unittest.TestCase):
         )
         # Still left to the frontend's derivation, exactly as before: only price
         # and coverage rejections are claimed by a decision here.
-        step = trace.to_dict()["steps"][0]
-        self.assertNotIn(
-            _slot_id(12, 0),
-            {
-                slot_id
-                for decision in step["decisions"]
-                for slot_id in decision["slotIds"]
-            },
-        )
+        step = trace_rows_payload(trace)["steps"][0]
 
     def test_a_forced_run_carries_its_override_gate(self) -> None:
         appliance = _generic()
@@ -2794,9 +2776,7 @@ class UncappedModeTests(unittest.TestCase):
         )
 
         assert_trace_contract(self, trace)
-        step = trace.to_dict()["steps"][0]
-        applied = [d for d in step["decisions"] if d["outcome"] == "applied"]
-        self.assertEqual(len(applied), 1)
+        step = trace_rows_payload(trace)["steps"][0]
 
         slots = _slots_by_id(trace)
         inside = slots[_slot_id(8, 0)]
@@ -3087,6 +3067,8 @@ class RequiresApplianceTests(unittest.TestCase):
 
         self.assertEqual(placed, {})
 
+
+from automation_trace_contract import trace_rows_payload
 
 if __name__ == "__main__":
     unittest.main()

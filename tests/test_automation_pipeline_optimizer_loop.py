@@ -21,8 +21,8 @@ def _summary_signature(summary: OptimizerRunSummary) -> dict[str, object]:
     # Drop the wall-clock duration, which legitimately differs run to run.
     return {
         key: value
-        for key, value in summary.to_dict().items()
-        if key != "durationMs"
+        for key, value in vars(summary).items()
+        if key != "duration_ms"
     }
 
 
@@ -305,6 +305,8 @@ class OptimizerLoopExecutorEquivalenceTests(unittest.IsolatedAsyncioTestCase):
             [_summary_signature(s) for s in executor_result.optimizers],
         )
         self.assertEqual(
-            inline_result.trace.to_dict(),
-            executor_result.trace.to_dict(),
+            trace_rows_payload(inline_result.trace),
+            trace_rows_payload(executor_result.trace),
         )
+
+from automation_trace_contract import trace_rows_payload

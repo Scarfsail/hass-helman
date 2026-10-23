@@ -37,3 +37,8 @@ def normalize_generic_appliance_schedule_action(
 def is_generic_action_running(action: Mapping[str, Any]) -> bool:
     """A generic appliance runs while its normalized action switches it on."""
     return action.get("on") is True
+
+
+def generic_action_from_state(runtime: Any, state: str) -> dict[str, Any]:
+    """Observed switch activity, without inventing unrecorded settings."""
+    return {"on": state == "on"}

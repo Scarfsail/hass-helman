@@ -133,7 +133,7 @@ const PAYLOAD = explanationRows({
                 ],
             })),
             // Only 14:30 reached the writer, and the user owns that slot.
-            gates: slot === 3 ? [{ key: "blocked_user_owned", state: "false" }] : [],
+            gates: slot === 3 ? [{ key: "blocked_user_owned", role: "veto", state: "false" }] : [],
         })),
     }],
 });
@@ -209,12 +209,12 @@ const SINGLE_GROUP_PAYLOAD = explanationRows({
             gates: [
                 // False, and not a veto: the day under-runs and this slot still ran.
                 {
-                    key: "placement_capacity",
+                    key: "placement_capacity", role: "advisory",
                     state: "false",
                     params: { slotsNeeded: 6, slotsPlaceable: 4, windowSlots: 8 },
                 },
-                { key: "slot_available", state: "true" },
-                { key: "cheapest_rank", state: "true", params: { rank: 2, rankOf: 9 } },
+                { key: "slot_available", role: "veto", state: "true" },
+                { key: "cheapest_rank", role: "veto", state: "true", params: { rank: 2, rankOf: 9 } },
             ],
         })),
     }],
@@ -229,7 +229,7 @@ function poolSlot(slot: ExplanationSlotInput) {
         runAt: RUN_AT,
         optimizers: [{
             optimizerId: "appliance_runtime",
-            slots: [{ gates: [{ key: "slot_available", state: "true" }], ...slot }],
+            slots: [{ gates: [{ key: "slot_available", role: "veto", state: "true" }], ...slot }],
         }],
     });
 }
@@ -404,7 +404,7 @@ const DAILY_MINIMUM_RUN_PAYLOAD = explanationRows({
                 conditions: [maxRunPrice(9.0)],
             }],
             gates: [{
-                key: "daily_minimum_remaining",
+                key: "daily_minimum_remaining", role: "veto",
                 state: "true",
                 // Nothing had run when the plan was built, and the day owes two
                 // hours: the same params on all four slots.
@@ -490,7 +490,7 @@ function selfSustainabilityPayload(tolerancePct = 0) {
                         },
                     ],
                 }],
-                gates: [{ key: "slot_available", state: "true" }],
+                gates: [{ key: "slot_available", role: "veto", state: "true" }],
             })),
         }],
     });
@@ -577,8 +577,8 @@ const SELF_GATING_TWO_GROUP_PAYLOAD = explanationRows({
                 },
             ],
             gates: [
-                { key: "run_window", state: "true", params: { start: "08:00", end: "18:00" } },
-                { key: "blocked_user_owned", state: "true" },
+                { key: "run_window", role: "veto", state: "true", params: { start: "08:00", end: "18:00" } },
+                { key: "blocked_user_owned", role: "veto", state: "true" },
             ],
         }],
     }],
@@ -631,28 +631,28 @@ const FORCED_DAY_PAYLOAD = poolSlot({
         ],
     }],
     gates: [
-        { key: "run_window", state: "true", params: { start: "08:00", end: "18:00" } },
+        { key: "run_window", role: "veto", state: "true", params: { start: "08:00", end: "18:00" } },
         {
-            key: "daily_minimum_remaining",
+            key: "daily_minimum_remaining", role: "veto",
             state: "true",
             params: { minHours: 4, doneHours: 1.5, remainingHours: 2.5, slotsNeeded: 5 },
         },
         {
-            key: "consecutive_skip_override",
+            key: "consecutive_skip_override", role: "override",
             state: "true",
             params: { consecutiveSkips: 2, maxConsecutiveSkips: 2 },
         },
         {
-            key: "placement_capacity",
+            key: "placement_capacity", role: "advisory",
             state: "false",
             params: { slotsNeeded: 5, slotsPlaceable: 4, windowSlots: 8 },
         },
         {
-            key: "cheapest_rank",
+            key: "cheapest_rank", role: "veto",
             state: "true",
             params: { rank: 1, rankOf: 16, cost: 2.1, worstChosenCost: 3.4 },
         },
-        { key: "slot_available", state: "true" },
+        { key: "slot_available", role: "veto", state: "true" },
     ],
 });
 
@@ -684,7 +684,7 @@ const NOT_APPLICABLE_PAYLOAD = explanationRows({
                     { key: "min_soc_pct", scope: "slot", state: "not_applicable" },
                 ],
             }],
-            gates: [{ key: "slot_available", state: "true" }],
+            gates: [{ key: "slot_available", role: "veto", state: "true" }],
         }],
     }],
 });

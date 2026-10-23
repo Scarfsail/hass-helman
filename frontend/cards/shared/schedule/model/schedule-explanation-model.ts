@@ -76,6 +76,7 @@ export interface ExplanationConditionNode {
 
 export interface ExplanationGate {
     key: string;
+    role: "veto" | "advisory" | "override";
     state: ExplanationNodeState;
     /**
      * Whatever the gate needs to explain itself, including ordinals such as

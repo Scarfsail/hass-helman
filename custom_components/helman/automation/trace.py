@@ -1,33 +1,17 @@
-"""Per-run optimizer decision trace (observability layer).
+"""Per-run committed writes and optimizer explanations.
 
-The trace makes every automation run explainable: for each schedule slot and
-each optimizer in the pipeline it records what the optimizer saw (rails), what
-it did (framework-recorded writes and emitted decisions), and — via the
-explanation layer in ``.explain`` — the condition logic that produced it. The
-recorder is a *dumb appender* owned by the optimizer loop — it never raises into
-the run, so an instrumentation bug can never stop the battery from charging.
-
-Design notes:
-- The serialized shape uses parallel arrays keyed by ``slotIds`` to stay compact.
-- Coverage validation (below) never fails the run: an overlap or a write without
-  a covering ``applied`` decision only warns and marks the step incomplete.
+The pipeline records actual schedule differences for winner attribution;
+optimizers record the conditions, gates and verdicts behind their plans.
+Reserve-floor observations remain a separate diagnostic-only collector.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 import logging
-from datetime import datetime
 from typing import Any, Iterable, Mapping, Sequence
 
-from homeassistant.util import dt as dt_util
 
-from ..const import SCHEDULE_SLOT_MINUTES
-from ..scheduling.schedule import (
-    SCHEDULE_SLOT_DURATION,
-    format_slot_id,
-    parse_slot_id,
-)
 from .explain import (
     NODE_SCOPES,
     NODE_STATES,
@@ -44,14 +28,6 @@ from .explain import (
 
 _LOGGER = logging.getLogger(__name__)
 
-# outcome vocabulary emitted by optimizers
-DECISION_OUTCOMES: frozenset[str] = frozenset(
-    {"applied", "rejected", "blocked", "out_of_scope"}
-)
-
-
-# --- serialized DTOs ---------------------------------------------------------
-
 
 @dataclass(frozen=True)
 class TraceWrite:
@@ -66,41 +42,6 @@ class TraceWrite:
     before: dict[str, Any] | None
     after: dict[str, Any] | None
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "slotId": self.slot_id,
-            "domain": self.controllable_id,
-            "before": self.before,
-            "after": self.after,
-        }
-
-
-@dataclass(frozen=True)
-class TraceDecision:
-    """A group-encoded decision: one outcome covering a list of slots."""
-
-    slot_ids: tuple[str, ...]
-    outcome: str
-    action: dict[str, Any] | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "slotIds": list(self.slot_ids),
-            "outcome": self.outcome,
-        }
-        if self.action is not None:
-            payload["action"] = self.action
-        return payload
-
-
-@dataclass(frozen=True)
-class TraceNote:
-    code: str
-    params: dict[str, Any]
-
-    def to_dict(self) -> dict[str, Any]:
-        return {"code": self.code, "params": self.params}
-
 
 @dataclass(frozen=True)
 class ReserveFloorObservation:
@@ -110,7 +51,7 @@ class ReserveFloorObservation:
     windows — unlike ``_ChargeFromGridEmission`` (charge_from_grid.py), which
     is lossy per slot by design. This is the transport for the P0 reserve-floor
     breach classifier (#270/#274): a diagnostic-only collector on
-    :class:`OptimizerTrace`, deliberately excluded from ``to_dict()`` and
+    :class:`OptimizerTrace`, deliberately excluded from
     ``optimizer_explanations()`` so it never reaches the wire format or the
     inspector.
 
@@ -151,20 +92,8 @@ class _MutableStep:
     #: traced, so explanation records only carry the authoritative phases 2/3.
     phase: int = 2
     status: str = "ok"
-    complete: bool = True
-    # False when this optimizer carries an execution condition that is NOT met:
-    # its placements are candidates (kept for display, excluded from resource
-    # accounting, never executed). The frontend explains its actions as tentative
-    # rather than as planned-for-execution. Defaults True (no condition / met).
-    condition_met: bool = True
-    rails_in: dict[str, list[float | None]] = field(default_factory=dict)
     writes: list[TraceWrite] = field(default_factory=list)
-    decisions: list[TraceDecision] = field(default_factory=list)
-    notes: list[TraceNote] = field(default_factory=list)
     # --- explanation layer (see .explain) ---------------------------------
-    # Serialized under the ``explanation`` key (pivoted against the run's
-    # ``slotIds``) only once something is actually recorded, so an unconverted
-    # optimizer's payload stays byte-identical.
     # slot_id -> group index -> group explanation, in first-recorded order.
     group_explanations: dict[str, dict[int, GroupExplanation]] = field(
         default_factory=dict
@@ -189,7 +118,7 @@ class _MutableStep:
 
         A slot appears only where this step actually said something about it
         (groups, gates or a verdict); slots it never looked at stay absent, and
-        serialize as ``null`` in every column rather than claiming a verdict.
+        have no explanation row rather than claiming a verdict.
 
         ``winners`` maps ``(lane, slot id)`` to the optimizer whose write
         survived on that lane, so a row can say "yes I decided execute, and no,
@@ -222,31 +151,6 @@ class _MutableStep:
             status_reason=self.explain_status_reason,
             slots=tuple(slots),
         )
-
-    def to_dict(
-        self,
-        slot_ids: Sequence[str] = (),
-        winners: Mapping[tuple[str, str], str] | None = None,
-    ) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "optimizerId": self.optimizer_id,
-            "kind": self.kind,
-            "status": self.status,
-            "complete": self.complete,
-            "railsIn": self.rails_in,
-            "writes": [write.to_dict() for write in self.writes],
-            "decisions": [decision.to_dict() for decision in self.decisions],
-            "notes": [note.to_dict() for note in self.notes],
-        }
-        # Serialized only when present, to stay compact and keep existing
-        # fixtures (which never set either) unchanged.
-        if not self.condition_met:
-            payload["conditionMet"] = False
-        if self.has_explanation():
-            payload["explanation"] = self.explanation(slot_ids, winners).to_dict(
-                slot_ids
-            )
-        return payload
 
 
 def _resolve_nodes(
@@ -284,33 +188,21 @@ def _resolve_nodes(
 class OptimizerTrace:
     """Per-run recorder. One instance per automation run, owned by the loop.
 
-    All public mutators swallow their own errors: observability must never fail
-    the run. ``to_dict`` produces the serialized shape returned by the
-    ``helman/run_automation`` websocket.
+    The pipeline owns its lifecycle; explanation rows serve the schedule UI.
     """
 
     def __init__(self, *, slot_ids: Sequence[str]) -> None:
         self._slot_ids: tuple[str, ...] = tuple(slot_ids)
         self._slot_id_set: frozenset[str] = frozenset(slot_ids)
-        self._static_rails: dict[str, list[float | None]] = {}
-        self._rails_final: dict[str, list[float | None]] = {}
         self._steps: list[_MutableStep] = []
         self._current: _MutableStep | None = None
-        # Raw #274 collector, kept strictly separate from the decisions/gates
+        # Raw #274 collector, kept strictly separate from the explanation gates
         # above: see `ReserveFloorObservation`. Never serialized.
         self._reserve_floor_observations: list[ReserveFloorObservation] = []
 
     @property
     def slot_ids(self) -> tuple[str, ...]:
         return self._slot_ids
-
-    # --- rails ---------------------------------------------------------------
-
-    def set_static_rails(self, rails: dict[str, list[float | None]]) -> None:
-        self._static_rails = rails
-
-    def set_rails_final(self, rails: dict[str, list[float | None]]) -> None:
-        self._rails_final = rails
 
     # --- step lifecycle ------------------------------------------------------
 
@@ -336,36 +228,13 @@ class OptimizerTrace:
             phase=phase,
         )
 
-    def set_condition_met(self, condition_met: bool) -> None:
-        """Record whether the current step's execution condition is met.
-
-        Called by the optimizer loop once per step. ``False`` marks every
-        placement this step makes as a candidate (condition not met), which the
-        frontend surfaces as tentative in the run explanation.
-        """
-        if self._current is not None:
-            self._current.condition_met = condition_met
-
-    def set_rails_in(self, rails: dict[str, list[float | None]]) -> None:
-        if self._current is not None:
-            self._current.rails_in = rails
 
     def record_writes(self, writes: Iterable[TraceWrite]) -> None:
         if self._current is not None:
             self._current.writes = list(writes)
 
-    def discard_step_decisions(self) -> None:
-        """Drop partial decisions/notes for the current step (skip path)."""
-        if self._current is not None:
-            self._current.decisions = []
-            self._current.notes = []
-
     def end_step(self, *, status: str) -> None:
-        """Finalize the current step, running coverage validation.
-
-        ``status="skipped"`` steps are exempt from the gap check (they carry a
-        single horizon-wide note instead).
-        """
+        """Finalize the current step and retain its execution status."""
         step = self._current
         self._current = None
         if step is None:
@@ -374,67 +243,10 @@ class OptimizerTrace:
         if step.explain_status is None:
             # never stamped explicitly: inherit the loop's own verdict, so a
             # skipped/failed step stays distinguishable in the explanation too.
-            step.explain_status = (
-                status if status in OPTIMIZER_STATUSES else STATUS_OK
-            )
-        try:
-            if status != "skipped":
-                self._validate_coverage(step)
-        except Exception:  # pragma: no cover - observability must not fail runs
-            _LOGGER.exception("trace coverage validation failed; run continues")
+            step.explain_status = status if status in OPTIMIZER_STATUSES else STATUS_OK
         self._steps.append(step)
 
-    # --- decisions / notes ---------------------------------------------------
-
-    def decision(
-        self,
-        *,
-        slot_ids: Sequence[str],
-        outcome: str,
-        action: dict[str, Any] | None = None,
-    ) -> None:
-        if self._current is None:
-            return
-        if outcome not in DECISION_OUTCOMES:
-            _LOGGER.warning("trace decision has unknown outcome %r", outcome)
-        self._current.decisions.append(
-            TraceDecision(
-                slot_ids=tuple(slot_ids),
-                outcome=outcome,
-                action=action,
-            )
-        )
-
-    def note(self, *, code: str, params: dict[str, Any] | None = None) -> None:
-        if self._current is None:
-            return
-        self._current.notes.append(TraceNote(code=code, params=params or {}))
-
-    def note_horizon(
-        self,
-        *,
-        code: str,
-        params: dict[str, Any] | None = None,
-        outcome: str = "out_of_scope",
-    ) -> None:
-        """Record a note and expand it to a horizon-wide decision group.
-
-        Used for run-level rationales (battery params missing, forecast
-        unavailable, optimizer skipped): the note carries the ``code``, the
-        decision states the outcome it produced across the whole horizon.
-        """
-        if self._current is None:
-            return
-        self.note(code=code, params=params)
-        self.decision(slot_ids=self._slot_ids, outcome=outcome)
-
     # --- explanation layer ---------------------------------------------------
-    #
-    # Where decisions say *what* an optimizer did, these record *the logic that
-    # produced it*: the per-group condition matrix, the post-condition gates,
-    # and the step's own status. They accumulate on the current step and are
-    # assembled into a ``RunExplanation`` by the pipeline; they do not appear in
-    # ``to_dict`` and never affect coverage validation.
 
     def _horizon_slots(self, slot_ids: Iterable[str], what: str) -> list[str]:
         """Filter to horizon slots, warning about (and dropping) strays."""
@@ -486,8 +298,7 @@ class OptimizerTrace:
             stored[slot_id] = by_index
         if strays:
             _LOGGER.warning(
-                "trace group explanations reference %d off-horizon slot(s); "
-                "dropped",
+                "trace group explanations reference %d off-horizon slot(s); dropped",
                 strays,
             )
         step.group_explanations = stored
@@ -497,6 +308,7 @@ class OptimizerTrace:
         *,
         slot_ids: Sequence[str],
         key: str,
+        role: str,
         state: str,
         params: dict[str, Any] | None = None,
     ) -> None:
@@ -524,7 +336,7 @@ class OptimizerTrace:
             return
         if state not in NODE_STATES:
             _LOGGER.warning("trace gate %r has unknown state %r", key, state)
-        node = GateNode(key=key, state=state, params=dict(params or {}))
+        node = GateNode(key=key, role=role, state=state, params=dict(params or {}))
         for slot_id in self._horizon_slots(slot_ids, f"gate {key!r}"):
             step.gates.setdefault(slot_id, {})[key] = node
 
@@ -625,7 +437,7 @@ class OptimizerTrace:
         the cause (``condition_rails_unavailable``, ``battery_params_missing``,
         ``stop_export_unsupported``, ...).
 
-        Does not touch the decision-trace ``status``, which :meth:`end_step`
+        Does not touch the pipeline step ``status``, which :meth:`end_step`
         owns; when this is never called, ``end_step`` back-fills from that.
         """
         step = self._current
@@ -659,7 +471,7 @@ class OptimizerTrace:
     def reserve_floor_observations(self) -> tuple[ReserveFloorObservation, ...]:
         """The raw, unreduced observations recorded this run.
 
-        Deliberately absent from ``to_dict()`` and ``optimizer_explanations()``
+        Deliberately absent from ``optimizer_explanations()``
         — see :class:`ReserveFloorObservation`.
         """
         return tuple(self._reserve_floor_observations)
@@ -689,201 +501,13 @@ class OptimizerTrace:
 
         The assembly seam for the run record: a caller builds
         ``RunExplanation(run_at=..., slot_ids=trace.slot_ids,
-        optimizers=trace.optimizer_explanations())``. The same objects are what
-        each step serializes under its ``explanation`` key.
+        optimizers=trace.optimizer_explanations())``.
         """
         winners = self.winning_optimizers()
-        return tuple(
-            step.explanation(self._slot_ids, winners) for step in self._steps
-        )
-
-    # --- coverage validation -------------------------------------------------
-
-    def _validate_coverage(self, step: _MutableStep) -> None:
-        """Warn about decisions that contradict the committed writes.
-
-        Not every slot needs a decision — an optimizer that had nothing to say
-        about a slot says nothing. What must hold is that no two decisions claim
-        the same slot, and that every write is backed by an ``applied`` decision,
-        because that pairing is what attributes a scheduled action to the step
-        that produced it.
-        """
-        covered: set[str] = set()
-        overlaps: set[str] = set()
-        applied: set[str] = set()
-        for decision in step.decisions:
-            for slot_id in decision.slot_ids:
-                if slot_id in covered:
-                    overlaps.add(slot_id)
-                covered.add(slot_id)
-                if decision.outcome == "applied":
-                    applied.add(slot_id)
-        if overlaps:
-            step.complete = False
-            _LOGGER.warning(
-                "trace overlap in step %s: %d slots claimed by >1 decision",
-                step.optimizer_id,
-                len(overlaps),
-            )
-
-        # writes must be explained by a covering `applied` decision
-        unbacked_writes = [
-            write
-            for write in step.writes
-            if write.slot_id in self._slot_id_set and write.slot_id not in applied
-        ]
-        if unbacked_writes:
-            step.complete = False
-            _LOGGER.warning(
-                "trace: step %s has %d committed write(s) without an `applied` "
-                "decision",
-                step.optimizer_id,
-                len(unbacked_writes),
-            )
-
-    # --- serialization -------------------------------------------------------
-
-    def to_dict(self) -> dict[str, Any]:
-        winners = self.winning_optimizers()
-        return {
-            "slotIds": list(self._slot_ids),
-            "staticRails": self._static_rails,
-            "steps": [
-                step.to_dict(self._slot_ids, winners) for step in self._steps
-            ],
-            "railsFinal": self._rails_final,
-        }
+        return tuple(step.explanation(self._slot_ids, winners) for step in self._steps)
 
 
 # A shared no-op recorder for callers (e.g. unit tests) that invoke an optimizer
 # without a live trace. It has no open step, so every mutator no-ops and nothing
 # ever accumulates on it.
 NULL_TRACE = OptimizerTrace(slot_ids=())
-
-
-# --- buckets -> slots reducer -----------------------------------------------
-
-
-def _parse_timestamp(value: Any) -> datetime | None:
-    if not isinstance(value, str):
-        return None
-    parsed = dt_util.parse_datetime(value)
-    if parsed is None:
-        return None
-    return dt_util.as_local(parsed)
-
-
-def _read_float(value: Any) -> float | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        return float(value)
-    return None
-
-
-def _slot_id_for_timestamp(
-    timestamp: datetime, slot_id_set: frozenset[str]
-) -> str | None:
-    """Floor ``timestamp`` to its schedule slot boundary."""
-    local = dt_util.as_local(timestamp)
-    floored = local.replace(
-        minute=(local.minute // SCHEDULE_SLOT_MINUTES) * SCHEDULE_SLOT_MINUTES,
-        second=0,
-        microsecond=0,
-    )
-    slot_id = format_slot_id(floored)
-    return slot_id if slot_id in slot_id_set else None
-
-
-def aggregate_series_to_slots(
-    series: Any,
-    slot_ids: Sequence[str],
-    *,
-    sum_fields: Sequence[str] = (),
-    last_fields: Sequence[str] = (),
-) -> dict[str, list[float | None]]:
-    """Reduce canonical forecast buckets to schedule slots.
-
-    ``sum_fields`` are summed across the covering buckets (energies);
-    ``last_fields`` take the end-of-slot value (SoC trajectory). Slots past
-    forecast coverage are left ``None``.
-    """
-    slot_id_set = frozenset(slot_ids)
-    buckets_by_slot: dict[str, list[tuple[datetime, dict[str, Any]]]] = {
-        slot_id: [] for slot_id in slot_ids
-    }
-    if isinstance(series, list):
-        for entry in series:
-            if not isinstance(entry, dict):
-                continue
-            timestamp = _parse_timestamp(entry.get("timestamp"))
-            if timestamp is None:
-                continue
-            slot_id = _slot_id_for_timestamp(timestamp, slot_id_set)
-            if slot_id is None:
-                continue
-            buckets_by_slot[slot_id].append((timestamp, entry))
-
-    fields = (*sum_fields, *last_fields)
-    result: dict[str, list[float | None]] = {
-        field_name: [None] * len(slot_ids) for field_name in fields
-    }
-    for index, slot_id in enumerate(slot_ids):
-        buckets = sorted(buckets_by_slot[slot_id], key=lambda item: item[0])
-        if not buckets:
-            continue
-        for field_name in sum_fields:
-            values = [
-                value
-                for _, entry in buckets
-                if (value := _read_float(entry.get(field_name))) is not None
-            ]
-            result[field_name][index] = sum(values) if values else None
-        for field_name in last_fields:
-            last_value: float | None = None
-            for _, entry in buckets:
-                value = _read_float(entry.get(field_name))
-                if value is not None:
-                    last_value = value
-            result[field_name][index] = last_value
-    return result
-
-
-def price_points_to_slots(
-    points: Any,
-    slot_ids: Sequence[str],
-) -> list[float | None]:
-    """Map a price forecast ``points[]`` step function onto schedule slots.
-
-    Prices are step functions (a slot takes the most recent price at or before
-    its start), not additive — so this is separate from the energy reducer.
-    """
-    parsed: list[tuple[datetime, float]] = []
-    if isinstance(points, list):
-        for point in points:
-            if not isinstance(point, dict):
-                continue
-            timestamp = _parse_timestamp(point.get("timestamp"))
-            value = _read_float(point.get("value"))
-            if timestamp is None or value is None:
-                continue
-            parsed.append((timestamp, value))
-    parsed.sort(key=lambda item: item[0])
-
-    result: list[float | None] = [None] * len(slot_ids)
-    for index, slot_id in enumerate(slot_ids):
-        slot_start = parse_slot_id(slot_id)
-        slot_end = slot_start + SCHEDULE_SLOT_DURATION
-        current: float | None = None
-        for timestamp, value in parsed:
-            if timestamp <= slot_start:
-                # latest price at or before the slot start (step function)
-                current = value
-            elif timestamp < slot_end and current is None:
-                # no earlier price, but one starts within this slot
-                current = value
-                break
-            else:
-                break
-        result[index] = current
-    return result

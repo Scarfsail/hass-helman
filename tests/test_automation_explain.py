@@ -38,8 +38,6 @@ from custom_components.helman.automation.explain import (  # noqa: E402
     OptimizerExplanation,
     RunExplanation,
     SlotExplanation,
-    encode_runs,
-    encode_sparse,
 )
 
 RUN_AT = datetime(2026, 7, 31, 20, 15, tzinfo=TZ)
@@ -50,190 +48,6 @@ def _slot_ids(count: int, *, start_hour: int = 12) -> tuple[str, ...]:
     return tuple(
         (base + timedelta(minutes=30 * index)).isoformat() for index in range(count)
     )
-
-
-class RunLengthCodecTests(unittest.TestCase):
-    def test_all_same_states_collapse_to_one_run(self) -> None:
-        self.assertEqual(encode_runs(["true"] * 96), [["true", 96]])
-
-    def test_alternating_states_do_not_collapse(self) -> None:
-        values = ["true", "false", "true", "false"]
-        self.assertEqual(
-            encode_runs(values),
-            [["true", 1], ["false", 1], ["true", 1], ["false", 1]],
-        )
-
-    def test_empty_column_encodes_to_empty_runs(self) -> None:
-        self.assertEqual(encode_runs([]), [])
-
-    def test_runs_preserve_order_and_length(self) -> None:
-        values = ["true"] * 3 + ["not_evaluated"] * 2 + [None] * 4 + ["false"]
-        self.assertEqual(
-            encode_runs(values),
-            [["true", 3], ["not_evaluated", 2], [None, 4], ["false", 1]],
-        )
-
-    def test_dict_values_collapse_by_equality(self) -> None:
-        params = {"targetSocPct": 80}
-        self.assertEqual(
-            encode_runs([dict(params), dict(params), None]),
-            [[params, 2], [None, 1]],
-        )
-
-    def test_bool_and_int_are_not_merged(self) -> None:
-        self.assertEqual(encode_runs([True, 1]), [[True, 1], [1, 1]])
-
-
-class SparseCodecTests(unittest.TestCase):
-    def test_none_entries_are_omitted(self) -> None:
-        self.assertEqual(encode_sparse([None, 4.2, None, 0.0]), {"1": 4.2, "3": 0.0})
-
-    def test_all_none_column_encodes_to_empty_map(self) -> None:
-        self.assertEqual(encode_sparse([None, None]), {})
-
-    def test_keys_are_the_string_index_of_each_present_value(self) -> None:
-        self.assertEqual(encode_sparse([None, 4.2, None]), {"1": 4.2})
-
-
-class IndexAlignedShapeTests(unittest.TestCase):
-    def _record(self) -> RunExplanation:
-        slot_ids = _slot_ids(4)
-        # price passes on the first two slots and fails on the last two, which
-        # are the only slots carrying an actual.
-        states = ["true", "true", "false", "false"]
-        actuals = [None, None, 4.10, 4.55]
-        slots = tuple(
-            SlotExplanation(
-                slot_id=slot_id,
-                groups=(
-                    GroupExplanation(
-                        index=0,
-                        label="night",
-                        params={"targetSocPct": 80},
-                        params_source="slot_matched",
-                        custom_results=(True,),
-                        conditions=(
-                            ConditionNode(
-                                key="max_price",
-                                scope="slot",
-                                state=states[index],
-                                value=3.5,
-                                actual=actuals[index],
-                            ),
-                        ),
-                    ),
-                ),
-                gates=(GateNode(key="window", state="true", params={"rank": index}),),
-                verdict="execute" if states[index] == "true" else "skip",
-            )
-            for index, slot_id in enumerate(slot_ids)
-        )
-        return RunExplanation(
-            run_at=RUN_AT,
-            slot_ids=slot_ids,
-            optimizers=(
-                OptimizerExplanation(
-                    optimizer_id="grid-1",
-                    kind="charge_from_grid",
-                    slots=slots,
-                ),
-            ),
-        )
-
-    def test_single_slot_ids_array_lives_on_the_record(self) -> None:
-        payload = self._record().to_dict()
-        self.assertEqual(payload["slotIds"], list(_slot_ids(4)))
-        self.assertEqual(payload["runAt"], RUN_AT.isoformat())
-        step = payload["optimizers"][0]
-        self.assertNotIn("slotIds", step)
-        self.assertNotIn("slotId", str(step.get("groups")))
-
-    def test_node_state_is_run_length_encoded(self) -> None:
-        payload = self._record().to_dict()
-        node = payload["optimizers"][0]["groups"][0]["conditions"][0]
-        self.assertEqual(node["key"], "max_price")
-        self.assertEqual(node["scope"], "slot")
-        self.assertEqual(node["state"], [["true", 2], ["false", 2]])
-        self.assertEqual(node["value"], [[3.5, 4]])
-
-    def test_actuals_are_sparse_and_only_for_failing_slots(self) -> None:
-        payload = self._record().to_dict()
-        node = payload["optimizers"][0]["groups"][0]["conditions"][0]
-        self.assertEqual(node["actual"], {"2": 4.10, "3": 4.55})
-
-    def test_passing_node_omits_the_actual_key_entirely(self) -> None:
-        record = RunExplanation(
-            run_at=RUN_AT,
-            slot_ids=_slot_ids(2),
-            optimizers=(
-                OptimizerExplanation(
-                    optimizer_id="export-1",
-                    kind="export_price",
-                    slots=tuple(
-                        SlotExplanation(
-                            slot_id=slot_id,
-                            groups=(
-                                GroupExplanation(
-                                    index=0,
-                                    conditions=(
-                                        ConditionNode(key="run_when", state="true"),
-                                    ),
-                                ),
-                            ),
-                            verdict="execute",
-                        )
-                        for slot_id in _slot_ids(2)
-                    ),
-                ),
-            ),
-        )
-        node = record.to_dict()["optimizers"][0]["groups"][0]["conditions"][0]
-        self.assertNotIn("actual", node)
-        self.assertNotIn("value", node)
-
-    def test_verdict_column_is_run_length_encoded(self) -> None:
-        payload = self._record().to_dict()
-        self.assertEqual(
-            payload["optimizers"][0]["verdict"],
-            [["execute", 2], ["skip", 2]],
-        )
-
-    def test_gate_params_ride_the_same_column_shape(self) -> None:
-        payload = self._record().to_dict()
-        gate = payload["optimizers"][0]["gates"][0]
-        self.assertEqual(gate["key"], "window")
-        self.assertEqual(gate["state"], [["true", 4]])
-        self.assertEqual(
-            gate["params"],
-            [[{"rank": 0}, 1], [{"rank": 1}, 1], [{"rank": 2}, 1], [{"rank": 3}, 1]],
-        )
-
-    def test_empty_slot_list_serializes(self) -> None:
-        record = RunExplanation(
-            run_at=RUN_AT,
-            slot_ids=(),
-            optimizers=(
-                OptimizerExplanation(optimizer_id="idle", kind="charge_hold"),
-            ),
-        )
-        payload = record.to_dict()
-        self.assertEqual(payload["slotIds"], [])
-        self.assertEqual(payload["optimizers"][0]["verdict"], [])
-        self.assertEqual(record.optimizers[0].to_rows()["slots"], [])
-
-    def test_off_horizon_slot_is_dropped_not_raised(self) -> None:
-        record = RunExplanation(
-            run_at=RUN_AT,
-            slot_ids=_slot_ids(1),
-            optimizers=(
-                OptimizerExplanation(
-                    optimizer_id="grid-1",
-                    kind="charge_from_grid",
-                    slots=(SlotExplanation(slot_id="2020-01-01T00:00:00+02:00"),),
-                ),
-            ),
-        )
-        self.assertEqual(record.to_dict()["optimizers"][0]["verdict"], [[None, 1]])
 
 
 class PlainRowTests(unittest.TestCase):
@@ -279,7 +93,7 @@ class PlainRowTests(unittest.TestCase):
                         ),
                     ),
                 ),
-                gates=(GateNode(key="capacity", state="true"),),
+                gates=(GateNode(role="veto", key="capacity", state="true"),),
                 verdict="candidate",
             ),
             SlotExplanation(
@@ -304,14 +118,14 @@ class PlainRowTests(unittest.TestCase):
             SlotExplanation(
                 slot_id=slot_ids[2],
                 gates=(
-                    GateNode(key="capacity", state="false", params={"rank": 7}),
-                    GateNode(key="deadline", state="true"),
+                    GateNode(role="veto", key="capacity", state="false", params={"rank": 7}),
+                    GateNode(role="veto", key="deadline", state="true"),
                 ),
                 verdict="skip",
             ),
             SlotExplanation(
                 slot_id=slot_ids[4],
-                gates=(GateNode(key="blocked_user_owned", state="false"),),
+                gates=(GateNode(role="veto", key="blocked_user_owned", state="false"),),
                 verdict="execute",
                 winning_optimizer="export_price",
             ),
@@ -395,7 +209,7 @@ class PlainRowTests(unittest.TestCase):
                                 ],
                             },
                         ],
-                        "gates": [{"key": "capacity", "state": "true", "params": {}}],
+                        "gates": [{"key": "capacity", "role": "veto", "state": "true", "params": {}}],
                     },
                     {
                         "slotId": slot_ids[1],
@@ -420,11 +234,11 @@ class PlainRowTests(unittest.TestCase):
                         "groups": [],
                         "gates": [
                             {
-                                "key": "capacity",
+                                "key": "capacity", "role": "veto",
                                 "state": "false",
                                 "params": {"rank": 7},
                             },
-                            {"key": "deadline", "state": "true", "params": {}},
+                            {"key": "deadline", "role": "veto", "state": "true", "params": {}},
                         ],
                     },
                     {
@@ -434,7 +248,7 @@ class PlainRowTests(unittest.TestCase):
                         "groups": [],
                         "gates": [
                             {
-                                "key": "blocked_user_owned",
+                                "key": "blocked_user_owned", "role": "veto",
                                 "state": "false",
                                 "params": {},
                             }

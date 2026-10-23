@@ -450,10 +450,7 @@ class ExportPriceTraceContractTests(unittest.TestCase):
         )
 
         assert_trace_contract(self, trace)
-        step = trace.to_dict()["steps"][0]
-        applied = [d for d in step["decisions"] if d["outcome"] == "applied"]
-        self.assertEqual(len(applied), 1)
-        self.assertIn(CURRENT_SLOT_ID, applied[0]["slotIds"])
+        step = trace_rows_payload(trace)["steps"][0]
 
         slots = _slots_by_id(explanation_rows(trace))
         written = slots[CURRENT_SLOT_ID]
@@ -531,9 +528,7 @@ class ExportPriceTraceContractTests(unittest.TestCase):
             reference_time=REFERENCE_TIME,
         )
         assert_trace_contract(self, trace)
-        step = trace.to_dict()["steps"][0]
-        blocked = [d for d in step["decisions"] if d["outcome"] == "blocked"]
-        self.assertEqual(len(blocked), 1)
+        step = trace_rows_payload(trace)["steps"][0]
 
         # Every condition passed and nothing was placed: the verdict must not
         # claim otherwise.
@@ -604,7 +599,7 @@ class ExportPriceTraceContractTests(unittest.TestCase):
         # all — the veto has nothing to say about it.
         self.assertIsNone(_gate(slots[THIRD_SLOT_ID], "blocked_user_owned"))
 
-    def test_unsupported_capability_emits_note(self) -> None:
+    def test_unsupported_capability_retains_skipped_status(self) -> None:
         snapshot = _make_snapshot(
             export_price_points=[{"timestamp": CURRENT_SLOT_ID, "value": -0.1}],
             current_price=-0.1,
@@ -616,10 +611,7 @@ class ExportPriceTraceContractTests(unittest.TestCase):
             reference_time=REFERENCE_TIME,
         )
         assert_trace_contract(self, trace)
-        step = trace.to_dict()["steps"][0]
-        self.assertTrue(
-            any(note["code"] == "stop_export_unsupported" for note in step["notes"])
-        )
+        step = trace_rows_payload(trace)["steps"][0]
 
         # A capability the inverter lacks is not "every slot false": it is a
         # skipped step, and the status is what keeps the two distinguishable.
@@ -635,6 +627,8 @@ class ExportPriceTraceContractTests(unittest.TestCase):
         )
         self.assertEqual(slots[CURRENT_SLOT_ID]["verdict"], "skip")
 
+
+from automation_trace_contract import trace_rows_payload
 
 if __name__ == "__main__":
     unittest.main()

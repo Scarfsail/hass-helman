@@ -26,12 +26,10 @@ from .ownership import (
     strip_automation_owned_actions,
 )
 from .optimizer import build_optimizer
-from .snapshot import OptimizationSnapshot, attach_day_contexts, snapshot_to_dict
+from .snapshot import OptimizationSnapshot, attach_day_contexts
 from .trace import (
     OptimizerTrace,
     TraceWrite,
-    aggregate_series_to_slots,
-    price_points_to_slots,
 )
 from ..scheduling.schedule import (
     ScheduleDocument,
@@ -57,25 +55,12 @@ class AutomationCleanupSummary:
     reason: str
     actions_stripped: int
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "reason": self.reason,
-            "actionsStripped": self.actions_stripped,
-        }
-
 
 @dataclass(frozen=True)
 class AutomationRunFailure:
     stage: str
     message: str
     unexpected: bool = True
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "stage": self.stage,
-            "message": self.message,
-            "unexpected": self.unexpected,
-        }
 
 
 @dataclass(frozen=True)
@@ -86,18 +71,6 @@ class OptimizerRunSummary:
     slots_written: int
     duration_ms: int
     error: str | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "id": self.id,
-            "kind": self.kind,
-            "status": self.status,
-            "slotsWritten": self.slots_written,
-            "durationMs": self.duration_ms,
-        }
-        if self.error is not None:
-            payload["error"] = self.error
-        return payload
 
 
 @dataclass(frozen=True)
@@ -178,50 +151,6 @@ class AutomationRunResult:
             trace=trace,
         )
 
-    def to_dict(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "ranAutomation": self.ran_automation,
-            "snapshot": (
-                None if self.snapshot is None else snapshot_to_dict(self.snapshot)
-            ),
-            "dayContexts": _summarize_day_contexts(self.snapshot),
-            "optimizers": [optimizer.to_dict() for optimizer in self.optimizers],
-            "durationMs": self.duration_ms,
-        }
-        if self.reason is not None:
-            payload["reason"] = self.reason
-        if self.message is not None:
-            payload["message"] = self.message
-        if self.cleanup is not None:
-            payload["cleanup"] = self.cleanup.to_dict()
-        if self.failure is not None:
-            payload["failure"] = self.failure.to_dict()
-        if self.trace is not None:
-            payload["trace"] = self.trace.to_dict()
-        return payload
-
-
-def _summarize_day_contexts(
-    snapshot: OptimizationSnapshot | None,
-) -> list[dict[str, Any]]:
-    """Concise per-day summary (the day's classification) for the UI.
-
-    Surfaces the run's canonical classification — the one computed from the
-    initial snapshot's whole-house view, not the per-optimizer ones (#264) —
-    beside the run result, so the frontend can show "today: surplus day" and why
-    the schedule is shaped as it is without digging into the full serialized
-    snapshot.
-    """
-    if snapshot is None:
-        return []
-    return [
-        {
-            "localDate": local_date.isoformat(),
-            "classification": day_context.classification,
-            "ratio": None if day_context.ratio == float("inf") else day_context.ratio,
-        }
-        for local_date, day_context in sorted(snapshot.context.day_contexts.items())
-    ]
 
 
 def _read_actual_history(forecast: Mapping[str, Any] | None) -> list[dict[str, Any]]:
@@ -788,9 +717,6 @@ def run_optimizer_loop_pure(
     snapshot = initial_snapshot
     optimizer_summaries: list[OptimizerRunSummary] = []
     trace = OptimizerTrace(slot_ids=iter_horizon_slot_ids(reference_time))
-    trace.set_static_rails(
-        _safe_capture(_capture_static_rails, initial_snapshot, trace.slot_ids)
-    )
     emitted_day_bands: dict[tuple[date, str], str] = {}
     # --- Phase 1: appliance optimizers, earlier appliances only, untraced ---
     # Provisional and superseded by phase 3: its summaries never join
@@ -890,9 +816,6 @@ def run_optimizer_loop_pure(
         final_day_contexts = resolve_day_contexts(snapshot, optimizer_id=None)
         snapshot = attach_day_contexts(snapshot, final_day_contexts)
 
-    trace.set_rails_final(
-        _safe_capture(_capture_step_rails, snapshot, trace.slot_ids)
-    )
     return _PipelineExecutionResult(
         working_schedule_document=working_schedule_document,
         snapshot=snapshot,
@@ -954,7 +877,7 @@ def _run_optimizer_step(
     "rails-unavailable policy" in #272: with no baseline to fall back to,
     continuing would persist that appliance's lane empty. That holds per
     member: there is no partial group. A step is opened (if one is not already)
-    purely so the failure note is visible on the trace the failed run reports.
+    purely so the failed run retains the step identity and status.
     """
     optimizer_started_at = time.perf_counter()
     emitted_bands: dict[tuple[date, str], str] = {}
@@ -990,19 +913,6 @@ def _run_optimizer_step(
                 controllable_id=controllable_id,
                 phase=phase,
             )
-            # Stamp the step with its execution-condition state so the run
-            # explanation can present this optimizer's placements as candidates
-            # (tentative, won't execute) rather than as planned-for-execution.
-            condition_met_by_group = (
-                snapshot.context.condition_met_by_optimizer_id.get(optimizer_config.id)
-            )
-            trace.set_condition_met(
-                True if condition_met_by_group is None else any(condition_met_by_group)
-            )
-            # railsIn is the rail segment the optimizer received (pre-rebuild).
-            trace.set_rails_in(
-                _safe_capture(_capture_step_rails, snapshot, trace.slot_ids)
-            )
         try:
             optimizer = build_optimizer(
                 member_config,
@@ -1022,14 +932,6 @@ def _run_optimizer_step(
                     controllable_id=controllable_id,
                     phase=phase,
                 )
-            # Discards any partial decisions/notes from a traced (phase-3) attempt
-            # that raised mid-way, and collapses the column to a single
-            # horizon-wide `skipped` note; the coverage validator exempts it.
-            trace.discard_step_decisions()
-            trace.note_horizon(
-                code="optimizer_skipped",
-                params={"applianceId": err.appliance_id, "reason": str(err)},
-            )
             trace.end_step(status="skipped")
             raise _build_optimizer_error(
                 config=optimizer_config,
@@ -1153,82 +1055,6 @@ def _build_runner_failed_result(
         cleanup=cleanup,
         trace=trace,
     )
-
-
-def _safe_capture(
-    capture,
-    snapshot: OptimizationSnapshot,
-    slot_ids: tuple[str, ...],
-) -> dict[str, list[float | None]]:
-    """Run a rail-capture helper without ever failing the run."""
-    try:
-        return capture(snapshot, slot_ids)
-    except Exception:  # pragma: no cover - observability must not fail runs
-        _LOGGER.exception("trace rail capture failed; run continues")
-        return {}
-
-
-def _capture_static_rails(
-    snapshot: OptimizationSnapshot,
-    slot_ids: tuple[str, ...],
-) -> dict[str, list[float | None]]:
-    """Per-run rails identical at every step: prices and solar only.
-
-    House demand is *not* run-invariant under the phased pipeline (#272, P2 of
-    #270): phase 2 genuinely reads the phase-1 estimate, phase 3 may move it.
-    A "static" house rail would misattribute phase 2's input, so
-    ``houseKwh`` moved to :func:`_capture_step_rails`, captured before every
-    step — each step then shows the house it actually read.
-    """
-    battery_series = snapshot.battery_forecast.get("series")
-    energy = aggregate_series_to_slots(
-        battery_series,
-        slot_ids,
-        sum_fields=("solarKwh",),
-    )
-    return {
-        "importPrice": price_points_to_slots(
-            snapshot.context.import_price_forecast.get("points"), slot_ids
-        ),
-        "exportPrice": price_points_to_slots(
-            snapshot.context.export_price_forecast.get("points"), slot_ids
-        ),
-        "solarKwh": energy["solarKwh"],
-    }
-
-
-def _capture_step_rails(
-    snapshot: OptimizationSnapshot,
-    slot_ids: tuple[str, ...],
-) -> dict[str, list[float | None]]:
-    """Step-sensitive rails: the system parameters an optimizer can move.
-
-    Captured before each step and after the last one, so the frontend can show
-    every decision's effect as a before->after delta (this step's rail vs the
-    next step's). Surplus is the redirectable solar; SoC is the projected
-    trajectory; import/export energy are the effective grid flows after the
-    battery schedule the step just changed; house is the demand this step
-    actually read — moved here from the static rails (#272, P2 of #270)
-    because it is not run-invariant once the run is phased.
-    """
-    surplus = aggregate_series_to_slots(
-        snapshot.grid_forecast.get("series"),
-        slot_ids,
-        sum_fields=("availableSurplusKwh",),
-    )
-    battery = aggregate_series_to_slots(
-        snapshot.battery_forecast.get("series"),
-        slot_ids,
-        sum_fields=("importedFromGridKwh", "exportedToGridKwh", "baselineHouseKwh"),
-        last_fields=("socPct",),
-    )
-    return {
-        "availableSurplusKwh": surplus["availableSurplusKwh"],
-        "batterySocPct": battery["socPct"],
-        "importedFromGridKwh": battery["importedFromGridKwh"],
-        "exportedToGridKwh": battery["exportedToGridKwh"],
-        "houseKwh": battery["baselineHouseKwh"],
-    }
 
 
 def _write_action_to_dict(action: SlotAction | None) -> dict[str, Any] | None:

@@ -35,7 +35,6 @@ SLOT_IDS = ["2026-07-31T10:00", "2026-07-31T10:30", "2026-07-31T11:00"]
 
 def _payload(
     *,
-    decisions=(),
     writes=(),
     explanation: OptimizerExplanation | None = None,
     status: str = "ok",
@@ -44,11 +43,7 @@ def _payload(
         "optimizerId": "opt-1",
         "kind": "export_price",
         "status": status,
-        "complete": True,
-        "railsIn": {},
         "writes": list(writes),
-        "decisions": list(decisions),
-        "notes": [],
     }
     if explanation is not None:
         step[EXPLANATION_KEY] = explanation.to_rows()
@@ -75,49 +70,24 @@ class TraceContractMetaTests(unittest.TestCase):
 
     # --- structural guarantees (reason-free) ---------------------------------
 
-    def test_overlapping_decisions_fail(self) -> None:
-        payload = _payload(
-            decisions=[
-                {"slotIds": SLOT_IDS[:2], "outcome": "applied"},
-                {"slotIds": SLOT_IDS[1:], "outcome": "rejected"},
-            ]
-        )
-        with self.assertRaises(AssertionError):
-            assert_trace_payload_contract(self, payload)
 
-    def test_write_without_applied_decision_fails(self) -> None:
+    def test_committed_write_without_execute_or_candidate_verdict_fails(self) -> None:
         payload = _payload(
-            decisions=[{"slotIds": SLOT_IDS, "outcome": "rejected"}],
-            writes=[{"slotId": SLOT_IDS[0], "domain": "inverter"}],
-        )
-        with self.assertRaises(AssertionError):
-            assert_trace_payload_contract(self, payload)
-
-    def test_write_covered_by_applied_decision_passes(self) -> None:
-        payload = _payload(
-            decisions=[{"slotIds": SLOT_IDS, "outcome": "applied"}],
-            writes=[{"slotId": SLOT_IDS[0], "domain": "inverter"}],
             explanation=_explanation(SLOT_IDS),
+            writes=[{"slotId": SLOT_IDS[0], "domain": "inverter"}],
         )
-        assert_trace_payload_contract(self, payload)
+        with self.assertRaises(AssertionError):
+            assert_trace_payload_contract(self, payload)
+
 
     def test_write_attributable_to_explanation_verdict_passes(self) -> None:
-        # Post-conversion path: no `applied` decision, but the explanation says
-        # the slot executes.
+        # The explanation verdict attributes the committed write.
         payload = _payload(
             writes=[{"slotId": SLOT_IDS[0], "domain": "inverter"}],
             explanation=_explanation(SLOT_IDS, verdict=VERDICT_EXECUTE),
         )
         assert_trace_payload_contract(self, payload)
 
-    def test_a_decision_carries_only_an_outcome(self) -> None:
-        # v1 asserted every decision's `code` was in V1_REASON_CODES; a decision
-        # has no reason at all now, and the contract is purely structural.
-        payload = _payload(
-            decisions=[{"slotIds": SLOT_IDS, "outcome": "rejected"}],
-            explanation=_explanation(SLOT_IDS),
-        )
-        assert_trace_payload_contract(self, payload)
 
     # --- explanation coverage (the v2 contract) ------------------------------
 

@@ -95,6 +95,7 @@ from .consumption_forecast_builder import (
     read_house_forecast_request,
 )
 from .controllables.config import (
+    CONTROLLABLE_ID_INVERTER,
     entity_friendly_name,
     is_active_state,
     iter_devices,
@@ -106,6 +107,7 @@ from .controllables.config import (
 from .controllables.spec import (
     CONTROLLABLE_KIND_CLIMATE,
     CONTROLLABLE_KIND_GENERIC,
+    CONTROLLABLE_KIND_INVERTER,
     spec_for,
 )
 from .device_reports.dataset import (
@@ -145,9 +147,11 @@ from .house_device_consumers import extract_house_device_consumers
 from .house_forecast_response import build_house_forecast_response
 from .live_power import LivePowerTracker
 from .point_forecast_response import build_solar_forecast_response
-from .scheduling.actual_history import ActualHistorySlot, build_entity_actual_histories
+from .scheduling.actual_history import build_entity_actual_histories
 from .scheduling.normal_state import (
+    build_controllable_entity,
     build_controllable_entities,
+    iter_controllable_sources,
 )
 from .scheduling.schedule import (
     ScheduleActionSetBy,
@@ -2039,7 +2043,7 @@ class HelmanCoordinator:
 
     async def async_get_entity_actual_history(
         self,
-    ) -> dict[str, list[ActualHistorySlot]]:
+    ) -> dict[str, list[dict[str, Any]]]:
         """What each controllable entity actually did earlier today.
 
         The whole roster shares one reference time, so it shares one window --
@@ -2059,12 +2063,31 @@ class HelmanCoordinator:
             reference_time=dt_util.utcnow(),
             interval_minutes=SCHEDULE_SLOT_MINUTES,
         )
-        # Keep the roster's order and its full membership, so a caller sees the
-        # same keys it would have seen from the per-entity loop.
-        return {
-            entity["entityId"]: history.get(entity["entityId"], [])
-            for entity in entities
-        }
+        # Keep each configured instance: a control entity can serve several lanes.
+        result: dict[str, list[dict[str, Any]]] = {}
+        for spec, runtime in iter_controllable_sources(
+            control_config=control_config, registry=registry
+        ):
+            entity = build_controllable_entity(spec, runtime)
+            if entity is None:
+                continue
+            entity_id = entity["entityId"]
+            controllable_id = (
+                CONTROLLABLE_ID_INVERTER
+                if spec.kind == CONTROLLABLE_KIND_INVERTER
+                else runtime.id
+            )
+            result.setdefault(entity_id, []).extend(
+                {
+                    "controllableId": controllable_id,
+                    "slot": entry["slot"],
+                    "action": action,
+                    "ratio": entry["ratio"],
+                }
+                for entry in history.get(entity_id, [])
+                if (action := spec.action_from_state(runtime, entry["state"])) is not None
+            )
+        return result
 
     def _fire_data_changed(self, kind: str) -> None:
         """Announce that something the cards draw has been rewritten.
