@@ -820,7 +820,7 @@ class TrainNowTests(unittest.IsolatedAsyncioTestCase):
         new_store = _make_store()
         new_store._store = old_store._store
         new_coordinator = _make_coordinator(store=new_store)
-        new_coordinator._async_refresh_forecast = AsyncMock()
+        new_coordinator.forecast._async_refresh_forecast = AsyncMock()
         hass = _hass(None)
 
         class _ReloadingApplianceJob:
@@ -855,7 +855,7 @@ class TrainNowTests(unittest.IsolatedAsyncioTestCase):
             _job(connection.results[0][1]["status"], "appliance_energy")["health"],
             "ok",
         )
-        new_coordinator._async_refresh_forecast.assert_awaited_once_with(
+        new_coordinator.forecast._async_refresh_forecast.assert_awaited_once_with(
             reason="training_artifacts_reloaded"
         )
 
@@ -875,7 +875,7 @@ class TrainNowTests(unittest.IsolatedAsyncioTestCase):
         new_service._store = new_store
         new_coordinator = _make_coordinator(bias_service=new_service)
         new_coordinator._solar_bias_store = new_store
-        new_coordinator._async_refresh_forecast = AsyncMock()
+        new_coordinator.forecast._async_refresh_forecast = AsyncMock()
         hass = _hass(None)
 
         old_service = _make_bias_service()
@@ -914,7 +914,7 @@ class TrainNowTests(unittest.IsolatedAsyncioTestCase):
             _job(connection.results[0][1]["status"], "solar_bias")["health"],
             "ok",
         )
-        new_coordinator._async_refresh_forecast.assert_awaited_once_with(
+        new_coordinator.forecast._async_refresh_forecast.assert_awaited_once_with(
             reason="training_artifacts_reloaded"
         )
 

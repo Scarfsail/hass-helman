@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:16:00+01:00")
 
 coordinator_module = importlib.import_module("custom_components.helman.coordinator")
+forecast_module = importlib.import_module("custom_components.helman.forecast.service")
 input_bundle_module = importlib.import_module("custom_components.helman.automation.input_bundle")
 config_module = importlib.import_module("custom_components.helman.appliances.config")
 automation_config_module = importlib.import_module("custom_components.helman.automation.config")
@@ -81,7 +82,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
         coordinator._appliances_registry.current = build_appliances_runtime_registry(
             {"devices": {"consumers": []}}
         )
-        coordinator._automation_input_bundle = None
+        coordinator.forecast._automation_input_bundle = None
         house_forecast = _make_house_forecast()
         canonical_solar = {
             "points": [{"timestamp": "2026-03-20T21:15:00+01:00", "value": 0.1}],
@@ -117,34 +118,34 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(
-                coordinator,
+                coordinator.forecast,
                 "_resolve_when_active_hourly_energy_kwh_by_appliance_id",
                 MagicMock(return_value={"pool-pump": 0.8}),
             ),
             patch.object(
-                coordinator,
+                coordinator.forecast,
                 "_async_get_canonical_solar_forecast",
                 AsyncMock(return_value=canonical_solar),
             ),
             patch.object(
-                coordinator_module,
+                forecast_module,
                 "build_solar_forecast_response",
                 return_value=canonical_solar,
             ),
             patch.object(
-                coordinator,
+                coordinator.forecast,
                 "grid_price_snapshot",
                 return_value=canonical_grid_price,
             ),
         ):
-            await coordinator._async_refresh_automation_input_bundle(
+            await coordinator.forecast._async_refresh_automation_input_bundle(
                 reference_time=REFERENCE_TIME,
                 house_forecast=house_forecast,
                 raw_forecast=_make_raw_forecast_result(),
             )
 
         self.assertEqual(
-            coordinator._automation_input_bundle,
+            coordinator.forecast._automation_input_bundle,
             AutomationInputBundle(
                 original_house_forecast=house_forecast,
                 solar_forecast=corrected_solar,
@@ -153,7 +154,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
         self.assertIsNot(
-            coordinator._automation_input_bundle.original_house_forecast,
+            coordinator.forecast._automation_input_bundle.original_house_forecast,
             house_forecast,
         )
 
@@ -238,7 +239,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
         coordinator.training.appliance_energy_estimates = {"living-room-hvac": 0.9}
 
         resolved = (
-            coordinator._resolve_when_active_hourly_energy_kwh_by_appliance_id()
+            coordinator.forecast._resolve_when_active_hourly_energy_kwh_by_appliance_id()
         )
 
         self.assertEqual(
@@ -311,7 +312,7 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
         coordinator.training.appliance_energy_estimates = {"dishwasher": 0.8}
 
         resolved = (
-            coordinator._resolve_when_active_hourly_energy_kwh_by_appliance_id()
+            coordinator.forecast._resolve_when_active_hourly_energy_kwh_by_appliance_id()
         )
 
         self.assertEqual(
@@ -333,39 +334,40 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
             grid_price_forecast={"importPricePoints": []},
             when_active_hourly_energy_kwh_by_appliance_id={"dishwasher": 1.2},
         )
-        coordinator._automation_input_bundle = previous_bundle
+        coordinator.forecast._automation_input_bundle = previous_bundle
 
         with (
             patch.object(
-                coordinator,
+                coordinator.forecast,
                 "_resolve_when_active_hourly_energy_kwh_by_appliance_id",
                 MagicMock(side_effect=RuntimeError()),
             ),
-            patch.object(coordinator_module._LOGGER, "exception"),
+            patch.object(forecast_module._LOGGER, "exception"),
         ):
-            refreshed = await coordinator._async_refresh_automation_input_bundle(
+            refreshed = await coordinator.forecast._async_refresh_automation_input_bundle(
                 reference_time=REFERENCE_TIME,
                 house_forecast=_make_house_forecast(),
                 raw_forecast=_make_raw_forecast_result(),
             )
 
         self.assertFalse(refreshed)
-        self.assertIs(coordinator._automation_input_bundle, previous_bundle)
+        self.assertIs(coordinator.forecast._automation_input_bundle, previous_bundle)
 
     async def test_refresh_forecast_updates_bundle_after_house_refresh(self) -> None:
         coordinator = make_coordinator()
         coordinator._hass = FakeHass()
+        coordinator.forecast._hass = coordinator._hass
         coordinator._active_config = {}
-        coordinator._storage = SimpleNamespace(
+        coordinator.forecast._storage = SimpleNamespace(
             schedule_document={"executionEnabled": False, "slotMinutes": 15, "slots": {}},
             async_save_snapshots=AsyncMock(),
         )
-        coordinator._invalidate_pipeline_cache = Mock()
-        coordinator._async_refresh_automation_input_bundle = AsyncMock(return_value=True)
-        coordinator._cached_forecast = None
-        coordinator._cached_solar_forecast = None
-        coordinator._slot_history = None
-        coordinator._ingest_grid_export_price = Mock(
+        coordinator.forecast._invalidate_pipeline_cache = Mock()
+        coordinator.forecast._async_refresh_automation_input_bundle = AsyncMock(return_value=True)
+        coordinator.forecast._cached_forecast = None
+        coordinator.forecast._cached_solar_forecast = None
+        coordinator.forecast._slot_history = None
+        coordinator.forecast._ingest_grid_export_price = Mock(
             return_value={"status": "available", "unit": "CZK/kWh"}
         )
 
@@ -377,40 +379,40 @@ class AutomationInputBundleTests(unittest.IsolatedAsyncioTestCase):
             "rawPoints": [],
         }
         builder_instance = SimpleNamespace(build=AsyncMock(return_value=snapshot))
-        coordinator._build_canonical_solar_forecast = Mock(return_value=solar_snapshot)
+        coordinator.forecast._build_canonical_solar_forecast = Mock(return_value=solar_snapshot)
         raw_forecast = _make_raw_forecast_result()
         with (
             patch.object(
-                coordinator_module,
+                forecast_module,
                 "ConsumptionForecastBuilder",
                 return_value=builder_instance,
             ),
             patch.object(
-                coordinator_module,
+                forecast_module,
                 "SolarForecastBuilder",
                 return_value=SimpleNamespace(
                     build=AsyncMock(return_value=raw_forecast["solar"])
                 ),
             ),
         ):
-            refresh_result = await coordinator._async_build_forecast_snapshots(
+            refresh_result = await coordinator.forecast._async_build_forecast_snapshots(
                 reference_time=REFERENCE_TIME, reason="slot_refresh"
             )
 
-        self.assertEqual(coordinator._cached_forecast, snapshot)
+        self.assertEqual(coordinator.forecast._cached_forecast, snapshot)
         self.assertEqual(
             refresh_result,
-            coordinator_module._ForecastRefreshResult(
+            forecast_module._ForecastRefreshResult(
                 forecast_refreshed=True,
                 bundle_ready=True,
             ),
         )
-        coordinator._invalidate_pipeline_cache.assert_called_once_with()
-        coordinator._storage.async_save_snapshots.assert_awaited_once_with(
+        coordinator.forecast._invalidate_pipeline_cache.assert_called_once_with()
+        coordinator.forecast._storage.async_save_snapshots.assert_awaited_once_with(
             house_snapshot=snapshot,
             solar_snapshot=solar_snapshot,
         )
-        coordinator._async_refresh_automation_input_bundle.assert_awaited_once_with(
+        coordinator.forecast._async_refresh_automation_input_bundle.assert_awaited_once_with(
             reference_time=REFERENCE_TIME,
             house_forecast=snapshot,
             raw_forecast=raw_forecast["solar"],
@@ -593,7 +595,7 @@ class ApplianceRuntimeHistoryResolutionTests(unittest.IsolatedAsyncioTestCase):
         coordinator._appliances_registry.current = build_appliances_runtime_registry(
             self.APPLIANCES
         )
-        coordinator._appliance_runtime_history = reader
+        coordinator.forecast._appliance_runtime_history = reader
         return coordinator
 
     @staticmethod
@@ -619,9 +621,9 @@ class ApplianceRuntimeHistoryResolutionTests(unittest.IsolatedAsyncioTestCase):
     async def _resolve(self, reader):
         coordinator = self._coordinator(reader)
         with patch.object(
-            coordinator_module, "read_automation_config", return_value=self._config()
+            forecast_module, "read_automation_config", return_value=self._config()
         ):
-            return await coordinator._async_resolve_runtime_hours_by_appliance_id_by_local_date(
+            return await coordinator.forecast._async_resolve_runtime_hours_by_appliance_id_by_local_date(
                 reference_time=datetime(2026, 5, 10, 12, 0)
             )
 
@@ -700,11 +702,11 @@ class ApplianceRuntimeHistoryResolutionTests(unittest.IsolatedAsyncioTestCase):
         )
         coordinator = self._coordinator(_Reader())
         with patch.object(
-            coordinator_module,
+            forecast_module,
             "read_automation_config",
             return_value=automation_config,
         ):
-            await coordinator._async_resolve_runtime_hours_by_appliance_id_by_local_date(
+            await coordinator.forecast._async_resolve_runtime_hours_by_appliance_id_by_local_date(
                 reference_time=datetime(2026, 5, 10, 12, 0)
             )
 
@@ -953,11 +955,11 @@ class ApplianceEnergyAdoptionTests(unittest.TestCase):
         coordinator.training.appliance_energy_estimates = {"dishwasher": 0.83}
         appliances = list(coordinator._appliances_registry.current.appliances)
         untrained = SimpleNamespace(id="never-trained")
-        coordinator._iter_projected_history_appliances = (
+        coordinator.forecast._iter_projected_history_appliances = (
             lambda **_kwargs: [*appliances, untrained]
         )
 
-        resolved = coordinator._build_history_projection_hourly_energy_by_appliance_id(
+        resolved = coordinator.forecast._build_history_projection_hourly_energy_by_appliance_id(
             schedule_document=object()
         )
 

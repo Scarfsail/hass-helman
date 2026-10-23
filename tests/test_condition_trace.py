@@ -8,6 +8,7 @@ the short-circuit. A ``hass`` with states and a bus is all the built-in
 """
 
 from __future__ import annotations
+from custom_components.helman.automation.config import read_automation_config
 
 from homeassistant.exceptions import Unauthorized
 
@@ -111,7 +112,7 @@ async def _build_checker(hass: FakeHass, entry: dict):
 async def _build_checker_and_entities(hass: FakeHass, entry: dict):
     """The checker and the entities the entry reads, as the coordinator gets them."""
     coordinator = _coordinator(hass, _optimizer({"custom": [entry]}))
-    return await coordinator._build_optimizer_condition_checker(
+    return await coordinator.conditions._build_optimizer_condition_checker(
         key=("export", 0), entry_index=0, condition_config=[entry]
     )
 
@@ -419,7 +420,7 @@ class CoordinatorConditionTraceTests(unittest.IsolatedAsyncioTestCase):
             hass, _optimizer({"when_price_below": 1.0, "custom": custom})
         )
 
-        await coordinator._async_evaluate_optimizer_conditions()
+        await coordinator.conditions.evaluate(read_automation_config(coordinator.config))
 
         payload = coordinator.get_condition_trace(optimizer_id="export", group_index=0)
         self.assertEqual(payload["optimizerId"], "export")
@@ -456,7 +457,7 @@ class CoordinatorConditionTraceTests(unittest.IsolatedAsyncioTestCase):
             }),
         )
 
-        await coordinator._async_evaluate_optimizer_conditions()
+        await coordinator.conditions.evaluate(read_automation_config(coordinator.config))
 
         payload = coordinator.get_condition_trace(optimizer_id="export", group_index=0)
         trace = payload["trace"]
@@ -479,7 +480,7 @@ class CoordinatorConditionTraceTests(unittest.IsolatedAsyncioTestCase):
             }),
         )
 
-        await coordinator._async_evaluate_optimizer_conditions()
+        await coordinator.conditions.evaluate(read_automation_config(coordinator.config))
 
         payload = coordinator.get_condition_trace(optimizer_id="export", group_index=0)
         self.assertNotIn("params", payload["trace"]["condition/0"][0])
@@ -496,7 +497,7 @@ class CoordinatorConditionTraceTests(unittest.IsolatedAsyncioTestCase):
             }),
         )
 
-        await coordinator._async_evaluate_optimizer_conditions()
+        await coordinator.conditions.evaluate(read_automation_config(coordinator.config))
 
         payload = coordinator.get_condition_trace(optimizer_id="export", group_index=0)
         self.assertEqual(
@@ -520,9 +521,9 @@ class CoordinatorConditionTraceTests(unittest.IsolatedAsyncioTestCase):
             }),
         )
 
-        await coordinator._async_evaluate_optimizer_conditions()
+        await coordinator.conditions.evaluate(read_automation_config(coordinator.config))
         hass.states._states["sensor.soc"] = State("sensor.soc", "11.0")
-        await coordinator._async_evaluate_optimizer_conditions()
+        await coordinator.conditions.evaluate(read_automation_config(coordinator.config))
 
         payload = coordinator.get_condition_trace(optimizer_id="export", group_index=0)
         self.assertEqual(
@@ -534,7 +535,7 @@ class CoordinatorConditionTraceTests(unittest.IsolatedAsyncioTestCase):
             FakeHass(), _optimizer({"when_price_below": 1.0})
         )
 
-        await coordinator._async_evaluate_optimizer_conditions()
+        await coordinator.conditions.evaluate(read_automation_config(coordinator.config))
 
         self.assertIsNone(
             coordinator.get_condition_trace(optimizer_id="export", group_index=0)
@@ -572,7 +573,7 @@ class CoordinatorConditionTraceTests(unittest.IsolatedAsyncioTestCase):
                 {"when_price_below": 2.0, "custom": custom},
             ),
         )
-        await coordinator._async_evaluate_optimizer_conditions()
+        await coordinator.conditions.evaluate(read_automation_config(coordinator.config))
         self.assertIsNotNone(
             coordinator.get_condition_trace(optimizer_id="export", group_index=1)
         )
@@ -582,7 +583,7 @@ class CoordinatorConditionTraceTests(unittest.IsolatedAsyncioTestCase):
                 "system_optimizers": [_optimizer({"when_price_below": 1.0, "custom": custom})]
             }
         }
-        await coordinator._async_evaluate_optimizer_conditions()
+        await coordinator.conditions.evaluate(read_automation_config(coordinator.config))
 
         self.assertIsNotNone(
             coordinator.get_condition_trace(optimizer_id="export", group_index=0)
@@ -614,7 +615,7 @@ class CoordinatorConditionTraceTests(unittest.IsolatedAsyncioTestCase):
                 }
             ),
         )
-        real_build = coordinator._build_optimizer_condition_checker
+        real_build = coordinator.conditions._build_optimizer_condition_checker
 
         async def _build(*, key, entry_index, condition_config):
             if entry_index == 1:
@@ -626,9 +627,9 @@ class CoordinatorConditionTraceTests(unittest.IsolatedAsyncioTestCase):
                 key=key, entry_index=entry_index, condition_config=condition_config
             )
 
-        coordinator._build_optimizer_condition_checker = _build
+        coordinator.conditions._build_optimizer_condition_checker = _build
 
-        results = await coordinator._async_evaluate_optimizer_conditions()
+        results = await coordinator.conditions.evaluate(read_automation_config(coordinator.config))
 
         group = results["export"][0]
         self.assertEqual(
@@ -659,7 +660,7 @@ class CoordinatorConditionTraceTests(unittest.IsolatedAsyncioTestCase):
                 }
             ),
         )
-        await coordinator._async_evaluate_optimizer_conditions()
+        await coordinator.conditions.evaluate(read_automation_config(coordinator.config))
 
         await coordinator.async_unload()
 
@@ -698,7 +699,7 @@ class ConditionTraceWebsocketTests(unittest.IsolatedAsyncioTestCase):
                 }
             ),
         )
-        await coordinator._async_evaluate_optimizer_conditions()
+        await coordinator.conditions.evaluate(read_automation_config(coordinator.config))
         connection = FakeConnection()
 
         ws_get_condition_trace(self._hass(coordinator), connection, dict(self.MESSAGE))
@@ -713,7 +714,7 @@ class ConditionTraceWebsocketTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_returns_null_for_a_group_with_no_custom_conditions(self) -> None:
         coordinator = _coordinator(FakeHass(), _optimizer({"when_price_below": 1.0}))
-        await coordinator._async_evaluate_optimizer_conditions()
+        await coordinator.conditions.evaluate(read_automation_config(coordinator.config))
         connection = FakeConnection()
 
         ws_get_condition_trace(self._hass(coordinator), connection, dict(self.MESSAGE))

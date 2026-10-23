@@ -317,11 +317,11 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
                 case_builder._config
             )
             coordinator = make_coordinator()
-            coordinator._cached_forecast = payload
+            coordinator.forecast._cached_forecast = payload
 
             with self.subTest(status=payload["status"]):
                 self.assertTrue(
-                    coordinator._has_matching_forecast_snapshot(
+                    coordinator.forecast._has_matching_forecast_snapshot(
                         total_energy_entity_id=request.total_energy_entity_id,
                         training_window_days=request.training_window_days,
                         min_history_days=request.min_history_days,

@@ -152,7 +152,7 @@ def hold_pipeline(coordinator: Any, pipeline: Any) -> None:
     """Cache ``pipeline`` for the readers that serve it without a key check."""
     from datetime import datetime, timezone
 
-    from custom_components.helman.coordinator import (
+    from custom_components.helman.forecast.service import (
         _PipelineCacheEntry,
         _PipelineCacheKey,
     )
@@ -167,7 +167,7 @@ def hold_pipeline(coordinator: Any, pipeline: Any) -> None:
         appliance_sig=(),
         effective_sig=None,
     )
-    coordinator._pipeline_cache = (
+    coordinator.forecast._pipeline_cache = (
         None
         if pipeline is None
         else _PipelineCacheEntry(
@@ -198,8 +198,12 @@ def make_coordinator(**overrides):
     # test_coordinator_schedule_execution.py, which is held unchanged and holds
     # the lock around the persist call it reaches on the coordinator.
     coordinator._schedule_lock = coordinator.schedule._lock
+    forecast_fields = {
+        "_cached_forecast", "_cached_solar_forecast", "_pipeline_cache",
+        "_automation_input_bundle", "_grid_price_snapshot_cache",
+    }
     for name, value in overrides.items():
-        setattr(coordinator, name, value)
+        setattr(coordinator.forecast if name in forecast_fields else coordinator, name, value)
     return coordinator
 
 

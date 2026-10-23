@@ -13,6 +13,7 @@ REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:16:00+01:00")
 
 const_module = importlib.import_module("custom_components.helman.const")
 coordinator_module = importlib.import_module("custom_components.helman.coordinator")
+forecast_module = importlib.import_module("custom_components.helman.forecast.service")
 
 
 @pytest.fixture(autouse=True)
@@ -32,7 +33,7 @@ HelmanCoordinator = coordinator_module.HelmanCoordinator
 class CoordinatorHouseForecastTests(unittest.TestCase):
     def test_has_matching_forecast_snapshot_rejects_missing_canonical_slot(self) -> None:
         coordinator = make_coordinator()
-        coordinator._cached_forecast = {
+        coordinator.forecast._cached_forecast = {
             "status": "available",
             "actualHistory": [],
             "trainingWindowDays": 56,
@@ -42,7 +43,7 @@ class CoordinatorHouseForecastTests(unittest.TestCase):
         }
 
         self.assertFalse(
-            coordinator._has_matching_forecast_snapshot(
+            coordinator.forecast._has_matching_forecast_snapshot(
                 total_energy_entity_id="sensor.house_total",
                 training_window_days=56,
                 min_history_days=14,
@@ -52,7 +53,7 @@ class CoordinatorHouseForecastTests(unittest.TestCase):
 
     def test_has_matching_forecast_snapshot_accepts_canonical_slot_shape(self) -> None:
         coordinator = make_coordinator()
-        coordinator._cached_forecast = {
+        coordinator.forecast._cached_forecast = {
             "status": "available",
             "actualHistory": [],
             "trainingWindowDays": 56,
@@ -67,7 +68,7 @@ class CoordinatorHouseForecastTests(unittest.TestCase):
         }
 
         self.assertTrue(
-            coordinator._has_matching_forecast_snapshot(
+            coordinator.forecast._has_matching_forecast_snapshot(
                 total_energy_entity_id="sensor.house_total",
                 training_window_days=56,
                 min_history_days=14,
@@ -80,7 +81,7 @@ class CoordinatorHouseForecastTests(unittest.TestCase):
         # nonDeferrable already carries scheduled appliance demand (0.6 kWh).
         # The deferrableConsumers band and the unadjusted cache must be ignored.
         coordinator = make_coordinator()
-        coordinator._cached_forecast = {
+        coordinator.forecast._cached_forecast = {
             "status": "available",
             "currentSlot": {
                 "timestamp": "2026-03-20T21:15:00+01:00",
@@ -115,7 +116,7 @@ class CoordinatorHouseForecastTests(unittest.TestCase):
         # never base + deferrableConsumers.
         coordinator = make_coordinator()
         hold_pipeline(coordinator, None)
-        coordinator._cached_forecast = {
+        coordinator.forecast._cached_forecast = {
             "status": "available",
             "currentSlot": {
                 "timestamp": "2026-03-20T21:15:00+01:00",
@@ -201,7 +202,7 @@ class StartupForecastRefreshDeferralTests(unittest.TestCase):
 class ForecastStalenessTests(unittest.TestCase):
     def test_a_healthy_outcome_leaves_the_age_rule_alone(self) -> None:
         self.assertIsNone(
-            coordinator_module._build_house_profile_health(
+            forecast_module._build_house_profile_health(
                 {"lastOutcome": "profile_trained"}
             )
         )
@@ -213,7 +214,7 @@ class ForecastStalenessTests(unittest.TestCase):
             ("training_failed", "house_profile_training_failed"),
         ):
             with self.subTest(last_outcome=last_outcome):
-                health = coordinator_module._build_house_profile_health(
+                health = forecast_module._build_house_profile_health(
                     {
                         "lastOutcome": last_outcome,
                         "historyDaysAvailable": 3,
@@ -227,7 +228,7 @@ class ForecastStalenessTests(unittest.TestCase):
                 self.assertTrue(health[1])
 
     def test_the_override_wins_over_a_fresh_snapshot(self) -> None:
-        staleness = coordinator_module._build_forecast_staleness(
+        staleness = forecast_module._build_forecast_staleness(
             REFERENCE_TIME.isoformat(),
             reference_time=REFERENCE_TIME,
             override=("house_profile_training_failed", "check the log"),
@@ -238,7 +239,7 @@ class ForecastStalenessTests(unittest.TestCase):
         self.assertEqual(staleness["hint"], "check the log")
 
     def test_without_an_override_age_still_decides(self) -> None:
-        staleness = coordinator_module._build_forecast_staleness(
+        staleness = forecast_module._build_forecast_staleness(
             REFERENCE_TIME.isoformat(),
             reference_time=REFERENCE_TIME,
         )

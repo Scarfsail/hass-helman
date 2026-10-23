@@ -21,7 +21,7 @@ from datetime import datetime
 REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:16:00+01:00")
 
 def _load_coordinator_module():
-    return importlib.import_module("custom_components.helman.coordinator")
+    return importlib.import_module("custom_components.helman.forecast.service")
 
 def _load_sensor_module():
     return importlib.import_module("custom_components.helman.sensor")
@@ -372,7 +372,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
         coordinator_module = _load_coordinator_module()
 
         coordinator = make_coordinator()
-        coordinator._cached_solar_forecast = {
+        coordinator.forecast._cached_solar_forecast = {
             "points": [
                 {"timestamp": "2026-03-20T08:00:00+01:00", "value": 500.0},
                 {"timestamp": "2026-03-20T12:00:00+01:00", "value": 1500.0},
@@ -387,7 +387,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
         coordinator_module = _load_coordinator_module()
 
         coordinator = make_coordinator()
-        coordinator._cached_solar_forecast = {
+        coordinator.forecast._cached_solar_forecast = {
             "points": [
                 {"timestamp": "2026-03-20T08:00:00+01:00", "value": 500.0},
                 {"timestamp": "2026-03-20T09:15:00+01:00", "value": 750.0},
@@ -426,7 +426,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
         coordinator_module = _load_coordinator_module()
 
         coordinator = make_coordinator()
-        coordinator._cached_solar_forecast = {
+        coordinator.forecast._cached_solar_forecast = {
             "points": [
                 {"timestamp": "2026-03-20T08:00:00+01:00", "value": 500.0},
                 {"timestamp": "2026-03-20T12:00:00+01:00", "value": 1500.0},
@@ -488,7 +488,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
 
         coordinator = make_coordinator()
 
-        coordinator._absorb_grid_import_price(
+        coordinator.forecast._absorb_grid_import_price(
             {"import": {"status": "available", "unit": "CZK/kWh", "currentPrice": 4.25}}
         )
         self.assertEqual(coordinator.get_grid_import_price_current(), 4.25)
@@ -496,7 +496,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
 
         # A channel that stopped being priced clears the value: a price that is
         # no longer computed is not a price that has not moved.
-        coordinator._absorb_grid_import_price({"import": {"status": "not_configured"}})
+        coordinator.forecast._absorb_grid_import_price({"import": {"status": "not_configured"}})
         self.assertIsNone(coordinator.get_grid_import_price_current())
         self.assertIsNone(coordinator.get_grid_import_price_unit())
 
@@ -593,7 +593,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
 
         coordinator = make_coordinator()
 
-        coordinator._absorb_grid_export_price(
+        coordinator.forecast._absorb_grid_export_price(
             {"export": {"status": "available", "unit": "CZK/kWh", "currentPrice": 1.85}}
         )
         self.assertEqual(coordinator.get_grid_export_price_current(), 1.85)
@@ -603,14 +603,14 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
         # a price but no forward points. The price is exactly what this mirror
         # asks for, so it is taken; refusing it would leave the whole series
         # empty on any setup whose spot integration publishes no attributes.
-        coordinator._absorb_grid_export_price(
+        coordinator.forecast._absorb_grid_export_price(
             {"export": {"status": "partial", "unit": "CZK/kWh", "currentPrice": 2.5}}
         )
         self.assertEqual(coordinator.get_grid_export_price_current(), 2.5)
 
         # A channel with no price at all clears the value rather than holding
         # the last one: the recorder must not archive a stale rate as current.
-        coordinator._absorb_grid_export_price({"export": {"status": "unavailable"}})
+        coordinator.forecast._absorb_grid_export_price({"export": {"status": "unavailable"}})
         self.assertIsNone(coordinator.get_grid_export_price_current())
         self.assertIsNone(coordinator.get_grid_export_price_unit())
 
@@ -618,7 +618,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
         # `unknown` while its attribute map still holds tomorrow's prices keeps
         # the mirror available, and an available mirror publishing a schedule
         # without a unit would say something the source never did.
-        coordinator._absorb_grid_export_price(
+        coordinator.forecast._absorb_grid_export_price(
             {
                 "export": {
                     "status": "partial",
@@ -634,7 +634,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
         coordinator_module = _load_coordinator_module()
         coordinator = make_coordinator()
 
-        coordinator._absorb_grid_export_price(
+        coordinator.forecast._absorb_grid_export_price(
             {
                 "export": {
                     "status": "available",
@@ -658,7 +658,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
         # An attribute-only update: the price has not moved, the schedule has,
         # and the owned channel must move with it or the sensor would keep
         # publishing yesterday's attributes.
-        coordinator._absorb_grid_export_price(
+        coordinator.forecast._absorb_grid_export_price(
             {
                 "export": {
                     "status": "available",
@@ -684,7 +684,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
         # The current price can go missing while the schedule stands -- a spot
         # provider that stops publishing a state keeps publishing tomorrow --
         # and neither answer is allowed to stand in for the other.
-        coordinator._absorb_grid_export_price(
+        coordinator.forecast._absorb_grid_export_price(
             {
                 "export": {
                     "status": "partial",
@@ -701,12 +701,12 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
 
         # A source or configuration change: nothing of the old provider's
         # schedule survives into the new one's.
-        coordinator._absorb_grid_export_price({"export": {"status": "not_configured"}})
+        coordinator.forecast._absorb_grid_export_price({"export": {"status": "not_configured"}})
         self.assertIsNone(coordinator.get_grid_export_price_current())
         self.assertEqual(coordinator.get_grid_export_price_schedule(), {})
 
         # The accessor hands out a copy: a consumer cannot edit the owned map.
-        coordinator._absorb_grid_export_price(
+        coordinator.forecast._absorb_grid_export_price(
             {"export": {"schedule": {"2026-09-10T02:00:00+02:00": 1.0}}}
         )
         coordinator.get_grid_export_price_schedule().clear()
@@ -719,8 +719,9 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
         coordinator_module = _load_coordinator_module()
         coordinator = make_coordinator()
         coordinator._hass = SimpleNamespace()
+        coordinator.forecast._hass = coordinator._hass
         coordinator._active_config = {}
-        coordinator._grid_export_price_channel = None
+        coordinator.forecast._grid_export_price_channel = None
 
         channel = {
             "status": "available",
@@ -740,13 +741,13 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
         ):
             # The cold read is an ingestion, and it is the last one: every
             # consumer afterwards is served from the owned channel.
-            self.assertIs(coordinator._get_grid_export_price_channel(), channel)
-            self.assertIs(coordinator._get_grid_export_price_channel(), channel)
-            self.assertIs(coordinator._get_grid_export_price_channel(), channel)
+            self.assertIs(coordinator.forecast._get_grid_export_price_channel(), channel)
+            self.assertIs(coordinator.forecast._get_grid_export_price_channel(), channel)
+            self.assertIs(coordinator.forecast._get_grid_export_price_channel(), channel)
             self.assertEqual(source_reads.call_count, 1)
 
             # Ingestion, and only ingestion, goes back to the source.
-            coordinator._ingest_grid_export_price()
+            coordinator.forecast._ingest_grid_export_price()
             self.assertEqual(source_reads.call_count, 2)
 
         self.assertEqual(coordinator.get_grid_export_price_current(), 1.85)
@@ -763,9 +764,10 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
         coordinator._hass = SimpleNamespace(
             config=SimpleNamespace(time_zone="Europe/Prague")
         )
+        coordinator.forecast._hass = coordinator._hass
         # REFERENCE_TIME is 21:16, so 21:15 is the slot in progress. The
         # neighbouring slots carry values that would be obvious if picked.
-        coordinator._cached_solar_forecast = {
+        coordinator.forecast._cached_solar_forecast = {
             "rawPoints": [
                 {"timestamp": "2026-03-20T21:00:00+01:00", "value": 999.0},
                 {"timestamp": "2026-03-20T21:15:00+01:00", "value": 250.0},
@@ -791,14 +793,14 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
             # No profile applied means no corrected series; the corrected sensor
             # reports the raw number rather than going unavailable, because "not
             # corrected yet" is honestly the same value.
-            coordinator._cached_solar_forecast.pop("correctedPoints")
+            coordinator.forecast._cached_solar_forecast.pop("correctedPoints")
             self.assertEqual(
                 coordinator.get_solar_forecast_current_wh(corrected=True), 250.0
             )
 
             # A snapshot that does not cover the current slot reports nothing
             # rather than the nearest slot it does have.
-            coordinator._cached_solar_forecast = {
+            coordinator.forecast._cached_solar_forecast = {
                 "rawPoints": [
                     {"timestamp": "2026-03-20T23:00:00+01:00", "value": 250.0}
                 ]
@@ -806,7 +808,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(
                 coordinator.get_solar_forecast_current_wh(corrected=False)
             )
-            coordinator._cached_solar_forecast = None
+            coordinator.forecast._cached_solar_forecast = None
             self.assertIsNone(
                 coordinator.get_solar_forecast_current_wh(corrected=False)
             )
@@ -837,27 +839,27 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
         coordinator = make_coordinator()
         job = next(
             j
-            for j in coordinator._backfill_jobs
+            for j in coordinator.forecast._backfill_jobs
             if j.name == "helman_grid_export_price_backfill"
         )
-        coordinator._get_grid_sell_price_entity_id = lambda: "sensor.spot_sell_price"
+        coordinator.forecast._get_grid_sell_price_entity_id = lambda: "sensor.spot_sell_price"
         coordinator._hass.async_create_background_task = (
             lambda coro, name: (coro.close(), started.append(name))[1]
         )
 
         # A price with no unit: nothing starts.
-        coordinator._absorb_grid_export_price(
+        coordinator.forecast._absorb_grid_export_price(
             {"export": {"status": "partial", "currentPrice": 2.5}}
         )
-        coordinator._maybe_start_backfill_jobs()
+        coordinator.forecast._maybe_start_backfill_jobs()
         self.assertEqual(started, [])
         self.assertFalse(job.started)
 
         # The next beat carries both, and the walk begins.
-        coordinator._absorb_grid_export_price(
+        coordinator.forecast._absorb_grid_export_price(
             {"export": {"status": "partial", "unit": "CZK/kWh", "currentPrice": 2.5}}
         )
-        coordinator._maybe_start_backfill_jobs()
+        coordinator.forecast._maybe_start_backfill_jobs()
         self.assertEqual(len(started), 1)
         self.assertTrue(job.started)
         self.assertEqual(started[0], "helman_grid_export_price_backfill")

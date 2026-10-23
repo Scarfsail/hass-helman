@@ -135,7 +135,7 @@ class CoordinatorSolarBiasCallbackTests(unittest.IsolatedAsyncioTestCase):
             refresh_calls.append(reason)
             coordinator._solar_bias_service.build_adjustment_result([], dt_util.now())
 
-        coordinator._async_run_forecast_refresh = _fake_run_forecast_refresh
+        coordinator.forecast._async_run_forecast_refresh = _fake_run_forecast_refresh
 
         job = SolarBiasTrainingJob(
             service,
@@ -222,12 +222,12 @@ class CoordinatorSolarBiasCallbackTests(unittest.IsolatedAsyncioTestCase):
         """An adjustment-status change triggers the same through on_status_changed."""
         hass = FakeHass()
         coordinator = make_coordinator(_hass=hass)
-        coordinator._async_refresh_forecast = AsyncMock()
+        coordinator.forecast._async_refresh_forecast = AsyncMock()
 
         coordinator._on_solar_bias_changed()
         await asyncio.sleep(0)
 
-        coordinator._async_refresh_forecast.assert_awaited_once_with(
+        coordinator.forecast._async_refresh_forecast.assert_awaited_once_with(
             reason="solar_bias_changed"
         )
         self.assertEqual(
@@ -242,11 +242,11 @@ class CoordinatorSolarBiasCallbackTests(unittest.IsolatedAsyncioTestCase):
         hass = FakeHass()
         coordinator = make_coordinator(_hass=hass)
         coordinator._unloaded = True
-        coordinator._async_refresh_forecast = AsyncMock()
+        coordinator.forecast._async_refresh_forecast = AsyncMock()
 
         await coordinator._async_on_solar_bias_trained()
 
-        coordinator._async_refresh_forecast.assert_not_awaited()
+        coordinator.forecast._async_refresh_forecast.assert_not_awaited()
         self.assertEqual(hass.bus.fired, [])
 
     async def test_async_reload_training_artifacts_reloads_solar_bias_service(
@@ -271,7 +271,7 @@ class CoordinatorSolarBiasCallbackTests(unittest.IsolatedAsyncioTestCase):
         async def _record_refresh(**_kwargs) -> None:
             call_order.append(f"refresh:{len(hass.bus.fired)}")
 
-        coordinator._async_refresh_forecast = AsyncMock(side_effect=_record_refresh)
+        coordinator.forecast._async_refresh_forecast = AsyncMock(side_effect=_record_refresh)
 
         self.assertIsNone(service._profile)
 
@@ -296,7 +296,7 @@ class CoordinatorSolarBiasCallbackTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(service._profile)
         self.assertEqual(service._profile.factors, {"10:00": 1.25})
         self.assertEqual(service._metadata.last_outcome, "profile_trained")
-        coordinator._async_refresh_forecast.assert_awaited_once_with(
+        coordinator.forecast._async_refresh_forecast.assert_awaited_once_with(
             reason="training_artifacts_reloaded"
         )
         # data_changed fires only after the forecast refresh completed.
