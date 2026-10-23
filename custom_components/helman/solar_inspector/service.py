@@ -14,7 +14,7 @@ from homeassistant.util import dt as dt_util
 
 from ..battery_state import read_battery_entity_config, read_battery_soc_bounds_config
 from ..const import GRID_EXPORT_PRICE_ENTITY_ID, GRID_IMPORT_PRICE_ENTITY_ID
-from ..controllables.config import read_carved_meters, read_schedulable_consumers
+from ..controllables.config import read_schedulable_consumers
 from ..grid_price_forecast_builder import (
     GridImportPriceConfigError,
     read_grid_import_price_config,
@@ -1685,65 +1685,6 @@ class SolarInspector:
             slot=slot,
         )
 
-    @staticmethod
-    def _normalize_consumers(raw_consumers: Any, *, deferrable: bool) -> list[dict]:
-        """Coerce a provider's list to
-        ``[{energy_entity_id, label, switch_entity_id, power_entity_id, deferrable, ids,
-        metered_children}]``.
-
-        Drops anything without a usable entity id and defaults a missing label to
-        the entity id, so callers get a clean, deduplicable list. The switch and
-        power sensor are optional — only the device tree knows them.
-
-        ``deferrable`` is the caller's answer for the whole list: a provider is one
-        roster, so which roster an entry came from is the only thing that decides it.
-
-        ``ids`` are the controllable ids the roster carries for the meter — the
-        keys the forecast's scheduled demand is reported under, several for a
-        meter shared by several devices, and empty for a device the tree alone
-        knows about. ``metered_children`` are the sub-meters behind a carved
-        meter, empty for everything else.
-        """
-        result: list[dict] = []
-        for consumer in raw_consumers or []:
-            if not isinstance(consumer, dict):
-                continue
-            entity_id = consumer.get("energy_entity_id")
-            if not isinstance(entity_id, str) or not entity_id.strip():
-                continue
-            eid = entity_id.strip()
-            switch = consumer.get("switch_entity_id")
-            power = consumer.get("power_entity_id")
-            raw_ids = consumer.get("ids")
-            raw_children = consumer.get("metered_children")
-            result.append(
-                {
-                    "energy_entity_id": eid,
-                    "label": consumer.get("label", eid),
-                    "switch_entity_id": switch if isinstance(switch, str) and switch else None,
-                    "power_entity_id": power if isinstance(power, str) and power else None,
-                    "deferrable": deferrable,
-                    "ids": [
-                        controllable_id
-                        for controllable_id in (
-                            raw_ids if isinstance(raw_ids, list) else ()
-                        )
-                        if isinstance(controllable_id, str) and controllable_id
-                    ],
-                    "metered_children": [
-                        child
-                        for child in (
-                            raw_children if isinstance(raw_children, list) else ()
-                        )
-                        if isinstance(child, str) and child
-                    ],
-                }
-            )
-        return result
-
-    def _house_deferrable_consumers(self) -> list[dict]:
-        return self._normalize_consumers(read_carved_meters(self._config), deferrable=True)
-
     def _house_scheduled_consumers(self) -> list[dict]:
         return read_schedulable_consumers(self._config)
 
@@ -1759,70 +1700,11 @@ class SolarInspector:
         except Exception:
             _LOGGER.exception("House device consumers failed")
             return []
-        return self._normalize_consumers(raw, deferrable=False)
+        return self._normalize_consumers(raw)
 
     async def _house_breakdown_consumers(self) -> list[dict]:
-        """The full set the house actual is split by: deferrable appliances first,
-        then any other individually-measured device not already among them.
-
-        Deferrable consumers lead because they are the forecast-facing appliances;
-        device-tree consumers fill in the rest of the metered house. De-duped by
-        entity id so an appliance that is both a scheduled consumer and a tree node
-        appears once, and the remainder stays true rather than double-subtracting
-        it. A deferrable consumer that IS also a tree node keeps its own label but
-        adopts the tree's switch and power sensor, which is the only place either
-        is known — otherwise the appliances most likely to have them would lose
-        them to the dedup. It also keeps its ``deferrable`` flag: being metered by
-        the tree as well does not make a shiftable appliance unshiftable.
-
-        The one label it gives up is a bare entity id. The roster falls back to
-        the meter's id when no single device's name fits — a meter shared by
-        several controllables, or one that declares no name — and the tree's
-        display name for the same sensor is the better name wherever it has one.
-        """
-        deferrable = self._house_deferrable_consumers()
-        device = await self._house_device_consumers()
-        switch_by_entity = {
-            consumer["energy_entity_id"]: consumer["switch_entity_id"]
-            for consumer in device
-            if consumer["switch_entity_id"]
-        }
-        power_by_entity = {
-            consumer["energy_entity_id"]: consumer["power_entity_id"]
-            for consumer in device
-            if consumer["power_entity_id"]
-        }
-        label_by_entity = {
-            consumer["energy_entity_id"]: consumer["label"] for consumer in device
-        }
-        merged: list[dict] = []
-        for consumer in deferrable:
-            merged.append(
-                {
-                    **consumer,
-                    "label": (
-                        label_by_entity.get(consumer["energy_entity_id"])
-                        if consumer["label"] == consumer["energy_entity_id"]
-                        else None
-                    )
-                    or consumer["label"],
-                    "switch_entity_id": (
-                        consumer["switch_entity_id"]
-                        or switch_by_entity.get(consumer["energy_entity_id"])
-                    ),
-                    "power_entity_id": (
-                        consumer["power_entity_id"]
-                        or power_by_entity.get(consumer["energy_entity_id"])
-                    ),
-                }
-            )
-        seen = {consumer["energy_entity_id"] for consumer in merged}
-        for consumer in device:
-            if consumer["energy_entity_id"] in seen:
-                continue
-            seen.add(consumer["energy_entity_id"])
-            merged.append(consumer)
-        return merged
+        """Disjoint actual-history rows, with ownership resolved by the tree."""
+        return await self._house_device_consumers()
 
     @staticmethod
     def _consumer_slot_map(

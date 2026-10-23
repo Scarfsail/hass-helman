@@ -56,6 +56,8 @@ class TestHouseDeviceConsumers(unittest.TestCase):
                     "switch_entity_id": "switch.dishwasher",
                     "power_entity_id": "sensor.dishwasher_power",
                     "metered_children": [],
+                    "deferrable": False,
+                    "ids": [],
                 }
             ],
         )
@@ -153,6 +155,35 @@ class TestHouseDeviceConsumers(unittest.TestCase):
             [c["energy_entity_id"] for c in extract(tree)], ["sensor.parent_energy"]
         )
 
+    def test_carved_own_load_keeps_passive_child_in_base_group(self):
+        tree = _tree([_node("sensor.parent", ownDeferrable=True,
+                            ownControllableIds=["washer", "dryer"],
+                            children=[_node("sensor.passive", children=[
+                                _node("sensor.nested", ownDeferrable=True,
+                                      ownControllableIds=["heater"])
+                            ])])])
+        rows = extract(tree)
+        self.assertEqual([row["deferrable"] for row in rows], [True, False, True])
+        self.assertEqual([row["metered_children"] for row in rows],
+                         [["sensor.passive"], ["sensor.nested"], []])
+        self.assertEqual(rows[0]["ids"], ["washer", "dryer"])
+        self.assertIsNone(rows[0]["power_entity_id"])
+
+    def test_estimated_shares_and_duplicate_meters_are_not_measured_twice(self):
+        tree = _tree([_node("sensor.shared", ownDeferrable=True,
+                            ownControllableIds=["ac1", "ac2"], children=[
+                                _node("sensor.estimated", isEstimated=True, deferrable=True),
+                            ]), _node("sensor.shared")])
+        self.assertEqual([row["energy_entity_id"] for row in extract(tree)], ["sensor.shared"])
+
+    def test_schedulable_ids_alone_do_not_carve_a_mixed_shared_meter(self):
+        tree = _tree([_node("sensor.mixed", controllableIds=["ac"], children=[
+            _node("share", energyEntityId=None, isEstimated=True, controllableIds=["ac"])
+        ])])
+        (row,) = extract(tree)
+        self.assertFalse(row["deferrable"])
+        self.assertEqual(row["ids"], [])
+
     def test_malformed_trees_yield_nothing(self):
         for tree in (None, {}, {"consumers": None}, {"consumers": []}, "nonsense"):
             self.assertEqual(extract(tree), [], tree)
@@ -172,7 +203,8 @@ class TestHouseDeviceConsumers(unittest.TestCase):
                             children=[
                                 _node(
                                     "sensor.washer_energy",
-                                    children=[_node("sensor.inner_energy")],
+                                    ownDeferrable=True,
+                                    children=[_node("sensor.inner_energy", ownDeferrable=True)],
                                 )
                             ],
                         ),
@@ -181,10 +213,11 @@ class TestHouseDeviceConsumers(unittest.TestCase):
             ]
         )
 
-        result = extract(tree, {"sensor.washer_energy", "sensor.inner_energy"})
+        result = extract(tree)
 
         self.assertEqual(result[0]["metered_children"], ["sensor.washer_energy"])
-        self.assertEqual(extract(tree)[0]["metered_children"], [])
+        self.assertEqual(result[1]["metered_children"], ["sensor.inner_energy"])
+        self.assertEqual(len(result), 3)
 
 
 if __name__ == "__main__":

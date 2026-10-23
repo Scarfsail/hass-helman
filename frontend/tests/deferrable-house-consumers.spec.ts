@@ -32,6 +32,8 @@ interface FakeNode {
     name: string;
     deferrable?: boolean;
     controllableIds?: string[];
+    ownDeferrable?: boolean;
+    ownControllableIds?: string[];
     groupBadgeTexts?: string[];
     isEstimated?: boolean;
     isUnmeasured?: boolean;
@@ -257,6 +259,22 @@ test.describe("deferrable house consumers on the power card", () => {
         ]);
 
         expect(rows[0].badgeColor).toBe(MIXED_COLOR);
+    });
+
+    test("historical own attribution does not tint an aggregate carved parent", async ({ page }) => {
+        await mountRows(page, [
+            {
+                id: "sensor.carved_parent", name: "Carved parent", deferrable: false,
+                ownDeferrable: true, ownControllableIds: ["dishwasher", "boiler"],
+                children: [
+                    { id: "sensor.passive_child", name: "Passive child", deferrable: false },
+                    { id: "parent_unmeasured", name: "Unmeasured", isUnmeasured: true, deferrable: true },
+                ],
+            },
+        ]);
+        const rows = await readRows(page);
+        expect(rows[0].label).toBe("Carved parent");
+        expect(rows[0].tint).toBe("");
     });
 
     test("a shared meter is one box whose badge folds every controllable behind it", async ({ page }) => {

@@ -18,7 +18,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from _fakes import DummyStore as _DummyStore
-from _fakes import _bias_service_config
+from _fakes import FakeInspectorLiveSources, _bias_service_config
 from homeassistant.components import recorder
 from homeassistant.components.recorder import history as recorder_history
 
@@ -174,6 +174,10 @@ def _make_service():
         hass,
         _DummyStore(),
         _make_cfg(),
+        live_sources=FakeInspectorLiveSources(house_device_consumers=lambda: [
+            {"energy_entity_id": entity_id, "label": entity_id, "deferrable": True}
+            for entity_id in CONSUMER_METERS
+        ]),
         config=_bias_service_config(
             _make_cfg(),
             house=HOUSE_METER,

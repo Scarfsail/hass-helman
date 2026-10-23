@@ -86,6 +86,43 @@ def _breaker(*, metered_child=False):
 
 class TestHouseChildDeferrability(unittest.TestCase):
 
+    def test_energy_only_own_attribution_does_not_add_live_house_rows(self):
+        breaker = _breaker(metered_child=True)
+        del breaker["consumption"]["power_entity_id"]
+        config = {
+            "energy_nodes": {"house": {"entities": {"energy": "sensor.house_energy"}}},
+            "devices": {"consumers": [breaker]},
+        }
+        builder = HelmanTreeBuilder(_Hass(), config)
+        live = asyncio.run(builder.build()).tree
+        self.assertEqual(live["consumers"], [])
+        history = asyncio.run(builder.build(include_house_without_power=True)).tree
+        parent = history["consumers"][0]["children"][0]
+        self.assertFalse(parent["deferrable"])
+        self.assertTrue(parent["ownDeferrable"])
+        self.assertEqual(parent["ownControllableIds"], [f"ac-{i}" for i in range(4)])
+        self.assertFalse(any(node["isUnmeasured"] for node in parent["children"]))
+        self.assertFalse(parent["children"][0]["ownDeferrable"])
+        from custom_components.helman.house_device_consumers import extract_house_device_consumers
+        rows = extract_house_device_consumers(history)
+        self.assertEqual([(row["energy_entity_id"], row["deferrable"]) for row in rows],
+                         [("sensor.jistic_klimatizace_energy", True), ("sensor.heater_energy", False)])
+        self.assertEqual(rows[0]["metered_children"], ["sensor.heater_energy"])
+
+    def test_all_schedulable_shared_meter_and_mixed_meter_use_canonical_own_attribution(self):
+        from custom_components.helman.house_device_consumers import extract_house_device_consumers
+        for passive in (False, True):
+            breaker = _breaker()
+            if passive:
+                breaker["children"][0]["schedulable"] = False
+            children = _built_house_children([breaker])
+            rows = extract_house_device_consumers({"consumers": [
+                {"id": "house", "children": list(children.values())}
+            ]})
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["deferrable"], not passive)
+            self.assertEqual(rows[0]["ids"], [] if passive else [f"ac-{i}" for i in range(4)])
+
     def test_only_the_children_that_are_deferrable_controllables_are_marked(self):
         nodes = _house_children(
             [

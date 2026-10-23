@@ -11,7 +11,6 @@ Nothing in this module infers, derives or guesses a switch.
 
 from __future__ import annotations
 
-from collections.abc import Collection
 from typing import Any
 
 #: Tree node flags that never denote a real measured consumer.
@@ -27,79 +26,59 @@ def _is_readable_entity_id(value: Any) -> bool:
     return isinstance(value, str) and "." in value and ":" not in value
 
 
-def extract_house_device_consumers(
-    tree: Any, carved_meters: Collection[str] = ()
-) -> list[dict[str, Any]]:
-    """The house's top-level measured consumers, as the power card knows them.
+def extract_house_device_consumers(tree: Any) -> list[dict[str, Any]]:
+    """Disjoint measured rows for inspector history, using tree attribution.
 
-    Each entry is ``{energy_entity_id, label, switch_entity_id, power_entity_id,
-    metered_children}``,
-    taken verbatim from the tree node: its ``energyEntityId`` is the device's
-    meter, ``displayName`` the name the card shows, ``switchEntityId`` the control the card
-    offers, and ``powerSensorId`` the live power sensor the card reads — each
-    ``None`` when the tree resolved none, which is the card's own behaviour.
+    Passive descendants remain inside their nearest included ancestor. A carved
+    meter exposes its own load separately from its metered children, and a nested
+    carved meter is subtracted from its nearest included ancestor exactly once.
+    Estimated share and synthetic live remainder nodes never own history.
 
-    Only top-level house children are returned. Nested sub-meters are already
-    counted inside their parent's stat, so including them would double-count
-    against the house total.
-
-    The exception is a nested meter in ``carved_meters``: the breakdown lists it
-    as a row of its own, so ``metered_children`` names the topmost such meters
-    beneath each entry, for its own energy to leave them out. The walk stops at
-    a carved meter, since that row already accounts for everything under it.
+    Only relationships and metadata are resolved here. Missing readings, excess
+    child energy and slot alignment belong to the inspector's own-energy reader,
+    not the reports' independent hourly coverage and attribution policy.
     """
-    if not isinstance(tree, dict):
+    if not isinstance(tree, dict) or not isinstance(tree.get("consumers"), list):
         return []
-    consumers = tree.get("consumers")
-    if not isinstance(consumers, list):
-        return []
-    house_node = next(
-        (
-            node
-            for node in consumers
-            if isinstance(node, dict) and node.get("id") == "house"
-        ),
-        None,
-    )
-    if house_node is None:
+    house = next((node for node in tree["consumers"]
+                  if isinstance(node, dict) and node.get("id") == "house"), None)
+    if house is None:
         return []
 
     result: list[dict[str, Any]] = []
-    for child in house_node.get("children") or []:
-        if not isinstance(child, dict):
-            continue
-        if any(child.get(flag) for flag in _SKIPPED_NODE_FLAGS):
-            continue
-        energy_entity_id = child.get("energyEntityId")
-        if not _is_readable_entity_id(energy_entity_id):
-            continue
-        switch_entity_id = child.get("switchEntityId")
-        power_entity_id = child.get("powerSensorId")
-        result.append(
-            {
-                "energy_entity_id": energy_entity_id,
-                "label": child.get("displayName") or energy_entity_id,
-                "switch_entity_id": (
-                    switch_entity_id if isinstance(switch_entity_id, str) and switch_entity_id else None
-                ),
-                "power_entity_id": (
-                    power_entity_id if _is_readable_entity_id(power_entity_id) else None
-                ),
-                "metered_children": _carved_beneath(child, carved_meters),
-            }
-        )
+    seen: set[str] = set()
+
+    def visit(node: Any, ancestor: dict | None, split_children: bool) -> None:
+        if not isinstance(node, dict):
+            return
+        if any(node.get(flag) for flag in _SKIPPED_NODE_FLAGS) or node.get("isEstimated"):
+            return
+        meter = node.get("energyEntityId")
+        own_deferrable = bool(node.get("ownDeferrable"))
+        if _is_readable_entity_id(meter):
+            if meter in seen:
+                return
+            seen.add(meter)
+            if ancestor is None or split_children or own_deferrable:
+                switch = node.get("switchEntityId")
+                power = node.get("powerSensorId")
+                row = {
+                    "energy_entity_id": meter,
+                    "label": node.get("displayName") or meter,
+                    "switch_entity_id": switch if isinstance(switch, str) and switch else None,
+                    "power_entity_id": power if _is_readable_entity_id(power) else None,
+                    "deferrable": own_deferrable,
+                    "ids": list(node.get("ownControllableIds") or []),
+                    "metered_children": [],
+                }
+                if ancestor is not None:
+                    ancestor["metered_children"].append(meter)
+                result.append(row)
+                ancestor = row
+                split_children = own_deferrable
+        for child in node.get("children") or []:
+            visit(child, ancestor, split_children)
+
+    for child in house.get("children") or []:
+        visit(child, None, False)
     return result
-
-
-def _carved_beneath(node: dict[str, Any], carved_meters: Collection[str]) -> list[str]:
-    """The topmost carved meters anywhere beneath ``node``."""
-    found: list[str] = []
-    for child in node.get("children") or []:
-        if not isinstance(child, dict):
-            continue
-        meter = child.get("energyEntityId")
-        if isinstance(meter, str) and meter in carved_meters:
-            found.append(meter)
-        else:
-            found.extend(_carved_beneath(child, carved_meters))
-    return found

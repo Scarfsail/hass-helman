@@ -88,7 +88,6 @@ async def _inspector_payload(
         bus=SimpleNamespace(async_fire=lambda *a, **kw: None),
         data={},
     )
-    carved = service_kwargs.pop("house_deferrable_consumers_provider", list)()
     bounds = service_kwargs.pop("battery_soc_bounds_entity_id_provider", lambda: None)()
     device_consumers = (
         service_kwargs.pop("house_device_consumers", None)
@@ -113,7 +112,6 @@ async def _inspector_payload(
             _make_cfg(),
             house="sensor.house_energy",
             soc="sensor.battery_soc",
-            carved=carved,
             soc_bounds=bounds,
         ),
     )
@@ -197,14 +195,15 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
 
     async def test_house_actual_breakdown_splits_base_and_appliances(self):
         payload = await _inspector_payload(
-            house_deferrable_consumers_provider=lambda: [
+            house_device_consumers_provider=lambda: [
                 {
                     "energy_entity_id": "sensor.dishwasher",
                     "label": "Dishwasher",
+                    "deferrable": True,
                     "ids": ["dishwasher"],
                 },
                 # A roster entry that declares no controllable keys off nothing.
-                {"energy_entity_id": "sensor.ev", "label": "EV charger"},
+                {"energy_entity_id": "sensor.ev", "label": "EV charger", "deferrable": True},
             ],
             _consumer_slot_by_entity={
                 "sensor.dishwasher": {"00:00": 50.0},
@@ -245,14 +244,14 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
         total = slot["unmeasuredWh"] + sum(a["wh"] for a in slot["appliances"])
         self.assertEqual(total, payload["series"]["houseActual"][0]["valueWh"])
 
-    async def test_house_actual_breakdown_merges_device_tree_consumers(self):
-        # Deferrable appliances lead; device-tree consumers fill in the rest, and
-        # an entity present in both lists appears once (deferrable label wins).
+    async def test_house_actual_breakdown_uses_tree_names_controls_and_attribution(self):
+        # The tree descriptor is the only source of names, controls and grouping.
         async def _devices():
             return [
                 {
                     "energy_entity_id": "sensor.ev",
                     "label": "EV (tree)",
+                    "deferrable": True,
                     "switch_entity_id": "switch.ev",
                     "power_entity_id": "sensor.ev_power",
                 },
@@ -265,9 +264,6 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
             ]
 
         payload = await _inspector_payload(
-            house_deferrable_consumers_provider=lambda: [
-                {"energy_entity_id": "sensor.ev", "label": "EV charger"},
-            ],
             house_device_consumers_provider=_devices,
             _consumer_slot_by_entity={
                 "sensor.ev": {"00:00": 30.0},
@@ -276,14 +272,13 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
         )
 
         slot = payload["series"]["houseActualBreakdown"][0]
-        # The EV keeps its deferrable label but adopts the tree's switch and power
-        # sensor, which is the only place either is known.
+        # The EV retains all metadata from the tree.
         self.assertEqual(
             slot["appliances"],
             [
                 {
                     "entityId": "sensor.ev",
-                    "label": "EV charger",
+                    "label": "EV (tree)",
                     "wh": 30.0,
                     "switchEntityId": "switch.ev",
                     "powerEntityId": "sensor.ev_power",
@@ -305,20 +300,15 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(slot["unmeasuredWh"], 130.0)
 
     async def test_house_actual_breakdown_marks_deferrable_consumers(self):
-        # Deferrability is a property of the device, read from which roster the
-        # consumer came from: the configured deferrable controllable is shiftable,
-        # the tree-only meter is not, and being on both lists keeps it shiftable.
+        # Own-load attribution comes from the shared tree, even with a control id.
         async def _devices():
             return [
-                {"energy_entity_id": "sensor.ev", "label": "EV (tree)"},
-                {"energy_entity_id": "sensor.fridge", "label": "Fridge"},
+                {"energy_entity_id": "sensor.dishwasher", "label": "Dishwasher", "deferrable": True},
+                {"energy_entity_id": "sensor.ev", "label": "EV (tree)", "deferrable": True},
+                {"energy_entity_id": "sensor.fridge", "label": "Fridge", "ids": ["mixed"]},
             ]
 
         payload = await _inspector_payload(
-            house_deferrable_consumers_provider=lambda: [
-                {"energy_entity_id": "sensor.dishwasher", "label": "Dishwasher"},
-                {"energy_entity_id": "sensor.ev", "label": "EV charger"},
-            ],
             house_device_consumers_provider=_devices,
             _consumer_slot_by_entity={
                 "sensor.dishwasher": {"00:00": 50.0},
@@ -340,8 +330,8 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
     async def test_house_actual_breakdown_clamps_negative_base(self):
         # Appliances momentarily over-report past the house total: base floors at 0.
         payload = await _inspector_payload(
-            house_deferrable_consumers_provider=lambda: [
-                {"energy_entity_id": "sensor.ev", "label": "EV charger"},
+            house_device_consumers_provider=lambda: [
+                {"energy_entity_id": "sensor.ev", "label": "EV charger", "deferrable": True},
             ],
             _consumer_slot_by_entity={"sensor.ev": {"00:00": 250.0}},
         )
