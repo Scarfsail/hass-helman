@@ -144,11 +144,11 @@ export interface ScheduleExplanationPayload {
 }
 
 export type NodeDetailPayload = Api.InverterDetailPayload | Api.InverterTemperatureSectionPayload
-    | Api.InverterModesSectionPayload | Api.GridDetailPayload | Api.GridVoltageSectionPayload
+    | Api.InverterModesSectionPayload | Api.GridDetailPayload | Api.GridVoltageSectionPayload | Api.GridMoneySectionPayload
     | Api.BatteryDetailPayload | Api.BatteryChargeSectionPayload | Api.FlowsSectionPayload
     | Api.SolarDetailPayload | Api.SolarProductionSectionPayload | Api.SolarStringsSectionPayload
     | Api.SolarDestinationsSectionPayload | Api.HouseDetailPayload | Api.HouseTodaySectionPayload
-    | Api.HousePatternSectionPayload | Api.EvChargerDetailPayload | Api.EvChargerSegmentSectionPayload
+    | Api.HousePatternSectionPayload | Api.HouseRankingSectionPayload | Api.EvChargerDetailPayload | Api.EvChargerSegmentSectionPayload
     | Api.EvChargerTodaySectionPayload;
 
 /** All request/response commands; subscribe_updates belongs to the shared feed. */

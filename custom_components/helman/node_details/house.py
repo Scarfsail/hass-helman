@@ -119,7 +119,7 @@ def build_house_overview(
         )
     )
 
-    sections = ["today"]
+    sections = ["today", "ranking"]
     if entities["power"] or _energy_meter(house):
         sections.append("pattern")
     return {
@@ -157,6 +157,14 @@ async def async_house_section(
     }
     if section == "today":
         return {**payload, **await _today(ctx, local_now)}
+    if section == "ranking":
+        report = await today_ranking_report(ctx, local_now)
+        return {
+            **payload,
+            "asOf": report.get("asOf", payload["asOf"]),
+            "unavailable": report.get("unavailable"),
+            "report": None if "unavailable" in report else report,
+        }
     house = node_config(config, "house")
     comparison, overnight = await asyncio.gather(
         _weekday_comparison(hass, _energy_meter(house), local_now),

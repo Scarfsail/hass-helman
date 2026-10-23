@@ -4,9 +4,8 @@ import { css, html, nothing, svg } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { fillTemplate } from "../localize/localize";
 import {
-    fetchDayAggregates,
     type DayStatsDTO,
-    type GridDayAggregatesPayload,
+    type GridMoneySectionPayload,
     type GridDetailPayload,
     type GridVoltageSectionPayload,
 } from "../helman-api";
@@ -15,7 +14,6 @@ import { currencyFromPriceUnit } from "../helman-solar-inspector/money-model";
 import { PHASE_COLORS } from "../color-utils";
 import { helmanColorVars } from "../color-vars";
 
-import { isoDateInTimeZone, todayKey } from "../shared/time/day-key";
 import { pylonGlyph } from "../shared/node-glyphs";
 import { scheduleActionToneStyles } from "../shared/schedule/action-tones";
 import "../shared/day-line-chart";
@@ -226,11 +224,8 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
     @property({ attribute: false }) public params!: GridDetailParams;
 
     /** Today's measured grid money; a failure leaves the money figures out, nothing else. */
-    private readonly _money = this._section<GridDayAggregatesPayload>("money", {
-        fetch: () => {
-            const date = todayKey(this._timeZone);
-            return fetchDayAggregates(this.hass, { start_date: date, end_date: date });
-        },
+    private readonly _money = this._section<GridMoneySectionPayload>("money", {
+        fetch: () => this._readSection("money"),
         shown: () => true,
     });
     /** Today's voltages, which the picture's ranges draw, once the overview says there are sensors to read. */
@@ -778,28 +773,21 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
 
     // Money -------------------------------------------------------------------
 
-    /** Today's money from the span read, `null` while unknown. */
+    /** Today's money from the node detail section, `null` while unknown. */
     private _moneyFigures(): MoneyFigures | null {
         const payload = this._money.payload;
         if (!payload) return null;
-        // The span read is for the day it was requested on.
-        const date = isoDateInTimeZone(new Date(this._money.requestedAt), this._timeZone);
-        const day = payload.days.find((row) => row.date === date);
-        if (!day) return null;
-        // A direction measured at zero cost or earned nothing; one with kWh
-        // but no rate, or with nothing measured, is unknown, never zero.
-        const side = (amount: number | null, kwh: number | null) => amount !== null ? amount : kwh === 0 ? 0 : null;
-        const cost = side(day.moneyCost, day.gridImportKwh);
-        const gain = side(day.moneyGain, day.gridExportKwh);
+        const cost = payload.importCost;
+        const gain = payload.exportRevenue;
         return {
             cost,
             gain,
             net: cost === null || gain === null ? null : cost - gain,
             currency: currencyFromPriceUnit(payload.priceUnit),
-            importKwh: day.gridImportKwh,
-            exportKwh: day.gridExportKwh,
-            costKwh: day.moneyCostKwh,
-            gainKwh: day.moneyGainKwh,
+            importKwh: payload.importKwh,
+            exportKwh: payload.exportKwh,
+            costKwh: payload.importPricedKwh,
+            gainKwh: payload.exportPricedKwh,
         };
     }
 

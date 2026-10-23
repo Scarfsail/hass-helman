@@ -38,6 +38,7 @@ export class TreeItem {
     // appliance right now; `id` is only its energy statistic. Several when the
     // statistic is a meter shared by several controllables, which stay one box.
     public controllableIds?: string[];
+    public applianceKind?: string | null;
     // The device's own energy meter, for the detail dialog's energy tiles.
     public energyEntityId?: string;
     // What locates this box's device in the config: its meter, or its

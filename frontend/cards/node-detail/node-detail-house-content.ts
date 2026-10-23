@@ -1,18 +1,16 @@
 import { formatKwh, formatPower } from "../shared/format";
-import { callHelman } from "../shared/data/helman-commands";
 import { pad2, SLOT_MS } from "../shared/time/slot-time";
 import { phaseSign } from "../shared/power-reading";
 import { css, html, nothing, unsafeCSS } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { fillTemplate } from "../localize/localize";
 import {
-    isDeviceReportUnavailable,
     type DevicePhase,
     type HouseDetailPayload,
     type HouseLoadDTO,
     type HousePatternSectionPayload,
     type HouseTodaySectionPayload,
-    type RankingReportPayload,
+    type HouseRankingSectionPayload,
     type ScheduleApplianceActionDTO,
 } from "../helman-api";
 import type { HelmanSolarInspectorCardConfig } from "../helman-solar-inspector/HelmanSolarInspectorCardConfig";
@@ -333,12 +331,8 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         shown: () => this._open === "pattern" && this._offers("pattern"),
     });
     /** Today's full ranking, while the consumers answer's evidence is open; `null` when the reports cannot build it. */
-    private readonly _ranking = this._section<RankingReportPayload | null>("ranking", {
-        fetch: async () => {
-            const today = todayKey(this._timeZone);
-            const payload = await callHelman(this.hass, "helman/device_report", { report: "ranking", start_date: today, end_date: today });
-            return isDeviceReportUnavailable(payload) ? null : payload as RankingReportPayload;
-        },
+    private readonly _ranking = this._section<HouseRankingSectionPayload>("ranking", {
+        fetch: () => this._readSection("ranking"),
         shown: () => this._open === "consumers" && this._evidenceOpen,
     });
 
@@ -752,12 +746,12 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
                 <button class="link-button" @click=${() => this._ranking.load()}>${this._t("retry")}</button>
             `;
         }
-        if (!ranking.payload) return html`<p class="note">${this._t("today.unavailable_not_loaded")}</p>`;
+        if (!ranking.payload?.report) return html`<p class="note">${this._t("today.unavailable_not_loaded")}</p>`;
         const today = todayKey(this._timeZone);
         return html`
             <helman-device-report-ranking
                 data-ranking
-                .payload=${ranking.payload}
+                .payload=${ranking.payload.report}
                 .query=${{ start_date: today, end_date: today }}
                 .localize=${this.localize}
             ></helman-device-report-ranking>

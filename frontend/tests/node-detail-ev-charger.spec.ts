@@ -64,6 +64,7 @@ type Variant = {
     /** HA's entity toggle never registers (outside a dashboard). */
     noToggle?: boolean;
     todayFails?: boolean;
+    evNode?: "meterless" | "missing_kind" | "multiple";
 };
 
 declare global {
@@ -88,7 +89,15 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             consumers: [dto({
                 id: "house", displayName: "House", powerSensorId: "sensor.house",
                 children: [
-                    dto({ id: "sensor.ev_energy", displayName: "Garage EV", powerSensorId: "sensor.ev_power", energyEntityId: "sensor.ev_energy", controllableIds: ["garage-ev"], switchEntityId: "switch.ev_charge" }),
+                    dto({
+                        id: variant.evNode === "meterless" ? "garage-ev" : "sensor.ev_energy",
+                        displayName: "Garage EV", powerSensorId: "sensor.ev_power",
+                        energyEntityId: variant.evNode === "meterless" ? null : "sensor.ev_energy",
+                        isEstimated: variant.evNode === "meterless",
+                        controllableIds: variant.evNode === "multiple" ? ["garage-ev", "other"] : ["garage-ev"],
+                        ...(variant.evNode === "missing_kind" ? {} : { applianceKind: "ev_charger" }),
+                        switchEntityId: "switch.ev_charge",
+                    }),
                     dto({ id: "sensor.boiler_energy", displayName: "Boiler", powerSensorId: "sensor.boiler_power", energyEntityId: "sensor.boiler_energy", controllableIds: ["boiler"] }),
                 ],
             })],
@@ -383,7 +392,28 @@ test.describe("routing", () => {
         await expect(page.locator("node-detail-device-content")).toHaveCount(1);
         await expect(content(page)).toHaveCount(0);
         expect(await requests(page, "helman/get_node_detail")).toEqual([]);
+        expect(await requests(page, "helman/get_appliances")).toHaveLength(1); // generic schedule data
     });
+
+    test("a meterless EV child opens charger detail from its own kind", async ({ page }) => {
+        await mount(page, { evNode: "meterless" });
+        await openDevice(page, "Garage EV");
+        await expect(content(page)).toHaveCount(1);
+        expect((await requests(page, "helman/get_node_detail"))[0].device_id).toBe("garage-ev");
+        // The charger itself reads its roster once for vehicle metadata.
+        expect(await requests(page, "helman/get_appliances")).toHaveLength(1);
+    });
+
+    for (const evNode of ["missing_kind", "multiple"] as const) {
+        test(`${evNode} uses generic detail without a classification request`, async ({ page }) => {
+            await mount(page, { evNode });
+            await openDevice(page, "Garage EV");
+            await expect(page.locator("node-detail-device-content")).toHaveCount(1);
+            expect(await requests(page, "helman/get_node_detail")).toEqual([]);
+            // The generic detail still reads the roster for its schedule; routing adds no second read.
+            expect(await requests(page, "helman/get_appliances")).toHaveLength(1);
+        });
+    }
 });
 
 test.describe("the overview", () => {
