@@ -17,6 +17,7 @@ NEXT_SLOT_ID = "2026-03-20T21:30:00+01:00"
 pipeline_module = importlib.import_module("custom_components.helman.automation.pipeline")
 triggers_module = importlib.import_module("custom_components.helman.automation.triggers")
 coordinator_module = importlib.import_module("custom_components.helman.coordinator")
+forecast_module = importlib.import_module("custom_components.helman.forecast.service")
 const_module = importlib.import_module("custom_components.helman.const")
 runtime_status_module = importlib.import_module("custom_components.helman.scheduling.runtime_status")
 schedule_module = importlib.import_module("custom_components.helman.scheduling.schedule")
@@ -242,6 +243,9 @@ class CoordinatorAutomationTriggerTests(unittest.IsolatedAsyncioTestCase):
             request_debounced=AsyncMock(),
             async_shutdown=AsyncMock(),
         )
+        coordinator.forecast._request_replan = (
+            coordinator._automation_triggers.request_debounced
+        )
         return coordinator, storage, executor
 
     async def test_refresh_wrapper_schedules_debounced_run_after_successful_refresh(
@@ -262,14 +266,14 @@ class CoordinatorAutomationTriggerTests(unittest.IsolatedAsyncioTestCase):
                 }
             },
         )
-        coordinator._async_build_forecast_snapshots = AsyncMock(
-            return_value=coordinator_module._ForecastRefreshResult(
+        coordinator.forecast._async_build_forecast_snapshots = AsyncMock(
+            return_value=forecast_module._ForecastRefreshResult(
                 forecast_refreshed=True,
                 bundle_ready=True,
             )
         )
 
-        await coordinator._async_run_forecast_refresh(
+        await coordinator.forecast._async_run_forecast_refresh(
             reason="startup",
             reference_time=REFERENCE_TIME,
         )
@@ -295,14 +299,14 @@ class CoordinatorAutomationTriggerTests(unittest.IsolatedAsyncioTestCase):
                 }
             },
         )
-        coordinator._async_build_forecast_snapshots = AsyncMock(
-            return_value=coordinator_module._ForecastRefreshResult(
+        coordinator.forecast._async_build_forecast_snapshots = AsyncMock(
+            return_value=forecast_module._ForecastRefreshResult(
                 forecast_refreshed=True,
                 bundle_ready=False,
             )
         )
 
-        await coordinator._async_run_forecast_refresh(
+        await coordinator.forecast._async_run_forecast_refresh(
             reason="slot_refresh",
             reference_time=REFERENCE_TIME,
         )
@@ -323,14 +327,14 @@ class CoordinatorAutomationTriggerTests(unittest.IsolatedAsyncioTestCase):
                 },
             }
         )
-        coordinator._async_build_forecast_snapshots = AsyncMock(
-            return_value=coordinator_module._ForecastRefreshResult(
+        coordinator.forecast._async_build_forecast_snapshots = AsyncMock(
+            return_value=forecast_module._ForecastRefreshResult(
                 forecast_refreshed=True,
                 bundle_ready=False,
             )
         )
 
-        await coordinator._async_run_forecast_refresh(
+        await coordinator.forecast._async_run_forecast_refresh(
             reason="startup",
             reference_time=REFERENCE_TIME,
         )
@@ -355,14 +359,14 @@ class CoordinatorAutomationTriggerTests(unittest.IsolatedAsyncioTestCase):
                 },
             },
         )
-        coordinator._async_build_forecast_snapshots = AsyncMock(
-            return_value=coordinator_module._ForecastRefreshResult(
+        coordinator.forecast._async_build_forecast_snapshots = AsyncMock(
+            return_value=forecast_module._ForecastRefreshResult(
                 forecast_refreshed=True,
                 bundle_ready=False,
             )
         )
 
-        await coordinator._async_run_forecast_refresh(
+        await coordinator.forecast._async_run_forecast_refresh(
             reason="startup",
             reference_time=REFERENCE_TIME,
         )

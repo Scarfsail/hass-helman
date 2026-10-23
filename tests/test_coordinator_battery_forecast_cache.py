@@ -16,6 +16,7 @@ REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
 
 from custom_components.helman.coordinator import HelmanCoordinator  # noqa: E402
 from custom_components.helman import coordinator as coordinator_module
+from custom_components.helman.forecast import service as forecast_module
 from custom_components.helman.const import SLOT_ALIGNED_REFRESH_REASON  # noqa: E402
 from custom_components.helman.forecast import assembly  # noqa: E402
 from custom_components.helman.scheduling.schedule import (  # noqa: E402
@@ -47,9 +48,10 @@ def _make_coordinator(test: unittest.TestCase) -> HelmanCoordinator:
     )
     coordinator = make_coordinator(_storage=storage, _active_config={})
     coordinator._hass = SimpleNamespace(async_add_executor_job=_inline_executor_job)
+    coordinator.forecast._hass = coordinator._hass
     # The tests store documents, not their dicts.
     coordinator.schedule.load = lambda: storage.schedule_document
-    coordinator._appliances_registry.current = coordinator_module.AppliancesRuntimeRegistry()
+    coordinator._appliances_registry.current = forecast_module.AppliancesRuntimeRegistry()
     test.build_battery_forecast = test.enterContext(
         patch.object(
             assembly.BatteryCapacityForecastBuilder,
@@ -77,7 +79,7 @@ async def _read_pipeline(
     house_forecast: dict | None = None,
 ):
     """The pipeline served for these snapshots at ``started_at``."""
-    return await coordinator._async_current_pipeline(
+    return await coordinator.forecast._async_current_pipeline(
         started_at,
         in_flight=(house_forecast or _make_house_forecast(), _make_solar_forecast()),
     )
@@ -178,12 +180,12 @@ def _patch_live_battery(*live_states):
     """Configure a battery and answer each live-state read with the next state."""
     return (
         patch.object(
-            coordinator_module,
+            forecast_module,
             "read_battery_entity_config",
             return_value=SimpleNamespace(capacity_entity_id="sensor.battery_capacity"),
         ),
         patch.object(
-            coordinator_module,
+            forecast_module,
             "read_battery_live_state",
             side_effect=[
                 SimpleNamespace(current_soc=soc, current_remaining_energy_kwh=kwh)
@@ -212,10 +214,10 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
 
         await _read_battery_forecast(coordinator)
 
-        entry = coordinator._pipeline_cache
+        entry = coordinator.forecast._pipeline_cache
         self.assertEqual(
             entry.key,
-            coordinator_module._PipelineCacheKey(
+            forecast_module._PipelineCacheKey(
                 slot_start=datetime.fromisoformat("2026-03-20T21:00:00+01:00"),
                 house_generated_at="2026-03-20T21:05:00+01:00",
                 solar_signature=assembly.build_battery_forecast_solar_signature(
@@ -230,7 +232,7 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             entry.expires_at,
             REFERENCE_TIME
             + timedelta(
-                seconds=coordinator_module.BATTERY_CAPACITY_FORECAST_CACHE_TTL_SECONDS
+                seconds=forecast_module.BATTERY_CAPACITY_FORECAST_CACHE_TTL_SECONDS
             ),
         )
 
@@ -258,7 +260,7 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         ]
 
         await _read_battery_forecast(coordinator)
-        self.assertIsNone(coordinator._pipeline_cache.key.slot_start)
+        self.assertIsNone(coordinator.forecast._pipeline_cache.key.slot_start)
         forecast = await _read_battery_forecast(coordinator)
 
         self.assertEqual(forecast, expected_forecast)
@@ -283,10 +285,10 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         coordinator = _make_coordinator(self)
 
         await _read_battery_forecast(coordinator)
-        revision = coordinator._forecast_cache_revision
-        coordinator._invalidate_pipeline_cache()
-        self.assertIsNone(coordinator._pipeline_cache)
-        self.assertEqual(coordinator._forecast_cache_revision, revision + 1)
+        revision = coordinator.forecast._forecast_cache_revision
+        coordinator.forecast._invalidate_pipeline_cache()
+        self.assertIsNone(coordinator.forecast._pipeline_cache)
+        self.assertEqual(coordinator.forecast._forecast_cache_revision, revision + 1)
         await _read_battery_forecast(
             coordinator, datetime.fromisoformat("2026-03-20T21:11:00+01:00")
         )
@@ -318,8 +320,8 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         coordinator = make_coordinator(_hass=FakeHass(), _storage=storage)
         coordinator.schedule.executor = FakeExecutor()
         hold_pipeline(coordinator, SimpleNamespace())
-        entry = coordinator._pipeline_cache
-        revision = coordinator._forecast_cache_revision
+        entry = coordinator.forecast._pipeline_cache
+        revision = coordinator.forecast._forecast_cache_revision
 
         await coordinator.set_schedule(
             slots=[
@@ -330,14 +332,14 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             ],
             reference_time=REFERENCE_TIME,
         )
-        self.assertEqual(coordinator._forecast_cache_revision, revision)
-        self.assertIs(coordinator._pipeline_cache, entry)
+        self.assertEqual(coordinator.forecast._forecast_cache_revision, revision)
+        self.assertIs(coordinator.forecast._pipeline_cache, entry)
 
         await coordinator.set_schedule_execution(
             enabled=True, reference_time=REFERENCE_TIME
         )
-        self.assertEqual(coordinator._forecast_cache_revision, revision)
-        self.assertIs(coordinator._pipeline_cache, entry)
+        self.assertEqual(coordinator.forecast._forecast_cache_revision, revision)
+        self.assertIs(coordinator.forecast._pipeline_cache, entry)
 
     async def test_projection_plan_reuses_cache_for_same_started_at(
         self,
@@ -461,14 +463,14 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
         coordinator._storage.schedule_document = first_schedule_document
 
         await _read_battery_forecast(coordinator)
-        self.assertEqual(coordinator._pipeline_cache.key.schedule_sig, ())
+        self.assertEqual(coordinator.forecast._pipeline_cache.key.schedule_sig, ())
         coordinator._storage.schedule_document = second_schedule_document
         await _read_battery_forecast(
             coordinator, datetime.fromisoformat("2026-03-20T21:11:00+01:00")
         )
 
         self.assertEqual(self.build_battery_forecast.call_count, 2)
-        self.assertNotEqual(coordinator._pipeline_cache.key.schedule_sig, ())
+        self.assertNotEqual(coordinator.forecast._pipeline_cache.key.schedule_sig, ())
         # The disabled build gets an overlay built from the emptied document.
         self.assertEqual(
             self.build_overlay.call_args_list[0].kwargs["schedule_document"].slots,
@@ -548,14 +550,14 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
 
         with entity_config, live_state:
             await _read_battery_forecast(coordinator)
-            first_effective_sig = coordinator._pipeline_cache.key.effective_sig
+            first_effective_sig = coordinator.forecast._pipeline_cache.key.effective_sig
             await _read_battery_forecast(
                 coordinator, datetime.fromisoformat("2026-03-20T21:11:00+01:00")
             )
 
         self.assertEqual(self.build_battery_forecast.call_count, 2)
         self.assertNotEqual(
-            coordinator._pipeline_cache.key.effective_sig, first_effective_sig
+            coordinator.forecast._pipeline_cache.key.effective_sig, first_effective_sig
         )
 
     async def test_rebuilds_when_active_target_slot_remains_target(
@@ -639,18 +641,18 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(
-                coordinator_module,
+                forecast_module,
                 "read_battery_entity_config",
                 return_value=SimpleNamespace(capacity_entity_id="sensor.battery_capacity"),
             ),
             patch.object(
-                coordinator_module,
+                forecast_module,
                 "read_battery_live_state",
                 side_effect=lambda *args, **kwargs: live_state,
             ),
         ):
             await _read_battery_forecast(coordinator)
-            first_key = coordinator._pipeline_cache.key
+            first_key = coordinator.forecast._pipeline_cache.key
             # A couple of minutes of charging: past the 0.1 kWh bound.
             live_state = SimpleNamespace(
                 current_soc=51.0,
@@ -661,7 +663,7 @@ class CoordinatorBatteryForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(self.build_battery_forecast.call_count, 2)
-        self.assertEqual(coordinator._pipeline_cache.key, first_key)
+        self.assertEqual(coordinator.forecast._pipeline_cache.key, first_key)
 
 
 class PipelineReadPathTests(unittest.IsolatedAsyncioTestCase):
@@ -669,27 +671,27 @@ class PipelineReadPathTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_waiting_reader_uses_the_latest_snapshots(self) -> None:
         coordinator = _make_coordinator(self)
-        coordinator._cached_forecast = _make_house_forecast()
-        coordinator._cached_solar_forecast = _make_solar_forecast()
-        async with coordinator._appliance_forecast_pipeline_lock:
-            reader = asyncio.create_task(coordinator._async_current_pipeline(REFERENCE_TIME))
+        coordinator.forecast._cached_forecast = _make_house_forecast()
+        coordinator.forecast._cached_solar_forecast = _make_solar_forecast()
+        async with coordinator.forecast._appliance_forecast_pipeline_lock:
+            reader = asyncio.create_task(coordinator.forecast._async_current_pipeline(REFERENCE_TIME))
             await asyncio.sleep(0)
             latest = {**_make_house_forecast(), "generatedAt": "2026-03-20T21:08:00+01:00"}
-            coordinator._cached_forecast = latest
-            coordinator._cached_solar_forecast = {
+            coordinator.forecast._cached_forecast = latest
+            coordinator.forecast._cached_solar_forecast = {
                 **_make_solar_forecast(),
                 "correctedPoints": [{"timestamp": "2026-03-20T21:00:00+01:00", "value": 42.0}],
             }
         pipeline = await reader
         self.assertEqual(pipeline.original_house_forecast, latest)
-        self.assertEqual(coordinator._pipeline_cache.key.house_generated_at, latest["generatedAt"])
+        self.assertEqual(coordinator.forecast._pipeline_cache.key.house_generated_at, latest["generatedAt"])
         self.assertEqual(self.build_battery_forecast.call_args.kwargs["solar_forecast"]["points"][0]["value"], 42.0)
 
     async def test_readers_build_against_the_canonical_snapshots(self) -> None:
         coordinator = _make_coordinator(self)
         house_forecast = _make_house_forecast()
-        coordinator._cached_forecast = house_forecast
-        coordinator._cached_solar_forecast = {
+        coordinator.forecast._cached_forecast = house_forecast
+        coordinator.forecast._cached_solar_forecast = {
             "status": "available",
             "points": [{"timestamp": "2026-03-20T21:00:00+01:00", "value": 10.0}],
             "correctedPoints": [
@@ -697,7 +699,7 @@ class PipelineReadPathTests(unittest.IsolatedAsyncioTestCase):
             ],
         }
 
-        pipeline = await coordinator._async_current_pipeline(REFERENCE_TIME)
+        pipeline = await coordinator.forecast._async_current_pipeline(REFERENCE_TIME)
 
         self.assertEqual(pipeline.original_house_forecast, house_forecast)
         # The bias-corrected view, which is what automation plans against too.
@@ -714,7 +716,7 @@ class PipelineReadPathTests(unittest.IsolatedAsyncioTestCase):
             }
         }
 
-        pipeline = await coordinator._async_current_pipeline(REFERENCE_TIME)
+        pipeline = await coordinator.forecast._async_current_pipeline(REFERENCE_TIME)
 
         self.assertEqual(pipeline.original_house_forecast["status"], "unavailable")
         self.assertEqual(
@@ -734,14 +736,14 @@ class PipelineReadPathTests(unittest.IsolatedAsyncioTestCase):
             calls.append("pipeline")
             return SimpleNamespace(projection_plan=plan)
 
-        coordinator._async_current_pipeline = current_pipeline
+        coordinator.forecast._async_current_pipeline = current_pipeline
 
         response = await coordinator.get_appliance_projections()
 
         self.assertEqual(calls, ["refresh", "pipeline"])
         self.assertEqual(
             response,
-            coordinator_module.build_empty_appliance_projections_response(
+            forecast_module.build_empty_appliance_projections_response(
                 generated_at=plan.generated_at
             ),
         )
@@ -751,12 +753,12 @@ class PipelineReadPathTests(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         coordinator = make_coordinator()
         battery_forecast = _make_battery_forecast()
-        coordinator._async_current_pipeline = AsyncMock(
+        coordinator.forecast._async_current_pipeline = AsyncMock(
             return_value=SimpleNamespace(battery_forecast=battery_forecast)
         )
 
         self.assertIs(await coordinator.battery_forecast(), battery_forecast)
-        coordinator._async_current_pipeline.assert_awaited_once_with(REFERENCE_TIME)
+        coordinator.forecast._async_current_pipeline.assert_awaited_once_with(REFERENCE_TIME)
 
 
 class SlotAlignedRefreshBeatTests(unittest.TestCase):
@@ -771,26 +773,26 @@ class SlotAlignedRefreshBeatTests(unittest.TestCase):
 
     def _fire(self, fired_at):
         coordinator = make_coordinator()
-        coordinator._hass = SimpleNamespace()
-        coordinator._unsub_forecast_refresh = None
+        coordinator.forecast._hass = SimpleNamespace()
+        coordinator.forecast._unsub_forecast_refresh = None
         forwarded = []
-        coordinator._create_tracked_refresh_task = lambda coro: coro
-        coordinator._async_refresh_forecast = (
+        coordinator.forecast._create_tracked_refresh_task = lambda coro: coro
+        coordinator.forecast._async_refresh_forecast = (
             lambda *, reason, reference_time: forwarded.append(
                 (reason, reference_time)
             )
         )
 
         registered = []
-        original = coordinator_module.async_track_time_change
-        coordinator_module.async_track_time_change = (
+        original = forecast_module.async_track_time_change
+        forecast_module.async_track_time_change = (
             lambda hass, action, **kwargs: registered.append((action, kwargs))
             or (lambda: None)
         )
         try:
-            coordinator._start_forecast_refresh()
+            coordinator.forecast._start_forecast_refresh()
         finally:
-            coordinator_module.async_track_time_change = original
+            forecast_module.async_track_time_change = original
 
         (on_interval, kwargs) = registered[0]
         self.assertEqual(kwargs, {"minute": [0, 15, 30, 45], "second": 0})
@@ -826,7 +828,7 @@ class BatteryForecastCurrentAccessorTests(unittest.TestCase):
 
     def _coordinator(self, snapshot):
         coordinator = make_coordinator()
-        coordinator._hass = SimpleNamespace(
+        coordinator.forecast._hass = SimpleNamespace(
             config=SimpleNamespace(time_zone="Europe/Prague")
         )
         hold_pipeline(
@@ -963,7 +965,7 @@ class BatteryForecastCurrentAccessorTests(unittest.TestCase):
         # The slot key is the memo's entire expiry: 20:45's figures can never
         # answer a read taken in the 21:00 slot.
         coordinator = self._coordinator(self._PARTIAL_SNAPSHOT)
-        coordinator._battery_forecast_current_slot = (
+        coordinator.forecast._battery_forecast_current_slot = (
             "2026-03-20T20:45:00+01:00",
             {"socPct": 91.0},
         )
@@ -989,7 +991,7 @@ class BatteryForecastCurrentAccessorTests(unittest.TestCase):
             {"series": [{"timestamp": "2026-03-20T21:00:00+01:00"}]}
         )
         self.assertIsNone(coordinator.get_battery_forecast_current())
-        self.assertIsNone(coordinator._battery_forecast_current_slot)
+        self.assertIsNone(coordinator.forecast._battery_forecast_current_slot)
 
     def _first_entry(self, duration_hours):
         return self._coordinator(
@@ -1055,11 +1057,11 @@ class BatteryForecastCurrentRefusalLoggingTests(unittest.TestCase):
     whose only trace was the recorder.
     """
 
-    LOGGER = "custom_components.helman.coordinator"
+    LOGGER = "custom_components.helman.forecast.service"
 
     def _coordinator(self, snapshot):
         coordinator = make_coordinator()
-        coordinator._hass = SimpleNamespace(
+        coordinator.forecast._hass = SimpleNamespace(
             config=SimpleNamespace(time_zone="Europe/Prague")
         )
         hold_pipeline(
@@ -1130,12 +1132,12 @@ class BatteryForecastCurrentRefusalLoggingTests(unittest.TestCase):
             }
         )
         coordinator.get_battery_forecast_current()
-        coordinator._pipeline_cache = self._partial_first_entry()._pipeline_cache
+        coordinator.forecast._pipeline_cache = self._partial_first_entry().forecast._pipeline_cache
         with self.assertNoLogs(self.LOGGER, level="INFO"):
             self.assertEqual(
                 coordinator.get_battery_forecast_current(), {"socPct": 62.5}
             )
-        coordinator._battery_forecast_current_slot = None
+        coordinator.forecast._battery_forecast_current_slot = None
         with self.assertLogs(self.LOGGER, level="INFO") as captured:
             self.assertIsNone(coordinator.get_battery_forecast_current())
         self.assertIn("reason=partial_slot", captured.output[0])
@@ -1176,7 +1178,7 @@ class ApplianceForecastPipelineDedupeTests(unittest.IsolatedAsyncioTestCase):
             lambda **_kwargs: _make_battery_forecast()
         )
         gate = asyncio.Event()
-        gather = coordinator.gather_compute_inputs
+        gather = coordinator.forecast.gather_compute_inputs
         calls: list[dict] = []
 
         async def gated_gather(**kwargs):
@@ -1184,7 +1186,7 @@ class ApplianceForecastPipelineDedupeTests(unittest.IsolatedAsyncioTestCase):
             await gate.wait()
             return await gather(**kwargs)
 
-        coordinator.gather_compute_inputs = gated_gather
+        coordinator.forecast.gather_compute_inputs = gated_gather
         return coordinator, gate, calls
 
     @staticmethod
@@ -1217,7 +1219,7 @@ class ApplianceForecastPipelineDedupeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.build_battery_forecast.call_count, 1)
         self.assertIs(results[0], results[1])
         self.assertIs(results[1], results[2])
-        self.assertIs(results[0], coordinator._pipeline_cache.snapshot)
+        self.assertIs(results[0], coordinator.forecast._pipeline_cache.snapshot)
 
     async def test_incompatible_waiter_builds_its_own_result(self) -> None:
         coordinator, gate, gather_calls = self._make_gated_coordinator()
@@ -1237,7 +1239,7 @@ class ApplianceForecastPipelineDedupeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.build_battery_forecast.call_count, 2)
         self.assertIsNot(first_pipeline, second_pipeline)
         self.assertEqual(
-            coordinator._pipeline_cache.key.house_generated_at,
+            coordinator.forecast._pipeline_cache.key.house_generated_at,
             "2026-03-20T21:20:00+01:00",
         )
 
@@ -1284,7 +1286,7 @@ class ApplianceForecastPipelineDedupeTests(unittest.IsolatedAsyncioTestCase):
         # finds no valid cache and builds again.
         self.assertEqual(len(gather_calls), 2)
         self.assertEqual(self.build_battery_forecast.call_count, 2)
-        self.assertIs(pipeline, coordinator._pipeline_cache.snapshot)
+        self.assertIs(pipeline, coordinator.forecast._pipeline_cache.snapshot)
 
     async def test_build_invalidated_mid_flight_is_not_published(self) -> None:
         coordinator, gate, _gather_calls = self._make_gated_coordinator()
@@ -1294,13 +1296,25 @@ class ApplianceForecastPipelineDedupeTests(unittest.IsolatedAsyncioTestCase):
         # Stands in for a config change, a fresh forecast snapshot, or unload:
         # all of them invalidate, and none of them may be overwritten by the
         # build that was already in flight.
-        coordinator._invalidate_pipeline_cache()
+        coordinator.forecast._invalidate_pipeline_cache()
         gate.set()
         pipeline = await request
 
         # The caller still gets what it asked for; the cache stays cleared.
         self.assertIsNotNone(pipeline)
-        self.assertIsNone(coordinator._pipeline_cache)
+        self.assertIsNone(coordinator.forecast._pipeline_cache)
+
+    async def test_unload_stops_a_read_build_waiting_on_inputs(self) -> None:
+        coordinator, gate, _gather_calls = self._make_gated_coordinator()
+        request = self._request(coordinator)
+        await self._settle()
+
+        await coordinator.forecast.async_unload()
+        gate.set()
+
+        with self.assertRaisesRegex(RuntimeError, "Forecast service is unloaded"):
+            await request
+        self.assertIsNone(coordinator.forecast._pipeline_cache)
 
     async def test_a_superseded_build_does_not_set_the_cache_back(self) -> None:
         """A build handed older snapshots must not overwrite a newer entry.
@@ -1312,8 +1326,8 @@ class ApplianceForecastPipelineDedupeTests(unittest.IsolatedAsyncioTestCase):
         the snapshots it is holding say the build is behind.
         """
         coordinator = self._make_gated_coordinator()[0]
-        coordinator.gather_compute_inputs = (
-            HelmanCoordinator.gather_compute_inputs.__get__(coordinator)
+        coordinator.forecast.gather_compute_inputs = (
+            forecast_module.ForecastService.gather_compute_inputs.__get__(coordinator.forecast)
         )
 
         fresh = await _read_pipeline(
@@ -1322,7 +1336,7 @@ class ApplianceForecastPipelineDedupeTests(unittest.IsolatedAsyncioTestCase):
                 generated_at="2026-03-20T21:20:00+01:00"
             ),
         )
-        revision = coordinator._forecast_cache_revision
+        revision = coordinator.forecast._forecast_cache_revision
 
         stale = await _read_pipeline(
             coordinator,
@@ -1334,14 +1348,14 @@ class ApplianceForecastPipelineDedupeTests(unittest.IsolatedAsyncioTestCase):
         # It gets the forecast it asked for -- and the cache keeps the newer
         # one, so the signature-less readers go on serving that.
         self.assertIsNot(stale, fresh)
-        self.assertIs(coordinator._pipeline_cache.snapshot, fresh)
+        self.assertIs(coordinator.forecast._pipeline_cache.snapshot, fresh)
         self.assertEqual(
-            coordinator._pipeline_cache.key.house_generated_at,
+            coordinator.forecast._pipeline_cache.key.house_generated_at,
             "2026-03-20T21:20:00+01:00",
         )
         # Nothing was invalidated: the revision guard alone would have let the
         # store through.
-        self.assertEqual(coordinator._forecast_cache_revision, revision)
+        self.assertEqual(coordinator.forecast._forecast_cache_revision, revision)
 
     async def test_the_run_computes_against_the_registry_it_pinned(self) -> None:
         """The registry travels with the other inputs pinned on the loop.
@@ -1354,7 +1368,7 @@ class ApplianceForecastPipelineDedupeTests(unittest.IsolatedAsyncioTestCase):
         """
         coordinator = _make_coordinator(self)
         pinned = coordinator._appliances_registry.current
-        gather = coordinator.gather_compute_inputs
+        gather = coordinator.forecast.gather_compute_inputs
         used: list[object] = []
 
         async def gather_then_swap(**kwargs):
@@ -1362,11 +1376,11 @@ class ApplianceForecastPipelineDedupeTests(unittest.IsolatedAsyncioTestCase):
             # Stands in for a climate entity coming back from unavailable
             # while this run is in flight.
             coordinator._appliances_registry.current = (
-                coordinator_module.AppliancesRuntimeRegistry()
+                forecast_module.AppliancesRuntimeRegistry()
             )
             return compute_inputs
 
-        coordinator.gather_compute_inputs = gather_then_swap
+        coordinator.forecast.gather_compute_inputs = gather_then_swap
 
         def record_registry(**kwargs):
             used.append(kwargs["registry"])
@@ -1414,7 +1428,7 @@ class ApplianceForecastPipelineDedupeTests(unittest.IsolatedAsyncioTestCase):
             def get(self, *_args, **_kwargs):
                 raise AssertionError("the worker must not read hass.states")
 
-        coordinator._hass = SimpleNamespace(
+        coordinator.forecast._hass = SimpleNamespace(
             async_add_executor_job=async_add_executor_job,
             states=_PoisonedStates(),
         )

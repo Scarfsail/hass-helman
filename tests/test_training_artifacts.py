@@ -232,7 +232,7 @@ class AdoptionPlumbingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_an_adoption_after_unload_does_not_refresh_the_forecast(self) -> None:
         coordinator = make_coordinator()
-        coordinator._async_refresh_forecast = AsyncMock()
+        coordinator.forecast._async_refresh_forecast = AsyncMock()
         coordinator.training.store = SimpleNamespace(
             house_consumption=None, appliance_energy=None
         )
@@ -240,7 +240,7 @@ class AdoptionPlumbingTests(unittest.IsolatedAsyncioTestCase):
 
         await coordinator.training.house_consumption_job._on_trained()
 
-        coordinator._async_refresh_forecast.assert_not_awaited()
+        coordinator.forecast._async_refresh_forecast.assert_not_awaited()
 
     async def test_a_reload_adopts_both_sections_and_schedules_no_refit(self) -> None:
         started: list = []

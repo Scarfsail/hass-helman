@@ -54,6 +54,7 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
     async def test_async_build_forecast_rebuild_uses_pinned_inputs_and_composes_grid(self) -> None:
         coordinator = make_coordinator()
         coordinator._hass = _make_executor_hass()
+        coordinator.forecast._hass = coordinator._hass
         coordinator._active_config = {}
         coordinator._appliances_registry.current = AppliancesRuntimeRegistry()
         build_battery_forecast = Mock(
@@ -116,7 +117,7 @@ class CoordinatorAutomationSnapshotTests(unittest.IsolatedAsyncioTestCase):
                 build_battery_forecast,
             ),
         ):
-            result = await coordinator._async_build_forecast_rebuild(
+            result = await coordinator.forecast._async_build_forecast_rebuild(
                 solar_forecast={"status": "available", "points": []},
                 original_house_forecast=original_house_forecast,
                 started_at=REFERENCE_TIME,

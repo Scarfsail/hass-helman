@@ -1,4 +1,6 @@
 from __future__ import annotations
+from custom_components.helman.automation.config import read_automation_config
+from custom_components.helman.forecast.assembly import build_battery_forecast_schedule_signature
 from tests._fakes import make_coordinator
 
 import asyncio
@@ -22,11 +24,11 @@ from custom_components.helman.const import (  # noqa: E402
 from custom_components.helman.appliances.config import build_appliances_runtime_registry  # noqa: E402
 from custom_components.helman.automation.compute_inputs import (  # noqa: E402
     CustomConditionGroupResult,
+    condition_met_map,
 )
 from custom_components.helman import coordinator as coordinator_module  # noqa: E402
 from custom_components.helman.coordinator import (  # noqa: E402
     HelmanCoordinator,
-    _condition_met_map,
 )
 from custom_components.helman.scheduling import (  # noqa: E402
     schedule_executor as schedule_executor_module,
@@ -63,10 +65,10 @@ def _battery_forecast_schedule_signature(coordinator):
     applied there, by emptying the document, so a signature taken from the
     stored document would not move on a toggle.
     """
-    documents = coordinator._build_forecast_schedule_documents(
+    documents = coordinator.forecast._build_forecast_schedule_documents(
         schedule_document=coordinator._load_schedule_document()
     )
-    return coordinator._build_battery_forecast_schedule_signature(
+    return build_battery_forecast_schedule_signature(
         documents.forecast_schedule_document
     )
 
@@ -166,9 +168,8 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             schedule_document={"executionEnabled": True, "slots": {}}
         )
         now = dt_util.now()
-        coordinator._last_automation_plan_at = now - timedelta(seconds=120)
-        coordinator._last_plan_condition_map = {"opt": (True,)}
-        coordinator._async_evaluate_optimizer_conditions = AsyncMock(
+        coordinator.conditions.record_plan(now - timedelta(seconds=120), {"opt": (True,)})
+        coordinator.conditions.evaluate = AsyncMock(
             return_value={"opt": (CustomConditionGroupResult(index=0, met=False),)}
         )
         coordinator._automation_triggers.request_debounced = AsyncMock()
@@ -187,9 +188,8 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             schedule_document={"executionEnabled": True, "slots": {}}
         )
         now = dt_util.now()
-        coordinator._last_automation_plan_at = now - timedelta(seconds=120)
-        coordinator._last_plan_condition_map = {"opt": (True,)}
-        coordinator._async_evaluate_optimizer_conditions = AsyncMock(
+        coordinator.conditions.record_plan(now - timedelta(seconds=120), {"opt": (True,)})
+        coordinator.conditions.evaluate = AsyncMock(
             return_value={"opt": (CustomConditionGroupResult(index=0, met=True),)}
         )
         coordinator._automation_triggers.request_debounced = AsyncMock()
@@ -206,9 +206,8 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
             schedule_document={"executionEnabled": True, "slots": {}}
         )
         now = dt_util.now()
-        coordinator._last_automation_plan_at = now  # just planned
-        coordinator._last_plan_condition_map = {"opt": (True,)}
-        coordinator._async_evaluate_optimizer_conditions = AsyncMock(
+        coordinator.conditions.record_plan(now, {"opt": (True,)})  # just planned
+        coordinator.conditions.evaluate = AsyncMock(
             return_value={"opt": (CustomConditionGroupResult(index=0, met=False),)}
         )
         coordinator._automation_triggers.request_debounced = AsyncMock()
@@ -217,7 +216,7 @@ class CoordinatorScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
 
         # Fresh plan: execute as-is, no eval, no re-plan.
         self.assertFalse(deferred)
-        coordinator._async_evaluate_optimizer_conditions.assert_not_awaited()
+        coordinator.conditions.evaluate.assert_not_awaited()
         coordinator._automation_triggers.request_debounced.assert_not_awaited()
 
     async def test_normalize_schedule_document_keeps_legacy_schedule_without_slot_minutes(
@@ -1676,7 +1675,7 @@ class OptimizerCustomConditionEvaluationTests(unittest.IsolatedAsyncioTestCase):
 
             return Mock(async_check=_check, async_unload=Mock()), (entity_id,)
 
-        coordinator._build_optimizer_condition_checker = _build
+        coordinator.conditions._build_optimizer_condition_checker = _build
         return built
 
     async def test_each_custom_entry_gets_its_own_result(self) -> None:
@@ -1703,7 +1702,7 @@ class OptimizerCustomConditionEvaluationTests(unittest.IsolatedAsyncioTestCase):
             },
         )
 
-        results = await coordinator._async_evaluate_optimizer_conditions()
+        results = await coordinator.conditions.evaluate(read_automation_config(coordinator.config))
 
         group = results["export"][0]
         self.assertEqual(len(group.entries), 3)
@@ -1719,7 +1718,7 @@ class OptimizerCustomConditionEvaluationTests(unittest.IsolatedAsyncioTestCase):
         # The aggregate is still the AND, and still what the optimizers read.
         self.assertFalse(group.met)
         self.assertFalse(group.errored)
-        self.assertEqual(_condition_met_map(results), {"export": (False,)})
+        self.assertEqual(condition_met_map(results), {"export": (False,)})
 
     async def test_all_entries_true_makes_the_group_met(self) -> None:
         coordinator = self._build_coordinator(
@@ -1739,11 +1738,11 @@ class OptimizerCustomConditionEvaluationTests(unittest.IsolatedAsyncioTestCase):
             coordinator, {"binary_sensor.a": True, "binary_sensor.b": True}
         )
 
-        results = await coordinator._async_evaluate_optimizer_conditions()
+        results = await coordinator.conditions.evaluate(read_automation_config(coordinator.config))
 
         self.assertTrue(results["export"][0].met)
         self.assertFalse(results["export"][0].errored)
-        self.assertEqual(_condition_met_map(results), {"export": (True,)})
+        self.assertEqual(condition_met_map(results), {"export": (True,)})
 
     async def test_a_raising_entry_is_errored_and_still_fails_the_group(self) -> None:
         coordinator = self._build_coordinator(
@@ -1764,7 +1763,7 @@ class OptimizerCustomConditionEvaluationTests(unittest.IsolatedAsyncioTestCase):
             {"binary_sensor.a": True, "binary_sensor.boom": RuntimeError("nope")},
         )
 
-        results = await coordinator._async_evaluate_optimizer_conditions()
+        results = await coordinator.conditions.evaluate(read_automation_config(coordinator.config))
 
         group = results["export"][0]
         self.assertEqual(
@@ -1774,7 +1773,7 @@ class OptimizerCustomConditionEvaluationTests(unittest.IsolatedAsyncioTestCase):
         # Fail-closed for scheduling, but no longer indistinguishable from false.
         self.assertFalse(group.met)
         self.assertTrue(group.errored)
-        self.assertEqual(_condition_met_map(results), {"export": (False,)})
+        self.assertEqual(condition_met_map(results), {"export": (False,)})
 
     async def test_an_unbuildable_entry_is_errored_too(self) -> None:
         coordinator = self._build_coordinator(
@@ -1789,7 +1788,7 @@ class OptimizerCustomConditionEvaluationTests(unittest.IsolatedAsyncioTestCase):
         )
         self._stub_checkers(coordinator, {"binary_sensor.bad": None})
 
-        results = await coordinator._async_evaluate_optimizer_conditions()
+        results = await coordinator.conditions.evaluate(read_automation_config(coordinator.config))
 
         group = results["export"][0]
         self.assertEqual(
@@ -1806,7 +1805,7 @@ class OptimizerCustomConditionEvaluationTests(unittest.IsolatedAsyncioTestCase):
         )
         built = self._stub_checkers(coordinator, {})
 
-        results = await coordinator._async_evaluate_optimizer_conditions()
+        results = await coordinator.conditions.evaluate(read_automation_config(coordinator.config))
 
         group = results["export"][0]
         self.assertTrue(group.met)
@@ -1814,7 +1813,7 @@ class OptimizerCustomConditionEvaluationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(group.entries, ())
         # A group with no custom conditions must not build a checker.
         self.assertEqual(built, [])
-        self.assertEqual(_condition_met_map(results), {"export": (True,)})
+        self.assertEqual(condition_met_map(results), {"export": (True,)})
 
     async def test_group_order_and_index_are_preserved(self) -> None:
         coordinator = self._build_coordinator(
@@ -1835,10 +1834,10 @@ class OptimizerCustomConditionEvaluationTests(unittest.IsolatedAsyncioTestCase):
             coordinator, {"binary_sensor.a": False, "binary_sensor.b": True}
         )
 
-        results = await coordinator._async_evaluate_optimizer_conditions()
+        results = await coordinator.conditions.evaluate(read_automation_config(coordinator.config))
 
         self.assertEqual([group.index for group in results["export"]], [0, 1])
-        self.assertEqual(_condition_met_map(results), {"export": (False, True)})
+        self.assertEqual(condition_met_map(results), {"export": (False, True)})
 
     async def test_results_reach_compute_inputs_alongside_the_aggregate(self) -> None:
         coordinator = self._build_coordinator(
@@ -1858,7 +1857,7 @@ class OptimizerCustomConditionEvaluationTests(unittest.IsolatedAsyncioTestCase):
             coordinator, {"binary_sensor.a": True, "binary_sensor.b": False}
         )
 
-        compute_inputs = await coordinator._async_gather_compute_inputs(
+        compute_inputs = await coordinator.gather_compute_inputs(
             started_at=REFERENCE_TIME, include_condition_flags=True
         )
 
@@ -1886,7 +1885,7 @@ class OptimizerCustomConditionEvaluationTests(unittest.IsolatedAsyncioTestCase):
         )
         self._stub_checkers(coordinator, {"binary_sensor.a": True})
 
-        compute_inputs = await coordinator._async_gather_compute_inputs(
+        compute_inputs = await coordinator.gather_compute_inputs(
             started_at=REFERENCE_TIME
         )
 
@@ -2005,7 +2004,7 @@ class ScheduleExecutionResponsivenessTests(unittest.IsolatedAsyncioTestCase):
             schedule = await self.coordinator.get_schedule(
                 reference_time=REFERENCE_TIME
             )
-            await self.coordinator._async_prepare_forecast_pipeline_inputs(
+            await self.coordinator.forecast._async_prepare_forecast_pipeline_inputs(
                 started_at=REFERENCE_TIME
             )
             await self.coordinator.set_schedule(

@@ -165,15 +165,15 @@ class CoordinatorSolarBiasResponseTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_get_forecast_uses_cached_adjusted_solar_points_when_bias_snapshot_exists(self) -> None:
         coordinator_module = importlib.import_module(
-            "custom_components.helman.coordinator"
+            "custom_components.helman.forecast.service"
         )
 
         coordinator = make_coordinator()
         coordinator._hass = SimpleNamespace()
         coordinator._storage = SimpleNamespace(config={})
         coordinator._active_config = {}
-        coordinator._cached_forecast = {"status": "available"}
-        coordinator._cached_solar_forecast = {
+        coordinator.forecast._cached_forecast = {"status": "available"}
+        coordinator.forecast._cached_solar_forecast = {
             "status": "available",
             "generatedAt": REFERENCE_TIME.isoformat(),
             "points": [
@@ -186,7 +186,7 @@ class CoordinatorSolarBiasResponseTests(unittest.IsolatedAsyncioTestCase):
         coordinator._read_house_forecast_config = Mock(
             return_value=("sensor.house_total", 56, 14, "fp")
         )
-        coordinator._async_refresh_forecast = AsyncMock()
+        coordinator.forecast._async_refresh_forecast = AsyncMock()
 
         adjusted_house_forecast = {
             "status": "available",
@@ -200,16 +200,16 @@ class CoordinatorSolarBiasResponseTests(unittest.IsolatedAsyncioTestCase):
         }
         # The real read path down to the build, so what the pipeline is handed
         # from the cached snapshots is what gets asserted.
-        coordinator._async_prepare_forecast_pipeline_inputs = AsyncMock(
+        coordinator.forecast._async_prepare_forecast_pipeline_inputs = AsyncMock(
             return_value=SimpleNamespace(
                 schedule_signature=(),
                 appliance_schedule_signature=(),
                 schedule_effective_signature=None,
             )
         )
-        coordinator._async_build_appliance_forecast_pipeline = AsyncMock(
+        coordinator.forecast._async_build_appliance_forecast_pipeline = AsyncMock(
             return_value=SimpleNamespace(
-                original_house_forecast=coordinator._cached_forecast,
+                original_house_forecast=coordinator.forecast._cached_forecast,
                 adjusted_house_forecast=adjusted_house_forecast,
                 battery_forecast=canonical_battery_forecast,
             )
@@ -284,8 +284,8 @@ class CoordinatorSolarBiasResponseTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await coordinator.get_forecast(forecast_days=1)
 
-        coordinator._async_refresh_forecast.assert_not_awaited()
-        coordinator._async_build_appliance_forecast_pipeline.assert_awaited_once_with(
+        coordinator.forecast._async_refresh_forecast.assert_not_awaited()
+        coordinator.forecast._async_build_appliance_forecast_pipeline.assert_awaited_once_with(
             solar_forecast={
                 "status": "available",
                 "generatedAt": REFERENCE_TIME.isoformat(),
@@ -296,7 +296,7 @@ class CoordinatorSolarBiasResponseTests(unittest.IsolatedAsyncioTestCase):
                     {"timestamp": "2026-03-20T21:00:00+01:00", "value": 10.0},
                 ],
             },
-            house_forecast=coordinator._cached_forecast,
+            house_forecast=coordinator.forecast._cached_forecast,
             started_at=REFERENCE_TIME,
             prepared=ANY,
             key=ANY,
@@ -307,15 +307,15 @@ class CoordinatorSolarBiasResponseTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_get_forecast_falls_back_to_cached_raw_points_without_bias_snapshot(self) -> None:
         coordinator_module = importlib.import_module(
-            "custom_components.helman.coordinator"
+            "custom_components.helman.forecast.service"
         )
 
         coordinator = make_coordinator()
         coordinator._hass = SimpleNamespace()
         coordinator._storage = SimpleNamespace(config={})
         coordinator._active_config = {}
-        coordinator._cached_forecast = {"status": "available"}
-        coordinator._cached_solar_forecast = {
+        coordinator.forecast._cached_forecast = {"status": "available"}
+        coordinator.forecast._cached_solar_forecast = {
             "status": "available",
             "generatedAt": REFERENCE_TIME.isoformat(),
             "points": [
@@ -328,19 +328,19 @@ class CoordinatorSolarBiasResponseTests(unittest.IsolatedAsyncioTestCase):
         coordinator._read_house_forecast_config = Mock(
             return_value=("sensor.house_total", 56, 14, "fp")
         )
-        coordinator._async_refresh_forecast = AsyncMock()
+        coordinator.forecast._async_refresh_forecast = AsyncMock()
         # The real read path down to the build, so what the pipeline is handed
         # from the cached snapshots is what gets asserted.
-        coordinator._async_prepare_forecast_pipeline_inputs = AsyncMock(
+        coordinator.forecast._async_prepare_forecast_pipeline_inputs = AsyncMock(
             return_value=SimpleNamespace(
                 schedule_signature=(),
                 appliance_schedule_signature=(),
                 schedule_effective_signature=None,
             )
         )
-        coordinator._async_build_appliance_forecast_pipeline = AsyncMock(
+        coordinator.forecast._async_build_appliance_forecast_pipeline = AsyncMock(
             return_value=SimpleNamespace(
-                original_house_forecast=coordinator._cached_forecast,
+                original_house_forecast=coordinator.forecast._cached_forecast,
                 adjusted_house_forecast={"status": "available"},
                 battery_forecast={"status": "available", "series": []},
             )
@@ -412,8 +412,8 @@ class CoordinatorSolarBiasResponseTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await coordinator.get_forecast(forecast_days=1)
 
-        coordinator._async_refresh_forecast.assert_not_awaited()
-        coordinator._async_build_appliance_forecast_pipeline.assert_awaited_once_with(
+        coordinator.forecast._async_refresh_forecast.assert_not_awaited()
+        coordinator.forecast._async_build_appliance_forecast_pipeline.assert_awaited_once_with(
             solar_forecast={
                 "status": "available",
                 "generatedAt": REFERENCE_TIME.isoformat(),
@@ -424,7 +424,7 @@ class CoordinatorSolarBiasResponseTests(unittest.IsolatedAsyncioTestCase):
                     {"timestamp": "2026-03-20T21:00:00+01:00", "value": 10.0},
                 ],
             },
-            house_forecast=coordinator._cached_forecast,
+            house_forecast=coordinator.forecast._cached_forecast,
             started_at=REFERENCE_TIME,
             prepared=ANY,
             key=ANY,

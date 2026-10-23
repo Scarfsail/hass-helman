@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:16:00+01:00")
 
-coordinator_module = importlib.import_module("custom_components.helman.coordinator")
+coordinator_module = importlib.import_module("custom_components.helman.forecast.service")
 
 
 @pytest.fixture(autouse=True)
@@ -25,7 +25,7 @@ class CoordinatorGridForecastTests(unittest.IsolatedAsyncioTestCase):
         coordinator._hass = SimpleNamespace()
         coordinator._storage = SimpleNamespace(config={})
         coordinator._active_config = {}
-        coordinator._cached_forecast = {"status": "available"}
+        coordinator.forecast._cached_forecast = {"status": "available"}
         coordinator._read_house_forecast_config = Mock(
             return_value=("sensor.house_total", 56, 14, "fp")
         )
@@ -44,7 +44,7 @@ class CoordinatorGridForecastTests(unittest.IsolatedAsyncioTestCase):
                 }
             ],
         }
-        coordinator._async_current_pipeline = AsyncMock(
+        coordinator.forecast._async_current_pipeline = AsyncMock(
             return_value=SimpleNamespace(
                 original_house_forecast=adjusted_house_forecast,
                 adjusted_house_forecast=adjusted_house_forecast,
@@ -52,7 +52,7 @@ class CoordinatorGridForecastTests(unittest.IsolatedAsyncioTestCase):
             )
         )
         canonical_solar = {"canonical": "solar"}
-        coordinator._async_get_canonical_solar_forecast = AsyncMock(
+        coordinator.forecast._async_get_canonical_solar_forecast = AsyncMock(
             return_value=canonical_solar
         )
 
@@ -146,7 +146,7 @@ class CoordinatorGridForecastTests(unittest.IsolatedAsyncioTestCase):
             canonical_grid_response,
             forecast_days=1,
         )
-        coordinator._async_current_pipeline.assert_awaited_once_with(REFERENCE_TIME)
+        coordinator.forecast._async_current_pipeline.assert_awaited_once_with(REFERENCE_TIME)
         self.assertEqual(result["solar"], solar_response)
         self.assertEqual(result["house_consumption"], house_response)
         self.assertEqual(result["battery_capacity"], battery_response)
@@ -172,9 +172,9 @@ class CoordinatorOwnedExportPriceChannelTests(unittest.TestCase):
         coordinator = make_coordinator()
         coordinator._hass = SimpleNamespace()
         coordinator._active_config = {}
-        coordinator._grid_price_snapshot_cache = None
-        coordinator._grid_export_price_channel = None
-        coordinator._grid_export_price_schedule = {}
+        coordinator.forecast._grid_price_snapshot_cache = None
+        coordinator.forecast._grid_export_price_channel = None
+        coordinator.forecast._grid_export_price_schedule = {}
         return coordinator
 
     def test_grid_price_snapshot_is_served_from_the_owned_export_channel(self) -> None:
@@ -186,7 +186,7 @@ class CoordinatorOwnedExportPriceChannelTests(unittest.TestCase):
             "points": [],
             "schedule": {"2026-03-20T21:00:00+01:00": 2.5},
         }
-        coordinator._grid_export_price_channel = owned_channel
+        coordinator.forecast._grid_export_price_channel = owned_channel
 
         build = Mock(return_value={"export": owned_channel, "import": {}})
         source_read = Mock()
@@ -232,20 +232,20 @@ class CoordinatorOwnedExportPriceChannelTests(unittest.TestCase):
             "GridPriceForecastBuilder",
             return_value=SimpleNamespace(build_export_price_snapshot=source_read),
         ):
-            coordinator._ingest_grid_export_price()
+            coordinator.forecast._ingest_grid_export_price()
             self.assertEqual(
                 coordinator.get_grid_export_price_schedule(),
                 {"2026-03-20T21:00:00+01:00": 2.5},
             )
 
-            coordinator._ingest_grid_export_price()
+            coordinator.forecast._ingest_grid_export_price()
 
         self.assertEqual(coordinator.get_grid_export_price_current(), 2.5)
         self.assertEqual(
             coordinator.get_grid_export_price_schedule(),
             {"2026-03-21T00:00:00+01:00": -0.4},
         )
-        self.assertIs(coordinator._get_grid_export_price_channel(), second)
+        self.assertIs(coordinator.forecast._get_grid_export_price_channel(), second)
 
 
 class GridForecastMergeTests(unittest.TestCase):
