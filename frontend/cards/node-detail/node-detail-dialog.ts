@@ -1,12 +1,11 @@
 import { DialogHistoryController } from "../shared/dialog-history-controller";
 import { LitElement, html } from "lit-element";
-import { customElement, property, state } from "lit/decorators.js";
+import { customElement, property } from "lit/decorators.js";
 import { nothing, TemplateResult } from "lit-html";
 import type { HomeAssistant } from "../../types/ha";
 import type { LocalizeFunction } from "../localize/localize";
 import type { NodeDetailParams } from "./node-detail-types";
 import type { TreeItem } from "../shared/data/tree-item";
-import { getSharedHelmanStore } from "../shared/data/store";
 import "./node-detail-battery-content";
 import "./node-detail-solar-content";
 import "./node-detail-grid-content";
@@ -29,25 +28,7 @@ export class NodeDetailDialog extends LitElement {
     @property({ attribute: false }) public params!: NodeDetailParams;
     @property({ type: Boolean }) public open = false;
 
-    /**
-     * Each schedulable appliance's kind by id, read once per opening: a device
-     * that is an EV charger opens the charger's own detail. `null` until read.
-     */
-    @state() private _applianceKinds: Map<string, string> | null = null;
-    /** Bumped on each opening, so a roster read for an earlier one is dropped. */
-    private _opening = 0;
-    private _applianceKindsRequested = false;
-
     // Lifecycle methods
-    willUpdate(changedProperties: Map<string, unknown>): void {
-        // A config change between openings can change what a device is.
-        if (changedProperties.has("open") && this.open) {
-            this._opening += 1;
-            this._applianceKinds = null;
-            this._applianceKindsRequested = false;
-        }
-    }
-
     updated(changedProperties: Map<string, unknown>): void {
         super.updated(changedProperties);
         if (!this.open || !this.params || this._history.active) {
@@ -133,8 +114,6 @@ export class NodeDetailDialog extends LitElement {
                 `;
             case "device": {
                 const chargerId = this._evChargerId(this.params.item);
-                // Not yet known: nothing rather than the generic detail flashing first.
-                if (chargerId === undefined) return html``;
                 if (chargerId !== null) {
                     return html`
                         <node-detail-ev-charger-content
@@ -158,33 +137,12 @@ export class NodeDetailDialog extends LitElement {
 
     /**
      * The charger id when the device is one schedulable EV charger, by its
-     * configured appliance kind; `null` for any other device, `undefined`
-     * while the appliance roster is read. A roster that cannot be read leaves
-     * the generic detail, which needs none of it.
+     * configured appliance kind; `null` for any other device.
      */
-    private _evChargerId(item: TreeItem): string | null | undefined {
+    private _evChargerId(item: TreeItem): string | null {
         const ids = item.controllableIds ?? [];
         if (ids.length !== 1) return null;
-        if (this._applianceKinds === null) {
-            this._loadApplianceKinds();
-            return undefined;
-        }
-        return this._applianceKinds.get(ids[0]) === "ev_charger" ? ids[0] : null;
-    }
-
-    private _loadApplianceKinds(): void {
-        if (this._applianceKindsRequested) return;
-        this._applianceKindsRequested = true;
-        const opening = this._opening;
-        getSharedHelmanStore(this.hass).getControllableRoster()
-            .then((roster) => new Map(roster.map((appliance) => [appliance.id, appliance.kind])))
-            .catch((error) => {
-                console.error("node-detail-dialog: failed to read the appliance roster", error);
-                return new Map<string, string>();
-            })
-            .then((kinds) => {
-                if (opening === this._opening) this._applianceKinds = kinds;
-            });
+        return item.applianceKind === "ev_charger" ? ids[0] : null;
     }
 
     private _closeDialogElement(): void {

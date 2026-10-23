@@ -1,4 +1,4 @@
-import { type DayAggregateRow, type DayAggregatesPayload, type HelmanCommands, callHelman } from "./shared/data/helman-commands";
+import { type DayAggregatesPayload, type HelmanCommands, callHelman } from "./shared/data/helman-commands";
 import type { HomeAssistant } from "../types/ha";
 import type { JsonObject, ValidationReport } from "./shared/config/types";
 export type { ConfigDocument } from "./shared/config/types";
@@ -84,6 +84,8 @@ export interface TreeItemDTO extends TreeItemDTOBase, EnergyNodeFields {
      * configured controllable, and for a controllable that declares no id.
      */
     controllableIds: string[];
+    /** Configured kind only when this node identifies one schedulable controllable. */
+    applianceKind?: string | null;
     /** A house child's meter; null for every other node. */
     energyEntityId: string | null;
     /** A meterless child's share of its parent's power — an estimate, shown with `≈`. */
@@ -1296,16 +1298,31 @@ export interface EvChargerTodaySectionPayload {
 }
 
 /**
- * One local day of `helman/solar_bias/day_aggregates`, as far as the grid
- * detail reads it. Money is priced hour by hour; each side is `null` where
- * nothing was priced, and `moneyCostKwh`/`moneyGainKwh` are the kWh it priced.
+ * One local day of grid detail money, projected from the inspector's span
+ * aggregates. Each side is `null` where its money is unknown.
  */
-export type GridDayAggregateDTO = Pick<DayAggregateRow,
-    "date" | "gridImportKwh" | "gridExportKwh" | "moneyCost" | "moneyGain" | "moneyCostKwh" | "moneyGainKwh">;
+export interface GridMoneySectionPayload {
+    node: "grid";
+    section: "money";
+    asOf: string;
+    priceUnit: string | null;
+    unavailable: string | null;
+    importCost: number | null;
+    exportRevenue: number | null;
+    importKwh: number | null;
+    exportKwh: number | null;
+    importPricedKwh: number | null;
+    exportPricedKwh: number | null;
+}
 
-export type GridDayAggregatesPayload = Pick<DayAggregatesPayload, "priceUnit"> & {
-    days: GridDayAggregateDTO[];
-};
+export interface HouseRankingSectionPayload {
+    node: "house";
+    section: "ranking";
+    asOf: string;
+    period: { start: string; end: string };
+    unavailable: string | null;
+    report: RankingReportPayload | null;
+}
 
 /** Explicit device suggestions preserve every candidate, including ambiguity. */
 export interface DeviceEntityCandidate {

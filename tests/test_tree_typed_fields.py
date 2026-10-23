@@ -75,6 +75,22 @@ FULL = {
 
 
 class TestTypedFields(unittest.TestCase):
+    def test_only_one_schedulable_meter_owner_has_appliance_kind(self):
+        config = {
+            "energy_nodes": {"house": {"entities": {"power": "sensor.house_power"}}},
+            "devices": {"consumers": [
+                {"id": "ev", "kind": "ev_charger", "schedulable": True,
+                 "consumption": {"energy_entity_id": "sensor.ev_energy"}},
+                {"id": "light", "kind": "generic", "schedulable": False,
+                 "consumption": {"energy_entity_id": "sensor.light_energy"}},
+            ]},
+        }
+        tree = asyncio.run(HelmanTreeBuilder(_Hass(), config).build()).tree
+        children = {node["id"]: node for node in tree["consumers"][0]["children"]}
+        self.assertEqual(children["sensor.ev_energy"]["controllableIds"], ["ev"])
+        self.assertEqual(children["sensor.ev_energy"]["applianceKind"], "ev_charger")
+        self.assertNotIn("applianceKind", children["sensor.light_energy"])
+
     def test_the_stored_config_is_not_shipped(self):
         for key, node in _nodes(_build(FULL)).items():
             with self.subTest(node=key):
@@ -119,6 +135,7 @@ class TestTypedFields(unittest.TestCase):
         house = _nodes(tree)["consumers:house"]
         for child in house["children"]:
             self.assertEqual({k: child[k] for k in TYPED_KEYS}, dict.fromkeys(TYPED_KEYS))
+        self.assertNotIn("applianceKind", house)
 
     def test_a_renamed_stored_key_does_not_reach_the_tree(self):
         """Only the keys the builder resolves are read; anything else stays behind."""

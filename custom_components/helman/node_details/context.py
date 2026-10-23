@@ -17,3 +17,4 @@ class NodeDetailContext:
     telemetry: Mapping[str, DeviceTelemetry]
     device_report: Callable[[str, ReportQuery], Awaitable[dict[str, Any]]] | None
     house_profile: tuple[HouseConsumptionProfile | None, str | None]
+    day_aggregates: Callable[[str], Awaitable[dict[str, Any]]] | None = None

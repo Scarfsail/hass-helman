@@ -12,6 +12,7 @@ export function hydrateItem(dto: TreeItemDTO, historyBuckets: number, localize: 
     item.isEstimated = dto.isEstimated;
     item.deferrable = dto.deferrable;
     item.controllableIds = dto.controllableIds;
+    item.applianceKind = dto.applianceKind;
     item.energyEntityId = dto.energyEntityId ?? undefined;
     item.deviceKey = dto.energyEntityId ?? (dto.isEstimated ? dto.id : undefined);
     item.deviceKeyIsMeter = !!dto.energyEntityId;

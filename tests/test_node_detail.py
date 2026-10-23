@@ -725,7 +725,7 @@ def test_the_grid_overview_carries_its_mappings_and_reads_no_history():
     assert payload["phasePowerPolarity"] == "positive_is_export"
     assert payload["maxAllowedExportPower"] == 9900
     assert payload["condition"] == {"kind": "off_grid", "runMode": "Off-Grid", "entityId": RUN_MODE}
-    assert payload["sections"] == ["voltage"]
+    assert payload["sections"] == ["money", "voltage"]
 
 
 def test_a_custom_grid_has_no_telemetry_and_no_voltage_section():
@@ -737,13 +737,48 @@ def test_a_custom_grid_has_no_telemetry_and_no_voltage_section():
         "today_import": "sensor.today_import",
         "today_export": "sensor.today_export",
     }
-    assert payload["sections"] == []
+    assert payload["sections"] == ["money"]
 
 
 def test_the_grid_refuses_a_section_it_does_not_answer():
     with pytest.raises(NodeDetailError) as raised:
         grid_detail(section="temperature")
     assert raised.value.code == "unknown_section"
+
+
+@pytest.mark.parametrize("cost,gain,import_kwh,export_kwh,expected_cost,expected_gain", [
+    (42.5, 9.45, 8.4, 12.6, 42.5, 9.45),
+    (None, -2.5, 8.4, 1.0, None, -2.5),
+    (None, None, 0.0, 0.0, 0.0, 0.0),
+])
+def test_grid_money_projects_the_aggregate_without_repricing(
+    cost, gain, import_kwh, export_kwh, expected_cost, expected_gain
+):
+    calls = []
+
+    async def aggregates(day):
+        calls.append(day)
+        return {"priceUnit": "CZK/kWh", "days": [{
+            "date": day, "moneyCost": cost, "moneyGain": gain,
+            "gridImportKwh": import_kwh, "gridExportKwh": export_kwh,
+            "moneyCostKwh": 2.0, "moneyGainKwh": 1.0,
+        }]}
+
+    ctx = NodeDetailContext({}, {}, None, (None, None), aggregates)
+    payload = asyncio.run(get_detail(fake_hass({}), ctx, node="grid", device_id=None, section="money", now=NOW))
+    assert calls == [NOW.date().isoformat()]
+    assert payload["importCost"] == expected_cost
+    assert payload["exportRevenue"] == expected_gain
+    assert payload["importPricedKwh"] == 2.0
+    assert payload["exportPricedKwh"] == 1.0
+    assert payload["priceUnit"] == "CZK/kWh"
+
+
+def test_grid_money_without_an_aggregate_is_unavailable():
+    ctx = NodeDetailContext({}, {}, None, (None, None))
+    payload = asyncio.run(get_detail(fake_hass({}), ctx, node="grid", device_id=None, section="money", now=NOW))
+    assert payload["unavailable"] == "no_day_aggregate"
+    assert payload["importCost"] is payload["exportRevenue"] is None
 
 
 def day(points):
@@ -1751,7 +1786,7 @@ def test_the_house_overview_carries_its_mappings_and_reads_no_history():
 
     assert calls == {"day_stats": [], "windows": [], "reports": []}
     assert payload["node"] == "house"
-    assert payload["sections"] == ["today", "pattern"]
+    assert payload["sections"] == ["today", "ranking", "pattern"]
     entities = payload["entities"]
     assert entities["power"] == HOUSE_POWER
     assert entities["solar_ratio"] == "sensor.helman_solar_source_ratio"
@@ -1779,7 +1814,7 @@ def test_a_custom_house_has_no_eps_readings_and_without_meters_no_pattern():
     assert payload["entities"]["phase_power_total"] == "sensor.helman_house_consumption_power"
     assert payload["phasePowerPolarity"] is None
     assert payload["entities"]["power"] is None
-    assert payload["sections"] == ["today"]
+    assert payload["sections"] == ["today", "ranking"]
 
 
 def test_grid_independence_keeps_the_unknown_share_apart():
@@ -1914,6 +1949,22 @@ def test_the_today_section_says_why_without_reports():
 
     assert payload["unavailable"] == "no_house_meter"
     assert payload["house"] is None and payload["consumers"] is None
+
+
+def test_house_ranking_returns_the_same_report_and_unavailable_reason():
+    report = ranking()
+    payload, calls = house_detail(section="ranking", report=report)
+    assert payload["report"] == report
+    assert payload["unavailable"] is None
+    assert calls["day_stats"] == calls["windows"] == []
+    (name, query), = calls["reports"]
+    assert name == "ranking"
+    assert query.start_date == query.end_date == NOW.date()
+
+    missing, calls = house_detail(section="ranking", report={"unavailable": "no_house_meter"})
+    assert missing["report"] is None
+    assert missing["unavailable"] == "no_house_meter"
+    assert len(calls["reports"]) == 1
 
 
 def hour(day, hour_of_day):

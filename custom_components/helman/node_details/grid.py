@@ -3,8 +3,7 @@
 The overview carries the entity ids the card reads live: the hardware
 profile's per-phase power and the inverter's phase voltages (telemetry), the
 grid's own today-energy meters (config), the limits and runtimes the off-grid
-answer shows. Money, prices and the plan come from the existing inspector,
-forecast and schedule clients, so they are not repeated here.
+answer shows. Money uses the existing inspector aggregate service.
 
 The one history section is ``voltage``: today's three phase voltages from
 :func:`.day_stats.async_day_stats`, plus the largest spread between phases.
@@ -98,9 +97,9 @@ def build_grid_overview(
         "maxAllowedExportPower": grid.get("max_allowed_export_power"),
         "condition": run_mode_condition(hass, telemetry),
         "sections": (
-            ["voltage"]
+            ["money", "voltage"]
             if any(entities.get(f"ac_voltage_l{phase}") for phase in PHASES)
-            else []
+            else ["money"]
         ),
     }
 
@@ -113,6 +112,25 @@ async def async_grid_section(
     ``phases`` holds each phase's day, ``None`` for a phase whose sensor the
     profile does not resolve.
     """
+    if section == "money":
+        local_now = dt_util.as_local(now)
+        day = local_now.date().isoformat()
+        aggregate = await ctx.day_aggregates(day) if ctx.day_aggregates else {}
+        row = next((item for item in aggregate.get("days", []) if item.get("date") == day), None)
+        def amount(money: Any, kwh: Any) -> float | None:
+            return money if money is not None else 0.0 if kwh == 0 else None
+
+        return {
+            "node": "grid", "section": "money", "asOf": local_now.isoformat(),
+            "priceUnit": aggregate.get("priceUnit"),
+            "unavailable": None if row is not None else "no_day_aggregate",
+            "importCost": amount(row.get("moneyCost"), row.get("gridImportKwh")) if row else None,
+            "exportRevenue": amount(row.get("moneyGain"), row.get("gridExportKwh")) if row else None,
+            "importKwh": row.get("gridImportKwh") if row else None,
+            "exportKwh": row.get("gridExportKwh") if row else None,
+            "importPricedKwh": row.get("moneyCostKwh") if row else None,
+            "exportPricedKwh": row.get("moneyGainKwh") if row else None,
+        }
     telemetry = ctx.telemetry.get(INVERTER_TELEMETRY_KEY)
     entity_ids = {
         phase: None if telemetry is None else telemetry.entities.get(f"ac_voltage_l{phase}")

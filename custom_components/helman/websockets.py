@@ -775,6 +775,11 @@ async def ws_get_node_detail(
                 telemetry=coordinator.live.vendor_telemetry,
                 device_report=coordinator.async_device_report,
                 house_profile=coordinator.training.served_house_profile,
+                day_aggregates=(
+                    (lambda day: inspector.async_get_span_aggregates(day, day))
+                    if (inspector := getattr(coordinator, "solar_inspector", None)) is not None
+                    else None
+                ),
             ),
             node=msg["node"],
             device_id=msg.get("device_id"),

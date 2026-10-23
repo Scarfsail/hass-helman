@@ -124,14 +124,12 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             phases: { "1": phaseDay(1, 236), "2": phaseDay(2, 240), "3": v.l3Missing ? null : phaseDay(3, 238) },
             spread: { phases: v.l3Missing ? [1, 2] : [1, 2, 3], max: 6.2, maxAt: `${day}T10:30:00+00:00`, coverage: 0.88 },
         };
-        const aggregates = {
-            bucket: "day",
+        const money = {
+            node: "grid", section: "money", asOf: "2026-10-21T12:00:00+00:00", unavailable: null,
             priceUnit: "CZK/kWh",
-            days: [{
-                date: day, gridImportKwh: 8.4, gridExportKwh: 12.6,
-                moneyCost: 42.5, moneyGain: v.exportPartlyPriced ? 9.45 : 18.9,
-                moneyCostKwh: 8.4, moneyGainKwh: v.exportPartlyPriced ? 6.3 : 12.6,
-            }],
+            importKwh: 8.4, exportKwh: 12.6,
+            importCost: 42.5, exportRevenue: v.exportPartlyPriced ? 9.45 : 18.9,
+            importPricedKwh: 8.4, exportPricedKwh: v.exportPartlyPriced ? 6.3 : 12.6,
         };
         const slot = (iso: string, imported: number, exported: number) => ({
             timestamp: iso, durationHours: 0.25, importedFromGridKwh: imported, exportedToGridKwh: exported,
@@ -160,10 +158,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
         const flowsSection = window.__flowsSection("grid", { unavailable: v.flowsUnavailable ?? null, ...(v.flowsUnavailable ? { flows: null } : {}) });
         const inverter = window.__inverterOverview({ entities: v.ratedPower ? { rated_power: "sensor.solax_inverter_power_type" } : {} });
         window.__GridHass = window.__configureNodeDetail({
-            states, tree, overviews: { grid: overview, inverter }, sections: { grid: { flows: flowsSection, voltage: v.sectionFails ? "error" : section } }, forecast,
-            replies: {
-                "helman/solar_bias/day_aggregates": aggregates,
-            },
+            states, tree, overviews: { grid: overview, inverter }, sections: { grid: { flows: flowsSection, voltage: v.sectionFails ? "error" : section, money } }, forecast,
         });
         window.__GridRequests = window.__NodeDetailRequests;
     }, { v: variant, tree: cardTree(variant.gridSign), forecastDefaults: forecastPayload() });
@@ -386,8 +381,9 @@ test.describe("the flow", () => {
         await expect(flowLabel(page, "out", "battery")).toContainText("1.5 kWh");
         await expect(flow(page).locator("[data-total='in']")).toHaveText("In 5.8 kWh · income 18.90 CZK");
         await expect(flow(page).locator("[data-total='out']")).toHaveText("Out 2.7 kWh · cost 42.50 CZK");
-        // The money is the span read made on opening, not a second one.
-        expect(await page.evaluate(() => window.__GridRequests.filter((r) => r.type === "helman/solar_bias/day_aggregates").length)).toBe(1);
+        // The money section is read on opening, with no direct aggregate request.
+        expect(await page.evaluate(() => window.__GridRequests.filter((r) => r.type === "helman/get_node_detail" && r.section === "money").length)).toBe(1);
+        expect(await page.evaluate(() => window.__GridRequests.filter((r) => r.type === "helman/solar_bias/day_aggregates").length)).toBe(0);
 
         await flow(page).locator("[data-scope='now']").click();
         await expect(flowLabel(page, "in", "solar")).toContainText("3.0 kW");
@@ -661,7 +657,7 @@ test.describe("a Custom inverter", () => {
         await open(page, "voltage");
         await expect(question(page, "voltage")).toContainText("this one is Custom");
         await expect(question(page, "voltage").locator("helman-day-line-chart")).toHaveCount(0);
-        expect(await sectionRequests(page)).toBe(0);
+        expect(await sectionRequests(page)).toBe(1); // money is available without inverter telemetry
         // Money and the plan do not depend on the profile.
         await open(page, "money");
         await expect(question(page, "money").locator(".preview")).toHaveText("cost 42.50 CZK · income 18.90 CZK");
@@ -702,8 +698,8 @@ test.describe("screenshots", { tag: "@screens" }, () => {
 test("section requests: a section is read while shown and re-read on a data change", async ({ page }) => {
     await mount(page);
     await openDetail(page);
-    const reads = () => sectionReads(page, "grid", ["helman/solar_bias/day_aggregates"]);
-    const MONEY = "helman/solar_bias/day_aggregates";
+    const reads = () => sectionReads(page, "grid");
+    const MONEY = "money";
     await expect.poll(reads).toEqual({ [MONEY]: 1, voltage: 1 });
     // An opened money answer shows today's figures as they are now.
     await open(page, "money");
@@ -734,13 +730,13 @@ test("money that failed to load is read again once stale, never on every update"
         const original = hass.callWS;
         (window as any).__moneyFail = true;
         hass.callWS = (request: any) => {
-            if (request.type !== "helman/solar_bias/day_aggregates" || !(window as any).__moneyFail) return original(request);
+            if (request.type !== "helman/get_node_detail" || request.section !== "money" || !(window as any).__moneyFail) return original(request);
             window.__GridRequests.push({ ...request });
             return Promise.reject(new Error("recorder down"));
         };
     });
     const status = () => content(page).evaluate((element: any) => element._money.state?.status);
-    const moneyReads = () => page.evaluate(() => window.__GridRequests.filter((r) => r.type === "helman/solar_bias/day_aggregates").length);
+    const moneyReads = () => page.evaluate(() => window.__GridRequests.filter((r) => r.type === "helman/get_node_detail" && r.section === "money").length);
     await openDetail(page);
     await expect.poll(status).toBe("error");
     const failed = await moneyReads();

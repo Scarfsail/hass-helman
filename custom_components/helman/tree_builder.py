@@ -27,6 +27,7 @@ from .controllables.config import (
     iter_devices,
     own_meter,
     peek_controllable_id,
+    peek_controllable_kind,
     read_carved_meters,
     read_groupings,
     read_name_cleaner_regex,
@@ -196,6 +197,7 @@ class TreeItemDTO:
     # up: a schedulable meter owner's id, or a meterless child's own. Empty for
     # every other item.
     controllable_ids: list[str] = field(default_factory=list)
+    appliance_kind: str | None = None
     # The device's meter, for a metered house child; ``None`` for every other
     # item. The item ``id`` happens to be the same entity (it keeps the
     # unmeasured sensor ids stable), but readers of the meter read it here.
@@ -252,6 +254,7 @@ class TreeItemDTO:
             "sourceType": self.source_type,
             "deferrable": self.deferrable,
             "controllableIds": self.controllable_ids,
+            **({"applianceKind": self.appliance_kind} if self.appliance_kind is not None else {}),
             "energyEntityId": self.energy_entity_id,
             "isEstimated": self.is_estimated,
             "phase": self.phase,
@@ -519,6 +522,11 @@ class HelmanTreeBuilder:
                     if meter in carved and is_schedulable(device)
                     else []
                 ),
+                appliance_kind=(
+                    peek_controllable_kind(device)
+                    if meter in carved and is_schedulable(device) and len(carved[meter]["ids"]) == 1
+                    else None
+                ),
                 energy_entity_id=meter,
             )
             apply_groups_and_phase(item, device)
@@ -570,6 +578,7 @@ class HelmanTreeBuilder:
             # The carve covers the meter's own energy, which these children split.
             deferrable=parent_meter in carved,
             controllable_ids=[device_id] if is_schedulable(device) else [],
+            appliance_kind=peek_controllable_kind(device) if is_schedulable(device) else None,
             is_estimated=True,
         )
 

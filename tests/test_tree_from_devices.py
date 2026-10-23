@@ -231,6 +231,15 @@ class TreeFromDevicesTests(unittest.TestCase):
         self.tree = _build(_upgrade())
         self.house = _house(self.tree)
 
+    def test_meterless_children_carry_their_own_configured_kind(self) -> None:
+        breaker = next(node for node in self.house["children"] if node["id"] == AC_BREAKER)
+        self.assertNotIn("applianceKind", breaker)
+        for child in breaker["children"]:
+            if child["controllableIds"]:
+                self.assertEqual(child["applianceKind"], "climate")
+            else:
+                self.assertNotIn("applianceKind", child)
+
     def test_it_matches_the_energy_path_apart_from_the_intended_differences(self) -> None:
         expected = _slim(ENERGY_PATH_TREE)
 

@@ -39,6 +39,7 @@ type Variant = {
     noMeasured?: boolean;
     /** Today's report cannot be built. */
     todayUnavailable?: boolean;
+    rankingUnavailable?: boolean;
     /** Schedule execution is switched off. */
     executionOff?: boolean;
     noSlots?: boolean;
@@ -272,10 +273,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             },
         };
         window.__HouseHass = window.__configureNodeDetail({
-            states, tree, overviews: { house: overview, inverter: window.__inverterOverview({ maxAllowedExportPower: null }) }, sections: { house: { today, pattern } }, forecast, schedule,
-            replies: {
-                "helman/device_report": ranking,
-            },
+            states, tree, overviews: { house: overview, inverter: window.__inverterOverview({ maxAllowedExportPower: null }) }, sections: { house: { today, pattern, ranking: { node: "house", section: "ranking", asOf: ranking.asOf, period: today.period, unavailable: v.rankingUnavailable ? "no_house_meter" : null, report: v.rankingUnavailable ? null : ranking } } }, forecast, schedule,
         });
         window.__HouseRequests = window.__NodeDetailRequests;
     }, { v: variant, tree, forecastDefaults: forecastPayload(), scheduleDefaults: scheduleSlots({ slotMinutes: 15 }) });
@@ -287,7 +285,7 @@ const houseCell = (page: Page) => page.locator(".node-cell:has(simple-card-house
 const fill = (page: Page, id: string) => flow(page).locator(`[data-glyph="house"] [data-house-fill="${id}"]`);
 const sectionRequests = async (page: Page) => (await sectionRequestLog(page, "house")).map((r) => r.section);
 const reportRequests = (page: Page) =>
-    page.evaluate(() => window.__HouseRequests.filter((r) => r.type === "helman/device_report").length);
+    page.evaluate(() => window.__HouseRequests.filter((r) => r.type === "helman/get_node_detail" && r.section === "ranking").length);
 
 async function openDetail(page: Page): Promise<void> {
     await houseCell(page).click();
@@ -935,8 +933,8 @@ test("an idle Today retries a delayed previous-day answer on the clock", async (
 test("section requests: a section is read while shown, re-read on a data change and dropped once hidden", async ({ page }) => {
     await mount(page);
     await openDetail(page);
-    const REPORT = "helman/device_report";
-    const reads = () => sectionReads(page, "house", [REPORT]);
+    const REPORT = "ranking";
+    const reads = () => sectionReads(page, "house");
     await expect.poll(reads).toEqual({ today: 1 });
     await open(page, "pattern");
     await expect.poll(reads).toEqual({ today: 1, pattern: 1 });
@@ -957,6 +955,18 @@ test("section requests: a section is read while shown, re-read on a data change 
     await flow(page).locator("[data-scope='today']").click();
     await page.waitForTimeout(300);
     expect(await reads()).toEqual({ today: 2, pattern: 2, [REPORT]: 2 });
+});
+
+test("an unavailable full ranking stays explicit and uses only the house section", async ({ page }) => {
+    await mount(page, { rankingUnavailable: true });
+    await openDetail(page);
+    await open(page, "consumers");
+    expect(await reportRequests(page)).toBe(0);
+    await evidence(page, "consumers").click();
+    await expect.poll(() => reportRequests(page)).toBe(1);
+    await expect(question(page, "consumers").locator("helman-device-report-ranking")).toHaveCount(0);
+    await expect(question(page, "consumers")).toContainText("not available");
+    expect(await page.evaluate(() => window.__HouseRequests.filter((r) => r.type === "helman/device_report").length)).toBe(0);
 });
 
 
