@@ -240,10 +240,8 @@ FRIDGE_METER = "sensor.fridge_energy"
 def _make_service_with_consumers():
     """A service whose house actual is split by a washer and a fridge.
 
-    The rosters are the two the day view's breakdown is built from, wired the
-    same way round: the washer is a deferrable appliance that the device tree
-    also meters (so it is where the switch and power sensor come from), the
-    fridge is a tree node alone.
+    The day and aggregate views both read this one tree descriptor roster:
+    the washer owns deferrable load, while the fridge owns passive load.
     """
     service = _make_service()
 
@@ -252,15 +250,14 @@ def _make_service_with_consumers():
             {
                 "energy_entity_id": WASHER_METER,
                 "label": "Washer",
+                "deferrable": True,
+                "ids": ["washer"],
                 "switch_entity_id": "switch.washer",
                 "power_entity_id": "sensor.washer_power",
             },
             {"energy_entity_id": FRIDGE_METER, "label": "Fridge"},
         ]
 
-    service._house_deferrable_consumers = lambda: service._normalize_consumers([
-        {"energy_entity_id": WASHER_METER, "label": "Washer", "ids": ["washer"]}
-    ], deferrable=True)
     service._live_sources._house_device_consumers = _device_consumers
     return service
 
@@ -650,6 +647,41 @@ class TestHouseBreakdown(unittest.IsolatedAsyncioTestCase):
         self.assertIn(WASHER_METER, _calls("hour")[0]["statistic_ids"])
         self.assertIn(FRIDGE_METER, _calls("hour")[0]["statistic_ids"])
 
+    async def test_day_and_span_rosters_share_tree_descriptors_and_deduplicated_reads(self):
+        from custom_components.helman.house_device_consumers import extract_house_device_consumers
+        service = _make_service()
+        tree = {"consumers": [{"id": "house", "children": [{
+            "energyEntityId": FRIDGE_METER, "displayName": "Circuit",
+            "children": [{"energyEntityId": WASHER_METER, "displayName": "Washer",
+                          "ownDeferrable": True, "ownControllableIds": ["washer"],
+                          "switchEntityId": "switch.washer"}],
+        }]}]}
+
+        async def _devices():
+            return extract_house_device_consumers(tree)
+
+        service._live_sources._house_device_consumers = _devices
+        day_rows = await service._house_breakdown_consumers()
+        span_rows, entities = await service._resolve_span_consumer_roster(True)
+        self.assertEqual(day_rows, span_rows)
+        self.assertEqual(entities, [FRIDGE_METER, WASHER_METER])
+        self.assertEqual(day_rows[0]["metered_children"], [WASHER_METER])
+        self.assertEqual(day_rows[1]["ids"], ["washer"])
+        self.assertEqual(day_rows[1]["switch_entity_id"], "switch.washer")
+
+    def test_own_energy_missing_children_and_excess_keep_inspector_policy(self):
+        start = _hour("2026-04-23T08:00:00+02:00")
+        later = start + timedelta(minutes=15)
+        rows = _make_service()._consumer_own_energy(
+            {"energy_entity_id": WASHER_METER, "metered_children": [FRIDGE_METER]},
+            {WASHER_METER: {start: 0.10004, later: 0.02},
+             FRIDGE_METER: {later: 0.03}},
+            slot=timedelta(minutes=15),
+        )
+        # A missing child subtracts nothing; excess children omit the own interval.
+        self.assertAlmostEqual(rows[start], 0.10004)
+        self.assertNotIn(later, rows)
+
     async def test_a_carved_meter_is_itemised_by_its_own_energy(self):
         # The fridge is a sub-meter behind the washer's meter and a row of its
         # own: the washer row is its meter minus the fridge, as the forecast
@@ -671,14 +703,14 @@ class TestHouseBreakdown(unittest.IsolatedAsyncioTestCase):
             }
         )
         service = _make_service_with_consumers()
-        service._house_deferrable_consumers = lambda: service._normalize_consumers([
-            {
-                "energy_entity_id": WASHER_METER,
-                "label": "Washer",
-                "ids": ["washer"],
-                "metered_children": [FRIDGE_METER],
-            }
-        ], deferrable=True)
+        original = service._live_sources._house_device_consumers
+
+        async def _device_consumers():
+            rows = await original()
+            rows[0]["metered_children"] = [FRIDGE_METER]
+            return rows
+
+        service._live_sources._house_device_consumers = _device_consumers
 
         payload = await service.async_get_span_aggregates(
             "2026-04-23", "2026-04-23", house_breakdown=True
@@ -719,7 +751,9 @@ class TestHouseBreakdown(unittest.IsolatedAsyncioTestCase):
                     "energy_entity_id": FRIDGE_METER,
                     "label": "Circuit",
                     "metered_children": [WASHER_METER],
-                }
+                },
+                {"energy_entity_id": WASHER_METER, "label": "Washer",
+                 "deferrable": True, "ids": ["washer"]},
             ]
 
         service._live_sources._house_device_consumers = _device_consumers

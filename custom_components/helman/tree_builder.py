@@ -197,6 +197,9 @@ class TreeItemDTO:
     # up: a schedulable meter owner's id, or a meterless child's own. Empty for
     # every other item.
     controllable_ids: list[str] = field(default_factory=list)
+    # Historical own-load attribution, independent of live remainder availability.
+    own_deferrable: bool = False
+    own_controllable_ids: list[str] = field(default_factory=list)
     appliance_kind: str | None = None
     # The device's meter, for a metered house child; ``None`` for every other
     # item. The item ``id`` happens to be the same entity (it keeps the
@@ -254,6 +257,8 @@ class TreeItemDTO:
             "sourceType": self.source_type,
             "deferrable": self.deferrable,
             "controllableIds": self.controllable_ids,
+            "ownDeferrable": self.own_deferrable,
+            "ownControllableIds": self.own_controllable_ids,
             **({"applianceKind": self.appliance_kind} if self.appliance_kind is not None else {}),
             "energyEntityId": self.energy_entity_id,
             "isEstimated": self.is_estimated,
@@ -279,7 +284,7 @@ class HelmanTreeBuilder:
     def _visualization(self) -> dict:
         return read_visualization(self._config)
 
-    async def build(self) -> DeviceTree:
+    async def build(self, *, include_house_without_power: bool = False) -> DeviceTree:
         """Build the serializable tree together with its static runtime index."""
         energy_nodes = self._config.get("energy_nodes", {})
         visualization = self._visualization()
@@ -324,7 +329,9 @@ class HelmanTreeBuilder:
         # --- Consumers ---
         consumers: list[TreeItemDTO] = []
 
-        if house_config and house_config.get("entities", {}).get("power"):
+        if house_config and (
+            house_config.get("entities", {}).get("power") or include_house_without_power
+        ):
             house_children = self._build_house_children(groupings)
             own_carved = {
                 carve["energy_entity_id"]
@@ -334,7 +341,7 @@ class HelmanTreeBuilder:
             house_node = TreeItemDTO(
                 id="house",
                 display_name="",
-                power_sensor_id=house_config["entities"]["power"],
+                power_sensor_id=house_config.get("entities", {}).get("power"),
                 switch_entity_id=None,
                 is_source=False,
                 is_unmeasured=False,
@@ -528,6 +535,8 @@ class HelmanTreeBuilder:
                     else None
                 ),
                 energy_entity_id=meter,
+                own_deferrable=meter in carved,
+                own_controllable_ids=list(carved[meter]["ids"]) if meter in carved else [],
             )
             apply_groups_and_phase(item, device)
             devices[id(device)] = item

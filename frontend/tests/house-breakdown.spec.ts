@@ -40,6 +40,8 @@ async function mountInspector(
         withBreakdown: boolean;
         appliances: Appliance[];
         unmeasuredWh: number;
+        /** Independently measured house energy, for sub-meter excess fixtures. */
+        houseWh?: number;
         /** Net grid energy per 15-min slot: positive exports, negative imports. */
         gridWh?: number;
         /** Net battery energy per 15-min slot: positive charges, negative discharges. */
@@ -101,7 +103,7 @@ async function mountInspector(
             factor: number | null;
         }> = [];
         const slotTotal =
-            opts.unmeasuredWh + opts.appliances.reduce((sum, a) => sum + a.wh, 0);
+            opts.houseWh ?? (opts.unmeasuredWh + opts.appliances.reduce((sum, a) => sum + a.wh, 0));
         for (let m = 0; m < 1440; m += 15) {
             const hh = String(Math.floor(m / 60)).padStart(2, "0");
             const mm = String(m % 60).padStart(2, "0");
@@ -1037,6 +1039,50 @@ async function houseTooltipRows(
 }
 
 test.describe("solar inspector deferrable house load", () => {
+    test("shiftable meter excess is capped to measured house demand", async ({ page }) => {
+        await loadBundle(page, "helman-solar-inspector");
+        await mountInspector(page, {
+            withBreakdown: true,
+            appliances: [{ entityId: "sensor.shared", label: "Shared breaker", wh: 250,
+                           deferrable: true, controllableIds: ["washer", "dryer"] }],
+            unmeasuredWh: 0,
+            houseWh: 100,
+        });
+        const shiftable = await bandExtent(page, DEFERRABLE_FILL);
+        expect(shiftable).not.toBeNull();
+        // The base band has zero width when shiftable history exceeds the house.
+        const base = await bandExtent(page, HOUSE_FILL);
+        if (base) expect(base.bottom).toBeCloseTo(base.top, 1);
+        expect(shiftable!.top).toBeCloseTo(shiftable!.baseline, 1);
+    });
+
+    test("tree own-load rows preserve base grouping for passive children and mixed meters", async ({ page }) => {
+        await loadBundle(page, "helman-solar-inspector");
+        await mountInspector(page, {
+            withBreakdown: true,
+            // The carved parent's row is already its own energy. Its metered
+            // child and a shared mixed meter remain measured base consumption.
+            appliances: [
+                { entityId: "sensor.parent", label: "Shared breaker", wh: 30,
+                  deferrable: true, controllableIds: ["washer", "dryer"] },
+                { entityId: "sensor.child", label: "Passive child", wh: 20 },
+                { entityId: "sensor.mixed", label: "Mixed meter", wh: 40,
+                  deferrable: false, controllableIds: ["ac"] },
+            ],
+            unmeasuredWh: 10,
+        });
+        await selectNoonSlot(page);
+        expect(await breakdownGroups(page)).toEqual([
+            { label: "Base consumption", power: "280 Wh", collapsed: true, tag: "" },
+            { label: "Deferrable consumption", power: "120 Wh", collapsed: true, tag: "" },
+        ]);
+        const rows = await breakdownBoxes(page);
+        expect(rows.map((row) => [row.label, row.tint])).toEqual([
+            ["Mixed meter", ""], ["Passive child", ""], ["👻 Untracked consumption", ""],
+            ["Shared breaker", DEFERRABLE_TINT],
+        ]);
+    });
+
     test("the measured house draws two bands, non-deferrable against the baseline", async ({ page }) => {
         await loadBundle(page, "helman-solar-inspector");
         // 180 Wh a slot: 50 shiftable, 130 not (30 metered fridge + 100 unmeasured).

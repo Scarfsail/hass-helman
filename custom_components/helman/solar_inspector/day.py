@@ -108,7 +108,8 @@ def _consumer_own_energy(
     )
 
 
-def _normalize_consumers(raw_consumers: Any, *, deferrable: bool) -> list[dict]:
+def _normalize_consumers(raw_consumers: Any) -> list[dict]:
+    """Normalize tree descriptors without changing their own-load attribution."""
     result: list[dict] = []
     for consumer in raw_consumers or []:
         if not isinstance(consumer, dict):
@@ -127,7 +128,7 @@ def _normalize_consumers(raw_consumers: Any, *, deferrable: bool) -> list[dict]:
                 "label": consumer.get("label", eid),
                 "switch_entity_id": switch if isinstance(switch, str) and switch else None,
                 "power_entity_id": power if isinstance(power, str) and power else None,
-                "deferrable": deferrable,
+                "deferrable": bool(consumer.get("deferrable")),
                 "ids": [
                     controllable_id
                     for controllable_id in (

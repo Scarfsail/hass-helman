@@ -1352,13 +1352,17 @@ class HelmanCoordinator:
         """
         try:
             tree = await self.get_device_tree()
+            if not any(node.get("id") == "house" for node in tree.get("consumers", [])):
+                # The live card deliberately hides a house without a power sensor.
+                # History still uses the same builder's metered relationships.
+                built = await HelmanTreeBuilder(self._hass, self._active_config).build(
+                    include_house_without_power=True
+                )
+                tree = built.tree
+            return extract_house_device_consumers(tree)
         except Exception:
             _LOGGER.exception("Failed to read device tree for inspector breakdown")
             return []
-        return extract_house_device_consumers(
-            tree,
-            {meter["energy_entity_id"] for meter in read_carved_meters(self._active_config)},
-        )
 
     def _get_battery_soc_bounds(self) -> tuple[float, float] | None:
         bounds_config = read_battery_soc_bounds_config(self._active_config)
