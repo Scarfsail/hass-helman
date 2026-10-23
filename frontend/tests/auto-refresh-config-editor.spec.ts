@@ -47,14 +47,18 @@ declare global {
         __saveConflicts: boolean;
         __holdSave: boolean;
         __releaseSave: () => void;
+        __compactVisualization: boolean;
+        __releaseLoadValidation: () => void;
+        __validationCalls: () => number;
+        __loadValidationFinished: () => boolean;
     }
 }
 
-async function mountEditor(page: Page, legacyBackend = false): Promise<Locator> {
+async function mountEditor(page: Page, legacyBackend = false, holdLoadValidation = false): Promise<Locator> {
     await loadBundle(page, "helman-config-editor-panel", EDITOR_BUNDLE);
 
     await page.evaluate(
-        ({ schema, config, legacyBackend }) => {
+        ({ schema, config, legacyBackend, holdLoadValidation }) => {
             let stored: unknown = JSON.parse(config);
             let getConfigCalls = 0;
             window.__setStoredConfig = (next: unknown) => {
@@ -67,6 +71,13 @@ async function mountEditor(page: Page, legacyBackend = false): Promise<Locator> 
             window.__saveValid = true;
             window.__saveConflicts = false;
             window.__holdSave = false;
+            window.__compactVisualization = false;
+            let validationCalls = 0;
+            window.__validationCalls = () => validationCalls;
+            let loadValidationFinished = false;
+            window.__loadValidationFinished = () => loadValidationFinished;
+            let releaseLoadValidation: (() => void) | undefined;
+            window.__releaseLoadValidation = () => releaseLoadValidation?.();
             let releaseSave: (() => void) | undefined;
             window.__releaseSave = () => releaseSave?.();
 
@@ -99,6 +110,21 @@ async function mountEditor(page: Page, legacyBackend = false): Promise<Locator> 
                     },
                 },
                 callWS: window.__mockHass({
+                    "helman/validate_config": async () => {
+                        validationCalls += 1;
+                        if (holdLoadValidation && validationCalls === 1) {
+                            await new Promise<void>((resolve) => { releaseLoadValidation = resolve; });
+                            loadValidationFinished = true;
+                            return { valid: true, errors: [], warnings: [{
+                                section: "training", path: "training.solar_bias.old_key",
+                                code: "unknown_key", message: "Old load warning",
+                            }] };
+                        }
+                        return { valid: true, errors: [], warnings: [{
+                            section: "training", path: "training.solar_bias.manual_key",
+                            code: "unknown_key", message: "New manual warning",
+                        }] };
+                    },
                     "helman/get_config": async (request: {
                         type: string;
                         config?: unknown;
@@ -126,12 +152,20 @@ async function mountEditor(page: Page, legacyBackend = false): Promise<Locator> 
                         const valid = window.__saveValid;
                         if (valid) {
                             stored = { ...(request.config as Record<string, unknown>), config_version: 29 };
+                            if (window.__compactVisualization) {
+                                const compacted = { ...(stored as Record<string, unknown>) };
+                                delete compacted.visualization;
+                                stored = compacted;
+                            }
                             queueMicrotask(() => {
-                                window.__fireDataChanged("config", JSON.stringify(stored));
+                                window.__fireDataChanged("config", window.__compactVisualization
+                                    ? window.__configRevision(stored) : JSON.stringify(stored));
                             });
                         }
                         return {
                             success: valid && succeeded,
+                            ...(window.__compactVisualization && valid
+                                ? { config: stored, revision: window.__configRevision(stored) } : {}),
                             validation: { valid, errors: [], warnings: [] },
                             reloadStarted: true,
                             reloadSucceeded: succeeded,
@@ -153,7 +187,7 @@ async function mountEditor(page: Page, legacyBackend = false): Promise<Locator> 
             }
             document.body.appendChild(element);
         },
-        { schema: SCHEMA, config: JSON.stringify(STORED_CONFIG), legacyBackend },
+        { schema: SCHEMA, config: JSON.stringify(STORED_CONFIG), legacyBackend, holdLoadValidation },
     );
 
     const panel = page.locator("helman-config-editor-panel");
@@ -170,6 +204,31 @@ function readBadges(page: Page): Promise<string[]> {
         return Array.from(editor?.querySelectorAll(".badge") ?? []).map(
             (badge) => badge.textContent?.trim() ?? "",
         );
+    });
+}
+
+for (const newerResult of ["manual validation", "rejected save"]) {
+    test(`a delayed load check preserves a newer ${newerResult}`, async ({ page }) => {
+        const panel = await mountEditor(page, false, true);
+        await expect.poll(() => page.evaluate(() => window.__validationCalls())).toBe(1);
+        if (newerResult === "manual validation") {
+            await panel.getByRole("button", { name: "Validate" }).click();
+            await expect(panel.locator(".issue-board")).toContainText("New manual warning");
+        } else {
+            await page.evaluate(() => { window.__saveValid = false; });
+            await panel.getByRole("button", { name: "Save and reload" }).click();
+            await expect.poll(() => page.evaluate(() => window.__saveCalls())).toBe(1);
+            await expect(panel.locator(".issue-board")).toHaveCount(0);
+        }
+        await page.evaluate(() => window.__releaseLoadValidation());
+        await expect.poll(() => page.evaluate(() => window.__loadValidationFinished())).toBe(true);
+        await page.evaluate(() => new Promise<void>((resolve) => setTimeout(resolve, 0)));
+        if (newerResult === "manual validation") {
+            await expect(panel.locator(".issue-board")).toContainText("New manual warning");
+            await expect(panel.locator(".issue-board")).not.toContainText("Old load warning");
+        } else {
+            await expect(panel.locator(".issue-board")).toHaveCount(0);
+        }
     });
 }
 
@@ -282,6 +341,30 @@ test("a landed save whose reload failed does not report its own write as an exte
     await page.locator("helman-config-editor-panel").getByRole("button", { name: "Reload stored config" }).click();
     await expect.poll(() => page.evaluate(() => window.__getConfigCalls())).toBe(2);
     expect(prompts).toEqual([]);
+});
+
+test("a compacted save rebases the draft and revision after reload failure", async ({ page }) => {
+    await mountEditor(page);
+    await page.evaluate(() => {
+        window.__compactVisualization = true;
+        const panel = document.querySelector("helman-config-editor-panel") as HTMLElement & {
+            setValue: (path: string[], value: unknown) => void;
+        };
+        panel.setValue(["visualization", "history_buckets"], 60);
+        window.__saveSucceeds = false;
+    });
+    await page.locator("helman-config-editor-panel").getByRole("button", { name: "Save and reload" }).click();
+    await expect.poll(() => page.evaluate(() => window.__saveCalls())).toBe(1);
+    await expect.poll(() => readBadges(page)).not.toContain("Unsaved changes");
+    expect(await readBadges(page)).not.toContain("The stored config changed elsewhere — reload to see it");
+    const state = await page.evaluate(() => {
+        const panel = document.querySelector("helman-config-editor-panel") as HTMLElement & {
+            config: Record<string, unknown>; savedConfig: Record<string, unknown>;
+        };
+        return { config: panel.config, savedConfig: panel.savedConfig };
+    });
+    expect(state.config).toEqual(state.savedConfig);
+    expect(state.config).not.toHaveProperty("visualization");
 });
 
 test("a rejected save keeps the unsaved draft dirty", async ({ page }) => {

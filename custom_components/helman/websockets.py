@@ -370,11 +370,13 @@ def ws_validate_config(
     msg: dict,
 ) -> None:
     connection.send_result(
-        msg["id"], _validate_with_vendors(hass, msg["config"]).to_dict()
+        msg["id"], _validate_with_vendors(hass, msg["config"])[1].to_dict()
     )
 
 
-def _validate_with_vendors(hass: HomeAssistant, config: dict) -> ValidationReport:
+def _validate_with_vendors(
+    hass: HomeAssistant, config: dict
+) -> tuple[dict, ValidationReport]:
     """Validate ``config`` as it will run: with its hardware profiles applied.
 
     The profiles fill the entity slots they own, so the completeness checks
@@ -391,7 +393,7 @@ def _validate_with_vendors(hass: HomeAssistant, config: dict) -> ValidationRepor
             code=issue.code,
             message=issue.message,
         )
-    return report
+    return resolved, report
 
 
 @websocket_api.websocket_command({
@@ -442,7 +444,7 @@ async def ws_save_config(
     # already in the new shape.
     config = {**msg["config"], "config_version": CONFIG_DOCUMENT_VERSION}
 
-    validation = _validate_with_vendors(hass, config)
+    resolved, validation = _validate_with_vendors(hass, config)
     if not validation.valid:
         connection.send_result(
             msg["id"],
@@ -454,7 +456,7 @@ async def ws_save_config(
         )
         return
 
-    await stor.async_save(config)
+    await stor.async_save(config, validation_config=resolved)
     stored = {"config": stor.config, "revision": config_revision(stor.config)}
 
     entries = hass.config_entries.async_entries(DOMAIN)

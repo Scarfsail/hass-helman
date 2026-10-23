@@ -3,7 +3,6 @@ import hashlib
 import json
 import logging
 from collections.abc import Mapping
-from copy import deepcopy
 from functools import partial
 from typing import Any
 from homeassistant.helpers import storage
@@ -14,7 +13,8 @@ from .automation.migration import (
     migrate_config_document,
     needs_migration,
 )
-from .visualization import read_visualization
+from .visualization import compact_visualization
+from .config_validation import validate_config_document
 from .const import (
     CONFIG_DOCUMENT_VERSION,
     DOMAIN,
@@ -63,15 +63,7 @@ class HelmanStorage:
 
     async def async_load(self) -> None:
         stored = await self._store.async_load() or {}
-        self._config = {
-            **DEFAULT_CONFIG,
-            **stored,
-            # Merged per key, not replaced: a partial ``visualization`` object
-            # must keep the defaults for everything it omits. Ahead of
-            # migration, which is what ``_migrate_v17_to_v18`` relies on when
-            # it lets a relocated value beat a default.
-            "visualization": deepcopy(read_visualization(stored)),
-        }
+        self._config = {**DEFAULT_CONFIG, **stored}
         # A fresh install has no document to upgrade, so it imports nothing
         # from Energy, backfills nothing and starts with an empty device list.
         await self._async_migrate_config(upgrade=bool(stored))
@@ -187,9 +179,19 @@ class HelmanStorage:
     def schedule_document(self) -> dict[str, Any] | None:
         return self._schedule_document
 
-    async def async_save(self, new_config: dict[str, Any]) -> None:
-        self._config = new_config
-        await self._store.async_save(new_config)
+    async def async_save(
+        self, new_config: dict[str, Any], *, validation_config: dict[str, Any] | None = None
+    ) -> None:
+        # Websocket saves validate the vendor-resolved form, while persistence
+        # keeps the submitted profile references. Other callers validate raw.
+        validation = validate_config_document(
+            validation_config if validation_config is not None else new_config
+        )
+        if not validation.valid:
+            raise ValueError("Cannot save invalid Helman config")
+        canonical = compact_visualization(new_config)
+        self._config = canonical
+        await self._store.async_save(canonical)
 
     async def async_save_snapshots(
         self,

@@ -289,7 +289,9 @@ test("the Automation tab lists system optimizers first, every section collapsed"
  */
 async function openTab(page: Page, label: string, expand = label === "Devices"): Promise<void> {
     const panel = page.locator("helman-config-editor-panel");
-    await panel.locator(".tabs").getByRole("button", { name: label, exact: true }).click();
+    await panel.locator(".tabs").getByRole("button", {
+        name: new RegExp(`^${label}(?:\\s+\\d+)?$`),
+    }).click();
     if (expand) await openTabSection(page, "Consumers");
 }
 

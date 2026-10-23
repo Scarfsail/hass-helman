@@ -219,7 +219,7 @@ export function renderOptionalNumberField(
     labelKey: string,
     helperKey?: string,
     helpKey?: string,
-    options: { min?: number; max?: number; suffix?: string } = {},
+    options: { min?: number; max?: number; suffix?: string; explicitValue?: unknown } = {},
 ): TemplateResult {
     return html`
         <div class="field">
@@ -231,7 +231,7 @@ export function renderOptionalNumberField(
                     min=${options.min ?? nothing}
                     max=${options.max ?? nothing}
                     placeholder=${defaultHint(host, path)}
-                    .value=${stringValue(host.getValue(path))}
+                    .value=${stringValue(options.explicitValue === undefined ? host.getValue(path) : options.explicitValue)}
                     @change=${(event: Event) =>
                         setOptionalNumber(host, path, (event.currentTarget as HTMLInputElement).value)}
                 />

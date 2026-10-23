@@ -17,7 +17,7 @@ from custom_components.helman.automation import config as automation_config_modu
 from custom_components.helman.const import CONFIG_DOCUMENT_VERSION, DOMAIN
 from custom_components.helman.config_defaults import CONFIG_FIELD_DEFAULTS
 from custom_components.helman.solar_bias_correction.models import read_bias_config
-from custom_components.helman.storage import config_revision
+from custom_components.helman.storage import HelmanStorage, config_revision
 from custom_components.helman.websockets import (
     ws_get_config,
     ws_get_config_defaults,
@@ -25,6 +25,7 @@ from custom_components.helman.websockets import (
     ws_save_config,
     ws_validate_config,
 )
+from test_vendors import config_entry, registry, solax_registry
 
 _save_config_handler = ws_save_config.__wrapped__.__wrapped__
 
@@ -66,7 +67,7 @@ class FakeStorage:
         self.config = config or {}
         self.saved_payloads: list[dict] = []
 
-    async def async_save(self, new_config: dict) -> None:
+    async def async_save(self, new_config: dict, *, validation_config: dict | None = None) -> None:
         self.saved_payloads.append(new_config)
         self.config = new_config
 
@@ -461,6 +462,84 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         )
         # This fake reload does not run async_setup_entry, the sole config emitter.
         self.assertEqual(hass.bus.fired, [])
+
+    async def test_save_profile_with_slot_invalidation_uses_resolved_prerequisites(self) -> None:
+        storage = HelmanStorage.__new__(HelmanStorage)
+        storage._config = {}
+        storage._store = SimpleNamespace(async_save=AsyncMock())
+        hass = FakeHass(storage)
+        entry = config_entry()
+        hass.config_entries.async_get_entry = lambda entry_id: entry if entry_id == entry.entry_id else None
+        original_entries = hass.config_entries.async_entries
+        hass.config_entries.async_entries = lambda domain, **kwargs: (
+            [entry] if domain == entry.domain else original_entries(domain, **kwargs)
+        )
+        submitted = {
+            "energy_nodes": {
+                "inverter": {"profile": {"id": "solax_inverter", "entry_id": entry.entry_id}},
+                "grid": {"max_allowed_export_power": 9900},
+            },
+            "training": {"solar_bias": {"slot_invalidation": {
+                "max_battery_soc_percent": 90,
+            }}},
+        }
+        connection = FakeConnection(is_admin=True)
+
+        with registry(solax_registry()):
+            await _save_config_handler(
+                hass, connection,
+                {"id": 1, "type": "helman/save_config", "config": submitted},
+            )
+
+        canonical = self._stamped(submitted)
+        self.assertEqual(connection.errors, [])
+        self.assertTrue(connection.results[0][1]["success"], connection.results)
+        self.assertEqual(connection.results[0][1]["config"], canonical)
+        self.assertEqual(connection.results[0][1]["revision"], config_revision(canonical))
+        self.assertEqual(storage.config, canonical)
+        storage._store.async_save.assert_awaited_once_with(canonical)
+        self.assertNotIn("entities", storage.config["energy_nodes"]["grid"])
+        self.assertNotIn("battery", storage.config["energy_nodes"])
+
+    async def test_save_returns_canonical_revision_after_reload_failure(self) -> None:
+        storage = HelmanStorage.__new__(HelmanStorage)
+        storage._config = {}
+        storage._store = SimpleNamespace(async_save=AsyncMock())
+        hass = FakeHass(storage, config_entries=FakeConfigEntries(reload_result=False))
+        connection = FakeConnection(is_admin=True)
+        submitted = {
+            "visualization": {
+                "history_buckets": 60,
+                "history_bucket_duration": 8,
+                "unknown_setting": "keep",
+            }
+        }
+
+        await _save_config_handler(
+            hass, connection,
+            {"id": 1, "type": "helman/save_config", "config": submitted,
+             "expected_revision": config_revision({})},
+        )
+
+        canonical = self._stamped({"visualization": {
+            "history_bucket_duration": 8, "unknown_setting": "keep",
+        }})
+        result = connection.results[0][1]
+        self.assertFalse(result["success"])
+        self.assertEqual(result["config"], canonical)
+        self.assertEqual(result["revision"], config_revision(canonical))
+        storage._store.async_save.assert_awaited_once_with(canonical)
+        self.assertEqual(submitted["visualization"]["history_buckets"], 60)
+
+        conflict = FakeConnection(is_admin=True)
+        await _save_config_handler(
+            hass, conflict,
+            {"id": 2, "type": "helman/save_config", "config": submitted,
+             "expected_revision": config_revision({})},
+        )
+        self.assertTrue(conflict.results[0][1]["conflict"])
+        self.assertEqual(conflict.results[0][1]["revision"], config_revision(canonical))
+        storage._store.async_save.assert_awaited_once()
 
     async def test_second_save_with_same_revision_conflicts(self) -> None:
         storage = FakeStorage()
