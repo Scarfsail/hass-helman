@@ -3,6 +3,32 @@ import type { LiveFlows } from "./live-flows";
 
 export type NodeType = "solar" | "battery" | "grid" | "house" | "inverter";
 
+/** What a detail shows: an energy node by its type, or a config device by its tree item. */
+export type NodeDetailTarget = NodeType | TreeItem;
+
+export type NodeDetailTab = "overview" | "control";
+
+/**
+ * The tab a detail was asked to open on, one object per request: asking for
+ * the same node's Control tab again is a new request even when the node and
+ * the tab are the same, while a refreshed tree keeps the one it has.
+ */
+export interface NodeDetailTabRequest {
+    readonly tab: NodeDetailTab;
+}
+
+/**
+ * Asks the power card around it to show a node's detail, on its Control tab
+ * when `tab` says so and on its Overview otherwise. Bubbles and is composed,
+ * so it reaches the card from inside the open detail's own shadow roots.
+ */
+export const NODE_DETAIL_REQUEST_EVENT = "helman-node-detail-request";
+
+export interface NodeDetailRequestDetail {
+    target: NodeDetailTarget;
+    tab?: Extract<NodeDetailTab, "control">;
+}
+
 /**
  * What every energy node's flow is drawn from: the card's live power split,
  * rebuilt with the params on every card render, and the fixed scale.
@@ -88,10 +114,14 @@ export interface DeviceDetailParams extends Partial<EnergyNodeFlowParams> {
     item: TreeItem;
 }
 
-export type NodeDetailParams =
+export type NodeDetailParams = (
     | BatteryDetailParams
     | SolarDetailParams
     | GridDetailParams
     | HouseDetailParams
     | InverterDetailParams
-    | DeviceDetailParams;
+    | DeviceDetailParams
+) & {
+    /** The tab the power card was asked for; without one, the detail opens on its Overview. */
+    tabRequest?: NodeDetailTabRequest;
+};

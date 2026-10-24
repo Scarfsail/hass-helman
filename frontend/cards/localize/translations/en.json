@@ -159,6 +159,19 @@
       "no_automations": "No automation drives this.",
       "automation_toggle": "Enable {name}",
       "config_failed": "Could not read the automations' configuration:",
+      "house": {
+        "system": "System",
+        "automation": "Automation",
+        "execution": "Schedule execution",
+        "execution_failed": "Could not change schedule execution:",
+        "lanes": "Who controls what",
+        "no_lanes": "Helman controls nothing in this house."
+      },
+      "inverter_link": {
+        "export_note": "Grid export is controlled through the inverter: its Stop export action stops it.",
+        "open": "Open inverter control",
+        "unavailable": "No controllable inverter is configured, so export cannot be controlled here."
+      },
       "override": {
         "title": "Manual override",
         "from": "From",

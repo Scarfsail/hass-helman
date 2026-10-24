@@ -1,6 +1,6 @@
 import type { TreeItem } from "../shared/data/tree-item";
 import { liveFlows, type LiveFlows } from "./live-flows";
-import type { EnergyNodeFlowParams, NodeDetailParams, NodeType } from "./node-detail-types";
+import type { NodeDetailParams, NodeDetailTabRequest, NodeDetailTarget } from "./node-detail-types";
 import type { EnergyReadings } from "./node-detail-readings";
 
 export interface NodeDetailContext {
@@ -53,12 +53,16 @@ export function buildNodeDetailContext(
     };
 }
 
-/** The params of an energy node's detail, or of a device opened from its name. */
-export function buildNodeDetailParams(context: NodeDetailContext, request: NodeType | TreeItem): NodeDetailParams {
+/** The params of an energy node's detail, or of a device opened from its name, opening on the tab requested. */
+export function buildNodeDetailParams(
+    context: NodeDetailContext,
+    request: NodeDetailTarget,
+    tabRequest?: NodeDetailTabRequest,
+): NodeDetailParams {
     // The split reads a missing meter as 0 and every edge is a residual of the
     // others: without the solar, battery or house reading it is not known, never a zero.
     const known = context.solarPowerReading !== null && context.batteryPowerReading !== null && context.houseReadable;
-    const flow: EnergyNodeFlowParams = { flows: known ? context.flows : null, flowScaleW: context.flowScaleW };
+    const flow = { flows: known ? context.flows : null, flowScaleW: context.flowScaleW, tabRequest };
     if (typeof request !== "string") return { ...flow, nodeType: "device", item: request };
     switch (request) {
         case "battery":

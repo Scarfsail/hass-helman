@@ -50,6 +50,12 @@ export const nodeDetailSharedStyles = css`
         margin-top: 4px;
     }
 
+    .error {
+        margin: 0;
+        font-size: 0.85rem;
+        color: var(--error-color, #c62828);
+    }
+
 `;
 
 /** The question-led node details: the overview summary, answer rows and tables. */

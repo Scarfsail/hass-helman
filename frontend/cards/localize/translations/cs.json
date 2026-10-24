@@ -59,6 +59,19 @@
       "no_automations": "Nic z automatizací to neřídí.",
       "automation_toggle": "Zapnout {name}",
       "config_failed": "Konfiguraci automatizací se nepodařilo načíst:",
+      "house": {
+        "system": "Systém",
+        "automation": "Automatizace",
+        "execution": "Vykonávání rozvrhu",
+        "execution_failed": "Vykonávání rozvrhu se nepodařilo změnit:",
+        "lanes": "Kdo co ovládá",
+        "no_lanes": "Helman v tomto domě nic neovládá."
+      },
+      "inverter_link": {
+        "export_note": "Export do sítě se řídí střídačem: jeho akce Zastavit export ho zastaví.",
+        "open": "Otevřít ovládání střídače",
+        "unavailable": "Není nastaven žádný ovladatelný střídač, proto zde export nelze ovládat."
+      },
       "override": {
         "title": "Ruční zásah",
         "from": "Od",
