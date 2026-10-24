@@ -19,7 +19,15 @@ import {
     type OpenScheduleEditorDetail,
     type SchedulingDayEditorHost,
 } from "./schedule/dialogs/scheduling-day-editor-host";
-import type { NodeDetailParams, NodeType } from "../node-detail/node-detail-types";
+import {
+    NODE_DETAIL_REQUEST_EVENT,
+    type NodeDetailParams,
+    type NodeDetailRequestDetail,
+    type NodeDetailTab,
+    type NodeDetailTabRequest,
+    type NodeDetailTarget,
+    type NodeType,
+} from "../node-detail/node-detail-types";
 import { buildNodeDetailContext, buildNodeDetailParams } from "../node-detail/node-detail-params-builder";
 import {
     readEnergyReadings,
@@ -51,7 +59,9 @@ export class EnergyCardHost implements ReactiveController {
     private _watchSources: Map<string, Set<string>> = new Map();
     private _localize?: LocalizeFunction;
     private _localizeLanguage?: string;
-    private _dialogRequest: NodeType | TreeItem | null = null;
+    private _dialogRequest: NodeDetailTarget | null = null;
+    /** The tab the open detail was asked for: a new object per request, kept across a tree refresh. */
+    private _dialogTabRequest: NodeDetailTabRequest = { tab: "overview" };
     private _loadGeneration = 0;
     private _inverterGeneration = 0;
 
@@ -72,6 +82,7 @@ export class EnergyCardHost implements ReactiveController {
         this.host.addEventListener(WATCHED_ENTITIES_EVENT, this._handleWatchedEntities);
         this.host.addEventListener("show-node-detail", this._handleShowNodeDetail);
         this.host.addEventListener("show-device-detail", this._handleShowDeviceDetail);
+        this.host.addEventListener(NODE_DETAIL_REQUEST_EVENT, this._handleNodeDetailRequest);
 
         if (this._latestHass) {
             void this.loadBackendData();
@@ -83,6 +94,7 @@ export class EnergyCardHost implements ReactiveController {
         this.host.removeEventListener(WATCHED_ENTITIES_EVENT, this._handleWatchedEntities);
         this.host.removeEventListener("show-node-detail", this._handleShowNodeDetail);
         this.host.removeEventListener("show-device-detail", this._handleShowDeviceDetail);
+        this.host.removeEventListener(NODE_DETAIL_REQUEST_EVENT, this._handleNodeDetailRequest);
 
         this._loadGeneration += 1;
         this._inverterGeneration += 1;
@@ -102,7 +114,7 @@ export class EnergyCardHost implements ReactiveController {
     public get historyRevision(): number { return this._historyRevision; }
     public get watchedEntityIds(): ReadonlySet<string> { return this._watchedEntityIds; }
     public get localize(): LocalizeFunction | undefined { return this._localize; }
-    public get dialogRequest(): NodeType | TreeItem | null { return this._dialogRequest; }
+    public get dialogRequest(): NodeDetailTarget | null { return this._dialogRequest; }
     /** Whether a load has succeeded; a later refresh keeps the card on what it has. */
     public get loaded(): boolean { return this._historyEngine !== undefined; }
 
@@ -114,7 +126,7 @@ export class EnergyCardHost implements ReactiveController {
             historyBuckets: this._uiConfig.history_buckets,
             historyBucketDuration: this._uiConfig.history_bucket_duration,
         });
-        return buildNodeDetailParams(context, this._dialogRequest);
+        return buildNodeDetailParams(context, this._dialogRequest, this._dialogTabRequest);
     }
 
     public setHass(hass: HomeAssistant): void {
@@ -158,7 +170,13 @@ export class EnergyCardHost implements ReactiveController {
         }
     }
 
-    public openNode(request: NodeType | TreeItem): void {
+    /**
+     * Show a node's detail: on its Overview, or on the tab asked for. An open
+     * detail swaps its target in place; asking for the same node again still
+     * selects the tab asked for.
+     */
+    public openNode(request: NodeDetailTarget, tab: NodeDetailTab = "overview"): void {
+        this._dialogTabRequest = { tab };
         // The same node again keeps the readings its open detail announced.
         if (request !== this._dialogRequest) {
             this._dialogRequest = request;
@@ -406,5 +424,11 @@ export class EnergyCardHost implements ReactiveController {
         event.stopPropagation();
         const item = (event as CustomEvent<{ item: TreeItem }>).detail.item;
         this.openNode(item);
+    };
+
+    private _handleNodeDetailRequest = (event: Event): void => {
+        event.stopPropagation();
+        const { target, tab } = (event as CustomEvent<NodeDetailRequestDetail>).detail;
+        this.openNode(target, tab);
     };
 }

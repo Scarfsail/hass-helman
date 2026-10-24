@@ -4,21 +4,11 @@ import { live } from "lit/directives/live.js";
 import type { HomeAssistant } from "../../types/ha";
 import { fillTemplate, getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import { DialogHistoryController } from "../shared/dialog-history-controller";
-import { DataChangedController } from "../shared/data/data-changed";
-import { getSharedHelmanStore } from "../shared/data/store";
 import { dispatchWatchedEntities } from "../shared/hass-change";
-import { describeError } from "../shared/describe-error";
-import { resolveLocale } from "../shared/resolve-locale";
 import { showToast } from "../shared/fire-event";
-import { asJsonObject, cloneJson, getValueAtPath, setValueAtPath } from "../shared/config/config-document";
-import { ConfigSession } from "../shared/config/config-session";
+import { asJsonObject, getValueAtPath, setValueAtPath } from "../shared/config/config-document";
 import { booleanValue, stringValue } from "../shared/config/form-fields";
-import type { JsonObject } from "../shared/config/types";
-import {
-    getLaneAutomationCoverage,
-    getSharedAutomationCoverage,
-    type AutomationCoverageIndex,
-} from "../shared/optimizer/automation-coverage";
+import { getLaneAutomationCoverage } from "../shared/optimizer/automation-coverage";
 import { findOptimizerLocations } from "../shared/optimizer/optimizer-locations";
 import type { HelmanOptimizerEditDialog } from "../shared/optimizer/helman-optimizer-edit-dialog";
 import { buildControllableEntityStatuses } from "../shared/schedule/model/controllable-entity-status";
@@ -33,98 +23,22 @@ import {
     type ScheduleControllable,
 } from "../shared/schedule/model/schedule-appliance-metadata";
 import { summarizeScheduleAuthorship } from "../shared/schedule/model/schedule-authorship";
-import { EMPTY_NORMALIZED_SCHEDULE, findCurrentScheduleSlot } from "../shared/schedule/model/schedule-normalizer";
-import { formatScheduleInstantLabel } from "../shared/schedule/model/schedule-time";
-import { EMPTY_SCHEDULE_OWNER_SNAPSHOT, getSharedScheduleOwner } from "../shared/schedule/schedule-owner";
+import { findCurrentScheduleSlot } from "../shared/schedule/model/schedule-normalizer";
+import { getSharedScheduleOwner } from "../shared/schedule/schedule-owner";
 import {
     isScheduleInverterAction,
-    type NormalizedScheduleModel,
-    type ScheduleOwnerSnapshot,
     type ScheduleSetBy,
     type ScheduleSlot,
 } from "../shared/schedule/schedule-types";
 import { schedulingSharedStyles } from "../shared/schedule/styles/scheduling-shared-styles";
+import { AdminConfigController } from "./admin-config-controller";
+import { currentManualRun, LaneOwnershipController } from "./lane-ownership";
 import { nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
-import { timeZone } from "./section-resource";
 import "../shared/optimizer/helman-optimizer-edit-dialog";
 import "../shared/schedule/components/scheduling-action-chip";
 import "../shared/schedule/components/scheduling-appliance-chip";
 import type { ControlOverrideDialog } from "./control-override-dialog";
 import "./control-override-dialog";
-
-/** Who owns a lane right now, as the Control tab names it. */
-export type ControlStatus =
-    | { kind: "loading" }
-    | { kind: "unavailable" }
-    | { kind: "execution_off" }
-    | { kind: "manual"; untilMs: number }
-    | { kind: "automatic" }
-    | { kind: "automation_off" }
-    | { kind: "not_automated" };
-
-/** A contiguous stretch of user-owned slots on one lane. */
-export interface ManualRun {
-    startMs: number;
-    endMs: number;
-    slots: ScheduleSlot[];
-}
-
-/**
- * The user-owned run of `controllableId` that the slot in progress belongs
- * to, from that slot on; `null` when the slot in progress is not the user's.
- * The slots are the normalised schedule's, in time order with the slot in
- * progress marked by the shared clock.
- *
- * Adjacent user actions may differ and still be one run: the run is about who
- * owns the lane, not what it does. It stops at the first slot that is not the
- * user's, and at a gap in the schedule.
- */
-export function currentManualRun(
-    slots: readonly ScheduleSlot[],
-    controllableId: string,
-): ManualRun | null {
-    const current = findCurrentScheduleSlot(slots);
-    if (!current) return null;
-    const run: ScheduleSlot[] = [];
-    for (const slot of slots.slice(slots.indexOf(current))) {
-        if (run.length > 0 && slot.startMs !== run[run.length - 1].endMs) break;
-        if (slot.assignments[controllableId]?.setBy !== "user") break;
-        run.push(slot);
-    }
-    return run.length === 0 ? null : { startMs: run[0].startMs, endMs: run[run.length - 1].endMs, slots: run };
-}
-
-/**
- * Who owns `controllableId` now, in precedence order: execution off, the
- * user's run in progress, an active automation, a disabled one, none.
- *
- * Unknown is never read as "no automation": until the schedule has loaded
- * the answer is loading (unavailable once its read failed), and until the
- * coverage has loaded every answer that needs it is loading too (unavailable
- * once its read failed). The slot in progress is the one the shared clock
- * marked in the normalised slots.
- */
-export function controlStatus({
-    schedule,
-    scheduleFailed,
-    coverage,
-    coverageFailed,
-    controllableId,
-}: {
-    schedule: { executionEnabled: boolean; slots: readonly ScheduleSlot[] } | null;
-    scheduleFailed: boolean;
-    coverage: AutomationCoverageIndex | null;
-    coverageFailed: boolean;
-    controllableId: string;
-}): ControlStatus {
-    if (schedule === null) return { kind: scheduleFailed ? "unavailable" : "loading" };
-    if (!schedule.executionEnabled) return { kind: "execution_off" };
-    const run = currentManualRun(schedule.slots, controllableId);
-    if (run !== null) return { kind: "manual", untilMs: run.endMs };
-    if (coverage === null) return { kind: coverageFailed ? "unavailable" : "loading" };
-    const state = getLaneAutomationCoverage(coverage, controllableId).state;
-    return { kind: state === "active" ? "automatic" : state === "disabled_only" ? "automation_off" : "not_automated" };
-}
 
 /** One optimizer driving the lane, as its config reads. */
 interface OptimizerRow {
@@ -183,11 +97,6 @@ export class HelmanNodeControl extends LitElement {
             cursor: default;
             opacity: 0.5;
         }
-        .error {
-            margin: 0;
-            font-size: 0.85rem;
-            color: var(--error-color, #c62828);
-        }
         .optimizer {
             display: flex;
             align-items: center;
@@ -214,29 +123,16 @@ export class HelmanNodeControl extends LitElement {
     /** Headed by the lane's name, for a node with several lanes. */
     @property({ attribute: false }) public titled = false;
 
-    @state() private _snapshot: ScheduleOwnerSnapshot = EMPTY_SCHEDULE_OWNER_SNAPSHOT;
-    @state() private _normalized: NormalizedScheduleModel = EMPTY_NORMALIZED_SCHEDULE;
-    @state() private _nowMs = Date.now();
-    @state() private _coverage: AutomationCoverageIndex | null = null;
-    /** The coverage's last read failed: with no index, its answers are unavailable, not loading. */
-    @state() private _coverageFailed = false;
-    /** The lane's roster entry; `undefined` until read, `null` when the roster has none. */
-    @state() private _controllable: ScheduleControllable | null | undefined = undefined;
-    /** The roster could not be read before any read landed: unknown, not absent. */
-    @state() private _rosterFailed = false;
-    /** The configuration an admin read: what the automation rows show. */
-    @state() private _config: JsonObject | null = null;
-    /** Why the admin's configuration read failed; the next data change reads again. */
-    @state() private _configError: string | null = null;
-    /** The optimizer whose switch is being saved. */
-    @state() private _savingOptimizer: string | null = null;
     @state() private _dialog: NestedDialog | null = null;
     @state() private _error: string | null = null;
 
-    private _stopFollowing: Array<() => void> = [];
-    private readonly _session = new ConfigSession(() => this.hass);
-    /** The configuration read that owns its answer: a newer read or a save supersedes an older one. */
-    private _configLoad = 0;
+    /** The plan, the coverage and the roster, followed while the tab is in the page. */
+    private readonly _lanes = new LaneOwnershipController(this, () => this.hass, (roster) => {
+        // The live state the Now row reads is the lane's primary entity.
+        const controllable = roster.find((entry) => entry.id === this.controllableId);
+        if (controllable) dispatchWatchedEntities(this, `node-detail:control:${this.controllableId}`, [controllable.primaryEntityId]);
+    });
+    private readonly _config = new AdminConfigController(this, () => this.hass);
     /** Back goes through the nested dialog's own close, so a draft or a write in flight keeps it open. */
     private readonly _history = new DialogHistoryController(this, "__helmanNodeControlDialogId", {
         onBack: () => {
@@ -251,124 +147,42 @@ export class HelmanNodeControl extends LitElement {
         close: () => { this._dialog = null; },
     });
 
-    constructor() {
-        super();
-        new DataChangedController(this, () => this.hass, { kinds: ["config"] }, (_kinds, { configRevision }) => {
-            if (this._savingOptimizer !== null) return;
-            if (this._configError !== null || this._session.isStale(configRevision)) void this._loadOptimizers();
-        });
-    }
+    /** The lane's roster entry, found once per render; `undefined` until read, `null` when the roster has none. */
+    private _controllable: ScheduleControllable | null | undefined = undefined;
 
-    connectedCallback(): void {
-        super.connectedCallback();
-        if (this.hass) this._start();
-    }
-
-    disconnectedCallback(): void {
-        super.disconnectedCallback();
-        for (const stop of this._stopFollowing) stop();
-        this._stopFollowing = [];
-    }
-
-    willUpdate(changed: Map<string, unknown>): void {
-        if (changed.has("hass") && this.hass && this.isConnected && this._stopFollowing.length === 0) this._start();
-    }
-
-    private get _isAdmin(): boolean {
-        return this.hass?.user?.is_admin === true;
-    }
-
-    private get _timeZone(): string {
-        return timeZone(this.hass);
-    }
-
-    private get _locale(): string {
-        return resolveLocale(this.hass);
-    }
-
-    private _start(): void {
-        const owner = getSharedScheduleOwner(this.hass);
-        const coverage = getSharedAutomationCoverage(this.hass);
-        const store = getSharedHelmanStore(this.hass);
-        this._coverage = coverage.get();
-        this._coverageFailed = coverage.failed();
-        this._stopFollowing = [
-            owner.subscribe((snapshot) => {
-                this._snapshot = snapshot;
-                this._normalized = owner.getNormalized(this._timeZone, this._locale);
-                this._nowMs = owner.getNowMs();
-            }),
-            coverage.subscribe(
-                (index) => { this._coverage = index; this._coverageFailed = false; },
-                () => { this._coverageFailed = true; },
-            ),
-            store.subscribeRosterInvalidation(() => void this._loadRoster()),
-        ];
-        void this._loadRoster();
-        if (this._isAdmin) void this._loadOptimizers();
-    }
-
-    private async _loadRoster(): Promise<void> {
-        try {
-            const roster = await getSharedHelmanStore(this.hass).getControllableRoster();
-            this._controllable = roster.find((entry) => entry.id === this.controllableId) ?? null;
-            this._rosterFailed = false;
-            // The live state the Now row reads is the lane's primary entity.
-            if (this._controllable) dispatchWatchedEntities(this, `node-detail:control:${this.controllableId}`, [this._controllable.primaryEntityId]);
-        } catch (error) {
-            console.error("node-control: failed to load the controllable roster", error);
-            // A roster read before keeps its answer; with none, the entry is unknown.
-            if (this._controllable === undefined) this._rosterFailed = true;
-        }
-    }
-
-    private async _loadOptimizers(): Promise<void> {
-        const load = ++this._configLoad;
-        try {
-            const { doc } = await this._session.load();
-            if (load !== this._configLoad) return;
-            this._config = doc ?? null;
-            this._configError = null;
-        } catch (error) {
-            if (load !== this._configLoad) return;
-            console.error("node-control: failed to load the configuration", error);
-            this._configError = describeError(error);
-        }
+    willUpdate(changedProperties: Map<string, unknown>): void {
+        super.willUpdate(changedProperties);
+        const roster = this._lanes.roster;
+        this._controllable = roster === null ? undefined : roster.find((entry) => entry.id === this.controllableId) ?? null;
     }
 
     /** One optimizer as the configuration read holds it; `undefined` until read or when it has none. */
     private _optimizerRow(optimizerId: string): OptimizerRow | undefined {
-        const config = this._config;
+        const config = this._config.config;
         const location = config ? findOptimizerLocations(config, [optimizerId])[0] : undefined;
         const entry = location ? asJsonObject(getValueAtPath(config!, ["automation", location.bucket, location.index])) : undefined;
         return entry ? { kind: stringValue(entry.kind), enabled: booleanValue(entry.enabled, true) } : undefined;
     }
 
     private _optimizerIds(): readonly string[] {
-        return getLaneAutomationCoverage(this._coverage, this.controllableId).optimizerIds;
+        return getLaneAutomationCoverage(this._lanes.coverage, this.controllableId).optimizerIds;
     }
 
     // ── Rendering ───────────────────────────────────────────────────────────
 
     render() {
-        const nowMs = this._nowMs;
-        const schedule = this._snapshot.schedule;
-        const slots = this._normalized.slots;
-        const status = controlStatus({
-            schedule: schedule ? { executionEnabled: schedule.executionEnabled, slots } : null,
-            scheduleFailed: this._snapshot.error !== null,
-            coverage: this._coverage,
-            coverageFailed: this._coverageFailed,
-            controllableId: this.controllableId,
-        });
+        const lanes = this._lanes;
+        const nowMs = lanes.nowMs;
+        const schedule = lanes.snapshot.schedule;
+        const slots = lanes.normalized.slots;
         const run = schedule ? currentManualRun(slots, this.controllableId) : null;
-        const writing = this._snapshot.writing;
+        const writing = lanes.snapshot.writing;
         const canAuthor = schedule !== null && this._controllable?.supportsAuthoring === true;
         return html`
             <div class="content" data-control=${this.controllableId}>
                 ${this.titled ? html`<div class="section-title" data-lane-name>${this._controllable?.name ?? this.controllableId}</div>` : nothing}
                 <div class="summary">
-                    <div class="status-line">${this._renderStatus(status)}</div>
+                    <div class="status-line" role="status">${lanes.renderStatus(lanes.status(this.controllableId), this.localize)}</div>
                     ${this.note ? html`<p class="note" data-lane-note>${this.note}</p>` : nothing}
                     ${schedule && !schedule.executionEnabled
                         ? html`<p class="note" data-execution-off>${this._t("execution_off_note")}</p>`
@@ -387,7 +201,7 @@ export class HelmanNodeControl extends LitElement {
                     </div>
                 ` : nothing}
                 ${this._controllable === null ? html`<p class="note" data-not-on-roster>${this._t("not_on_roster")}</p>` : nothing}
-                ${this._rosterFailed ? html`<p class="note" data-roster-failed>${this._t("status.unavailable")}</p>` : nothing}
+                ${lanes.rosterFailed ? html`<p class="note" data-roster-failed>${this._t("status.unavailable")}</p>` : nothing}
                 ${this._controllable?.supportsAuthoring === false ? html`<p class="note" data-unsupported>${this._t("unsupported_authoring")}</p>` : nothing}
                 <div class="actions">
                     ${canAuthor ? html`
@@ -402,28 +216,9 @@ export class HelmanNodeControl extends LitElement {
                     ` : nothing}
                 </div>
                 ${this._error ? html`<p class="error" role="alert" data-error>${this._error}</p>` : nothing}
-                ${this._isAdmin ? this._renderAutomations() : nothing}
+                ${this._config.isAdmin ? this._renderAutomations() : nothing}
             </div>
             ${this._renderDialog()}
-        `;
-    }
-
-    /** The status in the authorship tone of who owns the lane. */
-    private _renderStatus(status: ControlStatus) {
-        const authorship = status.kind === "manual" ? " authorship-decorated authorship-user"
-            : status.kind === "automatic" ? " authorship-decorated authorship-automation"
-            : "";
-        const text = status.kind === "manual"
-            ? fillTemplate(this._t("status.manual"), { time: formatScheduleInstantLabel(status.untilMs, {
-                currentDayKey: this._normalized.currentDayKey,
-                locale: this._locale,
-                timeZone: this._timeZone,
-                todayLabel: this.localize("scheduling.day.today"),
-                tomorrowLabel: this.localize("scheduling.day.tomorrow"),
-            }) })
-            : this._t(`status.${status.kind}`);
-        return html`
-            <span class=${`chip action action-tone-neutral status${authorship}`} role="status" data-status=${status.kind}>${text}</span>
         `;
     }
 
@@ -472,15 +267,16 @@ export class HelmanNodeControl extends LitElement {
 
     /** The lane's automations, each named by its kind, with its switch and its editor. */
     private _renderAutomations() {
-        const coverage = this._coverage;
-        if (coverage === null && this._configError === null) return nothing;
+        const coverage = this._lanes.coverage;
+        const configError = this._config.error;
+        if (coverage === null && configError === null) return nothing;
         const ids = this._optimizerIds();
         const editor = getLocalizeFunction(this.hass);
         return html`
             <div class="rows" data-automations>
                 <div class="section-title">${this._t("automations")}</div>
-                ${this._configError !== null
-                    ? html`<p class="error" role="alert" data-config-error>${this._t("config_failed")} ${this._configError}</p>`
+                ${configError !== null
+                    ? html`<p class="error" role="alert" data-config-error>${this._t("config_failed")} ${configError}</p>`
                     : nothing}
                 ${coverage === null ? nothing : ids.length === 0 ? html`<p class="note">${this._t("no_automations")}</p>` : ids.map((id) => {
                     const row = this._optimizerRow(id);
@@ -492,7 +288,7 @@ export class HelmanNodeControl extends LitElement {
                             </button>
                             <ha-switch
                                 .checked=${live(row?.enabled ?? false)}
-                                .disabled=${row === undefined || this._savingOptimizer !== null}
+                                .disabled=${row === undefined || this._config.saving !== null}
                                 aria-label=${fillTemplate(this._t("automation_toggle"), { name })}
                                 @change=${(event: Event) => this._setOptimizerEnabled(id, (event.currentTarget as HTMLInputElement).checked)}
                             ></ha-switch>
@@ -522,8 +318,8 @@ export class HelmanNodeControl extends LitElement {
                 .hass=${this.hass}
                 .localize=${this.localize}
                 .controllable=${this._controllable}
-                .normalized=${this._normalized}
-                .executionEnabled=${this._snapshot.schedule?.executionEnabled ?? false}
+                .normalized=${this._lanes.normalized}
+                .executionEnabled=${this._lanes.snapshot.schedule?.executionEnabled ?? false}
                 .open=${true}
                 @closed=${this._onDialogClosed}
             ></control-override-dialog>
@@ -553,7 +349,7 @@ export class HelmanNodeControl extends LitElement {
     private _returnToAutomatic = async (): Promise<void> => {
         const owner = getSharedScheduleOwner(this.hass);
         const nowMs = Date.now();
-        const slots = owner.getNormalized(this._timeZone, this._locale).slots;
+        const slots = owner.getNormalized(this._lanes.timeZone, this._lanes.locale).slots;
         const run = currentManualRun(slots, this.controllableId);
         if (run === null) return;
         this._error = null;
@@ -570,59 +366,15 @@ export class HelmanNodeControl extends LitElement {
         showToast(this, this._t("returned"));
     };
 
-    /**
-     * Switch one optimizer on or off: read the current document, change only
-     * its `enabled` and save with the revision read. A conflict keeps the
-     * newer document on screen and saves nothing: the switch is pressed
-     * again, deliberately, against what is there now.
-     */
-    private async _setOptimizerEnabled(optimizerId: string, enabled: boolean): Promise<void> {
-        if (this._savingOptimizer !== null) return;
-        this._savingOptimizer = optimizerId;
-        // A configuration read still in flight is older than this one.
-        this._configLoad += 1;
-        const editor = getLocalizeFunction(this.hass);
-        try {
-            const { doc } = await this._session.load();
-            const location = doc ? findOptimizerLocations(doc, [optimizerId])[0] : undefined;
-            if (!doc || !location) {
-                this._config = doc ?? null;
-                showToast(this, editor("editor.status.changed_elsewhere"));
-                return;
-            }
-            const next = cloneJson(doc);
-            setValueAtPath(next, ["automation", location.bucket, location.index, "enabled"], enabled);
-            const outcome = await this._session.save(next);
-            switch (outcome.kind) {
-                case "saved":
-                    this._config = outcome.doc;
-                    // Saved, but the integration's reload may still have failed.
-                    showToast(this, outcome.response.success
-                        ? editor(outcome.response.reloadStarted
-                            ? "editor.messages.config_saved_reload_started"
-                            : "editor.messages.config_saved")
-                        : outcome.response.reloadError ?? editor("editor.messages.config_saved_reload_failed"));
-                    break;
-                case "conflict":
-                    this._config = outcome.doc;
-                    showToast(this, editor("editor.status.changed_elsewhere"));
-                    break;
-                case "invalid":
-                    this._config = doc;
-                    showToast(this, editor("editor.messages.save_rejected"));
-                    break;
-                case "error":
-                    this._config = doc;
-                    showToast(this, `${editor("editor.messages.save_failed")} ${describeError(outcome.error ?? outcome.response?.reloadError ?? "")}`);
-                    break;
-            }
-        } catch (error) {
-            showToast(this, `${editor("editor.messages.save_failed")} ${describeError(error)}`);
-        } finally {
-            this._savingOptimizer = null;
-        }
+    /** Switch one optimizer on or off: only its `enabled` changes, against the document read at the press. */
+    private _setOptimizerEnabled(optimizerId: string, enabled: boolean): void {
+        void this._config.save(optimizerId, (doc) => {
+            const location = findOptimizerLocations(doc, [optimizerId])[0];
+            if (!location) return false;
+            setValueAtPath(doc, ["automation", location.bucket, location.index, "enabled"], enabled);
+            return true;
+        });
     }
-
 
     private _t(key: string): string {
         return this.localize(`node_detail.control.${key}`);

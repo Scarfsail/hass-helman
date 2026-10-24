@@ -44,7 +44,8 @@ export interface SharedScheduleOwner {
     applySchedulePatches(
         patches: readonly ScheduleSlotPatch[],
     ): Promise<ScheduleOwnerError | null>;
-    setExecutionEnabled(enabled: boolean): Promise<void>;
+    /** Switch execution and commit the schedule it returns. Resolves with the write's error, or null. */
+    setExecutionEnabled(enabled: boolean): Promise<ScheduleOwnerError | null>;
 }
 
 export function getSharedScheduleOwner(hass: HomeAssistant): SharedScheduleOwner {
@@ -168,8 +169,8 @@ class ScheduleOwnerImpl implements SharedScheduleOwner {
         );
     }
 
-    public async setExecutionEnabled(enabled: boolean): Promise<void> {
-        await this._trackMutation(
+    public async setExecutionEnabled(enabled: boolean): Promise<ScheduleOwnerError | null> {
+        return this._trackMutation(
             "_togglingExecution",
             () => this._helmanStore.setScheduleExecution(enabled),
             "schedule: failed to update schedule execution",

@@ -5,7 +5,7 @@ import { repeat } from "lit/directives/repeat.js";
 import { nothing, TemplateResult } from "lit-html";
 import type { HomeAssistant } from "../../types/ha";
 import type { LocalizeFunction } from "../localize/localize";
-import type { NodeDetailParams } from "./node-detail-types";
+import type { NodeDetailParams, NodeDetailTab, NodeDetailTabRequest } from "./node-detail-types";
 import type { TreeItem } from "../shared/data/tree-item";
 import { INVERTER_CONTROLLABLE_ID } from "../shared/schedule/schedule-types";
 import "./node-detail-battery-content";
@@ -18,14 +18,15 @@ import type { NodeDetailDeviceContent } from "./node-detail-device-content";
 import "./node-detail-device-content";
 import "./node-control";
 import "./device-direct-control";
-
-type NodeDetailTab = "overview" | "control";
+import "./node-control-rollup";
+import { deviceControllableIds } from "./node-detail-utils";
 const TABS: readonly NodeDetailTab[] = ["overview", "control"];
 
 /**
  * A node's detail in Home Assistant's dialog. A node with controls opens on
- * its Overview with a Control tab beside it; only the tab shown is in the
- * page, so a hidden one reads nothing.
+ * its Overview with a Control tab beside it, or on the tab the power card was
+ * asked for; only the tab shown is in the page, so a hidden one reads nothing.
+ * Another node swaps in place, inside the one history entry the dialog holds.
  */
 @customElement("node-detail-dialog")
 export class NodeDetailDialog extends LitElement {
@@ -70,17 +71,25 @@ export class NodeDetailDialog extends LitElement {
     @property({ type: Boolean }) public open = false;
 
     @state() private _tab: NodeDetailTab = "overview";
-    /** The node the tab was chosen for; an opening or another node starts on Overview. */
+    /** The node the tab was chosen for; an opening or another node starts on the tab requested. */
     private _tabTarget: string | null = null;
+    /** The request the tab was chosen for; a new one selects its tab, even on the same node. */
+    private _tabRequest: NodeDetailTabRequest | null = null;
 
     // Lifecycle methods
     willUpdate(changedProperties: Map<string, unknown>): void {
         super.willUpdate(changedProperties);
         if (!changedProperties.has("open") && !changedProperties.has("params")) return;
         const target = this.open && this.params ? this._targetKey() : null;
-        if (target !== this._tabTarget) {
+        const request = target !== null ? this.params.tabRequest ?? null : null;
+        if (target !== this._tabTarget || request !== this._tabRequest) {
             this._tabTarget = target;
-            this._tab = "overview";
+            this._tabRequest = request;
+            this._tab = request?.tab ?? "overview";
+            // A Control request swaps the content the press came from: focus lands on the tab, not the dialog.
+            if (request?.tab === "control") {
+                void this.updateComplete.then(() => this.shadowRoot?.querySelector<HTMLElement>('[data-tab="control"]')?.focus());
+            }
         }
     }
 
@@ -137,9 +146,7 @@ export class NodeDetailDialog extends LitElement {
      */
     private _controllableIds(): readonly string[] {
         if (this.params.nodeType === "inverter" || this.params.nodeType === "battery") return [INVERTER_CONTROLLABLE_ID];
-        if (this.params.nodeType !== "device") return [];
-        const { controllableIds = [], ownControllableIds = [] } = this.params.item;
-        return [...new Set([...controllableIds, ...ownControllableIds])];
+        return this.params.nodeType === "device" ? deviceControllableIds(this.params.item) : [];
     }
 
     /**
@@ -156,9 +163,8 @@ export class NodeDetailDialog extends LitElement {
     }
 
     private _renderBody(): TemplateResult {
-        const controllableIds = this._controllableIds();
-        const direct = this._directControls(controllableIds.length > 0);
-        if (controllableIds.length === 0 && direct === null) return this._renderContent();
+        const control = this._renderControl();
+        if (control === null) return this._renderContent();
         return html`
             <div class="tabs" role="tablist" aria-label=${this.localize("node_detail.control.tabs")} @keydown=${this._onTabKeydown}>
                 ${TABS.map((tab) => html`
@@ -175,27 +181,52 @@ export class NodeDetailDialog extends LitElement {
                 `)}
             </div>
             <div role="tabpanel" id="node-detail-tabpanel" aria-labelledby=${`node-detail-tab-${this._tab}`}>
-                ${this._tab === "overview" ? this._renderContent() : html`
-                    ${repeat(controllableIds, (controllableId) => controllableId, (controllableId) => html`
-                        <helman-node-control
-                            .hass=${this.hass}
-                            .localize=${this.localize}
-                            .controllableId=${controllableId}
-                            .titled=${controllableIds.length > 1}
-                            .note=${this.params.nodeType === "battery" ? this.localize("node_detail.control.battery_lane") : null}
-                        ></helman-node-control>
-                    `)}
-                    ${direct !== null ? html`
-                        <helman-device-direct-control
-                            .hass=${this.hass}
-                            .localize=${this.localize}
-                            .switchEntityId=${direct.switchEntityId}
-                            .climateEntityId=${direct.climateEntityId}
-                            .scheduled=${controllableIds.length > 0}
-                        ></helman-device-direct-control>
-                    ` : nothing}
-                `}
+                ${this._tab === "overview" ? this._renderContent() : control}
             </div>
+        `;
+    }
+
+    /**
+     * The Control tab's content; `null` for a node without one. The house
+     * rolls up its lanes, grid and solar point to the inverter's, and every
+     * other node drives its own lanes and HA's own controls.
+     */
+    private _renderControl(): TemplateResult | null {
+        switch (this.params.nodeType) {
+            case "house":
+                return html`
+                    <helman-house-control
+                        .hass=${this.hass}
+                        .localize=${this.localize}
+                        .houseNode=${this.params.houseNode}
+                    ></helman-house-control>
+                `;
+            case "grid":
+            case "solar":
+                return html`<helman-inverter-control-link .hass=${this.hass} .localize=${this.localize}></helman-inverter-control-link>`;
+        }
+        const controllableIds = this._controllableIds();
+        const direct = this._directControls(controllableIds.length > 0);
+        if (controllableIds.length === 0 && direct === null) return null;
+        return html`
+            ${repeat(controllableIds, (controllableId) => controllableId, (controllableId) => html`
+                <helman-node-control
+                    .hass=${this.hass}
+                    .localize=${this.localize}
+                    .controllableId=${controllableId}
+                    .titled=${controllableIds.length > 1}
+                    .note=${this.params.nodeType === "battery" ? this.localize("node_detail.control.battery_lane") : null}
+                ></helman-node-control>
+            `)}
+            ${direct !== null ? html`
+                <helman-device-direct-control
+                    .hass=${this.hass}
+                    .localize=${this.localize}
+                    .switchEntityId=${direct.switchEntityId}
+                    .climateEntityId=${direct.climateEntityId}
+                    .scheduled=${controllableIds.length > 0}
+                ></helman-device-direct-control>
+            ` : nothing}
         `;
     }
 
