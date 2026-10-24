@@ -491,6 +491,19 @@ test.describe("the charge switch", () => {
         await expect(page.locator("node-detail-dialog ha-entity-toggle")).toHaveCount(0);
     });
 
+    test("the Control tab watches the charger's mode selects, so Hardware now follows them", async ({ page }) => {
+        await openCharger(page);
+        await tab(page, "control").click();
+        const now = page.locator("helman-node-control [data-now]");
+        await expect(now).toContainText("Fast");
+        // The Control block's own source, not what the overview also watches.
+        const watched = () => page.evaluate(() => [...((document.querySelector("helman-card") as any)._host._watchSources.get("node-detail:control:garage-ev") ?? [])].sort());
+        await expect.poll(watched).toEqual(["select.ev_eco_gear", "select.ev_use_mode", "switch.ev_charge"]);
+        // Only the select changes; the charge switch stays as it was.
+        await setStates(page, { "select.ev_use_mode": "ECO" });
+        await expect(now).toContainText("ECO");
+    });
+
     test("an override writes the charger's lane through its own editor, keeping the boiler's user action", async ({ page }) => {
         await openCharger(page, { userBoiler: true });
         await tab(page, "control").click();

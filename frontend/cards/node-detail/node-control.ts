@@ -11,7 +11,7 @@ import { booleanValue, stringValue } from "../shared/config/form-fields";
 import { getLaneAutomationCoverage } from "../shared/optimizer/automation-coverage";
 import { findOptimizerLocations } from "../shared/optimizer/optimizer-locations";
 import type { HelmanOptimizerEditDialog } from "../shared/optimizer/helman-optimizer-edit-dialog";
-import { buildControllableEntityStatuses } from "../shared/schedule/model/controllable-entity-status";
+import { buildControllableEntityStatuses, controllableWatchedEntityIds } from "../shared/schedule/model/controllable-entity-status";
 import {
     buildEntityScheduleLanePatches,
     readEntityScheduleAction,
@@ -128,9 +128,9 @@ export class HelmanNodeControl extends LitElement {
 
     /** The plan, the coverage and the roster, followed while the tab is in the page. */
     private readonly _lanes = new LaneOwnershipController(this, () => this.hass, (roster) => {
-        // The live state the Now row reads is the lane's primary entity.
+        // The live state the Now row reads: the lane's primary entity and, for a charger, its mode selects.
         const controllable = roster.find((entry) => entry.id === this.controllableId);
-        if (controllable) dispatchWatchedEntities(this, `node-detail:control:${this.controllableId}`, [controllable.primaryEntityId]);
+        if (controllable) dispatchWatchedEntities(this, `node-detail:control:${this.controllableId}`, controllableWatchedEntityIds(controllable));
     });
     private readonly _config = new AdminConfigController(this, () => this.hass);
     /** Back goes through the nested dialog's own close, so a draft or a write in flight keeps it open. */
