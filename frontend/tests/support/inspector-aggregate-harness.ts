@@ -249,6 +249,7 @@ export async function mountInspector(
         el.hass = {
             language: "en",
             config: { time_zone: "UTC" },
+            states: {},
             connection: {},
             callWS: window.__mockHass({
                 "helman/solar_bias/day_aggregates": (msg: any) => {

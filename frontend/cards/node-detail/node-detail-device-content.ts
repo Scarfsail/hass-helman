@@ -1,18 +1,19 @@
 import { formatPower } from "../shared/format";
 import { callHelman } from "../shared/data/helman-commands";
 import { LitElement, css, html, nothing, type PropertyValues } from "lit";
-import { customElement, property, state } from "lit/decorators.js";
+import { customElement, property } from "lit/decorators.js";
 import type { HomeAssistant } from "../../types/ha";
 import type { LocalizeFunction } from "../localize/localize";
 import type { TreeItem } from "../shared/data/tree-item";
 import type { DeviceDetailParams } from "./node-detail-types";
 import { nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import { readPowerW } from "../shared/power-reading";
+import { openMoreInfo } from "./node-detail-readings";
 import { SectionResource } from "./section-resource";
 
 import { type DeviceStats, type DeviceStatsSpread } from "../helman-api";
-import type { HelmanDeviceEditDialog } from "../shared/devices/helman-device-edit-dialog";
-import "../shared/devices/helman-device-edit-dialog";
+import "./device-direct-control";
+import { deviceControllableIds, deviceDirectControls } from "./node-detail-utils";
 import {
     deviceEnergyFigure,
     deviceEnergyLabel,
@@ -64,6 +65,15 @@ export class NodeDetailDeviceContent extends LitElement {
             font-size: 1.4rem;
             font-weight: 600;
         }
+        button.power {
+            border: 0;
+            background: none;
+            color: inherit;
+            font: inherit;
+            text-align: left;
+            padding: 0;
+            cursor: pointer;
+        }
         .tiles {
             display: flex;
             flex-wrap: wrap;
@@ -110,19 +120,6 @@ export class NodeDetailDeviceContent extends LitElement {
     });
     /** Every figure of the device, read once per device opened. */
     private readonly _sections = [this._energy, this._stats, this._chart];
-    /** The device's config form is open over this detail. */
-    @state() private _editing = false;
-
-    /**
-     * Back pressed while the detail is open. With the edit dialog on top, only
-     * that closes, through its own discard check; returns whether it was.
-     */
-    public handleBack(): boolean {
-        if (!this._editing) return false;
-        this.renderRoot.querySelector<HelmanDeviceEditDialog>("helman-device-edit-dialog")?.requestClose();
-        return true;
-    }
-
     /** The device the figures and chart were read for; the host rebuilds params every render. */
     private _loadedItem?: TreeItem;
 
@@ -142,17 +139,24 @@ export class NodeDetailDeviceContent extends LitElement {
 
     render() {
         const item = this.params.item;
+        const direct = deviceDirectControls(item);
+        const powerId = powerEntity(item);
+        const header = html`<div class="header">
+            ${powerId
+                ? html`<button class="power" data-power-entity=${powerId} @click=${() => openMoreInfo(this, powerId)}>${this._livePower(item)}</button>`
+                : html`<div class="power">${this._livePower(item)}</div>`}
+        </div>`;
         return html`
             <div class="content">
-                <div class="header">
-                    ${item.icon ? html`<ha-icon .icon=${item.icon}></ha-icon>` : nothing}
-                    <div class="power">${this._livePower(item)}</div>
-                    ${item.deviceKey && this.hass.user?.is_admin === true ? html`
-                        <ha-button class="edit" @click=${() => { this._editing = true; }}>
-                            ${this.localize("node_detail.device.edit.button")}
-                        </ha-button>
-                    ` : nothing}
-                </div>
+                ${direct ? html`
+                    <helman-device-direct-control
+                        .hass=${this.hass}
+                        .localize=${this.localize}
+                        .switchEntityId=${direct.switchEntityId}
+                        .climateEntityId=${direct.climateEntityId}
+                        .scheduled=${deviceControllableIds(item).length > 0}
+                    >${header}</helman-device-direct-control>
+                ` : header}
                 ${item.energyEntityId ? html`
                     <div class="tiles">
                         ${this._tile("today", this._energy.payload?.today, item.energyEntityId)}
@@ -162,26 +166,6 @@ export class NodeDetailDeviceContent extends LitElement {
                 ${this._renderStats()}
                 ${this._chart.payload ?? nothing}
             </div>
-            ${this._renderEditDialog(item)}
-        `;
-    }
-
-    /**
-     * The device's own config form, stacked over this detail. Mounted per
-     * request, so each open loads the stored config afresh; closing it comes
-     * back here.
-     */
-    private _renderEditDialog(item: TreeItem) {
-        if (!this._editing || !item.deviceKey) return nothing;
-        return html`
-            <helman-device-edit-dialog
-                .hass=${this.hass}
-                .localize=${this.localize}
-                .open=${true}
-                .deviceKey=${item.deviceKey}
-                .keyIsMeter=${item.deviceKeyIsMeter === true}
-                @closed=${() => { this._editing = false; }}
-            ></helman-device-edit-dialog>
         `;
     }
 

@@ -129,7 +129,7 @@
       "tabs": "Detail views",
       "tab": {
         "overview": "Overview",
-        "control": "Control"
+        "schedule": "Schedule"
       },
       "status": {
         "loading": "Loading…",
@@ -148,7 +148,8 @@
       "unavailable": "unavailable",
       "not_on_roster": "Helman has no controllable for this node.",
       "unsupported_authoring": "This appliance's actions cannot be authored in the schedule yet, so a new manual override cannot be set here.",
-      "direct_note": "Helman does not schedule this device: these are Home Assistant's own controls.",
+      "scheduled_note": "Helman's schedule may switch this back at its next planned change. Use Schedule for a bounded override.",
+      "direct_label": "Control",
       "on": "on",
       "off": "off",
       "change": "Change",
@@ -166,11 +167,6 @@
         "execution_failed": "Could not change schedule execution:",
         "lanes": "Who controls what",
         "no_lanes": "Helman controls nothing in this house."
-      },
-      "inverter_link": {
-        "export_note": "Grid export is controlled through the inverter: its Stop export action stops it.",
-        "open": "Open inverter control",
-        "unavailable": "No controllable inverter is configured, so export cannot be controlled here."
       },
       "override": {
         "title": "Manual override",
@@ -207,7 +203,7 @@
         "mean": "mean"
       },
       "edit": {
-        "button": "Edit",
+        "button": "Settings",
         "title": "Edit device",
         "loading": "Loading configuration…",
         "load_failed": "Could not load the configuration",

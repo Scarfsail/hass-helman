@@ -7,7 +7,7 @@ import { loadBundle } from "./support/card-page";
 /**
  * Editing a device from its detail dialog.
  *
- * The Edit button on the device detail opens `helman-device-edit-dialog`, which
+ * The Settings button in the detail footer opens `helman-device-edit-dialog`, which
  * mounts `helman-device-editor` -- the element the config panel's Devices tab
  * is made of -- over the detail. These tests pin what the dialog adds around
  * that shared form:
@@ -40,7 +40,7 @@ const CONFIG = configDoc({
 });
 
 const STRINGS: Record<string, string> = {
-    "node_detail.device.edit.button": "Edit",
+    "node_detail.device.edit.button": "Settings",
     "node_detail.device.edit.title": "Edit device",
     "node_detail.device.edit.loading": "Loading configuration…",
     "node_detail.device.edit.load_failed": "Could not load the configuration",
@@ -54,6 +54,7 @@ const VALID = { valid: true, errors: [], warnings: [] };
 
 interface MountOptions {
     deviceKey?: string;
+    admin?: boolean;
     config?: unknown;
     saveResponse?: unknown;
     /** Leave the save request unanswered, so the save stays in flight. */
@@ -65,24 +66,36 @@ interface MountOptions {
 async function mountDetail(page: Page, options: MountOptions = {}): Promise<void> {
     const {
         deviceKey = "sensor.boiler_energy",
+        admin = true,
         config = CONFIG,
         saveResponse = { success: true, validation: VALID, reloadStarted: true },
         hangSave = false,
         vendors = {},
     } = options;
-    await loadBundle(page, "node-detail-device-content");
+    await loadBundle(page, "node-detail-dialog");
     await page.addScriptTag({ content: HA_DIALOG_STUB });
+    await page.addScriptTag({ content: `
+        customElements.define("ha-dialog-footer", class extends HTMLElement {
+            constructor() {
+                super();
+                this.attachShadow({ mode: "open" }).innerHTML =
+                    '<style>footer { display:flex; justify-content:flex-end; gap:12px; width:100%; }</style>' +
+                    '<footer><slot name="secondaryAction"></slot><slot name="primaryAction"></slot></footer>';
+                this.style.cssText = "display:block;width:400px";
+            }
+        });
+    ` });
 
     await page.evaluate(
-        ({ config, key, save, hang, strings, vendors }) => {
+        ({ config, key, save, hang, strings, vendors, admin }) => {
             const calls: { type: string; config?: unknown; expected_revision?: string; targets?: { key: string }[] }[] = [];
             (window as any).__calls = calls;
-            const content = document.createElement("node-detail-device-content") as any;
+            const content = document.createElement("node-detail-dialog") as any;
             content.localize = (k: string) => strings[k] ?? k;
             content.hass = {
                 language: "en",
                 locale: { language: "en" },
-                user: { is_admin: true },
+                user: { is_admin: admin },
                 states: {},
                 connection: window.__mockHass().connection,
                 callWS: window.__mockHass({
@@ -118,14 +131,15 @@ async function mountDetail(page: Page, options: MountOptions = {}): Promise<void
                 item: { id: key, name: "Boiler", displayName: "Boiler", deviceKey: key,
                     deviceKeyIsMeter: key.startsWith("sensor."), children: [] },
             };
+            content.open = true;
             document.body.appendChild(content);
         },
-        { config, key: deviceKey, save: saveResponse, hang: hangSave, strings: STRINGS, vendors },
+        { config, key: deviceKey, save: saveResponse, hang: hangSave, strings: STRINGS, vendors, admin },
     );
 }
 
 function editButton(page: Page) {
-    return page.locator("node-detail-device-content ha-button.edit");
+    return page.locator("node-detail-dialog ha-button[data-settings]");
 }
 
 function dialog(page: Page) {
@@ -161,8 +175,26 @@ async function calls(page: Page): Promise<{ type: string; config?: any; expected
 }
 
 test.describe("editing a device from its detail", () => {
-    test("Edit opens the form of the device named by its meter", async ({ page }) => {
+    test("Settings in the footer opens the form of the device named by its meter", async ({ page }) => {
         await mountDetail(page, { deviceKey: "sensor.boiler_energy" });
+        await expect(editButton(page)).toHaveText("Settings");
+        await expect(editButton(page)).toHaveAttribute("slot", "secondaryAction");
+        await expect(editButton(page)).toHaveAttribute("appearance", "plain");
+        await expect(editButton(page)).toHaveAttribute("variant", "neutral");
+        await expect(editButton(page).locator("ha-icon")).toHaveAttribute("icon", "mdi:cog");
+        await expect(editButton(page).locator("ha-icon")).toHaveAttribute("slot", "start");
+        const close = page.locator('node-detail-dialog ha-button[data-dialog="close"]');
+        await expect(close).toHaveAttribute("slot", "primaryAction");
+        await expect(close).toHaveAttribute("appearance", "filled");
+        await expect(close).toHaveAttribute("variant", "neutral");
+        const settingsBox = await editButton(page).boundingBox();
+        const closeBox = await close.boundingBox();
+        const footerBox = await page.locator("node-detail-dialog ha-dialog-footer").boundingBox();
+        expect(settingsBox).not.toBeNull();
+        expect(closeBox).not.toBeNull();
+        expect(footerBox).not.toBeNull();
+        expect(settingsBox!.x - footerBox!.x).toBeLessThan(2);
+        expect(footerBox!.x + footerBox!.width - closeBox!.x - closeBox!.width).toBeLessThan(2);
         await openEdit(page);
         await expect.poll(() => cardIds(page)).toEqual(["boiler"]);
         // Open, and alone: no children list, no drag, no remove.
@@ -170,10 +202,16 @@ test.describe("editing a device from its detail", () => {
         await expect(dialog(page).locator(".list-actions")).toHaveCount(0);
     });
 
-    test("Edit opens the form of a meterless device named by its id", async ({ page }) => {
+    test("Settings opens the form of a meterless device named by its id", async ({ page }) => {
         await mountDetail(page, { deviceKey: "pump" });
         await openEdit(page);
         await expect.poll(() => cardIds(page)).toEqual(["pump"]);
+    });
+
+    test("Settings is hidden from non-admins", async ({ page }) => {
+        await mountDetail(page, { admin: false });
+        await expect(editButton(page)).toHaveCount(0);
+        await expect(page.locator('node-detail-dialog ha-button[data-dialog="close"]')).toHaveAttribute("appearance", "filled");
     });
 
     test("saving sends the whole document with only the edited field changed", async ({ page }) => {
@@ -278,7 +316,7 @@ test.describe("editing a device from its detail", () => {
 
         const cancel = dialog(page).locator("ha-button[slot='secondaryAction']");
         await expect.poll(() => cancel.evaluate((button) => (button as any).disabled)).toBe(true);
-        await page.evaluate(() => (document.querySelector("node-detail-device-content") as any).handleBack());
+        await page.evaluate(() => window.history.back());
         await expect(dialog(page)).toHaveCount(1);
         // The form is frozen too: the save already took its snapshot of the draft.
         await expect(dialog(page).locator("helman-device-editor")).toHaveAttribute("inert", "");
@@ -290,17 +328,14 @@ test.describe("editing a device from its detail", () => {
         await openSection(page, "Identity");
         await nameInput(page).fill("Hot water");
         await nameInput(page).dispatchEvent("change");
-        const content = page.locator("node-detail-device-content");
-
         page.once("dialog", (prompt) => void prompt.dismiss());
-        expect(await content.evaluate((el) => (el as any).handleBack())).toBe(true);
+        await page.evaluate(() => window.history.back());
         await expect(dialog(page)).toHaveCount(1);
 
         page.once("dialog", (prompt) => void prompt.accept());
-        expect(await content.evaluate((el) => (el as any).handleBack())).toBe(true);
+        await page.evaluate(() => window.history.back());
         await expect(dialog(page)).toHaveCount(0);
         await expect(editButton(page)).toHaveCount(1);
-        expect(await content.evaluate((el) => (el as any).handleBack())).toBe(false);
     });
 
     test("an unknown key is named, not drawn as a blank form", async ({ page }) => {
@@ -423,7 +458,7 @@ for (const external of [false, true]) {
         await mountDetail(page);
         await openEdit(page);
         await page.evaluate(() => {
-            const host = document.querySelector("node-detail-device-content")!.shadowRoot!.querySelector("helman-device-edit-dialog") as any;
+            const host = document.querySelector("node-detail-dialog")!.shadowRoot!.querySelector("helman-device-edit-dialog") as any;
             const callWS = host.hass.callWS;
             host.hass = { ...host.hass, callWS: async (request: any) => {
                 if (request.type !== "helman/save_config") return callWS(request);

@@ -25,6 +25,7 @@ const REQUIRED_ELEMENTS = [
 const SORTABLE_TAG = "ha-sortable";
 const YAML_EDITOR_TAG = "ha-yaml-editor";
 const ENTITY_TOGGLE_TAG = "ha-entity-toggle";
+const STATE_ICON_TAG = "ha-state-icon";
 const TRACE_ELEMENTS = ["hat-script-graph", "ha-trace-path-details"] as const;
 
 /**
@@ -176,7 +177,7 @@ export async function loadHaTrace(hass: HomeAssistant): Promise<LocalizeFunc> {
  * element. Outside a dashboard there are no card helpers, and the tag simply
  * never arrives.
  */
-export const loadHaEntityToggle = loadOnce([ENTITY_TOGGLE_TAG], async () => {
+export const loadHaEntityToggle = loadOnce([ENTITY_TOGGLE_TAG, STATE_ICON_TAG], async () => {
   const loadCardHelpers = (window as unknown as { loadCardHelpers?: () => Promise<unknown> }).loadCardHelpers;
   if (typeof loadCardHelpers === "function") await loadCardHelpers();
 });

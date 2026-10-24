@@ -29,7 +29,7 @@
       "tabs": "Pohledy detailu",
       "tab": {
         "overview": "Přehled",
-        "control": "Ovládání"
+        "schedule": "Plán"
       },
       "status": {
         "loading": "Načítání…",
@@ -48,7 +48,8 @@
       "unavailable": "nedostupné",
       "not_on_roster": "Helman pro tento uzel nemá ovladatelné zařízení.",
       "unsupported_authoring": "Akce tohoto spotřebiče zatím nelze v rozvrhu autorovat, proto zde nelze nastavit nový ruční zásah.",
-      "direct_note": "Helman toto zařízení neplánuje: toto jsou vlastní ovládací prvky Home Assistantu.",
+      "scheduled_note": "Helmanův plán může zařízení při příští plánované změně přepnout zpět. Pro časově omezený zásah použijte Plán.",
+      "direct_label": "Ovládání",
       "on": "zapnuto",
       "off": "vypnuto",
       "change": "Změnit",
@@ -66,11 +67,6 @@
         "execution_failed": "Vykonávání rozvrhu se nepodařilo změnit:",
         "lanes": "Kdo co ovládá",
         "no_lanes": "Helman v tomto domě nic neovládá."
-      },
-      "inverter_link": {
-        "export_note": "Export do sítě se řídí střídačem: jeho akce Zastavit export ho zastaví.",
-        "open": "Otevřít ovládání střídače",
-        "unavailable": "Není nastaven žádný ovladatelný střídač, proto zde export nelze ovládat."
       },
       "override": {
         "title": "Ruční zásah",
@@ -936,7 +932,7 @@
         "mean": "průměr"
       },
       "edit": {
-        "button": "Upravit",
+        "button": "Nastavení",
         "title": "Upravit zařízení",
         "loading": "Načítám konfiguraci…",
         "load_failed": "Konfiguraci se nepodařilo načíst",

@@ -201,7 +201,7 @@ function openDialog(page: Page): Promise<null | { title: string; tiles: string[]
         if (!haDialog?.open) return null;
         const content = haDialog.querySelector("node-detail-device-content") as any;
         return {
-            title: haDialog.heading,
+            title: haDialog.querySelector('[slot="headerTitle"]')?.textContent.trim(),
             tiles: Array.from(content?.shadowRoot?.querySelectorAll(".tile") ?? []).map((tile: any) =>
                 tile.textContent.replace(/\s+/g, " ").trim()),
             hasChart: !!content?.shadowRoot?.querySelector(".history-graph-stub"),

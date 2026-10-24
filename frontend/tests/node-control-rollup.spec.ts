@@ -14,7 +14,7 @@ import type { SchedulePayload, TreeItemDTO } from "../cards/helman-api";
  * left flipped by a failed write; one row per distinct lane, the inverter
  * first and then in tree order, a shared meter's lanes as separate labelled
  * rows and an offline device's lane kept; a row, or the inverter pointer,
- * requesting that node's Control tab through the one host entry point; and
+ * requesting that node's Schedule tab through the one host entry point; and
  * that host's tab selection, tree refresh, watched entities and Back.
  */
 
@@ -159,10 +159,9 @@ async function mount(page: Page, setup: Setup = {}, card = "helman-simple-card")
 }
 
 const dialog = (page: Page) => page.locator("node-detail-dialog");
-const tab = (page: Page, name: "overview" | "control") => page.locator(`node-detail-dialog [data-tab="${name}"]`);
+const tab = (page: Page, name: "overview" | "schedule") => page.locator(`node-detail-dialog [data-tab="${name}"]`);
 const house = (page: Page) => page.locator("helman-house-control");
 const lane = (page: Page, id: string) => house(page).locator(`[data-lane="${id}"]`);
-const link = (page: Page) => page.locator("helman-inverter-control-link");
 const controls = (page: Page) => page.locator("helman-node-control");
 const requests = (page: Page, type: string) => page.evaluate((type) => window.__NodeDetailRequests.filter((r) => r.type === type), type);
 const hostState = (page: Page) => page.evaluate(() => {
@@ -179,7 +178,7 @@ async function openNode(page: Page, node: "house" | "grid" | "solar"): Promise<v
 
 async function openHouseControl(page: Page): Promise<void> {
     await openNode(page, "house");
-    await tab(page, "control").click();
+    await tab(page, "schedule").click();
     await expect(house(page)).toBeVisible();
 }
 
@@ -209,33 +208,33 @@ test.describe("the house's lanes", () => {
         await expect(lane(page, "inverter")).toHaveCount(0);
     });
 
-    test("a row requests its device's Control tab, several lanes the same device", async ({ page }) => {
+    test("a row requests its device's Schedule tab, several lanes the same device", async ({ page }) => {
         await mount(page);
         await openHouseControl(page);
         await lane(page, "pump-b").click();
         await expect(page.locator("node-detail-device-content")).toHaveCount(0);
-        await expect(tab(page, "control")).toHaveAttribute("aria-selected", "true");
-        expect(await hostState(page)).toEqual({ target: "sensor.pumps_energy", tab: "control" });
+        await expect(tab(page, "schedule")).toHaveAttribute("aria-selected", "true");
+        expect(await hostState(page)).toEqual({ target: "sensor.pumps_energy", tab: "schedule" });
         await expect(controls(page)).toHaveCount(2);
         expect(await controls(page).locator("[data-control]").evaluateAll((all) => all.map((element) => element.getAttribute("data-control")))).toEqual(["pump-a", "pump-b"]);
     });
 
-    test("the inverter row requests the inverter's Control tab by its type, from the keyboard too", async ({ page }) => {
+    test("the inverter row requests the inverter's Schedule tab by its type, from the keyboard too", async ({ page }) => {
         await mount(page);
         await openHouseControl(page);
         await lane(page, "inverter").focus();
         await page.keyboard.press("Enter");
         await expect(controls(page).locator("[data-control]")).toHaveAttribute("data-control", "inverter");
-        expect(await hostState(page)).toEqual({ target: "inverter", tab: "control" });
+        expect(await hostState(page)).toEqual({ target: "inverter", tab: "schedule" });
     });
 
-    test("a row pressed from the keyboard leaves focus on the Control tab it opened", async ({ page }) => {
+    test("a row pressed from the keyboard leaves focus on the Schedule tab it opened", async ({ page }) => {
         await mount(page);
         await openHouseControl(page);
         await lane(page, "boiler").focus();
         await page.keyboard.press("Enter");
         await expect(controls(page).locator("[data-control]")).toHaveAttribute("data-control", "boiler");
-        await expect(tab(page, "control")).toBeFocused();
+        await expect(tab(page, "schedule")).toBeFocused();
     });
 
     test("until the roster is read the lanes are loading, never a list without the inverter", async ({ page }) => {
@@ -353,25 +352,18 @@ test.describe("the house's system switches", () => {
     });
 });
 
-test.describe("grid and solar point to the inverter", () => {
+test.describe("grid and solar have no schedule tab", () => {
     for (const node of ["grid", "solar"] as const) {
-        test(`${node}: the inverter's status and how export is controlled, opening the inverter's Control tab`, async ({ page }) => {
+        test(`${node}: no tab bar with an inverter`, async ({ page }) => {
             await mount(page, { schedule: plan([["12:00", "13:00", { inverter: user({ kind: "stop_export" }) }]]) });
             await openNode(page, node);
-            await tab(page, "control").click();
-            await expect(link(page).locator("[data-status]")).toHaveText("Manual until Today 13:00");
-            await expect(link(page).locator("[data-export-note]")).toContainText("Stop export");
-            await link(page).locator("[data-open-inverter]").click();
-            await expect(controls(page).locator("[data-control]")).toHaveAttribute("data-control", "inverter");
-            expect(await hostState(page)).toEqual({ target: "inverter", tab: "control" });
+            await expect(dialog(page).locator("[role=tablist]")).toHaveCount(0);
         });
 
-        test(`${node}: without a controllable inverter it says so and offers nothing to press`, async ({ page }) => {
+        test(`${node}: no tab bar without an inverter`, async ({ page }) => {
             await mount(page, { noInverter: true });
             await openNode(page, node);
-            await tab(page, "control").click();
-            await expect(link(page).locator("[data-inverter-unavailable]")).toContainText("No controllable inverter");
-            await expect(link(page).locator("button, ha-switch, [data-status]")).toHaveCount(0);
+            await expect(dialog(page).locator("[role=tablist]")).toHaveCount(0);
         });
     }
 });
@@ -388,12 +380,12 @@ for (const card of ["helman-simple-card", "helman-card"]) {
             await openNode(page, "house");
             await expect(tab(page, "overview")).toHaveAttribute("aria-selected", "true");
             await expect(page.locator("node-detail-house-content")).toHaveCount(1);
-            await tab(page, "control").click();
+            await tab(page, "schedule").click();
             await lane(page, "boiler").click();
             await expect(controls(page).locator("[data-control]")).toHaveAttribute("data-control", "boiler");
-            await expect(tab(page, "control")).toHaveAttribute("aria-selected", "true");
-            // Watched entities follow the new target: the house's are forgotten, the boiler's lane is watched.
-            await expect.poll(() => sources(page)).toEqual(["node-detail:control:boiler"]);
+            await expect(tab(page, "schedule")).toHaveAttribute("aria-selected", "true");
+            // Watched entities follow the new target: its header icon and boiler lane are watched.
+            await expect.poll(() => sources(page)).toEqual(["node-detail:header-icon", "node-detail:control:boiler"]);
             // One dialog, one history entry, whatever it swapped to.
             expect(await historyLength()).toBe(before + 1);
             await expect(dialog(page)).toHaveCount(1);
@@ -409,7 +401,7 @@ for (const card of ["helman-simple-card", "helman-card"]) {
 
             // Opening again the ordinary way is an Overview again.
             await openNode(page, "grid");
-            await expect(tab(page, "overview")).toHaveAttribute("aria-selected", "true");
+            await expect(dialog(page).locator("[role=tablist]")).toHaveCount(0);
         });
 
         test("asking for the same node's Control again selects it, and a refreshed tree keeps the target and tab", async ({ page }) => {
@@ -423,10 +415,10 @@ for (const card of ["helman-simple-card", "helman-card"]) {
             await dialog(page).evaluate((element) => {
                 const card = document.querySelector("helman-simple-card, helman-card") as any;
                 element.dispatchEvent(new CustomEvent("helman-node-detail-request", {
-                    bubbles: true, composed: true, detail: { target: card._host.dialogRequest, tab: "control" },
+                    bubbles: true, composed: true, detail: { target: card._host.dialogRequest, tab: "schedule" },
                 }));
             });
-            await expect(tab(page, "control")).toHaveAttribute("aria-selected", "true");
+            await expect(tab(page, "schedule")).toHaveAttribute("aria-selected", "true");
             await expect(controls(page)).toHaveCount(1);
 
             // A refreshed tree re-resolves the target to its new item and keeps the tab.
@@ -441,7 +433,7 @@ for (const card of ["helman-simple-card", "helman-card"]) {
                 const target = (document.querySelector("helman-simple-card, helman-card") as any)._host.dialogRequest;
                 return target !== (window as any).__before && target?.id;
             })).toBe("sensor.boiler_energy");
-            await expect(tab(page, "control")).toHaveAttribute("aria-selected", "true");
+            await expect(tab(page, "schedule")).toHaveAttribute("aria-selected", "true");
             await expect(controls(page).locator("[data-control]")).toHaveAttribute("data-control", "boiler");
         });
     });

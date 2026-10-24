@@ -8,23 +8,25 @@ import type { LocalizeFunction } from "../localize/localize";
 import type { NodeDetailParams, NodeDetailTab, NodeDetailTabRequest } from "./node-detail-types";
 import type { TreeItem } from "../shared/data/tree-item";
 import { INVERTER_CONTROLLABLE_ID } from "../shared/schedule/schedule-types";
+import { dispatchWatchedEntities } from "../shared/hass-change";
+import { loadHaEntityToggle } from "../shared/load-ha-elements";
 import "./node-detail-battery-content";
 import "./node-detail-solar-content";
 import "./node-detail-grid-content";
 import "./node-detail-house-content";
 import "./node-detail-inverter-content";
 import "./node-detail-ev-charger-content";
-import type { NodeDetailDeviceContent } from "./node-detail-device-content";
 import "./node-detail-device-content";
 import "./node-control";
-import "./device-direct-control";
 import "./node-control-rollup";
-import { deviceControllableIds } from "./node-detail-utils";
-const TABS: readonly NodeDetailTab[] = ["overview", "control"];
+import type { HelmanDeviceEditDialog } from "../shared/devices/helman-device-edit-dialog";
+import "../shared/devices/helman-device-edit-dialog";
+import { deviceControllableIds, deviceDirectControls } from "./node-detail-utils";
+const TABS: readonly NodeDetailTab[] = ["overview", "schedule"];
 
 /**
  * A node's detail in Home Assistant's dialog. A node with controls opens on
- * its Overview with a Control tab beside it, or on the tab the power card was
+ * its Overview with a Schedule tab beside it, or on the tab the power card was
  * asked for; only the tab shown is in the page, so a hidden one reads nothing.
  * Another node swaps in place, inside the one history entry the dialog holds.
  */
@@ -57,10 +59,25 @@ export class NodeDetailDialog extends LitElement {
             outline: 2px solid var(--primary-color);
             outline-offset: -2px;
         }
+        .header-title {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .header-title ha-icon, .header-title ha-state-icon {
+            flex: none;
+        }
+        .settings-button {
+            margin-inline-end: auto;
+        }
     `;
 
     private readonly _history = new DialogHistoryController(this, "__helmanNodeDetailDialogId", {
-        onBack: () => this.shadowRoot?.querySelector<NodeDetailDeviceContent>("node-detail-device-content")?.handleBack() ?? false,
+        onBack: () => {
+            if (!this._settingsOpen) return false;
+            this.shadowRoot?.querySelector<HelmanDeviceEditDialog>("helman-device-edit-dialog")?.requestClose();
+            return true;
+        },
         close: () => this._closeDialogElement(),
     });
 
@@ -71,10 +88,19 @@ export class NodeDetailDialog extends LitElement {
     @property({ type: Boolean }) public open = false;
 
     @state() private _tab: NodeDetailTab = "overview";
+    @state() private _settingsOpen = false;
+    @state() private _stateIconReady = !!customElements.get("ha-state-icon");
     /** The node the tab was chosen for; an opening or another node starts on the tab requested. */
     private _tabTarget: string | null = null;
     /** The request the tab was chosen for; a new one selects its tab, even on the same node. */
     private _tabRequest: NodeDetailTabRequest | null = null;
+
+    connectedCallback(): void {
+        super.connectedCallback();
+        loadHaEntityToggle()
+            .then(() => { this._stateIconReady = true; })
+            .catch((error) => console.error("node-detail-dialog: failed to load HA's state icon", error));
+    }
 
     // Lifecycle methods
     willUpdate(changedProperties: Map<string, unknown>): void {
@@ -83,18 +109,24 @@ export class NodeDetailDialog extends LitElement {
         const target = this.open && this.params ? this._targetKey() : null;
         const request = target !== null ? this.params.tabRequest ?? null : null;
         if (target !== this._tabTarget || request !== this._tabRequest) {
+            if (target !== this._tabTarget) this._settingsOpen = false;
             this._tabTarget = target;
             this._tabRequest = request;
             this._tab = request?.tab ?? "overview";
-            // A Control request swaps the content the press came from: focus lands on the tab, not the dialog.
-            if (request?.tab === "control") {
-                void this.updateComplete.then(() => this.shadowRoot?.querySelector<HTMLElement>('[data-tab="control"]')?.focus());
+            // A Schedule request swaps the content the press came from: focus lands on the tab, not the dialog.
+            if (request?.tab === "schedule") {
+                void this.updateComplete.then(() => this.shadowRoot?.querySelector<HTMLElement>('[data-tab="schedule"]')?.focus());
             }
         }
     }
 
     updated(changedProperties: Map<string, unknown>): void {
         super.updated(changedProperties);
+        if (changedProperties.has("params") || changedProperties.has("open")) {
+            const switchId = this.open && this.params?.nodeType === "device"
+                ? deviceDirectControls(this.params.item)?.switchEntityId : null;
+            dispatchWatchedEntities(this, "node-detail:header-icon", [switchId]);
+        }
         if (!this.open || !this.params || this._history.active) {
             return;
         }
@@ -114,15 +146,26 @@ export class NodeDetailDialog extends LitElement {
                 .open=${this.open}
                 @closed=${this._onClosed}
                 .heading=${title}
-                .headerTitle=${title}
+                .ariaLabelledBy=${"node-detail-dialog-title"}
             >
+                <span id="node-detail-dialog-title" slot="headerTitle" class="header-title">
+                    ${this.params.nodeType === "device" ? this._renderDeviceIcon(this.params.item) : nothing}
+                    ${title}
+                </span>
                 ${this._renderBody()}
                 <ha-dialog-footer slot="footer">
-                    <mwc-button slot="primaryAction" data-dialog="close">
+                    ${this.params.nodeType === "device" && this.params.item.deviceKey && this.hass.user?.is_admin === true ? html`
+                        <ha-button class="settings-button" slot="secondaryAction" appearance="plain" variant="neutral" data-settings @click=${() => { this._settingsOpen = true; }}>
+                            <ha-icon slot="start" icon="mdi:cog"></ha-icon>
+                            ${this.localize("node_detail.device.edit.button")}
+                        </ha-button>
+                    ` : nothing}
+                    <ha-button slot="primaryAction" appearance="filled" variant="neutral" data-dialog="close">
                         ${this.localize("node_detail.close")}
-                    </mwc-button>
+                    </ha-button>
                 </ha-dialog-footer>
             </ha-dialog>
+            ${this._renderSettings()}
         `;
     }
 
@@ -134,13 +177,26 @@ export class NodeDetailDialog extends LitElement {
         return this.localize(`node_detail.title.${this.params.nodeType}`);
     }
 
+    private _deviceIcon(item: TreeItem): string {
+        return item.icon || (item.applianceKind === "ev_charger" ? "mdi:car-electric"
+            : item.climateEntityId ? "mdi:air-conditioner" : "mdi:power-plug");
+    }
+
+    private _renderDeviceIcon(item: TreeItem): TemplateResult {
+        const switchId = deviceDirectControls(item)?.switchEntityId;
+        const stateObj = switchId ? this.hass.states[switchId] : undefined;
+        return this._stateIconReady && stateObj
+            ? html`<ha-state-icon .hass=${this.hass} .stateObj=${stateObj}></ha-state-icon>`
+            : html`<ha-icon .icon=${this._deviceIcon(item)}></ha-icon>`;
+    }
+
     /** The params are rebuilt on every card render: the node is its type, and a device its item. */
     private _targetKey(): string {
         return this.params.nodeType === "device" ? `device:${this.params.item.id}` : this.params.nodeType;
     }
 
     /**
-     * The lanes a node's Control tab drives, once each in tree order: the
+     * The lanes a node's Schedule tab drives, once each in tree order: the
      * battery is driven through the inverter's, a device through its own and
      * those its meter stands for, as a meter shared by several controllables.
      */
@@ -149,22 +205,9 @@ export class NodeDetailDialog extends LitElement {
         return this.params.nodeType === "device" ? deviceControllableIds(this.params.item) : [];
     }
 
-    /**
-     * HA's own controls of a device: its switch and its climate entity. A
-     * device Helman schedules never gets a direct toggle, only its climate
-     * entity's more-info.
-     */
-    private _directControls(scheduled: boolean): { switchEntityId: string | null; climateEntityId: string | null } | null {
-        if (this.params.nodeType !== "device") return null;
-        const { switchEntityId, climateEntityId } = this.params.item;
-        // A meterless air conditioner's running signal is its climate entity: one control, not a switch.
-        const switchId = !scheduled && switchEntityId !== climateEntityId ? switchEntityId : null;
-        return switchId || climateEntityId ? { switchEntityId: switchId, climateEntityId } : null;
-    }
-
     private _renderBody(): TemplateResult {
-        const control = this._renderControl();
-        if (control === null) return this._renderContent();
+        const schedule = this._renderSchedule();
+        if (schedule === null) return this._renderContent();
         return html`
             <div class="tabs" role="tablist" aria-label=${this.localize("node_detail.control.tabs")} @keydown=${this._onTabKeydown}>
                 ${TABS.map((tab) => html`
@@ -181,17 +224,16 @@ export class NodeDetailDialog extends LitElement {
                 `)}
             </div>
             <div role="tabpanel" id="node-detail-tabpanel" aria-labelledby=${`node-detail-tab-${this._tab}`}>
-                ${this._tab === "overview" ? this._renderContent() : control}
+                ${this._tab === "overview" ? this._renderContent() : schedule}
             </div>
         `;
     }
 
     /**
-     * The Control tab's content; `null` for a node without one. The house
-     * rolls up its lanes, grid and solar point to the inverter's, and every
-     * other node drives its own lanes and HA's own controls.
+     * The Schedule tab's content; `null` for a node without one. The house
+     * rolls up its lanes, and other schedulable nodes drive their own lanes.
      */
-    private _renderControl(): TemplateResult | null {
+    private _renderSchedule(): TemplateResult | null {
         switch (this.params.nodeType) {
             case "house":
                 return html`
@@ -203,11 +245,10 @@ export class NodeDetailDialog extends LitElement {
                 `;
             case "grid":
             case "solar":
-                return html`<helman-inverter-control-link .hass=${this.hass} .localize=${this.localize}></helman-inverter-control-link>`;
+                return null;
         }
         const controllableIds = this._controllableIds();
-        const direct = this._directControls(controllableIds.length > 0);
-        if (controllableIds.length === 0 && direct === null) return null;
+        if (controllableIds.length === 0) return null;
         return html`
             ${repeat(controllableIds, (controllableId) => controllableId, (controllableId) => html`
                 <helman-node-control
@@ -218,15 +259,20 @@ export class NodeDetailDialog extends LitElement {
                     .note=${this.params.nodeType === "battery" ? this.localize("node_detail.control.battery_lane") : null}
                 ></helman-node-control>
             `)}
-            ${direct !== null ? html`
-                <helman-device-direct-control
-                    .hass=${this.hass}
-                    .localize=${this.localize}
-                    .switchEntityId=${direct.switchEntityId}
-                    .climateEntityId=${direct.climateEntityId}
-                    .scheduled=${controllableIds.length > 0}
-                ></helman-device-direct-control>
-            ` : nothing}
+        `;
+    }
+
+    private _renderSettings() {
+        if (!this._settingsOpen || this.params.nodeType !== "device" || !this.params.item.deviceKey) return nothing;
+        return html`
+            <helman-device-edit-dialog
+                .hass=${this.hass}
+                .localize=${this.localize}
+                .open=${true}
+                .deviceKey=${this.params.item.deviceKey}
+                .keyIsMeter=${this.params.item.deviceKeyIsMeter === true}
+                @closed=${() => { this._settingsOpen = false; }}
+            ></helman-device-edit-dialog>
         `;
     }
 

@@ -14,7 +14,7 @@ import { expectReducedMotionStill } from "./support/node-flow";
  * What is pinned is the routing (an EV charger by its configured appliance
  * kind, every other device on the generic detail), the pictured overview
  * (the charging strip with the completion under it, the flow around the
- * car, the tiles; the charge switch is the Control tab's), the shared
+ * car, the tiles; the charge switch is the Schedule tab's), the shared
  * disclosure contract, and the charger's truthfulness: the hardware's session counters
  * are the session and today's attribution is not, several cars with nothing
  * naming one show no car's charge, a time at current power is not a ready-by
@@ -111,6 +111,15 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             return out;
         };
         (window as any).loadCardHelpers = async () => ({ createCardElement: () => document.createElement("div") });
+        customElements.define("ha-entity-toggle", class extends HTMLElement {
+            set stateObj(value: any) { this.setAttribute("data-entity", value?.entity_id ?? ""); }
+        });
+        customElements.define("ha-state-icon", class extends HTMLElement {
+            set stateObj(value: any) {
+                this.setAttribute("data-entity", value?.entity_id ?? "");
+                this.setAttribute("data-icon", value?.attributes?.icon ?? "");
+            }
+        });
         window.__moreInfo = [];
         document.addEventListener("hass-more-info", (event) => window.__moreInfo.push((event as CustomEvent).detail.entityId));
         const profile = v.profile !== false;
@@ -125,7 +134,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             "sensor.battery": s("0", "W"), "sensor.grid": s("3800", "W"),
             "sensor.ev_power": s(v.power ?? "6400", "W"), "sensor.ev_energy": s("9474.7", "kWh"),
             "sensor.boiler_power": s("0", "W"), "sensor.boiler_energy": s("10", "kWh"),
-            "switch.ev_charge": s(v.chargeSwitch ?? "on"),
+            "switch.ev_charge": { ...s(v.chargeSwitch ?? "on"), attributes: { icon: "mdi:ev-station" } },
             "select.ev_use_mode": s("Fast"), "select.ev_eco_gear": s("6A"),
             "sensor.kona_soc": s(v.soc ?? "50", "%"), "sensor.ioniq_soc": s("30", "%"),
         };
@@ -309,7 +318,7 @@ const { content, question, header, evidence, tile, flow, flowLabel } = nodeDetai
 const overview = (page: Page) => content(page).locator("[data-overview]");
 const glyph = (page: Page) => content(page).locator("helman-soc-glyph");
 const strip = (page: Page) => content(page).locator("helman-mode-strip");
-const tab = (page: Page, name: "overview" | "control") => page.locator(`node-detail-dialog [data-tab="${name}"]`);
+const tab = (page: Page, name: "overview" | "schedule") => page.locator(`node-detail-dialog [data-tab="${name}"]`);
 // The card's own inverter overview, for its distribution row's cell, is not the detail's.
 const requests = (page: Page, type: string) =>
     page.evaluate((type) => window.__EvChargerRequests.filter((r) => r.type === type && r.node !== "inverter"), type);
@@ -476,13 +485,47 @@ test.describe("the overview", () => {
 });
 
 test.describe("the charge switch", () => {
-    test("is not on the overview: the Control tab drives the charger's lane, never a direct toggle", async ({ page }) => {
+    test("the EV detail has Settings in its footer", async ({ page }) => {
         await openCharger(page);
-        await expect(content(page).locator("[data-switch]")).toHaveCount(0);
-        await expect(page.locator("node-detail-dialog ha-entity-toggle")).toHaveCount(0);
+        const settings = page.locator("node-detail-dialog ha-button[data-settings]");
+        await expect(settings).toHaveText("Settings");
+        await expect(settings).toHaveAttribute("slot", "secondaryAction");
+        await settings.click();
+        await expect(page.locator("helman-device-edit-dialog")).toHaveCount(1);
+    });
+
+    test("is on Overview with the HA toggle and reminder; Schedule drives the charger's lane", async ({ page }) => {
+        await openCharger(page);
+        await expect(content(page).locator("[data-switch] ha-entity-toggle")).toHaveAttribute("data-entity", "switch.ev_charge");
+        await expect(content(page).locator("[data-switch] ha-state-icon, [data-switch] ha-icon")).toHaveCount(0);
+        await expect(page.locator('node-detail-dialog [slot="headerTitle"] ha-state-icon')).toHaveAttribute("data-entity", "switch.ev_charge");
+        await expect(page.locator('node-detail-dialog [slot="headerTitle"] ha-state-icon')).toHaveAttribute("data-icon", "mdi:ev-station");
+        const label = content(page).locator("[data-switch] .control-label");
+        await expect(label).toHaveText("Control");
+        await expect(content(page).locator("[data-switch]")).not.toContainText("EV charge");
+        const power = overview(page).locator("button[data-power-entity='sensor.ev_power']");
+        const toggle = content(page).locator("[data-switch] ha-entity-toggle");
+        const powerBox = await power.boundingBox();
+        const labelBox = await label.boundingBox();
+        const toggleBox = await toggle.boundingBox();
+        expect(powerBox && toggleBox && Math.abs(powerBox.y - toggleBox.y) < 32 && powerBox.x < toggleBox.x).toBeTruthy();
+        expect(labelBox && toggleBox && labelBox.x + labelBox.width <= toggleBox.x && toggleBox.x - labelBox.x - labelBox.width <= 12).toBeTruthy();
+        for (const width of [1280, 375]) {
+            await page.setViewportSize({ width, height: 800 });
+            const rowBox = await content(page).locator("[data-switch]").boundingBox();
+            const rightToggleBox = await toggle.boundingBox();
+            const contentBox = await content(page).locator(".content").boundingBox();
+            expect(rowBox && rightToggleBox && Math.abs(rowBox.x + rowBox.width - rightToggleBox.x - rightToggleBox.width) <= 2).toBeTruthy();
+            expect(rowBox && contentBox && Math.abs(rowBox.x + rowBox.width - contentBox.x - contentBox.width) <= 2).toBeTruthy();
+        }
+        await power.click();
+        expect(await page.evaluate(() => window.__moreInfo)).toEqual(["sensor.ev_power"]);
+        await label.click();
+        expect(await page.evaluate(() => window.__moreInfo)).toEqual(["sensor.ev_power", "switch.ev_charge"]);
+        await expect(content(page).locator("[data-scheduled-note]")).toContainText("Schedule");
         await expect(strip(page)).toBeVisible();
 
-        await tab(page, "control").click();
+        await tab(page, "schedule").click();
         await expect(content(page)).toHaveCount(0);
         const control = page.locator("helman-node-control");
         await expect(control).toHaveCount(1);
@@ -491,9 +534,9 @@ test.describe("the charge switch", () => {
         await expect(page.locator("node-detail-dialog ha-entity-toggle")).toHaveCount(0);
     });
 
-    test("the Control tab watches the charger's mode selects, so Hardware now follows them", async ({ page }) => {
+    test("the Schedule tab watches the charger's mode selects, so Hardware now follows them", async ({ page }) => {
         await openCharger(page);
-        await tab(page, "control").click();
+        await tab(page, "schedule").click();
         const now = page.locator("helman-node-control [data-now]");
         await expect(now).toContainText("Fast");
         // The Control block's own source, not what the overview also watches.
@@ -506,7 +549,7 @@ test.describe("the charge switch", () => {
 
     test("an override writes the charger's lane through its own editor, keeping the boiler's user action", async ({ page }) => {
         await openCharger(page, { userBoiler: true });
-        await tab(page, "control").click();
+        await tab(page, "schedule").click();
         await page.locator("helman-node-control [data-change]").click();
         const dialog = page.locator("control-override-dialog");
         await dialog.locator('label:has(input[value="off"])').click();
