@@ -814,8 +814,22 @@ test.describe("answers", () => {
         const plot = question(page, "operating").locator("helman-day-line-chart .plot");
         await plot.scrollIntoViewIfNeeded();
         await plot.focus();
-        // Focusing can scroll the dialog, and a scroll closes any popup: let it settle.
-        await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+        let previousTop: number | undefined;
+        await expect.poll(async () => {
+            const state = await plot.evaluate(async (element) => {
+                // Deliver focus scrolling before checking the controller's queued work.
+                await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+                const chart = element.getRootNode() as ShadowRoot;
+                const host = chart.host as any;
+                return {
+                    top: element.getBoundingClientRect().top,
+                    ready: host.series.length > 0 && !host.isUpdatePending && host._tooltip._frame === 0,
+                };
+            });
+            const settled = state.ready && state.top === previousTop;
+            previousTop = state.top;
+            return settled;
+        }).toBe(true);
         await page.keyboard.press("End");
         const tooltip = question(page, "operating").locator("helman-day-line-chart .hover-tooltip");
         await expect(tooltip).toBeVisible();
@@ -823,6 +837,30 @@ test.describe("answers", () => {
         await page.keyboard.press("Home");
         await expect(tooltip).toContainText("00:00–00:05");
         await page.keyboard.press("Escape");
+        await expect(tooltip).toHaveCount(0);
+    });
+
+    test("a keyboard selection replaces a queued viewport dismissal, and later scrolling dismisses it", async ({ page }) => {
+        await mount(page);
+        await openDetail(page);
+        await open(page, "operating");
+        const chart = question(page, "operating").locator("helman-day-line-chart");
+        await expect(chart.locator("path.line")).toHaveCount(1);
+        await chart.evaluate(async (element: any) => {
+            await element.updateComplete;
+            const plot = element.shadowRoot.querySelector(".plot");
+            // Both actions happen before the controller's queued dismissal runs.
+            plot.dispatchEvent(new KeyboardEvent("keydown", { key: "Home" }));
+            window.dispatchEvent(new Event("scroll"));
+            plot.dispatchEvent(new KeyboardEvent("keydown", { key: "End" }));
+        });
+        await expect.poll(() => chart.evaluate(async (element: any) => {
+            await element.updateComplete;
+            return element._tooltip._frame === 0 && !element.isUpdatePending;
+        })).toBe(true);
+        const tooltip = chart.locator(".hover-tooltip");
+        await expect(tooltip).toContainText("11:55–12:00");
+        await page.evaluate(() => window.dispatchEvent(new Event("scroll")));
         await expect(tooltip).toHaveCount(0);
     });
 
