@@ -8,11 +8,10 @@ import { entityName, openMoreInfo, readingText } from "./node-detail-readings";
 import { nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 
 /**
- * Home Assistant's own controls of a device Helman does not schedule: its
+ * Home Assistant's own controls at the top of a device's Overview: its
  * switch as HA's entity toggle, and its climate entity's more-info. Each
- * name opens its entity's more-info. Nothing here is a plan: no ownership,
- * no automation, no bounded hold. A device Helman schedules gets only its
- * climate entity's more-info here, beside its lanes.
+ * label opens its entity's more-info. Nothing here is a plan: no ownership,
+ * no automation, no bounded hold.
  */
 @customElement("helman-device-direct-control")
 export class HelmanDeviceDirectControl extends LitElement {
@@ -20,14 +19,43 @@ export class HelmanDeviceDirectControl extends LitElement {
         .control {
             display: flex;
             align-items: center;
-            justify-content: space-between;
             gap: 12px;
             min-height: 40px;
+        }
+        .summary-slot {
+            min-width: 0;
+        }
+        .summary-slot::slotted(*) {
+            max-width: 100%;
         }
         .control .reading {
             text-align: left;
             min-width: 0;
             overflow-wrap: anywhere;
+        }
+        .entity {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 0;
+            margin-inline-start: auto;
+        }
+        .control-label {
+            color: var(--secondary-text-color);
+            white-space: nowrap;
+            border: 0;
+            background: none;
+            padding: 0;
+            font: inherit;
+            cursor: pointer;
+        }
+        .control-label:focus-visible {
+            outline: 2px solid var(--primary-color);
+            outline-offset: 2px;
+        }
+        @media (max-width: 400px) {
+            .control { gap: 6px; }
+            .entity { gap: 4px; }
         }
     `];
 
@@ -37,11 +65,11 @@ export class HelmanDeviceDirectControl extends LitElement {
     @property({ attribute: false }) public switchEntityId: string | null = null;
     /** The climate entity whose more-info is offered; `null` for none. */
     @property({ attribute: false }) public climateEntityId: string | null = null;
-    /** Beside a scheduled device's lanes: no note that Helman does not schedule it. */
+    /** Show the schedule reminder when Helman can plan this device. */
     @property({ attribute: false }) public scheduled = false;
 
-    /** HA's entity toggle is defined; until then, or if it fails to load, the switch's state is text. */
-    @state() private _toggleReady = !!customElements.get("ha-entity-toggle");
+    /** HA's entity elements are defined; until then, the switch's state is text. */
+    @state() private _toggleReady = !!customElements.get("ha-entity-toggle") && !!customElements.get("ha-state-icon");
 
     connectedCallback(): void {
         super.connectedCallback();
@@ -61,22 +89,29 @@ export class HelmanDeviceDirectControl extends LitElement {
         const switchId = this.switchEntityId;
         const climateId = this.climateEntityId;
         return html`
-            <div class="content" data-direct-control>
-                ${this.scheduled ? nothing : html`<p class="note" data-direct-note>${this.localize("node_detail.control.direct_note")}</p>`}
+            <div data-direct-control>
                 ${switchId ? html`
                     <div class="control" data-switch>
-                        <button class="reading" data-entity=${switchId} @click=${() => openMoreInfo(this, switchId)}>${entityName(this.hass, switchId)}</button>
-                        ${this._toggleReady
-                            ? html`<ha-entity-toggle .hass=${this.hass} .stateObj=${this.hass.states[switchId]}></ha-entity-toggle>`
-                            : html`<span class="value" data-switch-state>${this._reading(switchId)}</span>`}
+                        <slot class="summary-slot"></slot>
+                        <div class="entity">
+                            <button class="control-label" data-entity=${switchId} @click=${() => openMoreInfo(this, switchId)}>${this.localize("node_detail.control.direct_label")}</button>
+                            ${this._toggleReady
+                                ? html`<ha-entity-toggle .hass=${this.hass} .stateObj=${this.hass.states[switchId]}></ha-entity-toggle>`
+                                : html`<span class="value" data-switch-state>${this._reading(switchId)}</span>`}
+                        </div>
                     </div>
                 ` : nothing}
                 ${climateId ? html`
                     <div class="control" data-climate>
-                        <button class="reading" data-entity=${climateId} @click=${() => openMoreInfo(this, climateId)}>${entityName(this.hass, climateId)}</button>
+                        ${switchId ? nothing : html`<slot class="summary-slot"></slot>`}
+                        <div class="entity">
+                            ${this._toggleReady ? html`<ha-state-icon .hass=${this.hass} .stateObj=${this.hass.states[climateId]}></ha-state-icon>` : nothing}
+                            <button class="reading" data-entity=${climateId} @click=${() => openMoreInfo(this, climateId)}>${entityName(this.hass, climateId)}</button>
+                        </div>
                         <span class="value">${this._reading(climateId)}</span>
                     </div>
                 ` : nothing}
+                ${this.scheduled ? html`<p class="note" data-scheduled-note>${this.localize("node_detail.control.scheduled_note")}</p>` : nothing}
             </div>
         `;
     }

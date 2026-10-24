@@ -27,12 +27,14 @@ import { getScheduleApplianceActionPresentation } from "../shared/schedule/model
 import { resolveScheduleSlotBoundaries, type ScheduleSlotBoundary } from "../shared/schedule/model/schedule-time";
 import { IDLE_W, NodeDetailContentBase, type FlowNode, type NodeFlow } from "./node-detail-base";
 import { staleToday } from "./section-resource";
-import { readEnergyKWh, readingNumber } from "./node-detail-readings";
+import { openMoreInfo, readEnergyKWh, readingNumber } from "./node-detail-readings";
 import { dispatchWatchedEntities } from "../shared/hass-change";
 import { powerUnitFactor } from "../shared/power-reading";
 import { mergeRuns, runtimeFor, withinTodayTomorrow } from "./node-detail-schedule";
 import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { DeviceDetailParams } from "./node-detail-types";
+import { deviceDirectControls } from "./node-detail-utils";
+import "./device-direct-control";
 
 type QuestionId = "progress" | "plan" | "waiting" | "today" | "trust";
 
@@ -121,6 +123,11 @@ type Completion =
 @customElement("node-detail-ev-charger-content")
 export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerDetailPayload, QuestionId> {
     static styles = [helmanColorVars, nodeDetailSharedStyles, nodeDetailQuestionStyles, nodeDetailPictureStyles, scheduleActionToneStyles, css`
+        button.status {
+            font-family: inherit;
+            text-align: left;
+            cursor: pointer;
+        }
         .muted {
             color: var(--secondary-text-color);
         }
@@ -265,9 +272,19 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         const overview = this._overview.payload;
         const selection = this._selection();
         const eta = this._flowScope === "now" ? this._eta(overview, selection) : null;
+        const direct = deviceDirectControls(this.params.item);
+        const summary = this._renderSummary(overview);
         return html`
             <div class="content">
-                ${this._renderSummary(overview)}
+                ${direct ? html`
+                    <helman-device-direct-control
+                        .hass=${this.hass}
+                        .localize=${this.localize}
+                        .switchEntityId=${direct.switchEntityId}
+                        .climateEntityId=${direct.climateEntityId}
+                        .scheduled=${true}
+                    >${summary}</helman-device-direct-control>
+                ` : summary}
                 ${this._renderStrip(selection)}
                 ${this._renderCarFlow(overview, selection)}
                 ${eta ? html`<p class="estimate" data-estimate>${eta}</p>` : nothing}
@@ -305,9 +322,12 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         const tone: ScheduleActionTone = this._charging(overview) ? "charge" : kind === "fault" ? "stop" : "neutral";
         // At most one exception: a fault the charger reports, linked to the readings answer.
         const fault = this._fault(overview);
+        const powerId = overview.entities.power ?? this.params.item.powerSensorId;
         return html`
             <div class="summary" data-overview>
-                <p class="status pill action-tone-${tone}" data-tone=${tone}>${this._statusText(overview, power)}</p>
+                ${powerId
+                    ? html`<button class="status pill action-tone-${tone}" data-tone=${tone} data-power-entity=${powerId} @click=${() => openMoreInfo(this, powerId)}>${this._statusText(overview, power)}</button>`
+                    : html`<p class="status pill action-tone-${tone}" data-tone=${tone}>${this._statusText(overview, power)}</p>`}
                 ${fault ? this._exceptionBanner(fillTemplate(this._t("exception.fault"), { fault }), "trust") : nothing}
             </div>
         `;

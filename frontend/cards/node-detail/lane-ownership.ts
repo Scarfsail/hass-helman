@@ -15,7 +15,7 @@ import { EMPTY_SCHEDULE_OWNER_SNAPSHOT, getSharedScheduleOwner } from "../shared
 import type { NormalizedScheduleModel, ScheduleOwnerSnapshot, ScheduleSlot } from "../shared/schedule/schedule-types";
 import { timeZone } from "./section-resource";
 
-/** Who owns a lane right now, as the Control tab names it. */
+/** Who owns a lane right now, as the Schedule tab names it. */
 export type ControlStatus =
     | { kind: "loading" }
     | { kind: "unavailable" }

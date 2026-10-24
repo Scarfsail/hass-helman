@@ -49,7 +49,7 @@ interface OptimizerRow {
 type NestedDialog = { kind: "override" } | { kind: "optimizer"; optimizerId: string };
 
 /**
- * The Control tab: who owns a lane now, what the hardware does, the bounded
+ * The Schedule tab: who owns a lane now, what the hardware does, the bounded
  * override and the automations that drive the lane.
  *
  * The plan, the coverage and the roster are the shared ones, followed while

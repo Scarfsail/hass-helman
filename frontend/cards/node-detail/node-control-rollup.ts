@@ -17,7 +17,7 @@ import { nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-
 import { NODE_DETAIL_REQUEST_EVENT, type NodeDetailRequestDetail, type NodeDetailTarget } from "./node-detail-types";
 import { deviceControllableIds } from "./node-detail-utils";
 
-/** One lane of the house roll-up and the detail whose Control tab drives it. */
+/** One lane of the house roll-up and the detail whose Schedule tab drives it. */
 export interface ControlLane {
     controllableId: string;
     target: NodeDetailTarget;
@@ -26,7 +26,7 @@ export interface ControlLane {
 /**
  * The house roll-up's lanes: the inverter first when it is configured, then
  * every schedulable controllable of the house tree once, in tree order, each
- * to the first device whose Control tab drives it. A meter shared by several
+ * to the first device whose Schedule tab drives it. A meter shared by several
  * controllables is one destination for each of its lanes. A device is listed
  * by its configuration, whatever its meter reads now.
  */
@@ -47,9 +47,9 @@ export function houseControlLanes(houseNode: TreeItem | null, inverterConfigured
     return lanes;
 }
 
-/** Ask the power card for a node's Control tab. */
+/** Ask the power card for a node's Schedule tab. */
 function requestControl(node: HTMLElement, target: NodeDetailTarget): void {
-    fireEvent<NodeDetailRequestDetail>(node, NODE_DETAIL_REQUEST_EVENT, { target, tab: "control" });
+    fireEvent<NodeDetailRequestDetail>(node, NODE_DETAIL_REQUEST_EVENT, { target, tab: "schedule" });
 }
 
 const rollupStyles = css`
@@ -99,9 +99,9 @@ const rollupStyles = css`
 `;
 
 /**
- * The house's Control tab: the system switches, and who controls each lane
+ * The house's Schedule tab: the system switches, and who controls each lane
  * of the house now, one row per lane so that lanes owned differently are
- * never summed into one status. A row opens its device's Control tab.
+ * never summed into one status. A row opens its device's Schedule tab.
  *
  * Schedule execution is the shared schedule owner's switch, for everyone the
  * schedule endpoint lets write it. The automation master switch is an
@@ -217,54 +217,8 @@ export class HelmanHouseControl extends LitElement {
     }
 }
 
-/**
- * The grid's and the solar node's Control tab: a pointer to the inverter's,
- * with who controls the inverter now, since export is the inverter's to stop.
- * Without a controllable inverter it says so and offers nothing to press.
- */
-@customElement("helman-inverter-control-link")
-export class HelmanInverterControlLink extends LitElement {
-    static styles = [nodeDetailSharedStyles, nodeDetailQuestionStyles, schedulingSharedStyles];
-
-    @property({ attribute: false }) public hass!: HomeAssistant;
-    @property({ attribute: false }) public localize!: LocalizeFunction;
-
-    private readonly _lanes = new LaneOwnershipController(this, () => this.hass);
-
-    render() {
-        const lanes = this._lanes;
-        if (lanes.roster === null) {
-            const pending = lanes.rosterFailed ? "unavailable" : "loading";
-            return html`<div class="content" data-inverter-link><p class="note" data-inverter-pending>${this.localize(`node_detail.control.status.${pending}`)}</p></div>`;
-        }
-        const inverter = lanes.roster.find((entry) => entry.id === INVERTER_CONTROLLABLE_ID);
-        if (!inverter) {
-            return html`<div class="content" data-inverter-link><p class="note" data-inverter-unavailable>${this._t("unavailable")}</p></div>`;
-        }
-        return html`
-            <div class="content" data-inverter-link>
-                <div class="summary">
-                    <div class="row">
-                        <span class="label">${inverter.name}</span>
-                        <span role="status">${lanes.renderStatus(lanes.status(INVERTER_CONTROLLABLE_ID), this.localize)}</span>
-                    </div>
-                    <p class="note" data-export-note>${this._t("export_note")}</p>
-                </div>
-                <button type="button" class="link-button" data-open-inverter @click=${() => requestControl(this, "inverter")}>
-                    ${this._t("open")}
-                </button>
-            </div>
-        `;
-    }
-
-    private _t(key: string): string {
-        return this.localize(`node_detail.control.inverter_link.${key}`);
-    }
-}
-
 declare global {
     interface HTMLElementTagNameMap {
         "helman-house-control": HelmanHouseControl;
-        "helman-inverter-control-link": HelmanInverterControlLink;
     }
 }

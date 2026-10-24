@@ -6,11 +6,11 @@ export type NodeType = "solar" | "battery" | "grid" | "house" | "inverter";
 /** What a detail shows: an energy node by its type, or a config device by its tree item. */
 export type NodeDetailTarget = NodeType | TreeItem;
 
-export type NodeDetailTab = "overview" | "control";
+export type NodeDetailTab = "overview" | "schedule";
 
 /**
  * The tab a detail was asked to open on, one object per request: asking for
- * the same node's Control tab again is a new request even when the node and
+ * the same node's Schedule tab again is a new request even when the node and
  * the tab are the same, while a refreshed tree keeps the one it has.
  */
 export interface NodeDetailTabRequest {
@@ -18,7 +18,7 @@ export interface NodeDetailTabRequest {
 }
 
 /**
- * Asks the power card around it to show a node's detail, on its Control tab
+ * Asks the power card around it to show a node's detail, on its Schedule tab
  * when `tab` says so and on its Overview otherwise. Bubbles and is composed,
  * so it reaches the card from inside the open detail's own shadow roots.
  */
@@ -26,7 +26,7 @@ export const NODE_DETAIL_REQUEST_EVENT = "helman-node-detail-request";
 
 export interface NodeDetailRequestDetail {
     target: NodeDetailTarget;
-    tab?: Extract<NodeDetailTab, "control">;
+    tab?: Extract<NodeDetailTab, "schedule">;
 }
 
 /**

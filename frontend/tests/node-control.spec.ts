@@ -4,7 +4,7 @@ import { treeNode, treePayload } from "./support/payload-builders";
 import type { SchedulePayload } from "../cards/helman-api";
 
 /**
- * The Control tab of the inverter and battery details, on the real simple
+ * The Schedule tab of the inverter and battery details, on the real simple
  * card against a fake backend.
  *
  * What is pinned: who owns the inverter lane now and how that is worked out
@@ -159,13 +159,13 @@ async function mount(page: Page, setup: Setup = {}, card = "helman-simple-card")
 
 const control = (page: Page) => page.locator("helman-node-control");
 const status = (page: Page) => control(page).locator("[data-status]");
-const tab = (page: Page, name: "overview" | "control") => page.locator(`node-detail-dialog [data-tab="${name}"]`);
+const tab = (page: Page, name: "overview" | "schedule") => page.locator(`node-detail-dialog [data-tab="${name}"]`);
 const overrideDialog = (page: Page) => page.locator("control-override-dialog");
 const requests = (page: Page, type: string) => page.evaluate((type) => window.__NodeDetailRequests.filter((r) => r.type === type), type);
 
 async function openControl(page: Page, node: "inverter" | "battery" = "inverter"): Promise<void> {
     await (node === "inverter" ? page.locator(".inverter-cell") : page.locator(".node-cell:has(simple-card-battery)")).click();
-    await tab(page, "control").click();
+    await tab(page, "schedule").click();
     await expect(control(page)).toBeVisible();
 }
 
@@ -304,8 +304,8 @@ test.describe("the tabs", () => {
         await expect(page.locator("node-detail-inverter-content")).toHaveCount(1);
         await expect(control(page)).toHaveCount(0);
 
-        await tab(page, "control").click();
-        await expect(tab(page, "control")).toHaveAttribute("aria-selected", "true");
+        await tab(page, "schedule").click();
+        await expect(tab(page, "schedule")).toHaveAttribute("aria-selected", "true");
         await expect(page.locator("node-detail-inverter-content")).toHaveCount(0);
         await expect(control(page)).toHaveCount(1);
 
@@ -313,7 +313,7 @@ test.describe("the tabs", () => {
         await page.locator("node-detail-dialog").evaluate((detail: any) => { detail.open = false; });
         await page.locator("node-detail-dialog").evaluate((detail: any) => { detail.open = true; });
         await expect(tab(page, "overview")).toHaveAttribute("aria-selected", "true");
-        await tab(page, "control").click();
+        await tab(page, "schedule").click();
         await page.locator(".node-cell:has(simple-card-battery)").click();
         await expect(tab(page, "overview")).toHaveAttribute("aria-selected", "true");
         await expect(page.locator("node-detail-battery-content")).toHaveCount(1);
@@ -323,16 +323,16 @@ test.describe("the tabs", () => {
         await mount(page);
         await page.locator(".inverter-cell").click();
         await expect(page.locator("node-detail-dialog [role=tablist]")).toBeVisible();
-        await expect(tab(page, "control")).toHaveAttribute("tabindex", "-1");
+        await expect(tab(page, "schedule")).toHaveAttribute("tabindex", "-1");
         await tab(page, "overview").focus();
         await page.keyboard.press("ArrowRight");
-        await expect(tab(page, "control")).toHaveAttribute("aria-selected", "true");
-        await expect(tab(page, "control")).toBeFocused();
+        await expect(tab(page, "schedule")).toHaveAttribute("aria-selected", "true");
+        await expect(tab(page, "schedule")).toBeFocused();
         await expect(control(page)).toBeVisible();
         await page.keyboard.press("Home");
         await expect(tab(page, "overview")).toBeFocused();
         await page.keyboard.press("End");
-        await expect(tab(page, "control")).toHaveAttribute("aria-selected", "true");
+        await expect(tab(page, "schedule")).toHaveAttribute("aria-selected", "true");
         await page.keyboard.press("ArrowLeft");
         await expect(tab(page, "overview")).toHaveAttribute("aria-selected", "true");
     });
@@ -571,7 +571,7 @@ test.describe("the automation rows", () => {
 });
 
 test.describe("on both cards and a phone", () => {
-    test("the full card opens the same Control tab", async ({ page }) => {
+    test("the full card opens the same Schedule tab", async ({ page }) => {
         await mount(page, { schedule: plan([["12:00", "13:00", { inverter: user("stop_export") }]]) }, "helman-card");
         await openControl(page);
         await expect(status(page)).toHaveText("Manual until Today 13:00");

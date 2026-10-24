@@ -351,11 +351,11 @@ test("the device edit dialog shows every section collapsed, and no Children", as
         devices: { consumers: [BREAKER] },
         automation: { enabled: true, appliance_optimizers: [], system_optimizers: [] },
     });
-    await loadBundle(page, "node-detail-device-content");
+    await loadBundle(page, "node-detail-dialog");
     await page.addScriptTag({ content: HA_DIALOG_STUB });
     await page.evaluate((config) => {
-        const content = document.createElement("node-detail-device-content") as any;
-        content.localize = (key: string) => (key === "node_detail.device.edit.button" ? "Edit" : key);
+        const content = document.createElement("node-detail-dialog") as any;
+        content.localize = (key: string) => (key === "node_detail.device.edit.button" ? "Settings" : key);
         content.hass = {
             language: "en",
             locale: { language: "en" },
@@ -373,10 +373,11 @@ test("the device edit dialog shows every section collapsed, and no Children", as
             item: { id: "breaker", name: "AC breaker", displayName: "AC breaker", deviceKey: "sensor.breaker_energy",
                 deviceKeyIsMeter: true, children: [] },
         };
+        content.open = true;
         document.body.appendChild(content);
     }, JSON.parse(JSON.stringify(config)));
 
-    await page.locator("node-detail-device-content ha-button.edit").click();
+    await page.locator("node-detail-dialog ha-button[data-settings]").click();
     const dialog = page.locator("helman-device-edit-dialog");
     await expect(dialog.locator("details.device-card")).toHaveAttribute("open", "");
     await expect.poll(() => sections(dialog, "breaker")).toEqual([
