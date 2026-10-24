@@ -89,6 +89,8 @@ export interface TreeItemDTO extends TreeItemDTOBase, EnergyNodeFields {
     ownControllableIds?: string[];
     /** Configured kind only when this node identifies one schedulable controllable. */
     applianceKind?: string | null;
+    /** The climate entity a device configures, whose more-info its Control tab opens; null for every other node. */
+    climateEntityId: string | null;
     /** A house child's meter; null for every other node. */
     energyEntityId: string | null;
     /** A meterless child's share of its parent's power — an estimate, shown with `≈`. */
