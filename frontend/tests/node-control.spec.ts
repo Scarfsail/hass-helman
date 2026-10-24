@@ -23,7 +23,7 @@ declare global {
         __schedule: SchedulePayload;
         __toasts: string[];
         __setScheduleFails: boolean;
-        __releaseSave: (() => void) | null;
+        __releaseNodeSave: (() => void) | null;
         __detailClosed: boolean;
         __coverageFails: boolean;
         __configFails: boolean;
@@ -89,7 +89,7 @@ interface Setup {
     admin?: boolean;
     /** Answer every save with a conflict and this newer document. */
     conflict?: object;
-    /** Hold every config save until `__releaseSave`. */
+    /** Hold every config save until `__releaseNodeSave`. */
     holdSave?: boolean;
     timeZone?: string;
     /** The page's clock, before anything mounts. */
@@ -104,7 +104,7 @@ async function mount(page: Page, setup: Setup = {}, card = "helman-simple-card")
         window.__toasts = [];
         window.__setScheduleFails = false;
         window.__scheduleWrite = null;
-        window.__releaseSave = null;
+        window.__releaseNodeSave = null;
         window.__coverageFails = !!o.coverageFails;
         window.__configFails = !!o.configFails;
         window.addEventListener("hass-notification", (event) => window.__toasts.push((event as CustomEvent).detail.message));
@@ -149,7 +149,7 @@ async function mount(page: Page, setup: Setup = {}, card = "helman-simple-card")
                 }) } : {}),
                 ...(o.conflict ? { "helman/save_config": () => ({ success: false, conflict: true, config: o.conflict, revision: "newer" }) } : {}),
                 ...(o.holdSave ? { "helman/save_config": () => new Promise((resolve) => {
-                    window.__releaseSave = () => resolve({ success: true, validation: { valid: true, errors: [], warnings: [] }, reloadStarted: true });
+                    window.__releaseNodeSave = () => resolve({ success: true, validation: { valid: true, errors: [], warnings: [] }, reloadStarted: true });
                 }) } : {}),
             },
         });
@@ -189,7 +189,7 @@ async function save(page: Page): Promise<void> {
     await overrideDialog(page).locator("[data-save]").click();
 }
 
-const setScheduleSlots = async (page: Page) => (await requests(page, "helman/set_schedule")).map((r) => r.slots);
+const setScheduleSlots = async (page: Page) => (await requests(page, "helman/set_schedule")).map((r) => r.slots as Array<{ id: string; controllables: unknown }>);
 
 test.describe("who owns the lane", () => {
     for (const [coverage, text, kind] of [
@@ -391,7 +391,7 @@ test.describe("the override", () => {
         await save(page);
         const [slots] = await setScheduleSlots(page);
         expect(slots).toHaveLength(4);
-        expect(slots.every((slot: any) => JSON.stringify(slot.controllables) === JSON.stringify({ inverter: { kind: "normal" } }))).toBe(true);
+        expect(slots.every((slot) => JSON.stringify(slot.controllables) === JSON.stringify({ inverter: { kind: "normal" } }))).toBe(true);
     });
 
     test("offers only the quick picks the loaded schedule has an edge for", async ({ page }) => {
@@ -423,7 +423,7 @@ test.describe("the override", () => {
         await overrideDialog(page).locator("[data-to]").selectOption(String(Date.parse("2026-10-25T01:15:00Z")));
         await save(page);
         const [slots] = await setScheduleSlots(page);
-        expect(slots.map((slot: any) => slot.id)).toEqual(Array.from({ length: 15 }, (_, i) =>
+        expect(slots.map((slot) => slot.id)).toEqual(Array.from({ length: 15 }, (_, i) =>
             new Date(Date.parse("2026-10-24T21:30:00Z") + i * 900_000).toISOString().replace(".000Z", "+00:00")));
     });
 
@@ -455,13 +455,13 @@ test.describe("the override", () => {
         await openOverride(page);
         await page.evaluate(() => {
             window.__setScheduleFails = true;
-            window.__scheduleWrite = new Promise((resolve) => { window.__releaseSave = resolve; });
+            window.__scheduleWrite = new Promise((resolve) => { window.__releaseNodeSave = resolve; });
         });
         await overrideDialog(page).locator('[data-pick="plus_1h"]').click();
         await save(page);
         await expect(overrideDialog(page).locator("[data-save]")).toHaveText("Saving…");
         await overrideDialog(page).evaluate((dialog) => (dialog.shadowRoot!.querySelector("ha-dialog") as any).close());
-        await page.evaluate(() => window.__releaseSave!());
+        await page.evaluate(() => window.__releaseNodeSave!());
         await expect(overrideDialog(page).locator("[data-error]")).toContainText("write refused");
     });
 
@@ -517,7 +517,7 @@ test.describe("the automation rows", () => {
         expect(saved.expected_revision).toBe(await page.evaluate(() => window.__configRevision({
             automation: { enabled: true, system_optimizers: [{ id: "export_price", kind: "export_price", enabled: true }, { id: "charge_hold", kind: "charge_hold", enabled: true }], appliance_optimizers: [] },
         })));
-        await page.evaluate(() => window.__releaseSave!());
+        await page.evaluate(() => window.__releaseNodeSave!());
         await expect(toggle(page, "export_price")).toHaveJSProperty("disabled", false);
         await expect(toggle(page, "export_price")).toHaveJSProperty("checked", false);
         expect(await page.evaluate(() => window.__toasts)).toEqual(["Config saved. Helman reload started."]);
