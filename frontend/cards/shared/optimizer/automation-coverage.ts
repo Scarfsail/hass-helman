@@ -43,7 +43,9 @@ export function getLaneAutomationCoverage(
  * read is shared the way `getSharedHelmanStore` shares its own: one
  * `helman/get_automation_coverage` per connection rather than one per element. `get()`
  * answers `null` until the first read lands, which callers draw as "no badge
- * yet" rather than guessing at "no automation".
+ * yet" rather than guessing at "no automation". `failed()` says the last read
+ * failed, so a caller that must not show "loading" forever can tell the two
+ * apart; `onFailed` hears each failure, and the next good read clears it.
  *
  * The `helman_data_changed` feed is what keeps it honest -- saving an optimizer
  * from the badge's own dialog is exactly the case that must not leave a stale
@@ -52,7 +54,8 @@ export function getLaneAutomationCoverage(
  */
 export interface AutomationCoverageSource {
     get(): AutomationCoverageIndex | null;
-    subscribe(listener: (index: AutomationCoverageIndex) => void): () => void;
+    failed(): boolean;
+    subscribe(listener: (index: AutomationCoverageIndex) => void, onFailed?: () => void): () => void;
 }
 
 const sources = new WeakMap<object, AutomationCoverageSourceImpl>();
@@ -78,7 +81,9 @@ export function getSharedAutomationCoverage(hass: HomeAssistant): AutomationCove
 class AutomationCoverageSourceImpl implements AutomationCoverageSource {
     private _hass: HomeAssistant;
     private _index: AutomationCoverageIndex | null = null;
+    private _failed = false;
     private readonly _listeners = new Set<(index: AutomationCoverageIndex) => void>();
+    private readonly _failureListeners = new Set<() => void>();
     private _unsubscribeDataChanged: (() => void) | null = null;
     /** The read in flight, so a burst of mounting lanes costs one round trip. */
     private _pending: Promise<void> | null = null;
@@ -104,8 +109,13 @@ class AutomationCoverageSourceImpl implements AutomationCoverageSource {
         return this._index;
     }
 
-    public subscribe(listener: (index: AutomationCoverageIndex) => void): () => void {
+    public failed(): boolean {
+        return this._failed;
+    }
+
+    public subscribe(listener: (index: AutomationCoverageIndex) => void, onFailed?: () => void): () => void {
         this._listeners.add(listener);
+        if (onFailed) this._failureListeners.add(onFailed);
         this._ensureDataChangedSubscription();
         void this._read();
 
@@ -116,6 +126,7 @@ class AutomationCoverageSourceImpl implements AutomationCoverageSource {
             }
             isSubscribed = false;
             this._listeners.delete(listener);
+            if (onFailed) this._failureListeners.delete(onFailed);
             if (this._listeners.size === 0) {
                 this._unsubscribeDataChanged?.();
                 this._unsubscribeDataChanged = null;
@@ -142,6 +153,7 @@ class AutomationCoverageSourceImpl implements AutomationCoverageSource {
             try {
                 const coverage = await callHelman(this._hass, "helman/get_automation_coverage", {});
                 this._index = new Map(Object.entries(coverage.controllables));
+                this._failed = false;
                 for (const listener of this._listeners) {
                     listener(this._index);
                 }
@@ -149,6 +161,10 @@ class AutomationCoverageSourceImpl implements AutomationCoverageSource {
                 // A failed read leaves the last good index in place, and the
                 // badge stays dark until the first one lands. Coverage is
                 // decoration on a band that has to keep drawing regardless.
+                this._failed = true;
+                for (const onFailed of this._failureListeners) {
+                    onFailed();
+                }
             } finally {
                 this._pending = null;
                 if (this._rereadRequested) {

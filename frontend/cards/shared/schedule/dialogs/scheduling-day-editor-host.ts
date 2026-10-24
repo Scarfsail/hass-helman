@@ -17,6 +17,7 @@ import type { EntityScheduleSaveDetail } from "./scheduling-entity-day-editor";
 import {
     buildControllableEntityStatuses,
     type ControllableEntityStatus,
+    controllableWatchedEntityIds,
 } from "../model/controllable-entity-status";
 import {
     buildEntityScheduleDays,
@@ -475,11 +476,7 @@ export class SchedulingDayEditorHost extends LitElement {
     private _emitWatchedEntities(): void {
         const ids = new Set<string>();
         for (const controllable of this._controllables) {
-            ids.add(controllable.primaryEntityId);
-            if (controllable.kind === "ev_charger") {
-                ids.add(controllable.controls.useMode.entityId);
-                ids.add(controllable.controls.ecoGear.entityId);
-            }
+            for (const id of controllableWatchedEntityIds(controllable)) ids.add(id);
         }
         dispatchWatchedEntities(this, "schedule-editor", [...ids]);
     }

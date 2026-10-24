@@ -38,7 +38,13 @@ export class TreeItem {
     // appliance right now; `id` is only its energy statistic. Several when the
     // statistic is a meter shared by several controllables, which stay one box.
     public controllableIds?: string[];
+    // Every controllable whose demand the device's own meter stands for: the
+    // owner when it is schedulable, else its meterless children. What its
+    // Control tab drives, one lane each.
+    public ownControllableIds?: string[];
     public applianceKind?: string | null;
+    // The climate entity the device configures, for its Control tab's more-info.
+    public climateEntityId: string | null = null;
     // The device's own energy meter, for the detail dialog's energy tiles.
     public energyEntityId?: string;
     // What locates this box's device in the config: its meter, or its

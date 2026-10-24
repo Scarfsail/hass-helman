@@ -24,7 +24,7 @@ import "../shared/node-tile";
 import "../shared/node-flow";
 import { FLOW_SCOPE_EVENT, type FlowItem, type FlowScope, type FlowScopeDetail } from "../shared/node-flow";
 import type { ScheduleActionTone } from "../shared/schedule/action-tones";
-import { readingNumber, readingText } from "./node-detail-readings";
+import { entityName, openMoreInfo, readingNumber, readingText } from "./node-detail-readings";
 import { dispatchWatchedEntities } from "../shared/hass-change";
 
 import { IDLE_W } from "./live-flows";
@@ -625,11 +625,7 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
 
     /** HA's own more-info dialog for `entityId`, as the card's device rows open it. */
     protected _moreInfo(entityId: string): void {
-        this.dispatchEvent(new CustomEvent("hass-more-info", {
-            bubbles: true,
-            composed: true,
-            detail: { entityId },
-        }));
+        openMoreInfo(this, entityId);
     }
 
     /** A reading as shown: its state and unit, `null` when missing or unavailable. */
@@ -658,7 +654,7 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
     }
 
     protected _name(entityId: string): string {
-        return (this.hass.states[entityId]?.attributes.friendly_name as string | undefined) ?? entityId;
+        return entityName(this.hass, entityId);
     }
 
     // ── Formatting ──────────────────────────────────────────────────────────

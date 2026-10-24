@@ -37,6 +37,7 @@ from .controllables.config import (
     resolve_device_name,
     running_signal,
 )
+from .controllables.kinds import CONTROLLABLE_KIND_CLIMATE
 from .power_polarity import consumer_value_type, power_sign, source_value_type
 
 
@@ -201,6 +202,9 @@ class TreeItemDTO:
     own_deferrable: bool = False
     own_controllable_ids: list[str] = field(default_factory=list)
     appliance_kind: str | None = None
+    # The climate entity a device configures as ``controls.climate``, which
+    # the card's Control tab opens more-info for; ``None`` for every other item.
+    climate_entity_id: str | None = None
     # The device's meter, for a metered house child; ``None`` for every other
     # item. The item ``id`` happens to be the same entity (it keeps the
     # unmeasured sensor ids stable), but readers of the meter read it here.
@@ -260,6 +264,7 @@ class TreeItemDTO:
             "ownDeferrable": self.own_deferrable,
             "ownControllableIds": self.own_controllable_ids,
             **({"applianceKind": self.appliance_kind} if self.appliance_kind is not None else {}),
+            "climateEntityId": self.climate_entity_id,
             "energyEntityId": self.energy_entity_id,
             "isEstimated": self.is_estimated,
             "phase": self.phase,
@@ -509,7 +514,8 @@ class HelmanTreeBuilder:
                     cleaner_regex=cleaner_regex,
                 ),
                 power_sensor_id=power_sensor_id,
-                switch_entity_id=_switch_entity(device),
+                switch_entity_id=_control_entity(device, ("switch", "charge")),
+                climate_entity_id=_control_entity(device, (CONTROLLABLE_KIND_CLIMATE,)),
                 is_source=False,
                 is_unmeasured=False,
                 is_virtual=False,
@@ -573,6 +579,7 @@ class HelmanTreeBuilder:
             # The running signal is the control the row offers: a switch, or
             # the climate entity of an air conditioner.
             switch_entity_id=running_signal(device)[0],
+            climate_entity_id=_control_entity(device, (CONTROLLABLE_KIND_CLIMATE,)),
             is_source=False,
             is_unmeasured=False,
             is_virtual=False,
@@ -649,14 +656,11 @@ def _consumption_entity(device: Device, key: str) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
-def _switch_entity(device: Device) -> str | None:
-    """The switch the card offers: ``controls.switch``, else ``controls.charge``."""
-    controls = device.get("controls")
-    if not isinstance(controls, Mapping):
-        return None
-    for control_key in ("switch", "charge"):
-        control = controls.get(control_key)
-        entity_id = control.get("entity_id") if isinstance(control, Mapping) else None
-        if isinstance(entity_id, str) and entity_id.strip():
-            return entity_id.strip()
+def _control_entity(device: Device, control_keys: tuple[str, ...]) -> str | None:
+    """The entity of the first of ``control_keys`` the device's ``controls`` configure."""
+    controls = read_mapping(device.get("controls"))
+    for control_key in control_keys:
+        entity_id = read_entity_id(read_mapping(controls.get(control_key)).get("entity_id"))
+        if entity_id is not None:
+            return entity_id
     return None

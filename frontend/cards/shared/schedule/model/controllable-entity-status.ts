@@ -85,6 +85,17 @@ export interface ControllableEntityStatus {
 }
 
 /**
+ * The entities a controllable's live state is read from: its primary entity
+ * and, for an EV charger, the `useMode`/`ecoGear` selects that describe a
+ * running charge.
+ */
+export function controllableWatchedEntityIds(controllable: ScheduleControllable): string[] {
+    return controllable.kind === "ev_charger"
+        ? [controllable.primaryEntityId, controllable.controls.useMode.entityId, controllable.controls.ecoGear.entityId]
+        : [controllable.primaryEntityId];
+}
+
+/**
  * Every entity Helman can drive, with its live state and its next scheduled
  * change, in the order the configuration lists them.
  *

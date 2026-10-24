@@ -3,6 +3,7 @@ import { LitElement, css, html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 
 import { getLocalizeFunction, type LocalizeFunction } from "../../localize/localize";
+import { showToast } from "../fire-event";
 import { defineOnce } from "../define-once";
 import { loadHaForm, loadHaSortable } from "../load-ha-elements";
 import { DataChangedController } from "../data/data-changed";
@@ -377,7 +378,7 @@ export class HelmanDeviceEditDialog extends LitElement {
                 this._dirty = false;
             }
             if (response?.success) {
-                this._notify(this._translate(
+                showToast(this, this._translate(
                     response.reloadStarted
                         ? "editor.messages.config_saved_reload_started"
                         : "editor.messages.config_saved",
@@ -407,14 +408,6 @@ export class HelmanDeviceEditDialog extends LitElement {
         }
     };
 
-    /** Home Assistant's own toast, for something the dialog closed before it could show. */
-    private _notify(message: string): void {
-        this.dispatchEvent(new CustomEvent("hass-notification", {
-            bubbles: true,
-            composed: true,
-            detail: { message },
-        }));
-    }
 
     /** Throw the draft away and read the config again. */
     private _handleReload = (): void => {

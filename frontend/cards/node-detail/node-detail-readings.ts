@@ -20,6 +20,20 @@ export function readingText(
     return unit ? stateObj.state + " " + unit : stateObj.state;
 }
 
+/** An entity's friendly name, else its id. */
+export function entityName(hass: HomeAssistant, entityId: string): string {
+    return (hass.states[entityId]?.attributes.friendly_name as string | undefined) ?? entityId;
+}
+
+/** HA's own more-info dialog for `entityId`, as the card's device rows open it. */
+export function openMoreInfo(element: EventTarget, entityId: string): void {
+    element.dispatchEvent(new CustomEvent("hass-more-info", {
+        bubbles: true,
+        composed: true,
+        detail: { entityId },
+    }));
+}
+
 /** A reading as a number, `null` when missing or not numeric. */
 export function readingNumber(hass: HomeAssistant, entityId: string | null | undefined): number | null {
     const raw = entityId ? hass.states[entityId]?.state : undefined;
