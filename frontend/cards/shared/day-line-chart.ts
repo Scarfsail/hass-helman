@@ -368,12 +368,11 @@ export class HelmanDayLineChart extends LitElement {
 
     /** A keyboard selection has no pointer: its popup sits on the selected bucket. */
     private _showAtSelection(index: number): void {
-        const rect = this.renderRoot.querySelector(".plot")!.getBoundingClientRect();
+        const plot = this.renderRoot.querySelector(".plot")!;
+        const rect = plot.getBoundingClientRect();
         const x = rect.left + this._scales().x(this._times[index]);
         const point = { x, y: rect.top + PAD.top };
-        this._tooltip.content = { ...this._tooltipBody(index), ...point };
-        this._tooltip.point = point;
-        this.requestUpdate();
+        this._tooltip.showAt(point, this._tooltipBody(index), plot);
     }
 }
 

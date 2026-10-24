@@ -1115,29 +1115,44 @@ test.describe("continuous detail calendar", () => {
     test("August 1 to July 31 scrolls without loading, then loads exactly once at the click position", async ({ page }) => {
         await browseMonth(page, "2026-08");
         await page.locator('helman-solar-day-pills [data-day="2026-08-01"]').click();
-        // Let the click's own scroll/render settle so the wheel is not swallowed
-        // by a scroll position that is still being restored.
-        let settledTop = -1;
-        await expect.poll(async () => {
-            const top = (await calendarState(page)).top;
-            const stable = top === settledTop;
-            settledTop = top;
-            return stable;
-        }).toBe(true);
+        // Request recording precedes the load's Lit update and the picker frame
+        // that can replace its buffer and restore the scroll anchor.
+        const settleCalendar = async () => {
+            let previousTop = -1;
+            await expect.poll(async () => {
+                const state = await page.evaluate(async () => {
+                    // Native scroll events run before animation callbacks; sample
+                    // after delivery so their queued viewport work is visible.
+                    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+                    const inspector = document.querySelector("helman-solar-inspector") as any;
+                    const picker = inspector.shadowRoot.querySelector("helman-solar-day-pills") as any;
+                    return {
+                        top: picker.shadowRoot.querySelector(".continuous").scrollTop,
+                        idle: !inspector._loading && !inspector.isUpdatePending
+                            && !picker.isUpdatePending && picker._frame === 0
+                            && picker._revealed === picker.revealVersion && !picker._restore,
+                    };
+                });
+                const settled = state.idle && state.top === previousTop;
+                previousTop = state.top;
+                return settled;
+            }).toBe(true);
+        };
+        await settleCalendar();
         const before = await calendarState(page);
-        await calendarRow(page).hover();
-        // Re-send the wheel until it takes effect; a single event can be dropped on a busy runner.
-        await expect.poll(async () => {
-            await page.mouse.wheel(0, -144);
-            await page.waitForTimeout(100);
-            return (await calendarState(page)).top;
-        }).toBeLessThan(before.top);
+        // Use the row's scroll API so the scroll is applied before waiting for
+        // its event and viewport work, as in the buffer anchoring test below.
+        await calendarRow(page).evaluate((row: HTMLElement) => { row.scrollTop -= 144; });
+        await settleCalendar();
         const scrolled = await calendarState(page);
+        expect(scrolled.top).toBeLessThan(before.top);
         expect(scrolled.selected).toBe("2026-08-01");
         expect(scrolled.requests).toEqual(before.requests);
         expect(scrolled.visible.some((cell) => cell.day === "2026-07-31")).toBe(true);
         await page.locator('helman-solar-day-pills [data-day="2026-07-31"]').click();
         await expect.poll(async () => (await calendarState(page)).requests.length).toBe(before.requests.length + 1);
+        await settleCalendar();
+        expect((await calendarState(page)).requests).toEqual([...before.requests, "2026-07-31"]);
         expect((await calendarState(page)).top).toBe(scrolled.top);
         expect((await calendarState(page)).selected).toBe("2026-07-31");
     });
