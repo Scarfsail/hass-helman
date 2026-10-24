@@ -162,7 +162,7 @@ export class EnergyCardHost implements ReactiveController {
         // The same node again keeps the readings its open detail announced.
         if (request !== this._dialogRequest) {
             this._dialogRequest = request;
-            this._watchSources.delete("node-detail");
+            this._forgetNodeDetailSources();
             this._rebuildWatchedEntityIds();
         }
         this._adoptLatestHass();
@@ -171,7 +171,7 @@ export class EnergyCardHost implements ReactiveController {
 
     public closeDialog(): void {
         this._dialogRequest = null;
-        this._watchSources.delete("node-detail");
+        this._forgetNodeDetailSources();
         this._rebuildWatchedEntityIds();
         this._adoptLatestHass();
         this.host.requestUpdate();
@@ -255,6 +255,13 @@ export class EnergyCardHost implements ReactiveController {
             this.host.requestUpdate();
         } catch (err) {
             if (!obsolete()) console.error("Helman: failed to load the inverter overview", err);
+        }
+    }
+
+    /** Drop what the open detail announced: its readings and every Control tab block's. */
+    private _forgetNodeDetailSources(): void {
+        for (const source of [...this._watchSources.keys()]) {
+            if (source === "node-detail" || source.startsWith("node-detail:")) this._watchSources.delete(source);
         }
     }
 

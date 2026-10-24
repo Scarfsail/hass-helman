@@ -211,6 +211,8 @@ export class HelmanNodeControl extends LitElement {
     @property({ attribute: false }) public controllableId!: string;
     /** Why this lane controls the node, for a node that does not own its lane. */
     @property({ attribute: false }) public note: string | null = null;
+    /** Headed by the lane's name, for a node with several lanes. */
+    @property({ attribute: false }) public titled = false;
 
     @state() private _snapshot: ScheduleOwnerSnapshot = EMPTY_SCHEDULE_OWNER_SNAPSHOT;
     @state() private _normalized: NormalizedScheduleModel = EMPTY_NORMALIZED_SCHEDULE;
@@ -312,7 +314,7 @@ export class HelmanNodeControl extends LitElement {
             this._controllable = roster.find((entry) => entry.id === this.controllableId) ?? null;
             this._rosterFailed = false;
             // The live state the Now row reads is the lane's primary entity.
-            if (this._controllable) dispatchWatchedEntities(this, "node-control", [this._controllable.primaryEntityId]);
+            if (this._controllable) dispatchWatchedEntities(this, `node-detail:control:${this.controllableId}`, [this._controllable.primaryEntityId]);
         } catch (error) {
             console.error("node-control: failed to load the controllable roster", error);
             // A roster read before keeps its answer; with none, the entry is unknown.
@@ -363,7 +365,8 @@ export class HelmanNodeControl extends LitElement {
         const writing = this._snapshot.writing;
         const canAuthor = schedule !== null && this._controllable?.supportsAuthoring === true;
         return html`
-            <div class="content" data-control>
+            <div class="content" data-control=${this.controllableId}>
+                ${this.titled ? html`<div class="section-title" data-lane-name>${this._controllable?.name ?? this.controllableId}</div>` : nothing}
                 <div class="summary">
                     <div class="status-line">${this._renderStatus(status)}</div>
                     ${this.note ? html`<p class="note" data-lane-note>${this.note}</p>` : nothing}
@@ -385,6 +388,7 @@ export class HelmanNodeControl extends LitElement {
                 ` : nothing}
                 ${this._controllable === null ? html`<p class="note" data-not-on-roster>${this._t("not_on_roster")}</p>` : nothing}
                 ${this._rosterFailed ? html`<p class="note" data-roster-failed>${this._t("status.unavailable")}</p>` : nothing}
+                ${this._controllable?.supportsAuthoring === false ? html`<p class="note" data-unsupported>${this._t("unsupported_authoring")}</p>` : nothing}
                 <div class="actions">
                     ${canAuthor ? html`
                         <button type="button" data-change ?disabled=${writing} @click=${() => this._openDialog({ kind: "override" })}>

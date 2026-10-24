@@ -10,7 +10,6 @@ import { nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import { readPowerW } from "../shared/power-reading";
 import { SectionResource } from "./section-resource";
 
-import "../appliance-switch-badge";
 import { type DeviceStats, type DeviceStatsSpread } from "../helman-api";
 import type { HelmanDeviceEditDialog } from "../shared/devices/helman-device-edit-dialog";
 import "../shared/devices/helman-device-edit-dialog";
@@ -41,7 +40,7 @@ function powerEntity(item: TreeItem): string | undefined {
 }
 
 /**
- * One config device at a glance: its live power and switch, the energy its own
+ * One config device at a glance: its live power, the energy its own
  * meter counted today and in the last hour, what it typically uses as learned
  * over its learning window, and HA's history graph of both.
  *
@@ -148,13 +147,6 @@ export class NodeDetailDeviceContent extends LitElement {
                 <div class="header">
                     ${item.icon ? html`<ha-icon .icon=${item.icon}></ha-icon>` : nothing}
                     <div class="power">${this._livePower(item)}</div>
-                    ${item.switchEntityId ? html`
-                        <helman-appliance-switch-badge
-                            .hass=${this.hass}
-                            .entityId=${item.switchEntityId}
-                            @show-more-info=${this._showMoreInfo}
-                        ></helman-appliance-switch-badge>
-                    ` : nothing}
                     ${item.deviceKey && this.hass.user?.is_admin === true ? html`
                         <ha-button class="edit" @click=${() => { this._editing = true; }}>
                             ${this.localize("node_detail.device.edit.button")}
@@ -315,14 +307,5 @@ export class NodeDetailDeviceContent extends LitElement {
         }) as HistoryGraphCard;
         chart.hass = this.hass;
         return chart;
-    }
-
-    /** HA's own more-info request, as the device rows turn it. */
-    private _showMoreInfo(event: CustomEvent<{ entityId: string }>): void {
-        this.dispatchEvent(new CustomEvent("hass-more-info", {
-            bubbles: true,
-            composed: true,
-            detail: { entityId: event.detail.entityId },
-        }));
     }
 }

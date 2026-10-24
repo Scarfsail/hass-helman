@@ -47,6 +47,10 @@
       "nothing_scheduled": "Nic naplánováno",
       "unavailable": "nedostupné",
       "not_on_roster": "Helman pro tento uzel nemá ovladatelné zařízení.",
+      "unsupported_authoring": "Akce tohoto spotřebiče zatím nelze v rozvrhu autorovat, proto zde nelze nastavit nový ruční zásah.",
+      "direct_note": "Helman toto zařízení neplánuje: toto jsou vlastní ovládací prvky Home Assistantu.",
+      "on": "zapnuto",
+      "off": "vypnuto",
       "change": "Změnit",
       "return_to_automatic": "Vrátit automatice",
       "returned": "Vráceno automatice.",
@@ -1337,16 +1341,6 @@
         "lock": "Elektronický zámek",
         "no_readings": "Žádné technické údaje nejsou k dispozici.",
         "evidence_note": "Údaje, jak je nabíječka hlásí, každý se svým časem aktualizace."
-      },
-      "switch": {
-        "execution_off": "Provádění plánu je vypnuté: plán ho nepřepíná.",
-        "on_planned": "Zapnuto, podle plánu.",
-        "off_planned": "Vypnuto, ačkoli plán teď nabíjí.",
-        "on_unplanned": "Zapnuto, ačkoli teď není nabíjení v plánu.",
-        "off_unplanned": "Vypnuto, podle plánu.",
-        "next_on": "Plán ho příště zapne v {time}.",
-        "next_off": "Plán ho příště vypne v {time}.",
-        "no_next": "Plán ho dnes ani zítra nepřepne."
       },
       "strip": {
         "scope": "Nabíjení · dnes do zítřejšího poledne",

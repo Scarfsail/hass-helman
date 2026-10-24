@@ -1,7 +1,7 @@
 import { formatKwh, formatPower } from "../shared/format";
 import { SLOT_MS } from "../shared/time/slot-time";
 import { css, html, nothing } from "lit";
-import { customElement, property, state } from "lit/decorators.js";
+import { customElement, property } from "lit/decorators.js";
 import { fillTemplate } from "../localize/localize";
 import type {
     ApplianceProjectionsPayload,
@@ -18,7 +18,6 @@ import { helmanColorVars } from "../color-vars";
 import { currencyFromPriceUnit } from "../helman-solar-inspector/money-model";
 import { getSharedHelmanStore } from "../shared/data/store";
 
-import { loadHaEntityToggle } from "../shared/load-ha-elements";
 import "../shared/mode-strip";
 import { modeStripWindow, type ModeChange, type ModeSegment } from "../shared/mode-strip";
 import type { FlowItem } from "../shared/node-flow";
@@ -96,8 +95,7 @@ type Completion =
  * planned and whether it reaches the target, why it is not charging, what
  * powered it today and whether its readings can be trusted.
  *
- * It opens on a status pill, the charge switch the charger configures with
- * the plan's word on it, the charging strip (charging so far today and the
+ * It opens on a status pill, the charging strip (charging so far today and the
  * planned windows to noon tomorrow, with the projected completion under it)
  * and the Now/Today flow around the car. The pictures absorb three
  * questions: the car opens the progress, the strip the plan, the flow today's
@@ -125,23 +123,6 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
     static styles = [helmanColorVars, nodeDetailSharedStyles, nodeDetailQuestionStyles, nodeDetailPictureStyles, scheduleActionToneStyles, css`
         .muted {
             color: var(--secondary-text-color);
-        }
-        .switch {
-            display: flex;
-            flex-direction: column;
-            gap: 2px;
-        }
-        .switch-row {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 12px;
-            min-height: 40px;
-        }
-        .switch-row .reading {
-            text-align: left;
-            min-width: 0;
-            overflow-wrap: anywhere;
         }
         .estimate {
             margin: 0;
@@ -218,8 +199,6 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
             this._segmentRunMode = this._overview.status === "ready" ? this._runModeState(this._overview.payload) : "";
         },
     });
-    /** HA's entity toggle is defined; until then, or if it fails to load, the switch's state is text. */
-    @state() private _toggleReady = !!customElements.get("ha-entity-toggle");
 
     /** The slot boundaries, read several times a render; cleared before each update. */
     private _boundariesCache?: ScheduleSlotBoundary[];
@@ -237,13 +216,6 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
             void this._loadOverview(true);
         }
         super.willUpdate(changed);
-    }
-
-    protected _start(): void {
-        super._start();
-        loadHaEntityToggle()
-            .then(() => { this._toggleReady = true; })
-            .catch((error) => console.error("node-detail-ev_charger: failed to load HA's entity toggle", error));
     }
 
     protected updated(changed: Map<string, unknown>): void {
@@ -296,7 +268,6 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         return html`
             <div class="content">
                 ${this._renderSummary(overview)}
-                ${this._renderSwitch(overview)}
                 ${this._renderStrip(selection)}
                 ${this._renderCarFlow(overview, selection)}
                 ${eta ? html`<p class="estimate" data-estimate>${eta}</p>` : nothing}
@@ -351,47 +322,6 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         if (runMode !== null) return fillTemplate(this._t("status.reported"), { state: runMode });
         if (power === null) return this._t("status.unavailable");
         return fillTemplate(this._t(power > IDLE_W ? "status.drawing" : "status.not_drawing"), values);
-    }
-
-    // Switch ------------------------------------------------------------------
-
-    /**
-     * The charge switch the charger configures, HA's own toggle for it, with
-     * its name opening more-info. The line under it says whether its state is
-     * what the plan has now and when the plan next changes it; it never says
-     * who switched it. None without a configured switch.
-     */
-    private _renderSwitch(overview: EvChargerDetailPayload) {
-        const entityId = overview.entities.charge_switch;
-        if (!entityId) return nothing;
-        const line = this._switchLine(entityId);
-        return html`
-            <div class="switch" data-switch>
-                <div class="switch-row">
-                    <button class="reading" data-entity=${entityId} @click=${() => this._moreInfo(entityId)}>${this._name(entityId)}</button>
-                    ${this._toggleReady
-                        ? html`<ha-entity-toggle .hass=${this.hass} .stateObj=${this.hass.states[entityId]}></ha-entity-toggle>`
-                        : html`<span class="value" data-switch-state>${this._reading(overview, "charge_switch") ?? this._t("unavailable")}</span>`}
-                </div>
-                ${line ? html`<p class="note" data-switch-line data-plan-state=${line.state}>${line.text}</p>` : nothing}
-            </div>
-        `;
-    }
-
-    /** The switch against the plan's window now and its next change; `null` until the plan is read. */
-    private _switchLine(entityId: string): { state: string; text: string } | null {
-        const schedule = this._plan.schedule;
-        if (!schedule) return null;
-        if (!schedule.executionEnabled) return { state: "execution_off", text: this._t("switch.execution_off") };
-        const reading = this.hass.states[entityId]?.state;
-        const on = reading === "on" ? true : reading === "off" ? false : null;
-        const planned = this._effectiveWindowNow() !== null;
-        const state = `${on === null ? "unknown" : on ? "on" : "off"}_${planned ? "planned" : "unplanned"}`;
-        const change = this._planChange();
-        const next = change
-            ? fillTemplate(this._t(change.charge ? "switch.next_on" : "switch.next_off"), { time: this._time(change.at) })
-            : this._t("switch.no_next");
-        return { state, text: (on === null ? "" : this._t(`switch.${state}`) + " ") + next };
     }
 
     /** The effective window in progress: execution on and its condition met. */

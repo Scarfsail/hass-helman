@@ -383,6 +383,18 @@ class SharedMeterRowsTests(unittest.TestCase):
         )
         self.assertTrue(all(c["deferrable"] for c in children))
 
+    def test_each_child_names_its_climate_entity_and_the_parent_none(self) -> None:
+        children = [c for c in self.breaker["children"] if c["isEstimated"]]
+
+        self.assertEqual(
+            [c["climateEntityId"] for c in children],
+            [f"climate.{room}" for room in AC_ROOMS],
+        )
+        # A switch is not a climate entity; a remainder has no controls at all.
+        self.assertIsNone(self.breaker["climateEntityId"])
+        (remainder,) = [c for c in self.breaker["children"] if c["isUnmeasured"]]
+        self.assertIsNone(remainder["climateEntityId"])
+
     def test_an_unmeasured_remainder_sits_beside_them(self) -> None:
         (remainder,) = [c for c in self.breaker["children"] if c["isUnmeasured"]]
 

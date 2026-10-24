@@ -91,6 +91,32 @@ class TestTypedFields(unittest.TestCase):
         self.assertEqual(children["sensor.ev_energy"]["applianceKind"], "ev_charger")
         self.assertNotIn("applianceKind", children["sensor.light_energy"])
 
+    def test_a_metered_device_carries_its_configured_climate_entity(self):
+        config = {
+            "energy_nodes": {"house": {"entities": {"power": "sensor.house_power"}}},
+            "devices": {"consumers": [
+                {"id": "ac", "kind": "climate", "schedulable": False,
+                 "consumption": {"energy_entity_id": "sensor.ac_energy"},
+                 "controls": {
+                     "switch": {"entity_id": "switch.ac_breaker"},
+                     "climate": {"entity_id": " climate.living_room "},
+                 }},
+                {"id": "light", "kind": "generic", "schedulable": False,
+                 "consumption": {"energy_entity_id": "sensor.light_energy"},
+                 "controls": {"switch": {"entity_id": "switch.light"}, "climate": {"entity_id": ""}}},
+            ]},
+        }
+        tree = asyncio.run(HelmanTreeBuilder(_Hass(), config).build()).tree
+        house = tree["consumers"][0]
+        children = {node["id"]: node for node in house["children"]}
+        # Both controls are typed fields of their own, the climate one trimmed.
+        self.assertEqual(children["sensor.ac_energy"]["switchEntityId"], "switch.ac_breaker")
+        self.assertEqual(children["sensor.ac_energy"]["climateEntityId"], "climate.living_room")
+        # An unset or blank climate control is a typed null, never dropped.
+        self.assertIn("climateEntityId", children["sensor.light_energy"])
+        self.assertIsNone(children["sensor.light_energy"]["climateEntityId"])
+        self.assertIsNone(house["climateEntityId"])
+
     def test_the_stored_config_is_not_shipped(self):
         for key, node in _nodes(_build(FULL)).items():
             with self.subTest(node=key):

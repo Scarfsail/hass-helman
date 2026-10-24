@@ -10,12 +10,11 @@ import { expectReducedMotionStill } from "./support/node-flow";
  * Mounted on the real `helman-card` against a fake backend that answers the
  * device tree, the appliance roster, `helman/get_node_detail` (the charger's
  * overview and its today and segment sections), the schedule and the
- * appliance projection. HA's `ha-entity-toggle` is a stub that reflects the
- * state it is handed and calls the switch service on a click.
+ * appliance projection.
  * What is pinned is the routing (an EV charger by its configured appliance
  * kind, every other device on the generic detail), the pictured overview
- * (the charge switch and its plan line, the charging strip with the
- * completion under it, the flow around the car, the tiles), the shared
+ * (the charging strip with the completion under it, the flow around the
+ * car, the tiles; the charge switch is the Control tab's), the shared
  * disclosure contract, and the charger's truthfulness: the hardware's session counters
  * are the session and today's attribution is not, several cars with nothing
  * naming one show no car's charge, a time at current power is not a ready-by
@@ -61,9 +60,9 @@ type Variant = {
     timeZone?: string;
     /** The profile's L3 power is not in the registry. */
     noPhase3?: boolean;
-    /** HA's entity toggle never registers (outside a dashboard). */
-    noToggle?: boolean;
     todayFails?: boolean;
+    /** The boiler's user action from 12:00 to 13:00, another lane's override. */
+    userBoiler?: boolean;
     evNode?: "meterless" | "missing_kind" | "multiple";
 };
 
@@ -72,7 +71,6 @@ declare global {
         __EvChargerHass: any;
         __EvChargerRequests: Array<{ type: string; node?: string; section?: string; device_id?: string }>;
         __deepAll: (root: ParentNode, selector: string, out?: Element[]) => Element[];
-        __serviceCalls: Array<[string, string, Record<string, unknown>]>;
         __moreInfo: string[];
     }
 }
@@ -113,25 +111,6 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             return out;
         };
         (window as any).loadCardHelpers = async () => ({ createCardElement: () => document.createElement("div") });
-        // HA's entity toggle: reflects the state handed to it, and a click asks for the other one.
-        if (!v.noToggle) customElements.define("ha-entity-toggle", class extends HTMLElement {
-            hass: any;
-            private _stateObj: any;
-            set stateObj(value: any) {
-                this._stateObj = value;
-                this.setAttribute("data-state", value?.state ?? "");
-                this.setAttribute("data-entity", value?.entity_id ?? "");
-            }
-            get stateObj() { return this._stateObj; }
-            connectedCallback() {
-                this.textContent = "toggle";
-                this.addEventListener("click", () => {
-                    const on = this._stateObj?.state === "on";
-                    this.hass.callService("switch", on ? "turn_off" : "turn_on", { entity_id: this._stateObj.entity_id });
-                });
-            }
-        });
-        window.__serviceCalls = [];
         window.__moreInfo = [];
         document.addEventListener("hass-more-info", (event) => window.__moreInfo.push((event as CustomEvent).detail.entityId));
         const profile = v.profile !== false;
@@ -252,7 +231,8 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             const id = at.toISOString().replace(".000Z", "+00:00");
             const hour = 11.75 + i / 4;
             const window = windows.find((w) => hour >= w.from && hour < w.to);
-            const controllables: ScheduleControllableActionsDTO = { inverter: { kind: "normal" } };
+            const controllables: ScheduleControllableActionsDTO = { inverter: { kind: "normal", setBy: "automation" } };
+            if (v.userBoiler && hour >= 12 && hour < 13) controllables.boiler = { on: true, setBy: "user" };
             if (window) {
                 controllables["garage-ev"] = {
                     charge: true, useMode: window.useMode ?? "Fast", ecoGear: "6A", setBy: "automation",
@@ -285,10 +265,9 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
         window.__EvChargerHass = window.__configureNodeDetail({
             states, tree, overviews: { ev_charger: overview }, sections: { ev_charger: { today, segment } }, schedule,
             timeZone: v.timeZone,
-            hass: { user: { is_admin: true }, callService: async (domain: string, service: string, data: Record<string, unknown>) => {
-                window.__serviceCalls.push([domain, service, data]);
-            } },
+            hass: { user: { is_admin: true } },
             replies: {
+                "helman/set_schedule": schedule,
                 "helman/get_appliances": appliances,
                 "helman/get_appliance_projections": () => {
                     if (v.projectionFails || (window as any).__projectionDown) throw new Error("projection down");
@@ -330,7 +309,7 @@ const { content, question, header, evidence, tile, flow, flowLabel } = nodeDetai
 const overview = (page: Page) => content(page).locator("[data-overview]");
 const glyph = (page: Page) => content(page).locator("helman-soc-glyph");
 const strip = (page: Page) => content(page).locator("helman-mode-strip");
-const switchLine = (page: Page) => content(page).locator("[data-switch-line]");
+const tab = (page: Page, name: "overview" | "control") => page.locator(`node-detail-dialog [data-tab="${name}"]`);
 // The card's own inverter overview, for its distribution row's cell, is not the detail's.
 const requests = (page: Page, type: string) =>
     page.evaluate((type) => window.__EvChargerRequests.filter((r) => r.type === type && r.node !== "inverter"), type);
@@ -417,11 +396,10 @@ test.describe("routing", () => {
 });
 
 test.describe("the overview", () => {
-    test("opens on a status pill, the switch, the strip, the Now flow around the car and three closed tiles", async ({ page }) => {
+    test("opens on a status pill, the strip, the Now flow around the car and three closed tiles", async ({ page }) => {
         await openCharger(page);
         await expect(overview(page).locator(".status")).toHaveText("Charging at 6.4 kW.");
         await expect(overview(page).locator(".status")).toHaveAttribute("data-tone", "charge");
-        await expect(content(page).locator("[data-switch]")).toBeVisible();
         await expect(strip(page)).toBeVisible();
         await expect(flow(page)).toHaveAttribute("data-flow-scope", "now");
         // 30 % of a 64 kWh battery at 6.4 kW: three hours, at current power, not a ready-by time.
@@ -498,61 +476,35 @@ test.describe("the overview", () => {
 });
 
 test.describe("the charge switch", () => {
-    test("reflects and toggles the configured entity; its name opens more-info", async ({ page }) => {
+    test("is not on the overview: the Control tab drives the charger's lane, never a direct toggle", async ({ page }) => {
         await openCharger(page);
-        const toggle = content(page).locator("[data-switch] ha-entity-toggle");
-        await expect(toggle).toHaveAttribute("data-entity", "switch.ev_charge");
-        await expect(toggle).toHaveAttribute("data-state", "on");
-        // On during a planned window: as planned, and the plan stops it at the window's end.
-        await expect(switchLine(page)).toHaveAttribute("data-plan-state", "on_planned");
-        await expect(switchLine(page)).toHaveText("On, as planned. The plan next switches it off at 14:00.");
-
-        await toggle.click();
-        expect(await page.evaluate(() => window.__serviceCalls)).toEqual([["switch", "turn_off", { entity_id: "switch.ev_charge" }]]);
-        // HA reports the new state; the toggle and the line follow it, and never say who switched it.
-        await setStates(page, { "switch.ev_charge": "off" });
-        await expect(toggle).toHaveAttribute("data-state", "off");
-        await expect(switchLine(page)).toHaveAttribute("data-plan-state", "off_planned");
-        await expect(switchLine(page)).toHaveText("Off, though the plan charges now. The plan next switches it off at 14:00.");
-        await expect(switchLine(page)).not.toContainText(/you|user|manual|Helman switched/i);
-
-        await content(page).locator("[data-switch] button.reading").click();
-        expect(await page.evaluate(() => window.__moreInfo)).toEqual(["switch.ev_charge"]);
-    });
-
-    test("not planned now: the line says so, and when the plan next switches it on", async ({ page }) => {
-        await openCharger(page, { runMode: "SuspendedEV", power: "0", chargeSwitch: "off", windows: [{ from: 22, to: 26, vehicleId: "kona" }] });
-        await expect(switchLine(page)).toHaveAttribute("data-plan-state", "off_unplanned");
-        await expect(switchLine(page)).toHaveText("Off, as planned. The plan next switches it on at 22:00.");
-        await setStates(page, { "switch.ev_charge": "on" });
-        await expect(switchLine(page)).toHaveAttribute("data-plan-state", "on_unplanned");
-        await expect(switchLine(page)).toHaveText("On, though no charging is planned now. The plan next switches it on at 22:00.");
-    });
-
-    test("adjacent planned windows are one stretch: the plan switches it off where the last ends", async ({ page }) => {
-        await openCharger(page, { windows: [
-            { from: 11.75, to: 13, vehicleId: "kona", useMode: "Fast" },
-            { from: 13, to: 14.5, vehicleId: "kona", useMode: "ECO" },
-        ] });
-        await expect(switchLine(page)).toHaveText("On, as planned. The plan next switches it off at 14:30.");
-    });
-
-    test("a candidate is not executed: it is not a plan change", async ({ page }) => {
-        await openCharger(page, { runMode: "SuspendedEV", power: "0", chargeSwitch: "off", windows: [{ from: 22, to: 26, candidate: true, vehicleId: "kona" }] });
-        await expect(switchLine(page)).toHaveText("Off, as planned. The plan does not switch it today or tomorrow.");
-    });
-
-    test("with execution off the plan does not switch it", async ({ page }) => {
-        await openCharger(page, { executionEnabled: false });
-        await expect(switchLine(page)).toHaveAttribute("data-plan-state", "execution_off");
-        await expect(switchLine(page)).toHaveText("Schedule execution is off: the plan does not switch it.");
-    });
-
-    test("no switch row without a configured switch", async ({ page }) => {
-        await openCharger(page, { chargeSwitch: null });
         await expect(content(page).locator("[data-switch]")).toHaveCount(0);
-        await expect(content(page).locator("ha-entity-toggle")).toHaveCount(0);
+        await expect(page.locator("node-detail-dialog ha-entity-toggle")).toHaveCount(0);
         await expect(strip(page)).toBeVisible();
+
+        await tab(page, "control").click();
+        await expect(content(page)).toHaveCount(0);
+        const control = page.locator("helman-node-control");
+        await expect(control).toHaveCount(1);
+        await expect(control.locator("[data-control]")).toHaveAttribute("data-control", "garage-ev");
+        await expect(page.locator("helman-device-direct-control")).toHaveCount(0);
+        await expect(page.locator("node-detail-dialog ha-entity-toggle")).toHaveCount(0);
+    });
+
+    test("an override writes the charger's lane through its own editor, keeping the boiler's user action", async ({ page }) => {
+        await openCharger(page, { userBoiler: true });
+        await tab(page, "control").click();
+        await page.locator("helman-node-control [data-change]").click();
+        const dialog = page.locator("control-override-dialog");
+        await dialog.locator('label:has(input[value="off"])').click();
+        await dialog.locator('[data-pick="plus_1h"]').click();
+        await dialog.locator("[data-save]").click();
+        await expect(dialog).toHaveCount(0);
+        const slots = await page.evaluate(() => window.__EvChargerRequests.filter((r) => r.type === "helman/set_schedule").map((r) => (r as any).slots));
+        expect(slots).toEqual([["12:00", "12:15", "12:30", "12:45"].map((time) => ({
+            id: `2026-10-21T${time}:00+00:00`,
+            controllables: { "garage-ev": { charge: false }, boiler: { on: true } },
+        }))]);
     });
 });
 
@@ -594,6 +546,20 @@ test.describe("the charging strip", () => {
         ]);
         await expect(strip(page).locator("[data-next-change]")).toHaveText("22:00 · starts charging");
         await expect(strip(page).locator("[data-next-change]")).toHaveAttribute("data-tone", "charge");
+    });
+
+    test("adjacent planned windows are one stretch: charging stops where the last ends", async ({ page }) => {
+        await openCharger(page, { windows: [
+            { from: 11.75, to: 13, vehicleId: "kona", useMode: "Fast" },
+            { from: 13, to: 14.5, vehicleId: "kona", useMode: "ECO" },
+        ] });
+        await expect(strip(page).locator("[data-next-change]")).toHaveText("14:30 · stops charging");
+    });
+
+    test("a candidate is not executed: it is not a plan change", async ({ page }) => {
+        await openCharger(page, { runMode: "SuspendedEV", power: "0", windows: [{ from: 22, to: 26, candidate: true, vehicleId: "kona" }] });
+        await expect(strip(page)).toBeVisible();
+        await expect(strip(page).locator("[data-next-change]")).toHaveCount(0);
     });
 
     test("a completion that cannot be estimated says why on the line", async ({ page }) => {
@@ -1094,12 +1060,6 @@ test.describe("a Custom charger", () => {
 });
 
 test.describe("review fixes", () => {
-    test("without HA's toggle the switch row still says on or off", async ({ page }) => {
-        await openCharger(page, { noToggle: true });
-        await expect(content(page).locator("[data-switch] ha-entity-toggle")).toHaveCount(0);
-        await expect(content(page).locator("[data-switch-state]")).toHaveText("on");
-    });
-
     test("a phase the registry does not have is not drawn, and the total out stays", async ({ page }) => {
         await openCharger(page, { noPhase3: true });
         await expect(flow(page).locator("[data-side='out'] [data-flow]")).toHaveCount(2);

@@ -147,6 +147,10 @@
       "nothing_scheduled": "Nothing scheduled",
       "unavailable": "unavailable",
       "not_on_roster": "Helman has no controllable for this node.",
+      "unsupported_authoring": "This appliance's actions cannot be authored in the schedule yet, so a new manual override cannot be set here.",
+      "direct_note": "Helman does not schedule this device: these are Home Assistant's own controls.",
+      "on": "on",
+      "off": "off",
       "change": "Change",
       "return_to_automatic": "Return to automatic",
       "returned": "Returned to automatic.",
@@ -1436,16 +1440,6 @@
         "lock": "Electronic lock",
         "no_readings": "No technical readings are available.",
         "evidence_note": "Readings as reported by the charger, each with its own update time."
-      },
-      "switch": {
-        "execution_off": "Schedule execution is off: the plan does not switch it.",
-        "on_planned": "On, as planned.",
-        "off_planned": "Off, though the plan charges now.",
-        "on_unplanned": "On, though no charging is planned now.",
-        "off_unplanned": "Off, as planned.",
-        "next_on": "The plan next switches it on at {time}.",
-        "next_off": "The plan next switches it off at {time}.",
-        "no_next": "The plan does not switch it today or tomorrow."
       },
       "strip": {
         "scope": "Charging · today to noon tomorrow",

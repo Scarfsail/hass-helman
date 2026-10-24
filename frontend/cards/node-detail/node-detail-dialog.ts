@@ -1,6 +1,7 @@
 import { DialogHistoryController } from "../shared/dialog-history-controller";
 import { LitElement, css, html } from "lit-element";
 import { customElement, property, state } from "lit/decorators.js";
+import { repeat } from "lit/directives/repeat.js";
 import { nothing, TemplateResult } from "lit-html";
 import type { HomeAssistant } from "../../types/ha";
 import type { LocalizeFunction } from "../localize/localize";
@@ -16,12 +17,13 @@ import "./node-detail-ev-charger-content";
 import type { NodeDetailDeviceContent } from "./node-detail-device-content";
 import "./node-detail-device-content";
 import "./node-control";
+import "./device-direct-control";
 
 type NodeDetailTab = "overview" | "control";
 const TABS: readonly NodeDetailTab[] = ["overview", "control"];
 
 /**
- * A node's detail in Home Assistant's dialog. A node Helman controls opens on
+ * A node's detail in Home Assistant's dialog. A node with controls opens on
  * its Overview with a Control tab beside it; only the tab shown is in the
  * page, so a hidden one reads nothing.
  */
@@ -128,14 +130,35 @@ export class NodeDetailDialog extends LitElement {
         return this.params.nodeType === "device" ? `device:${this.params.item.id}` : this.params.nodeType;
     }
 
-    /** The lane a node's Control tab drives; `null` for a node without one. The battery is driven through the inverter's. */
-    private _controllableId(): string | null {
-        return this.params.nodeType === "inverter" || this.params.nodeType === "battery" ? INVERTER_CONTROLLABLE_ID : null;
+    /**
+     * The lanes a node's Control tab drives, once each in tree order: the
+     * battery is driven through the inverter's, a device through its own and
+     * those its meter stands for, as a meter shared by several controllables.
+     */
+    private _controllableIds(): readonly string[] {
+        if (this.params.nodeType === "inverter" || this.params.nodeType === "battery") return [INVERTER_CONTROLLABLE_ID];
+        if (this.params.nodeType !== "device") return [];
+        const { controllableIds = [], ownControllableIds = [] } = this.params.item;
+        return [...new Set([...controllableIds, ...ownControllableIds])];
+    }
+
+    /**
+     * HA's own controls of a device: its switch and its climate entity. A
+     * device Helman schedules never gets a direct toggle, only its climate
+     * entity's more-info.
+     */
+    private _directControls(scheduled: boolean): { switchEntityId: string | null; climateEntityId: string | null } | null {
+        if (this.params.nodeType !== "device") return null;
+        const { switchEntityId, climateEntityId } = this.params.item;
+        // A meterless air conditioner's running signal is its climate entity: one control, not a switch.
+        const switchId = !scheduled && switchEntityId !== climateEntityId ? switchEntityId : null;
+        return switchId || climateEntityId ? { switchEntityId: switchId, climateEntityId } : null;
     }
 
     private _renderBody(): TemplateResult {
-        const controllableId = this._controllableId();
-        if (controllableId === null) return this._renderContent();
+        const controllableIds = this._controllableIds();
+        const direct = this._directControls(controllableIds.length > 0);
+        if (controllableIds.length === 0 && direct === null) return this._renderContent();
         return html`
             <div class="tabs" role="tablist" aria-label=${this.localize("node_detail.control.tabs")} @keydown=${this._onTabKeydown}>
                 ${TABS.map((tab) => html`
@@ -153,12 +176,24 @@ export class NodeDetailDialog extends LitElement {
             </div>
             <div role="tabpanel" id="node-detail-tabpanel" aria-labelledby=${`node-detail-tab-${this._tab}`}>
                 ${this._tab === "overview" ? this._renderContent() : html`
-                    <helman-node-control
-                        .hass=${this.hass}
-                        .localize=${this.localize}
-                        .controllableId=${controllableId}
-                        .note=${this.params.nodeType === "battery" ? this.localize("node_detail.control.battery_lane") : null}
-                    ></helman-node-control>
+                    ${repeat(controllableIds, (controllableId) => controllableId, (controllableId) => html`
+                        <helman-node-control
+                            .hass=${this.hass}
+                            .localize=${this.localize}
+                            .controllableId=${controllableId}
+                            .titled=${controllableIds.length > 1}
+                            .note=${this.params.nodeType === "battery" ? this.localize("node_detail.control.battery_lane") : null}
+                        ></helman-node-control>
+                    `)}
+                    ${direct !== null ? html`
+                        <helman-device-direct-control
+                            .hass=${this.hass}
+                            .localize=${this.localize}
+                            .switchEntityId=${direct.switchEntityId}
+                            .climateEntityId=${direct.climateEntityId}
+                            .scheduled=${controllableIds.length > 0}
+                        ></helman-device-direct-control>
+                    ` : nothing}
                 `}
             </div>
         `;
