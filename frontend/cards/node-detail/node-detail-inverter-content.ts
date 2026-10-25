@@ -1,6 +1,6 @@
 import { formatPower } from "../shared/format";
 import { css, html, nothing, svg } from "lit";
-import { customElement, property } from "lit/decorators.js";
+import { customElement, property, state } from "lit/decorators.js";
 import { fillTemplate } from "../localize/localize";
 import type {
     InverterDetailPayload,
@@ -20,7 +20,7 @@ import { getScheduleActionTone, scheduleActionToneStyles, type ScheduleActionTon
 import { INVERTER_CONTROLLABLE_ID } from "../shared/schedule/schedule-types";
 import "../shared/day-line-chart";
 import type { DayLineSeries } from "../shared/day-line-chart";
-import { NodeDetailContentBase, type NodeFlow } from "./node-detail-base";
+import { IDLE_W, NodeDetailContentBase, type NodeFlow } from "./node-detail-base";
 import { staleToday } from "./section-resource";
 import {
     currentRun,
@@ -37,6 +37,11 @@ import {
 import { powerUnitFactor } from "../shared/power-reading";
 import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { InverterDetailParams } from "./node-detail-types";
+import { LaneOwnershipController } from "./lane-ownership";
+import { ownershipText } from "./who-decides";
+import "./detail-headline";
+import "./help-tip";
+import "./control-override-dialog";
 import type { LiveFlows } from "./live-flows";
 
 type QuestionId = "why" | "next" | "limits" | "operating" | "trust";
@@ -203,11 +208,18 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
         .load .meter-fill {
             --meter-accent: var(--helman-neutral);
         }
+        .inverter-icon.active { animation: inverter-glow 2s ease-in-out infinite; }
+        @keyframes inverter-glow {
+            50% { filter: drop-shadow(0 0 8px var(--helman-neutral)); }
+        }
+        @media (prefers-reduced-motion: reduce) { .inverter-icon.active { animation: none; } }
     `];
 
     protected readonly _node = "inverter" as const;
 
     @property({ attribute: false }) public params!: InverterDetailParams;
+    @state() private _overrideOpen = false;
+    private readonly _lanes = new LaneOwnershipController(this, () => this.hass);
 
     /** The inverter's plan. */
     private readonly _plan = this._useSchedule(inverterRuns);
@@ -254,24 +266,37 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
         const notReady = this._renderNotReady();
         if (notReady || this._overview.status !== "ready") return notReady;
         const overview = this._overview.payload;
+        const mode = overview.agreement.observedOption;
+        const ac = this._acPower(overview);
+        const rated = this._watts(overview, "rated_power");
+        const pct = ac !== null && rated !== null && rated > 0 ? Math.round(Math.abs(ac) / rated * 100) : null;
+        const controllable = this._lanes.roster?.find((item) => item.id === INVERTER_CONTROLLABLE_ID);
         return html`
             <div class="content">
                 ${this._renderSummary(overview)}
+                <helman-detail-headline .value=${mode ? this._modeLabel(mode) : "—"}
+                    .entityId=${overview.mode?.entityId ?? null}
+                    .caption=${[this.localize("node_detail.shared.mode_now"), mode ? this._t(`mode_short.${mode}`) : "—"]}>
+                    <span slot="icon" class=${`inverter-icon ${ac !== null && Math.abs(ac) > IDLE_W ? "active" : ""}`}>${inverterGlyph()}</span>
+                </helman-detail-headline>
+                <div class="section-title">${this.localize("node_detail.shared.inverter_chain")}
+                    <helman-help-tip .explanation=${this.localize("node_detail.shared.inverter_chain_help")}></helman-help-tip></div>
                 ${this._renderChain(overview)}
-                ${this._renderStrip(overview)}
-                ${this._renderInverterFlow(overview)}
-                <div class="tiles">
-                    ${this._renderLimitsTile(overview)}
-                    ${this._renderOperatingTile(overview)}
-                    ${overview.profile ? this._renderTrustTile(overview) : nothing}
-                </div>
-                ${this._renderOpen(overview)}
+                <div class="row" data-output><span>${this.localize("node_detail.shared.output_now")}</span>
+                    <strong>${ac === null ? "—" : formatPower(Math.abs(ac)).display}${pct !== null && rated !== null ? ` · ${pct} % ${this.localize("node_detail.shared.of_rating")} ${formatPower(rated).display}` : ""}</strong></div>
+                ${pct !== null ? html`<span class="meter"><span class="meter-fill" style=${`width:${Math.min(100, pct)}%`}></span></span>` : nothing}
+                <div class="row"><span>${this.localize("node_detail.shared.temperature")}</span><strong>${this._reading(overview, "inverter_temperature") ?? "—"}</strong></div>
+                <button type="button" class="link-button" ?disabled=${!controllable?.supportsAuthoring} @click=${() => { this._overrideOpen = true; }}>${this.localize("node_detail.shared.override_mode")}</button>
+                ${this._overrideOpen && controllable ? html`<control-override-dialog .hass=${this.hass} .localize=${this.localize}
+                    .controllable=${controllable} .normalized=${this._lanes.normalized}
+                    .executionEnabled=${this._lanes.snapshot.schedule?.executionEnabled ?? false} .open=${true}
+                    @closed=${() => { this._overrideOpen = false; }}></control-override-dialog>` : nothing}
             </div>
         `;
     }
 
     /** The open question's answer and evidence, full width under the tiles. */
-    private _renderOpen(overview: InverterDetailPayload) {
+    protected _renderOpen(overview: InverterDetailPayload) {
         switch (this._open) {
             case "why":
                 return this._question("why", this._whyPreview(), () => this._renderWhy(overview), () => this._renderWhyEvidence(overview), "evidence");
@@ -300,8 +325,9 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
         const condition = overview.condition;
         return html`
             <div class="summary" data-overview>
-                <p class="status pill action-tone-${tone}" data-tone=${tone}>${status}</p>
+                <p class="status" data-tone=${tone}>${status} · ${ownershipText(this._lanes.status(INVERTER_CONTROLLABLE_ID), this.localize, this._lanes.locale, this._lanes.timeZone)}</p>
                 ${condition ? this._exceptionBanner(fillTemplate(this._t(`exception.${condition.kind}`), { state: condition.runMode }), "operating") : nothing}
+                ${!condition && overview.agreement.status === "mismatch" ? html`<div class="exception" role="status" data-exception>${this._t("exception.mismatch")}</div>` : nothing}
             </div>
         `;
     }
@@ -318,10 +344,17 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
         const notApplied = this._plan.schedule !== null && !this._plan.schedule.executionEnabled;
         const [plan, command, inverter] = this._chainBoxes(overview);
         const mismatch = overview.agreement.status === "mismatch";
+        const current = this._plan.runs.find((run) => run.startMs <= Date.now() && (run.endMs === null || Date.now() < run.endMs));
+        const planned = current ? effectiveAction(current.action).kind : null;
+        const commanded = this._commandedKind(overview);
+        const planMismatch = planned !== null && commanded !== null && planned !== commanded;
+        const runtime = runtimeFor<InverterRuntimeDTO>(this._plan.schedule, INVERTER_CONTROLLABLE_ID, Date.now());
+        const reason = notApplied ? this._t("why.execution_off_short")
+            : planMismatch ? this._t("chain.plan_mismatch")
+                : runtime?.outcome === "failed" ? this._t("chain.executor_failed")
+                    : mismatch ? this._t("exception.mismatch") : null;
         return html`
-            <button class="picture chain" data-chain title=${this._t("q.why")} aria-expanded=${this._open === "why" ? "true" : "false"}
-                @click=${() => this._setOpen(this._open === "why" ? null : "why")}>
-                <span class="picture-scope">${this._nowScopeLabel()}</span>
+            <div class="picture chain" data-chain>
                 <span class="chain-row">
                     ${this._renderBox(plan)}
                     ${this._renderLink(notApplied)}
@@ -329,13 +362,10 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
                     ${this._renderLink(false)}
                     ${this._renderBox(inverter)}
                 </span>
-            </button>
-            ${mismatch ? html`
-                <div class="exception" role="status" data-exception>
-                    <span>${this._t("exception.mismatch")}</span>
-                    <button class="link-button" @click=${() => this._setOpen("why")}>${this._t("exception.details")}</button>
-                </div>
-            ` : nothing}
+            </div>
+            <p data-verdict>${reason ? fillTemplate(this.localize("node_detail.shared.inverter_not_applied"), { why: reason })
+                : planned !== null && commanded !== null && overview.agreement.status === "match"
+                    ? this.localize("node_detail.shared.inverter_agrees") : this._t("chain.unknown")}</p>
         `;
     }
 
@@ -411,7 +441,7 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
      * tomorrow, hatched, with the next change flagged in its tone. The strip
      * opens *next*.
      */
-    private _renderStrip(overview: InverterDetailPayload) {
+    protected _renderStrip(overview: InverterDetailPayload) {
         const now = Date.now();
         const { start, end } = modeStripWindow(now, this._timeZone);
         const change = nextChange(this._plan.runs, Date.now(), this._timeZone);
@@ -484,7 +514,7 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
      * inverter with its AC power now. Live from the card on Now, today's kWh
      * from the `flows` section on Today. The flow opens *operating*.
      */
-    private _renderInverterFlow(overview: InverterDetailPayload) {
+    protected _renderInverterFlow(overview: InverterDetailPayload) {
         const flow = this._flowScope === "now" ? this._nowFlow(overview) : this._todayFlow();
         return this._renderFlow(flow, this.params.flowScaleW, "operating", html`<span slot="centre">${inverterGlyph()}</span>`);
     }
@@ -550,7 +580,7 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
     // Tiles -------------------------------------------------------------------
 
     /** The export cap the inverter holds, and the battery's SoC range as a bar. */
-    private _renderLimitsTile(overview: InverterDetailPayload) {
+    protected _renderLimitsTile(overview: InverterDetailPayload) {
         const exportLimit = this._watts(overview, "export_limit") ?? overview.maxAllowedExportPower;
         const low = this._number(overview, "battery_min_soc");
         const high = this._number(overview, "battery_max_soc");
@@ -569,7 +599,7 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
     }
 
     /** The temperature, and the AC load as a share of the inverter's rating, without thresholds. */
-    private _renderOperatingTile(overview: InverterDetailPayload) {
+    protected _renderOperatingTile(overview: InverterDetailPayload) {
         const ac = this._acPower(overview);
         const rated = this._watts(overview, "rated_power");
         const share = ac !== null && rated !== null && rated > 0 ? Math.abs(ac) / rated : null;
@@ -583,7 +613,7 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
     }
 
     /** The link's success rate and the quarantined registers, as the integration reports them. */
-    private _renderTrustTile(overview: InverterDetailPayload) {
+    protected _renderTrustTile(overview: InverterDetailPayload) {
         const rate = this._reading(overview, "link_success_rate");
         const quarantined = this._number(overview, "link_quarantined_registers");
         if (rate === null && quarantined === null) return this._tile("trust", "–", this._t("trust.unavailable"));

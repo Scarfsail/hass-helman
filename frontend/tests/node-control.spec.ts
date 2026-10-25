@@ -159,13 +159,14 @@ async function mount(page: Page, setup: Setup = {}, card = "helman-simple-card")
 
 const control = (page: Page) => page.locator("helman-node-control");
 const status = (page: Page) => control(page).locator("[data-status]");
-const tab = (page: Page, name: "overview" | "schedule") => page.locator(`node-detail-dialog [data-tab="${name}"]`);
+const scheduleSection = (page: Page) => page.locator("node-detail-dialog helman-detail-section[data-schedule]");
+const scheduleButton = (page: Page) => scheduleSection(page).locator("button").first();
 const overrideDialog = (page: Page) => page.locator("control-override-dialog");
 const requests = (page: Page, type: string) => page.evaluate((type) => window.__NodeDetailRequests.filter((r) => r.type === type), type);
 
 async function openControl(page: Page, node: "inverter" | "battery" = "inverter"): Promise<void> {
     await (node === "inverter" ? page.locator(".inverter-cell") : page.locator(".node-cell:has(simple-card-battery)")).click();
-    await tab(page, "schedule").click();
+    await scheduleButton(page).click();
     await expect(control(page)).toBeVisible();
 }
 
@@ -296,45 +297,15 @@ test.describe("who owns the lane", () => {
     });
 });
 
-test.describe("the tabs", () => {
-    test("open on Overview, unmount the hidden tab and reset on reopening", async ({ page }) => {
+test.describe("the Schedule section", () => {
+    test("opens collapsed and expands with a button", async ({ page }) => {
         await mount(page);
         await page.locator(".inverter-cell").click();
-        await expect(tab(page, "overview")).toHaveAttribute("aria-selected", "true");
-        await expect(page.locator("node-detail-inverter-content")).toHaveCount(1);
-        await expect(control(page)).toHaveCount(0);
-
-        await tab(page, "schedule").click();
-        await expect(tab(page, "schedule")).toHaveAttribute("aria-selected", "true");
-        await expect(page.locator("node-detail-inverter-content")).toHaveCount(0);
-        await expect(control(page)).toHaveCount(1);
-
-        // Reopened, then another node: each starts on Overview.
-        await page.locator("node-detail-dialog").evaluate((detail: any) => { detail.open = false; });
-        await page.locator("node-detail-dialog").evaluate((detail: any) => { detail.open = true; });
-        await expect(tab(page, "overview")).toHaveAttribute("aria-selected", "true");
-        await tab(page, "schedule").click();
-        await page.locator(".node-cell:has(simple-card-battery)").click();
-        await expect(tab(page, "overview")).toHaveAttribute("aria-selected", "true");
-        await expect(page.locator("node-detail-battery-content")).toHaveCount(1);
-    });
-
-    test("are a keyboard tab list: arrows, Home and End move the selection and focus", async ({ page }) => {
-        await mount(page);
-        await page.locator(".inverter-cell").click();
-        await expect(page.locator("node-detail-dialog [role=tablist]")).toBeVisible();
-        await expect(tab(page, "schedule")).toHaveAttribute("tabindex", "-1");
-        await tab(page, "overview").focus();
-        await page.keyboard.press("ArrowRight");
-        await expect(tab(page, "schedule")).toHaveAttribute("aria-selected", "true");
-        await expect(tab(page, "schedule")).toBeFocused();
+        await expect(page.locator("node-detail-inverter-content")).toBeVisible();
+        await expect(scheduleButton(page)).toHaveAttribute("aria-expanded", "false");
+        await scheduleButton(page).click();
+        await expect(scheduleButton(page)).toHaveAttribute("aria-expanded", "true");
         await expect(control(page)).toBeVisible();
-        await page.keyboard.press("Home");
-        await expect(tab(page, "overview")).toBeFocused();
-        await page.keyboard.press("End");
-        await expect(tab(page, "schedule")).toHaveAttribute("aria-selected", "true");
-        await page.keyboard.press("ArrowLeft");
-        await expect(tab(page, "overview")).toHaveAttribute("aria-selected", "true");
     });
 
     test("Back closes the override first, then the node detail", async ({ page }) => {

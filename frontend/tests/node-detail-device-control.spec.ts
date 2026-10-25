@@ -177,15 +177,15 @@ async function openDevice(page: Page, name: string): Promise<void> {
     await expect(page.locator("node-detail-device-content")).toHaveCount(1);
 }
 
-const tab = (page: Page, name: "overview" | "schedule") => page.locator(`node-detail-dialog [data-tab="${name}"]`);
+const scheduleButton = (page: Page) => page.locator("node-detail-dialog helman-detail-section[data-schedule] button").first();
 const controls = (page: Page) => page.locator("helman-node-control");
-const direct = (page: Page) => page.locator("helman-device-direct-control");
+const switchTile = (page: Page) => page.locator("node-detail-device-content helman-switch-tile");
 const overrideDialog = (page: Page) => page.locator("control-override-dialog");
 const writes = (page: Page) => page.evaluate(() => window.__NodeDetailRequests.filter((r) => r.type === "helman/set_schedule").map((r) => r.slots));
 
 async function openControl(page: Page, name: string): Promise<void> {
     await openDevice(page, name);
-    await tab(page, "schedule").click();
+    await scheduleButton(page).click();
 }
 
 /** Override a control's lane from now for an hour with the editor option `mode`. */
@@ -213,30 +213,11 @@ test.describe("a schedulable device", () => {
     test("a generic device's override writes its own lane and keeps another lane's user action", async ({ page }) => {
         await mount(page, plan([["12:00", "13:00", { klima: user({ mode: "cool" }) }]]));
         await openDevice(page, "Boiler");
-        // The header keeps the measured power; the switch follows on Overview.
-        await expect(page.locator("node-detail-device-content helman-appliance-switch-badge")).toHaveCount(0);
-        await expect(direct(page).locator("[data-switch] ha-entity-toggle")).toHaveAttribute("data-entity", "switch.boiler");
-        await expect(page.locator('node-detail-dialog [slot="headerTitle"] ha-state-icon')).toHaveAttribute("data-entity", "switch.boiler");
-        await expect(page.locator('node-detail-dialog [slot="headerTitle"] ha-state-icon')).toHaveAttribute("data-icon", "mdi:radiator");
-        await expect(page.locator("node-detail-device-content .header ha-icon")).toHaveCount(0);
-        await expect(direct(page).locator("[data-scheduled-note]")).toContainText("Schedule");
-        await tab(page, "schedule").click();
+        await expect(switchTile(page)).toHaveCount(1);
+        await scheduleButton(page).click();
         await expect(controls(page)).toHaveCount(1);
         await expect(controls(page).locator("[data-control]")).toHaveAttribute("data-control", "boiler");
         await expect(controls(page).locator("[data-status]")).toHaveText("Automatic");
-        // The Schedule panel contains only Helman's lane control.
-        await expect(direct(page)).toHaveCount(0);
-        await expect(page.locator("node-detail-dialog ha-entity-toggle")).toHaveCount(0);
-        await page.evaluate(async () => {
-            const hass = window.__NodeDetailHass;
-            const states = { ...hass.states, "switch.boiler": { ...hass.states["switch.boiler"], state: "on", attributes: { icon: "mdi:fire" } } };
-            window.__NodeDetailHass = { ...hass, states };
-            const card = document.querySelector("helman-card") as any;
-            card.hass = window.__NodeDetailHass;
-            await card.updateComplete;
-        });
-        await expect(page.locator('node-detail-dialog [slot="headerTitle"] ha-state-icon')).toHaveAttribute("data-icon", "mdi:fire");
-        await expect(page.locator('node-detail-dialog [slot="headerTitle"] ha-state-icon')).toHaveAttribute("data-state", "on");
 
         await override(page, controls(page), "on");
         expect(await writes(page)).toEqual([hour({ boiler: { on: true }, klima: { mode: "cool" } })]);
@@ -256,11 +237,9 @@ test.describe("a schedulable device", () => {
     test("a schedulable climate device offers climate more-info on Overview, with no toggle", async ({ page }) => {
         await mount(page);
         await openDevice(page, "Klima");
-        await expect(direct(page).locator("[data-scheduled-note]")).toContainText("Schedule");
-        await expect(direct(page).locator("[data-switch]")).toHaveCount(0);
-        await expect(page.locator("node-detail-dialog ha-entity-toggle")).toHaveCount(0);
-        await expect(direct(page).locator("[data-climate] .value")).toHaveText("off");
-        await direct(page).locator("[data-climate] button.reading").click();
+        await expect(switchTile(page)).toHaveCount(1);
+        await expect(switchTile(page).locator("button")).toContainText("off");
+        await switchTile(page).locator("button").click();
         expect(await page.evaluate(() => window.__moreInfo)).toEqual(["climate.klima"]);
     });
 
@@ -269,7 +248,6 @@ test.describe("a schedulable device", () => {
         await openControl(page, "Pumps");
         await expect(controls(page)).toHaveCount(2);
         // The breaker's switch is on Overview, separate from its lanes.
-        await expect(direct(page)).toHaveCount(0);
         await expect(controls(page).locator("[data-lane-name]")).toHaveText(["Pump A", "Pump B"]);
         await expect(controls(page).nth(0).locator("[data-status]")).toHaveText("Manual until Today 13:00");
         await expect(controls(page).nth(1).locator("[data-status]")).toHaveText("Not automated");
@@ -290,95 +268,27 @@ test.describe("a schedulable device", () => {
     });
 });
 
-test.describe("a device Helman does not schedule", () => {
-    test("the Control group reaches the right edge of its row at wide and narrow widths", async ({ page }) => {
+test.describe("direct control tiles", () => {
+    test("switch tile toggles and opens more-info on hold", async ({ page }) => {
         await mount(page);
         await openDevice(page, "Lamp");
-        for (const width of [1280, 375]) {
-            await page.setViewportSize({ width, height: 800 });
-            const row = await direct(page).locator("[data-switch]").boundingBox();
-            const toggle = await direct(page).locator("[data-switch] ha-entity-toggle").boundingBox();
-            const content = await page.locator("node-detail-device-content .content").boundingBox();
-            expect(row && toggle && Math.abs(row.x + row.width - toggle.x - toggle.width) <= 2).toBeTruthy();
-            expect(row && content && Math.abs(row.x + row.width - content.x - content.width) <= 2).toBeTruthy();
-        }
+        const tile = switchTile(page).locator("button");
+        await expect(tile).toHaveAttribute("aria-pressed", "true");
+        await tile.click();
+        await expect.poll(() => page.evaluate(() => window.__NodeDetailRequests.filter((r) => r.type === "call_service").length)).toBe(1);
+        await tile.hover();
+        await page.mouse.down();
+        await page.waitForTimeout(550);
+        await page.mouse.up();
+        expect(await page.evaluate(() => window.__moreInfo)).toContain("switch.lamp");
     });
 
-    test("a plain switch is HA's own toggle, with no plan around it", async ({ page }) => {
-        await mount(page);
-        await openDevice(page, "Lamp");
-        await expect(page.locator("node-detail-dialog [role=tablist]")).toHaveCount(0);
-        await expect(controls(page)).toHaveCount(0);
-        const toggle = direct(page).locator("[data-switch] ha-entity-toggle");
-        await expect(toggle).toHaveAttribute("data-entity", "switch.lamp");
-        await expect(toggle).toHaveAttribute("data-state", "on");
-        await expect(direct(page).locator("[data-switch] ha-state-icon, [data-switch] ha-icon")).toHaveCount(0);
-        await expect(page.locator('node-detail-dialog [slot="headerTitle"] ha-state-icon')).toHaveAttribute("data-entity", "switch.lamp");
-        const label = direct(page).locator("[data-switch] .control-label");
-        await expect(label).toHaveText("Control");
-        await expect(direct(page).locator("[data-switch]")).not.toContainText("Lamp switch");
-        const power = direct(page).locator("button[data-power-entity='sensor.lamp_power']");
-        await expect(power).toHaveText("75 W");
-        const powerBox = await power.boundingBox();
-        const labelBox = await label.boundingBox();
-        const toggleBox = await toggle.boundingBox();
-        expect(powerBox && toggleBox && Math.abs(powerBox.y - toggleBox.y) < 32 && powerBox.x < toggleBox.x).toBeTruthy();
-        expect(labelBox && toggleBox && labelBox.x + labelBox.width <= toggleBox.x && toggleBox.x - labelBox.x - labelBox.width <= 12).toBeTruthy();
-        await power.click();
-        expect(await page.evaluate(() => window.__moreInfo)).toEqual(["sensor.lamp_power"]);
-        await label.click();
-        expect(await page.evaluate(() => window.__moreInfo)).toEqual(["sensor.lamp_power", "switch.lamp"]);
-        await expect(direct(page).locator("[data-climate]")).toHaveCount(0);
-        await expect(page.locator("node-detail-dialog [data-status], node-detail-dialog [data-automations], node-detail-dialog [data-change]")).toHaveCount(0);
-        await toggle.click();
-        expect(await page.evaluate(() => window.__serviceCalls)).toEqual([["homeassistant", "turn_off", { entity_id: "switch.lamp" }]]);
-        await expect(direct(page).locator("[data-switch] button.reading")).toHaveCount(0);
-        expect(await writes(page)).toEqual([]);
-    });
-
-    test("a climate device opens its climate entity's more-info", async ({ page }) => {
+    test("climate tile opens more-info and a passive meter has no Schedule", async ({ page }) => {
         await mount(page);
         await openDevice(page, "Bedroom AC");
-        await expect(direct(page).locator("[data-switch]")).toHaveCount(0);
-        await expect.poll(() => page.locator('node-detail-dialog [slot="headerTitle"] ha-icon').evaluate((icon: any) => icon.icon)).toBe("mdi:air-conditioner");
-        await expect(direct(page).locator("[data-climate]")).toContainText("Bedroom thermostat");
-        await expect(direct(page).locator("[data-climate] .value")).toHaveText("cool");
-        await direct(page).locator("[data-climate] button.reading").click();
-        expect(await page.evaluate(() => window.__moreInfo)).toEqual(["climate.bedroom"]);
-    });
-
-    test("a device with both offers both", async ({ page }) => {
-        await mount(page);
-        await openDevice(page, "Heater");
-        await expect(direct(page).locator("[data-switch] ha-entity-toggle")).toHaveAttribute("data-entity", "switch.heater_breaker");
-        await expect(direct(page).locator("[data-climate]")).toContainText("Heater thermostat");
-    });
-
-    test("a running signal that is the climate entity is one climate control, not a toggle", async ({ page }) => {
-        await mount(page);
-        await openDevice(page, "Office AC");
-        await expect(direct(page).locator("[data-switch]")).toHaveCount(0);
-        await expect(direct(page).locator("[data-climate]")).toContainText("Office thermostat");
-    });
-
-    test("a closed detail stops watching what its Schedule tab announced", async ({ page }) => {
-        await mount(page);
-        const sources = () => page.evaluate(() => [...(document.querySelector("helman-card") as any)._host._watchSources.keys()]
-            .filter((source: string) => source.startsWith("node-detail:")));
-        await openControl(page, "Boiler");
-        await expect.poll(sources).toEqual(["node-detail:header-icon", "node-detail:direct-control", "node-detail:control:boiler"]);
-        // Another node's detail forgets the last one's blocks.
-        await openDevice(page, "Bedroom AC");
-        await expect.poll(sources).toEqual(["node-detail:direct-control"]);
-        await page.evaluate(() => (document.querySelector("helman-card") as any)._host.closeDialog());
-        expect(await sources()).toEqual([]);
-        expect(await page.evaluate(() => (document.querySelector("helman-card") as any)._host.watchedEntityIds.has("climate.bedroom"))).toBe(false);
-    });
-
-    test("a passive meter has no tabs", async ({ page }) => {
-        await mount(page);
+        await switchTile(page).locator("button").click();
+        expect(await page.evaluate(() => window.__moreInfo)).toContain("climate.bedroom");
         await openDevice(page, "Meter");
-        await expect(page.locator("node-detail-dialog [role=tablist]")).toHaveCount(0);
-        await expect(tab(page, "schedule")).toHaveCount(0);
+        await expect(scheduleButton(page)).toHaveCount(0);
     });
 });

@@ -1,5 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
-import type { ControllableRuntimeDTO, InverterRuntimeDTO, ScheduleActionDTO, SchedulePayload, ScheduleSlotDTO } from "../helman-api";
+import type { ControllableRuntimeDTO, InverterRuntimeDTO, ScheduleActionDTO, ScheduleControllableActionDTO, SchedulePayload, ScheduleSlotDTO } from "../helman-api";
 import type { LocalizeFunction } from "../localize/localize";
 import {
     addDaysToDayKey,
@@ -8,6 +8,7 @@ import {
 } from "../shared/schedule/model/schedule-time";
 import { getScheduleActionLabel, getScheduleReasonLabel } from "../shared/schedule/model/schedule-labels";
 import { INVERTER_CONTROLLABLE_ID } from "../shared/schedule/schedule-types";
+import { getScheduleControllableActionIdentityKey, isScheduleApplianceActionEnabled, isScheduleInverterAction } from "../shared/schedule/schedule-types";
 import { SLOT_MS } from "../shared/time/slot-time";
 
 /**
@@ -70,6 +71,72 @@ export function inverterRuns(schedule: SchedulePayload, now: number): ScheduleRu
         .filter((slot) => slot.startMs + SLOT_MS > now);
     const slotsById = new Map(schedule.slots.map((slot) => [slot.id, slot]));
     return mergeRuns<ScheduleActionDTO>(boundaries, slotsById, INVERTER_CONTROLLABLE_ID, () => true, sameAction, { fillEmpty: true });
+}
+
+/** The remaining runs for any schedule lane, including empty stretches. */
+export function laneRuns(schedule: SchedulePayload, controllableId: string, now: number): ScheduleRun<ScheduleControllableActionDTO>[] {
+    const boundaries = resolveScheduleSlotBoundaries(schedule.slots.map((slot) => slot.id))
+        .filter((slot) => slot.startMs + SLOT_MS > now);
+    const slotsById = new Map(schedule.slots.map((slot) => [slot.id, slot]));
+    return mergeRuns<ScheduleControllableActionDTO>(boundaries, slotsById, controllableId, () => true,
+        (left, right) => {
+            const { setBy: _left, ...leftAction } = left;
+            const { setBy: _right, ...rightAction } = right;
+            return getScheduleControllableActionIdentityKey(leftAction as ScheduleControllableActionDTO)
+                === getScheduleControllableActionIdentityKey(rightAction as ScheduleControllableActionDTO);
+        },
+        { fillEmpty: true });
+}
+
+/** First action change after now on a lane, including a switch to an empty stretch. */
+export function nextLaneChange(runs: ScheduleRun<ScheduleControllableActionDTO>[], now: number, timeZone: string): ScheduleRun<ScheduleControllableActionDTO> | null {
+    const days = todayAndTomorrow(now, timeZone);
+    const inverterLane = runs.some((run) => isScheduleInverterAction(run.action) && run.action.kind !== "empty");
+    let previous: ScheduleControllableActionDTO = inverterLane ? { kind: "normal" } : { kind: "empty" };
+    for (const run of runs) {
+        const action = effectiveLaneAction(run.action, inverterLane);
+        if (run.startMs > now && effectiveLaneKey(previous) !== effectiveLaneKey(action)) {
+            return days.includes(dayKey(run.startMs, timeZone)) ? { ...run, action } : null;
+        }
+        previous = action;
+    }
+    return null;
+}
+
+/** First future appliance start today or tomorrow, skipping idle and unmet candidates. */
+export function nextLaneStart(runs: ScheduleRun<ScheduleControllableActionDTO>[], now: number, timeZone: string): ScheduleRun<ScheduleControllableActionDTO> | null {
+    const days = todayAndTomorrow(now, timeZone);
+    let wasEnabled = false;
+    for (const run of runs) {
+        const action = effectiveLaneAction(run.action);
+        const enabled = !isScheduleInverterAction(action) && isScheduleApplianceActionEnabled(action) === true;
+        if (run.startMs > now && enabled && !wasEnabled) {
+            return days.includes(dayKey(run.startMs, timeZone)) ? { ...run, action } : null;
+        }
+        wasEnabled = enabled;
+    }
+    return null;
+}
+
+function effectiveLaneAction(action: ScheduleControllableActionDTO, inverterLane = false): ScheduleControllableActionDTO {
+    if (isScheduleInverterAction(action)) return action.kind === "empty" && !inverterLane ? action : effectiveAction(action);
+    if (action.conditionMet !== false) return action;
+    if ("on" in action) return { on: false };
+    if ("charge" in action) return { charge: false };
+    return "mode" in action ? { mode: "off" } : action;
+}
+
+function effectiveLaneKey(action: ScheduleControllableActionDTO): string {
+    if (isScheduleInverterAction(action) ? action.kind === "empty" : isScheduleApplianceActionEnabled(action) !== true) return "idle";
+    const { setBy: _author, conditionMet: _condition, ...effective } = action;
+    return getScheduleControllableActionIdentityKey(effective as ScheduleControllableActionDTO);
+}
+
+export function laneActionLabel(action: ScheduleControllableActionDTO, localize: LocalizeFunction): string {
+    if (isScheduleInverterAction(action)) return getScheduleActionLabel(action, localize);
+    if ("on" in action) return localize(`node_detail.control.${action.on ? "on" : "off"}`);
+    if ("charge" in action) return localize(`node_detail.shared.${action.charge ? "charging" : "idle"}`);
+    return "mode" in action ? action.mode : localize("node_detail.shared.schedule.none");
 }
 
 /** The run in progress at `now`, unless it is an empty stretch. */

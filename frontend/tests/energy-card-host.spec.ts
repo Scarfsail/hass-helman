@@ -6,7 +6,7 @@ import { CARD_BUNDLE } from "./support/card-page";
 
 test.describe("EnergyCardHost", () => {
     for (const tag of ["helman-card", "helman-simple-card"] as const) {
-        test(`inverter detail shows the same battery and solar figures when opened from ${tag}`, async ({ page }) => {
+        test(`inverter Overview receives live readings and renders when opened from ${tag}`, async ({ page }) => {
             const states = {
                 "sensor.solar": state("4200", "W"),
                 "sensor.battery": state("-500", "W"),
@@ -57,10 +57,10 @@ test.describe("EnergyCardHost", () => {
                 batteryPower: -500,
             });
 
-            // Open operating question to check the rendered figures
-            await content.locator("helman-node-tile[data-question='operating'] button").click();
-            await expect(content.locator("[data-row='solar'] .value")).toHaveText("4.2 kW");
-            await expect(content.locator("[data-row='battery'] .value")).toHaveText(/500 W · discharging/i);
+            await expect(content.locator("[data-overview]")).toContainText("Helman last commanded: Normal");
+            await expect(content.locator("helman-detail-headline")).toBeVisible();
+            await expect(content.locator("[data-chain] [data-box]")).toHaveCount(3);
+            await expect(content.locator("[data-chain] [data-box='command'] .box-value")).toHaveText("Normal");
         });
     }
 

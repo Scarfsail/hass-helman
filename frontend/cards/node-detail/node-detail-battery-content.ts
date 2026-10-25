@@ -28,6 +28,11 @@ import {
 } from "./node-detail-schedule";
 import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { BatteryDetailParams } from "./node-detail-types";
+import { NODE_DETAIL_REQUEST_EVENT } from "./node-detail-types";
+import "../helman-simple/simple-card-battery";
+import "./detail-headline";
+import "./flow-gauge";
+import "./help-tip";
 
 type QuestionId = "reserve" | "next" | "limits" | "charge" | "diagnostics";
 
@@ -124,26 +129,47 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
         if (notReady || this._overview.status !== "ready") return notReady;
         const overview = this._overview.payload;
         const reserve = readReserve(this.hass, overview);
-        const estimate = this._flowScope === "now" ? this._estimate(overview) : null;
+        const estimate = this._estimate(overview);
+        const power = this.params.power;
+        const soc = this._number(overview, "soc");
+        const direction = this._direction();
+        const flow = this.params.flows;
+        const lowest = direction === "idle" ? null : this._lowest(this._ceilings(overview, direction === "charge" ? "charge" : "discharge"));
+        const binding = lowest && power !== null && Math.abs(power) >= AT_CEILING * lowest.watts;
+        const run = currentRun(this._plan.runs, Date.now());
         return html`
             <div class="content">
                 ${this._renderSummary(overview)}
-                ${this._renderBatteryFlow(overview, reserve)}
+                <helman-detail-headline .value=${soc === null ? "—" : `${Math.round(soc)} %`}
+                    .entityId=${overview.entities.soc ?? null}
+                    .caption=${[power === null ? "—" : `${direction === "charge" ? this.localize("node_detail.shared.charging") : direction === "discharge" ? this.localize("node_detail.shared.discharging") : this.localize("node_detail.shared.idle")} ${formatPower(Math.abs(power)).display}`,
+                        fillTemplate(this.localize("node_detail.shared.battery_range"), { floor: reserve?.minSoc ?? "?", ceiling: reserve?.maxSoc ?? "?" })]}>
+                    <simple-card-battery slot="icon" .compact=${true} .power=${power ?? 0} .soc=${soc ?? 0}
+                        .minSoc=${reserve?.minSoc ?? 0} .maxSoc=${reserve?.maxSoc ?? 100}></simple-card-battery>
+                </helman-detail-headline>
                 ${estimate?.kind === "time" ? html`
-                    <p class="estimate" data-estimate>${fillTemplate(this._t("next_estimate"), { estimate: estimate.text })}</p>
+                    <p class="estimate" data-estimate>${estimate.text}
+                        <helman-help-tip .explanation=${this.localize("node_detail.shared.battery_rate_help")}></helman-help-tip></p>
                 ` : nothing}
-                <div class="tiles">
-                    ${this._renderNextTile()}
-                    ${this._renderLimitsTile(overview)}
-                    ${this._renderDiagnosticsTile(overview)}
-                </div>
-                ${this._renderOpen(overview, reserve)}
+                <helman-flow-gauge .direction=${direction === "charge" ? "from" : "to"} .localize=${this.localize}
+                    .items=${flow ? direction === "charge" ? [
+                        { node: "solar", powerW: flow.solarToBattery }, { node: "grid", powerW: flow.gridToBattery },
+                    ] : direction === "discharge" ? [
+                        { node: "house", powerW: flow.batteryToHouse }, { node: "grid", powerW: flow.batteryToGrid },
+                    ] : [] : []}></helman-flow-gauge>
+                ${binding ? html`<div class="notice" data-binding>${fillTemplate(this.localize(`node_detail.shared.battery_capped_${direction}`), { power: formatPower(lowest.watts).display })}
+                    <span>${lowest.source === "bms" && this._celsius(overview, "battery_temperature") !== null && this._celsius(overview, "battery_temperature")! < COLD_C
+                        ? fillTemplate(this.localize("node_detail.shared.battery_cold_cause"), { temperature: this._reading(overview, "battery_temperature") ?? "?" })
+                        : this._t(`limits.source_${lowest.source}`)}</span></div>` : nothing}
+                <button type="button" class="link-button" @click=${() => this.dispatchEvent(new CustomEvent(NODE_DETAIL_REQUEST_EVENT, { detail: { target: "inverter" }, bubbles: true, composed: true }))}>
+                    ${this.localize("node_detail.shared.battery_inverter")} → ${run ? this._actionLabel(run.action) : this._t("next.no_change")}
+                </button>
             </div>
         `;
     }
 
     /** The open question's answer and evidence, full width under the tiles. */
-    private _renderOpen(overview: BatteryDetailPayload, reserve: Reserve | null) {
+    protected _renderOpen(overview: BatteryDetailPayload, reserve: Reserve | null) {
         switch (this._open) {
             case "reserve":
                 return this._question("reserve", this._reservePreview(reserve), () => this._renderReserve(overview, reserve), () => this._renderReserveEvidence(overview, reserve), "evidence");
@@ -173,7 +199,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
         const condition = overview.condition;
         return html`
             <div class="summary" data-overview>
-                <p class="status pill action-tone-${tone}" data-tone=${tone}>${status}</p>
+                <p class="status" data-tone=${tone}>${status} · ${this.localize("node_detail.shared.battery_inverter")}</p>
                 ${condition ? this._exceptionBanner(fillTemplate(this._t(`exception.${condition.kind}`), { state: condition.state }),
                     condition.kind === "off_grid" ? "reserve" : "diagnostics") : nothing}
             </div>
@@ -194,7 +220,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
      * the card on Now, today's kWh from the `flows` section on Today. The
      * glyph opens the reserve; the flow opens today's charge.
      */
-    private _renderBatteryFlow(overview: BatteryDetailPayload, reserve: Reserve | null) {
+    protected _renderBatteryFlow(overview: BatteryDetailPayload, reserve: Reserve | null) {
         const flow = this._flowScope === "now" ? this._nowFlow() : this._todayFlow(overview);
         const soc = this._number(overview, "soc");
         return this._renderFlow(flow, this.params.flowScaleW, "charge", html`
@@ -286,7 +312,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
     // Tiles -------------------------------------------------------------------
 
     /** The plan's next change, in its action's tone. */
-    private _renderNextTile() {
+    protected _renderNextTile() {
         const change = nextChange(this._plan.runs, Date.now(), this._timeZone);
         if (!change) return this._tile("next", this._t("tile.no_change"), null, nothing, "neutral");
         return this._tile("next", this._time(change.startMs), this._actionLabel(change.action), nothing, getScheduleActionTone(change.action.kind));
@@ -296,7 +322,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
      * The lowest known ceiling in the direction the battery moves, charge at
      * idle, with the power now against it while it moves.
      */
-    private _renderLimitsTile(overview: BatteryDetailPayload) {
+    protected _renderLimitsTile(overview: BatteryDetailPayload) {
         const direction = this._direction();
         const side = direction === "discharge" ? "discharge" : "charge";
         const lowest = this._lowest(this._ceilings(overview, side));
@@ -311,7 +337,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
     }
 
     /** Temperature, the cell voltage gap from the highest and lowest cell, and cycles. */
-    private _renderDiagnosticsTile(overview: BatteryDetailPayload) {
+    protected _renderDiagnosticsTile(overview: BatteryDetailPayload) {
         const parts: string[] = [];
         const high = this._volts(overview, "cell_voltage_high");
         const low = this._volts(overview, "cell_voltage_low");

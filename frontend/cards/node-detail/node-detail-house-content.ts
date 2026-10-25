@@ -2,7 +2,7 @@ import { formatKwh, formatPower } from "../shared/format";
 import { pad2, SLOT_MS } from "../shared/time/slot-time";
 import { phaseSign } from "../shared/power-reading";
 import { css, html, nothing, unsafeCSS } from "lit";
-import { customElement, property } from "lit/decorators.js";
+import { customElement, property, state } from "lit/decorators.js";
 import { fillTemplate } from "../localize/localize";
 import {
     type DevicePhase,
@@ -23,9 +23,7 @@ import type { FlowItem } from "../shared/node-flow";
 import { houseGlyph, type HouseShare } from "../shared/node-glyphs";
 import { scheduleActionToneStyles, type ScheduleActionTone } from "../shared/schedule/action-tones";
 import { getScheduleApplianceActionPresentation } from "../shared/schedule/model/schedule-appliance-action-presentation";
-import { resolveScheduleSlotBoundaries } from "../shared/schedule/model/schedule-time";
 import {
-    getScheduleApplianceActionIdentityKey,
     INVERTER_CONTROLLABLE_ID,
     isScheduleApplianceActionEnabled,
     isScheduleClimateApplianceAction,
@@ -36,9 +34,13 @@ import "../helman-device-reports/device-report-ranking";
 import { IDLE_W, NodeDetailContentBase, type NodeFlow } from "./node-detail-base";
 import { readingNumber } from "./node-detail-readings";
 import { powerUnitFactor, readPowerW } from "../shared/power-reading";
-import { dayKey, mergeRuns, todayAndTomorrow, withinTodayTomorrow } from "./node-detail-schedule";
+import { dayKey, laneRuns, todayAndTomorrow, withinTodayTomorrow } from "./node-detail-schedule";
 import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { HouseDetailParams } from "./node-detail-types";
+import { NODE_DETAIL_REQUEST_EVENT } from "./node-detail-types";
+import "../helman-simple/simple-card-house";
+import "./detail-headline";
+import "./flow-gauge";
 
 type QuestionId = "sources" | "consumers" | "next" | "pattern" | "phases";
 
@@ -72,6 +74,7 @@ export const HOUSE_FORECAST_INSPECTOR_CONFIG: HelmanSolarInspectorCardConfig = {
 
 /** One load of the house tree, counted once, as the phase estimate sees it. */
 export interface PhaseLoad {
+    item?: TreeItem;
     label: string;
     /** A metered parent's own share: its remainder. */
     own: boolean;
@@ -121,7 +124,7 @@ export function estimatePhaseLoads(house: TreeItem | null, read: (entityId: stri
         const phase = own ?? (inherited ? parentPhase : null);
         const inheritedFrom = inherited ? phaseFrom : null;
         const add = (watts: number | null, isOwn: boolean) =>
-            loads.push({ label: item.name, own: isOwn, phase, inheritedFrom, watts });
+            loads.push({ item, label: item.name, own: isOwn, phase, inheritedFrom, watts });
         if (!item.children.length) {
             add(read(item.powerSensorId), false);
             return;
@@ -290,6 +293,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
     protected readonly _node = "house" as const;
 
     @property({ attribute: false }) public params!: HouseDetailParams;
+    @state() private _allUsers = false;
 
     /**
      * The appliances' planned runs from now through tomorrow: consecutive
@@ -298,21 +302,14 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
      * condition is not met, is kept and marked: the executor does not run it.
      */
     private readonly _plan = this._useSchedule((schedule, now): PlannedRun[] => {
-        const boundaries = resolveScheduleSlotBoundaries(schedule.slots.map((slot) => slot.id));
-        const slotsById = new Map(schedule.slots.map((slot) => [slot.id, slot]));
         const ids = new Set(schedule.slots.flatMap((slot) => Object.keys(slot.controllables)));
         ids.delete(INVERTER_CONTROLLABLE_ID);
         const names = this._applianceNames();
-        // Who set a slot is plan metadata, not a setting: it does not split a run.
-        const sameSettings = (left: ScheduleApplianceActionDTO, right: ScheduleApplianceActionDTO) => {
-            const { setBy: _left, ...leftSettings } = left;
-            const { setBy: _right, ...rightSettings } = right;
-            return getScheduleApplianceActionIdentityKey(leftSettings) === getScheduleApplianceActionIdentityKey(rightSettings);
-        };
-        const runs = [...ids].flatMap((id) => mergeRuns<ScheduleApplianceActionDTO>(
-            boundaries, slotsById, id, (action) => isScheduleApplianceActionEnabled(action) === true, sameSettings,
-        ).map((run) => ({
+        const runs = [...ids].flatMap((id) => laneRuns(schedule, id, now)
+            .filter((run) => isScheduleApplianceActionEnabled(run.action as ScheduleApplianceActionDTO) === true)
+            .map((run) => ({
             ...run,
+            action: run.action as ScheduleApplianceActionDTO,
             id,
             name: names.get(id) ?? id,
             candidate: run.action.conditionMet === false,
@@ -368,22 +365,55 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         if (notReady || this._overview.status !== "ready") return notReady;
         const overview = this._overview.payload;
         const phases = this._phaseEstimate();
+        const power = this._powerNow();
+        const flows = this.params.flows;
+        const loads = phases.loads.filter((load) => load.watts !== null && load.watts > 0).sort((a, b) => b.watts! - a.watts!);
+        const visible = this._allUsers ? loads : loads.slice(0, TOP_CONSUMERS);
         return html`
             <div class="content">
                 ${this._renderSummary(overview)}
-                ${this._renderHouseFlow(phases)}
-                <div class="tiles">
-                    ${this._renderNextTile()}
-                    ${this._renderPatternTile()}
-                    ${this._renderPhasesTile(overview, phases)}
-                </div>
-                ${this._renderOpen(overview, phases)}
+                <helman-detail-headline .value=${power === null ? "—" : formatPower(power).display}
+                    .entityId=${overview.entities.power ?? null} .caption=${[this.localize("node_detail.shared.house_used")] }>
+                    <simple-card-house slot="icon" .compact=${true} .power=${power ?? 0}
+                        .sourceColor=${this._houseSourceColor()}></simple-card-house>
+                </helman-detail-headline>
+                <helman-flow-gauge direction="from" .localize=${this.localize}
+                    .items=${flows ? [
+                        { node: "solar", powerW: flows.solarToHouse },
+                        { node: "battery", powerW: flows.batteryToHouse },
+                        { node: "grid", powerW: flows.gridToHouse },
+                    ] : []}></helman-flow-gauge>
+                <div class="section-title">${this.localize("node_detail.shared.house_biggest")}</div>
+                ${visible.map((load) => this._userRow(load, power))}
+                ${this._allUsers ? this._userRow({ label: this.localize("node_detail.shared.not_measured"), own: false, phase: null, inheritedFrom: null,
+                    watts: phases.houseRemainderW ?? (power === null ? null : Math.max(0, power - loads.reduce((sum, load) => sum + (load.watts ?? 0), 0))) }, power, false) : nothing}
+                ${loads.length || phases.houseRemainderW !== null ? html`<button type="button" class="link-button" @click=${() => { this._allUsers = !this._allUsers; }}>
+                    ${this._allUsers ? this.localize("node_detail.shared.show_less") : fillTemplate(this.localize("node_detail.shared.everything_else"), { count: Math.max(0, loads.length - TOP_CONSUMERS) + 1 })}
+                </button>` : nothing}
             </div>
         `;
     }
 
+    private _houseSourceColor(): string | undefined {
+        const flow = this.params.flows;
+        if (!flow) return undefined;
+        const parts = [["solar", flow.solarToHouse], ["battery", flow.batteryToHouse], ["grid", flow.gridToHouse]] as const;
+        const source = parts.reduce((best, item) => item[1] > best[1] ? item : best, parts[0]);
+        return `var(--helman-${source[0]})`;
+    }
+
+    private _userRow(load: PhaseLoad, house: number | null, clickable = true) {
+        const pct = house && load.watts ? Math.round(load.watts / house * 100) : 0;
+        const item = clickable ? load.item ?? null : null;
+        const inner = html`<span>${load.label}</span><strong>${formatPower(load.watts ?? 0).display} · ${pct} %</strong><span>›</span>`;
+        return item ? html`<button type="button" class="row" style=${`min-height:44px;background:linear-gradient(to right,color-mix(in srgb,var(--helman-house) 22%,transparent) ${pct}%,transparent ${pct}%);`}
+            @click=${() => this.dispatchEvent(new CustomEvent(NODE_DETAIL_REQUEST_EVENT, { detail: { target: item }, bubbles: true, composed: true }))}>${inner}</button>`
+            : html`<div class="row" style=${`min-height:44px;background:linear-gradient(to right,color-mix(in srgb,var(--helman-house) 22%,transparent) ${pct}%,transparent ${pct}%);`}>${inner}</div>`;
+    }
+
+
     /** The open question's answer and evidence, full width under the tiles. */
-    private _renderOpen(overview: HouseDetailPayload, phases: PhaseEstimate) {
+    protected _renderOpen(overview: HouseDetailPayload, phases: PhaseEstimate) {
         switch (this._open) {
             case "sources":
                 return this._question("sources", this._sourcesPreview(), () => this._renderSources(), () => this._renderSourcesEvidence(), "evidence");
@@ -407,7 +437,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
             : fillTemplate(this._t("status.using"), { power: formatPower(Math.max(0, power)).display });
         return html`
             <div class="summary" data-overview>
-                <p class="status pill action-tone-neutral">${status}</p>
+                <p class="status">${status} · ${this.localize("node_detail.shared.on_grid")}</p>
                 ${overview.condition ? this._exceptionBanner(fillTemplate(this._t(`exception.${overview.condition.kind}`), { state: overview.condition.runMode }), "phases") : nothing}
             </div>
         `;
@@ -422,7 +452,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
      * already reads. The sources open what powered the house, the consumers
      * what used the most.
      */
-    private _renderHouseFlow(phases: PhaseEstimate) {
+    protected _renderHouseFlow(phases: PhaseEstimate) {
         const now = this._flowScope === "now";
         const { flow, shares } = now ? this._nowFlow(phases) : this._todayFlow();
         return this._renderFlow(flow, this.params.flowScaleW, "sources", html`<span slot="centre">${houseGlyph(shares)}</span>`, "consumers");
@@ -526,7 +556,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
     // Tiles -------------------------------------------------------------------
 
     /** The next planned appliance run, or the one running now, in its action's tone. */
-    private _renderNextTile() {
+    protected _renderNextTile() {
         const run = this._plan.runs[0];
         if (!run) return this._tile("next", this._t("tile.no_runs"), null, nothing, "neutral");
         const running = run.startMs <= Date.now();
@@ -545,7 +575,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
     }
 
     /** Today's energy so far, with today against the usual once the comparison is read. */
-    private _renderPatternTile() {
+    protected _renderPatternTile() {
         const house = this._today.payload?.house;
         return this._tile("pattern", house ? (formatKwh(Math.abs(house.kwh)) + " kWh") : "–", this._patternPreview() ?? this._t("tile.today_so_far"));
     }
@@ -555,7 +585,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
      * the measured sensors are unavailable, and the three phases as bars in
      * the shared phase colours.
      */
-    private _renderPhasesTile(overview: HouseDetailPayload, estimate: PhaseEstimate) {
+    protected _renderPhasesTile(overview: HouseDetailPayload, estimate: PhaseEstimate) {
         const measured = this._measuredPhases(overview);
         if (!measured && !estimate.anyMapped) return this._tile("phases", "–", this._t("phases.none_mapped_short"));
         const bars = measured ?? estimate.perPhase;

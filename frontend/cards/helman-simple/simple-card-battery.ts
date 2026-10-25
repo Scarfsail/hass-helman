@@ -141,6 +141,7 @@ export class SimpleCardBattery extends LitElement {
     @property({ type: Number }) public power = 0;
     @property({ type: Number }) public soc = 0;
     @property({ type: Number }) public minSoc = 10;
+    @property({ type: Number }) public maxSoc = 100;
     /** When charging: color of the energy source (solar yellow, grid blue, or blended). */
     @property({ type: String }) public sourceColor?: string;
     /** When true: renders SVG at 40px and suppresses the power label (for use as an icon). */
@@ -231,6 +232,14 @@ export class SimpleCardBattery extends LitElement {
                         x="${v.innerX}" y="${v.innerFillY}"
                         width="${v.innerWidth}" height="${v.innerFillHeight}" rx="2"
                         clip-path="url(#${this._clipId})"/>
+                    ${this.compact ? html`
+                        <line x1="1" x2="57" y1="${BODY_TOP + BODY_HEIGHT * (1 - this.minSoc / 100)}" y2="${BODY_TOP + BODY_HEIGHT * (1 - this.minSoc / 100)}"
+                            stroke="var(--primary-text-color)" stroke-width="1" stroke-dasharray="3 2"/>
+                        <line x1="1" x2="57" y1="${BODY_TOP + BODY_HEIGHT * (1 - this.maxSoc / 100)}" y2="${BODY_TOP + BODY_HEIGHT * (1 - this.maxSoc / 100)}"
+                            stroke="var(--primary-text-color)" stroke-width="1" stroke-dasharray="3 2"/>
+                        <text x="59" y="${BODY_TOP + BODY_HEIGHT * (1 - this.minSoc / 100)}" font-size="8" fill="var(--primary-text-color)">${this.minSoc}</text>
+                        <text x="59" y="${BODY_TOP + BODY_HEIGHT * (1 - this.maxSoc / 100)}" font-size="8" fill="var(--primary-text-color)">${this.maxSoc}</text>
+                    ` : ''}
 
                     <!-- SoC percentage inside -->
                     <text class="soc-label"

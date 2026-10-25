@@ -25,7 +25,7 @@ import "../shared/soc-glyph";
 import { scheduleActionToneStyles, type ScheduleActionTone } from "../shared/schedule/action-tones";
 import { getScheduleApplianceActionPresentation } from "../shared/schedule/model/schedule-appliance-action-presentation";
 import { resolveScheduleSlotBoundaries, type ScheduleSlotBoundary } from "../shared/schedule/model/schedule-time";
-import { IDLE_W, NodeDetailContentBase, type FlowNode, type NodeFlow } from "./node-detail-base";
+import { IDLE_W, NodeDetailContentBase, type NodeFlow } from "./node-detail-base";
 import { staleToday } from "./section-resource";
 import { openMoreInfo, readEnergyKWh, readingNumber } from "./node-detail-readings";
 import { dispatchWatchedEntities } from "../shared/hass-change";
@@ -34,7 +34,13 @@ import { mergeRuns, runtimeFor, withinTodayTomorrow } from "./node-detail-schedu
 import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { DeviceDetailParams } from "./node-detail-types";
 import { deviceDirectControls } from "./node-detail-utils";
-import "./device-direct-control";
+import { estimatedConsumerMix } from "./live-flows";
+import "./detail-headline";
+import "./flow-gauge";
+import "./switch-tile";
+import "./who-decides";
+import { ownershipText } from "./who-decides";
+import { LaneOwnershipController } from "./lane-ownership";
 
 type QuestionId = "progress" | "plan" | "waiting" | "today" | "trust";
 
@@ -149,6 +155,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
     @property({ attribute: false }) public deviceId!: string;
     /** The device as opened: the card's live split and the flow's scale. */
     @property({ attribute: false }) public params!: DeviceDetailParams;
+    private readonly _lanes = new LaneOwnershipController(this, () => this.hass);
 
     /** This charger's charging windows in progress, today and tomorrow. */
     private readonly _plan = this._useSchedule((schedule, now): ChargeWindow[] => {
@@ -271,35 +278,52 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         if (notReady || this._overview.status !== "ready") return notReady;
         const overview = this._overview.payload;
         const selection = this._selection();
-        const eta = this._flowScope === "now" ? this._eta(overview, selection) : null;
+        const power = this._powerW(overview);
+        const charging = this._charging(overview);
         const direct = deviceDirectControls(this.params.item);
-        const summary = this._renderSummary(overview);
+        const session = this._sessionKWh(overview);
+        const since = this._segment.payload?.chargingSince;
+        const caption = [direct?.switchEntityId && this.hass.states[direct.switchEntityId]?.state === "off"
+            ? this.localize("node_detail.shared.ev_off") : charging ? this.localize("node_detail.shared.ev_charging") : this._waitingPreview(overview, selection)];
+        if (session !== null) caption.push(fillTemplate(this.localize("node_detail.shared.ev_session"), {
+            kwh: formatKwh(session), time: since ? this._time(Date.parse(since)) : "—",
+        }));
         return html`
             <div class="content">
-                ${direct ? html`
-                    <helman-device-direct-control
-                        .hass=${this.hass}
-                        .localize=${this.localize}
-                        .switchEntityId=${direct.switchEntityId}
-                        .climateEntityId=${direct.climateEntityId}
-                        .scheduled=${true}
-                    >${summary}</helman-device-direct-control>
-                ` : summary}
-                ${this._renderStrip(selection)}
-                ${this._renderCarFlow(overview, selection)}
-                ${eta ? html`<p class="estimate" data-estimate>${eta}</p>` : nothing}
-                <div class="tiles">
-                    ${this._renderSessionTile(overview)}
-                    ${this._renderWaitingTile(overview, selection)}
-                    ${this._renderReadingsTile(overview)}
-                </div>
-                ${this._renderOpen(overview, selection)}
+                <p class="status" data-overview>${this._statusText(overview, power)} · ${ownershipText(this._lanes.status(this.deviceId), this.localize, this._lanes.locale, this._lanes.timeZone)}</p>
+                ${this._fault(overview) ? this._exceptionBanner(fillTemplate(this._t("exception.fault"), { fault: this._fault(overview)! }), "trust") : nothing}
+                <helman-detail-headline .value=${power === null ? "—" : formatPower(power).display}
+                    .entityId=${overview.entities.power ?? this.params.item.powerSensorId ?? null} .caption=${caption}>
+                    ${direct?.switchEntityId ? html`<helman-switch-tile slot="icon" .hass=${this.hass} .localize=${this.localize}
+                        .entityId=${direct.switchEntityId} fallbackIcon="mdi:car-electric"></helman-switch-tile>`
+                        : html`<ha-icon slot="icon" icon="mdi:car-electric"></ha-icon>`}
+                </helman-detail-headline>
+                <helman-flow-gauge direction="from" .items=${estimatedConsumerMix(this.params.flows, power)} .estimated=${true} .localize=${this.localize}></helman-flow-gauge>
+                <helman-who-decides .hass=${this.hass} .localize=${this.localize} .controllableId=${this.deviceId}></helman-who-decides>
+                ${this._renderCarTile(overview, selection)}
             </div>
         `;
     }
 
+    private _renderCarTile(overview: EvChargerDetailPayload, selection: VehicleSelection) {
+        if (selection.kind !== "selected") return html`<div class="tile">${this._t(selection.kind === "none" ? "car.none" : "car.ambiguous")}</div>`;
+        const car = selection.car;
+        const power = this._powerW(overview);
+        const minutes = power && power > IDLE_W && car.neededKwh !== null ? car.neededKwh / (power / 1000) * 60 : null;
+        return html`<div class="tile" data-car>
+            <div class="row"><strong>${car.vehicle.name} — ${car.soc ?? "?"} % ${this.localize("node_detail.shared.ev_of")} ${car.limit ?? "?"} % ${this.localize("node_detail.shared.ev_limit")}</strong></div>
+            <div class="meter" style="position:relative"><span class="meter-fill" style=${`width:${Math.max(0, Math.min(100, car.soc ?? 0))}%`}></span>
+                ${car.limit !== null ? html`<span data-limit-marker style=${`position:absolute;left:${Math.max(0, Math.min(100, car.limit))}%;top:-3px;bottom:-3px;border-left:2px dashed var(--primary-text-color)`}></span>` : nothing}
+            </div>
+            <div>${this.localize("node_detail.shared.ev_needed")} ${car.neededKwh === null ? "—" : `${formatKwh(car.neededKwh)} kWh`}</div>
+            ${minutes !== null ? html`<div>${fillTemplate(this.localize("node_detail.shared.ev_at_power"), {
+                duration: this._duration(minutes), time: this._time(Date.now() + minutes * 60_000),
+            })}</div>` : nothing}
+        </div>`;
+    }
+
     /** The open question's answer and evidence, full width under the tiles. */
-    private _renderOpen(overview: EvChargerDetailPayload, selection: VehicleSelection) {
+    protected _renderOpen(overview: EvChargerDetailPayload, selection: VehicleSelection) {
         switch (this._open) {
             case "progress":
                 return this._question("progress", this._progressPreview(overview, selection), () => this._renderProgress(overview, selection), () => this._renderProgressEvidence(overview, selection), "evidence");
@@ -316,7 +340,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         }
     }
 
-    private _renderSummary(overview: EvChargerDetailPayload) {
+    protected _renderSummary(overview: EvChargerDetailPayload) {
         const power = this._powerW(overview);
         const kind = overview.status?.kind;
         const tone: ScheduleActionTone = this._charging(overview) ? "charge" : kind === "fault" ? "stop" : "neutral";
@@ -373,7 +397,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
      * tomorrow, with the plan's next change flagged; the projected completion
      * is the line under it. The strip opens the plan.
      */
-    private _renderStrip(selection: VehicleSelection) {
+    protected _renderStrip(selection: VehicleSelection) {
         const now = Date.now();
         const { start, end } = modeStripWindow(now, this._timeZone);
         const change = this._planChange();
@@ -469,7 +493,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
      * section's sources alone: per-phase energy is not recorded. The car
      * opens the progress, the flow today's sources.
      */
-    private _renderCarFlow(overview: EvChargerDetailPayload, selection: VehicleSelection) {
+    protected _renderCarFlow(overview: EvChargerDetailPayload, selection: VehicleSelection) {
         const flow = this._flowScope === "now" ? this._nowFlow(overview) : this._todayFlow();
         const car = selection.kind === "selected" ? selection.car : null;
         // A device opened without the card's live split (the solar inspector's) has no scale: minimum widths.
@@ -496,16 +520,12 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
 
     /** The house's live mix applied to the charger's power, W, and its phases; unknown without either, never 0. */
     private _nowFlow(overview: EvChargerDetailPayload): NodeFlow {
-        const flows = this.params?.flows ?? null;
         const power = this._powerW(overview);
         const format = this._fmt("now");
-        const mix: Array<[FlowNode, number]> = flows
-            ? [["solar", flows.solarToHouse], ["battery", flows.batteryToHouse], ["grid", flows.gridToHouse]]
-            : [];
-        const house = mix.reduce((sum, [, watts]) => sum + watts, 0);
+        const mix = estimatedConsumerMix(this.params?.flows, power);
         const inputs = (["solar", "battery", "grid"] as const).map((node) => {
-            const share = mix.find(([key]) => key === node)?.[1];
-            return this._flowItem(node, power === null || share === undefined || house <= 0 ? null : power * share / house, format);
+            const share = mix.find((item) => item.node === node);
+            return this._flowItem(node, share?.powerW ?? null, format);
         });
         const outputs: FlowItem[] = [1, 2, 3]
             .filter((phase) => overview.entities[`charge_power_l${phase}`])
@@ -563,7 +583,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
     // Tiles -------------------------------------------------------------------
 
     /** The hardware's session energy and duration. */
-    private _renderSessionTile(overview: EvChargerDetailPayload) {
+    protected _renderSessionTile(overview: EvChargerDetailPayload) {
         if (this._pluggedIn(overview) === false) return this._tile("progress", this._t("progress.no_car"), null);
         const session = this._sessionKWh(overview);
         const minutes = this._sessionMinutes(overview);
@@ -572,7 +592,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
     }
 
     /** Charging and since when, or what the readings support as why not. */
-    private _renderWaitingTile(overview: EvChargerDetailPayload, selection: VehicleSelection) {
+    protected _renderWaitingTile(overview: EvChargerDetailPayload, selection: VehicleSelection) {
         const waiting = this._waiting(overview, selection);
         if (waiting.kind === "charging") {
             const since = this._segment.payload?.chargingSince ?? null;
@@ -584,7 +604,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
     }
 
     /** The total power against the sum of its phases, when they compare. */
-    private _renderReadingsTile(overview: EvChargerDetailPayload) {
+    protected _renderReadingsTile(overview: EvChargerDetailPayload) {
         const fault = this._fault(overview);
         if (fault) return this._tile("trust", this._t("tile.fault"), fault, nothing, "stop");
         const comparison = this._comparison(overview);

@@ -23,8 +23,8 @@ import {
     NODE_DETAIL_REQUEST_EVENT,
     type NodeDetailParams,
     type NodeDetailRequestDetail,
-    type NodeDetailTab,
-    type NodeDetailTabRequest,
+    type NodeDetailSection,
+    type NodeDetailSectionRequest,
     type NodeDetailTarget,
     type NodeType,
 } from "../node-detail/node-detail-types";
@@ -61,7 +61,7 @@ export class EnergyCardHost implements ReactiveController {
     private _localizeLanguage?: string;
     private _dialogRequest: NodeDetailTarget | null = null;
     /** The tab the open detail was asked for: a new object per request, kept across a tree refresh. */
-    private _dialogTabRequest: NodeDetailTabRequest = { tab: "overview" };
+    private _dialogSectionRequest?: NodeDetailSectionRequest;
     private _loadGeneration = 0;
     private _inverterGeneration = 0;
 
@@ -123,10 +123,11 @@ export class EnergyCardHost implements ReactiveController {
         if (this._dialogRequest === null || this._readings === null || this._uiConfig === null) return null;
         const context = buildNodeDetailContext(this._readings, {
             houseNode: this._energyNodes.houseNode,
+            gridPowerEntityId: this._energyNodes.gridProducerNode?.powerSensorId ?? this._energyNodes.gridConsumerNode?.powerSensorId ?? null,
             historyBuckets: this._uiConfig.history_buckets,
             historyBucketDuration: this._uiConfig.history_bucket_duration,
         });
-        return buildNodeDetailParams(context, this._dialogRequest, this._dialogTabRequest);
+        return buildNodeDetailParams(context, this._dialogRequest, this._dialogSectionRequest);
     }
 
     public setHass(hass: HomeAssistant): void {
@@ -175,8 +176,8 @@ export class EnergyCardHost implements ReactiveController {
      * detail swaps its target in place; asking for the same node again still
      * selects the tab asked for.
      */
-    public openNode(request: NodeDetailTarget, tab: NodeDetailTab = "overview"): void {
-        this._dialogTabRequest = { tab };
+    public openNode(request: NodeDetailTarget, section?: NodeDetailSection): void {
+        this._dialogSectionRequest = section ? { section } : undefined;
         // The same node again keeps the readings its open detail announced.
         if (request !== this._dialogRequest) {
             this._dialogRequest = request;
@@ -428,7 +429,7 @@ export class EnergyCardHost implements ReactiveController {
 
     private _handleNodeDetailRequest = (event: Event): void => {
         event.stopPropagation();
-        const { target, tab } = (event as CustomEvent<NodeDetailRequestDetail>).detail;
-        this.openNode(target, tab);
+        const { target, section } = (event as CustomEvent<NodeDetailRequestDetail>).detail;
+        this.openNode(target, section);
     };
 }

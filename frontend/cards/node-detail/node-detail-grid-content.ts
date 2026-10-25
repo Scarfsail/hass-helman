@@ -11,7 +11,7 @@ import {
 } from "../helman-api";
 import type { HelmanSolarInspectorCardConfig } from "../helman-solar-inspector/HelmanSolarInspectorCardConfig";
 import { currencyFromPriceUnit } from "../helman-solar-inspector/money-model";
-import { PHASE_COLORS } from "../color-utils";
+import { GRID_EXPORT_COLOR, GRID_IMPORT_COLOR, PHASE_COLORS } from "../color-utils";
 import { helmanColorVars } from "../color-vars";
 
 import { pylonGlyph } from "../shared/node-glyphs";
@@ -21,6 +21,10 @@ import type { DayLineBand, DayLineReference, DayLineSeries } from "../shared/day
 import { IDLE_W, NodeDetailContentBase, type NodeFlow } from "./node-detail-base";
 import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { GridDetailParams } from "./node-detail-types";
+import "../helman-simple/simple-card-grid";
+import "./detail-headline";
+import "./flow-gauge";
+import "./help-tip";
 
 type QuestionId = "voltage" | "phases" | "money" | "next" | "outage";
 
@@ -260,23 +264,46 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         const notReady = this._renderNotReady();
         if (notReady || this._overview.status !== "ready") return notReady;
         const overview = this._overview.payload;
+        const power = this.params.gridPower;
+        const importing = power !== null && power >= 0;
+        const flows = this.params.flows;
+        const grid = this._forecast?.grid;
+        const buy = this._priceNow("import");
+        const sell = this._priceNow("export");
+        const next = this._nextPriceChange("import");
         return html`
             <div class="content">
                 ${this._renderSummary(overview)}
-                ${this._renderPhasePicture(overview)}
-                ${this._renderGridFlow()}
-                <div class="tiles">
-                    ${this._renderNextTile()}
-                    ${overview.profile ? this._renderOutageTile(overview) : nothing}
-                    ${this._renderVoltageTile(overview)}
-                </div>
-                ${this._renderOpen(overview)}
+                <helman-detail-headline style=${`--detail-headline-color: ${importing ? GRID_IMPORT_COLOR : GRID_EXPORT_COLOR}`}
+                    .value=${power === null ? "—" : `${importing ? "←" : "→"} ${formatPower(Math.abs(power)).display}`}
+                    .entityId=${this.params.powerEntityId}
+                    .caption=${[this.localize(`node_detail.shared.grid_${importing ? "importing" : "exporting"}`)]}>
+                    <simple-card-grid slot="icon" .compact=${true} .power=${power ?? 0}></simple-card-grid>
+                </helman-detail-headline>
+                <helman-flow-gauge .direction=${importing ? "to" : "from"} .localize=${this.localize}
+                    .items=${flows ? importing ? [
+                        { node: "house", powerW: flows.gridToHouse }, { node: "battery", powerW: flows.gridToBattery },
+                    ] : [
+                        { node: "solar", powerW: flows.solarToGrid }, { node: "battery", powerW: flows.batteryToGrid },
+                    ] : []}></helman-flow-gauge>
+                ${grid && buy !== null && sell !== null ? html`<div class="row" data-price>
+                    <span>${fillTemplate(this.localize("node_detail.shared.grid_price"), {
+                        buy: this._price(buy, grid.importPriceUnit), sell: this._price(sell, grid.exportPriceUnit),
+                    })}</span>
+                    ${next ? html`<span>${fillTemplate(this.localize("node_detail.shared.grid_next_price"), {
+                        time: this._time(next.at), buy: this._price(next.value, grid.importPriceUnit),
+                    })}</span>` : nothing}
+                </div>` : nothing}
+                <div>${this._renderPhasePicture(overview)}
+                    <helman-help-tip .explanation=${fillTemplate(this.localize("node_detail.shared.grid_phase_help"), {
+                        amps: this._number(overview, "main_breaker_limit") ?? "?",
+                    })}></helman-help-tip></div>
             </div>
         `;
     }
 
     /** The open question's answer and evidence, full width under the tiles. */
-    private _renderOpen(overview: GridDetailPayload) {
+    protected _renderOpen(overview: GridDetailPayload) {
         switch (this._open) {
             case "voltage":
                 return this._question("voltage", this._voltagePreview(overview), () => this._renderVoltage(overview), () => this._renderVoltageEvidence(overview), "evidence");
@@ -304,7 +331,7 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
             : fillTemplate(this._t(power > 0 ? "status.importing" : "status.exporting"), { power: formatPower(Math.abs(power)).display });
         return html`
             <div class="summary" data-overview>
-                <p class="status pill action-tone-neutral" data-tone="neutral">${status}</p>
+                <p class="status" data-tone="neutral">${status} · ${this.localize("node_detail.shared.on_grid")}</p>
                 ${overview.condition ? this._exceptionBanner(fillTemplate(this._t(`exception.${overview.condition.kind}`), { state: overview.condition.runMode }), "outage") : nothing}
             </div>
         `;
@@ -323,16 +350,7 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
      */
     private _renderPhasePicture(overview: GridDetailPayload) {
         if (!this._hasPhaseTelemetry(overview, "grid_power") && !this._hasPhaseTelemetry(overview, "ac_voltage")) {
-            // No picture to draw, but the answer (its evidence and what it needs) stays one tap away.
-            return html`
-                <button
-                    class="picture"
-                    data-phase-picture-none
-                    title=${this._t("q.phases")}
-                    aria-expanded=${this._open === "phases" ? "true" : "false"}
-                    @click=${() => this._setOpen(this._open === "phases" ? null : "phases")}
-                ><span class="note">${this._t("phases.no_profile")}</span></button>
-            `;
+            return html`<div class="picture" data-phase-picture-none><span class="note">${this._t("phases.no_profile")}</span></div>`;
         }
         const readings = this._phaseReadings(overview);
         const scaleW = this._phaseScaleW(overview, readings);
@@ -346,13 +364,7 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         ];
         const axis = { from: Math.min(VOLTAGE_AXIS.from, ...known), to: Math.max(VOLTAGE_AXIS.to, ...known) };
         return html`
-            <button
-                class="picture"
-                data-phase-picture
-                title=${this._t("q.phases")}
-                aria-expanded=${this._open === "phases" ? "true" : "false"}
-                @click=${() => this._setOpen(this._open === "phases" ? null : "phases")}
-            >
+            <div class="picture" data-phase-picture>
                 <span class="phases">
                     <span class="phases-head" aria-hidden="true">
                         <span></span>
@@ -361,7 +373,7 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
                     </span>
                     ${readings.map((reading) => this._phaseRow(reading, scaleW, axis, ranges))}
                 </span>
-            </button>
+            </div>
             ${this._renderRangeStatus(overview)}
         `;
     }
@@ -436,7 +448,7 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
      * today's kWh from the `flows` section on Today with today's export
      * income and import cost on their sides. A tap opens the money.
      */
-    private _renderGridFlow() {
+    protected _renderGridFlow() {
         const flow = this._flowScope === "now" ? this._nowFlow() : this._todayFlow();
         return this._renderFlow(flow, this.params.flowScaleW, "money", html`<span slot="centre">${pylonGlyph()}</span>`);
     }
@@ -486,7 +498,7 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
     // Tiles -------------------------------------------------------------------
 
     /** The next import price change, in the import colour. */
-    private _renderNextTile() {
+    protected _renderNextTile() {
         const accent = "var(--helman-grid-import)";
         const grid = this._forecast?.grid;
         if (!grid) {
@@ -501,7 +513,7 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
     }
 
     /** Whether the inverter runs on the grid now, by its own run mode. */
-    private _renderOutageTile(overview: GridDetailPayload) {
+    protected _renderOutageTile(overview: GridDetailPayload) {
         const condition = overview.condition;
         const runMode = this._reading(overview, "run_mode");
         if (condition) return this._tile("outage", this._t(`tile.${condition.kind}`), condition.runMode);
@@ -511,7 +523,7 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
     }
 
     /** Today's voltage range over every phase, with each phase's day as a sparkline. */
-    private _renderVoltageTile(overview: GridDetailPayload) {
+    protected _renderVoltageTile(overview: GridDetailPayload) {
         if (!overview.sections.includes("voltage")) {
             return this._tile("voltage", "–", this._t(this._hasPhaseTelemetry(overview, "ac_voltage") ? "tile.no_voltage_sensors" : "voltage.no_profile"));
         }

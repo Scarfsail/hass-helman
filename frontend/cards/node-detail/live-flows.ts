@@ -29,6 +29,18 @@ export interface LiveFlows {
     gridPower: number;
 }
 
+/** Apply the house's currently measured source shares to a consumer without a source meter. */
+export function estimatedConsumerMix(flows: LiveFlows | null | undefined, powerW: number | null): Array<{ node: "solar" | "battery" | "grid"; powerW: number }> {
+    if (!flows || powerW === null || powerW <= IDLE_W) return [];
+    const house = flows.solarToHouse + flows.batteryToHouse + flows.gridToHouse;
+    if (house <= 0) return [];
+    return ([
+        ["solar", flows.solarToHouse],
+        ["battery", flows.batteryToHouse],
+        ["grid", flows.gridToHouse],
+    ] as const).map(([node, watts]) => ({ node, powerW: powerW * watts / house }));
+}
+
 /**
  * How the live power splits between the nodes, as the card draws it.
  *
