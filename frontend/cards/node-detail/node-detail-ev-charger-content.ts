@@ -291,7 +291,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         return html`
             <div class="content">
                 <p class="status" data-overview>${this._statusText(overview, power)} · ${ownershipText(this._lanes.status(this.deviceId), this.localize, this._lanes.locale, this._lanes.timeZone)}</p>
-                ${this._fault(overview) ? this._exceptionBanner(fillTemplate(this._t("exception.fault"), { fault: this._fault(overview)! }), "trust") : nothing}
+                ${this._fault(overview) ? this._exceptionBanner(fillTemplate(this._t("exception.fault"), { fault: this._fault(overview)! })) : nothing}
                 <helman-detail-headline .value=${power === null ? "—" : formatPower(power).display}
                     .entityId=${overview.entities.power ?? this.params.item.powerSensorId ?? null} .caption=${caption}>
                     ${direct?.switchEntityId ? html`<helman-switch-tile slot="icon" .hass=${this.hass} .localize=${this.localize}
@@ -344,7 +344,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         const power = this._powerW(overview);
         const kind = overview.status?.kind;
         const tone: ScheduleActionTone = this._charging(overview) ? "charge" : kind === "fault" ? "stop" : "neutral";
-        // At most one exception: a fault the charger reports, linked to the readings answer.
+        // At most one exception: a fault the charger reports.
         const fault = this._fault(overview);
         const powerId = overview.entities.power ?? this.params.item.powerSensorId;
         return html`
@@ -352,7 +352,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
                 ${powerId
                     ? html`<button class="status pill action-tone-${tone}" data-tone=${tone} data-power-entity=${powerId} @click=${() => openMoreInfo(this, powerId)}>${this._statusText(overview, power)}</button>`
                     : html`<p class="status pill action-tone-${tone}" data-tone=${tone}>${this._statusText(overview, power)}</p>`}
-                ${fault ? this._exceptionBanner(fillTemplate(this._t("exception.fault"), { fault }), "trust") : nothing}
+                ${fault ? this._exceptionBanner(fillTemplate(this._t("exception.fault"), { fault })) : nothing}
             </div>
         `;
     }

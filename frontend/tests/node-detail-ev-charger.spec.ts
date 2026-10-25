@@ -328,6 +328,16 @@ test("ev-charger Overview shows the P1 detail layout", async ({ page }) => {
     await expect(c.locator("helman-node-flow, helman-node-tile, helman-node-question")).toHaveCount(0);
 });
 
+test("charger fault remains visible without a dead Details button", async ({ page }) => {
+    await mount(page, { runMode: "Faulted", faultCode: "42" });
+    await openDevice(page, "Garage EV");
+
+    const warning = content(page).locator("[data-exception]");
+    await expect(warning).toBeVisible();
+    await expect(warning).toContainText("Over current");
+    await expect(warning.locator("button")).toHaveCount(0);
+});
+
 test("charger car tile gives the limit, needed energy and ETA", async ({ page }) => {
     await mount(page);
     await openDevice(page, "Garage EV");

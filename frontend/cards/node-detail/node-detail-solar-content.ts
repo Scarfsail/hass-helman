@@ -374,7 +374,7 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
         return html`
             <div class="summary" data-overview>
                 <p class="status" data-tone="neutral">${status} · ${this.localize("node_detail.shared.on_grid")}</p>
-                ${overview.condition ? this._exceptionBanner(fillTemplate(this._t(`exception.${overview.condition.kind}`), { state: overview.condition.runMode }), "limits") : nothing}
+                ${overview.condition ? this._exceptionBanner(fillTemplate(this._t(`exception.${overview.condition.kind}`), { state: overview.condition.runMode })) : nothing}
             </div>
         `;
     }

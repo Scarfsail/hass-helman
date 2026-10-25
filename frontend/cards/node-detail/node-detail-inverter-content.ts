@@ -326,7 +326,7 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
         return html`
             <div class="summary" data-overview>
                 <p class="status" data-tone=${tone}>${status} · ${ownershipText(this._lanes.status(INVERTER_CONTROLLABLE_ID), this.localize, this._lanes.locale, this._lanes.timeZone)}</p>
-                ${condition ? this._exceptionBanner(fillTemplate(this._t(`exception.${condition.kind}`), { state: condition.runMode }), "operating") : nothing}
+                ${condition ? this._exceptionBanner(fillTemplate(this._t(`exception.${condition.kind}`), { state: condition.runMode })) : nothing}
                 ${!condition && overview.agreement.status === "mismatch" ? html`<div class="exception" role="status" data-exception>${this._t("exception.mismatch")}</div>` : nothing}
             </div>
         `;

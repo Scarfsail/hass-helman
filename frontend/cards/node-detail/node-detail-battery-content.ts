@@ -200,8 +200,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
         return html`
             <div class="summary" data-overview>
                 <p class="status" data-tone=${tone}>${status} · ${this.localize("node_detail.shared.battery_inverter")}</p>
-                ${condition ? this._exceptionBanner(fillTemplate(this._t(`exception.${condition.kind}`), { state: condition.state }),
-                    condition.kind === "off_grid" ? "reserve" : "diagnostics") : nothing}
+                ${condition ? this._exceptionBanner(fillTemplate(this._t(`exception.${condition.kind}`), { state: condition.state })) : nothing}
             </div>
         `;
     }

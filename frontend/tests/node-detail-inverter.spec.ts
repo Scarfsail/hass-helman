@@ -260,6 +260,16 @@ test("inverter Overview shows the P1 detail layout", async ({ page }) => {
     await expect(c.locator("helman-node-flow, helman-node-tile, helman-node-question")).toHaveCount(0);
 });
 
+test("inverter condition remains visible without a dead Details button", async ({ page }) => {
+    await mount(page, { condition: "off_grid" });
+    await page.locator(".inverter-cell").click();
+
+    const warning = content(page).locator("[data-exception]");
+    await expect(warning).toBeVisible();
+    await expect(warning).toContainText("Off-Grid");
+    await expect(warning.locator("button")).toHaveCount(0);
+});
+
 test("inverter verdict distinguishes agreement and mismatch", async ({ page }) => {
     await mount(page, { profile: true, agreement: "match" });
     await page.locator(".inverter-cell").click();

@@ -438,7 +438,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         return html`
             <div class="summary" data-overview>
                 <p class="status">${status} · ${this.localize("node_detail.shared.on_grid")}</p>
-                ${overview.condition ? this._exceptionBanner(fillTemplate(this._t(`exception.${overview.condition.kind}`), { state: overview.condition.runMode }), "phases") : nothing}
+                ${overview.condition ? this._exceptionBanner(fillTemplate(this._t(`exception.${overview.condition.kind}`), { state: overview.condition.runMode })) : nothing}
             </div>
         `;
     }
