@@ -283,6 +283,23 @@ test.describe("direct control tiles", () => {
         expect(await page.evaluate(() => window.__moreInfo)).toContain("switch.lamp");
     });
 
+    test("switch-only state updates reach the open tile and change its next toggle", async ({ page }) => {
+        await mount(page);
+        await openDevice(page, "Lamp");
+        const tile = switchTile(page).locator("button");
+        await expect(tile).toHaveAttribute("aria-pressed", "true");
+        await page.evaluate(() => {
+            const card = document.querySelector("helman-card") as any;
+            card.hass = { ...window.__NodeDetailHass, states: {
+                ...window.__NodeDetailHass.states,
+                "switch.lamp": { ...window.__NodeDetailHass.states["switch.lamp"], state: "off" },
+            } };
+        });
+        await expect(tile).toHaveAttribute("aria-pressed", "false");
+        await tile.click();
+        await expect.poll(() => page.evaluate(() => window.__NodeDetailRequests.find((r) => r.type === "call_service")?.service)).toBe("turn_on");
+    });
+
     test("climate tile opens more-info and a passive meter has no Schedule", async ({ page }) => {
         await mount(page);
         await openDevice(page, "Bedroom AC");
@@ -290,5 +307,33 @@ test.describe("direct control tiles", () => {
         expect(await page.evaluate(() => window.__moreInfo)).toContain("climate.bedroom");
         await openDevice(page, "Meter");
         await expect(scheduleButton(page)).toHaveCount(0);
+    });
+
+    test("climate-only state updates reach the tile", async ({ page }) => {
+        await mount(page);
+        await openDevice(page, "Bedroom AC");
+        const tile = switchTile(page).locator("button");
+        await expect(tile).toContainText("cool");
+        await page.evaluate(() => {
+            const card = document.querySelector("helman-card") as any;
+            card.hass = { ...window.__NodeDetailHass, states: {
+                ...window.__NodeDetailHass.states,
+                "climate.bedroom": { ...window.__NodeDetailHass.states["climate.bedroom"], state: "heat" },
+            } };
+        });
+        await expect(tile).toContainText("heat");
+    });
+
+    test("a device with switch and climate controls opens the thermostat separately", async ({ page }) => {
+        await mount(page);
+        await openDevice(page, "Heater");
+        await expect(switchTile(page)).toHaveCount(1);
+        expect(await switchTile(page).evaluate((tile: any) => tile.entityId)).toBe("switch.heater_breaker");
+        await expect.poll(() => page.evaluate(() => {
+            const watched = (document.querySelector("helman-card") as any)._host.watchedEntityIds;
+            return watched.has("switch.heater_breaker") && watched.has("climate.heater");
+        })).toBe(true);
+        await page.locator("node-detail-device-content button.climate-control").click();
+        expect(await page.evaluate(() => window.__moreInfo)).toEqual(["climate.heater"]);
     });
 });

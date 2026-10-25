@@ -148,6 +148,7 @@
       "device_today": "{kwh} kWh used today",
       "device_state_on": "on",
       "device_state_off": "off",
+      "climate_controls": "Climate controls",
       "solar_producing": "producing now",
       "solar_rating": "{pct}% of the {rating} inverter rating",
       "grid_importing": "importing from the grid now",

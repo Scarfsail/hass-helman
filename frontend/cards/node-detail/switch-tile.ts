@@ -1,7 +1,8 @@
-import { LitElement, css, html } from "lit";
+import { LitElement, css, html, type PropertyValues } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import type { HomeAssistant } from "../../types/ha";
 import { loadHaEntityToggle } from "../shared/load-ha-elements";
+import { dispatchWatchedEntities } from "../shared/hass-change";
 import { openMoreInfo } from "./node-detail-readings";
 
 @customElement("helman-switch-tile")
@@ -23,6 +24,9 @@ export class HelmanSwitchTile extends LitElement {
     private _held = false;
     connectedCallback(): void { super.connectedCallback(); void loadHaEntityToggle().then(() => this.requestUpdate()); }
     disconnectedCallback(): void { super.disconnectedCallback(); this._clearHold(); }
+    protected updated(changed: PropertyValues<this>): void {
+        if (changed.has("entityId")) dispatchWatchedEntities(this, "node-detail:switch-tile", [this.entityId]);
+    }
     private _clearHold(): void { if (this._holdTimer) clearTimeout(this._holdTimer); this._holdTimer = undefined; }
     private _down(): void { this._held = false; this._clearHold(); this._holdTimer = setTimeout(() => { this._held = true; openMoreInfo(this, this.entityId); }, 500); }
     private _up(): void { this._clearHold(); }

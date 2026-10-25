@@ -6,6 +6,7 @@ import { fillTemplate } from "../localize/localize";
 import type { TreeItem } from "../shared/data/tree-item";
 import { formatPower } from "../shared/format";
 import { readPowerW } from "../shared/power-reading";
+import { dispatchWatchedEntities } from "../shared/hass-change";
 import type { DeviceDetailParams } from "./node-detail-types";
 import { deviceControllableIds, deviceDirectControls } from "./node-detail-utils";
 import { estimatedConsumerMix } from "./live-flows";
@@ -15,6 +16,7 @@ import "./flow-gauge";
 import "./switch-tile";
 import "./who-decides";
 import { ownershipText } from "./who-decides";
+import { openMoreInfo } from "./node-detail-readings";
 import { LaneOwnershipController } from "./lane-ownership";
 
 function powerEntity(item: TreeItem): string | undefined {
@@ -29,6 +31,8 @@ export class NodeDetailDeviceContent extends LitElement {
         .content { display: grid; gap: 10px; }
         .icon { width: 64px; height: 64px; display: grid; place-items: center; }
         .icon ha-icon { --mdc-icon-size: 42px; }
+        .climate-control { justify-self: start; border: 0; padding: 0; background: none; color: var(--primary-color); font: inherit; cursor: pointer; }
+        .climate-control:hover { text-decoration: underline; }
     `;
     @property({ attribute: false }) public hass!: HomeAssistant;
     @property({ attribute: false }) public localize!: LocalizeFunction;
@@ -45,6 +49,9 @@ export class NodeDetailDeviceContent extends LitElement {
         if (!item || !this.hass) return;
         if (item !== this._loadedItem) { this._loadedItem = item; this._energy.drop(); }
         this._energy.sync();
+    }
+    protected updated(changed: PropertyValues<this>): void {
+        if (changed.has("params")) dispatchWatchedEntities(this, "node-detail:device-climate", [deviceDirectControls(this.params.item)?.climateEntityId]);
     }
     render() {
         const item = this.params.item;
@@ -69,6 +76,8 @@ export class NodeDetailDeviceContent extends LitElement {
                     .fallbackIcon=${item.icon || (direct?.climateEntityId ? "mdi:air-conditioner" : "mdi:power-plug")}></helman-switch-tile>`
                     : html`<span slot="icon" class="icon"><ha-icon .icon=${item.icon || "mdi:power-plug"}></ha-icon></span>`}
             </helman-detail-headline>
+            ${direct?.switchEntityId && direct.climateEntityId ? html`<button class="climate-control" type="button"
+                @click=${() => openMoreInfo(this, direct.climateEntityId!)}>${this.localize("node_detail.shared.climate_controls")}</button>` : nothing}
             <helman-flow-gauge direction="from" .items=${estimatedConsumerMix(this.params.flows, power)} .estimated=${true} .localize=${this.localize}></helman-flow-gauge>
             ${ids.length ? html`<helman-who-decides .hass=${this.hass} .localize=${this.localize} .controllableId=${ids[0]}></helman-who-decides>` : nothing}
         </div>`;

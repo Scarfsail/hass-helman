@@ -48,6 +48,7 @@
       "device_today": "Dnes spotřebováno {kwh} kWh",
       "device_state_on": "zapnuto",
       "device_state_off": "vypnuto",
+      "climate_controls": "Ovládání topení/klimatizace",
       "solar_producing": "právě vyrábí",
       "solar_rating": "{pct} % z výkonu střídače {rating}",
       "grid_importing": "právě odebírá ze sítě",
