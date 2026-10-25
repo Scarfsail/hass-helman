@@ -171,7 +171,9 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
         grid_actual=None,
         battery_actual=None,
         archived_points=None,
+        now: str | None = None,
     ):
+        effective_now = now or NOW
         current_slot, day_current_slot, next_slot = _pinned_slot_helpers()
         old_now = service_mod.dt_util.now
         # The day's solar actuals are the meter batch's solar column, so a test
@@ -179,14 +181,14 @@ class _InspectorHarness(unittest.IsolatedAsyncioTestCase):
         # their own. Slot keys are local ``HH:MM`` on the day under test; the
         # batch carries kWh keyed by slot start.
         meter_batch = {
-            "sensor.__probe__": {datetime.fromisoformat(NOW): 1.0},
+            "sensor.__probe__": {datetime.fromisoformat(effective_now): 1.0},
             "sensor.solar_total": {
                 datetime.fromisoformat(f"{target_date}T{slot}:00+02:00"): wh / 1000.0
                 for slot, wh in (actuals_by_slot or {}).items()
             },
         }
         try:
-            service_mod.dt_util.now = lambda: datetime.fromisoformat(NOW)
+            service_mod.dt_util.now = lambda: datetime.fromisoformat(effective_now)
             with current_slot, day_current_slot, next_slot, patch.object(
                 service,
                 "_load_slot_energy_kwh_for_entities",
@@ -840,6 +842,60 @@ class TestInspectorForecastComposition(_InspectorHarness):
         breakdown = payload["series"]["houseForecastBreakdown"]
         self.assertEqual([p["unmeasuredWh"] for p in breakdown], [400.0])
         self.assertEqual([a["wh"] for a in breakdown[0]["appliances"]], [300.0, 100.0])
+
+    async def test_tomorrow_after_dst_fallback_provides_battery_and_grid_forecasts(self):
+        """When tomorrow is selected after DST fall-back, battery and grid forecasts are available."""
+        fall_back_now = "2026-10-25T14:07:00+02:00"
+        tomorrow_date = "2026-10-26"
+
+        snapshot = _snapshot(
+            _entry(
+                f"{tomorrow_date}T00:00:00+01:00",
+                soc=50.0,
+                imported=0.2,
+                exported=0.1,
+                charged=0.3,
+                discharged=0.1,
+            ),
+            _entry(
+                f"{tomorrow_date}T12:00:00+01:00",
+                soc=75.0,
+                imported=0.0,
+                exported=0.5,
+                charged=0.8,
+                discharged=0.0,
+            ),
+        )
+        service = self._service(snapshot)
+        service._live_sources._house_forecast_snapshot = lambda: {
+            "status": "available",
+            "series": [
+                {"timestamp": f"{tomorrow_date}T00:00:00+01:00", "nonDeferrable": {"value": 0.35}},
+                {"timestamp": f"{tomorrow_date}T12:00:00+01:00", "nonDeferrable": {"value": 0.45}},
+            ],
+        }
+
+        payload = await self._inspect(service, tomorrow_date, now=fall_back_now)
+
+        soc = payload["series"]["batterySocForecast"]
+        self.assertGreater(len(soc), 0)
+        self.assertEqual([p["slot"] for p in soc], ["00:00", "12:00"])
+        self.assertEqual(soc[0]["pct"], 50.0)
+
+        battery = payload["series"]["batteryForecast"]
+        self.assertGreater(len(battery), 0)
+        self.assertEqual([p["slot"] for p in battery], ["00:00", "12:00"])
+        self.assertAlmostEqual(battery[0]["valueWh"], 200.0)
+
+        grid = payload["series"]["gridForecast"]
+        self.assertGreater(len(grid), 0)
+        self.assertEqual([p["slot"] for p in grid], ["00:00", "12:00"])
+        self.assertAlmostEqual(grid[0]["valueWh"], -100.0)
+
+        house = payload["series"]["houseForecast"]
+        self.assertGreater(len(house), 0)
+        self.assertEqual([p["slot"] for p in house], ["00:00", "12:00"])
+        self.assertAlmostEqual(house[0]["valueWh"], 350.0)
 
 
 if __name__ == "__main__":
