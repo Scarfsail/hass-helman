@@ -13,7 +13,7 @@ import type { SchedulePayload } from "../helman-api";
 import { formatScheduleTime } from "../shared/schedule/model/schedule-time";
 import { laneActionLabel, laneRuns, nextLaneChange, nextLaneStart } from "./node-detail-schedule";
 import { houseControlLanes } from "./node-control-rollup";
-import { fillTemplate } from "../localize/localize";
+import { boldTemplate } from "./detail-section";
 import "./detail-section";
 import "./node-detail-battery-content";
 import "./node-detail-solar-content";
@@ -36,7 +36,11 @@ import { deviceControllableIds } from "./node-detail-utils";
 @customElement("node-detail-dialog")
 export class NodeDetailDialog extends LitElement {
     static styles = css`
+        /* The sections run edge to edge, so the body pads the overview only. */
+        ha-dialog { --dialog-content-padding: 0; }
         .header-title { display: inline-flex; align-items: center; }
+        .overview { padding: 0 var(--ha-space-6, 24px) var(--ha-space-5, 20px); }
+        helman-detail-section:last-of-type { border-bottom: 1px solid var(--divider-color); }
         .settings-button {
             margin-inline-end: auto;
         }
@@ -163,18 +167,20 @@ export class NodeDetailDialog extends LitElement {
 
     private _renderBody(): TemplateResult {
         const schedule = this._renderSchedule();
-        if (schedule === null) return this._renderContent();
+        const content = html`<div class="overview">${this._renderContent()}</div>`;
+        if (schedule === null) return content;
         return html`
-            ${this._renderContent()}
-            <helman-detail-section data-schedule icon="mdi:calendar" .title=${this.localize("node_detail.control.tab.schedule")}
+            ${content}
+            <helman-detail-section data-schedule icon="mdi:calendar-month-outline" .title=${this.localize("node_detail.control.tab.schedule")}
                 .expanded=${this._scheduleExpanded} @expanded-changed=${(event: CustomEvent<boolean>) => { this._scheduleExpanded = event.detail; }}>
-                <span slot="summary"><strong>${this._scheduleSummary()}</strong></span>
+                <span slot="summary">${this._scheduleSummary()}</span>
                 ${schedule}
             </helman-detail-section>
         `;
     }
 
-    private _scheduleSummary(): string {
+    /** The Schedule header's summary, its values in bold. */
+    private _scheduleSummary(): TemplateResult | string {
         const schedule = this._schedule;
         if (!schedule) return this.localize("node_detail.shared.schedule.none");
         const now = Date.now();
@@ -186,7 +192,7 @@ export class NodeDetailDialog extends LitElement {
                 .filter((entry) => entry.run !== null)
                 .sort((a, b) => a.run!.startMs - b.run!.startMs);
             const first = changes[0];
-            return first?.run ? fillTemplate(this.localize("node_detail.shared.schedule.house_next"), {
+            return first?.run ? boldTemplate(this.localize("node_detail.shared.schedule.house_next"), {
                 device: typeof first.lane.target === "string" ? first.lane.target : first.lane.target.displayName || first.lane.target.name,
                 time: formatScheduleTime(first.run.startMs, locale, zone),
             }) : this.localize("node_detail.shared.schedule.none");
@@ -194,7 +200,7 @@ export class NodeDetailDialog extends LitElement {
         const changes = this._controllableIds().map((id) => nextLaneChange(laneRuns(schedule, id, now), now, zone))
             .filter((run) => run !== null).sort((a, b) => a!.startMs - b!.startMs);
         const first = changes[0];
-        return first ? fillTemplate(this.localize("node_detail.shared.schedule.next"), {
+        return first ? boldTemplate(this.localize("node_detail.shared.schedule.next"), {
             action: laneActionLabel(first.action, this.localize), time: formatScheduleTime(first.startMs, locale, zone),
         }) : this.localize("node_detail.shared.schedule.none");
     }

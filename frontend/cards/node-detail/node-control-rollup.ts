@@ -53,6 +53,8 @@ function requestControl(node: HTMLElement, target: NodeDetailTarget): void {
 }
 
 const rollupStyles = css`
+    /* The Schedule section's body keeps its own tighter rhythm. */
+    .content { gap: 8px; }
     .switch-row {
         display: flex;
         align-items: center;

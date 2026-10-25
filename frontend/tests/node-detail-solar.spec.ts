@@ -302,6 +302,13 @@ test("solar Overview shows the P1 detail layout", async ({ page }) => {
     await expect(c.locator("helman-node-flow, helman-node-tile, helman-node-question")).toHaveCount(0);
 });
 
+test("solar Overview shows the off-grid warning", async ({ page }) => {
+    await mount(page, { offGrid: true });
+    await page.locator(".node-cell:has(simple-card-solar)").click();
+    const overview = content(page).locator("[data-overview]");
+    await expect(overview).toContainText("off-grid operation");
+});
+
 test("solar names its inverter rating, shows both strings, and routes a destination", async ({ page }) => {
     await mount(page);
     await page.locator(".node-cell:has(simple-card-solar)").click();

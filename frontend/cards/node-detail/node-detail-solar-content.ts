@@ -109,11 +109,9 @@ interface ForecastModel {
  * went, whether anything limits it, how the strings contribute and what to
  * expect.
  *
- * It opens on a status pill, today's production curve against the forecast
- * and the solar Now/Today flow from the strings around the panel. The
- * pictures absorb three questions: the curve opens the production, the flow
- * the destinations and the panel the strings. The other two are tiles; one
- * answer is open at a time, full width under the tiles.
+ * The Overview opens on the power headline (producing or not, and the share
+ * of the inverter rating as caption), then the gauge of where the power goes
+ * and, with two strings or more, each string's power now.
  *
  * Live readings come from `hass` and the live flow from the card; the backend
  * overview supplies the entity ids, the string mapping and the configured
@@ -317,13 +315,14 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
         const power = this._powerNow();
         const rated = this._ratedW(overview);
         const flows = this.params.flows;
-        const caption = [this.localize("node_detail.shared.solar_producing")];
-        if (power !== null && rated !== null && rated > 0) caption.push(fillTemplate(this.localize("node_detail.shared.solar_rating"), {
+        const producing = power !== null && power > IDLE_W;
+        const caption = [this.localize(producing ? "node_detail.shared.solar_producing" : "node_detail.shared.solar_idle")];
+        if (producing && rated !== null && rated > 0) caption.push(fillTemplate(this.localize("node_detail.shared.solar_rating"), {
             pct: Math.round(power / rated * 100), rating: formatPower(rated).display,
         }));
         return html`
-            <div class="content">
-                ${this._renderSummary(overview)}
+            <div class="content" data-overview>
+                ${this._renderException(overview)}
                 <helman-detail-headline .value=${power === null ? "—" : formatPower(power).display}
                     .entityId=${overview.entities.power ?? null} .caption=${caption}>
                     <simple-card-solar slot="icon" .compact=${true} .power=${power ?? 0}></simple-card-solar>
@@ -334,12 +333,12 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
                         { node: "battery", powerW: flows.solarToBattery },
                         { node: "grid", powerW: flows.solarToGrid },
                     ] : []}></helman-flow-gauge>
-                ${overview.strings.length >= 2 ? html`<div class="section-title">${this._t("strings.now")}</div>
-                    ${overview.strings.map((string) => {
+                ${overview.strings.length >= 2 ? html`<div class="section-title">${this.localize("node_detail.shared.strings_now")}</div>
+                    <div class="tile">${overview.strings.map((string) => {
                         const watts = this._watts(overview, `pv_power_${string}`);
                         return html`<div class="row" data-string=${string}><span>${fillTemplate(this._t("strings.string"), { n: String(string) })}</span>
-                            <strong>${watts === null ? "—" : formatPower(watts).display}</strong></div>`;
-                    })}` : nothing}
+                            <span>${watts === null ? "—" : formatPower(watts).display}</span></div>`;
+                    })}</div>` : nothing}
             </div>
         `;
     }
@@ -364,19 +363,9 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
         }
     }
 
-    private _renderSummary(overview: SolarDetailPayload) {
-        const power = this._powerNow();
-        const status = power === null
-            ? this._t("status.unavailable")
-            : power > IDLE_W
-            ? fillTemplate(this._t("status.producing"), { power: formatPower(power).display })
-            : this._t("status.not_producing");
-        return html`
-            <div class="summary" data-overview>
-                <p class="status" data-tone="neutral">${status} · ${this.localize("node_detail.shared.on_grid")}</p>
-                ${overview.condition ? this._exceptionBanner(fillTemplate(this._t(`exception.${overview.condition.kind}`), { state: overview.condition.runMode })) : nothing}
-            </div>
-        `;
+    /** An off-grid or fault run mode the inverter reports. */
+    private _renderException(overview: SolarDetailPayload) {
+        return overview.condition ? this._exceptionBanner(fillTemplate(this._t(`exception.${overview.condition.kind}`), { state: overview.condition.runMode })) : nothing;
     }
 
     // Production curve --------------------------------------------------------

@@ -64,6 +64,9 @@ type NestedDialog = { kind: "override" } | { kind: "optimizer"; optimizerId: str
 @customElement("helman-node-control")
 export class HelmanNodeControl extends LitElement {
     static styles = [nodeDetailSharedStyles, nodeDetailQuestionStyles, schedulingSharedStyles, css`
+        /* The Schedule section's body keeps its own tighter rhythm. */
+        .content { gap: 8px; }
+        .summary { padding-bottom: 8px; }
         .status-line {
             display: flex;
             flex-wrap: wrap;

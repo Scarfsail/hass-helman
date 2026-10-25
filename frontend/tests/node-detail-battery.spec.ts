@@ -224,3 +224,12 @@ test("battery compact icon marks the usable range and gauge segments open destin
     await content(page).locator("helman-flow-gauge button").first().click();
     await expect(page.locator("node-detail-house-content, node-detail-grid-content")).toHaveCount(1);
 });
+
+
+test("battery caption colours the power in the discharge colour", async ({ page }) => {
+    await mount(page);
+    await openDetail(page);
+    const part = content(page).locator("helman-detail-headline [data-direction]");
+    await expect(part).toContainText("discharging");
+    await expect(part).toHaveCSS("color", "rgb(220, 38, 38)");
+});

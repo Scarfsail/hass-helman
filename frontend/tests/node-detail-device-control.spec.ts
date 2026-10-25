@@ -229,6 +229,22 @@ test.describe("a schedulable device", () => {
         await expect(overrideDialog(page)).toHaveCount(0);
     });
 
+    test("the switch help names the next planned change", async ({ page }) => {
+        await mount(page, plan([["12:00", "13:00", { boiler: auto({ on: true }) }]]));
+        await openDevice(page, "Boiler");
+        const tip = page.locator("node-detail-device-content helman-who-decides helman-help-tip");
+        await expect.poll(() => tip.evaluate((el: any) => el.explanation)).toMatch(/next planned change at \d{1,2}[:.]\d{2}/);
+        expect(await tip.evaluate((el: any) => el.explanation)).not.toContain("—");
+    });
+
+    test("the switch help omits the time when no change is planned", async ({ page }) => {
+        await mount(page, plan());
+        await openDevice(page, "Boiler");
+        const tip = page.locator("node-detail-device-content helman-who-decides helman-help-tip");
+        await expect.poll(() => tip.evaluate((el: any) => el.explanation)).toContain("next planned change, then");
+        expect(await tip.evaluate((el: any) => el.explanation)).not.toContain("—");
+    });
+
     test("the dialog is named by its visible slotted title", async ({ page }) => {
         await mount(page);
         await openDevice(page, "Boiler");

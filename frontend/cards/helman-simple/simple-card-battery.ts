@@ -1,5 +1,5 @@
 import { formatPower } from "../shared/format";
-import { LitElement, css, html } from "lit-element";
+import { LitElement, css, html, svg } from "lit-element";
 import { customElement, property, state } from "lit/decorators.js";
 
 import { helmanColorVars } from "../color-vars";
@@ -146,6 +146,8 @@ export class SimpleCardBattery extends LitElement {
     @property({ type: String }) public sourceColor?: string;
     /** When true: renders SVG at 40px and suppresses the power label (for use as an icon). */
     @property({ type: Boolean }) public compact = false;
+    /** When true with `compact`: dashed marks and labels at `minSoc` and `maxSoc`, the range the battery is used in. */
+    @property({ type: Boolean }) public rangeMarks = false;
 
     // State properties
     @state() private _view?: BatteryView;
@@ -232,14 +234,11 @@ export class SimpleCardBattery extends LitElement {
                         x="${v.innerX}" y="${v.innerFillY}"
                         width="${v.innerWidth}" height="${v.innerFillHeight}" rx="2"
                         clip-path="url(#${this._clipId})"/>
-                    ${this.compact ? html`
-                        <line x1="1" x2="57" y1="${BODY_TOP + BODY_HEIGHT * (1 - this.minSoc / 100)}" y2="${BODY_TOP + BODY_HEIGHT * (1 - this.minSoc / 100)}"
-                            stroke="var(--primary-text-color)" stroke-width="1" stroke-dasharray="3 2"/>
-                        <line x1="1" x2="57" y1="${BODY_TOP + BODY_HEIGHT * (1 - this.maxSoc / 100)}" y2="${BODY_TOP + BODY_HEIGHT * (1 - this.maxSoc / 100)}"
-                            stroke="var(--primary-text-color)" stroke-width="1" stroke-dasharray="3 2"/>
-                        <text x="59" y="${BODY_TOP + BODY_HEIGHT * (1 - this.minSoc / 100)}" font-size="8" fill="var(--primary-text-color)">${this.minSoc}</text>
-                        <text x="59" y="${BODY_TOP + BODY_HEIGHT * (1 - this.maxSoc / 100)}" font-size="8" fill="var(--primary-text-color)">${this.maxSoc}</text>
-                    ` : ''}
+                    ${this.compact && this.rangeMarks ? [this.minSoc, this.maxSoc].map((mark) => {
+                        const y = BODY_TOP + BODY_HEIGHT * (1 - mark / 100);
+                        return svg`<line x1="1" x2="57" y1=${y} y2=${y} stroke="var(--primary-text-color)" stroke-width="2" stroke-dasharray="4 3"/>
+                            <text x="61" y=${y} dominant-baseline="middle" font-size="15" fill="var(--secondary-text-color)">${mark}</text>`;
+                    }) : ''}
 
                     <!-- SoC percentage inside -->
                     <text class="soc-label"

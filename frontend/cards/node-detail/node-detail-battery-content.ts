@@ -12,7 +12,7 @@ import { currencyFromPriceUnit } from "../helman-solar-inspector/money-model";
 
 import "../shared/soc-glyph";
 import type { SocDirection } from "../shared/soc-glyph";
-import { getScheduleActionTone, scheduleActionToneStyles, type ScheduleActionTone } from "../shared/schedule/action-tones";
+import { getScheduleActionTone, scheduleActionToneStyles } from "../shared/schedule/action-tones";
 import { INVERTER_CONTROLLABLE_ID } from "../shared/schedule/schedule-types";
 import { IDLE_W, NodeDetailContentBase, type NodeFlow } from "./node-detail-base";
 import { INVERTER_PLAN_INSPECTOR_CONFIG } from "./node-detail-inverter-content";
@@ -27,6 +27,7 @@ import {
     runtimeText,
 } from "./node-detail-schedule";
 import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
+import { helmanColorVars } from "../color-vars";
 import type { BatteryDetailParams } from "./node-detail-types";
 import { NODE_DETAIL_REQUEST_EVENT } from "./node-detail-types";
 import "../helman-simple/simple-card-battery";
@@ -56,10 +57,10 @@ interface Ceilings {
  * battery will do next, what limits it, where today's charge came from and what
  * the diagnostics tell.
  *
- * It opens on a status pill and the battery's Now/Today flow around its SoC
- * glyph. The pictures absorb two questions: the glyph opens the reserve, the
- * flow opens today's charge. The other three are tiles; one answer is open at
- * a time, full width under the tiles.
+ * The Overview opens on the SoC headline (the battery glyph with its reserve
+ * range when known, the charge or discharge power and the range as caption),
+ * then the time at the recent rate, the flow gauge, a notice when a ceiling
+ * binds, and the tile naming the inverter and the mode it runs now.
  *
  * Live readings come from `hass` and the live flow from the card; the backend
  * overview supplies the entity ids, the configured ceilings and the throughput
@@ -71,15 +72,17 @@ interface Ceilings {
  */
 @customElement("node-detail-battery-content")
 export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetailPayload, QuestionId> {
-    static styles = [nodeDetailSharedStyles, nodeDetailQuestionStyles, nodeDetailPictureStyles, scheduleActionToneStyles, css`
+    static styles = [helmanColorVars, nodeDetailSharedStyles, nodeDetailQuestionStyles, nodeDetailPictureStyles, scheduleActionToneStyles, css`
         .muted {
             color: var(--secondary-text-color);
         }
         .estimate {
             margin: 0;
-            font-size: 0.85rem;
-            color: var(--secondary-text-color);
         }
+        .notice { background: color-mix(in srgb, var(--warning-color, #ffa600) 16%, var(--card-background-color)); }
+        .notice-title { color: var(--warning-color, #ffa600); }
+        .inverter-link { min-height: 0; padding: 0; font-weight: inherit; text-decoration: underline; }
+        .notice-cause { font-size: 12px; line-height: 1.45; }
     `];
 
     protected readonly _node = "battery" as const;
@@ -138,18 +141,17 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
         const binding = lowest && power !== null && Math.abs(power) >= AT_CEILING * lowest.watts;
         const run = currentRun(this._plan.runs, Date.now());
         return html`
-            <div class="content">
-                ${this._renderSummary(overview)}
+            <div class="content" data-overview>
+                ${this._renderException(overview)}
                 <helman-detail-headline .value=${soc === null ? "—" : `${Math.round(soc)} %`}
                     .entityId=${overview.entities.soc ?? null}
-                    .caption=${[power === null ? "—" : `${direction === "charge" ? this.localize("node_detail.shared.charging") : direction === "discharge" ? this.localize("node_detail.shared.discharging") : this.localize("node_detail.shared.idle")} ${formatPower(Math.abs(power)).display}`,
+                    .caption=${[power === null ? "—" : html`<span data-direction style=${direction === "idle" ? "" : `color: var(--helman-${direction})`}>${direction === "charge" ? this.localize("node_detail.shared.charging") : direction === "discharge" ? this.localize("node_detail.shared.discharging") : this.localize("node_detail.shared.idle")} ${formatPower(Math.abs(power)).display}</span>`,
                         fillTemplate(this.localize("node_detail.shared.battery_range"), { floor: reserve?.minSoc ?? "?", ceiling: reserve?.maxSoc ?? "?" })]}>
-                    <simple-card-battery slot="icon" .compact=${true} .power=${power ?? 0} .soc=${soc ?? 0}
+                    <simple-card-battery slot="icon" .compact=${true} .rangeMarks=${reserve != null} .power=${power ?? 0} .soc=${soc ?? 0}
                         .minSoc=${reserve?.minSoc ?? 0} .maxSoc=${reserve?.maxSoc ?? 100}></simple-card-battery>
                 </helman-detail-headline>
                 ${estimate?.kind === "time" ? html`
-                    <p class="estimate" data-estimate>${estimate.text}
-                        <helman-help-tip .explanation=${this.localize("node_detail.shared.battery_rate_help")}></helman-help-tip></p>
+                    <p class="estimate" data-estimate>${estimate.text} <span class="muted">${this.localize("node_detail.shared.battery_recent_rate")}</span><helman-help-tip .explanation=${this.localize("node_detail.shared.battery_rate_help")}></helman-help-tip></p>
                 ` : nothing}
                 <helman-flow-gauge .direction=${direction === "charge" ? "from" : "to"} .localize=${this.localize}
                     .items=${flow ? direction === "charge" ? [
@@ -157,13 +159,18 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
                     ] : direction === "discharge" ? [
                         { node: "house", powerW: flow.batteryToHouse }, { node: "grid", powerW: flow.batteryToGrid },
                     ] : [] : []}></helman-flow-gauge>
-                ${binding ? html`<div class="notice" data-binding>${fillTemplate(this.localize(`node_detail.shared.battery_capped_${direction}`), { power: formatPower(lowest.watts).display })}
-                    <span>${lowest.source === "bms" && this._celsius(overview, "battery_temperature") !== null && this._celsius(overview, "battery_temperature")! < COLD_C
+                ${binding ? html`<div class="tile notice" data-binding>
+                    <span class="notice-title">${fillTemplate(this.localize(`node_detail.shared.battery_capped_${direction}`), { power: formatPower(lowest.watts).display })}</span>
+                    <span class="notice-cause">${lowest.source === "bms" && this._celsius(overview, "battery_temperature") !== null && this._celsius(overview, "battery_temperature")! < COLD_C
                         ? fillTemplate(this.localize("node_detail.shared.battery_cold_cause"), { temperature: this._reading(overview, "battery_temperature") ?? "?" })
                         : this._t(`limits.source_${lowest.source}`)}</span></div>` : nothing}
-                <button type="button" class="link-button" @click=${() => this.dispatchEvent(new CustomEvent(NODE_DETAIL_REQUEST_EVENT, { detail: { target: "inverter" }, bubbles: true, composed: true }))}>
-                    ${this.localize("node_detail.shared.battery_inverter")} → ${run ? this._actionLabel(run.action) : this._t("next.no_change")}
-                </button>
+                <div class="tile" data-inverter-control>
+                    <div class="row"><span class="label">${this.localize("node_detail.shared.controlled_through")}</span>
+                        <button type="button" class="link-button inverter-link" aria-label=${this.localize("node_detail.shared.battery_inverter")}
+                            @click=${() => this.dispatchEvent(new CustomEvent(NODE_DETAIL_REQUEST_EVENT, { detail: { target: "inverter" }, bubbles: true, composed: true }))}>${this.localize("node_detail.shared.the_inverter")}</button></div>
+                    <div class="row"><span class="label">${this.localize("node_detail.shared.mode_now_label")}</span>
+                        <span class="value">${run ? this._actionLabel(run.action) : this.localize("node_detail.control.nothing_scheduled")}</span></div>
+                </div>
             </div>
         `;
     }
@@ -186,23 +193,10 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
         }
     }
 
-    private _renderSummary(overview: BatteryDetailPayload) {
-        const power = this.params.power;
-        const status = power === null
-            ? this._t("status.unavailable")
-            : Math.abs(power) <= IDLE_W
-            ? fillTemplate(this._t("status.idle"), { power: formatPower(Math.abs(power)).display })
-            : fillTemplate(this._t(power > 0 ? "status.charging" : "status.discharging"), { power: formatPower(Math.abs(power)).display });
-        const direction = this._direction();
-        const tone: ScheduleActionTone = direction === "idle" ? "neutral" : direction;
-        // At most one exception: a BMS state or run mode the hardware reports.
+    /** At most one exception: a BMS state or run mode the hardware reports. */
+    private _renderException(overview: BatteryDetailPayload) {
         const condition = overview.condition;
-        return html`
-            <div class="summary" data-overview>
-                <p class="status" data-tone=${tone}>${status} · ${this.localize("node_detail.shared.battery_inverter")}</p>
-                ${condition ? this._exceptionBanner(fillTemplate(this._t(`exception.${condition.kind}`), { state: condition.state })) : nothing}
-            </div>
-        `;
+        return condition ? this._exceptionBanner(fillTemplate(this._t(`exception.${condition.kind}`), { state: condition.state })) : nothing;
     }
 
     /** Which way the battery's power moves now; idle without a reading. */

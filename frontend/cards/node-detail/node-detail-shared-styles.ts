@@ -8,9 +8,55 @@ export const nodeDetailSharedStyles = css`
     .content {
         display: flex;
         flex-direction: column;
-        gap: 12px;
+        gap: 14px;
         min-width: 240px;
-        padding: 8px 0;
+    }
+
+
+    /* A grouped block on the dialog surface: label rows, a car, a price. */
+    .tile {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        padding: 12px 14px;
+        border-radius: var(--ha-border-radius-lg, 12px);
+        background: var(--secondary-background-color);
+    }
+    /* A secondary action on the surface, like Override… */
+    .outline-button {
+        align-self: flex-start;
+        box-sizing: border-box;
+        display: inline-flex;
+        align-items: center;
+        min-height: 44px;
+        padding: 10px 16px;
+        border: 1px solid var(--divider-color);
+        border-radius: 22px;
+        background: none;
+        color: var(--primary-text-color);
+        font: inherit;
+        font-size: 14px;
+        cursor: pointer;
+    }
+    .outline-button:hover:not(:disabled) {
+        background: var(--secondary-background-color);
+    }
+    .outline-button:focus-visible {
+        outline: 2px solid var(--primary-color);
+        outline-offset: 2px;
+    }
+    .outline-button:disabled {
+        cursor: default;
+        opacity: 0.5;
+    }
+    .tile .row {
+        align-items: baseline;
+        font-size: 14px;
+    }
+    .tile .label,
+    .tile .value {
+        font-size: inherit;
+        font-weight: inherit;
     }
 
     .detail-row {
@@ -42,12 +88,13 @@ export const nodeDetailSharedStyles = css`
     }
 
     .section-title {
-        font-size: 0.75rem;
+        display: flex;
+        align-items: center;
+        font-size: 11px;
         font-weight: 600;
         text-transform: uppercase;
         color: var(--secondary-text-color);
-        letter-spacing: 0.05em;
-        margin-top: 4px;
+        letter-spacing: 0.08em;
     }
 
     .error {
@@ -60,18 +107,10 @@ export const nodeDetailSharedStyles = css`
 
 /** The question-led node details: the overview summary, answer rows and tables. */
 export const nodeDetailQuestionStyles = css`
-    .content {
-        gap: 8px;
-    }
     .summary {
         display: flex;
         flex-direction: column;
         gap: 8px;
-        padding-bottom: 8px;
-    }
-    .status {
-        margin: 0;
-        font-size: 0.95rem;
     }
     .figures {
         display: grid;
@@ -195,21 +234,10 @@ export const nodeDetailQuestionStyles = css`
 `;
 
 /**
- * The pictured node details: the status pill (in a scheduler tone class),
- * a picture or glyph that opens the question it absorbed, the answer tiles
- * and the open answer under them.
+ * The pictured node details: a picture or glyph that opens the question it
+ * absorbed, the answer tiles and the open answer under them.
  */
 export const nodeDetailPictureStyles = css`
-    .pill {
-        align-self: flex-start;
-        padding: 4px 12px;
-        border-radius: 999px;
-        border: 1px solid var(--schedule-action-tone-border);
-        background: var(--schedule-action-tone-bg);
-        color: var(--schedule-action-tone-color);
-        font-weight: 600;
-        font-size: 0.9rem;
-    }
     .glyph,
     .picture {
         display: block;

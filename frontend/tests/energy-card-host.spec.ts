@@ -57,7 +57,6 @@ test.describe("EnergyCardHost", () => {
                 batteryPower: -500,
             });
 
-            await expect(content.locator("[data-overview]")).toContainText("Helman last commanded: Normal");
             await expect(content.locator("helman-detail-headline")).toBeVisible();
             await expect(content.locator("[data-chain] [data-box]")).toHaveCount(3);
             await expect(content.locator("[data-chain] [data-box='command'] .box-value")).toHaveText("Normal");

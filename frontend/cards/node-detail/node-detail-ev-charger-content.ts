@@ -27,7 +27,7 @@ import { getScheduleApplianceActionPresentation } from "../shared/schedule/model
 import { resolveScheduleSlotBoundaries, type ScheduleSlotBoundary } from "../shared/schedule/model/schedule-time";
 import { IDLE_W, NodeDetailContentBase, type NodeFlow } from "./node-detail-base";
 import { staleToday } from "./section-resource";
-import { openMoreInfo, readEnergyKWh, readingNumber } from "./node-detail-readings";
+import { readEnergyKWh, readingNumber } from "./node-detail-readings";
 import { dispatchWatchedEntities } from "../shared/hass-change";
 import { powerUnitFactor } from "../shared/power-reading";
 import { mergeRuns, runtimeFor, withinTodayTomorrow } from "./node-detail-schedule";
@@ -39,8 +39,6 @@ import "./detail-headline";
 import "./flow-gauge";
 import "./switch-tile";
 import "./who-decides";
-import { ownershipText } from "./who-decides";
-import { LaneOwnershipController } from "./lane-ownership";
 
 type QuestionId = "progress" | "plan" | "waiting" | "today" | "trust";
 
@@ -103,12 +101,10 @@ type Completion =
  * planned and whether it reaches the target, why it is not charging, what
  * powered it today and whether its readings can be trusted.
  *
- * It opens on a status pill, the charging strip (charging so far today and the
- * planned windows to noon tomorrow, with the projected completion under it)
- * and the Now/Today flow around the car. The pictures absorb three
- * questions: the car opens the progress, the strip the plan, the flow today's
- * sources. The other two are tiles beside the session's; one answer is open
- * at a time, full width under the tiles.
+ * The Overview opens on the power headline (the charger's switch as its icon,
+ * the charging state and the session's energy as caption), then the estimated
+ * source mix, who decides the charger now, and the selected car's tile: its
+ * SoC against the limit, the energy still needed and the time at this power.
  *
  * Live readings come from `hass` and the house's live split from the card;
  * the backend overview supplies the entity ids and the charger's reported
@@ -129,17 +125,10 @@ type Completion =
 @customElement("node-detail-ev-charger-content")
 export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerDetailPayload, QuestionId> {
     static styles = [helmanColorVars, nodeDetailSharedStyles, nodeDetailQuestionStyles, nodeDetailPictureStyles, scheduleActionToneStyles, css`
-        button.status {
-            font-family: inherit;
-            text-align: left;
-            cursor: pointer;
-        }
+        [data-car] .meter { position: relative; height: 10px; margin: 4px 0; border-radius: 5px; overflow: visible; }
+        [data-car] .meter-fill { border-radius: 5px; background: var(--success-color, #43a047); }
+        [data-limit-marker] { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--primary-text-color); }
         .muted {
-            color: var(--secondary-text-color);
-        }
-        .estimate {
-            margin: 0;
-            font-size: 0.85rem;
             color: var(--secondary-text-color);
         }
         ul {
@@ -155,7 +144,6 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
     @property({ attribute: false }) public deviceId!: string;
     /** The device as opened: the card's live split and the flow's scale. */
     @property({ attribute: false }) public params!: DeviceDetailParams;
-    private readonly _lanes = new LaneOwnershipController(this, () => this.hass);
 
     /** This charger's charging windows in progress, today and tomorrow. */
     private readonly _plan = this._useSchedule((schedule, now): ChargeWindow[] => {
@@ -285,12 +273,11 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         const since = this._segment.payload?.chargingSince;
         const caption = [direct?.switchEntityId && this.hass.states[direct.switchEntityId]?.state === "off"
             ? this.localize("node_detail.shared.ev_off") : charging ? this.localize("node_detail.shared.ev_charging") : this._waitingPreview(overview, selection)];
-        if (session !== null) caption.push(fillTemplate(this.localize("node_detail.shared.ev_session"), {
-            kwh: formatKwh(session), time: since ? this._time(Date.parse(since)) : "—",
-        }));
+        if (session !== null) caption.push(since
+            ? fillTemplate(this.localize("node_detail.shared.ev_session"), { kwh: formatKwh(session), time: this._time(Date.parse(since)) })
+            : fillTemplate(this.localize("node_detail.shared.ev_session_total"), { kwh: formatKwh(session) }));
         return html`
-            <div class="content">
-                <p class="status" data-overview>${this._statusText(overview, power)} · ${ownershipText(this._lanes.status(this.deviceId), this.localize, this._lanes.locale, this._lanes.timeZone)}</p>
+            <div class="content" data-overview>
                 ${this._fault(overview) ? this._exceptionBanner(fillTemplate(this._t("exception.fault"), { fault: this._fault(overview)! })) : nothing}
                 <helman-detail-headline .value=${power === null ? "—" : formatPower(power).display}
                     .entityId=${overview.entities.power ?? this.params.item.powerSensorId ?? null} .caption=${caption}>
@@ -311,14 +298,14 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         const power = this._powerW(overview);
         const minutes = power && power > IDLE_W && car.neededKwh !== null ? car.neededKwh / (power / 1000) * 60 : null;
         return html`<div class="tile" data-car>
-            <div class="row"><strong>${car.vehicle.name} — ${car.soc ?? "?"} % ${this.localize("node_detail.shared.ev_of")} ${car.limit ?? "?"} % ${this.localize("node_detail.shared.ev_limit")}</strong></div>
-            <div class="meter" style="position:relative"><span class="meter-fill" style=${`width:${Math.max(0, Math.min(100, car.soc ?? 0))}%`}></span>
-                ${car.limit !== null ? html`<span data-limit-marker style=${`position:absolute;left:${Math.max(0, Math.min(100, car.limit))}%;top:-3px;bottom:-3px;border-left:2px dashed var(--primary-text-color)`}></span>` : nothing}
+            <div class="row"><span>${car.vehicle.name}</span><span><strong>${car.soc ?? "?"} %</strong> <span class="label">${this.localize("node_detail.shared.ev_of")} ${car.limit ?? "?"} % ${this.localize("node_detail.shared.ev_limit")}</span></span></div>
+            <div class="meter"><span class="meter-fill" style=${`width:${Math.max(0, Math.min(100, car.soc ?? 0))}%`}></span>
+                ${car.limit !== null ? html`<span data-limit-marker style=${`left:${Math.max(0, Math.min(100, car.limit))}%`}></span>` : nothing}
             </div>
-            <div>${this.localize("node_detail.shared.ev_needed")} ${car.neededKwh === null ? "—" : `${formatKwh(car.neededKwh)} kWh`}</div>
-            ${minutes !== null ? html`<div>${fillTemplate(this.localize("node_detail.shared.ev_at_power"), {
+            <div class="row"><span class="label">${this.localize("node_detail.shared.ev_needed")}</span><span>${car.neededKwh === null ? "—" : `${formatKwh(car.neededKwh)} kWh`}</span></div>
+            ${minutes !== null ? html`<div class="row"><span class="label">${this.localize("node_detail.shared.ev_at_power")}</span><span>${fillTemplate(this.localize("node_detail.shared.ev_eta"), {
                 duration: this._duration(minutes), time: this._time(Date.now() + minutes * 60_000),
-            })}</div>` : nothing}
+            })}</span></div>` : nothing}
         </div>`;
     }
 
@@ -338,34 +325,6 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
             default:
                 return nothing;
         }
-    }
-
-    protected _renderSummary(overview: EvChargerDetailPayload) {
-        const power = this._powerW(overview);
-        const kind = overview.status?.kind;
-        const tone: ScheduleActionTone = this._charging(overview) ? "charge" : kind === "fault" ? "stop" : "neutral";
-        // At most one exception: a fault the charger reports.
-        const fault = this._fault(overview);
-        const powerId = overview.entities.power ?? this.params.item.powerSensorId;
-        return html`
-            <div class="summary" data-overview>
-                ${powerId
-                    ? html`<button class="status pill action-tone-${tone}" data-tone=${tone} data-power-entity=${powerId} @click=${() => openMoreInfo(this, powerId)}>${this._statusText(overview, power)}</button>`
-                    : html`<p class="status pill action-tone-${tone}" data-tone=${tone}>${this._statusText(overview, power)}</p>`}
-                ${fault ? this._exceptionBanner(fillTemplate(this._t("exception.fault"), { fault })) : nothing}
-            </div>
-        `;
-    }
-
-    /** The status as the charger reports it; a Custom charger's from its power. */
-    private _statusText(overview: EvChargerDetailPayload, power: number | null): string {
-        const status = overview.status;
-        const values = { power: power === null ? "?" : formatPower(power).display, state: status?.runMode ?? "" };
-        if (status) return fillTemplate(this._t(`status.${status.kind}`), values);
-        const runMode = this._reading(overview, "run_mode");
-        if (runMode !== null) return fillTemplate(this._t("status.reported"), { state: runMode });
-        if (power === null) return this._t("status.unavailable");
-        return fillTemplate(this._t(power > IDLE_W ? "status.drawing" : "status.not_drawing"), values);
     }
 
     /** The effective window in progress: execution on and its condition met. */

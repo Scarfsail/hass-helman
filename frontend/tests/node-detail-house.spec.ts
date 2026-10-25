@@ -294,11 +294,24 @@ test("house Overview shows the P1 detail layout", async ({ page }) => {
     await expect(c.locator("helman-node-flow, helman-node-tile, helman-node-question")).toHaveCount(0);
 });
 
+test("house Overview shows the off-grid warning", async ({ page }) => {
+    await mount(page, { offGrid: true });
+    await page.locator(".node-cell:has(simple-card-house)").click();
+    const overview = content(page).locator("[data-overview]");
+    await expect(overview).toContainText("off-grid operation");
+});
+
 test("house expands biggest users and opens the selected device", async ({ page }) => {
     await mount(page);
     await page.locator(".node-cell:has(simple-card-house)").click();
     const c = content(page);
-    await expect(c.locator("button.row")).toHaveCount(3);
+    await expect(c.locator("button.user-row")).toHaveCount(4);
+    await expect(c.getByRole("button", { name: /Everything else/ })).toContainText("1.8 kW 23 %");
+    expect(await c.locator("button.user-row").first().evaluate((row) => ({
+        border: getComputedStyle(row).borderTopWidth,
+        radius: getComputedStyle(row).borderTopLeftRadius,
+        height: row.getBoundingClientRect().height,
+    }))).toEqual({ border: "0px", radius: "8px", height: 44 });
     await c.getByRole("button", { name: /Everything else/ }).click();
     await expect(c).toContainText("Not measured");
     await c.getByRole("button", { name: /Heat pump/ }).click();

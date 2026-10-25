@@ -171,11 +171,10 @@ interface PlannedRun {
  * phases. The card's device tree is not repeated: the card stays the route to
  * individual devices.
  *
- * It opens on a status pill and the house's Now/Today flow: its sources in,
- * the house filled with their mix, and the three largest consumers and
- * everything else out. The flow absorbs two questions: its sources open what
- * powered the house, its consumers what used the most. The other three are
- * tiles; one answer is open at a time, full width under the tiles.
+ * The Overview opens on the power headline (the house filled with its main
+ * source's colour), then the gauge of where the power comes from and the
+ * biggest users now, each with its kW and share, the rest folded into
+ * everything else.
  *
  * Live readings come from `hass` and the live split from the card; Now's
  * consumers are the card's house tree, each load counted once. The backend
@@ -288,6 +287,34 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
             font-size: 0.82rem;
             color: var(--secondary-text-color);
         }
+        .user-list { display: flex; flex-direction: column; gap: 4px; }
+        .user-row {
+            box-sizing: border-box;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            width: 100%;
+            min-height: 44px;
+            padding: 0 12px;
+            border: 0;
+            border-radius: 8px;
+            color: var(--primary-text-color);
+            font: inherit;
+            font-size: 14px;
+            text-align: start;
+            background: linear-gradient(to right,
+                color-mix(in srgb, var(--helman-house) 35%, var(--secondary-background-color)) var(--share),
+                var(--secondary-background-color) var(--share));
+        }
+        button.user-row { cursor: pointer; }
+        button.user-row:hover { filter: brightness(1.08); }
+        button.user-row:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
+        .user-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .user-row.muted .user-name { color: var(--secondary-text-color); }
+        .user-amount { flex: none; font-variant-numeric: tabular-nums; white-space: nowrap; }
+        .user-amount .percent { color: var(--secondary-text-color); }
+        .user-chevron { flex: none; width: 16px; --mdc-icon-size: 16px; color: var(--secondary-text-color); }
+        .show-less { align-self: flex-start; }
     `];
 
     protected readonly _node = "house" as const;
@@ -369,9 +396,13 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         const flows = this.params.flows;
         const loads = phases.loads.filter((load) => load.watts !== null && load.watts > 0).sort((a, b) => b.watts! - a.watts!);
         const visible = this._allUsers ? loads : loads.slice(0, TOP_CONSUMERS);
+        const hasUnmeasured = phases.houseRemainderW !== null || power !== null;
+        const unmeasuredW = phases.houseRemainderW ?? (power === null ? 0 : Math.max(0, power - loads.reduce((sum, load) => sum + (load.watts ?? 0), 0)));
+        const otherW = loads.slice(TOP_CONSUMERS).reduce((sum, load) => sum + (load.watts ?? 0), unmeasuredW);
+        const otherCount = Math.max(0, loads.length - TOP_CONSUMERS) + (hasUnmeasured ? 1 : 0);
         return html`
-            <div class="content">
-                ${this._renderSummary(overview)}
+            <div class="content" data-overview>
+                ${this._renderException(overview)}
                 <helman-detail-headline .value=${power === null ? "—" : formatPower(power).display}
                     .entityId=${overview.entities.power ?? null} .caption=${[this.localize("node_detail.shared.house_used")] }>
                     <simple-card-house slot="icon" .compact=${true} .power=${power ?? 0}
@@ -384,12 +415,12 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
                         { node: "grid", powerW: flows.gridToHouse },
                     ] : []}></helman-flow-gauge>
                 <div class="section-title">${this.localize("node_detail.shared.house_biggest")}</div>
-                ${visible.map((load) => this._userRow(load, power))}
-                ${this._allUsers ? this._userRow({ label: this.localize("node_detail.shared.not_measured"), own: false, phase: null, inheritedFrom: null,
-                    watts: phases.houseRemainderW ?? (power === null ? null : Math.max(0, power - loads.reduce((sum, load) => sum + (load.watts ?? 0), 0))) }, power, false) : nothing}
-                ${loads.length || phases.houseRemainderW !== null ? html`<button type="button" class="link-button" @click=${() => { this._allUsers = !this._allUsers; }}>
-                    ${this._allUsers ? this.localize("node_detail.shared.show_less") : fillTemplate(this.localize("node_detail.shared.everything_else"), { count: Math.max(0, loads.length - TOP_CONSUMERS) + 1 })}
-                </button>` : nothing}
+                <div class="user-list">
+                    ${visible.map((load) => this._userRow(load, power))}
+                    ${this._allUsers && hasUnmeasured ? this._userRow({ label: this.localize("node_detail.shared.not_measured"), own: false, phase: null, inheritedFrom: null, watts: unmeasuredW }, power, false) : nothing}
+                    ${otherCount > 0 && !this._allUsers ? this._userRow({ label: fillTemplate(this.localize("node_detail.shared.everything_else"), { count: otherCount }), own: false, phase: null, inheritedFrom: null, watts: otherW }, power, true, () => { this._allUsers = true; }, true) : nothing}
+                </div>
+                ${otherCount > 0 && this._allUsers ? html`<button type="button" class="link-button show-less" @click=${() => { this._allUsers = false; }}>${this.localize("node_detail.shared.show_less")}</button>` : nothing}
             </div>
         `;
     }
@@ -402,13 +433,17 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         return `var(--helman-${source[0]})`;
     }
 
-    private _userRow(load: PhaseLoad, house: number | null, clickable = true) {
+    private _userRow(load: PhaseLoad, house: number | null, clickable = true, onClick?: () => void, expanded = false) {
         const pct = house && load.watts ? Math.round(load.watts / house * 100) : 0;
         const item = clickable ? load.item ?? null : null;
-        const inner = html`<span>${load.label}</span><strong>${formatPower(load.watts ?? 0).display} · ${pct} %</strong><span>›</span>`;
-        return item ? html`<button type="button" class="row" style=${`min-height:44px;background:linear-gradient(to right,color-mix(in srgb,var(--helman-house) 22%,transparent) ${pct}%,transparent ${pct}%);`}
-            @click=${() => this.dispatchEvent(new CustomEvent(NODE_DETAIL_REQUEST_EVENT, { detail: { target: item }, bubbles: true, composed: true }))}>${inner}</button>`
-            : html`<div class="row" style=${`min-height:44px;background:linear-gradient(to right,color-mix(in srgb,var(--helman-house) 22%,transparent) ${pct}%,transparent ${pct}%);`}>${inner}</div>`;
+        const inner = html`<span class="user-name">${load.label}</span><span class="user-amount">${formatPower(load.watts ?? 0).display} <span class="percent">${pct} %</span></span>${item || onClick
+            ? html`<ha-icon class="user-chevron" icon=${expanded ? "mdi:chevron-down" : "mdi:chevron-right"}></ha-icon>` : html`<span class="user-chevron"></span>`}`;
+        const style = `--share: ${Math.max(0, Math.min(100, pct))}%`;
+        // Everything else and Not measured are no device: their names read muted.
+        const rowClass = clickable && !onClick ? "user-row" : "user-row muted";
+        return item || onClick ? html`<button type="button" class=${rowClass} style=${style}
+            @click=${onClick ?? (() => this.dispatchEvent(new CustomEvent(NODE_DETAIL_REQUEST_EVENT, { detail: { target: item }, bubbles: true, composed: true })))}>${inner}</button>`
+            : html`<div class=${rowClass} style=${style}>${inner}</div>`;
     }
 
 
@@ -430,17 +465,9 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         }
     }
 
-    private _renderSummary(overview: HouseDetailPayload) {
-        const power = this._powerNow();
-        const status = power === null
-            ? this._t("status.unavailable")
-            : fillTemplate(this._t("status.using"), { power: formatPower(Math.max(0, power)).display });
-        return html`
-            <div class="summary" data-overview>
-                <p class="status">${status} · ${this.localize("node_detail.shared.on_grid")}</p>
-                ${overview.condition ? this._exceptionBanner(fillTemplate(this._t(`exception.${overview.condition.kind}`), { state: overview.condition.runMode })) : nothing}
-            </div>
-        `;
+    /** An off-grid or fault run mode the inverter reports. */
+    private _renderException(overview: HouseDetailPayload) {
+        return overview.condition ? this._exceptionBanner(fillTemplate(this._t(`exception.${overview.condition.kind}`), { state: overview.condition.runMode })) : nothing;
     }
 
     // Flow --------------------------------------------------------------------

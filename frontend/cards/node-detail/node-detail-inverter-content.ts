@@ -40,7 +40,6 @@ import type { InverterDetailParams } from "./node-detail-types";
 import { LaneOwnershipController } from "./lane-ownership";
 import { DialogHistoryController } from "../shared/dialog-history-controller";
 import type { ControlOverrideDialog } from "./control-override-dialog";
-import { ownershipText } from "./who-decides";
 import "./detail-headline";
 import "./help-tip";
 import "./control-override-dialog";
@@ -86,11 +85,8 @@ interface ChainBox {
  * The inverter detail: what Helman commanded, what the hardware shows, and
  * what comes next.
  *
- * It opens on a status pill, then two pictures: the plan → command →
- * inverter chain, which absorbs *why*, and the mode strip from midnight to
- * noon tomorrow, which absorbs *next*. The Now/Today flow around the
- * inverter follows, then the *Limits*, *Operating* and *Trust* tiles; one
- * answer is open at a time, full width under the tiles.
+ * The Overview opens on the mode headline (what the mode does as caption),
+ * then the plan → command → inverter chain and the output tile.
  *
  * Four facts are kept apart throughout: the schedule's intent (this slot's
  * action), the last command (Helman's mode control), the executor's outcome
@@ -139,34 +135,29 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
         }
         .chain-row {
             display: grid;
-            grid-template-columns: minmax(0, 1fr) 30px minmax(0, 1fr) 30px minmax(0, 1fr);
+            grid-template-columns: minmax(0, 1fr) 20px minmax(0, 1fr) 20px minmax(0, 1fr);
             align-items: stretch;
-            margin-top: 4px;
         }
         .box {
             display: flex;
             flex-direction: column;
-            gap: 2px;
+            gap: 4px;
             min-width: 0;
-            padding: 6px 8px;
-            border-radius: 8px;
-            border: 2px solid var(--schedule-action-tone-border);
-            background: var(--schedule-action-tone-bg);
+            padding: 10px;
+            border-radius: 10px;
+            background: var(--secondary-background-color);
         }
         .box.mismatch {
-            border-color: var(--error-color, #db4437);
+            outline: 1px solid var(--error-color, #db4437);
             background: color-mix(in srgb, var(--error-color, #db4437) 12%, transparent);
         }
         .box-label {
-            font-size: 0.68rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
+            font-size: 12px;
+            line-height: 1.45;
             color: var(--secondary-text-color);
         }
         .box-value {
-            font-weight: 700;
-            font-size: 0.88rem;
+            font-size: 13px;
             line-height: 1.2;
             overflow-wrap: anywhere;
             color: var(--schedule-action-tone-color);
@@ -175,7 +166,7 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
             color: var(--error-color, #db4437);
         }
         .box-detail {
-            font-size: 0.72rem;
+            font-size: 0.75rem;
             line-height: 1.2;
             color: var(--secondary-text-color);
             overflow-wrap: anywhere;
@@ -186,14 +177,10 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
             align-items: center;
             justify-content: center;
             gap: 2px;
-            color: var(--secondary-text-color);
-            font-size: 0.6rem;
-            line-height: 1.1;
-            text-align: center;
-            overflow-wrap: anywhere;
+            color: var(--success-color, #43a047);
         }
         .link svg {
-            width: 26px;
+            width: 18px;
             height: 12px;
             stroke: currentColor;
             stroke-width: 1.6;
@@ -211,6 +198,9 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
             --meter-accent: var(--helman-neutral);
         }
         .inverter-icon.active { animation: inverter-glow 2s ease-in-out infinite; }
+        [data-verdict] { margin: 0; color: var(--warning-color, #c27c0e); }
+        [data-verdict][data-agrees] { color: var(--success-color, #43a047); }
+        [data-output] ~ .meter { height: 8px; margin: 0; --meter-accent: var(--primary-text-color); }
         @keyframes inverter-glow {
             50% { filter: drop-shadow(0 0 8px var(--helman-neutral)); }
         }
@@ -291,21 +281,23 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
         const pct = ac !== null && rated !== null && rated > 0 ? Math.round(Math.abs(ac) / rated * 100) : null;
         const controllable = this._lanes.roster?.find((item) => item.id === INVERTER_CONTROLLABLE_ID);
         return html`
-            <div class="content">
-                ${this._renderSummary(overview)}
+            <div class="content" data-overview>
+                ${this._renderException(overview)}
                 <helman-detail-headline .value=${mode ? this._modeLabel(mode) : "—"}
                     .entityId=${overview.mode?.entityId ?? null}
-                    .caption=${[this.localize("node_detail.shared.mode_now"), mode ? this._t(`mode_short.${mode}`) : "—"]}>
+                    .caption=${mode && mode !== "empty" ? [this.localize("node_detail.shared.mode_now"), this.localize(`node_detail.shared.mode_does.${mode}`)] : [this.localize("node_detail.shared.mode_now")]}>
                     <span slot="icon" class=${`inverter-icon ${ac !== null && Math.abs(ac) > IDLE_W ? "active" : ""}`}>${inverterGlyph()}</span>
                 </helman-detail-headline>
                 <div class="section-title">${this.localize("node_detail.shared.inverter_chain")}
                     <helman-help-tip .explanation=${this.localize("node_detail.shared.inverter_chain_help")}></helman-help-tip></div>
                 ${this._renderChain(overview)}
-                <div class="row" data-output><span>${this.localize("node_detail.shared.output_now")}</span>
-                    <strong>${ac === null ? "—" : formatPower(Math.abs(ac)).display}${pct !== null && rated !== null ? ` · ${pct} % ${this.localize("node_detail.shared.of_rating")} ${formatPower(rated).display}` : ""}</strong></div>
-                ${pct !== null ? html`<span class="meter"><span class="meter-fill" style=${`width:${Math.min(100, pct)}%`}></span></span>` : nothing}
-                <div class="row"><span>${this.localize("node_detail.shared.temperature")}</span><strong>${this._reading(overview, "inverter_temperature") ?? "—"}</strong></div>
-                <button type="button" class="link-button" ?disabled=${!controllable?.supportsAuthoring} @click=${this._openOverride}>${this.localize("node_detail.shared.override_mode")}</button>
+                <div class="tile">
+                    <div class="row" data-output><span class="label">${this.localize("node_detail.shared.output_now")}</span>
+                        <span>${ac === null ? "—" : formatPower(Math.abs(ac)).display}${pct !== null && rated !== null ? html` <span class="label">· ${pct} % ${this.localize("node_detail.shared.of_rating")} ${formatPower(rated).display}</span>` : nothing}</span></div>
+                    ${pct !== null ? html`<span class="meter"><span class="meter-fill" style=${`width:${Math.min(100, pct)}%`}></span></span>` : nothing}
+                    <div class="row"><span class="label">${this.localize("node_detail.shared.temperature")}</span><span>${this._reading(overview, "inverter_temperature") ?? "—"}</span></div>
+                </div>
+                <button type="button" class="outline-button" ?disabled=${!controllable?.supportsAuthoring} @click=${this._openOverride}>${this.localize("node_detail.shared.override_mode")}</button>
                 ${this._overrideOpen && controllable ? html`<control-override-dialog .hass=${this.hass} .localize=${this.localize}
                     .controllable=${controllable} .normalized=${this._lanes.normalized}
                     .executionEnabled=${this._lanes.snapshot.schedule?.executionEnabled ?? false} .open=${true}
@@ -332,23 +324,11 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
         }
     }
 
-    /** The last command in its mode's tone, and at most one reported condition. */
-    private _renderSummary(overview: InverterDetailPayload) {
-        const commanded = this._commandedKind(overview);
-        const raw = this._commandedRaw(overview);
-        const status = commanded || raw
-            ? fillTemplate(this._t("status.commanded"), { mode: commanded ? this._modeLabel(commanded) : raw! })
-            : this._t("status.no_command");
-        const tone: ScheduleActionTone = commanded ? getScheduleActionTone(commanded) : "neutral";
-        // A fault or off-grid operation the hardware reports, leading to the operating answer.
+    /** A fault or off-grid operation the hardware reports, else a reported mismatch. */
+    private _renderException(overview: InverterDetailPayload) {
         const condition = overview.condition;
-        return html`
-            <div class="summary" data-overview>
-                <p class="status" data-tone=${tone}>${status} · ${ownershipText(this._lanes.status(INVERTER_CONTROLLABLE_ID), this.localize, this._lanes.locale, this._lanes.timeZone)}</p>
-                ${condition ? this._exceptionBanner(fillTemplate(this._t(`exception.${condition.kind}`), { state: condition.runMode })) : nothing}
-                ${!condition && overview.agreement.status === "mismatch" ? html`<div class="exception" role="status" data-exception>${this._t("exception.mismatch")}</div>` : nothing}
-            </div>
-        `;
+        if (condition) return this._exceptionBanner(fillTemplate(this._t(`exception.${condition.kind}`), { state: condition.runMode }));
+        return overview.agreement.status === "mismatch" ? this._exceptionBanner(this._t("exception.mismatch")) : nothing;
     }
 
     // Chain -------------------------------------------------------------------
@@ -382,7 +362,7 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
                     ${this._renderBox(inverter)}
                 </span>
             </div>
-            <p data-verdict>${reason ? fillTemplate(this.localize("node_detail.shared.inverter_not_applied"), { why: reason })
+            <p data-verdict ?data-agrees=${!reason && planned !== null && commanded !== null && overview.agreement.status === "match"}>${reason ? fillTemplate(this.localize("node_detail.shared.inverter_not_applied"), { why: reason })
                 : planned !== null && commanded !== null && overview.agreement.status === "match"
                     ? this.localize("node_detail.shared.inverter_agrees") : this._t("chain.unknown")}</p>
         `;
@@ -442,13 +422,12 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
     /** An arrow; broken, and said so, where the plan is not applied. */
     private _renderLink(broken: boolean) {
         return html`
-            <span class="link ${broken ? "broken" : ""}" data-link=${broken ? "broken" : "applied"}>
+            <span class="link ${broken ? "broken" : ""}" data-link=${broken ? "broken" : "applied"} title=${broken ? this._t("chain.not_applied") : nothing}>
                 <svg viewBox="0 0 26 12" aria-hidden="true">
                     ${broken
                         ? svg`<path d="M1 6 H8 M15 6 H20 M17 2 L22 6 L17 10 M9 10 L12 2 M12 10 L15 2"></path>`
                         : svg`<path d="M1 6 H20 M17 2 L22 6 L17 10"></path>`}
                 </svg>
-                ${broken ? html`<span>${this._t("chain.not_applied")}</span>` : nothing}
             </span>
         `;
     }

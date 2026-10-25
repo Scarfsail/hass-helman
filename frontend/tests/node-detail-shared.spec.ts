@@ -45,3 +45,24 @@ test("help tips close on Escape and opening another tip", async ({ page }) => {
     await page.keyboard.press("Escape");
     await expect(tips.nth(1).locator(".popup")).toBeHidden();
 });
+
+test("a help popup near the right edge stays inside a 390 px viewport", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 700 });
+    await page.evaluate(() => {
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex;justify-content:flex-end;box-sizing:border-box;padding-right:16px;width:390px";
+        const tip = document.createElement("helman-help-tip") as any;
+        tip.explanation = "A long explanation that would run past the right edge of the narrow viewport when start-aligned, so it has to flip.";
+        row.append(tip);
+        document.getElementById("mount")!.style.width = "390px";
+        document.getElementById("mount")!.append(row);
+    });
+    await page.locator("helman-help-tip button").click();
+    const popup = page.locator("helman-help-tip .popup");
+    await expect(popup).toBeVisible();
+    await expect.poll(async () => {
+        const box = (await popup.boundingBox())!;
+        return box.x >= 0 && box.x + box.width <= 390;
+    }).toBe(true);
+});
+

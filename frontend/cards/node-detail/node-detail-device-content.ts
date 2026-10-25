@@ -16,9 +16,8 @@ import "./detail-headline";
 import "./flow-gauge";
 import "./switch-tile";
 import "./who-decides";
-import { ownershipText } from "./who-decides";
 import { openMoreInfo } from "./node-detail-readings";
-import { LaneOwnershipController } from "./lane-ownership";
+import { nodeDetailSharedStyles } from "./node-detail-shared-styles";
 
 function powerEntity(item: TreeItem): string | undefined {
     return item.powerSensorId && item.powerSensorId !== item.energyEntityId ? item.powerSensorId : undefined;
@@ -26,19 +25,15 @@ function powerEntity(item: TreeItem): string | undefined {
 
 @customElement("node-detail-device-content")
 export class NodeDetailDeviceContent extends LitElement {
-    static styles = css`
-        :host { display: block; }
-        .status { margin: 0 0 8px; color: var(--secondary-text-color); }
-        .content { display: grid; gap: 10px; }
+    static styles = [nodeDetailSharedStyles, css`
         .icon { width: 64px; height: 64px; display: grid; place-items: center; }
         .icon ha-icon { --mdc-icon-size: 42px; }
-        .climate-control { justify-self: start; border: 0; padding: 0; background: none; color: var(--primary-color); font: inherit; cursor: pointer; }
+        .climate-control { align-self: flex-start; border: 0; padding: 0; background: none; color: var(--primary-color); font: inherit; cursor: pointer; }
         .climate-control:hover { text-decoration: underline; }
-    `;
+    `];
     @property({ attribute: false }) public hass!: HomeAssistant;
     @property({ attribute: false }) public localize!: LocalizeFunction;
     @property({ attribute: false }) public params!: DeviceDetailParams;
-    private readonly _lanes = new LaneOwnershipController(this, () => this.hass);
     private readonly _energy = new SectionResource<number | null>(this, "energy", {
         fetch: () => this._readToday(this.params.item.energyEntityId!),
         shown: () => !!this.params.item.energyEntityId,
@@ -67,10 +62,7 @@ export class NodeDetailDeviceContent extends LitElement {
         const today = this._energy.payload;
         const caption = [stateLabel];
         if (today !== undefined && today !== null) caption.push(fillTemplate(this.localize("node_detail.shared.device_today"), { kwh: today.toFixed(2) }));
-        return html`<div class="content">
-            <p class="status" data-overview>${stateLabel} · ${ids.length
-                ? ownershipText(this._lanes.status(ids[0]), this.localize, this._lanes.locale, this._lanes.timeZone)
-                : this.localize("node_detail.control.status.not_automated")}</p>
+        return html`<div class="content" data-overview>
             <helman-detail-headline .value=${power === null ? "—" : formatPower(power).display} .entityId=${powerId ?? null} .caption=${caption}>
                 ${controlId ? html`<helman-switch-tile slot="icon" .hass=${this.hass} .localize=${this.localize}
                     .entityId=${controlId} .kind=${direct?.switchEntityId ? "switch" : "climate"}

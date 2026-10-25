@@ -180,6 +180,13 @@ test("grid Overview shows the P1 detail layout", async ({ page }) => {
     await expect(c.locator("helman-node-flow, helman-node-tile, helman-node-question")).toHaveCount(0);
 });
 
+test("grid Overview shows the off-grid warning", async ({ page }) => {
+    await mount(page, { condition: "off_grid" });
+    await page.locator(".node-cell:has(simple-card-grid)").click();
+    const overview = content(page).locator("[data-overview]");
+    await expect(overview).toContainText("off-grid operation");
+});
+
 test("grid shows price change and keeps phase picture passive", async ({ page }) => {
     await mount(page);
     await page.locator(".node-cell:has(simple-card-grid)").click();
@@ -213,4 +220,33 @@ test("grid Overview omits the price row when neither price is available", async 
     await mount(page, { noImportPrice: true, noExportPrice: true });
     await page.locator(".node-cell:has(simple-card-grid)").click();
     await expect(content(page).locator("[data-price]")).toHaveCount(0);
+});
+
+test("grid headline at about 0 W shows no arrow and a neutral idle caption", async ({ page }) => {
+    await mount(page, { grid: "0", solar: "0", house: "0", battery: "0" });
+    await page.locator(".node-cell:has(simple-card-grid)").click();
+    const headline = content(page).locator("helman-detail-headline");
+    await expect(headline).toContainText("not exchanging with the grid now");
+    await expect(headline).not.toContainText("importing");
+    const value = headline.locator("[data-headline]");
+    await expect(value).not.toContainText("←");
+    await expect(value).not.toContainText("→");
+    const colors = await value.evaluate((el) => {
+        const probe = document.createElement("span");
+        probe.style.color = "var(--primary-text-color)";
+        el.parentElement!.appendChild(probe);
+        const primary = getComputedStyle(probe).color;
+        probe.remove();
+        return { value: getComputedStyle(el).color, primary };
+    });
+    expect(colors.value).toBe(colors.primary);
+});
+
+test("grid price tile bolds each price and keeps each one whole", async ({ page }) => {
+    await mount(page);
+    await page.locator(".node-cell:has(simple-card-grid)").click();
+    const price = content(page).locator("[data-price] .row").first();
+    await expect(price.locator(".price-part")).toHaveCount(2);
+    await expect(price.locator(".price-part b")).toHaveCount(2);
+    await expect(price.locator(".price-part").first()).toHaveCSS("display", "inline-block");
 });

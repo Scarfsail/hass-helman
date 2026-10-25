@@ -8,12 +8,18 @@ import { openMoreInfo } from "./node-detail-readings";
 @customElement("helman-switch-tile")
 export class HelmanSwitchTile extends LitElement {
     static styles = css`
-        button { display: flex; flex-direction: column; align-items: center; justify-content: center; width: 64px; height: 64px;
-            border: 1.5px solid var(--divider-color); border-radius: 10px; background: var(--secondary-background-color);
-            color: var(--secondary-text-color); font: inherit; font-size: 0.75rem; cursor: pointer; }
-        button.on { border: 2px solid #ffad26; color: #ffad26; box-shadow: 0 0 12px #ffad2680; }
-        button.on ha-state-icon { --state-switch-active-color: #ffad26; color: #ffad26; }
-        ha-icon, ha-state-icon { --mdc-icon-size: 28px; }
+        button { --tile-on: var(--state-switch-on-color, var(--amber-color, #ffc107));
+            box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+            width: 64px; height: 64px; border: 1.5px solid var(--divider-color); border-radius: 14px; background: var(--secondary-background-color);
+            color: var(--secondary-text-color); font: inherit; font-size: 12px; font-weight: var(--ha-font-weight-medium, 500);
+            cursor: pointer; touch-action: manipulation; user-select: none; transition: box-shadow 0.2s, background 0.2s; }
+        button:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
+        button.on { border: 2px solid var(--tile-on); color: var(--tile-on); box-shadow: 0 0 16px color-mix(in srgb, var(--tile-on) 55%, transparent);
+            background: color-mix(in srgb, var(--tile-on) 12%, var(--card-background-color)); }
+        button.on ha-state-icon { --state-switch-active-color: var(--tile-on); color: var(--tile-on); }
+        ha-icon, ha-state-icon { --mdc-icon-size: 24px; }
+        .label { display: block; }
+        .label::first-letter { text-transform: uppercase; }
     `;
     @property({ attribute: false }) public hass!: HomeAssistant;
     @property() public entityId = "";
@@ -45,7 +51,7 @@ export class HelmanSwitchTile extends LitElement {
             @pointerdown=${this._down} @pointerup=${this._up} @pointercancel=${this._up}
             @contextmenu=${(event: Event) => event.preventDefault()} @click=${this._activate}>
             ${state && customElements.get("ha-state-icon") ? html`<ha-state-icon .hass=${this.hass} .stateObj=${state}></ha-state-icon>`
-                : html`<ha-icon .icon=${this.fallbackIcon}></ha-icon>`}<span>${label}</span>
+                : html`<ha-icon .icon=${this.fallbackIcon}></ha-icon>`}<span class="label">${label}</span>
         </button>`;
     }
 }

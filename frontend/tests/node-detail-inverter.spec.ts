@@ -264,7 +264,7 @@ test("inverter Overview shows the P1 detail layout", async ({ page }) => {
 test("Back closes the Overview mode override and keeps the inverter detail", async ({ page }) => {
     await mount(page);
     await page.locator(".inverter-cell").click();
-    await content(page).locator("button.link-button").filter({ hasText: "Override mode" }).click();
+    await content(page).getByRole("button", { name: /Override mode/ }).click();
     await expect(page.locator("control-override-dialog")).toBeVisible();
     await expect.poll(() => page.evaluate(() => window.history.state?.__helmanInverterOverrideId)).toBeTruthy();
     await page.evaluate(() => window.history.back());
@@ -295,10 +295,9 @@ test("inverter does not claim agreement when the plan differs from the last comm
     await expect(content(page).locator("[data-verdict]")).toContainText("last command differs from the plan");
 });
 
-test("inverter reports disabled execution in status and verdict", async ({ page }) => {
+test("inverter reports disabled execution in its verdict", async ({ page }) => {
     await mount(page, { executionEnabled: false });
     await page.locator(".inverter-cell").click();
-    await expect(content(page).locator("[data-overview] .status")).toContainText("Execution off");
     await expect(content(page).locator("[data-verdict]")).toContainText("execution off");
 });
 
@@ -321,8 +320,3 @@ test("inverter Schedule does not promise an unmet discharge candidate", async ({
         .toContainText("Nothing planned");
 });
 
-test("inverter status names a manual override", async ({ page }) => {
-    await mount(page, { userOverrideNow: true });
-    await page.locator(".inverter-cell").click();
-    await expect(content(page).locator("[data-overview] .status")).toContainText("You, until");
-});

@@ -19,6 +19,7 @@ import { scheduleActionToneStyles } from "../shared/schedule/action-tones";
 import "../shared/day-line-chart";
 import type { DayLineBand, DayLineReference, DayLineSeries } from "../shared/day-line-chart";
 import { IDLE_W, NodeDetailContentBase, type NodeFlow } from "./node-detail-base";
+import { boldTemplate } from "./detail-section";
 import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { GridDetailParams } from "./node-detail-types";
 import "../helman-simple/simple-card-grid";
@@ -98,10 +99,9 @@ interface MoneyFigures {
  * grid, what the grid cost or earned today, what changes next and what happens
  * without the grid.
  *
- * It opens on a status pill, the phase picture and the grid's Now/Today flow
- * around the pylon. The pictures absorb two questions: the phase picture opens
- * the phases, the flow opens the money. The other three are tiles; one answer
- * is open at a time, full width under the tiles.
+ * The Overview opens on the exchange headline (its direction in the import or
+ * export colour), then the gauge of where the power goes or comes from, the
+ * price tile and the phase picture.
  *
  * Live readings come from `hass` and the live flow from the card; the backend
  * overview supplies the entity ids. Today's voltages are read on opening, for
@@ -113,6 +113,8 @@ interface MoneyFigures {
 @customElement("node-detail-grid-content")
 export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPayload, QuestionId> {
     static styles = [helmanColorVars, nodeDetailSharedStyles, nodeDetailQuestionStyles, nodeDetailPictureStyles, scheduleActionToneStyles, css`
+        /* A price moves whole to the next line; only a price wider than the line wraps inside. */
+        .price-part { display: inline-block; }
         .swatch {
             display: inline-block;
             width: 10px;
@@ -266,18 +268,20 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         const overview = this._overview.payload;
         const power = this.params.gridPower;
         const importing = power !== null && power >= 0;
+        const idle = power !== null && Math.abs(power) <= IDLE_W;
         const flows = this.params.flows;
         const grid = this._forecast?.grid;
         const buy = this._priceNow("import");
         const sell = this._priceNow("export");
         const next = this._nextPriceChange("import");
+        const breaker = this._number(overview, "main_breaker_limit");
         return html`
-            <div class="content">
-                ${this._renderSummary(overview)}
-                <helman-detail-headline style=${`--detail-headline-color: ${importing ? GRID_IMPORT_COLOR : GRID_EXPORT_COLOR}`}
-                    .value=${power === null ? "—" : `${importing ? "←" : "→"} ${formatPower(Math.abs(power)).display}`}
+            <div class="content" data-overview>
+                ${this._renderException(overview)}
+                <helman-detail-headline style=${idle ? "" : `--detail-headline-color: ${importing ? GRID_IMPORT_COLOR : GRID_EXPORT_COLOR}`}
+                    .value=${power === null ? "—" : idle ? formatPower(Math.abs(power)).display : `${importing ? "←" : "→"} ${formatPower(Math.abs(power)).display}`}
                     .entityId=${this.params.powerEntityId}
-                    .caption=${[this.localize(`node_detail.shared.grid_${importing ? "importing" : "exporting"}`)]}>
+                    .caption=${[this.localize(`node_detail.shared.grid_${idle ? "idle" : importing ? "importing" : "exporting"}`)]}>
                     <simple-card-grid slot="icon" .compact=${true} .power=${power ?? 0}></simple-card-grid>
                 </helman-detail-headline>
                 <helman-flow-gauge .direction=${importing ? "to" : "from"} .localize=${this.localize}
@@ -286,22 +290,20 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
                     ] : [
                         { node: "solar", powerW: flows.solarToGrid }, { node: "battery", powerW: flows.batteryToGrid },
                     ] : []}></helman-flow-gauge>
-                ${grid && (buy !== null || sell !== null) ? html`<div class="row" data-price>
-                    <span>${buy !== null && sell !== null
-                        ? fillTemplate(this.localize("node_detail.shared.grid_price"), {
-                            buy: this._price(buy, grid.importPriceUnit), sell: this._price(sell, grid.exportPriceUnit),
-                        })
-                        : buy !== null
-                            ? fillTemplate(this.localize("node_detail.shared.grid_price_buy"), { buy: this._price(buy, grid.importPriceUnit) })
-                            : fillTemplate(this.localize("node_detail.shared.grid_price_sell"), { sell: this._price(sell!, grid.exportPriceUnit) })}</span>
-                    ${next ? html`<span>${fillTemplate(this.localize("node_detail.shared.grid_next_price"), {
-                        time: this._time(next.at), buy: this._price(next.value, grid.importPriceUnit),
-                    })}</span>` : nothing}
+                ${grid && (buy !== null || sell !== null) ? html`<div class="tile" data-price>
+                    <div class="row"><span class="label">${this.localize("node_detail.shared.grid_price_now")}</span>
+                        <span class="value">${[
+                            buy !== null ? boldTemplate(this.localize("node_detail.shared.grid_price_buy"), { buy: this._price(buy, grid.importPriceUnit) }) : null,
+                            sell !== null ? boldTemplate(this.localize("node_detail.shared.grid_price_sell"), { sell: this._price(sell, grid.exportPriceUnit) }) : null,
+                        ].filter((part) => part !== null).map((part, index) => html`${index ? "\u00a0· " : ""}<span class="price-part">${part}</span>`)}</span></div>
+                    ${next ? html`<div class="row"><span class="label">${fillTemplate(this.localize("node_detail.shared.grid_next_price"), { time: this._time(next.at) })}</span>
+                        <span class="value">${fillTemplate(this.localize("node_detail.shared.grid_price_buy"), { buy: this._price(next.value, grid.importPriceUnit) })}</span></div>` : nothing}
                 </div>` : nothing}
-                <div>${this._renderPhasePicture(overview)}
-                    <helman-help-tip .explanation=${fillTemplate(this.localize("node_detail.shared.grid_phase_help"), {
-                        amps: this._number(overview, "main_breaker_limit") ?? "?",
-                    })}></helman-help-tip></div>
+                <div class="section-title">${breaker !== null
+                    ? fillTemplate(this.localize("node_detail.shared.grid_phases"), { amps: breaker })
+                    : this.localize("node_detail.shared.grid_phases_no_breaker")}
+                    <helman-help-tip .explanation=${fillTemplate(this.localize("node_detail.shared.grid_phase_help"), { amps: breaker ?? "?" })}></helman-help-tip></div>
+                <div class="tile">${this._renderPhasePicture(overview)}</div>
             </div>
         `;
     }
@@ -326,19 +328,9 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         }
     }
 
-    private _renderSummary(overview: GridDetailPayload) {
-        const power = this.params.gridPower;
-        const status = power === null
-            ? this._t("status.unavailable")
-            : Math.abs(power) <= IDLE_W
-            ? fillTemplate(this._t("status.idle"), { power: formatPower(Math.abs(power)).display })
-            : fillTemplate(this._t(power > 0 ? "status.importing" : "status.exporting"), { power: formatPower(Math.abs(power)).display });
-        return html`
-            <div class="summary" data-overview>
-                <p class="status" data-tone="neutral">${status} · ${this.localize("node_detail.shared.on_grid")}</p>
-                ${overview.condition ? this._exceptionBanner(fillTemplate(this._t(`exception.${overview.condition.kind}`), { state: overview.condition.runMode })) : nothing}
-            </div>
-        `;
+    /** An off-grid or fault run mode the inverter reports. */
+    private _renderException(overview: GridDetailPayload) {
+        return overview.condition ? this._exceptionBanner(fillTemplate(this._t(`exception.${overview.condition.kind}`), { state: overview.condition.runMode })) : nothing;
     }
 
     // Phase picture -----------------------------------------------------------

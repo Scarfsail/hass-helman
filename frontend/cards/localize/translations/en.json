@@ -145,6 +145,7 @@
       "you": "You",
       "override": "Override…",
       "switch_help": "Tap the tile to switch it by hand. That holds until Helman's next planned change at {time}, then the schedule takes over again. Hold the tile for Home Assistant's details. To keep a manual state longer, use Override.",
+      "switch_help_no_time": "Tap the tile to switch it by hand. That holds until Helman's next planned change, then the schedule takes over again. Hold the tile for Home Assistant's details. To keep a manual state longer, use Override.",
       "device_today": "{kwh} kWh used today",
       "device_state_on": "on",
       "device_state_off": "off",
@@ -153,10 +154,10 @@
       "solar_rating": "{pct}% of the {rating} inverter rating",
       "grid_importing": "importing from the grid now",
       "grid_exporting": "exporting to the grid now",
-      "grid_price": "Price now {buy} to buy · {sell} to sell",
-      "grid_price_buy": "Price now {buy} to buy",
-      "grid_price_sell": "Price now {sell} to sell",
-      "grid_next_price": "Changes at {time} to {buy}",
+      "grid_idle": "not exchanging with the grid now",
+      "grid_price_buy": "{buy} to buy",
+      "grid_price_sell": "{sell} to sell",
+      "grid_next_price": "Changes at {time} to",
       "grid_phase_help": "Each bar is one phase: right of the centre line is import, left is export, and a full bar is the {amps} A main breaker. Normal voltage is 207–253 V.",
       "house_used": "used by the house now",
       "house_biggest": "Going to · now · biggest users",
@@ -184,13 +185,31 @@
       "ev_of": "of",
       "ev_limit": "limit",
       "ev_needed": "Still needed",
-      "ev_at_power": "At this power ≈ {duration} → limit around {time}",
+      "ev_at_power": "At this power",
       "helman_schedule": "Helman's schedule",
       "you_until": "You, until {time}",
-      "on_grid": "on grid",
       "inverter_agrees": "✓ Everything agrees",
       "inverter_not_applied": "Not applied: {why}",
-      "battery_cold_cause": "The cells are cold ({temperature}), so the battery management limits the current."
+      "battery_cold_cause": "The cells are cold ({temperature}), so the battery management limits the current.",
+      "grid_price_now": "Price now",
+      "grid_phases": "Phases · load vs {amps} A breaker · voltage",
+      "grid_phases_no_breaker": "Phases · load · voltage",
+      "strings_now": "Strings now",
+      "controlled_through": "Controlled through",
+      "the_inverter": "the inverter →",
+      "mode_now_label": "Mode now",
+      "battery_recent_rate": "at the recent rate",
+      "ev_eta": "≈ {duration} → limit around {time}",
+      "ev_session_total": "{kwh} kWh added this session",
+      "mode_does": {
+        "normal": "solar covers the house, the surplus charges the battery",
+        "stop_charging": "the battery does not charge",
+        "stop_discharging": "the battery keeps its charge",
+        "charge_to_target_soc": "the battery charges to its target",
+        "discharge_to_target_soc": "the battery discharges to its target",
+        "stop_export": "nothing is sold to the grid"
+      },
+      "solar_idle": "not producing now"
     },
     "control": {
       "tab": {
@@ -308,10 +327,6 @@
       "off": "off",
       "evidence": "How this is worked out",
       "technical": "Technical readings",
-      "status": {
-        "commanded": "Helman last commanded: {mode}.",
-        "no_command": "Helman has not commanded a mode yet."
-      },
       "figure": {
         "temperature": "Temperature"
       },
@@ -468,8 +483,8 @@
       },
       "chain": {
         "plan": "Plan",
-        "command": "Last command",
-        "inverter": "Inverter",
+        "command": "Helman sent",
+        "inverter": "Inverter reports",
         "executor": "executor {outcome}",
         "no_runtime": "no executor record",
         "match": "matches",
@@ -509,12 +524,6 @@
       "phase": "Phase",
       "loading_history": "Loading today's history…",
       "history_failed": "Today's history could not be loaded.",
-      "status": {
-        "importing": "Importing {power} from the grid.",
-        "exporting": "Exporting {power} to the grid.",
-        "idle": "Hardly any grid flow right now ({power}).",
-        "unavailable": "No grid power reading right now."
-      },
       "power": {
         "import": "importing {power}",
         "export": "exporting {power}",
@@ -684,12 +693,6 @@
       "technical": "Technical readings",
       "next_change": "Next: {action} from {time}",
       "next_estimate": "At the recent rate: {estimate}",
-      "status": {
-        "charging": "Charging at {power}.",
-        "discharging": "Discharging at {power}.",
-        "idle": "Idle ({power}).",
-        "unavailable": "No battery power reading right now."
-      },
       "glyph": {
         "min": "min {soc}",
         "max": "max {soc}"
@@ -881,11 +884,6 @@
       "forecast_unavailable": "No solar forecast is available yet.",
       "forecast_not_configured": "No solar forecast is configured.",
       "period": "Today {start}–{end}",
-      "status": {
-        "producing": "Producing {power}.",
-        "not_producing": "Not producing right now.",
-        "unavailable": "No solar power reading right now."
-      },
       "next": {
         "until": "Forecast: production until around {time}",
         "from": "Forecast: production from around {time}",
@@ -1110,10 +1108,6 @@
       "period_range": "{start}–{end}",
       "share_value": "{kwh} ({share})",
       "incomplete": "Today's statistics are not complete yet; the figures can still move a little.",
-      "status": {
-        "using": "Using {power}.",
-        "unavailable": "No house power reading right now."
-      },
       "mix": {
         "solar": "solar {share}",
         "battery": "battery {share}",
@@ -1317,16 +1311,6 @@
       "technical": "Technical readings",
       "next_window": "Next charging window: {window}",
       "eta": "≈ {duration} to {limit} at current power",
-      "status": {
-        "charging": "Charging at {power}.",
-        "waiting": "Car plugged in, not charging ({state}).",
-        "no_car": "No car connected ({state}).",
-        "fault": "The charger reports a fault ({state}).",
-        "reported": "The charger reports {state}.",
-        "drawing": "Drawing {power}.",
-        "not_drawing": "Not drawing power ({power}).",
-        "unavailable": "No charger power reading right now."
-      },
       "exception": {
         "fault": "The charger reports a fault: {fault}.",
         "details": "Show details"
