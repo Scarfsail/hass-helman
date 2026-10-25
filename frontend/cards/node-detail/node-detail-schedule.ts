@@ -118,7 +118,7 @@ export function nextLaneStart(runs: ScheduleRun<ScheduleControllableActionDTO>[]
     return null;
 }
 
-function effectiveLaneAction(action: ScheduleControllableActionDTO, inverterLane = false): ScheduleControllableActionDTO {
+export function effectiveLaneAction(action: ScheduleControllableActionDTO, inverterLane = false): ScheduleControllableActionDTO {
     if (isScheduleInverterAction(action)) return action.kind === "empty" && !inverterLane ? action : effectiveAction(action);
     if (action.conditionMet !== false) return action;
     if ("on" in action) return { on: false };

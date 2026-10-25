@@ -203,6 +203,32 @@ async function override(page: Page, control: ReturnType<typeof controls>, mode: 
 const hour = (lanes: Record<string, object>) => ["12:00", "12:15", "12:30", "12:45"].map((time) => ({ id: `${DAY}T${time}:00+00:00`, controllables: lanes }));
 
 test.describe("a schedulable device", () => {
+    test("Overview shows an unmet candidate as off and Back closes its override first", async ({ page }) => {
+        await mount(page, plan([["12:00", "13:00", { boiler: auto({ on: true, conditionMet: false }) }]]));
+        await openDevice(page, "Boiler");
+        const overview = page.locator("node-detail-device-content helman-who-decides");
+        await expect(overview.locator(".row").nth(1).locator("span").last()).toContainText("off, until");
+        await overview.locator("button").first().click();
+        await expect(overrideDialog(page)).toBeVisible();
+        await expect.poll(() => page.evaluate(() => window.history.state?.__helmanWhoDecidesOverrideId)).toBeTruthy();
+        await page.evaluate(() => window.history.back());
+        await expect(overrideDialog(page)).toHaveCount(0);
+        await expect(page.locator("node-detail-device-content")).toBeVisible();
+
+        await overview.locator("button").first().click();
+        await overrideDialog(page).evaluate((dialog: any) => { dialog._saving = true; });
+        await page.evaluate(() => new Promise<void>((resolve) => {
+            window.addEventListener("popstate", () => resolve(), { once: true });
+            window.history.back();
+        }));
+        await expect.poll(() => page.evaluate(() => window.history.state?.__helmanWhoDecidesOverrideId)).toBeTruthy();
+        await expect(overrideDialog(page)).toBeVisible();
+        await expect(page.locator("node-detail-device-content")).toBeVisible();
+        await overrideDialog(page).evaluate((dialog: any) => { dialog._saving = false; });
+        await page.evaluate(() => window.history.back());
+        await expect(overrideDialog(page)).toHaveCount(0);
+    });
+
     test("the dialog is named by its visible slotted title", async ({ page }) => {
         await mount(page);
         await openDevice(page, "Boiler");

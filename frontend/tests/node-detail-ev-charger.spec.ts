@@ -355,3 +355,10 @@ test("charger Schedule does not promise an unmet charge candidate", async ({ pag
     await expect(page.locator("node-detail-dialog helman-detail-section[data-schedule] [slot=summary]"))
         .toContainText("Nothing planned");
 });
+
+test("charger Overview shows an unmet current candidate as idle", async ({ page }) => {
+    await mount(page, { windows: [{ from: 11.75, to: 14, candidate: true }] });
+    await openDevice(page, "Garage EV");
+    const planned = content(page).locator("helman-who-decides .row").nth(1);
+    await expect(planned.locator("span").last()).toContainText("idle, until");
+});

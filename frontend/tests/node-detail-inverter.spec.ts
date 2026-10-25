@@ -209,6 +209,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 return () => undefined;
             } } },
             replies: {
+                "helman/get_appliances": { appliances: [{ id: "inverter", name: "Inverter", kind: "inverter", primaryEntityId: "select.helman_inverter_mode", supportsAuthoring: true, normalState: "normal", actionOptions: { normal: "normal", stop_export: "stop_export" } }] },
                 "helman/get_node_detail": async (msg: {
                     type: string;
                     node?: string;
@@ -258,6 +259,17 @@ test("inverter Overview shows the P1 detail layout", async ({ page }) => {
     await expect(c.locator("[data-chain] [data-box]")).toHaveCount(3);
     await expect(c.locator("[data-verdict]")).toBeVisible();
     await expect(c.locator("helman-node-flow, helman-node-tile, helman-node-question")).toHaveCount(0);
+});
+
+test("Back closes the Overview mode override and keeps the inverter detail", async ({ page }) => {
+    await mount(page);
+    await page.locator(".inverter-cell").click();
+    await content(page).locator("button.link-button").filter({ hasText: "Override mode" }).click();
+    await expect(page.locator("control-override-dialog")).toBeVisible();
+    await expect.poll(() => page.evaluate(() => window.history.state?.__helmanInverterOverrideId)).toBeTruthy();
+    await page.evaluate(() => window.history.back());
+    await expect(page.locator("control-override-dialog")).toHaveCount(0);
+    await expect(content(page)).toBeVisible();
 });
 
 test("inverter condition remains visible without a dead Details button", async ({ page }) => {

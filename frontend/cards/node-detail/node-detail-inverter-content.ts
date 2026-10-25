@@ -38,6 +38,8 @@ import { powerUnitFactor } from "../shared/power-reading";
 import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { InverterDetailParams } from "./node-detail-types";
 import { LaneOwnershipController } from "./lane-ownership";
+import { DialogHistoryController } from "../shared/dialog-history-controller";
+import type { ControlOverrideDialog } from "./control-override-dialog";
 import { ownershipText } from "./who-decides";
 import "./detail-headline";
 import "./help-tip";
@@ -220,6 +222,23 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
     @property({ attribute: false }) public params!: InverterDetailParams;
     @state() private _overrideOpen = false;
     private readonly _lanes = new LaneOwnershipController(this, () => this.hass);
+    private readonly _history = new DialogHistoryController(this, "__helmanInverterOverrideId", {
+        onBack: () => {
+            const dialog = this.renderRoot.querySelector<ControlOverrideDialog>("control-override-dialog");
+            if (dialog === null) return false;
+            queueMicrotask(() => dialog.requestClose());
+            return true;
+        },
+        close: () => { this._overrideOpen = false; },
+    });
+    private _openOverride(): void {
+        this._overrideOpen = true;
+        this._history.push();
+    }
+    private _onOverrideClosed = (): void => {
+        this._history.closed();
+        this._overrideOpen = false;
+    };
 
     /** The inverter's plan. */
     private readonly _plan = this._useSchedule(inverterRuns);
@@ -286,11 +305,11 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
                     <strong>${ac === null ? "—" : formatPower(Math.abs(ac)).display}${pct !== null && rated !== null ? ` · ${pct} % ${this.localize("node_detail.shared.of_rating")} ${formatPower(rated).display}` : ""}</strong></div>
                 ${pct !== null ? html`<span class="meter"><span class="meter-fill" style=${`width:${Math.min(100, pct)}%`}></span></span>` : nothing}
                 <div class="row"><span>${this.localize("node_detail.shared.temperature")}</span><strong>${this._reading(overview, "inverter_temperature") ?? "—"}</strong></div>
-                <button type="button" class="link-button" ?disabled=${!controllable?.supportsAuthoring} @click=${() => { this._overrideOpen = true; }}>${this.localize("node_detail.shared.override_mode")}</button>
+                <button type="button" class="link-button" ?disabled=${!controllable?.supportsAuthoring} @click=${this._openOverride}>${this.localize("node_detail.shared.override_mode")}</button>
                 ${this._overrideOpen && controllable ? html`<control-override-dialog .hass=${this.hass} .localize=${this.localize}
                     .controllable=${controllable} .normalized=${this._lanes.normalized}
                     .executionEnabled=${this._lanes.snapshot.schedule?.executionEnabled ?? false} .open=${true}
-                    @closed=${() => { this._overrideOpen = false; }}></control-override-dialog>` : nothing}
+                    @closed=${this._onOverrideClosed}></control-override-dialog>` : nothing}
             </div>
         `;
     }
