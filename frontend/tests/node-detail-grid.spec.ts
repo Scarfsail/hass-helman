@@ -33,6 +33,8 @@ type Variant = {
     exportPartlyPriced?: boolean;
     /** The payload's current import price is from before the 12:00 boundary. */
     staleCurrentPrice?: boolean;
+    noImportPrice?: boolean;
+    noExportPrice?: boolean;
     /** The grid node's power sign: `-1` (the default) for a positive-is-import meter, `1` for positive-is-export. */
     gridSign?: 1 | -1;
     /** The grid power sensor reads unavailable. */
@@ -138,14 +140,14 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 ...forecastDefaults.grid,
                 status: "available", generatedAt: null, unit: "kWh",
                 startedAt: null, partialReason: null, coverageUntil: null, scheduleAdjusted: true,
-                currentImportPrice: v.staleCurrentPrice ? 3.0 : 4.2, importPriceUnit: "CZK/kWh",
-                importPricePoints: [
+                currentImportPrice: v.noImportPrice ? null : v.staleCurrentPrice ? 3.0 : 4.2, importPriceUnit: "CZK/kWh",
+                importPricePoints: v.noImportPrice ? [] : [
                     { timestamp: `${day}T12:00:00+00:00`, value: 4.2 },
                     { timestamp: `${day}T13:00:00+00:00`, value: 4.2 },
                     { timestamp: `${day}T14:00:00+00:00`, value: 5.1 },
                 ],
-                currentExportPrice: 1.5, exportPriceUnit: "CZK/kWh",
-                exportPricePoints: [{ timestamp: `${day}T12:00:00+00:00`, value: 1.5 }],
+                currentExportPrice: v.noExportPrice ? null : 1.5, exportPriceUnit: "CZK/kWh",
+                exportPricePoints: v.noExportPrice ? [] : [{ timestamp: `${day}T12:00:00+00:00`, value: 1.5 }],
                 series: [
                     slot(`${day}T12:00:00+00:00`, 0, 0.3),
                     slot(`${day}T12:15:00+00:00`, 0, 0.3),
@@ -183,7 +185,32 @@ test("grid shows price change and keeps phase picture passive", async ({ page })
     await page.locator(".node-cell:has(simple-card-grid)").click();
     const c = content(page);
     await expect(c.locator("[data-price]")).toContainText("to buy");
+    await expect(c.locator("[data-price]")).toContainText("to sell");
     await expect(c.locator("[data-phase-picture]")).toBeVisible();
     await expect(c.locator("[data-phase-picture] button")).toHaveCount(0);
     await expect(c.locator("helman-help-tip")).toHaveCount(1);
+});
+
+test("grid Overview keeps import price and next change without an export price", async ({ page }) => {
+    await mount(page, { noExportPrice: true });
+    await page.locator(".node-cell:has(simple-card-grid)").click();
+    const price = content(page).locator("[data-price]");
+    await expect(price).toContainText("Price now 4.20 CZK/kWh to buy");
+    await expect(price).toContainText("Changes at 14:00 to 5.10 CZK/kWh");
+    await expect(price).not.toContainText("to sell");
+});
+
+test("grid Overview shows export price without an import price", async ({ page }) => {
+    await mount(page, { noImportPrice: true });
+    await page.locator(".node-cell:has(simple-card-grid)").click();
+    const price = content(page).locator("[data-price]");
+    await expect(price).toContainText("Price now 1.50 CZK/kWh to sell");
+    await expect(price).not.toContainText("to buy");
+    await expect(price).not.toContainText("Changes at");
+});
+
+test("grid Overview omits the price row when neither price is available", async ({ page }) => {
+    await mount(page, { noImportPrice: true, noExportPrice: true });
+    await page.locator(".node-cell:has(simple-card-grid)").click();
+    await expect(content(page).locator("[data-price]")).toHaveCount(0);
 });

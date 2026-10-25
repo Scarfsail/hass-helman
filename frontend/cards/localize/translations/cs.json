@@ -54,6 +54,8 @@
       "grid_importing": "právě odebírá ze sítě",
       "grid_exporting": "právě dodává do sítě",
       "grid_price": "Cena nyní {buy} za odběr · {sell} za dodávku",
+      "grid_price_buy": "Cena nyní {buy} za odběr",
+      "grid_price_sell": "Cena nyní {sell} za dodávku",
       "grid_next_price": "V {time} se změní na {buy}",
       "grid_phase_help": "Každý pruh je jedna fáze: vpravo od středu je odběr, vlevo dodávka. Plný pruh odpovídá hlavnímu jističi {amps} A. Běžné napětí je 207–253 V.",
       "house_used": "právě spotřebovává dům",

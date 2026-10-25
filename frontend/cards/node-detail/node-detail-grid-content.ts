@@ -286,10 +286,14 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
                     ] : [
                         { node: "solar", powerW: flows.solarToGrid }, { node: "battery", powerW: flows.batteryToGrid },
                     ] : []}></helman-flow-gauge>
-                ${grid && buy !== null && sell !== null ? html`<div class="row" data-price>
-                    <span>${fillTemplate(this.localize("node_detail.shared.grid_price"), {
-                        buy: this._price(buy, grid.importPriceUnit), sell: this._price(sell, grid.exportPriceUnit),
-                    })}</span>
+                ${grid && (buy !== null || sell !== null) ? html`<div class="row" data-price>
+                    <span>${buy !== null && sell !== null
+                        ? fillTemplate(this.localize("node_detail.shared.grid_price"), {
+                            buy: this._price(buy, grid.importPriceUnit), sell: this._price(sell, grid.exportPriceUnit),
+                        })
+                        : buy !== null
+                            ? fillTemplate(this.localize("node_detail.shared.grid_price_buy"), { buy: this._price(buy, grid.importPriceUnit) })
+                            : fillTemplate(this.localize("node_detail.shared.grid_price_sell"), { sell: this._price(sell!, grid.exportPriceUnit) })}</span>
                     ${next ? html`<span>${fillTemplate(this.localize("node_detail.shared.grid_next_price"), {
                         time: this._time(next.at), buy: this._price(next.value, grid.importPriceUnit),
                     })}</span>` : nothing}
