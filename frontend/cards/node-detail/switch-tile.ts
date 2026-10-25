@@ -35,7 +35,7 @@ export class HelmanSwitchTile extends LitElement {
         if (this.kind === "climate") { openMoreInfo(this, this.entityId); return; }
         const state = this.hass.states[this.entityId]?.state;
         if (state !== "on" && state !== "off") return;
-        void this.hass.callWS({ type: "call_service", domain: "switch", service: state === "on" ? "turn_off" : "turn_on", service_data: { entity_id: this.entityId } });
+        void this.hass.callWS({ type: "call_service", domain: this.entityId.split(".", 1)[0], service: state === "on" ? "turn_off" : "turn_on", service_data: { entity_id: this.entityId } });
     }
     render() {
         const state = this.hass?.states[this.entityId];

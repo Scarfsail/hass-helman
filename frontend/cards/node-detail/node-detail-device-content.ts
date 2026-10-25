@@ -5,6 +5,7 @@ import type { LocalizeFunction } from "../localize/localize";
 import { fillTemplate } from "../localize/localize";
 import type { TreeItem } from "../shared/data/tree-item";
 import { formatPower } from "../shared/format";
+import { convertToKWh, isSupportedEnergyUnit } from "../helman/energy-unit-converter";
 import { readPowerW } from "../shared/power-reading";
 import { dispatchWatchedEntities } from "../shared/hass-change";
 import type { DeviceDetailParams } from "./node-detail-types";
@@ -87,7 +88,9 @@ export class NodeDetailDeviceContent extends LitElement {
             const result = await this.hass.callWS<{ change?: number | null }>({
                 type: "recorder/statistic_during_period", statistic_id: meter, types: ["change"], calendar: { period: "day" },
             });
-            return typeof result?.change === "number" ? result.change : null;
+            const unit = this.hass.states[meter]?.attributes.unit_of_measurement as string | undefined;
+            return typeof result?.change === "number" && unit && isSupportedEnergyUnit(unit)
+                ? convertToKWh(result.change, unit) : null;
         } catch { return null; }
     }
 }

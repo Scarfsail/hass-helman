@@ -69,6 +69,8 @@ async function mountCard(
     page: Page,
     stats: Record<string, unknown> = {},
     schedulableBoiler = false,
+    energyUnit = "kWh",
+    today = TODAY_KWH,
 ): Promise<void> {
     await loadBundle(page, "helman-card");
     await installHaStubs(page);
@@ -120,7 +122,7 @@ async function mountCard(
     });
 
     await page.evaluate(
-        async ({ tree, today, lastHour, stats }) => {
+        async ({ tree, today, lastHour, stats, energyUnit }) => {
             const state = (value: string, attributes: Record<string, unknown> = {}) => ({ state: value, attributes });
             (window as any).__statRequests = [];
             (window as any).__deviceStatsRequests = [];
@@ -136,7 +138,7 @@ async function mountCard(
                     "sensor.solar": state("0"),
                     "sensor.house": state("2000"),
                     "sensor.boiler_power": state("1200", { unit_of_measurement: "W" }),
-                    "sensor.boiler_energy": state("10", { unit_of_measurement: "kWh" }),
+                    "sensor.boiler_energy": state("10", { unit_of_measurement: energyUnit }),
                     "sensor.pump_share": state("300"),
                     "sensor.house_unmeasured": state("500"),
                     "switch.boiler": { entity_id: "switch.boiler", state: "on", attributes: {} },
@@ -163,7 +165,7 @@ async function mountCard(
             card.hass = hass;
             document.body.appendChild(card);
         },
-        { tree, today: TODAY_KWH, lastHour: LAST_HOUR_KWH, stats },
+        { tree, today, lastHour: LAST_HOUR_KWH, stats, energyUnit },
     );
 
     await expect.poll(() => rowNames(page)).toContain("Boiler");
@@ -195,6 +197,14 @@ test("device name opens a shared Overview with today's measured energy", async (
     await expect(detail.locator("helman-switch-tile")).toHaveCount(1);
     await expect(detail.locator("helman-node-flow, helman-node-tile, helman-node-question")).toHaveCount(0);
 });
+
+for (const [unit, change, caption] of [["Wh", 500, "0.50 kWh used today"], ["MWh", 0.00125, "1.25 kWh used today"]] as const) {
+    test(`today's ${unit} recorder change is displayed in kWh`, async ({ page }) => {
+        await mountCard(page, {}, false, unit, change);
+        await openDevice(page, "Boiler");
+        await expect(page.locator("node-detail-device-content helman-detail-headline")).toContainText(caption);
+    });
+}
 
 test("device headline opens its power entity and the Schedule starts collapsed", async ({ page }) => {
     await mountCard(page, {}, true);

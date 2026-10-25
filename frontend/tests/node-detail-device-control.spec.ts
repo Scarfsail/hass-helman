@@ -67,6 +67,7 @@ const TREE = treePayload({
             }),
             device("Legacy", { controllableIds: ["legacy"], ownControllableIds: ["legacy"], applianceKind: "generic" }),
             device("Lamp", { switchEntityId: "switch.lamp" }),
+            device("Living Light", { switchEntityId: "light.living_room" }),
             device("Bedroom AC", { climateEntityId: "climate.bedroom" }),
             device("Heater", { switchEntityId: "switch.heater_breaker", climateEntityId: "climate.heater" }),
             // A meterless air conditioner: its running signal is its climate entity.
@@ -140,6 +141,7 @@ async function mount(page: Page, schedule: SchedulePayload = plan()): Promise<vo
             "sensor.lamp_power": s("75", "W"), "sensor.boiler_power": s("100", "W"),
             "switch.boiler": s("off", undefined, { icon: "mdi:radiator" }), "climate.klima": s("off", undefined, { friendly_name: "Klima thermostat" }), "switch.pumps_breaker": s("on"), "switch.pump-a": s("off"), "switch.pump-b": s("off"),
             "switch.lamp": s("on", undefined, { friendly_name: "Lamp switch", icon: "mdi:lightbulb" }),
+            "light.living_room": s("off", undefined, { friendly_name: "Living room light" }),
             "climate.bedroom": s("cool", undefined, { friendly_name: "Bedroom thermostat" }),
             "switch.heater_breaker": s("off", undefined, { friendly_name: "Heater breaker" }),
             "climate.heater": s("heat", undefined, { friendly_name: "Heater thermostat" }),
@@ -298,6 +300,28 @@ test.describe("direct control tiles", () => {
         await expect(tile).toHaveAttribute("aria-pressed", "false");
         await tile.click();
         await expect.poll(() => page.evaluate(() => window.__NodeDetailRequests.find((r) => r.type === "call_service")?.service)).toBe("turn_on");
+    });
+
+    test("light control uses the light domain for both toggle directions", async ({ page }) => {
+        await mount(page);
+        await openDevice(page, "Living Light");
+        const tile = switchTile(page).locator("button");
+        await tile.click();
+        await expect.poll(() => page.evaluate(() => window.__NodeDetailRequests.filter((r) => r.type === "call_service"))).toEqual([
+            { type: "call_service", domain: "light", service: "turn_on", service_data: { entity_id: "light.living_room" } },
+        ]);
+        await page.evaluate(() => {
+            const card = document.querySelector("helman-card") as any;
+            card.hass = { ...window.__NodeDetailHass, states: {
+                ...window.__NodeDetailHass.states,
+                "light.living_room": { ...window.__NodeDetailHass.states["light.living_room"], state: "on" },
+            } };
+        });
+        await expect(tile).toHaveAttribute("aria-pressed", "true");
+        await tile.click();
+        await expect.poll(() => page.evaluate(() => window.__NodeDetailRequests.filter((r) => r.type === "call_service").map((r) => [r.domain, r.service]))).toEqual([
+            ["light", "turn_on"], ["light", "turn_off"],
+        ]);
     });
 
     test("climate tile opens more-info and a passive meter has no Schedule", async ({ page }) => {
