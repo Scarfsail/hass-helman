@@ -268,9 +268,9 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(points[4][0].isoformat(), "2026-03-29T01:00:00+01:00")
         self.assertEqual(points[8][0].isoformat(), "2026-03-29T03:00:00+02:00")
         self.assertTrue(all("T02:" not in point["timestamp"] for _, point in points))
-        self.assertAlmostEqual(points[8][1]["value"], 2.0 / 4)
+        self.assertAlmostEqual(points[8][1]["value"], 3.0 / 4)
         self.assertEqual(points[-1][0].isoformat(), "2026-03-29T23:45:00+02:00")
-        self.assertAlmostEqual(points[-1][1]["value"], 22.0 / 4)
+        self.assertAlmostEqual(points[-1][1]["value"], 23.0 / 4)
 
     async def test_extract_solar_points_prefers_the_fifteen_minute_series(self) -> None:
         entity_id = "sensor.energy_production_today"
@@ -346,6 +346,146 @@ class ForecastBuilderActualHistoryTests(unittest.IsolatedAsyncioTestCase):
             points = builder._extract_solar_points(entity_id, date(2026, 3, 30))
 
         self.assertEqual([point["value"] for _, point in points[:4]], [25.0, 25.0, 25.0, 25.0])
+
+    async def test_extract_solar_points_fall_back_with_96_value_source(self) -> None:
+        entity_id = "sensor.energy_production_today"
+        wh_period_15m = {
+            f"2026-10-25T{slot // 4:02d}:{(slot % 4) * 15:02d}:00+02:00": float(slot)
+            for slot in range(96)
+        }
+        forecast_builder_module, builder = self._make_builder(
+            states={
+                entity_id: SimpleNamespace(attributes={"wh_period_15m": wh_period_15m}),
+            }
+        )
+
+        with patch.object(forecast_builder_module, "dt_util", dt_util):
+            points = builder._extract_solar_points(entity_id, date(2026, 10, 25))
+
+        self.assertEqual(len(points), 100)
+        # 00:00..01:45
+        self.assertEqual(points[0][0].isoformat(), "2026-10-25T00:00:00+02:00")
+        self.assertEqual(points[0][1]["value"], 0.0)
+        self.assertEqual(points[7][0].isoformat(), "2026-10-25T01:45:00+02:00")
+        self.assertEqual(points[7][1]["value"], 7.0)
+
+        # First occurrence of 02:00..02:45 (fold == 0, +02:00) gets source values 8..11
+        self.assertEqual(points[8][0].isoformat(), "2026-10-25T02:00:00+02:00")
+        self.assertEqual(points[8][0].fold, 0)
+        self.assertEqual(points[8][1]["value"], 8.0)
+        self.assertEqual(points[11][0].isoformat(), "2026-10-25T02:45:00+02:00")
+        self.assertEqual(points[11][0].fold, 0)
+        self.assertEqual(points[11][1]["value"], 11.0)
+
+        # Second occurrence of 02:00..02:45 (fold == 1, +01:00) is filled with 0.0
+        self.assertEqual(points[12][0].isoformat(), "2026-10-25T02:00:00+01:00")
+        self.assertEqual(points[12][0].fold, 1)
+        self.assertEqual(points[12][1]["value"], 0.0)
+        self.assertEqual(points[15][0].isoformat(), "2026-10-25T02:45:00+01:00")
+        self.assertEqual(points[15][0].fold, 1)
+        self.assertEqual(points[15][1]["value"], 0.0)
+
+        # 03:00..23:45 (+01:00) maps to source indices 12..95 unshifted
+        self.assertEqual(points[16][0].isoformat(), "2026-10-25T03:00:00+01:00")
+        self.assertEqual(points[16][1]["value"], 12.0)
+        self.assertEqual(points[-1][0].isoformat(), "2026-10-25T23:45:00+01:00")
+        self.assertEqual(points[-1][1]["value"], 95.0)
+
+        # Preserves daily Wh sum
+        self.assertEqual(sum(p[1]["value"] for p in points), sum(range(96)))
+
+    async def test_extract_solar_points_fall_back_with_hourly_fallback(self) -> None:
+        entity_id = "sensor.energy_production_today"
+        wh_period = {
+            f"2026-10-25T{hour:02d}:00:00+02:00": float(hour)
+            for hour in range(24)
+        }
+        forecast_builder_module, builder = self._make_builder(
+            states={
+                entity_id: SimpleNamespace(attributes={"wh_period": wh_period}),
+            }
+        )
+
+        with patch.object(forecast_builder_module, "dt_util", dt_util):
+            points = builder._extract_solar_points(entity_id, date(2026, 10, 25))
+
+        self.assertEqual(len(points), 100)
+        self.assertEqual(points[8][0].isoformat(), "2026-10-25T02:00:00+02:00")
+        self.assertEqual(points[8][0].fold, 0)
+        self.assertAlmostEqual(points[8][1]["value"], 2.0 / 4)
+
+        self.assertEqual(points[12][0].isoformat(), "2026-10-25T02:00:00+01:00")
+        self.assertEqual(points[12][0].fold, 1)
+        self.assertEqual(points[12][1]["value"], 0.0)
+
+        self.assertEqual(points[16][0].isoformat(), "2026-10-25T03:00:00+01:00")
+        self.assertAlmostEqual(points[16][1]["value"], 3.0 / 4)
+
+        self.assertEqual(points[-1][0].isoformat(), "2026-10-25T23:45:00+01:00")
+        self.assertAlmostEqual(points[-1][1]["value"], 23.0 / 4)
+        self.assertAlmostEqual(sum(p[1]["value"] for p in points), sum(range(24)))
+
+    async def test_extract_solar_points_preserves_native_100_slot_fall_back(self) -> None:
+        entity_id = "sensor.energy_production_today"
+        forecast_builder_module, builder = self._make_builder()
+        # 100 native values keyed chronologically
+        wh_period_15m: dict[str, float] = {}
+        slots = builder._build_local_slots_for_date(date(2026, 10, 25))
+        for idx, slot in enumerate(slots):
+            wh_period_15m[slot.isoformat()] = float(idx)
+
+        forecast_builder_module, builder = self._make_builder(
+            states={
+                entity_id: SimpleNamespace(attributes={"wh_period_15m": wh_period_15m}),
+            }
+        )
+
+        with patch.object(forecast_builder_module, "dt_util", dt_util):
+            points = builder._extract_solar_points(entity_id, date(2026, 10, 25))
+
+        self.assertEqual(len(points), 100)
+        self.assertEqual(points[8][1]["value"], 8.0)
+        self.assertEqual(points[12][1]["value"], 12.0)
+        self.assertEqual(points[-1][1]["value"], 99.0)
+
+    async def test_extract_solar_points_preserves_native_92_slot_spring_forward(self) -> None:
+        entity_id = "sensor.energy_production_today"
+        forecast_builder_module, builder = self._make_builder()
+        wh_period_15m: dict[str, float] = {}
+        slots = builder._build_local_slots_for_date(date(2026, 3, 29))
+        for idx, slot in enumerate(slots):
+            wh_period_15m[slot.isoformat()] = float(idx)
+
+        forecast_builder_module, builder = self._make_builder(
+            states={
+                entity_id: SimpleNamespace(attributes={"wh_period_15m": wh_period_15m}),
+            }
+        )
+
+        with patch.object(forecast_builder_module, "dt_util", dt_util):
+            points = builder._extract_solar_points(entity_id, date(2026, 3, 29))
+
+        self.assertEqual(len(points), 92)
+        self.assertEqual(points[0][1]["value"], 0.0)
+        self.assertEqual(points[-1][1]["value"], 91.0)
+
+    async def test_extract_solar_points_missing_data_leaves_partial_coverage(self) -> None:
+        entity_id = "sensor.energy_production_today"
+        # 50 values on a 100-slot day
+        wh_period_15m = {
+            f"2026-10-25T{slot // 4:02d}:{(slot % 4) * 15:02d}:00+02:00": float(slot)
+            for slot in range(50)
+        }
+        forecast_builder_module, builder = self._make_builder(
+            states={
+                entity_id: SimpleNamespace(attributes={"wh_period_15m": wh_period_15m}),
+            }
+        )
+
+        with patch.object(forecast_builder_module, "dt_util", dt_util):
+            points = builder._extract_solar_points(entity_id, date(2026, 10, 25))
+
+        self.assertEqual(len(points), 50)
 
 
 if __name__ == "__main__":

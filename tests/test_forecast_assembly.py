@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
+from zoneinfo import ZoneInfo
+
+from homeassistant.util import dt as dt_util
 
 from custom_components.helman.appliances.state import AppliancesRuntimeRegistry
 from custom_components.helman.automation.compute_inputs import ComputeInputs
 from custom_components.helman.automation.config import AutomationConfig
 from custom_components.helman.automation.input_bundle import AutomationInputBundle
+from custom_components.helman.battery_state import BatteryLiveState
 from custom_components.helman.forecast import assembly
+from custom_components.helman.forecast_builder import SolarForecastBuilder
 from custom_components.helman.scheduling.schedule import (
     ScheduleAction,
     ScheduleControlConfig,
@@ -238,7 +243,7 @@ class SolarSignatureTests(unittest.TestCase):
         )
 
 
-class ForecastRebuildTests(unittest.TestCase):
+class ForecastRebuildTests(unittest.IsolatedAsyncioTestCase):
     def test_simulates_against_the_overlay_of_the_forecast_document(self) -> None:
         battery_forecast = {"status": "available", "series": []}
         forecast_document = _document({CURRENT_SLOT_ID: _inverter("stop_charging")})
@@ -276,6 +281,141 @@ class ForecastRebuildTests(unittest.TestCase):
         self.assertIs(rebuild.schedule_overlay, overlay)
         # No grid price forecast, no grid flow: only automation asks for one.
         self.assertIsNone(rebuild.grid_forecast)
+
+    async def test_rebuild_extends_across_dst_fallback_into_tomorrow(self) -> None:
+        tz = ZoneInfo("Europe/Berlin")
+        previous_tz = dt_util.DEFAULT_TIME_ZONE
+        dt_util.set_default_time_zone(tz)
+        self.addCleanup(dt_util.set_default_time_zone, previous_tz)
+        start_time = datetime(2026, 10, 25, 14, 7, tzinfo=tz)
+
+        # 96-value solar forecast for today (fall-back) and tomorrow
+        today_wh = {
+            f"2026-10-25T{slot // 4:02d}:{(slot % 4) * 15:02d}:00+02:00": 200.0
+            for slot in range(96)
+        }
+        tomorrow_wh = {
+            f"2026-10-26T{slot // 4:02d}:{(slot % 4) * 15:02d}:00+01:00": 200.0
+            for slot in range(96)
+        }
+        states = {
+            "sensor.solar_today": SimpleNamespace(
+                attributes={"wh_period_15m": today_wh, "unit_of_measurement": "Wh"}
+            ),
+            "sensor.solar_tomorrow": SimpleNamespace(
+                attributes={"wh_period_15m": tomorrow_wh, "unit_of_measurement": "Wh"}
+            ),
+        }
+        solar_config = {
+            "energy_nodes": {
+                "solar": {
+                    "forecast": {
+                        "daily_energy_entity_ids": [
+                            "sensor.solar_today",
+                            "sensor.solar_tomorrow",
+                        ]
+                    }
+                }
+            }
+        }
+        hass = SimpleNamespace(
+            config=SimpleNamespace(time_zone="Europe/Berlin"),
+            states=SimpleNamespace(get=lambda entity_id: states.get(entity_id)),
+        )
+        solar_builder = SolarForecastBuilder(
+            hass,
+            solar_config,
+            SimpleNamespace(async_query_slot_energy_changes=AsyncMock(return_value={})),
+        )
+        solar_forecast = await solar_builder.build(start_time)
+        self.assertEqual(solar_forecast["status"], "available")
+        self.assertEqual(len(solar_forecast["points"]), 196)
+
+        # House forecast from 14:00 today through tomorrow
+        house_current_slot_start = datetime(2026, 10, 25, 14, 0, tzinfo=tz)
+        house_series = []
+        for i in range(1, 150):
+            slot_utc = house_current_slot_start.astimezone(timezone.utc) + timedelta(minutes=15 * i)
+            slot_local = slot_utc.astimezone(tz)
+            house_series.append(
+                {
+                    "timestamp": slot_local.isoformat(),
+                    "nonDeferrable": {"value": 0.3},
+                }
+            )
+        house_forecast = {
+            "status": "available",
+            "currentSlot": {
+                "timestamp": house_current_slot_start.isoformat(),
+                "nonDeferrable": {"value": 0.3},
+            },
+            "series": house_series,
+        }
+
+        battery_config = {
+            "energy_nodes": {
+                "battery": {
+                    "entities": {
+                        "remaining_energy": "sensor.remaining",
+                        "capacity": "sensor.capacity",
+                        "min_soc": "sensor.min_soc",
+                        "max_soc": "sensor.max_soc",
+                    },
+                    "forecast": {
+                        "max_charge_power_w": 5000.0,
+                        "max_discharge_power_w": 5000.0,
+                    },
+                }
+            }
+        }
+        live_state = BatteryLiveState(
+            current_remaining_energy_kwh=5.0,
+            current_soc=50.0,
+            min_soc=10.0,
+            max_soc=100.0,
+            nominal_capacity_kwh=10.0,
+            min_energy_kwh=1.0,
+            max_energy_kwh=10.0,
+        )
+        compute_inputs = ComputeInputs(battery_live_state=live_state)
+
+        rebuild = assembly.build_forecast_rebuild(
+            config=battery_config,
+            appliances_registry=AppliancesRuntimeRegistry(),
+            solar_forecast=solar_forecast,
+            original_house_forecast=house_forecast,
+            started_at=start_time,
+            forecast_schedule_document=_document({}),
+            projection_schedule_document=_document({}),
+            when_active_hourly_energy_kwh_by_appliance_id={},
+            compute_inputs=compute_inputs,
+            grid_price_forecast={"import": {}, "export": {}},
+        )
+
+        # Simulation must not halt at 23:00 on 2026-10-25
+        self.assertIn(rebuild.battery_forecast["status"], {"available", "partial"})
+        self.assertTrue(
+            rebuild.battery_forecast["coverageUntil"].startswith("2026-10-27")
+            or "2026-10-26T23:00:00" in rebuild.battery_forecast["coverageUntil"]
+        )
+
+        # Battery forecast series continues through tomorrow
+        tomorrow_battery_slots = [
+            entry
+            for entry in rebuild.battery_forecast["series"]
+            if "2026-10-26" in entry["timestamp"]
+        ]
+        self.assertEqual(len(tomorrow_battery_slots), 96)
+
+        # Grid forecast continues through tomorrow
+        self.assertIsNotNone(rebuild.grid_forecast)
+        self.assertIn(rebuild.grid_forecast["status"], {"available", "partial"})
+        tomorrow_grid_slots = [
+            entry
+            for entry in rebuild.grid_forecast["series"]
+            if "2026-10-26" in entry["timestamp"]
+        ]
+        self.assertEqual(len(tomorrow_grid_slots), 96)
 
 
 class AutomationSnapshotTests(unittest.TestCase):

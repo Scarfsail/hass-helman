@@ -15,7 +15,13 @@ from .const import (
 )
 from .forecast_response import parse_ts
 from .today_slot_readers import TodaySlotEnergyReader
-from .slot_grid import SLOTS_PER_DAY, SLOTS_PER_HOUR, day_slots, split_hour_by_weights
+from .slot_grid import (
+    SLOT_MINUTES,
+    SLOTS_PER_DAY,
+    SLOTS_PER_HOUR,
+    day_slots,
+    split_hour_by_weights,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -162,9 +168,8 @@ class SolarForecastBuilder:
 
         # The values are anchored positionally from local midnight, so a short
         # or long series silently shifts or truncates the whole curve. A DST
-        # day is the one benign case: the source publishes a normal 24-hour
-        # series and the local axis is an hour shorter or longer, which the
-        # positional anchor is there to absorb.
+        # transition day with a normal 24-hour (SLOTS_PER_DAY) source is
+        # normalized onto the local wall-clock slot axis below.
         if len(values) not in (len(expected_slots), SLOTS_PER_DAY):
             _LOGGER.warning(
                 "Solar forecast for %s on %s has %d values for %d slots; "
@@ -179,16 +184,35 @@ class SolarForecastBuilder:
             )
 
         points: list[tuple[datetime, dict[str, Any]]] = []
-        for slot_start, value in zip(expected_slots, values):
-            points.append(
-                (
-                    slot_start,
-                    {
-                        "timestamp": slot_start.isoformat(),
-                        "value": value,
-                    },
+        if len(values) == SLOTS_PER_DAY and len(expected_slots) != SLOTS_PER_DAY:
+            for slot_start in expected_slots:
+                if slot_start.fold == 1:
+                    value = 0.0
+                else:
+                    slot_index = (
+                        slot_start.hour * 60 + slot_start.minute
+                    ) // SLOT_MINUTES
+                    value = values[slot_index]
+                points.append(
+                    (
+                        slot_start,
+                        {
+                            "timestamp": slot_start.isoformat(),
+                            "value": value,
+                        },
+                    )
                 )
-            )
+        else:
+            for slot_start, value in zip(expected_slots, values):
+                points.append(
+                    (
+                        slot_start,
+                        {
+                            "timestamp": slot_start.isoformat(),
+                            "value": value,
+                        },
+                    )
+                )
 
         return points
 

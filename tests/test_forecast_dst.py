@@ -14,8 +14,16 @@ to local.  This avoids gap times entirely.
 from __future__ import annotations
 
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
+
+from custom_components.helman.forecast_builder import (
+    SolarForecastBuilder,
+    solar_slot_map,
+)
+from custom_components.helman.slot_grid import SLOT
 
 TZ = ZoneInfo("Europe/Prague")
 UTC = timezone.utc
@@ -273,6 +281,105 @@ class ForecastDstTests(unittest.TestCase):
             "2026-10-25T02:45:00+01:00",
         ):
             self.assertIn(expected_timestamp, iso_slots)
+
+    def test_solar_points_fall_back_maps_96_values_to_100_slots(self):
+        """A 24-hour solar source on fall-back day covers all 100 slots without gap."""
+        wh_period_15m = {
+            f"2026-10-25T{slot // 4:02d}:{(slot % 4) * 15:02d}:00+02:00": float(slot * 10)
+            for slot in range(96)
+        }
+        hass = SimpleNamespace(
+            config=SimpleNamespace(time_zone="Europe/Prague"),
+            states=SimpleNamespace(
+                get=lambda _id: SimpleNamespace(attributes={"wh_period_15m": wh_period_15m})
+            ),
+        )
+        builder = SolarForecastBuilder(hass, {}, SimpleNamespace(async_query_slot_energy_changes=AsyncMock()))
+        points = builder._extract_solar_points("sensor.solar_today", date(2026, 10, 25))
+
+        self.assertEqual(len(points), 100)
+        # Fold 0 gets source value for 02:00
+        self.assertEqual(points[8][0].fold, 0)
+        self.assertEqual(points[8][1]["value"], 80.0)
+        # Fold 1 is zeroed to prevent double-counting
+        self.assertEqual(points[12][0].fold, 1)
+        self.assertEqual(points[12][1]["value"], 0.0)
+        # 03:00 unshifted
+        self.assertEqual(points[16][0].fold, 0)
+        self.assertEqual(points[16][1]["value"], 120.0)
+        # 23:45 unshifted and covered
+        self.assertEqual(points[-1][0].isoformat(), "2026-10-25T23:45:00+01:00")
+        self.assertEqual(points[-1][1]["value"], 950.0)
+
+    def test_solar_points_fall_back_hourly_fallback(self):
+        """An hourly solar source on fall-back day expands to 100 slots."""
+        wh_period = {
+            f"2026-10-25T{hour:02d}:00:00+02:00": float(hour * 100)
+            for hour in range(24)
+        }
+        hass = SimpleNamespace(
+            config=SimpleNamespace(time_zone="Europe/Prague"),
+            states=SimpleNamespace(
+                get=lambda _id: SimpleNamespace(attributes={"wh_period": wh_period})
+            ),
+        )
+        builder = SolarForecastBuilder(hass, {}, SimpleNamespace(async_query_slot_energy_changes=AsyncMock()))
+        points = builder._extract_solar_points("sensor.solar_today", date(2026, 10, 25))
+
+        self.assertEqual(len(points), 100)
+        self.assertEqual(points[8][0].fold, 0)
+        self.assertAlmostEqual(points[8][1]["value"], 200.0 / 4)
+        self.assertEqual(points[12][0].fold, 1)
+        self.assertEqual(points[12][1]["value"], 0.0)
+        self.assertEqual(points[16][0].fold, 0)
+        self.assertAlmostEqual(points[16][1]["value"], 300.0 / 4)
+        self.assertEqual(points[-1][0].isoformat(), "2026-10-25T23:45:00+01:00")
+        self.assertAlmostEqual(points[-1][1]["value"], 2300.0 / 4)
+
+    def test_battery_simulation_solar_inputs_continuous_across_fall_back(self):
+        """Battery simulation slot iteration across fall-back finds all solar inputs."""
+        today_wh_15m = {
+            f"2026-10-25T{slot // 4:02d}:{(slot % 4) * 15:02d}:00+02:00": 100.0
+            for slot in range(96)
+        }
+        tomorrow_wh_15m = {
+            f"2026-10-26T{slot // 4:02d}:{(slot % 4) * 15:02d}:00+01:00": 100.0
+            for slot in range(96)
+        }
+        states = {
+            "sensor.solar_today": SimpleNamespace(attributes={"wh_period_15m": today_wh_15m}),
+            "sensor.solar_tomorrow": SimpleNamespace(attributes={"wh_period_15m": tomorrow_wh_15m}),
+        }
+        hass = SimpleNamespace(
+            config=SimpleNamespace(time_zone="Europe/Prague"),
+            states=SimpleNamespace(get=lambda entity_id: states.get(entity_id)),
+        )
+        builder = SolarForecastBuilder(hass, {}, SimpleNamespace(async_query_slot_energy_changes=AsyncMock()))
+
+        today_points = builder._extract_solar_points("sensor.solar_today", date(2026, 10, 25))
+        tomorrow_points = builder._extract_solar_points("sensor.solar_tomorrow", date(2026, 10, 26))
+        all_points = [p for _, p in sorted([*today_points, *tomorrow_points], key=lambda item: item[0])]
+
+        solar_by_slot = solar_slot_map({"points": all_points})
+
+        # Start battery simulation at 14:00 on 2026-10-25
+        started_at = datetime(2026, 10, 25, 14, 0, 0, tzinfo=TZ)
+        current_slot_start = started_at
+        next_slot_start = current_slot_start + timedelta(minutes=15)
+        next_slot_start_utc = _as_utc(next_slot_start)
+
+        # Simulate 120 canonical slots (reaching far into tomorrow)
+        missing_slots = []
+        for slot_index in range(120):
+            if slot_index == 0:
+                slot_key = current_slot_start
+            else:
+                slot_key = _as_local(next_slot_start_utc + (SLOT * (slot_index - 1)))
+
+            if solar_by_slot.get(slot_key) is None:
+                missing_slots.append(f"slot_index={slot_index} slot_key={slot_key.isoformat()}")
+
+        self.assertEqual(missing_slots, [], f"Encountered missing solar slots: {missing_slots}")
 
 
 if __name__ == "__main__":
