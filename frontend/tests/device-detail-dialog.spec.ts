@@ -73,6 +73,7 @@ async function mountCard(
     energyUnit = "kWh",
     today = TODAY_KWH,
     projections: Record<string, Array<[string, number]>> = {},
+    generatedAt = "2026-10-21T12:00:00+00:00",
 ): Promise<void> {
     await loadBundle(page, "helman-card");
     await installHaStubs(page);
@@ -124,7 +125,7 @@ async function mountCard(
     });
 
     await page.evaluate(
-        async ({ tree, today, lastHour, stats, energyUnit, projections }) => {
+        async ({ tree, today, lastHour, stats, energyUnit, projections, generatedAt }) => {
             const state = (value: string, attributes: Record<string, unknown> = {}) => ({ state: value, attributes });
             (window as any).__statRequests = [];
             (window as any).__deviceStatsRequests = [];
@@ -157,7 +158,7 @@ async function mountCard(
                         return (stats as Record<string, unknown>)[msg.device_key] ?? null;
                     },
                     "helman/get_appliance_projections": async () => ({
-                        generatedAt: "2026-10-21T12:00:00+00:00",
+                        generatedAt,
                         appliances: Object.fromEntries(Object.entries(projections).map(([id, points]) =>
                             [id, { series: points.map(([slotId, energyKwh]) => ({ slotId, energyKwh })) }])),
                     }),
@@ -172,7 +173,7 @@ async function mountCard(
             card.hass = hass;
             document.body.appendChild(card);
         },
-        { tree, today, lastHour: LAST_HOUR_KWH, stats, energyUnit, projections },
+        { tree, today, lastHour: LAST_HOUR_KWH, stats, energyUnit, projections, generatedAt },
     );
 
     await expect.poll(() => rowNames(page)).toContain("Boiler");
@@ -254,6 +255,22 @@ test("device Forecast header sums the planned runs to noon tomorrow, and the bod
     await expect(chart.locator("path.line.dashed")).toHaveCount(1);
     await expect(chart.locator("[data-now]")).toHaveCount(1);
     expect(await section.locator("helman-help-tip").evaluate((tip: any) => tip.explanation)).toContain("learned 2.0 kW");
+});
+
+test("device Forecast normalises the slot in progress by what was left of it", async ({ page }) => {
+    await installFixedClock(page);
+    await page.clock.setFixedTime(new Date("2026-10-21T12:14:00Z"));
+    // 3 kW with one minute left in the 12:00 slot is 0.05 kWh; the next slot is a full 0.75 kWh.
+    await mountCard(page, {}, true, "kWh", TODAY_KWH, {
+        boiler: [["2026-10-21T12:00:00+00:00", 0.05], ["2026-10-21T12:15:00+00:00", 0.75]],
+    }, "2026-10-21T12:14:00+00:00");
+    await openDevice(page, "Boiler");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-forecast]");
+    await section.locator("button").first().click();
+    const power = await section.locator("helman-day-line-chart").evaluate((chart: any) =>
+        chart.series[0].points.slice(0, 2).map((point: { v: number }) => Math.round(point.v * 1000) / 1000));
+    expect(power).toEqual([3, 3]);
+    expect(await section.locator("helman-help-tip").evaluate((tip: any) => tip.explanation)).toContain("learned 3.0 kW");
 });
 
 test("device without projected energy has no Forecast section", async ({ page }) => {

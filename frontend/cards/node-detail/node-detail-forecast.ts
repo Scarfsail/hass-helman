@@ -120,6 +120,11 @@ export function slotKw(kwh: number): number {
     return kwh / (SLOT_MS / HOUR_MS);
 }
 
+/** The share of the slot starting at `startMs` still ahead at `at`: 1 for a future slot, less in progress. */
+export function remainingShare(startMs: number, at: number): number {
+    return Math.max(0, Math.min(1, (startMs + SLOT_MS - Math.max(startMs, at)) / SLOT_MS));
+}
+
 export interface ProjectedSlot {
     startMs: number;
     kwh: number;

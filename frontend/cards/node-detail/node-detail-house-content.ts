@@ -43,7 +43,7 @@ import "../helman-simple/simple-card-house";
 import "./detail-headline";
 import "./flow-gauge";
 import { boldTemplate } from "./detail-section";
-import { forecastWhen, projectedKwh, projectedSlots, renderForecastChart } from "./node-detail-forecast";
+import { forecastWhen, projectedKwh, projectedSlots, remainingShare, renderForecastChart } from "./node-detail-forecast";
 import { modeStripWindow } from "../shared/mode-strip";
 import type { ApplianceProjectionsPayload } from "../helman-api";
 import { getSharedHelmanStore } from "../shared/data/store";
@@ -497,7 +497,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         for (const slot of slots) {
             if (slot.start + SLOT_MS <= context.now || dayKey(slot.start, context.timeZone) !== today) continue;
             const hour = slot.start - (getScheduleLocalTimeParts(slot.start, context.timeZone)?.minute ?? 0) * 60_000;
-            hours.set(hour, (hours.get(hour) ?? 0) + Math.max(0, slot.kwh));
+            hours.set(hour, (hours.get(hour) ?? 0) + Math.max(0, slot.kwh) * remainingShare(slot.start, context.now));
         }
         const busiest = [...hours].reduce<[number, number] | null>((best, hour) => !best || hour[1] > best[1] ? hour : best, null);
         const runs = this._plan.runs.filter((run) => run.startMs < end);
@@ -988,7 +988,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
             const start = Date.parse(slot.timestamp);
             const end = start + SLOT_MS;
             if (!Number.isFinite(start) || end <= now || dayKey(start, this._timeZone) !== today) continue;
-            kwh += Math.max(0, slot.nonDeferrable.value) * Math.min(1, (end - Math.max(start, now)) / SLOT_MS);
+            kwh += Math.max(0, slot.nonDeferrable.value) * remainingShare(start, now);
         }
         return kwh;
     }
