@@ -19,6 +19,7 @@ import { scheduleActionToneStyles } from "../shared/schedule/action-tones";
 import "../shared/day-line-chart";
 import type { DayLineBand, DayLineReference, DayLineSeries } from "../shared/day-line-chart";
 import { IDLE_W, NodeDetailContentBase, type NodeFlow } from "./node-detail-base";
+import { gridMix } from "./live-flows";
 import { boldTemplate } from "./detail-section";
 import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { GridDetailParams } from "./node-detail-types";
@@ -285,11 +286,7 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
                     <simple-card-grid slot="icon" .compact=${true} .power=${power ?? 0}></simple-card-grid>
                 </helman-detail-headline>
                 <helman-flow-gauge .direction=${importing ? "to" : "from"} .localize=${this.localize}
-                    .items=${flows ? importing ? [
-                        { node: "house", powerW: flows.gridToHouse }, { node: "battery", powerW: flows.gridToBattery },
-                    ] : [
-                        { node: "solar", powerW: flows.solarToGrid }, { node: "battery", powerW: flows.batteryToGrid },
-                    ] : []}></helman-flow-gauge>
+                    .items=${gridMix(flows, power)}></helman-flow-gauge>
                 ${grid && (buy !== null || sell !== null) ? html`<div class="tile" data-price>
                     <div class="row"><span class="label">${this.localize("node_detail.shared.grid_price_now")}</span>
                         <span class="value">${[

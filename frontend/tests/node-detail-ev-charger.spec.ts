@@ -1,4 +1,4 @@
-import { prepareNodeDetailPage, mountSimpleCard, treeNode } from "./support/node-detail-harness";
+import { prepareNodeDetailPage, mountSimpleCard, treeNode, liveFigures } from "./support/node-detail-harness";
 import { energyFields, scheduleSlots, treePayload } from "./support/payload-builders";
 import type { EvChargerUseMode, ScheduleControllableActionsDTO, SchedulePayload, ScheduleSlotDTO, TreeItemDTO } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
@@ -326,6 +326,15 @@ test("ev-charger Overview shows the P1 detail layout", async ({ page }) => {
     await expect(c.locator("helman-flow-gauge")).toHaveCount(1);
     await expect(c.locator("[data-car]")).toHaveCount(1);
     await expect(c.locator("helman-node-flow, helman-node-tile, helman-node-question")).toHaveCount(0);
+});
+
+test("charger gauge adds up to its headline, small shares included", async ({ page }) => {
+    // 100 W on a house that 4.2 kW of solar and 3.8 kW of grid supply: shares of 52.5 and 47.5 W.
+    await mount(page, { power: "100" });
+    await openDevice(page, "Garage EV");
+    const figures = await liveFigures(page, "node-detail-ev-charger-content", null);
+    expect(figures.gauge).toBe(100);
+    expect(figures.headline).toContain("100 W");
 });
 
 test("charger fault remains visible without a dead Details button", async ({ page }) => {

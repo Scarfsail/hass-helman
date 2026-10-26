@@ -55,7 +55,7 @@ export class HelmanWhoDecides extends LitElement {
     render() {
         const now = Date.now();
         const schedule = this._lanes.snapshot.schedule;
-        const runs = schedule ? laneRuns(schedule, this.controllableId, now) : [];
+        const runs = schedule ? laneRuns(schedule, this.controllableId, now, { byAuthor: true }) : [];
         const current = runs.find((run) => run.startMs <= now && (run.endMs === null || now < run.endMs));
         const next = nextLaneChange(runs, now, this._lanes.timeZone);
         const action = current ? laneActionLabel(effectiveLaneAction(current.action), this.localize) : this.localize("node_detail.control.nothing_scheduled");

@@ -332,7 +332,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         const ids = new Set(schedule.slots.flatMap((slot) => Object.keys(slot.controllables)));
         ids.delete(INVERTER_CONTROLLABLE_ID);
         const names = this._applianceNames();
-        const runs = [...ids].flatMap((id) => laneRuns(schedule, id, now)
+        const runs = [...ids].flatMap((id) => laneRuns(schedule, id, now, { byAuthor: true })
             .filter((run) => isScheduleApplianceActionEnabled(run.action as ScheduleApplianceActionDTO) === true)
             .map((run) => ({
             ...run,
@@ -409,7 +409,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
                         .sourceColor=${this._houseSourceColor()}></simple-card-house>
                 </helman-detail-headline>
                 <helman-flow-gauge direction="from" .localize=${this.localize}
-                    .items=${flows ? [
+                    .items=${flows && power !== null && power > IDLE_W ? [
                         { node: "solar", powerW: flows.solarToHouse },
                         { node: "battery", powerW: flows.batteryToHouse },
                         { node: "grid", powerW: flows.gridToHouse },

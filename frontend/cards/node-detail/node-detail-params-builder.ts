@@ -4,7 +4,7 @@ import type { NodeDetailParams, NodeDetailSectionRequest, NodeDetailTarget } fro
 import type { EnergyReadings } from "./node-detail-readings";
 
 export interface NodeDetailContext {
-    /** The card's live power split, W. */
+    /** The card's live power split, W, every flow kept however small. */
     flows: LiveFlows;
     flowScaleW: number | null;
     batteryPower: number;
@@ -40,7 +40,7 @@ export function buildNodeDetailContext(
             housePower: readings.housePower,
             batteryPower: readings.batteryPowerReading ?? 0,
             gridPower: readings.gridPowerSigned ?? 0,
-        }),
+        }, { threshold: false }),
         flowScaleW: readings.flowScaleW,
         batteryPower: readings.batteryPower,
         batteryPowerReading: readings.batteryPowerReading,
@@ -88,7 +88,9 @@ export function buildNodeDetailParams(
             return {
                 ...flow,
                 nodeType: "grid",
-                gridPower: context.gridPower,
+                // As the card's grid node shows it: a reading of ≈ 0 while
+                // solar or the battery clearly exports reads as that export.
+                gridPower: context.gridPower === null ? null : context.flows.gridPower,
                 powerEntityId: context.gridPowerEntityId,
             };
         case "house":

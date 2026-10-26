@@ -20,6 +20,7 @@ import { readEnergyKWh, readingNumber } from "./node-detail-readings";
 import { readReserve, type Reserve } from "./battery-reserve";
 import {
     currentRun,
+    effectiveAction,
     inverterRuns,
     nextChange,
     renderCurrentSlot,
@@ -169,7 +170,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
                         <button type="button" class="link-button inverter-link" aria-label=${this.localize("node_detail.shared.battery_inverter")}
                             @click=${() => this.dispatchEvent(new CustomEvent(NODE_DETAIL_REQUEST_EVENT, { detail: { target: "inverter" }, bubbles: true, composed: true }))}>${this.localize("node_detail.shared.the_inverter")}</button></div>
                     <div class="row"><span class="label">${this.localize("node_detail.shared.mode_now_label")}</span>
-                        <span class="value">${run ? this._actionLabel(run.action) : this.localize("node_detail.control.nothing_scheduled")}</span></div>
+                        <span class="value">${run ? this._actionLabel(effectiveAction(run.action)) : this.localize("node_detail.control.nothing_scheduled")}</span></div>
                 </div>
             </div>
         `;

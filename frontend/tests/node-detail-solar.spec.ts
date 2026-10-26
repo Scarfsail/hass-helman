@@ -1,4 +1,4 @@
-import { prepareNodeDetailPage, mountSimpleCard } from "./support/node-detail-harness";
+import { prepareNodeDetailPage, mountSimpleCard, liveFigures } from "./support/node-detail-harness";
 import { cardTree, forecastPayload, scheduleSlots } from "./support/payload-builders";
 import type { ForecastPayload, ForecastStatus, ScheduleActionDTO, SchedulePayload, ScheduleSlotDTO } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
@@ -300,6 +300,15 @@ test("solar Overview shows the P1 detail layout", async ({ page }) => {
     await expect(c.locator("helman-flow-gauge")).toHaveCount(1);
     await expect(c.locator("helman-node-flow, helman-node-tile, helman-node-question")).toHaveCount(0);
     await expect(c.locator("helman-node-flow, helman-node-tile, helman-node-question")).toHaveCount(0);
+});
+
+test("solar headline, gauge and power card agree where the grid meter disagrees with the balance", async ({ page }) => {
+    // 4.2 kW of solar, 1.2 kW of house and 1.5 kW of charge leave 1.5 kW to export; the grid meter reads 0.3 kW.
+    await mount(page);
+    await page.locator(".node-cell:has(simple-card-solar)").click();
+    const figures = await liveFigures(page, "node-detail-solar-content", "solar");
+    expect(figures).toMatchObject({ card: 4200, gauge: 4200 });
+    expect(figures.headline).toContain("4.2 kW");
 });
 
 test("solar Overview shows the off-grid warning", async ({ page }) => {

@@ -229,6 +229,18 @@ test.describe("a schedulable device", () => {
         await expect(overrideDialog(page)).toHaveCount(0);
     });
 
+    test("Planned now ends where the author changes and the summary skips that boundary", async ({ page }) => {
+        await mount(page, plan([
+            ["12:00", "14:00", { boiler: user({ on: true }) }],
+            ["14:00", "17:00", { boiler: auto({ on: true }) }],
+            ["17:00", "18:00", { boiler: auto({ on: false }) }],
+        ]));
+        await openDevice(page, "Boiler");
+        const overview = page.locator("node-detail-device-content helman-who-decides");
+        await expect(overview.locator(".row").nth(1).locator("span").last()).toHaveText("on, until 14:00 · You");
+        await expect(page.locator("node-detail-dialog helman-detail-section[data-schedule] [slot=summary]")).toContainText("Next: off at 17:00");
+    });
+
     test("the switch help names the next planned change", async ({ page }) => {
         await mount(page, plan([["12:00", "13:00", { boiler: auto({ on: true }) }]]));
         await openDevice(page, "Boiler");

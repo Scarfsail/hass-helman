@@ -1,4 +1,4 @@
-import { prepareNodeDetailPage, mountSimpleCard, treeNode } from "./support/node-detail-harness";
+import { prepareNodeDetailPage, mountSimpleCard, treeNode, liveFigures } from "./support/node-detail-harness";
 import { energyFields, forecastPayload, scheduleSlots, treePayload } from "./support/payload-builders";
 import type { DevicePhase, ForecastPayload, ScheduleControllableActionsDTO, SchedulePayload, ScheduleSlotDTO, TreeItemDTO } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
@@ -292,6 +292,25 @@ test("house Overview shows the P1 detail layout", async ({ page }) => {
     await expect(c.locator("helman-flow-gauge")).toHaveCount(1);
     await expect(c).toContainText("biggest users");
     await expect(c.locator("helman-node-flow, helman-node-tile, helman-node-question")).toHaveCount(0);
+});
+
+test("house headline, gauge and power card agree where the grid meter disagrees with the balance", async ({ page }) => {
+    // 7.8 kW of house from 3 kW of solar and 1 kW of battery leaves 3.8 kW from the grid; its meter reads 2 kW.
+    await mount(page);
+    await page.locator(".node-cell:has(simple-card-house)").click();
+    const figures = await liveFigures(page, "node-detail-house-content", "house");
+    expect(figures).toMatchObject({ card: 7800, gauge: 7800 });
+    expect(figures.headline).toContain("7.8 kW");
+});
+
+test("house gauge keeps a source share under 50 W, so it adds up to the headline", async ({ page }) => {
+    // 463 W of house: 150 W of solar, 283 W of battery and the 30 W the grid supplies.
+    await mount(page, { power: "463", solar: "150", battery: "-283", grid: "30" });
+    await page.locator(".node-cell:has(simple-card-house)").click();
+    const figures = await liveFigures(page, "node-detail-house-content", "house");
+    expect(figures).toMatchObject({ card: 463, gauge: 463 });
+    expect(figures.headline).toContain("463 W");
+    await expect(content(page).locator("helman-flow-gauge .figure")).toHaveCount(3);
 });
 
 test("house Overview shows the off-grid warning", async ({ page }) => {

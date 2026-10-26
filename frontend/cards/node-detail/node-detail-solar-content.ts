@@ -328,7 +328,7 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
                     <simple-card-solar slot="icon" .compact=${true} .power=${power ?? 0}></simple-card-solar>
                 </helman-detail-headline>
                 <helman-flow-gauge direction="to" .localize=${this.localize}
-                    .items=${flows ? [
+                    .items=${flows && producing ? [
                         { node: "house", powerW: flows.solarToHouse },
                         { node: "battery", powerW: flows.solarToBattery },
                         { node: "grid", powerW: flows.solarToGrid },

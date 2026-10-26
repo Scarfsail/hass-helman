@@ -73,8 +73,12 @@ export function inverterRuns(schedule: SchedulePayload, now: number): ScheduleRu
     return mergeRuns<ScheduleActionDTO>(boundaries, slotsById, INVERTER_CONTROLLABLE_ID, () => true, sameAction, { fillEmpty: true });
 }
 
-/** The remaining runs for any schedule lane, including empty stretches. */
-export function laneRuns(schedule: SchedulePayload, controllableId: string, now: number): ScheduleRun<ScheduleControllableActionDTO>[] {
+/**
+ * The remaining runs for any schedule lane, including empty stretches. A
+ * change of author alone continues a run unless `byAuthor` asks for it to
+ * start a new one, as a run that names its author must.
+ */
+export function laneRuns(schedule: SchedulePayload, controllableId: string, now: number, { byAuthor = false }: { byAuthor?: boolean } = {}): ScheduleRun<ScheduleControllableActionDTO>[] {
     const boundaries = resolveScheduleSlotBoundaries(schedule.slots.map((slot) => slot.id))
         .filter((slot) => slot.startMs + SLOT_MS > now);
     const slotsById = new Map(schedule.slots.map((slot) => [slot.id, slot]));
@@ -82,7 +86,8 @@ export function laneRuns(schedule: SchedulePayload, controllableId: string, now:
         (left, right) => {
             const { setBy: _left, ...leftAction } = left;
             const { setBy: _right, ...rightAction } = right;
-            return getScheduleControllableActionIdentityKey(leftAction as ScheduleControllableActionDTO)
+            return (!byAuthor || left.setBy === right.setBy)
+                && getScheduleControllableActionIdentityKey(leftAction as ScheduleControllableActionDTO)
                 === getScheduleControllableActionIdentityKey(rightAction as ScheduleControllableActionDTO);
         },
         { fillEmpty: true });

@@ -1,4 +1,4 @@
-import { prepareNodeDetailPage, mountSimpleCard } from "./support/node-detail-harness";
+import { prepareNodeDetailPage, mountSimpleCard, liveFigures } from "./support/node-detail-harness";
 import { cardTree, forecastPayload } from "./support/payload-builders";
 import type { ForecastPayload } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
@@ -240,6 +240,26 @@ test("grid headline at about 0 W shows no arrow and a neutral idle caption", asy
         return { value: getComputedStyle(el).color, primary };
     });
     expect(colors.value).toBe(colors.primary);
+});
+
+test("grid gauge adds up to the headline where the house meter disagrees with the grid meter", async ({ page }) => {
+    // The split's grid edges are residuals of the other meters: 124 W to the house, 1000 W to the battery.
+    await mount(page, { grid: "1100", solar: "0", house: "124", battery: "1000" });
+    await page.locator(".node-cell:has(simple-card-grid)").click();
+    const c = content(page);
+    await expect(c.locator("helman-detail-headline [data-headline]")).toHaveText("← 1.1 kW");
+    const gauge = c.locator("helman-flow-gauge");
+    await expect(gauge.locator(".figure")).toHaveText(["100 W 9 %", "1.0 kW 91 %"]);
+    expect(await liveFigures(page, "node-detail-grid-content", "grid")).toMatchObject({ card: 1100, gauge: 1100 });
+});
+
+test("grid gauge stays away while the headline is idle", async ({ page }) => {
+    await mount(page, { grid: "0", solar: "0", house: "83", battery: "0" });
+    await page.locator(".node-cell:has(simple-card-grid)").click();
+    const c = content(page);
+    await expect(c.locator("helman-detail-headline")).toContainText("not exchanging with the grid now");
+    await expect(c.locator("helman-flow-gauge")).toBeHidden();
+    expect(await liveFigures(page, "node-detail-grid-content", "grid")).toMatchObject({ card: 0, gauge: 0 });
 });
 
 test("grid price tile bolds each price and keeps each one whole", async ({ page }) => {

@@ -1,4 +1,4 @@
-import { prepareNodeDetailPage, mountSimpleCard } from "./support/node-detail-harness";
+import { prepareNodeDetailPage, mountSimpleCard, liveFigures } from "./support/node-detail-harness";
 import { cardTree, forecastPayload, scheduleSlots } from "./support/payload-builders";
 import type { ForecastPayload, ScheduleActionDTO, SchedulePayload, ScheduleSlotDTO } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
@@ -47,6 +47,8 @@ type Variant = {
     ratedPower?: string;
     /** Today's flows section: a fixed day, or the reports' reason for none. */
     flowsUnavailable?: string;
+    /** The slot in progress holds a charge candidate whose condition is not met. */
+    candidateNow?: boolean;
 };
 
 declare global {
@@ -148,6 +150,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             const hour = at.getUTCHours() + (at.getUTCDate() - 21) * 24;
             let action: ScheduleActionDTO = { kind: "normal", setBy: "automation" };
             if (hour >= 14 && hour < 16) action = { kind: "charge_to_target_soc", targetSoc: 80, setBy: "automation" };
+            if (v.candidateNow && hour === 12) action = { kind: "charge_to_target_soc", targetSoc: 80, setBy: "automation", conditionMet: false };
             if (hour >= 18 && hour < 19) action = { kind: "discharge_to_target_soc", targetSoc: 30, setBy: "automation", conditionMet: false };
             slots.push({ id, controllables: { inverter: action } });
         }
@@ -206,6 +209,23 @@ test("battery Overview has SoC, recent-rate estimate, destination gauge and inve
     await expect(content(page).locator("helman-node-flow, helman-node-tile, helman-node-question")).toHaveCount(0);
     await content(page).getByRole("button", { name: /Controlled through the inverter/ }).click();
     await expect(page.locator("node-detail-inverter-content")).toBeVisible();
+});
+
+test("battery mode now shows an unmet candidate as the normal mode it runs", async ({ page }) => {
+    await mount(page, { candidateNow: true });
+    await openDetail(page);
+    const mode = content(page).locator("[data-inverter-control] .row").nth(1).locator(".value");
+    await expect(mode).toHaveText("Normal");
+    await expect(mode).not.toContainText("Charge to");
+});
+
+test("battery headline, gauge and power card agree where the grid meter disagrees with the balance", async ({ page }) => {
+    // 2.1 kW discharging while solar covers the house: the balance exports it all; the grid meter reads 0.3 kW.
+    await mount(page);
+    await openDetail(page);
+    const figures = await liveFigures(page, "node-detail-battery-content", "battery");
+    expect(figures).toMatchObject({ card: -2100, gauge: 2100 });
+    expect(figures.headline).toContain("discharging 2.1 kW");
 });
 
 test("battery shows a binding cap only while power reaches the lowest limit", async ({ page }) => {

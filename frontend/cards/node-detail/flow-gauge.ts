@@ -2,7 +2,6 @@ import { LitElement, css, html, nothing } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { formatPower } from "../shared/format";
 import { fillTemplate } from "../localize/localize";
-import { IDLE_W } from "./live-flows";
 import { NODE_DETAIL_REQUEST_EVENT } from "./node-detail-types";
 import { helmanColorVars } from "../color-vars";
 import "./help-tip";
@@ -38,7 +37,12 @@ export class HelmanFlowGauge extends LitElement {
     @property({ attribute: false }) public items: FlowGaugeItem[] = [];
     @property({ type: Boolean }) public estimated = false;
     @property({ attribute: false }) public localize!: (key: string) => string;
-    private get _shown(): FlowGaugeItem[] { return this.items.filter((item) => item.powerW >= IDLE_W); }
+    /**
+     * Every part that rounds to a watt: its caller decides what is idle, so
+     * the parts add up to the figure the detail headlines (a device's small
+     * solar share is part of its power, not noise).
+     */
+    private get _shown(): FlowGaugeItem[] { return this.items.filter((item) => Math.round(item.powerW) > 0); }
     /** An empty gauge takes no place, nor a gap, in the overview. */
     protected willUpdate(): void { this.hidden = this._shown.length === 0; }
     render() {

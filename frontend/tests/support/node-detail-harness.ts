@@ -237,3 +237,31 @@ export async function reconnectDetail(page: Page, selector: string, field: strin
         return state;
     }, field);
 }
+
+/**
+ * The live figures one node shows in three places: the power card's node,
+ * its detail's headline and the sum of its detail's gauge, W. `node` names
+ * the power card's node; a device has none, so its card figure is `null`.
+ */
+export async function liveFigures(page: Page, content: string, node: "solar" | "grid" | "house" | "battery" | null): Promise<{ card: number | null; headline: string; gauge: number }> {
+    return page.evaluate(({ content, node }) => {
+        const deepAll = (root: ParentNode, selector: string, out: Element[] = []): Element[] => {
+            for (const element of Array.from(root.querySelectorAll("*"))) {
+                if (element.matches(selector)) out.push(element);
+                if (element.shadowRoot) deepAll(element.shadowRoot, selector, out);
+            }
+            return out;
+        };
+        const card = node ? (deepAll(document, `simple-card-${node}`)[0] as any)?.power ?? null : null;
+        const detail = deepAll(document, content)[0].shadowRoot!;
+        const headline = deepAll(detail, "helman-detail-headline")[0];
+        const gauge = deepAll(detail, "helman-flow-gauge")[0];
+        return {
+            card,
+            headline: (headline?.shadowRoot?.textContent ?? "").replace(/\s+/g, " ").trim(),
+            // The parts the gauge draws, none while it is hidden.
+            gauge: !gauge || (gauge as HTMLElement).hidden ? 0 : Math.round(((gauge as any)._shown as Array<{ powerW: number }>)
+                .reduce((sum, item) => sum + item.powerW, 0)),
+        };
+    }, { content, node });
+}
