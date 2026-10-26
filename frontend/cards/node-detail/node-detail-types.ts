@@ -1,3 +1,4 @@
+import type { ModeSegment } from "../shared/mode-strip";
 import type { TreeItem } from "../shared/data/tree-item";
 import type { LiveFlows } from "./live-flows";
 
@@ -6,27 +7,46 @@ export type NodeType = "solar" | "battery" | "grid" | "house" | "inverter";
 /** What a detail shows: an energy node by its type, or a config device by its tree item. */
 export type NodeDetailTarget = NodeType | TreeItem;
 
-export type NodeDetailTab = "overview" | "schedule";
+export type NodeDetailSection = "schedule";
 
 /**
- * The tab a detail was asked to open on, one object per request: asking for
- * the same node's Schedule tab again is a new request even when the node and
- * the tab are the same, while a refreshed tree keeps the one it has.
+ * The section a detail was asked to open, one object per request: asking for
+ * the same node's Schedule section again is a new request even when the node
+ * and section are the same, while a refreshed tree keeps the one it has.
  */
-export interface NodeDetailTabRequest {
-    readonly tab: NodeDetailTab;
+export interface NodeDetailSectionRequest {
+    readonly section: NodeDetailSection;
 }
 
 /**
- * Asks the power card around it to show a node's detail, on its Schedule tab
- * when `tab` says so and on its Overview otherwise. Bubbles and is composed,
+ * Asks the power card around it to show a node's detail, opening its Schedule
+ * section when requested. Bubbles and is composed,
  * so it reaches the card from inside the open detail's own shadow roots.
  */
 export const NODE_DETAIL_REQUEST_EVENT = "helman-node-detail-request";
 
+/**
+ * A detail reports what its node's lane did today, for the Schedule
+ * section's strip: a `LaneHistory`. Bubbles to the dialog around the
+ * detail, not composed.
+ */
+export const LANE_HISTORY_EVENT = "helman-lane-history";
+
+/**
+ * What a lane did today: its stretches, the one still going open-ended, and
+ * a note when they can't be read, with the read to try again and its label.
+ */
+export interface LaneHistory {
+    segments: ModeSegment[];
+    note: string | null;
+    retry: { label: string; load: () => void } | null;
+}
+
+export const NO_LANE_HISTORY: LaneHistory = { segments: [], note: null, retry: null };
+
 export interface NodeDetailRequestDetail {
     target: NodeDetailTarget;
-    tab?: Extract<NodeDetailTab, "schedule">;
+    section?: NodeDetailSection;
 }
 
 /**
@@ -76,6 +96,7 @@ export interface GridDetailParams extends EnergyNodeFlowParams {
     /** Grid power: positive imports, negative exports, W. */
     /** Signed import-positive; `null` when the grid sensor has no reading. */
     gridPower: number | null;
+    powerEntityId: string | null;
 }
 
 /**
@@ -122,6 +143,6 @@ export type NodeDetailParams = (
     | InverterDetailParams
     | DeviceDetailParams
 ) & {
-    /** The tab the power card was asked for; without one, the detail opens on its Overview. */
-    tabRequest?: NodeDetailTabRequest;
+    /** The section the power card was asked to open; otherwise sections start collapsed. */
+    sectionRequest?: NodeDetailSectionRequest;
 };

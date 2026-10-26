@@ -5,12 +5,69 @@ export const nodeDetailSharedStyles = css`
         display: block;
     }
 
+    /* A detail's Overview; the sections after it run edge to edge. */
+    .overview {
+        padding: 0 var(--ha-space-6, 24px) var(--ha-space-5, 20px);
+    }
+
+    /* The last section is closed off from the footer; a detail without sections ends on its Overview, unlined. */
+    helman-detail-section:last-child,
+    slot[name="schedule"]:last-child::slotted(helman-detail-section) {
+        border-bottom: 1px solid var(--divider-color);
+    }
+
     .content {
         display: flex;
         flex-direction: column;
-        gap: 12px;
+        gap: 14px;
         min-width: 240px;
-        padding: 8px 0;
+    }
+
+
+    /* A grouped block on the dialog surface: label rows, a car, a price. */
+    .tile {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        padding: 12px 14px;
+        border-radius: var(--ha-border-radius-lg, 12px);
+        background: var(--secondary-background-color);
+    }
+    /* A secondary action on the surface, like Override… */
+    .outline-button {
+        align-self: flex-start;
+        box-sizing: border-box;
+        display: inline-flex;
+        align-items: center;
+        min-height: 44px;
+        padding: 10px 16px;
+        border: 1px solid var(--divider-color);
+        border-radius: 22px;
+        background: none;
+        color: var(--primary-text-color);
+        font: inherit;
+        font-size: 14px;
+        cursor: pointer;
+    }
+    .outline-button:hover:not(:disabled) {
+        background: var(--secondary-background-color);
+    }
+    .outline-button:focus-visible {
+        outline: 2px solid var(--primary-color);
+        outline-offset: 2px;
+    }
+    .outline-button:disabled {
+        cursor: default;
+        opacity: 0.5;
+    }
+    .tile .row {
+        align-items: baseline;
+        font-size: 14px;
+    }
+    .tile .label,
+    .tile .value {
+        font-size: inherit;
+        font-weight: inherit;
     }
 
     .detail-row {
@@ -42,12 +99,58 @@ export const nodeDetailSharedStyles = css`
     }
 
     .section-title {
-        font-size: 0.75rem;
+        display: flex;
+        align-items: center;
+        font-size: 11px;
         font-weight: 600;
         text-transform: uppercase;
         color: var(--secondary-text-color);
-        letter-spacing: 0.05em;
-        margin-top: 4px;
+        letter-spacing: 0.08em;
+    }
+
+    /* History & statistics: a part of the row above it, figures as tiles, energy by source. */
+    .row.indent {
+        padding-left: 14px;
+    }
+    /* History and technical figures read as plain text; a key figure is bolded where it is. */
+    [data-history-body] .row .value,
+    [data-technical-body] .row .value {
+        font-weight: inherit;
+    }
+    .stat-tiles {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+    }
+    .stat-tiles.two {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .stat-value {
+        font-size: 18px;
+        overflow-wrap: anywhere;
+    }
+    .stat-caption {
+        font-size: 12px;
+        line-height: 1.45;
+        color: var(--secondary-text-color);
+    }
+    /* HA's history graph sits on the section, not in a card of its own. */
+    hui-history-graph-card {
+        --ha-card-background: transparent;
+        --ha-card-border-width: 0;
+        --ha-card-box-shadow: none;
+    }
+    .share-bar {
+        display: flex;
+        gap: 2px;
+        height: 16px;
+    }
+    .share-bar > span {
+        min-width: 4px;
+        border-radius: 4px;
+    }
+    .swatch-mark {
+        margin-right: 4px;
     }
 
     .error {
@@ -60,18 +163,10 @@ export const nodeDetailSharedStyles = css`
 
 /** The question-led node details: the overview summary, answer rows and tables. */
 export const nodeDetailQuestionStyles = css`
-    .content {
-        gap: 8px;
-    }
     .summary {
         display: flex;
         flex-direction: column;
         gap: 8px;
-        padding-bottom: 8px;
-    }
-    .status {
-        margin: 0;
-        font-size: 0.95rem;
     }
     .figures {
         display: grid;
@@ -194,63 +289,12 @@ export const nodeDetailQuestionStyles = css`
     }
 `;
 
-/**
- * The pictured node details: the status pill (in a scheduler tone class),
- * a picture or glyph that opens the question it absorbed, the answer tiles
- * and the open answer under them.
- */
+/** The inverter's plan → command → inverter chain, and a meter bar under a figure. */
 export const nodeDetailPictureStyles = css`
-    .pill {
-        align-self: flex-start;
-        padding: 4px 12px;
-        border-radius: 999px;
-        border: 1px solid var(--schedule-action-tone-border);
-        background: var(--schedule-action-tone-bg);
-        color: var(--schedule-action-tone-color);
-        font-weight: 600;
-        font-size: 0.9rem;
-    }
-    .glyph,
-    .picture {
-        display: block;
-        padding: 0;
-        border: none;
-        background: none;
-        color: inherit;
-        font: inherit;
-        text-align: inherit;
-        cursor: pointer;
-        border-radius: 8px;
-    }
-    .picture {
-        width: 100%;
-    }
-    .picture.strip,
     .picture.chain {
         display: flex;
         flex-direction: column;
         gap: 4px;
-    }
-    .glyph:focus-visible,
-    .picture:focus-visible {
-        outline: 2px solid var(--primary-color);
-        outline-offset: 2px;
-    }
-    .picture-scope {
-        font-size: 0.75rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        color: var(--secondary-text-color);
-    }
-    .tiles {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
-        gap: 8px;
-        margin-top: 4px;
-    }
-    helman-node-question {
-        margin-top: 4px;
     }
     .meter {
         display: block;

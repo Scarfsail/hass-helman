@@ -1,7 +1,7 @@
 import { pad2 } from "./time/slot-time";
 import { LitElement, css, html, nothing } from "lit";
 import { customElement, property } from "lit/decorators.js";
-import { renderNowMarker } from "../helman-solar-inspector/now-marker";
+import { renderNowMarker } from "./now-marker";
 import { scheduleActionToneStyles, type ScheduleActionTone } from "./schedule/action-tones";
 import { formatScheduleTime, getScheduleLocalDayStartMs, getScheduleLocalTimeParts } from "./schedule/model/schedule-time";
 
@@ -12,14 +12,8 @@ export interface ModeSegment {
     tone: ScheduleActionTone;
     /** What it is, such as "Charging". */
     label: string;
-}
-
-/** The next change the strip flags: when, in which tone, and what it says. */
-export interface ModeChange {
-    at: number;
-    tone: ScheduleActionTone;
-    /** As shown on the flag, such as "22:00 charging". */
-    label: string;
+    /** A candidate: planned, but only run once its condition is met. Drawn dashed and neutral. */
+    candidate?: boolean;
 }
 
 const HOUR_MS = 3_600_000;
@@ -38,16 +32,17 @@ export function modeStripWindow(now: number, timeZone: string): { start: number;
 }
 
 /**
- * A mode over a day and a half, `start` to `end`: each segment in its
- * scheduler action tone, solid where it has happened and hatched where it is
- * planned, split at `now`, with a now marker and the next change flagged in
- * its tone. Hour ticks are the wall clock in `timeZone`.
+ * A mode over a day and a half, `start` to `end`: what happened before `now`
+ * (`history`, dimmed) and what is planned after it (`segments`), each in its
+ * scheduler action tone, a candidate dashed and neutral, with a now marker,
+ * the hour ticks in `timeZone` and a legend of what is drawn.
  *
- * Generic over what the segments are: the EV charger's charging, the
- * inverter's modes. A gap between segments is nothing known or planned. The
- * strip is a picture; a host that makes it a control wraps it in its own
- * button, and the strip's text (the flag, the ticks and a visually hidden
- * list of its segments) stays readable there.
+ * With `rows`, the two are drawn as two labelled rows, happened above
+ * planned, instead of one strip split at now.
+ *
+ * Generic over what the segments are: an appliance's runs, the EV charger's
+ * charging, the inverter's modes. A gap between segments is nothing known or
+ * planned.
  */
 @customElement("helman-mode-strip")
 export class HelmanModeStrip extends LitElement {
@@ -55,80 +50,114 @@ export class HelmanModeStrip extends LitElement {
         :host {
             display: block;
         }
-        .flag-row {
+        .tracks {
             position: relative;
-            height: 18px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
         }
-        .flag {
-            position: absolute;
-            bottom: 2px;
-            transform: translateX(-50%);
-            white-space: nowrap;
-            font-size: 0.75rem;
-            font-weight: 600;
+        .row-label {
+            font-size: 10px;
             line-height: 1.2;
-            color: var(--schedule-action-tone-color);
-        }
-        .flag.start {
-            transform: none;
-        }
-        .flag.end {
-            transform: translateX(-100%);
+            color: var(--secondary-text-color);
         }
         .track {
             position: relative;
-            height: 18px;
-            border-radius: 4px;
+            height: 26px;
+            border-radius: 6px;
             background: var(--secondary-background-color, rgba(0, 0, 0, 0.06));
             overflow: hidden;
+        }
+        .rows .track {
+            height: 14px;
+            border-radius: 3px;
         }
         .segment {
             position: absolute;
             top: 0;
             bottom: 0;
             box-sizing: border-box;
+            border-radius: 3px;
             background: var(--schedule-action-tone-accent);
-            /* The normal tone is near the track's own colour: its border keeps it apart. */
-            box-shadow: inset 0 0 0 1px var(--schedule-action-tone-border);
         }
-        .segment.planned {
-            background: repeating-linear-gradient(
-                135deg,
-                var(--schedule-action-tone-accent) 0 3px,
-                color-mix(in srgb, var(--schedule-action-tone-accent) 22%, transparent) 3px 7px
-            );
+        /* Normal and neutral are the resting modes: a muted grey, never the bright accent. */
+        .segment.action-tone-normal,
+        .segment.action-tone-neutral {
+            background: color-mix(in srgb, var(--secondary-text-color) 60%, transparent);
         }
-        .next-mark {
+        .segment.candidate {
+            background: none;
+            border: 1.5px dashed var(--secondary-text-color);
+        }
+        .rows .segment {
+            border-radius: 0;
+        }
+        /* What has happened is dimmed under the surface's colour. */
+        .shade {
             position: absolute;
             top: 0;
             bottom: 0;
-            width: 2px;
-            margin-left: -1px;
-            background: var(--schedule-action-tone-color);
+            left: 0;
+            background: var(--card-background-color, var(--ha-card-background));
+            opacity: 0.5;
         }
         .overlay {
             position: absolute;
-            inset: 0;
+            left: 0;
+            top: -6px;
             width: 100%;
-            height: 100%;
+            height: calc(100% + 12px);
             overflow: visible;
+            pointer-events: none;
         }
         .hours {
             position: relative;
             height: 14px;
-            margin-top: 2px;
-            font-size: 0.7rem;
+            margin-top: 6px;
+            font-size: 11px;
             color: var(--secondary-text-color);
         }
         .hours span {
             position: absolute;
             transform: translateX(-50%);
+            white-space: nowrap;
         }
         .hours span.start {
             transform: none;
         }
         .hours span.end {
             transform: translateX(-100%);
+        }
+        .hours .now {
+            color: var(--primary-text-color);
+        }
+        .legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 2px 12px;
+            margin-top: 6px;
+            font-size: 12px;
+            color: var(--secondary-text-color);
+        }
+        .legend span {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .swatch {
+            box-sizing: border-box;
+            width: 10px;
+            height: 10px;
+            border-radius: 2px;
+            background: var(--schedule-action-tone-accent);
+        }
+        .swatch.action-tone-normal,
+        .swatch.action-tone-neutral {
+            background: color-mix(in srgb, var(--secondary-text-color) 60%, transparent);
+        }
+        .swatch.candidate {
+            background: none;
+            border: 1.5px dashed var(--secondary-text-color);
         }
         .sr {
             position: absolute;
@@ -143,52 +172,89 @@ export class HelmanModeStrip extends LitElement {
     @property({ type: Number }) public start = 0;
     @property({ type: Number }) public end = 0;
     @property({ type: Number }) public now = 0;
+    /** What is planned; drawn from now on. */
     @property({ attribute: false }) public segments: ModeSegment[] = [];
-    @property({ attribute: false }) public next: ModeChange | null = null;
+    /** What happened; drawn up to now. */
+    @property({ attribute: false }) public history: ModeSegment[] = [];
+    /** The two rows' labels, to draw what happened and what is planned apart. */
+    @property({ attribute: false }) public rows: { happened: string; planned: string } | null = null;
+    /** The now marker's tick label. */
+    @property({ attribute: false }) public nowLabel = "now";
     @property({ attribute: false }) public timeZone = "UTC";
     @property({ attribute: false }) public locale = "en";
 
     render() {
         const span = Math.max(1, this.end - this.start);
         const pct = (at: number) => Math.max(0, Math.min(100, (at - this.start) / span * 100));
-        const drawn = this.segments.flatMap((segment) => {
-            const start = Math.max(segment.start, this.start);
-            const end = Math.min(segment.end, this.end);
-            if (end <= start) return [];
-            // Split at now: what has happened is solid, what is planned hatched.
-            const parts: Array<{ start: number; end: number; planned: boolean }> = [];
-            if (start < this.now) parts.push({ start, end: Math.min(end, this.now), planned: false });
-            if (end > this.now) parts.push({ start: Math.max(start, this.now), end, planned: true });
-            return parts.map((part) => ({ ...part, segment }));
+        const clip = (segments: ModeSegment[], from: number, to: number) => segments.flatMap((segment) => {
+            const start = Math.max(segment.start, from);
+            const end = Math.min(segment.end, to);
+            return end > start ? [{ ...segment, start, end }] : [];
         });
-        const next = this.next && this.next.at >= this.start && this.next.at <= this.end ? this.next : null;
+        const happened = clip(this.history, this.start, Math.min(this.now, this.end));
+        const planned = clip(this.segments, Math.max(this.now, this.start), this.end);
         const nowIn = this.now >= this.start && this.now <= this.end;
+        const draw = (segments: ModeSegment[], past: boolean) => segments.map((segment) => html`
+            <span class="segment action-tone-${segment.tone} ${segment.candidate ? "candidate" : ""}"
+                data-segment data-tone=${segment.tone} data-planned=${past ? "false" : "true"}
+                data-candidate=${segment.candidate ? "true" : "false"}
+                data-start=${segment.start} data-end=${segment.end}
+                style="left: ${pct(segment.start).toFixed(2)}%; width: ${(pct(segment.end) - pct(segment.start)).toFixed(2)}%"></span>
+        `);
+        const marker = nowIn ? html`
+            <svg class="overlay" data-now viewBox="0 0 1000 10" preserveAspectRatio="none">${renderNowMarker(pct(this.now) * 10, 0, 10, this._time(this.now))}</svg>
+        ` : nothing;
         return html`
-            <div class="flag-row">
-                ${next ? html`
-                    <span class="flag action-tone-${next.tone} ${this._edge(pct(next.at))}" data-next-change data-tone=${next.tone}
-                        style="left: ${pct(next.at).toFixed(2)}%">${next.label}</span>
-                ` : nothing}
-            </div>
-            <div class="track" aria-hidden="true">
-                ${drawn.map(({ start, end, planned, segment }) => html`
-                    <span class="segment action-tone-${segment.tone} ${planned ? "planned" : ""}"
-                        data-segment data-tone=${segment.tone} data-planned=${planned ? "true" : "false"}
-                        data-start=${start} data-end=${end}
-                        style="left: ${pct(start).toFixed(2)}%; width: ${(pct(end) - pct(start)).toFixed(2)}%"></span>
-                `)}
-                ${next ? html`<span class="next-mark action-tone-${next.tone}" style="left: ${pct(next.at).toFixed(2)}%"></span>` : nothing}
-                ${nowIn ? html`
-                    <svg class="overlay" data-now viewBox="0 0 1000 10" preserveAspectRatio="none">${renderNowMarker(pct(this.now) * 10, 0, 10, this._time(this.now))}</svg>
-                ` : nothing}
-            </div>
+            ${this.rows ? html`
+                <div class="tracks rows" aria-hidden="true">
+                    <span class="row-label">${this.rows.happened}</span>
+                    <div class="track" data-row="happened">${draw(happened, true)}</div>
+                    <span class="row-label">${this.rows.planned}</span>
+                    <div class="track" data-row="planned">${draw(planned, false)}</div>
+                    ${marker}
+                </div>
+            ` : html`
+                <div class="tracks" aria-hidden="true">
+                    <div class="track">
+                        ${draw(happened, true)}
+                        ${draw(planned, false)}
+                        ${nowIn ? html`<span class="shade" style="width: ${pct(this.now).toFixed(2)}%"></span>` : nothing}
+                    </div>
+                    ${marker}
+                </div>
+            `}
             <div class="hours" aria-hidden="true">
-                ${this._ticks().map((tick) => html`
+                ${this._ticks().filter((tick) => !nowIn || Math.abs(pct(tick.at) - pct(this.now)) > 7).map((tick) => html`
                     <span class=${this._edge(pct(tick.at))} style="left: ${pct(tick.at).toFixed(2)}%">${pad2(tick.hour)}</span>
                 `)}
+                ${nowIn ? html`<span class="now ${this._edge(pct(this.now))}" style="left: ${pct(this.now).toFixed(2)}%">${this.nowLabel}</span>` : nothing}
             </div>
-            <span class="sr">${drawn.map(({ start, end, segment }) =>
-                `${this._time(start)}–${this._time(end)} ${segment.label}. `)}</span>
+            ${this._renderLegend([...happened, ...planned])}
+            <span class="sr">${[...happened, ...planned].map((segment) =>
+                `${this._time(segment.start)}–${this._time(segment.end)} ${segment.label}. `)}</span>
+        `;
+    }
+
+    /**
+     * One entry per swatch drawn, in the order first drawn: modes that share
+     * a tone share a swatch, so they share an entry, their labels joined.
+     */
+    private _renderLegend(segments: ModeSegment[]) {
+        const entries = new Map<string, { segment: ModeSegment; labels: Set<string> }>();
+        for (const segment of segments) {
+            const key = segment.candidate ? "candidate" : segment.tone;
+            const label = segment.label.charAt(0).toUpperCase() + segment.label.slice(1);
+            const entry = entries.get(key);
+            if (entry) entry.labels.add(label);
+            else entries.set(key, { segment, labels: new Set([label]) });
+        }
+        if (entries.size === 0) return nothing;
+        return html`
+            <div class="legend" data-legend aria-hidden="true">
+                ${[...entries.values()].map(({ segment, labels }) => html`
+                    <span data-legend-entry><span class="swatch action-tone-${segment.tone} ${segment.candidate ? "candidate" : ""}"></span>${[...labels].join(" / ")}</span>
+                `)}
+            </div>
         `;
     }
 

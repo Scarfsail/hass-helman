@@ -1,10 +1,10 @@
 import type { TreeItem } from "../shared/data/tree-item";
 import { liveFlows, type LiveFlows } from "./live-flows";
-import type { NodeDetailParams, NodeDetailTabRequest, NodeDetailTarget } from "./node-detail-types";
+import type { NodeDetailParams, NodeDetailSectionRequest, NodeDetailTarget } from "./node-detail-types";
 import type { EnergyReadings } from "./node-detail-readings";
 
 export interface NodeDetailContext {
-    /** The card's live power split, W. */
+    /** The card's live power split, W, every flow kept however small. */
     flows: LiveFlows;
     flowScaleW: number | null;
     batteryPower: number;
@@ -14,6 +14,7 @@ export interface NodeDetailContext {
     solarPowerReading: number | null;
     /** Grid power: positive imports, negative exports, W. */
     gridPower: number | null;
+    gridPowerEntityId: string | null;
     housePower: number;
     /** Whether the house meter has a reading; `housePower` is 0 without one. */
     houseReadable: boolean;
@@ -28,6 +29,7 @@ export function buildNodeDetailContext(
     readings: EnergyReadings,
     options: {
         houseNode: TreeItem | null | undefined;
+        gridPowerEntityId: string | null;
         historyBuckets: number;
         historyBucketDuration: number;
     },
@@ -38,12 +40,13 @@ export function buildNodeDetailContext(
             housePower: readings.housePower,
             batteryPower: readings.batteryPowerReading ?? 0,
             gridPower: readings.gridPowerSigned ?? 0,
-        }),
+        }, { threshold: false }),
         flowScaleW: readings.flowScaleW,
         batteryPower: readings.batteryPower,
         batteryPowerReading: readings.batteryPowerReading,
         solarPowerReading: readings.solarPowerReading,
         gridPower: readings.gridPowerSigned,
+        gridPowerEntityId: options.gridPowerEntityId,
         housePower: readings.housePower,
         houseReadable: readings.houseReadable,
         solarPower: readings.solarPower,
@@ -57,12 +60,12 @@ export function buildNodeDetailContext(
 export function buildNodeDetailParams(
     context: NodeDetailContext,
     request: NodeDetailTarget,
-    tabRequest?: NodeDetailTabRequest,
+    sectionRequest?: NodeDetailSectionRequest,
 ): NodeDetailParams {
     // The split reads a missing meter as 0 and every edge is a residual of the
     // others: without the solar, battery or house reading it is not known, never a zero.
     const known = context.solarPowerReading !== null && context.batteryPowerReading !== null && context.houseReadable;
-    const flow = { flows: known ? context.flows : null, flowScaleW: context.flowScaleW, tabRequest };
+    const flow = { flows: known ? context.flows : null, flowScaleW: context.flowScaleW, sectionRequest };
     if (typeof request !== "string") return { ...flow, nodeType: "device", item: request };
     switch (request) {
         case "battery":
@@ -85,7 +88,10 @@ export function buildNodeDetailParams(
             return {
                 ...flow,
                 nodeType: "grid",
-                gridPower: context.gridPower,
+                // As the card's grid node shows it: a reading of ≈ 0 while
+                // solar or the battery clearly exports reads as that export.
+                gridPower: context.gridPower === null ? null : context.flows.gridPower,
+                powerEntityId: context.gridPowerEntityId,
             };
         case "house":
             return {

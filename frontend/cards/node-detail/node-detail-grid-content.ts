@@ -1,35 +1,35 @@
 import { formatKwh, formatMoney, formatPower } from "../shared/format";
 import { phaseSign } from "../shared/power-reading";
-import { css, html, nothing, svg } from "lit";
+import { css, html, nothing } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import { fillTemplate } from "../localize/localize";
 import {
-    type DayStatsDTO,
     type GridMoneySectionPayload,
     type GridDetailPayload,
     type GridVoltageSectionPayload,
 } from "../helman-api";
-import type { HelmanSolarInspectorCardConfig } from "../helman-solar-inspector/HelmanSolarInspectorCardConfig";
 import { currencyFromPriceUnit } from "../helman-solar-inspector/money-model";
-import { PHASE_COLORS } from "../color-utils";
+import { GRID_EXPORT_COLOR, GRID_IMPORT_COLOR, PHASE_COLORS } from "../color-utils";
 import { helmanColorVars } from "../color-vars";
 
-import { pylonGlyph } from "../shared/node-glyphs";
-import { scheduleActionToneStyles } from "../shared/schedule/action-tones";
 import "../shared/day-line-chart";
 import type { DayLineBand, DayLineReference, DayLineSeries } from "../shared/day-line-chart";
-import { IDLE_W, NodeDetailContentBase, type NodeFlow } from "./node-detail-base";
-import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
+import { IDLE_W, NodeDetailContentBase } from "./node-detail-base";
+import { gridMix } from "./live-flows";
+import { boldTemplate } from "./detail-section";
+import { nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { GridDetailParams } from "./node-detail-types";
-
-type QuestionId = "voltage" | "phases" | "money" | "next" | "outage";
+import "../helman-simple/simple-card-grid";
+import "./detail-headline";
+import "./flow-gauge";
+import "./help-tip";
+import { forecastWhen, holdAtSlots, remainingShare, renderForecastChart, type ForecastChartContext } from "./node-detail-forecast";
+import { historyRow, historySummary, kwhText, sectionNotReady, subTitle } from "./node-detail-history";
+import { modeStripWindow } from "../shared/mode-strip";
+import { SLOT_MS } from "../shared/time/slot-time";
 
 const PHASES = [1, 2, 3] as const;
 type Phase = (typeof PHASES)[number];
-
-/** What the grid takes in, exports, and gives out, imports, in the order every flow shows them. */
-const EXPORTS = [["solar", "solarToGrid"], ["battery", "batteryToGrid"]] as const;
-const IMPORTS = [["house", "gridToHouse"], ["battery", "gridToBattery"]] as const;
 
 /** The nominal low-voltage supply and the ±10 % band around it, as references only. */
 const NOMINAL_VOLTAGE = 230;
@@ -37,36 +37,6 @@ const REFERENCE_BAND = { from: 207, to: 253 };
 
 /** The phase picture's voltage axis: the reference band with room either side, widened to fit any reading. */
 const VOLTAGE_AXIS = { from: 200, to: 260 };
-
-/**
- * The inspector under "What has the grid cost or earned today?": today's
- * measured grid flow with its price and money rails. The plan, the forecast
- * and the aggregate views answer other questions, so they are hidden.
- */
-export const GRID_MONEY_INSPECTOR_CONFIG: HelmanSolarInspectorCardConfig = {
-    type: "custom:helman-solar-inspector-card",
-    transparent_background: true,
-    hide_schedule_strip: true,
-    hide_aggregate_views: true,
-    show_bias_ratio: false,
-    daylight_only_default: false,
-    chart_series: ["gridActual"],
-};
-
-/**
- * The inspector under "What changes next?": planned against measured grid flow
- * with the price rails and the schedule strip, for today and tomorrow. Money is
- * the other question's.
- */
-export const GRID_PLAN_INSPECTOR_CONFIG: HelmanSolarInspectorCardConfig = {
-    type: "custom:helman-solar-inspector-card",
-    transparent_background: true,
-    hide_money_strip: true,
-    hide_aggregate_views: true,
-    show_bias_ratio: false,
-    daylight_only_default: false,
-    chart_series: ["gridForecast", "gridActual"],
-};
 
 interface PhaseReading {
     phase: Phase;
@@ -81,34 +51,30 @@ interface PhaseReading {
 interface MoneyFigures {
     cost: number | null;
     gain: number | null;
+    /** What the grid earned less what it cost; negative when it cost more. */
     net: number | null;
     currency: string;
     importKwh: number | null;
     exportKwh: number | null;
-    costKwh: number | null;
-    gainKwh: number | null;
 }
 
 /**
- * The grid detail: how stable each phase's voltage is, how each phase uses the
- * grid, what the grid cost or earned today, what changes next and what happens
- * without the grid.
+ * The grid detail.
  *
- * It opens on a status pill, the phase picture and the grid's Now/Today flow
- * around the pylon. The pictures absorb two questions: the phase picture opens
- * the phases, the flow opens the money. The other three are tiles; one answer
- * is open at a time, full width under the tiles.
+ * The Overview opens on the exchange headline (its direction in the import or
+ * export colour), then the gauge of where the power goes or comes from, the
+ * price tile and the phase picture.
  *
  * Live readings come from `hass` and the live flow from the card; the backend
  * overview supplies the entity ids. Today's voltages are read on opening, for
- * the picture's ranges; today's money comes from the inspector's own span
- * read, also on opening, the rates and the plan from the forecast, today's
- * flows from the `flows` section once Today is chosen, and the focused
- * inspector embeds are mounted only behind their answers' second disclosure.
+ * the picture's ranges and the History chart; today's money on opening too,
+ * for the History header; the rates and the plan come from the forecast.
  */
 @customElement("node-detail-grid-content")
-export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPayload, QuestionId> {
-    static styles = [helmanColorVars, nodeDetailSharedStyles, nodeDetailQuestionStyles, nodeDetailPictureStyles, scheduleActionToneStyles, css`
+export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPayload> {
+    static styles = [helmanColorVars, nodeDetailSharedStyles, nodeDetailQuestionStyles, css`
+        /* A price moves whole to the next line; only a price wider than the line wraps inside. */
+        .price-part { display: inline-block; }
         .swatch {
             display: inline-block;
             width: 10px;
@@ -223,7 +189,7 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
 
     @property({ attribute: false }) public params!: GridDetailParams;
 
-    /** Today's measured grid money; a failure leaves the money figures out, nothing else. */
+    /** Today's measured grid money, for the History header; a failure leaves the money figures out, nothing else. */
     private readonly _money = this._section<GridMoneySectionPayload>("money", {
         fetch: () => this._readSection("money"),
         shown: () => true,
@@ -245,69 +211,216 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         void this._loadForecast();
     }
 
-    // ── Disclosure ──────────────────────────────────────────────────────────
-
-    protected _setOpen(id: QuestionId | null): void {
-        super._setOpen(id);
-        // An opened answer shows today's figures as they are now.
-        if (id === "money") void this._money.load();
-        if (id === "next") void this._loadForecast();
-    }
-
     // ── Rendering ───────────────────────────────────────────────────────────
 
-    render() {
-        const notReady = this._renderNotReady();
-        if (notReady || this._overview.status !== "ready") return notReady;
-        const overview = this._overview.payload;
-        return html`
-            <div class="content">
-                ${this._renderSummary(overview)}
-                ${this._renderPhasePicture(overview)}
-                ${this._renderGridFlow()}
-                <div class="tiles">
-                    ${this._renderNextTile()}
-                    ${overview.profile ? this._renderOutageTile(overview) : nothing}
-                    ${this._renderVoltageTile(overview)}
-                </div>
-                ${this._renderOpen(overview)}
-            </div>
-        `;
-    }
-
-    /** The open question's answer and evidence, full width under the tiles. */
-    private _renderOpen(overview: GridDetailPayload) {
-        switch (this._open) {
-            case "voltage":
-                return this._question("voltage", this._voltagePreview(overview), () => this._renderVoltage(overview), () => this._renderVoltageEvidence(overview), "evidence");
-            case "phases":
-                return this._question("phases", this._phasesPreview(overview), () => this._renderPhases(overview), () => this._renderPhasesEvidence(overview), "evidence");
-            case "money":
-                return this._question("money", this._moneyPreview(), () => this._renderMoney(), () => this._renderMoneyEvidence(), "evidence");
-            case "next":
-                return this._question("next", this._nextPreview(), () => this._renderNext(), () => this._renderNextEvidence(), "evidence");
-            case "outage":
-                return overview.profile
-                    ? this._question("outage", this._outagePreview(overview), () => this._renderOutage(overview), () => this._renderOutageEvidence(overview), "technical")
-                    : nothing;
-            default:
-                return nothing;
-        }
-    }
-
-    private _renderSummary(overview: GridDetailPayload) {
+    protected _renderOverview(overview: GridDetailPayload) {
         const power = this.params.gridPower;
-        const status = power === null
-            ? this._t("status.unavailable")
-            : Math.abs(power) <= IDLE_W
-            ? fillTemplate(this._t("status.idle"), { power: formatPower(Math.abs(power)).display })
-            : fillTemplate(this._t(power > 0 ? "status.importing" : "status.exporting"), { power: formatPower(Math.abs(power)).display });
+        const importing = power !== null && power >= 0;
+        const idle = power !== null && Math.abs(power) <= IDLE_W;
+        const flows = this.params.flows;
+        const grid = this._forecast?.grid;
+        const buy = this._priceNow("import");
+        const sell = this._priceNow("export");
+        const next = this._nextPriceChange("import");
+        const breaker = this._number(overview, "main_breaker_limit");
         return html`
-            <div class="summary" data-overview>
-                <p class="status pill action-tone-neutral" data-tone="neutral">${status}</p>
-                ${overview.condition ? this._exceptionBanner(fillTemplate(this._t(`exception.${overview.condition.kind}`), { state: overview.condition.runMode }), "outage") : nothing}
+            <div class="content" data-overview>
+                ${this._renderException(overview)}
+                <helman-detail-headline style=${idle || power === null ? "" : `--detail-headline-color: ${importing ? GRID_IMPORT_COLOR : GRID_EXPORT_COLOR}`}
+                    .value=${power === null ? "—" : idle ? formatPower(Math.abs(power)).display : `${importing ? "←" : "→"} ${formatPower(Math.abs(power)).display}`}
+                    .entityId=${this.params.powerEntityId}
+                    .caption=${[power === null ? this.localize("node_detail.grid.unavailable") : this.localize(`node_detail.shared.grid_${idle ? "idle" : importing ? "importing" : "exporting"}`)]}>
+                    <simple-card-grid slot="icon" .compact=${true} .power=${power ?? 0}></simple-card-grid>
+                </helman-detail-headline>
+                <helman-flow-gauge .direction=${idle || power === null ? "flow" : importing ? "to" : "from"} .localize=${this.localize}
+                    .items=${gridMix(flows, power)}></helman-flow-gauge>
+                ${grid && (buy !== null || sell !== null) ? html`<div class="tile" data-price>
+                    <div class="row"><span class="label">${this.localize("node_detail.shared.grid_price_now")}</span>
+                        <span class="value">${[
+                            buy !== null ? boldTemplate(this.localize("node_detail.shared.grid_price_buy"), { buy: this._price(buy, grid.importPriceUnit) }) : null,
+                            sell !== null ? boldTemplate(this.localize("node_detail.shared.grid_price_sell"), { sell: this._price(sell, grid.exportPriceUnit) }) : null,
+                        ].filter((part) => part !== null).map((part, index) => html`${index ? "\u00a0· " : ""}<span class="price-part">${part}</span>`)}</span></div>
+                    ${next ? html`<div class="row"><span class="label">${fillTemplate(this.localize("node_detail.shared.grid_next_price"), { time: this._time(next.at) })}</span>
+                        <span class="value">${fillTemplate(this.localize("node_detail.shared.grid_price_buy"), { buy: this._price(next.value, grid.importPriceUnit) })}</span></div>` : nothing}
+                </div>` : nothing}
+                <div class="section-title">${breaker !== null
+                    ? fillTemplate(this.localize("node_detail.shared.grid_phases"), { amps: breaker })
+                    : this.localize("node_detail.shared.grid_phases_no_breaker")}
+                    <helman-help-tip .explanation=${fillTemplate(this.localize("node_detail.shared.grid_phase_help"), { amps: breaker ?? "?" })}></helman-help-tip></div>
+                <div class="tile">${this._renderPhasePicture(overview)}</div>
             </div>
         `;
+    }
+
+    // Forecast ----------------------------------------------------------------
+
+    /** The buy price to tomorrow noon, its cheapest and dearest stretch, and the grid use the plan expects. */
+    protected _renderForecast() {
+        const pending = this._forecastPending();
+        if (pending !== null) return pending;
+        const grid = this._forecast!.grid;
+        const context = this._chartContext;
+        const end = modeStripWindow(context.now, context.timeZone).end;
+        const from = Math.floor(context.now / SLOT_MS) * SLOT_MS;
+        // A price holds until the next one, and the last for as long as the one before it did.
+        const points = grid.importPricePoints.map((point) => ({ t: Date.parse(point.timestamp), v: point.value }));
+        const last = points[points.length - 1];
+        const until = last ? last.t + (points.length > 1 ? last.t - points[points.length - 2].t : SLOT_MS) : from;
+        const prices = holdAtSlots(points, from, Math.min(until, end) - SLOT_MS);
+        if (!prices.length) return nothing;
+        const cheapest = extremeStretch(prices, (a, b) => a < b);
+        const dearest = extremeStretch(prices, (a, b) => a > b);
+        const text = (key: string) => this.localize(`node_detail.shared.forecast.${key}`);
+        const stretch = (run: Stretch) => ({ range: forecastWhen(run.start, context, run.end), price: this._price(run.value, grid.importPriceUnit) });
+        const summary = boldTemplate(text("grid_summary"), stretch(cheapest));
+        return this._forecastSection(summary, () => html`
+            ${renderForecastChart(context, {
+                title: text("grid_chart"),
+                help: text("grid_help"),
+                series: [{ key: "buy", label: text("grid_buy"), color: "var(--primary-text-color)", points: prices }],
+                spans: [{ start: cheapest.start, end: cheapest.end, color: CHEAPEST_COLOR }],
+                step: true,
+                formatValue: (value) => this._price(value, grid.importPriceUnit),
+            })}
+            <div class="rows">
+                <div class="row" data-row="dearest"><span class="label">${text("grid_dearest")}</span><span class="value">${fillTemplate(text("grid_stretch"), stretch(dearest))}</span></div>
+                <div class="row" data-row="cheapest"><span class="label"><span style="color: ${CHEAPEST_COLOR}">▬</span> ${text("grid_cheapest")}</span><span class="value">${fillTemplate(text("grid_stretch"), stretch(cheapest))}</span></div>
+            </div>
+            ${this._renderPlannedGridUse(context, end)}
+        `);
+    }
+
+    /** The plan's grid import and export to tomorrow noon, one row per stretch of one direction. */
+    private _renderPlannedGridUse(context: ForecastChartContext, end: number) {
+        const runs: Array<{ start: number; end: number; direction: "import" | "export"; kwh: number }> = [];
+        for (const slot of this._forecast!.grid.series) {
+            const start = Date.parse(slot.timestamp);
+            const slotEnd = start + slot.durationHours * 3_600_000;
+            if (slotEnd <= context.now || start >= end) continue;
+            const direction = flowDirection(slot.importedFromGridKwh, slot.exportedToGridKwh);
+            if (direction === "balanced") continue;
+            // The slot in progress counts only what is still ahead of it.
+            const kwh = (direction === "import" ? slot.importedFromGridKwh : slot.exportedToGridKwh) * remainingShare(start, context.now, slot.durationHours * 3_600_000);
+            const last = runs[runs.length - 1];
+            if (last && last.direction === direction && last.end === start) {
+                last.end = slotEnd;
+                last.kwh += kwh;
+            } else {
+                runs.push({ start, end: slotEnd, direction, kwh });
+            }
+        }
+        if (!runs.length) return nothing;
+        const text = (key: string) => this.localize(`node_detail.shared.forecast.${key}`);
+        return html`
+            <div class="section-title">${text("grid_planned")}</div>
+            <div class="rows" data-planned>${runs.map((run) => html`
+                <div class="row" data-run=${run.direction}><span><b>${forecastWhen(run.start, context, run.end)}</b></span>
+                    <span class="value">${fillTemplate(text(`grid_${run.direction}`), { kwh: `≈ ${formatKwh(run.kwh)} kWh` })}</span></div>`)}
+            </div>
+        `;
+    }
+
+    // History & statistics -----------------------------------------------------
+
+    /** Today's bought and sold energy with its money, then today's voltage per phase. */
+    protected _renderHistory(_overview: GridDetailPayload) {
+        const money = this._moneyFigures();
+        const summary = historySummary(this._money, this.localize, money?.importKwh != null ? boldTemplate(this._h("grid_summary"), { kwh: kwhText(money.importKwh) }) : null);
+        return this._historySection(summary, () => html`
+            ${subTitle(this._h("today"))}
+            ${this._renderMoney()}
+            ${this._offers("voltage") ? html`
+                ${subTitle(this._h("voltage_today"))}
+                ${this._renderVoltage()}
+            ` : nothing}
+        `);
+    }
+
+    /** Bought and sold, each with its money, and the net: an estimate from the prices Helman knows. */
+    private _renderMoney() {
+        const notReady = sectionNotReady(this._money, this.localize);
+        if (notReady) return notReady;
+        const money = this._moneyFigures()!;
+        const side = (kwh: number | null, value: number | null) => [kwh === null ? "—" : kwhText(kwh), value === null ? null : this._formatMoney(value, money.currency)]
+            .filter(Boolean).join(" · ");
+        return html`<div class="rows" data-money>
+            ${historyRow(this._h("bought"), side(money.importKwh, money.cost), "bought")}
+            ${historyRow(this._h("sold"), side(money.exportKwh, money.gain), "sold")}
+            ${historyRow(html`${this._h("net")}<helman-help-tip .explanation=${this._h("net_help")}></helman-help-tip>`,
+                html`<b>${money.net === null ? "—" : (money.net < 0 ? "−" : "") + this._formatMoney(Math.abs(money.net), money.currency)}</b>`, "net")}
+        </div>`;
+    }
+
+    /** Today's voltage per phase against the nominal and the normal band, and its lowest and highest. */
+    private _renderVoltage() {
+        const notReady = sectionNotReady(this._voltage, this.localize);
+        if (notReady) return notReady;
+        const payload = this._voltage.payload!;
+        const drawn = PHASES.map((phase) => ({ phase, stats: payload.phases[String(phase) as "1" | "2" | "3"] }))
+            .filter(({ stats }) => stats && stats.points.length > 0 && stats.min !== null && stats.max !== null);
+        if (!drawn.length) return html`<p class="note">${this._t("voltage.none_today")}</p>`;
+        // The chart's inputs keep their identity until the payload changes.
+        if (this._voltageChart?.payload !== payload) {
+            this._voltageChart = {
+                payload,
+                series: drawn.map(({ phase, stats }) => ({
+                    key: "l" + phase,
+                    label: "L" + phase,
+                    color: PHASE_COLORS[phase],
+                    points: stats!.points.map((point) => ({ t: Date.parse(point.start), v: point.mean, min: point.min, max: point.max })),
+                })),
+                references: [{ value: NOMINAL_VOLTAGE, label: `${NOMINAL_VOLTAGE} V` }],
+                bands: [{ ...REFERENCE_BAND, label: this._t("voltage.band_label") }],
+            };
+        }
+        const chart = this._voltageChart;
+        const low = Math.min(...drawn.map(({ stats }) => stats!.min!));
+        const high = Math.max(...drawn.map(({ stats }) => stats!.max!));
+        return html`
+            <helman-day-line-chart
+                data-voltage-chart
+                .series=${chart.series}
+                .references=${chart.references}
+                .bands=${chart.bands}
+                .start=${Date.parse(payload.period.start)}
+                .end=${Date.parse(payload.period.end)}
+                .bucketMs=${drawn[0].stats!.bucketMinutes * 60_000}
+                .now=${Date.now()}
+                .nowLabel=${this.localize("node_detail.shared.now")}
+                .timeZone=${this._timeZone}
+                .locale=${this._locale}
+                .formatValue=${this._formatVolts}
+            ></helman-day-line-chart>
+            <div class="rows">${historyRow(this._h("voltage_range"), `${Math.floor(low)}–${Math.ceil(high)} V`, "voltage-range")}</div>
+        `;
+    }
+
+    // Technical details ---------------------------------------------------------
+
+    /** The export limit and cap now, whether the inverter runs on the grid, and each phase's current against the breaker. */
+    protected _renderTechnical(overview: GridDetailPayload) {
+        const exportLimit = this._number(overview, "export_limit");
+        const runMode = this._reading(overview, "run_mode");
+        const state = overview.condition
+            ? fillTemplate(this._t(`outage.state_${overview.condition.kind}`), { state: overview.condition.runMode })
+            : runMode ? fillTemplate(this._t("outage.state_on_grid"), { state: runMode }) : this._t("outage.state_unknown");
+        const limit = this._number(overview, "main_breaker_limit");
+        return html`
+            <div class="rows">
+                ${exportLimit !== null ? this._row(this._t("outage.export_limit"), formatPower(exportLimit).display, "export-limit", this._t("outage.scope_inverter"), overview.entities.export_limit) : nothing}
+                ${overview.maxAllowedExportPower !== null ? this._row(this._t("outage.export_cap"), formatPower(overview.maxAllowedExportPower).display, "export-cap", this._t("outage.scope_helman")) : nothing}
+                ${this._row(this._t("outage.state"), state, "grid-state")}
+            </div>
+            ${this._hasPhaseTelemetry(overview, "grid_power") ? html`
+                ${subTitle(this.localize("node_detail.shared.technical.phase_currents"))}
+                <div class="rows">${this._phaseReadings(overview).map((reading) => this._row(`L${reading.phase}`, this._currentText(reading, limit), `current-l${reading.phase}`))}</div>
+            ` : nothing}
+        `;
+    }
+
+    /** An off-grid or fault run mode the inverter reports. */
+    private _renderException(overview: GridDetailPayload) {
+        return overview.condition ? this._exceptionBanner(fillTemplate(this._t(`exception.${overview.condition.kind}`), { state: overview.condition.runMode })) : nothing;
     }
 
     // Phase picture -----------------------------------------------------------
@@ -323,16 +436,7 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
      */
     private _renderPhasePicture(overview: GridDetailPayload) {
         if (!this._hasPhaseTelemetry(overview, "grid_power") && !this._hasPhaseTelemetry(overview, "ac_voltage")) {
-            // No picture to draw, but the answer (its evidence and what it needs) stays one tap away.
-            return html`
-                <button
-                    class="picture"
-                    data-phase-picture-none
-                    title=${this._t("q.phases")}
-                    aria-expanded=${this._open === "phases" ? "true" : "false"}
-                    @click=${() => this._setOpen(this._open === "phases" ? null : "phases")}
-                ><span class="note">${this._t("phases.no_profile")}</span></button>
-            `;
+            return html`<div class="picture" data-phase-picture-none><span class="note">${this._t("phases.no_profile")}</span></div>`;
         }
         const readings = this._phaseReadings(overview);
         const scaleW = this._phaseScaleW(overview, readings);
@@ -346,13 +450,7 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         ];
         const axis = { from: Math.min(VOLTAGE_AXIS.from, ...known), to: Math.max(VOLTAGE_AXIS.to, ...known) };
         return html`
-            <button
-                class="picture"
-                data-phase-picture
-                title=${this._t("q.phases")}
-                aria-expanded=${this._open === "phases" ? "true" : "false"}
-                @click=${() => this._setOpen(this._open === "phases" ? null : "phases")}
-            >
+            <div class="picture" data-phase-picture>
                 <span class="phases">
                     <span class="phases-head" aria-hidden="true">
                         <span></span>
@@ -361,7 +459,7 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
                     </span>
                     ${readings.map((reading) => this._phaseRow(reading, scaleW, axis, ranges))}
                 </span>
-            </button>
+            </div>
             ${this._renderRangeStatus(overview)}
         `;
     }
@@ -428,264 +526,6 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         `;
     }
 
-    // Flow --------------------------------------------------------------------
-
-    /**
-     * Solar and battery export in, house and battery import out, around the
-     * pylon: live from the card on Now with the rates now as the footnote,
-     * today's kWh from the `flows` section on Today with today's export
-     * income and import cost on their sides. A tap opens the money.
-     */
-    private _renderGridFlow() {
-        const flow = this._flowScope === "now" ? this._nowFlow() : this._todayFlow();
-        return this._renderFlow(flow, this.params.flowScaleW, "money", html`<span slot="centre">${pylonGlyph()}</span>`);
-    }
-
-    /** The card's live split, W; unknown without the solar, battery or house reading, never 0. */
-    private _nowFlow(): NodeFlow {
-        const flows = this.params.flows;
-        const power = this._fmt("now");
-        const inputs = this._edgeItems(flows, EXPORTS, power);
-        const outputs = this._edgeItems(flows, IMPORTS, power);
-        const prices = this._pricesNow();
-        return this._flowShell("now", inputs, outputs, {
-            centre: () => this.params.gridPower === null ? null : this._directedPower(this.params.gridPower),
-            active: this._isActive(this.params.gridPower),
-            notes: prices.length ? [fillTemplate(this._t("flow.price_now"), { prices: prices.join(" · ") })] : [],
-        });
-    }
-
-    /**
-     * Today's kWh from the `flows` section, with today's export income on the
-     * export side and import cost on the import side, from the money read on
-     * opening; a side whose money is not known says so, never zero.
-     */
-    private _todayFlow(): NodeFlow {
-        const flows = this._flows.payload?.flows ?? null;
-        const energy = this._fmt("today");
-        const status = this._todayFlowsNote();
-        const notes: string[] = status ? [status] : [];
-        const money = this._moneyFigures();
-        const unknown = this._t("money.unknown");
-        const withMoney = (total: string | null, key: string, value: number | null) => money
-            ? [total, fillTemplate(this._t(key), { value: value === null ? unknown : this._formatMoney(value, money.currency) })].filter(Boolean).join(" · ")
-            : total;
-        if (this._money.state?.status === "error") notes.push(this._t("money.failed"));
-        const flow = this._flowShell("today", this._edgeItems(flows, EXPORTS, energy), this._edgeItems(flows, IMPORTS, energy), {
-            // Exported in, imported out.
-            centre: (sumIn, sumOut) => this._centrePair(sumIn, sumOut, energy),
-            notes,
-        });
-        return {
-            ...flow,
-            totalIn: withMoney(flow.totalIn, "money.income_short", money?.gain ?? null),
-            totalOut: withMoney(flow.totalOut, "money.cost_short", money?.cost ?? null),
-        };
-    }
-
-    // Tiles -------------------------------------------------------------------
-
-    /** The next import price change, in the import colour. */
-    private _renderNextTile() {
-        const accent = "var(--helman-grid-import)";
-        const grid = this._forecast?.grid;
-        if (!grid) {
-            return this._tile("next", "–", this._forecastFailed ? this.localize("node_detail.forecast_failed") : this._t("tile.loading_prices"));
-        }
-        const next = this._nextPriceChange("import");
-        if (next) {
-            return this._tile("next", this._time(next.at), fillTemplate(this._t("next.import_short"), { price: this._price(next.value, grid.importPriceUnit) }), nothing, null, accent);
-        }
-        const now = this._priceNow("import");
-        return this._tile("next", this._t("tile.no_price_change"), now === null ? null : fillTemplate(this._t("next.import_short"), { price: this._price(now, grid.importPriceUnit) }), nothing, null, accent);
-    }
-
-    /** Whether the inverter runs on the grid now, by its own run mode. */
-    private _renderOutageTile(overview: GridDetailPayload) {
-        const condition = overview.condition;
-        const runMode = this._reading(overview, "run_mode");
-        if (condition) return this._tile("outage", this._t(`tile.${condition.kind}`), condition.runMode);
-        return runMode
-            ? this._tile("outage", this._t("tile.on_grid"), runMode)
-            : this._tile("outage", "–", this._t("outage.unknown_short"));
-    }
-
-    /** Today's voltage range over every phase, with each phase's day as a sparkline. */
-    private _renderVoltageTile(overview: GridDetailPayload) {
-        if (!overview.sections.includes("voltage")) {
-            return this._tile("voltage", "–", this._t(this._hasPhaseTelemetry(overview, "ac_voltage") ? "tile.no_voltage_sensors" : "voltage.no_profile"));
-        }
-        const section = this._voltage.state;
-        if (section === null || section.status === "loading") return this._tile("voltage", "–", this._t("loading_history"));
-        if (section.status === "error") return this._tile("voltage", "–", this._t("history_failed"));
-        const drawn = PHASES.flatMap((phase) => {
-            const stats = section.payload.phases[String(phase) as "1" | "2" | "3"];
-            return stats && stats.points.length && stats.min !== null && stats.max !== null ? [{ phase, stats }] : [];
-        });
-        if (!drawn.length) return this._tile("voltage", "–", this._t("voltage.none_today"));
-        const low = Math.min(...drawn.map(({ stats }) => stats.min!));
-        const high = Math.max(...drawn.map(({ stats }) => stats.max!));
-        const start = Date.parse(section.payload.period.start);
-        const span = Math.max(1, Date.parse(section.payload.period.end) - start);
-        const means = drawn.flatMap(({ stats }) => stats.points.map((point) => point.mean));
-        const bottom = Math.min(...means);
-        const top = Math.max(bottom + 1, ...means);
-        const bucketMs = drawn[0].stats.bucketMinutes * 60_000;
-        // A gap in the day stays a gap in the line.
-        const path = (points: Array<{ start: string; mean: number }>) => {
-            let d = "";
-            let previous: number | null = null;
-            for (const point of points) {
-                const t = Date.parse(point.start);
-                const x = (t - start) / span * 100;
-                const y = 2 + (1 - (point.mean - bottom) / (top - bottom)) * 24;
-                d += `${previous === null || t - previous > bucketMs * 1.5 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`;
-                previous = t;
-            }
-            return d;
-        };
-        const graphic = html`
-            <svg class="sparkline" data-sparkline viewBox="0 0 100 28" preserveAspectRatio="none" aria-hidden="true">
-                ${drawn.map(({ phase, stats }) => svg`<path data-spark=${phase} d=${path(stats.points)} stroke=${PHASE_COLORS[phase]}></path>`)}
-            </svg>
-        `;
-        return this._tile("voltage", `${Math.floor(low)}–${Math.ceil(high)} V`, this._t("tile.voltage_range"), graphic);
-    }
-
-    // Voltage -----------------------------------------------------------------
-
-    private _voltagePreview(overview: GridDetailPayload): string {
-        if (!this._hasPhaseTelemetry(overview, "ac_voltage")) return this._t("voltage.no_profile");
-        const known = PHASES.map((phase) => ({ phase, value: this._number(overview, `ac_voltage_l${phase}`) }));
-        const values = known.filter((reading) => reading.value !== null).map((reading) => reading.value!);
-        if (!values.length) return this._t("voltage.unavailable_now");
-        const range = values.length > 1
-            ? this._volts(Math.min(...values)) + "–" + this._volts(Math.max(...values))
-            : this._volts(values[0]);
-        let text = fillTemplate(this._t("voltage.now_short"), { range });
-        const missing = known.filter((reading) => reading.value === null).map((reading) => "L" + reading.phase);
-        if (missing.length) text += " · " + fillTemplate(this._t("voltage.missing_short"), { phases: missing.join(", ") });
-        return text;
-    }
-
-    private _renderVoltage(overview: GridDetailPayload) {
-        if (!overview.sections.includes("voltage")) {
-            return html`<p class="note">${this._t(this._hasPhaseTelemetry(overview, "ac_voltage") ? "voltage.no_sensors" : "voltage.no_profile_long")}</p>`;
-        }
-        const section = this._voltage.state;
-        if (section === null || section.status === "loading") {
-            return html`<p class="note" data-voltage-loading>${this._t("loading_history")}</p>`;
-        }
-        if (section.status === "error") {
-            return html`
-                <p class="note">${this._t("history_failed")}</p>
-                <button class="link-button" @click=${() => this._voltage.load()}>${this._t("retry")}</button>
-            `;
-        }
-        const payload = section.payload;
-        const phases = PHASES.map((phase) => ({ phase, stats: payload.phases[String(phase) as "1" | "2" | "3"] }));
-        const drawn = phases.filter(({ stats }) => stats && stats.points.length > 0);
-        if (!drawn.length) return html`<p class="note">${this._t("voltage.none_today")}</p>`;
-
-        // The chart's inputs keep their identity until the payload changes.
-        if (this._voltageChart?.payload !== payload) {
-            this._voltageChart = {
-                payload,
-                series: drawn.map(({ phase, stats }) => ({
-                    key: "l" + phase,
-                    label: "L" + phase,
-                    color: PHASE_COLORS[phase],
-                    points: stats!.points.map((point) => ({ t: Date.parse(point.start), v: point.mean, min: point.min, max: point.max })),
-                })),
-                references: [{ value: NOMINAL_VOLTAGE, label: this._t("voltage.nominal_label") }],
-                bands: [{ ...REFERENCE_BAND, label: this._t("voltage.band_label") }],
-            };
-        }
-        const chart = this._voltageChart;
-        const summary = drawn
-            .map(({ phase, stats }) => fillTemplate(this._t("voltage.chart_summary"), {
-                phase: "L" + phase,
-                min: this._volts(stats!.min!),
-                max: this._volts(stats!.max!),
-            }))
-            .join(" ");
-        const spread = payload.spread;
-        return html`
-            <helman-day-line-chart
-                data-voltage-chart
-                .series=${chart.series}
-                .references=${chart.references}
-                .bands=${chart.bands}
-                .start=${Date.parse(payload.period.start)}
-                .end=${Date.parse(payload.period.end)}
-                .bucketMs=${drawn[0].stats!.bucketMinutes * 60_000}
-                .timeZone=${this._timeZone}
-                .locale=${this._locale}
-                .formatValue=${this._formatVolts}
-                .summary=${summary}
-            ></helman-day-line-chart>
-            <table data-voltage-table>
-                <thead><tr>
-                    <th>${this._t("phase")}</th><th>${this._t("voltage.min")}</th><th>${this._t("voltage.mean")}</th><th>${this._t("voltage.max")}</th>
-                </tr></thead>
-                <tbody>
-                    ${phases.map(({ phase, stats }) => this._voltageRow(phase, stats))}
-                </tbody>
-            </table>
-            ${this._row(this._t("voltage.spread"), spread.max !== null
-                ? fillTemplate(this._t("voltage.spread_value"), {
-                    value: this._volts(spread.max),
-                    time: spread.maxAt ? this._time(Date.parse(spread.maxAt)) : "?",
-                    coverage: this._percent(spread.coverage),
-                })
-                : this._t("voltage.spread_none"), "spread")}
-            <p class="note">${this._t("voltage.explain")}</p>
-        `;
-    }
-
-    private _voltageRow(phase: Phase, stats: DayStatsDTO | null) {
-        const label = html`<span class="swatch" style="background: ${PHASE_COLORS[phase]}"></span>L${phase}`;
-        if (!stats || stats.mean === null) {
-            return html`<tr data-phase=${phase}><td>${label}</td><td colspan="3" class="muted">${this._t(stats ? "voltage.not_recorded" : "voltage.no_sensor")}</td></tr>`;
-        }
-        return html`
-            <tr data-phase=${phase}>
-                <td>${label}</td>
-                <td>${this._volts(stats.min!)}</td>
-                <td>${this._volts(stats.mean)}</td>
-                <td>${this._volts(stats.max!)}</td>
-            </tr>
-        `;
-    }
-
-    private _renderVoltageEvidence(overview: GridDetailPayload) {
-        const section = this._voltage.payload;
-        const stats = section
-            ? PHASES.flatMap((phase) => {
-                const day = section.phases[String(phase) as "1" | "2" | "3"];
-                return day ? [{ phase, day }] : [];
-            })
-            : [];
-        return html`
-            <div class="section-title">${this._t("voltage.sampling")}</div>
-            ${stats.map(({ phase, day }) => this._row("L" + phase, fillTemplate(this._t("voltage.recorded"), {
-                coverage: this._percent(day.coverage),
-            }), "sampling-l" + phase))}
-            ${[...new Set(stats.map(({ day }) => day.source))].map((source) => html`
-                <p class="note" data-source=${source}>${this._t(source === "statistics" ? "voltage.source_statistics" : "voltage.source_history")}</p>
-            `)}
-            <p class="note">${this._t("voltage.weighting")}</p>
-            <div class="section-title">${this._t("voltage.location")}</div>
-            ${PHASES.map((phase) => {
-                const entityId = overview.entities[`ac_voltage_l${phase}`];
-                return entityId ? this._row("L" + phase, this._name(entityId), "voltage-source-l" + phase) : nothing;
-            })}
-            <p class="note">${this._t("voltage.location_note")}</p>
-            <div class="section-title">${this._t("voltage.references")}</div>
-            <p class="note" data-reference-meaning>${this._t("voltage.references_note")}</p>
-        `;
-    }
-
     // Phases ------------------------------------------------------------------
 
     private _phaseReadings(overview: GridDetailPayload): PhaseReading[] {
@@ -699,76 +539,11 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         });
     }
 
-    private _phasesPreview(overview: GridDetailPayload): string {
-        if (!this._hasPhaseTelemetry(overview, "grid_power")) return this._t("phases.no_profile");
-        const readings = this._phaseReadings(overview).filter((reading) => reading.power !== null);
-        if (!readings.length) return this._t("phases.unavailable");
-        const top = readings.reduce((best, reading) => Math.abs(reading.power!) > Math.abs(best.power!) ? reading : best);
-        let text = fillTemplate(this._t("phases.highest_short"), { phase: "L" + top.phase, power: this._directedPower(top.power!) });
-        if (top.current !== null) text += " " + fillTemplate(this._t("phases.current_short"), { current: this._amps(top.current) });
-        return text;
-    }
-
-    /**
-     * The picture above draws each phase; the answer adds each phase's
-     * estimated current against the configured setting, and what a full bar is.
-     */
-    private _renderPhases(overview: GridDetailPayload) {
-        if (!this._hasPhaseTelemetry(overview, "grid_power")) {
-            return html`<p class="note">${this._t("phases.no_profile_long")}</p>`;
-        }
-        const readings = this._phaseReadings(overview);
-        const limit = this._number(overview, "main_breaker_limit");
-        return html`
-            ${readings.map((reading) => html`
-                <div class="row" data-phase-current=${reading.phase}>
-                    <span class="label"><span class="swatch" style="background: ${PHASE_COLORS[reading.phase]}"></span>L${reading.phase}
-                        <span data-power>${reading.power === null ? this._t("unavailable") : this._directedPower(reading.power)}</span></span>
-                    <span class="value" data-current>${this._currentText(reading, limit)}</span>
-                </div>
-            `)}
-            <p class="note" data-phase-scale>${limit !== null && limit > 0
-                ? fillTemplate(this._t("phases.scale_limit"), { limit: this._amps(limit), voltage: NOMINAL_VOLTAGE + " V" })
-                : fillTemplate(this._t("phases.scale_power"), { power: formatPower(this._phaseScaleW(overview, readings)).display })}</p>
-            <p class="note">${this._t("phases.explain")}</p>
-        `;
-    }
-
     private _currentText(reading: PhaseReading, limit: number | null): string {
         if (reading.power === null) return this._t("unavailable");
         if (reading.current === null) return this._t("phases.current_unknown");
         if (limit !== null && limit > 0) return fillTemplate(this._t("phases.current_of_limit"), { current: this._amps(reading.current), limit: this._amps(limit) });
         return fillTemplate(this._t("phases.current_only"), { current: this._amps(reading.current) });
-    }
-
-    private _renderPhasesEvidence(overview: GridDetailPayload) {
-        const readings = this._phaseReadings(overview);
-        const dash = "–";
-        return html`
-            ${this._hasPhaseTelemetry(overview, "grid_power") ? html`
-                <table data-phase-table>
-                    <thead><tr>
-                        <th>${this._t("phase")}</th><th>W</th><th>V</th><th>${this._t("phases.est_current")}</th>
-                    </tr></thead>
-                    <tbody>
-                        ${readings.map((reading) => html`
-                            <tr>
-                                <td>L${reading.phase}</td>
-                                <td>${reading.power === null ? dash : Math.round(reading.power) + " W"}</td>
-                                <td>${reading.voltage === null ? dash : this._volts(reading.voltage)}</td>
-                                <td>${reading.current === null ? dash : this._amps(reading.current)}</td>
-                            </tr>
-                        `)}
-                    </tbody>
-                </table>
-                <p class="note">${this._t("phases.sign_note")}</p>
-            ` : nothing}
-            ${this._optionalRow(overview, "main_breaker_limit", "phases.limit")}
-            ${this._optionalRow(overview, "grid_import", "phases.meter_import")}
-            ${this._optionalRow(overview, "grid_export", "phases.meter_export")}
-            <p class="note">${this._t("phases.calculation")}</p>
-            <p class="note">${this._t("phases.limitations")}</p>
-        `;
     }
 
     // Money -------------------------------------------------------------------
@@ -782,127 +557,13 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         return {
             cost,
             gain,
-            net: cost === null || gain === null ? null : cost - gain,
+            net: cost === null || gain === null ? null : gain - cost,
             currency: currencyFromPriceUnit(payload.priceUnit),
             importKwh: payload.importKwh,
             exportKwh: payload.exportKwh,
-            costKwh: payload.importPricedKwh,
-            gainKwh: payload.exportPricedKwh,
         };
     }
 
-    private _moneyPreview(): string | null {
-        if (this._money.state?.status === "error") return this._t("money.failed");
-        if (!this._money.payload) return null;
-        const money = this._moneyFigures();
-        if (!money || (money.cost === null && money.gain === null)) return this._t("money.unpriced");
-        const parts: string[] = [];
-        if (money.cost !== null) parts.push(fillTemplate(this._t("money.cost_short"), { value: this._formatMoney(money.cost, money.currency) }));
-        if (money.gain !== null) parts.push(fillTemplate(this._t("money.income_short"), { value: this._formatMoney(money.gain, money.currency) }));
-        return parts.join(" · ");
-    }
-
-    private _renderMoney() {
-        const section = this._money.state;
-        if (section === null || section.status === "loading") {
-            return html`<p class="note">${this._t("money.loading")}</p>`;
-        }
-        if (section.status === "error") {
-            return html`
-                <p class="note">${this._t("money.failed")}</p>
-                <button class="link-button" @click=${() => this._money.load()}>${this._t("retry")}</button>
-            `;
-        }
-        const money = this._moneyFigures();
-        const period = fillTemplate(this._t("money.period"), { time: this._time(Date.now()) });
-        if (!money || (money.cost === null && money.gain === null)) {
-            return html`
-                ${this._row(this._t("money.period_label"), period, "period")}
-                <p class="note" data-unpriced>${this._t("money.unpriced_long")}</p>
-            `;
-        }
-        const unknown = this._t("money.unknown");
-        return html`
-            ${this._row(this._t("money.period_label"), period, "period")}
-            ${this._row(this._t("money.import_cost"), money.cost === null ? unknown : this._formatMoney(money.cost, money.currency), "import-cost")}
-            ${this._row(this._t("money.export_income"), money.gain === null ? unknown : this._formatMoney(money.gain, money.currency), "export-income")}
-            ${this._row(
-                this._t(money.net !== null && money.net < 0 ? "money.net_income" : "money.net_cost"),
-                money.net === null ? unknown : this._formatMoney(Math.abs(money.net), money.currency),
-                "net",
-            )}
-            ${this._row(this._t("money.coverage"), this._coverageText(money), "coverage")}
-            <p class="note">${this._t("money.explain")}</p>
-        `;
-    }
-
-    /** Each direction's priced share of its measured kWh. */
-    private _coverageText(money: MoneyFigures): string {
-        const side = (key: string, kwh: number | null, priced: number | null) => {
-            if (!kwh) return fillTemplate(this._t(`money.coverage_${key}_none`), {});
-            const share = Math.min(1, (priced ?? 0) / kwh);
-            return fillTemplate(this._t(`money.coverage_${key}`), { share: this._percent(share), kwh: (formatKwh(Math.abs(kwh)) + " kWh") });
-        };
-        return side("import", money.importKwh, money.costKwh) + " · " + side("export", money.exportKwh, money.gainKwh);
-    }
-
-    private _renderMoneyEvidence() {
-        return html`
-            <div class="plan" data-money-inspector>${this._inspector("money", GRID_MONEY_INSPECTOR_CONFIG)}</div>
-            <p class="note">${this._t("money.valuation")}</p>
-        `;
-    }
-
-    // Next --------------------------------------------------------------------
-
-    /** The import and export rates now, each as its short phrase; none without the forecast or a rate. */
-    private _pricesNow(): string[] {
-        const grid = this._forecast?.grid;
-        if (!grid) return [];
-        const parts: string[] = [];
-        const importNow = this._priceNow("import");
-        const exportNow = this._priceNow("export");
-        if (importNow !== null) parts.push(fillTemplate(this._t("next.import_short"), { price: this._price(importNow, grid.importPriceUnit) }));
-        if (exportNow !== null) parts.push(fillTemplate(this._t("next.export_short"), { price: this._price(exportNow, grid.exportPriceUnit) }));
-        return parts;
-    }
-
-    private _nextPreview(): string | null {
-        if (!this._forecast?.grid) return null;
-        const parts = this._pricesNow();
-        return parts.length ? parts.join(" · ") : this._t("next.no_prices");
-    }
-
-    private _renderNext() {
-        const grid = this._forecast?.grid;
-        if (!grid) return this._forecastFailed ? this._renderForecastFailed() : html`<p class="note">${this._t("next.unavailable")}</p>`;
-        const importNext = this._nextPriceChange("import");
-        const exportNext = this._nextPriceChange("export");
-        const planned = this._plannedNow();
-        const change = this._plannedChange();
-        const priceRow = (label: string, value: number | null, unit: string | null, key: string) =>
-            this._row(label, value === null ? this._t("next.no_rate") : this._price(value, unit), key);
-        const changeRow = (label: string, next: { at: number; value: number } | null, unit: string | null, key: string) =>
-            this._row(label, next ? fillTemplate(this._t("next.change_value"), { price: this._price(next.value, unit), time: this._time(next.at) }) : this._t("next.no_change"), key);
-        return html`
-            ${priceRow(this._t("next.import_now"), this._priceNow("import"), grid.importPriceUnit, "import-now")}
-            ${changeRow(this._t("next.import_next"), importNext, grid.importPriceUnit, "import-next")}
-            ${priceRow(this._t("next.export_now"), this._priceNow("export"), grid.exportPriceUnit, "export-now")}
-            ${changeRow(this._t("next.export_next"), exportNext, grid.exportPriceUnit, "export-next")}
-            ${this._row(this._t("next.planned_now"), planned ?? this._t("next.no_plan"), "planned-now")}
-            ${change ? this._row(this._t("next.planned_change"), change, "planned-change") : nothing}
-            <p class="note">${this._t(grid.scheduleAdjusted ? "next.explain_adjusted" : "next.explain")}</p>
-        `;
-    }
-
-    private _renderNextEvidence() {
-        return html`
-            <div class="plan" data-plan-inspector>${this._inspector("next", GRID_PLAN_INSPECTOR_CONFIG)}</div>
-            <p class="note">${this._t("next.evidence_note")}</p>
-        `;
-    }
-
-    /** The first future price point that differs from the current rate. */
     /**
      * The rate in force now, from the timestamped points so it advances at a
      * tariff boundary while the dialog stays open; the payload's current
@@ -935,30 +596,6 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         return null;
     }
 
-    /** The plan's grid flow for the slot in progress, in words. */
-    private _plannedNow(): string | null {
-        const slot = this._currentPlanSlot();
-        return slot ? this._flowText(slot.importedFromGridKwh, slot.exportedToGridKwh) : null;
-    }
-
-    /** When the plan's grid direction next changes from the current slot's. */
-    private _plannedChange(): string | null {
-        const series = this._forecast?.grid.series ?? [];
-        const current = this._currentPlanSlot();
-        if (!current) return null;
-        const direction = flowDirection(current.importedFromGridKwh, current.exportedToGridKwh);
-        const now = Date.now();
-        for (const slot of series) {
-            const at = Date.parse(slot.timestamp);
-            if (at <= now) continue;
-            const next = flowDirection(slot.importedFromGridKwh, slot.exportedToGridKwh);
-            if (next !== direction) {
-                return fillTemplate(this._t("next.planned_change_value"), { time: this._time(at), flow: this._t(`next.flow_${next}`) });
-            }
-        }
-        return null;
-    }
-
     /**
      * The rate now, the next change and the planned flow are read off the
      * clock: the now-clock renders again once the next price point or plan slot
@@ -973,56 +610,6 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         for (const slot of grid?.series ?? []) {
             yield Date.parse(slot.timestamp) + slot.durationHours * 3_600_000;
         }
-    }
-
-    private _currentPlanSlot() {
-        const now = Date.now();
-        return (this._forecast?.grid.series ?? []).find((slot) => {
-            const at = Date.parse(slot.timestamp);
-            return at <= now && now < at + slot.durationHours * 3_600_000;
-        }) ?? null;
-    }
-
-    private _flowText(imported: number, exported: number): string {
-        const direction = flowDirection(imported, exported);
-        if (direction === "import") return fillTemplate(this._t("next.flow_import_kwh"), { kwh: (formatKwh(Math.abs(imported)) + " kWh") });
-        if (direction === "export") return fillTemplate(this._t("next.flow_export_kwh"), { kwh: (formatKwh(Math.abs(exported)) + " kWh") });
-        return this._t("next.flow_balanced");
-    }
-
-    // Outage ------------------------------------------------------------------
-
-    private _outagePreview(overview: GridDetailPayload): string {
-        if (overview.condition) return fillTemplate(this._t(`outage.${overview.condition.kind}_short`), { state: overview.condition.runMode });
-        const runMode = this._reading(overview, "run_mode");
-        return runMode ? fillTemplate(this._t("outage.on_grid_short"), { state: runMode }) : this._t("outage.unknown_short");
-    }
-
-    private _renderOutage(overview: GridDetailPayload) {
-        const runMode = this._reading(overview, "run_mode");
-        const state = overview.condition
-            ? fillTemplate(this._t(`outage.state_${overview.condition.kind}`), { state: overview.condition.runMode })
-            : runMode ? fillTemplate(this._t("outage.state_on_grid"), { state: runMode }) : this._t("outage.state_unknown");
-        const exportLimit = this._number(overview, "export_limit");
-        return html`
-            ${this._row(this._t("outage.state"), state, "grid-state")}
-            ${exportLimit !== null ? this._row(this._t("outage.export_limit"), formatPower(exportLimit).display, "export-limit", this._t("outage.scope_inverter"), overview.entities.export_limit) : nothing}
-            ${overview.maxAllowedExportPower !== null ? this._row(this._t("outage.export_cap"), formatPower(overview.maxAllowedExportPower).display, "export-cap", this._t("outage.scope_helman")) : nothing}
-            ${this._optionalRow(overview, "grid_mode_runtime", "outage.grid_runtime")}
-            ${this._optionalRow(overview, "eps_mode_runtime", "outage.eps_runtime")}
-            <p class="note">${this._t("outage.explain")}</p>
-        `;
-    }
-
-    private _renderOutageEvidence(overview: GridDetailPayload) {
-        const rows = [
-            this._optionalRow(overview, "grid_frequency", "outage.frequency"),
-            this._optionalRow(overview, "run_mode", "outage.run_mode"),
-        ];
-        return html`
-            ${rows.every((row) => row === nothing) ? html`<p class="note">${this._t("outage.no_readings")}</p>` : rows}
-            <p class="note">${this._t("outage.evidence_note")}</p>
-        `;
     }
 
     // ── Rows and readings ───────────────────────────────────────────────────
@@ -1050,14 +637,26 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         return value.toFixed(1) + " A";
     }
 
-    private _percent(share: number): string {
-        return Math.round(share * 100) + " %";
-    }
-
     private _price(value: number, unit: string | null): string {
         return formatMoney(value, unit);
     }
 
+}
+
+/** The cheapest stretch on the Forecast chart. */
+const CHEAPEST_COLOR = "var(--success-color, #43a047)";
+
+/** A stretch of equal prices. */
+interface Stretch { start: number; end: number; value: number }
+
+/** The first stretch of consecutive slots at the price `better` than every other, slot by slot. */
+function extremeStretch(points: ReadonlyArray<{ t: number; v: number }>, better: (a: number, b: number) => boolean): Stretch {
+    const best = points.reduce((winner, point) => better(point.v, winner.v) ? point : winner, points[0]);
+    let end = best.t + SLOT_MS;
+    for (const point of points) {
+        if (point.t === end && point.v === best.v) end += SLOT_MS;
+    }
+    return { start: best.t, end, value: best.v };
 }
 
 /** Which way a slot's planned grid flow mostly goes; a few Wh either way is balanced. */

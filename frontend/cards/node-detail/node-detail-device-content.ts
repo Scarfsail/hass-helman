@@ -1,295 +1,270 @@
-import { formatPower } from "../shared/format";
-import { callHelman } from "../shared/data/helman-commands";
 import { LitElement, css, html, nothing, type PropertyValues } from "lit";
-import { customElement, property } from "lit/decorators.js";
+import { customElement, property, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../types/ha";
 import type { LocalizeFunction } from "../localize/localize";
+import { fillTemplate } from "../localize/localize";
 import type { TreeItem } from "../shared/data/tree-item";
-import type { DeviceDetailParams } from "./node-detail-types";
-import { nodeDetailSharedStyles } from "./node-detail-shared-styles";
+import { formatKwh, formatMinutes, formatPower } from "../shared/format";
+import { convertToKWh, isSupportedEnergyUnit } from "../helman/energy-unit-converter";
 import { readPowerW } from "../shared/power-reading";
-import { openMoreInfo } from "./node-detail-readings";
-import { SectionResource } from "./section-resource";
-
-import { type DeviceStats, type DeviceStatsSpread } from "../helman-api";
-import "./device-direct-control";
+import { dispatchWatchedEntities } from "../shared/hass-change";
+import type { DeviceDetailParams } from "./node-detail-types";
 import { deviceControllableIds, deviceDirectControls } from "./node-detail-utils";
+import { estimatedConsumerMix } from "./live-flows";
+import { SectionResource } from "./section-resource";
+import type { ApplianceProjectionsPayload, ApplianceRuntimeDTO, DeviceStats, DeviceStatsSpread } from "../helman-api";
+import { callHelman } from "../shared/data/helman-commands";
+import { deviceEnergyMeasures } from "../shared/devices/device-energy";
+import { ScheduleController } from "./schedule-controller";
+import { runtimeText, runtimeFor } from "./node-detail-schedule";
 import {
-    deviceEnergyFigure,
-    deviceEnergyLabel,
-    deviceEnergyMeasures,
-    deviceEnergySourceLabel,
-    deviceEnergyStyles,
-    formatDeviceEnergyWatts,
-    renderDeviceEnergyValue,
-} from "../shared/devices/device-energy";
+    HistoryGraphResource, historyRow, historySummary, renderHistorySection, renderTechnicalSection, sectionNotReady, statTile, subTitle,
+} from "./node-detail-history";
+import { getSharedHelmanStore } from "../shared/data/store";
+import { DataChangedController } from "../shared/data/data-changed";
+import { SLOT_MS } from "../shared/time/slot-time";
+import { boldTemplate } from "./detail-section";
+import { helmanColorVars } from "../color-vars";
+import {
+    forecastChartContext, forecastWhen, projectedRuns, projectedSlots, remainingShare, renderForecastChart, renderForecastSection, slotKw,
+    type ForecastChartContext, type ProjectedSlot,
+} from "./node-detail-forecast";
+import { modeStripWindow } from "../shared/mode-strip";
+import "./detail-headline";
+import "./flow-gauge";
+import "./switch-tile";
+import "./who-decides";
+import { openMoreInfo } from "./node-detail-readings";
+import { nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 
-type HistoryGraphCard = HTMLElement & { hass?: HomeAssistant };
-
-/** A tile's figure: `undefined` while it loads, `null` when HA had no answer. */
-type Reading = number | null | undefined;
-
-/** What the device's own meter counted today and in the last hour; `null` where HA had no answer. */
-type MeterEnergy = { today: number | null; lastHour: number | null };
-
-/**
- * The device's power sensor, if it has one. An inspector box with no power
- * sensor falls back to its energy meter, which is a cumulative total, not watts.
- */
 function powerEntity(item: TreeItem): string | undefined {
     return item.powerSensorId && item.powerSensorId !== item.energyEntityId ? item.powerSensorId : undefined;
 }
 
-/**
- * One config device at a glance: its live power, the energy its own
- * meter counted today and in the last hour, what it typically uses as learned
- * over its learning window, and HA's history graph of both.
- *
- * Always "now", wherever it is opened from. The energy figures are fetched when
- * the dialog opens on a device, not on every `hass` tick.
- */
 @customElement("node-detail-device-content")
 export class NodeDetailDeviceContent extends LitElement {
-
-    static styles = [nodeDetailSharedStyles, deviceEnergyStyles, css`
-        .header {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-        .header ha-icon {
-            color: var(--secondary-text-color);
-        }
-        .power {
-            flex-grow: 1;
-            font-size: 1.4rem;
-            font-weight: 600;
-        }
-        button.power {
-            border: 0;
-            background: none;
-            color: inherit;
-            font: inherit;
-            text-align: left;
-            padding: 0;
-            cursor: pointer;
-        }
-        .tiles {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-        }
-        .tile {
-            flex: 1 1 120px;
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-            padding: 8px 12px;
-            border-radius: 8px;
-            background: var(--secondary-background-color);
-        }
-        .tile .range {
-            color: var(--secondary-text-color);
-            font-size: 0.8rem;
-        }
+    static styles = [helmanColorVars, nodeDetailSharedStyles, nodeDetailQuestionStyles, css`
+        .icon { width: 64px; height: 64px; display: grid; place-items: center; }
+        .icon ha-icon { --mdc-icon-size: 42px; }
+        .climate-control { align-self: flex-start; border: 0; padding: 0; background: none; color: var(--primary-color); font: inherit; cursor: pointer; }
+        .climate-control:hover { text-decoration: underline; }
     `];
-
     @property({ attribute: false }) public hass!: HomeAssistant;
     @property({ attribute: false }) public localize!: LocalizeFunction;
     @property({ attribute: false }) public params!: DeviceDetailParams;
-
-    /** The energy the device's own meter counted. */
-    private readonly _energy = new SectionResource<MeterEnergy>(this, "energy", {
-        fetch: () => this._readEnergy(this.params.item.energyEntityId!),
+    private readonly _energy = new SectionResource<number | null>(this, "energy", {
+        fetch: () => this._readToday(this.params.item.energyEntityId!),
         shown: () => !!this.params.item.energyEntityId,
         staleness: () => false,
     });
-    /** The learned usage record; `null` when there is none. */
+    /**
+     * The plan's projected energy, for the Forecast section's summary, read on
+     * opening. A projection from an earlier slot counts energy already used:
+     * re-read once per slot, and on every announced change of the plan.
+     */
+    private readonly _projection = new SectionResource<ApplianceProjectionsPayload>(this, "projection", {
+        fetch: () => getSharedHelmanStore(this.hass).getApplianceProjections(),
+        shown: () => deviceControllableIds(this.params.item).length > 0,
+        staleness: (_payload, requestedAt) => requestedAt < Math.floor(Date.now() / SLOT_MS) * SLOT_MS,
+        keepOnError: false,
+    });
+    /** The learned usage record, for the History header: read on opening; `null` when there is none. */
     private readonly _stats = new SectionResource<DeviceStats | null>(this, "stats", {
-        // The solar inspector's deviceKey is a controllable id; the backend
-        // resolves a metered device's id to its meter.
+        // The backend resolves a metered device's id to its meter.
         fetch: () => callHelman(this.hass, "helman/get_device_stats", { device_key: this.params.item.deviceKey! }),
         shown: () => !!this.params.item.deviceKey,
         staleness: () => false,
     });
-    /** HA's history graph of the device's power and switch. */
-    private readonly _chart = new SectionResource<HistoryGraphCard>(this, "chart", {
-        fetch: () => this._createChart(this._chartEntities(this.params.item)),
-        shown: () => this._chartEntities(this.params.item).length > 0 && typeof (window as any).loadCardHelpers === "function",
-        staleness: () => false,
-    });
-    /** Every figure of the device, read once per device opened. */
-    private readonly _sections = [this._energy, this._stats, this._chart];
-    /** The device the figures and chart were read for; the host rebuilds params every render. */
+    /** HA's history graph of the device's power and switch, once History & statistics is open. */
+    private readonly _chart = new HistoryGraphResource(this, () => this._chartEntities(), () => this._historyOpen);
+    /** The plan, for the executor's outcome in Technical details, followed once that is open. */
+    private readonly _plan = new ScheduleController(this, () => []);
+    private _planStarted = false;
+    @state() private _forecastOpen = false;
+    @state() private _historyOpen = false;
+    @state() private _technicalOpen = false;
     private _loadedItem?: TreeItem;
 
-    protected willUpdate(changed: PropertyValues<this>): void {
-        super.willUpdate(changed);
+    constructor() {
+        super();
+        new DataChangedController(this, () => this.hass, {}, () => this._projection.reload());
+    }
+    protected willUpdate(): void {
+        this._plan.reset();
         const item = this.params?.item;
         if (!item || !this.hass) return;
-        // Another device: nothing shown is its.
+        const sections = [this._energy, this._projection, this._stats];
         if (item !== this._loadedItem) {
             this._loadedItem = item;
-            for (const section of this._sections) section.drop();
+            for (const section of [...sections, this._chart]) section.drop();
+            this._forecastOpen = this._historyOpen = this._technicalOpen = false;
         }
-        for (const section of this._sections) section.sync();
-        const chart = this._chart.payload;
-        if (chart && changed.has("hass")) chart.hass = this.hass;
+        for (const section of sections) section.sync();
+        this._chart.follow(this.hass);
+        if (this._technicalOpen && !this._planStarted) {
+            this._planStarted = true;
+            this._plan.start(this.hass);
+        }
     }
 
+    disconnectedCallback(): void {
+        super.disconnectedCallback();
+        this._plan.stop();
+        this._planStarted = false;
+    }
+    protected updated(changed: PropertyValues<this>): void {
+        if (changed.has("params")) dispatchWatchedEntities(this, "node-detail:device-climate", [deviceDirectControls(this.params.item)?.climateEntityId]);
+    }
     render() {
         const item = this.params.item;
         const direct = deviceDirectControls(item);
+        const controlId = direct?.switchEntityId ?? direct?.climateEntityId ?? null;
+        const state = controlId ? this.hass.states[controlId]?.state : null;
         const powerId = powerEntity(item);
-        const header = html`<div class="header">
-            ${powerId
-                ? html`<button class="power" data-power-entity=${powerId} @click=${() => openMoreInfo(this, powerId)}>${this._livePower(item)}</button>`
-                : html`<div class="power">${this._livePower(item)}</div>`}
-        </div>`;
-        return html`
-            <div class="content">
-                ${direct ? html`
-                    <helman-device-direct-control
-                        .hass=${this.hass}
-                        .localize=${this.localize}
-                        .switchEntityId=${direct.switchEntityId}
-                        .climateEntityId=${direct.climateEntityId}
-                        .scheduled=${deviceControllableIds(item).length > 0}
-                    >${header}</helman-device-direct-control>
-                ` : header}
-                ${item.energyEntityId ? html`
-                    <div class="tiles">
-                        ${this._tile("today", this._energy.payload?.today, item.energyEntityId)}
-                        ${this._tile("last_hour", this._energy.payload?.lastHour, item.energyEntityId)}
-                    </div>
-                ` : nothing}
-                ${this._renderStats()}
-                ${this._chart.payload ?? nothing}
-            </div>
-        `;
+        const power = readPowerW(this.hass, powerId);
+        const ids = deviceControllableIds(item);
+        const stateLabel = state === "on" ? this.localize("node_detail.shared.device_state_on")
+            : state === "off" ? this.localize("node_detail.shared.device_state_off") : state ?? "—";
+        const today = this._energy.payload;
+        const caption = [stateLabel];
+        if (today !== undefined && today !== null) caption.push(fillTemplate(this.localize("node_detail.shared.device_today"), { kwh: today.toFixed(2) }));
+        return html`<div class="overview"><div class="content" data-overview>
+            <helman-detail-headline .value=${power === null ? "—" : formatPower(power).display} .entityId=${powerId ?? null} .caption=${caption}>
+                ${controlId ? html`<helman-switch-tile slot="icon" .hass=${this.hass} .localize=${this.localize}
+                    .entityId=${controlId} .kind=${direct?.switchEntityId ? "switch" : "climate"}
+                    .fallbackIcon=${item.icon || (direct?.climateEntityId ? "mdi:air-conditioner" : "mdi:power-plug")}></helman-switch-tile>`
+                    : html`<span slot="icon" class="icon"><ha-icon .icon=${item.icon || "mdi:power-plug"}></ha-icon></span>`}
+            </helman-detail-headline>
+            ${direct?.switchEntityId && direct.climateEntityId ? html`<button class="climate-control" type="button"
+                @click=${() => openMoreInfo(this, direct.climateEntityId!)}>${this.localize("node_detail.shared.climate_controls")}</button>` : nothing}
+            <helman-flow-gauge direction="from" .items=${estimatedConsumerMix(this.params.flows, power)} .estimated=${true} .localize=${this.localize}></helman-flow-gauge>
+            ${ids.length ? html`<helman-who-decides .hass=${this.hass} .localize=${this.localize} .controllableId=${ids[0]}></helman-who-decides>` : nothing}
+        </div></div>
+        <slot name="schedule"></slot>
+        ${this._renderForecast(ids)}
+        ${this._renderHistory()}
+        ${renderTechnicalSection(this.hass, this.localize, this._technicalOpen, (open) => { this._technicalOpen = open; }, () => this._renderTechnical(ids))}`;
     }
 
-    private _livePower(item: TreeItem): string {
-        const power = readPowerW(this.hass, powerEntity(item));
-        return power === null ? "—" : formatPower(power).display;
-    }
-
-    private _tile(key: "today" | "last_hour", value: Reading, meter: string) {
-        const unit = this.hass.states?.[meter]?.attributes.unit_of_measurement ?? "";
-        return html`
-            <div class="tile ${key}">
-                <span class="label">${this.localize(`node_detail.device.${key}`)}</span>
-                <span class="value">${typeof value === "number" ? `${value.toFixed(2)} ${unit}`.trim() : "—"}</span>
-            </div>
-        `;
+    /** The power sensor and the switch, which HA's history graph draws. */
+    private _chartEntities(): string[] {
+        const item = this.params.item;
+        return [powerEntity(item), deviceDirectControls(item)?.switchEntityId ?? item.switchEntityId].filter((id): id is string => !!id);
     }
 
     /**
-     * The learned-usage row: its headline figure, a typical day, and -- when
-     * the record has them -- how often and how long the device runs, and the
-     * other of its two power figures.
-     * The headline is chosen by schedulability, as everywhere else: a
-     * schedulable device's average while switched on, any other device's
-     * power while active. The tree lists controllable ids only for
-     * schedulable devices.
-     * A meterless child has no meter tiles above, so this stands on its own.
-     * Titled by the days the record covers: the device's lookback, or less
-     * where the recorder has purged older history.
+     * Its power and switch over the last 24 hours, and what it typically
+     * uses, as learned over its window. None for a device with neither.
      */
-    private _renderStats() {
+    private _renderHistory() {
+        if (!this._chart.available() && !this.params.item.deviceKey) return nothing;
         const stats = this._stats.payload;
-        if (!stats) return nothing;
+        const measures = deviceEnergyMeasures(stats ?? undefined);
+        const whileOn = measures.on ?? measures.running;
+        const h = (key: string) => this.localize(`node_detail.shared.history.${key}`);
+        const summary = historySummary(this._stats, this.localize, whileOn !== undefined ? boldTemplate(h("device_summary"), { kw: formatPower(whileOn).display }) : null);
+        return renderHistorySection(this.localize, summary, this._historyOpen, (open) => { this._historyOpen = open; }, () => html`
+            ${this._chart.render(this.localize)}
+            ${this.params.item.deviceKey ? this._renderTypical() : nothing}
+        `);
+    }
+
+    /** A typical day, how often and how long it runs, and its average while on: 2×2 tiles. */
+    private _renderTypical() {
+        const notReady = sectionNotReady(this._stats, this.localize);
+        if (notReady) return notReady;
+        const stats = this._stats.payload;
+        const h = (key: string) => this.localize(`node_detail.shared.history.${key}`);
+        if (!stats) return html`<p class="note" data-no-stats>${h("device_no_stats")}</p>`;
+        const range = (spread: DeviceStatsSpread, digits: number) => `${spread.min.toFixed(digits)}–${spread.max.toFixed(digits)}`;
         const day = stats.daily_kwh;
-        const run = stats.run_minutes && stats.run_kwh
-            ? { minutes: stats.run_minutes, kwh: stats.run_kwh }
-            : undefined;
-        const energy = { record: stats, schedulable: (this.params.item.controllableIds?.length ?? 0) > 0 };
-        const text = (key: string) => this.localize(`device_energy.${key}`);
-        const other = energy.schedulable ? "running" : "on";
-        const otherWatts = deviceEnergyMeasures(stats)[other];
-        const tiles = [
-            deviceEnergyFigure(stats, energy.schedulable) ? html`
-                <div class="tile energy">
-                    <span class="label">${deviceEnergyLabel(text, energy)}</span>
-                    <span class="value">${renderDeviceEnergyValue(text, energy)}</span>
-                </div>
-            ` : nothing,
-            day ? this._statTile(
-                "typical_day",
-                `${day.median.toFixed(2)} kWh`,
-                `${this._range(day, 2)} kWh · ${this.localize("node_detail.device.stats.mean")} ${day.mean.toFixed(2)} kWh`,
-            ) : nothing,
-            typeof stats.runs_per_day === "number"
-                ? this._statTile("runs_per_day", stats.runs_per_day.toFixed(1))
-                : nothing,
-            run ? this._statTile(
-                "typical_run",
-                `${Math.round(run.minutes.median)} min · ${run.kwh.median.toFixed(2)} kWh`,
-                `${this._range(run.minutes, 0)} min · ${this._range(run.kwh, 2)} kWh`,
-            ) : nothing,
-            otherWatts !== undefined ? html`
-                <div class="tile ${other}">
-                    <span class="label">${deviceEnergySourceLabel(text, other)}</span>
-                    <span class="value">${formatDeviceEnergyWatts(otherWatts)}</span>
-                </div>
-            ` : nothing,
-        ];
-        if (tiles.every((tile) => tile === nothing)) return nothing;
+        const measures = deviceEnergyMeasures(stats);
+        const whileOn = measures.on ?? measures.running;
+        const run = stats.run_minutes && stats.run_kwh ? { minutes: stats.run_minutes.median, kwh: stats.run_kwh.median } : null;
         return html`
-            <div class="section-title">${day
-                ? this.localize("node_detail.device.stats.title", { days: day.days })
-                : this.localize("node_detail.device.stats.title_undated")}</div>
-            <div class="tiles stats">${tiles}</div>
-        `;
-    }
-
-    private _range(spread: DeviceStatsSpread, digits: number): string {
-        return `${spread.min.toFixed(digits)}–${spread.max.toFixed(digits)}`;
-    }
-
-    private _statTile(key: string, value: string, range?: string) {
-        return html`
-            <div class="tile ${key}">
-                <span class="label">${this.localize(`node_detail.device.stats.${key}`)}</span>
-                <span class="value">${value}</span>
-                ${range ? html`<span class="range">${range}</span>` : nothing}
+            ${subTitle(day ? fillTemplate(h("device_typical"), { days: day.days }) : h("device_typical_undated"))}
+            <div class="stat-tiles two" data-typical>
+                ${day ? statTile(`${formatKwh(day.median)} kWh`, fillTemplate(h("device_day"), { range: range(day, 1) }), "day") : nothing}
+                ${typeof stats.runs_per_day === "number" ? statTile(fillTemplate(h("device_runs"), { n: Math.round(stats.runs_per_day * 10) / 10 }), h("device_runs_caption"), "runs") : nothing}
+                ${run ? statTile(formatMinutes(run.minutes), fillTemplate(h("device_run"), { kwh: formatKwh(run.kwh) }), "run") : nothing}
+                ${whileOn !== undefined ? statTile(formatPower(whileOn).display, h("device_while_on"), "while-on") : nothing}
             </div>
         `;
     }
 
-    private async _readEnergy(meter: string): Promise<MeterEnergy> {
-        const change = async (period: Record<string, unknown>): Promise<number | null> => {
-            try {
-                const result = await this.hass.callWS<{ change?: number | null }>({
-                    type: "recorder/statistic_during_period",
-                    statistic_id: meter,
-                    types: ["change"],
-                    ...period,
-                });
-                return typeof result?.change === "number" ? result.change : null;
-            } catch {
-                return null;
-            }
+    /** The executor's outcome for each of its lanes in the slot in progress, and the entities it is read and switched through. */
+    private _renderTechnical(ids: readonly string[]) {
+        const item = this.params.item;
+        const direct = deviceDirectControls(item);
+        const t = (key: string) => this.localize(`node_detail.shared.technical.${key}`);
+        const now = Date.now();
+        return html`<div class="rows">
+            ${ids.map((id) => {
+                const runtime = runtimeFor<ApplianceRuntimeDTO>(this._plan.schedule, id, now);
+                return historyRow(ids.length > 1 ? `${t("executor")} · ${id}` : t("executor"), runtime ? runtimeText(runtime, this.localize) : t("no_runtime"), `runtime-${id}`);
+            })}
+            ${historyRow(t("switch_entity"), direct?.switchEntityId ?? item.switchEntityId ?? "—", "switch")}
+            ${historyRow(t("power_entity"), item.powerSensorId ?? "—", "power-sensor")}
+        </div>`;
+    }
+
+    /**
+     * What the plan's runs are projected to use until tomorrow noon: the
+     * summary, a chart of the planned power and one row per run. None for a
+     * device without projected energy.
+     */
+    private _renderForecast(ids: readonly string[]) {
+        const projection = this._projection.state;
+        if (projection?.status === "error") {
+            return renderForecastSection(this.localize, this.localize("node_detail.forecast_failed"), this._forecastOpen, (open) => { this._forecastOpen = open; },
+                () => html`<button class="link-button" @click=${() => this._projection.load()}>${this.localize("node_detail.shared.forecast.retry")}</button>`);
+        }
+        const context = forecastChartContext(this.hass, this.localize);
+        const slots = projectedSlots(this._projection.payload, ids, context.now, modeStripWindow(context.now, context.timeZone).end);
+        if (!slots.length) return nothing;
+        const total = slots.reduce((sum, slot) => sum + slot.kwh, 0);
+        return renderForecastSection(this.localize,
+            boldTemplate(this.localize("node_detail.shared.forecast.device_summary"), { kwh: `≈ ${formatKwh(total)} kWh` }),
+            this._forecastOpen, (open) => { this._forecastOpen = open; }, () => this._renderForecastBody(slots, context));
+    }
+
+    private _renderForecastBody(slots: ProjectedSlot[], context: ForecastChartContext) {
+        const first = Math.floor(context.now / SLOT_MS) * SLOT_MS;
+        const end = modeStripWindow(context.now, context.timeZone).end;
+        const bySlot = new Map(slots.map((slot) => [slot.startMs, slot.kwh]));
+        const points = [];
+        // Off between the runs is planned too: zero, not a gap.
+        // The slots hold only what is still ahead of the slot in progress.
+        const power = (startMs: number, kwh: number) => {
+            const share = remainingShare(startMs, context.now);
+            return share > 0 ? slotKw(kwh / share) : 0;
         };
-        const [today, lastHour] = await Promise.all([
-            change({ calendar: { period: "day" } }),
-            change({ rolling_window: { duration: { hours: 1 } } }),
-        ]);
-        return { today, lastHour };
+        for (let t = first; t < end; t += SLOT_MS) points.push({ t, v: power(t, bySlot.get(t) ?? 0) });
+        const kw = Math.max(...slots.map((slot) => power(slot.startMs, slot.kwh)));
+        const runs = projectedRuns(slots);
+        return html`
+            ${renderForecastChart(context, {
+                title: this.localize("node_detail.shared.forecast.device_chart"),
+                help: fillTemplate(this.localize("node_detail.shared.forecast.device_help"), { kw: formatPower(kw * 1000).display }),
+                series: [{ key: "planned", label: this.localize("node_detail.shared.forecast.planned"), color: "var(--helman-house)", points, dashed: true }],
+                step: true,
+                formatValue: (value) => formatPower(value * 1000).display,
+            })}
+            <div class="rows">
+                ${runs.map((run) => html`<div class="row" data-run><span class="label">${forecastWhen(run.startMs, context, run.endMs)}</span>
+                    <span class="value">≈ ${formatKwh(run.kwh)} kWh</span></div>`)}
+            </div>
+        `;
     }
 
-    private _chartEntities(item: TreeItem): string[] {
-        return [powerEntity(item), item.switchEntityId].filter((id): id is string => !!id);
-    }
-
-    private async _createChart(entities: string[]): Promise<HistoryGraphCard> {
-        const helpers = await (window as any).loadCardHelpers();
-        const chart = helpers.createCardElement({
-            type: "history-graph",
-            hours_to_show: 24,
-            entities,
-        }) as HistoryGraphCard;
-        chart.hass = this.hass;
-        return chart;
+    private async _readToday(meter: string): Promise<number | null> {
+        try {
+            const result = await this.hass.callWS<{ change?: number | null }>({
+                type: "recorder/statistic_during_period", statistic_id: meter, types: ["change"], calendar: { period: "day" },
+            });
+            const unit = this.hass.states[meter]?.attributes.unit_of_measurement as string | undefined;
+            return typeof result?.change === "number" && unit && isSupportedEnergyUnit(unit)
+                ? convertToKWh(result.change, unit) : null;
+        } catch { return null; }
     }
 }

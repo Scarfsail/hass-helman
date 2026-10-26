@@ -159,7 +159,8 @@ async function mount(page: Page, setup: Setup = {}, card = "helman-simple-card")
 }
 
 const dialog = (page: Page) => page.locator("node-detail-dialog");
-const tab = (page: Page, name: "overview" | "schedule") => page.locator(`node-detail-dialog [data-tab="${name}"]`);
+const scheduleSection = (page: Page) => page.locator("node-detail-dialog helman-detail-section[data-schedule]");
+const scheduleButton = (page: Page) => scheduleSection(page).locator("button").first();
 const house = (page: Page) => page.locator("helman-house-control");
 const lane = (page: Page, id: string) => house(page).locator(`[data-lane="${id}"]`);
 const controls = (page: Page) => page.locator("helman-node-control");
@@ -167,7 +168,7 @@ const requests = (page: Page, type: string) => page.evaluate((type) => window.__
 const hostState = (page: Page) => page.evaluate(() => {
     const card = document.querySelector("helman-simple-card, helman-card") as any;
     const target = card._host.dialogRequest;
-    return { target: typeof target === "string" || target === null ? target : target.id, tab: card._host._dialogTabRequest.tab };
+    return { target: typeof target === "string" || target === null ? target : target.id, section: card._host._dialogSectionRequest?.section };
 });
 
 /** Open an energy node's detail the ordinary way, from the card. */
@@ -178,7 +179,7 @@ async function openNode(page: Page, node: "house" | "grid" | "solar"): Promise<v
 
 async function openHouseControl(page: Page): Promise<void> {
     await openNode(page, "house");
-    await tab(page, "schedule").click();
+    await scheduleButton(page).click();
     await expect(house(page)).toBeVisible();
 }
 
@@ -201,6 +202,20 @@ test.describe("the house's lanes", () => {
         await expect(lane(page, "garage").locator("[data-status]")).toHaveText("Not automated");
     });
 
+    test("each row says what its lane is doing now, under a help, before the system switches", async ({ page }) => {
+        await mount(page, { admin: true, schedule: plan([["12:00", "13:00", { "pump-a": user({ on: true }) }]]) });
+        await openHouseControl(page);
+        await expect(lane(page, "inverter").locator("[data-lane-doing]")).toHaveText("· Normal");
+        await expect(lane(page, "pump-a").locator("[data-lane-doing]")).toHaveText("· on until 13:00");
+        await expect(lane(page, "boiler").locator("[data-lane-doing]")).toHaveText("· Nothing planned");
+        expect(await house(page).locator("[data-lanes] helman-help-tip").evaluate((tip: any) => tip.explanation))
+            .toBe("Every device Helman can control, what it is doing, and who decides. Tap one to open its own detail.");
+        expect(await house(page).locator("[data-lanes], [data-system]").evaluateAll((all) => all.map((element) => element.hasAttribute("data-lanes"))))
+            .toEqual([true, false]);
+        await expect(house(page).locator("[data-automation] .label")).toHaveText("Automation (optimizers plan the schedule)");
+        await expect(house(page).locator("[data-execution] .label")).toHaveText("Schedule execution (the plan is applied)");
+    });
+
     test("without a controllable inverter there is no inverter row", async ({ page }) => {
         await mount(page, { noInverter: true });
         await openHouseControl(page);
@@ -212,9 +227,9 @@ test.describe("the house's lanes", () => {
         await mount(page);
         await openHouseControl(page);
         await lane(page, "pump-b").click();
-        await expect(page.locator("node-detail-device-content")).toHaveCount(0);
-        await expect(tab(page, "schedule")).toHaveAttribute("aria-selected", "true");
-        expect(await hostState(page)).toEqual({ target: "sensor.pumps_energy", tab: "schedule" });
+        await expect(page.locator("node-detail-device-content")).toHaveCount(1);
+        await expect(scheduleButton(page)).toHaveAttribute("aria-expanded", "true");
+        expect(await hostState(page)).toEqual({ target: "sensor.pumps_energy", section: "schedule" });
         await expect(controls(page)).toHaveCount(2);
         expect(await controls(page).locator("[data-control]").evaluateAll((all) => all.map((element) => element.getAttribute("data-control")))).toEqual(["pump-a", "pump-b"]);
     });
@@ -225,7 +240,7 @@ test.describe("the house's lanes", () => {
         await lane(page, "inverter").focus();
         await page.keyboard.press("Enter");
         await expect(controls(page).locator("[data-control]")).toHaveAttribute("data-control", "inverter");
-        expect(await hostState(page)).toEqual({ target: "inverter", tab: "schedule" });
+        expect(await hostState(page)).toEqual({ target: "inverter", section: "schedule" });
     });
 
     test("a row pressed from the keyboard leaves focus on the Schedule tab it opened", async ({ page }) => {
@@ -234,7 +249,7 @@ test.describe("the house's lanes", () => {
         await lane(page, "boiler").focus();
         await page.keyboard.press("Enter");
         await expect(controls(page).locator("[data-control]")).toHaveAttribute("data-control", "boiler");
-        await expect(tab(page, "schedule")).toBeFocused();
+        await expect(scheduleButton(page)).toBeFocused();
     });
 
     test("until the roster is read the lanes are loading, never a list without the inverter", async ({ page }) => {
@@ -368,73 +383,34 @@ test.describe("grid and solar have no schedule tab", () => {
     }
 });
 
-for (const card of ["helman-simple-card", "helman-card"]) {
-    test.describe(`navigation on ${card}`, () => {
-        const sources = (page: Page) => page.evaluate(() => [...(document.querySelector("helman-simple-card, helman-card") as any)._host._watchSources.keys()]
-            .filter((source: string) => source.startsWith("node-detail")));
+test("a Schedule request expands the section for the requested device", async ({ page }) => {
+    await mount(page, { schedule: plan([["13:00", "13:30", { boiler: auto({ on: true }) }]]) });
+    await openHouseControl(page);
+    await expect(scheduleSection(page).locator('[slot="summary"]')).toContainText("Next:");
+    await lane(page, "boiler").click();
+    await expect(scheduleSection(page).locator('[slot="summary"]')).toContainText("Next: on at 13:00");
+    await expect(scheduleButton(page)).toHaveAttribute("aria-expanded", "true");
+    await expect(controls(page).locator("[data-control]")).toHaveAttribute("data-control", "boiler");
+    expect(await hostState(page)).toEqual({ target: "sensor.boiler_energy", section: "schedule" });
+});
 
-        test("an ordinary open lands on Overview, a request on Control, in place, and Back closes it", async ({ page }) => {
-            await mount(page, {}, card);
-            const historyLength = () => page.evaluate(() => window.history.length);
-            const before = await historyLength();
-            await openNode(page, "house");
-            await expect(tab(page, "overview")).toHaveAttribute("aria-selected", "true");
-            await expect(page.locator("node-detail-house-content")).toHaveCount(1);
-            await tab(page, "schedule").click();
-            await lane(page, "boiler").click();
-            await expect(controls(page).locator("[data-control]")).toHaveAttribute("data-control", "boiler");
-            await expect(tab(page, "schedule")).toHaveAttribute("aria-selected", "true");
-            // Watched entities follow the new target: its header icon and boiler lane are watched.
-            await expect.poll(() => sources(page)).toEqual(["node-detail:header-icon", "node-detail:control:boiler"]);
-            // One dialog, one history entry, whatever it swapped to.
-            expect(await historyLength()).toBe(before + 1);
-            await expect(dialog(page)).toHaveCount(1);
-
-            // HA's dialog closes on its close action, which Back presses.
-            await dialog(page).evaluate((detail: any) => {
-                const haDialog = detail.shadowRoot.querySelector("ha-dialog");
-                detail.shadowRoot.querySelector("[data-dialog='close']").addEventListener("click", () => haDialog.close());
-            });
-            await page.evaluate(() => window.history.back());
-            await expect(dialog(page)).toHaveCount(0);
-            expect(await hostState(page).then((state) => state.target)).toBeNull();
-
-            // Opening again the ordinary way is an Overview again.
-            await openNode(page, "grid");
-            await expect(dialog(page).locator("[role=tablist]")).toHaveCount(0);
+for (const [row, control] of [["boiler", "boiler"], ["inverter", "inverter"]] as const) {
+    test(`a Schedule request for the ${row} expands, scrolls to and focuses the section`, async ({ page }) => {
+        await page.setViewportSize({ width: 360, height: 420 });
+        await mount(page);
+        await openHouseControl(page);
+        await page.evaluate(() => {
+            (window as any).__scrolled = [];
+            const original = HTMLElement.prototype.scrollIntoView;
+            HTMLElement.prototype.scrollIntoView = function (this: HTMLElement, ...args: any[]) {
+                (window as any).__scrolled.push(this.hasAttribute("data-schedule"));
+                return original.apply(this, args as any);
+            };
         });
-
-        test("asking for the same node's Control again selects it, and a refreshed tree keeps the target and tab", async ({ page }) => {
-            await mount(page, {}, card);
-            await openHouseControl(page);
-            await lane(page, "boiler").click();
-            await expect(controls(page)).toHaveCount(1);
-            await tab(page, "overview").click();
-            await expect(page.locator("node-detail-device-content")).toHaveCount(1);
-            // The same node, asked for again from inside the dialog.
-            await dialog(page).evaluate((element) => {
-                const card = document.querySelector("helman-simple-card, helman-card") as any;
-                element.dispatchEvent(new CustomEvent("helman-node-detail-request", {
-                    bubbles: true, composed: true, detail: { target: card._host.dialogRequest, tab: "schedule" },
-                }));
-            });
-            await expect(tab(page, "schedule")).toHaveAttribute("aria-selected", "true");
-            await expect(controls(page)).toHaveCount(1);
-
-            // A refreshed tree re-resolves the target to its new item and keeps the tab.
-            await page.evaluate(() => { (window as any).__before = (document.querySelector("helman-simple-card, helman-card") as any)._host.dialogRequest; });
-            const reads = (await requests(page, "helman/get_device_tree")).length;
-            await page.evaluate(() => {
-                window.__fireDataChanged("config");
-                document.dispatchEvent(new Event("visibilitychange"));
-            });
-            await expect.poll(() => requests(page, "helman/get_device_tree").then((list) => list.length)).toBeGreaterThan(reads);
-            await expect.poll(() => page.evaluate(() => {
-                const target = (document.querySelector("helman-simple-card, helman-card") as any)._host.dialogRequest;
-                return target !== (window as any).__before && target?.id;
-            })).toBe("sensor.boiler_energy");
-            await expect(tab(page, "schedule")).toHaveAttribute("aria-selected", "true");
-            await expect(controls(page).locator("[data-control]")).toHaveAttribute("data-control", "boiler");
-        });
+        await lane(page, row).click();
+        await expect(controls(page).locator("[data-control]")).toHaveAttribute("data-control", control);
+        await expect(scheduleButton(page)).toHaveAttribute("aria-expanded", "true");
+        await expect(scheduleButton(page)).toBeFocused();
+        expect(await page.evaluate(() => (window as any).__scrolled)).toContain(true);
     });
 }

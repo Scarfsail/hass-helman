@@ -1,8 +1,7 @@
-import { prepareNodeDetailPage, mountSimpleCard, nodeDetailLocators, sectionRequestLog, sectionReads } from "./support/node-detail-harness";
+import { prepareNodeDetailPage, mountSimpleCard } from "./support/node-detail-harness";
 import { cardTree, scheduleSlots } from "./support/payload-builders";
 import type { ScheduleActionDTO, SchedulePayload, ScheduleSlotDTO } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
-import { expectReducedMotionStill } from "./support/node-flow";
 
 /**
  * The inverter: the simple card's centre cell and its node detail.
@@ -17,7 +16,6 @@ import { expectReducedMotionStill } from "./support/node-flow";
  * each other, and only a confirmed mismatch is promoted.
  */
 
-const SCREENS = process.env.SCREENS;
 
 type Variant = {
     agreement?: "match" | "mismatch" | "unknown";
@@ -50,7 +48,14 @@ type Variant = {
     modesNull?: boolean;
     /** The slot in progress is a discharge candidate whose condition is not met. */
     candidateNow?: boolean;
+    plannedChargeNow?: boolean;
+    userOverrideNow?: boolean;
+    runtimeFailed?: boolean;
+    /** The slot in progress charges to a target the battery has reached: the executor holds it with stop discharging. */
+    targetReachedNow?: boolean;
     timeZone?: string;
+    /** The viewer is an admin. */
+    admin?: boolean;
 };
 
 declare global {
@@ -111,7 +116,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
         const states: Record<string, unknown> = {
             "sensor.solar": s(v.solar ?? "4200", "W"), "sensor.grid": s(v.grid ?? "-300", "W"), "sensor.battery": s(v.battery ?? "-500", "W"),
             "sensor.house": s(v.house ?? "1200", "W"), "number.min_soc": s("10", "%"), "number.max_soc": s("100", "%"),
-            "select.helman_inverter_mode": s("normal", undefined, { friendly_name: "Helman inverter mode" }),
+            "select.helman_inverter_mode": s(v.targetReachedNow ? "stop_discharging" : "normal", undefined, { friendly_name: "Helman inverter mode" }),
         };
         const entities: Record<string, string | null> = { battery_min_soc: "number.min_soc", battery_max_soc: "number.max_soc" };
         if (profile) {
@@ -134,7 +139,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             entities,
             maxAllowedExportPower: 9900,
             agreement: profile
-                ? { status: v.agreement ?? "match", reason: v.agreement === "unknown" ? "unavailable" : null, commanded: "normal", observedOption: v.agreement === "mismatch" ? null : "normal",
+                ? { status: v.agreement ?? "match", reason: v.agreement === "unknown" ? "unavailable" : null, commanded: v.targetReachedNow ? "stop_discharging" : "normal", observedOption: v.agreement === "mismatch" ? null : v.targetReachedNow ? "stop_discharging" : "normal",
                     observedFrom: ["number.solax_export_control_user_limit", "select.solax_charger_use_mode", "select.solax_manual_mode_select"], registers }
                 : { status: "unknown", reason: "no_profile", commanded: "normal", observedOption: null, observedFrom: [], registers: [] },
             condition: v.condition === "off_grid" ? { kind: "off_grid", runMode: "Off-Grid", entityId: "sensor.solax_run_mode" } : null,
@@ -183,6 +188,8 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             if (!v.noCharge && hour >= 14 && hour < 16) action = { kind: "charge_to_target_soc", targetSoc: 80, setBy: "automation" };
             if (hour >= 18 && hour < 19) action = { kind: "discharge_to_target_soc", targetSoc: 30, setBy: "automation", conditionMet: false };
             if (v.candidateNow && hour < 14) action = { kind: "discharge_to_target_soc", targetSoc: 30, setBy: "automation", conditionMet: false };
+            if ((v.plannedChargeNow || v.targetReachedNow) && hour < 14) action = { kind: "charge_to_target_soc", targetSoc: 80, setBy: "automation" };
+            if (v.userOverrideNow && hour < 14) action = { kind: "normal", setBy: "user" };
             slots.push({ id, controllables: action ? { inverter: action } : {} });
         }
         const schedule: SchedulePayload = {
@@ -191,7 +198,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             slots,
             runtime: {
                 activeSlotId: "2026-10-21T12:00:00+00:00",
-                controllables: { inverter: { actionKind: "apply", outcome: "success", executedAction: { kind: "normal" }, reason: "scheduled" } },
+                controllables: { inverter: { actionKind: "apply", outcome: v.runtimeFailed ? "failed" : "success", executedAction: { kind: v.targetReachedNow ? "stop_discharging" : "normal" }, reason: v.targetReachedNow ? "target_soc_reached" : "scheduled" } },
             },
         };
         window.__modesFail = !!v.modesFail;
@@ -201,11 +208,12 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
         window.__InverterHass = window.__configureNodeDetail({
             states, tree, overviews: { inverter: overview }, sections: { inverter: { flows: flowsSection, modes, temperature: section } }, schedule,
             timeZone: v.timeZone,
-            hass: { connection: { subscribeMessage: async (listener: (event: unknown) => void, request: { type: string }) => {
+            hass: { ...(v.admin ? { user: { is_admin: true } } : {}), connection: { subscribeMessage: async (listener: (event: unknown) => void, request: { type: string }) => {
                 if (request.type === "helman/subscribe_updates") window.__dataChanged.push(listener);
                 return () => undefined;
             } } },
             replies: {
+                "helman/get_appliances": { appliances: [{ id: "inverter", name: "Inverter", kind: "inverter", primaryEntityId: "select.helman_inverter_mode", supportsAuthoring: true, normalState: "normal", actionOptions: { normal: "normal", stop_export: "stop_export" } }] },
                 "helman/get_node_detail": async (msg: {
                     type: string;
                     node?: string;
@@ -243,770 +251,186 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
 }
 
 
-const { content, question, header, evidence, tile, flow, flowLabel } = nodeDetailLocators("inverter");
-const cell = (page: Page) => page.locator(".inverter-cell");
-const chain = (page: Page) => content(page).locator("[data-chain]");
-const box = (page: Page, key: string) => chain(page).locator(`[data-box="${key}"]`);
-const strip = (page: Page) => content(page).locator("helman-mode-strip");
-const sectionRequests = async (page: Page, section?: string) => (await sectionRequestLog(page, "inverter", section)).filter((r) => section !== undefined || r.section !== "modes").length;
 
-async function segments(page: Page): Promise<Array<{ tone: string; planned: string; from: string; to: string }>> {
-    return strip(page).locator("[data-segment]").evaluateAll((nodes) => nodes.map((node) => ({
-        tone: node.getAttribute("data-tone")!,
-        planned: node.getAttribute("data-planned")!,
-        from: new Date(Number(node.getAttribute("data-start"))).toISOString().slice(11, 16),
-        to: new Date(Number(node.getAttribute("data-end"))).toISOString().slice(11, 16),
-    })));
-}
+const content = (page: Page) => page.locator("node-detail-inverter-content");
 
-async function setStates(page: Page, states: Record<string, string>): Promise<void> {
-    await page.evaluate((states) => {
-        const card = document.querySelector("helman-simple-card") as any;
-        const hass = window.__InverterHass;
-        const next = { ...hass.states };
-        for (const [id, state] of Object.entries(states)) next[id] = { ...next[id], state };
-        window.__InverterHass = { ...hass, states: next };
-        card.hass = window.__InverterHass;
-    }, states);
-}
+test("inverter Overview shows the P1 detail layout", async ({ page }) => {
+    await mount(page);
+    await page.locator(".inverter-cell").click();
+    const c = content(page);
+    await expect(c.locator("[data-overview]")).toBeVisible();
+    await expect(c.locator("helman-detail-headline")).toBeVisible();
+    await expect(c.locator("[data-chain] [data-box]")).toHaveCount(3);
+    await expect(c.locator("[data-verdict]")).toBeVisible();
+});
 
-/** Announce a data change, as the backend's update feed does. */
-async function announceChange(page: Page): Promise<void> {
-    await page.evaluate(() => { for (const listener of window.__dataChanged) listener({ kind: "config" }); });
-}
+test("Back closes the Overview mode override and keeps the inverter detail", async ({ page }) => {
+    await mount(page);
+    await page.locator(".inverter-cell").click();
+    await content(page).getByRole("button", { name: /Override mode/ }).click();
+    await expect(page.locator("control-override-dialog")).toBeVisible();
+    await expect.poll(() => page.evaluate(() => window.history.state?.__helmanInverterOverrideId)).toBeTruthy();
+    await page.evaluate(() => window.history.back());
+    await expect(page.locator("control-override-dialog")).toHaveCount(0);
+    await expect(content(page)).toBeVisible();
+});
 
-const overviewRequests = (page: Page) =>
-    page.evaluate(() => window.__InverterRequests.filter((r) => r.type === "helman/get_node_detail" && r.node === "inverter" && !r.section).length);
+test("inverter condition remains visible without a dead Details button", async ({ page }) => {
+    await mount(page, { condition: "off_grid" });
+    await page.locator(".inverter-cell").click();
 
-async function openDetail(page: Page): Promise<void> {
-    await cell(page).click();
+    const warning = content(page).locator("[data-exception]");
+    await expect(warning).toBeVisible();
+    await expect(warning).toContainText("Off-Grid");
+    await expect(warning.locator("button")).toHaveCount(0);
+});
+
+test("inverter verdict distinguishes agreement and mismatch", async ({ page }) => {
+    await mount(page, { profile: true, agreement: "match" });
+    await page.locator(".inverter-cell").click();
+    await expect(content(page).locator("[data-verdict]")).toContainText("Everything agrees");
+    await expect(content(page).locator("[data-output]")).toContainText("Output now (AC)");
+});
+
+test("inverter does not claim agreement when the plan differs from the last command", async ({ page }) => {
+    await mount(page, { plannedChargeNow: true });
+    await page.locator(".inverter-cell").click();
+    await expect(content(page).locator("[data-verdict]")).toContainText("last command differs from the plan");
+});
+
+test("inverter agrees when a charge to target holds the battery at its reached target", async ({ page }) => {
+    await mount(page, { targetReachedNow: true });
+    await page.locator(".inverter-cell").click();
+    const c = content(page);
+    await expect(c.locator("[data-verdict]")).toContainText("Everything agrees");
+    await expect(c.locator("[data-verdict]")).not.toContainText("Not applied");
+    await expect(c.locator("[data-box=plan]")).toContainText("Target SoC reached");
+});
+
+test("inverter reports disabled execution in its verdict", async ({ page }) => {
+    await mount(page, { executionEnabled: false });
+    await page.locator(".inverter-cell").click();
+    await expect(content(page).locator("[data-verdict]")).toContainText("execution off");
+});
+
+test("inverter candidate is judged by its effective normal action", async ({ page }) => {
+    await mount(page, { candidateNow: true });
+    await page.locator(".inverter-cell").click();
+    await expect(content(page).locator("[data-verdict]")).toContainText("Everything agrees");
+});
+
+test("inverter does not claim agreement when the current command failed", async ({ page }) => {
+    await mount(page, { runtimeFailed: true });
+    await page.locator(".inverter-cell").click();
+    await expect(content(page).locator("[data-verdict]")).toContainText("scheduled command failed");
+});
+
+test("inverter Schedule does not promise an unmet discharge candidate", async ({ page }) => {
+    await mount(page, { noCharge: true });
+    await page.locator(".inverter-cell").click();
+    await expect(page.locator("node-detail-dialog helman-detail-section[data-schedule] [slot=summary]"))
+        .toContainText("Nothing planned");
+});
+
+
+test("inverter Schedule strip draws the observed modes before now and the plan after it, in two rows", async ({ page }) => {
+    await mount(page);
+    await page.locator(".inverter-cell").click();
+    await page.locator("node-detail-dialog helman-detail-section[data-schedule] button").first().click();
+    const control = page.locator("helman-node-control");
+    await expect(control.locator("[data-strip-title]")).toHaveText("Modes · today → tomorrow noon");
+    const strip = control.locator("helman-mode-strip");
+    const happened = strip.locator("[data-row=happened] [data-segment]");
+    const planned = strip.locator("[data-row=planned] [data-segment]");
+    // The recorded stretches, the Modbus blip a gap, the mode still held running to now.
+    await expect(happened).toHaveCount(3);
+    expect(await happened.evaluateAll((segments) => segments.map((s) => [s.getAttribute("data-tone"), s.getAttribute("data-planned")])))
+        .toEqual([["normal", "false"], ["charge", "false"], ["normal", "false"]]);
+    await expect(happened.last()).toHaveAttribute("data-end", String(Date.parse("2026-10-21T12:00:00Z")));
+    // The plan from now on, the unmet discharge dashed and neutral.
+    await expect(planned.first()).toHaveAttribute("data-start", String(Date.parse("2026-10-21T12:00:00Z")));
+    expect(await planned.evaluateAll((segments) => segments.map((s) => [s.getAttribute("data-tone"), s.getAttribute("data-candidate")])))
+        .toEqual([["normal", "false"], ["charge", "false"], ["normal", "false"], ["neutral", "true"], ["normal", "false"]]);
+    // Observed and planned modes by the same names, each named once.
+    expect(await strip.locator("[data-legend-entry]").allInnerTexts()).toEqual(["Normal", "Charging", "Discharging · candidate"]);
+    await expect(control.locator("[data-history-note]")).toHaveCount(0);
+    // Today and tomorrow's changes: who set each, a candidate as its range.
+    const rows = control.locator("[data-change-row]");
+    expect(await rows.allInnerTexts()).toEqual([
+        "14:00 Charge to 80 %\nHelman's schedule",
+        "16:00 Normal\ndefault",
+        "18:00–19:00 Discharge to 30 %\ncandidate",
+        "19:00 Normal\ndefault",
+    ]);
+});
+
+test("inverter Schedule says why nothing happened is drawn, and a failed read is tried again", async ({ page }) => {
+    const openSchedule = async () => {
+        await page.locator(".inverter-cell").click();
+        await page.locator("node-detail-dialog helman-detail-section[data-schedule] button").first().click();
+    };
+    const note = page.locator("helman-node-control [data-history-note]");
+    await mount(page, { modesFail: true });
+    await openSchedule();
+    await expect(note).toContainText("Today's modes could not be read.");
+    await page.evaluate(() => { window.__modesFail = false; });
+    await note.locator("[data-history-retry]").click();
+    await expect(note).toHaveCount(0);
+    await expect(page.locator("helman-node-control helman-mode-strip [data-row=happened] [data-segment]")).toHaveCount(3);
+
+    await mount(page, { modesNull: true });
+    await openSchedule();
+    await expect(note).toHaveText("Not every mode register of the profile is found, so today's modes can't be read: only the plan is drawn.");
+
+    await mount(page, { profile: false });
+    await openSchedule();
+    await expect(note).toHaveText("A Custom inverter has no mode registers to read: only the plan is drawn.");
+});
+
+test("inverter has a Schedule but no Forecast section: its future is its schedule", async ({ page }) => {
+    await mount(page);
+    await page.locator(".inverter-cell").click();
     await expect(content(page).locator("[data-overview]")).toBeVisible();
-}
-
-/** Open a question the way a reader does: the picture that absorbed it, or its tile. */
-async function open(page: Page, id: string): Promise<void> {
-    if (id === "why") await chain(page).click();
-    else if (id === "next") await content(page).locator("[data-strip]").click();
-    else await tile(page, id).locator("button").click();
-    await expect(header(page, id)).toHaveAttribute("aria-expanded", "true");
-}
-
-test.describe("the centre cell", () => {
-    test("is a labelled button with the commanded mode, opened from the keyboard", async ({ page }) => {
-        await mount(page);
-        await expect(cell(page)).toBeVisible();
-        await expect(cell(page)).toHaveText(/Normal/);
-        await expect(cell(page)).toHaveAttribute("aria-label", "Inverter: Normal");
-
-        await cell(page).focus();
-        await page.keyboard.press("Enter");
-        await expect(content(page).locator("[data-overview]")).toBeVisible();
-    });
-
-    test("a link short of 100 % is a neutral cue with its value, not a fault", async ({ page }) => {
-        await mount(page, { linkRate: "97.0" });
-        await expect(cell(page).locator(".inverter-link")).toHaveText("97 %");
-        await expect(cell(page)).toHaveAttribute("aria-label", /communication details: 97 %/);
-    });
-
-    test("a rate just short of 100 % never rounds up to 100 %", async ({ page }) => {
-        await mount(page, { linkRate: "99.97" });
-        await expect(cell(page).locator(".inverter-link")).toHaveText("99.9 %");
-    });
-
-    test("no cell when the overview cannot be loaded, and the card still draws", async ({ page }) => {
-        await mount(page, { overviewFails: true });
-        await expect(page.locator("simple-card-solar")).toBeVisible();
-        await expect(cell(page)).toHaveCount(0);
-    });
-});
-
-test.describe("the inverter overview", () => {
-    test("opens on a status pill, the chain, the strip, the Now flow and three closed tiles", async ({ page }) => {
-        await mount(page);
-        await openDetail(page);
-        const status = content(page).locator("[data-overview] .status");
-        await expect(status).toHaveText("Helman last commanded: Normal.");
-        await expect(status).toHaveAttribute("data-tone", "normal");
-        await expect(chain(page).locator("[data-box]")).toHaveCount(3);
-        await expect(strip(page)).toBeVisible();
-        await expect(flow(page)).toHaveAttribute("data-flow-scope", "now");
-
-        const ids = await content(page).locator("helman-node-tile").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-question")));
-        expect(ids).toEqual(["limits", "operating", "trust"]);
-        // No answer is open, and nothing heavy is mounted; only the strip's modes are read.
-        await expect(content(page).locator("helman-node-question")).toHaveCount(0);
-        await expect(content(page).locator("table, helman-day-line-chart, helman-solar-inspector-card")).toHaveCount(0);
-        expect(await sectionRequests(page)).toBe(0);
-        expect(await sectionRequests(page, "modes")).toBe(1);
-        await expect(content(page).locator("[data-exception]")).toHaveCount(0);
-    });
-
-    test("tiles say the answer: the export cap with the SoC range, temperature and load, the link", async ({ page }) => {
-        await mount(page);
-        await openDetail(page);
-        await expect(tile(page, "limits").locator(".value")).toHaveText("≤ 9.9 kW");
-        await expect(tile(page, "limits").locator(".detail")).toHaveText("export cap · SoC 10–100 %");
-        const range = tile(page, "limits").locator("[data-soc-range]");
-        await expect(range).toHaveAttribute("data-min", "10");
-        await expect(range).toHaveAttribute("data-max", "100");
-        await expect(range.locator(".meter-fill")).toHaveAttribute("style", /margin-left: 10%; width: 90%/);
-        // 3.5 kW of the 10 kW rating, without thresholds.
-        await expect(tile(page, "operating").locator(".value")).toHaveText("48 °C");
-        await expect(tile(page, "operating").locator(".detail")).toHaveText("AC 3.5 kW · 35 % of rating");
-        await expect(tile(page, "operating").locator("[data-load-meter] .meter-fill")).toHaveAttribute("style", /width: 35\.0%/);
-        // The rate and the quarantined count: no hourly dots, there is no history of the link.
-        await expect(tile(page, "trust").locator(".value")).toHaveText("100.0 %");
-        await expect(tile(page, "trust").locator(".detail")).toHaveText("0 quarantined");
-        await expect(tile(page, "trust").locator(".caption")).toHaveText("Can I trust its readings?");
-    });
-
-    test("unavailable link readings say so on the trust tile", async ({ page }) => {
-        await mount(page, { linkUnavailable: true });
-        await openDetail(page);
-        await expect(tile(page, "trust").locator(".value")).toHaveText("–");
-        await expect(tile(page, "trust").locator(".detail")).toHaveText("The link readings are unavailable.");
-    });
-
-    test("off-grid operation is promoted and leads to the operating answer", async ({ page }) => {
-        await mount(page, { condition: "off_grid" });
-        await openDetail(page);
-        await expect(content(page).locator("[data-exception]")).toContainText("off-grid operation (Off-Grid)");
-        await content(page).locator("[data-exception] button").click();
-        await expect(header(page, "operating")).toHaveAttribute("aria-expanded", "true");
-    });
-
-    test("an overview that fails explains itself with a retry", async ({ page }) => {
-        await mount(page);
-        await page.evaluate(() => {
-            window.__setMockReply(window.__InverterHass, "helman/get_node_detail", new Error("down"));
-        });
-        await cell(page).click();
-        await expect(content(page)).toContainText("Inverter details could not be loaded.");
-        await expect(content(page).getByRole("button", { name: "Try again" })).toBeVisible();
-    });
-});
-
-test.describe("the chain", () => {
-    test("match: plan, command and inverter in their mode's tone, linked; it opens why", async ({ page }) => {
-        await mount(page);
-        await openDetail(page);
-        await expect(chain(page).locator(".picture-scope")).toHaveText("Now · 12:00");
-        await expect(box(page, "plan").locator(".box-value")).toHaveText("Normal");
-        await expect(box(page, "plan").locator(".box-detail")).toHaveText("execution on");
-        await expect(box(page, "command").locator(".box-value")).toHaveText("Normal");
-        await expect(box(page, "command").locator(".box-detail")).toHaveText("executor succeeded");
-        await expect(box(page, "inverter").locator(".box-value")).toHaveText("Normal");
-        await expect(box(page, "inverter").locator(".box-detail")).toHaveText("matches");
-        for (const key of ["plan", "command", "inverter"]) {
-            await expect(box(page, key)).toHaveAttribute("data-tone", "normal");
-            await expect(box(page, key)).toHaveClass(/action-tone-normal/);
-        }
-        await expect(box(page, "inverter")).not.toHaveAttribute("data-state", "mismatch");
-        await expect(chain(page).locator("[data-link]")).toHaveCount(2);
-        await expect(chain(page).locator("[data-link='broken']")).toHaveCount(0);
-        await expect(content(page).locator("[data-exception]")).toHaveCount(0);
-
-        // A button wrapping a picture keeps its values readable: the question is its title.
-        await expect(chain(page)).toHaveAttribute("title", "Why is the inverter doing this?");
-        expect(await chain(page).getAttribute("aria-label")).toBeNull();
-        await open(page, "why");
-        await expect(chain(page)).toHaveAttribute("aria-expanded", "true");
-        const why = question(page, "why");
-        await expect(why.locator("[data-row='scheduled']")).toContainText("Normal until 14:00");
-        await expect(why.locator("[data-row='execution']")).toContainText("On: Helman applies the schedule");
-        await expect(why.locator("[data-row='executor']")).toContainText("Applied · succeeded · Normal");
-        await expect(why.locator("[data-row='last-command']")).toContainText("Normal");
-        await expect(why.locator("[data-row='agreement']")).toContainText("Matches the last command");
-        await evidence(page, "why").click();
-        const registers = why.locator("[data-registers] tbody tr");
-        await expect(registers).toHaveCount(2);
-        await expect(registers.first()).toContainText("Self Use Mode");
-        await expect(registers.first()).toContainText("matches");
-    });
-
-    test("mismatch: the inverter's box turns red and the exception sits under the chain, leading to why", async ({ page }) => {
-        await mount(page, { agreement: "mismatch" });
-        await openDetail(page);
-        await expect(box(page, "inverter")).toHaveAttribute("data-state", "mismatch");
-        await expect(box(page, "inverter")).toHaveClass(/mismatch/);
-        await expect(box(page, "inverter").locator(".box-value")).toHaveText("another mode");
-        await expect(box(page, "inverter").locator(".box-detail")).toHaveText("doesn't match");
-        // The plan and the command are unchanged: only the disagreement is promoted.
-        await expect(box(page, "command")).not.toHaveAttribute("data-state", "mismatch");
-        const exception = content(page).locator("[data-exception]");
-        await expect(exception).toHaveCount(1);
-        await expect(exception).toContainText("don't match Helman's last command");
-        // Under the chain, before the strip.
-        const order = await content(page).locator("[data-chain], [data-exception], [data-strip]").evaluateAll((nodes) =>
-            nodes.map((node) => node.hasAttribute("data-chain") ? "chain" : node.hasAttribute("data-exception") ? "exception" : "strip"));
-        expect(order).toEqual(["chain", "exception", "strip"]);
-        await exception.locator("button").click();
-        await expect(header(page, "why")).toHaveAttribute("aria-expanded", "true");
-        await expect(question(page, "why").locator("[data-row='agreement']")).toContainText("Doesn't match the last command");
-    });
-
-    test("execution off: the link from plan to command is broken and says not applied", async ({ page }) => {
-        await mount(page, { executionEnabled: false });
-        await openDetail(page);
-        await expect(box(page, "plan").locator(".box-detail")).toHaveText("execution off");
-        const links = chain(page).locator("[data-link]");
-        await expect(links.nth(0)).toHaveAttribute("data-link", "broken");
-        await expect(links.nth(0)).toHaveText("not applied");
-        await expect(links.nth(1)).toHaveAttribute("data-link", "applied");
-        await open(page, "why");
-        await expect(question(page, "why").locator("[data-row='execution']")).toContainText("Off: the schedule is shown but not applied");
-    });
-
-    test("an unreadable register is unknown, never an alert", async ({ page }) => {
-        await mount(page, { agreement: "unknown" });
-        await openDetail(page);
-        await expect(content(page).locator("[data-exception]")).toHaveCount(0);
-        await expect(box(page, "inverter")).not.toHaveAttribute("data-state", "mismatch");
-        await expect(box(page, "inverter").locator(".box-detail")).toHaveText("can't be told now");
-        await open(page, "why");
-        await expect(question(page, "why").locator("[data-row='agreement']")).toContainText("Unknown: some mode registers can't be read");
-    });
-
-    test("a candidate in progress is what the executor applies, normal, and said to be a candidate", async ({ page }) => {
-        await mount(page, { candidateNow: true });
-        await openDetail(page);
-        await expect(box(page, "plan").locator(".box-value")).toHaveText("Normal");
-        await expect(box(page, "plan").locator(".box-detail")).toHaveText("Discharge to 30 %: a candidate, not executed · execution on");
-        await expect(box(page, "plan")).toHaveAttribute("data-tone", "normal");
-        // The strip agrees: normal from now.
-        expect((await segments(page)).find((segment) => segment.planned === "true")).toEqual({ tone: "normal", planned: "true", from: "12:00", to: "14:00" });
-    });
-
-    for (const [reason, text] of [["no_command", "No command to compare yet"], ["not_bound", "Unknown: not every mode register of the profile is found"]] as const) {
-        test(`an agreement unknown for ${reason} says why`, async ({ page }) => {
-            await mount(page);
-            await page.evaluate((reason) => {
-                window.__overview = { ...window.__overview, agreement: { ...window.__overview.agreement, status: "unknown", reason, registers: [] } };
-            }, reason);
-            await openDetail(page);
-            await expect(box(page, "inverter").locator(".box-detail")).toHaveText(text);
-        });
-    }
-
-    test("the plan box takes the slot's action tone", async ({ page }) => {
-        await mount(page, { stopExportThenEmpty: true });
-        await openDetail(page);
-        await expect(box(page, "plan").locator(".box-value")).toHaveText("Stop export");
-        await expect(box(page, "plan")).toHaveAttribute("data-tone", "stop");
-    });
-});
-
-test.describe("the mode strip", () => {
-    test("today's recorded modes solid, a gap left a gap, the plan hatched to noon tomorrow, the next change flagged", async ({ page }) => {
-        await mount(page);
-        await openDetail(page);
-        await expect(content(page).locator("[data-strip] .picture-scope")).toHaveText("Modes · today to noon tomorrow");
-        expect(await segments(page)).toEqual([
-            { tone: "normal", planned: "false", from: "00:00", to: "06:00" },
-            { tone: "charge", planned: "false", from: "06:00", to: "08:00" },
-            // 08:00–08:10 the registers held no mode: a gap, never forced into one.
-            { tone: "normal", planned: "false", from: "08:10", to: "12:00" },
-            // The plan from now: the executor applies normal outside actions, and a candidate is normal.
-            { tone: "normal", planned: "true", from: "12:00", to: "14:00" },
-            { tone: "charge", planned: "true", from: "14:00", to: "16:00" },
-            { tone: "normal", planned: "true", from: "16:00", to: "18:00" },
-            { tone: "normal", planned: "true", from: "18:00", to: "19:00" },
-            { tone: "normal", planned: "true", from: "19:00", to: "12:00" },
-        ]);
-        const next = strip(page).locator("[data-next-change]");
-        await expect(next).toHaveText("14:00 · Charge to 80 %");
-        await expect(next).toHaveAttribute("data-tone", "charge");
-        await expect(strip(page).locator("[data-now]")).toHaveCount(1);
-    });
-
-    test("the strip opens what it will do next", async ({ page }) => {
-        await mount(page);
-        await openDetail(page);
-        await expect(content(page).locator("[data-strip]")).toHaveAttribute("title", "What will it do next?");
-        await expect(page.locator("helman-solar-inspector-card")).toHaveCount(0);
-        await open(page, "next");
-        const runs = question(page, "next").locator("[data-runs] li:not(.day-label)");
-        await expect(runs.nth(1)).toContainText("14:00–16:00");
-        await expect(runs.nth(1)).toContainText("Charge to 80 %");
-        await expect(runs.nth(3)).toContainText("Discharge to 30 % (candidate, not executed)");
-        await expect(question(page, "next").locator("helman-solar-inspector-card")).toHaveCount(1);
-        await evidence(page, "next").click();
-        await expect(question(page, "next")).toContainText("The schedule does not record why an optimizer chose this action.");
-        await content(page).locator("[data-strip]").click();
-        await expect(page.locator("helman-solar-inspector-card")).toHaveCount(0);
-    });
-
-    test("with execution off the plan is drawn neutral, not applied", async ({ page }) => {
-        await mount(page, { executionEnabled: false });
-        await openDetail(page);
-        const planned = (await segments(page)).filter((segment) => segment.planned === "true");
-        expect(planned.length).toBeGreaterThan(0);
-        expect(planned.every((segment) => segment.tone === "neutral")).toBe(true);
-        // What was recorded keeps its tone.
-        expect((await segments(page))[1].tone).toBe("charge");
-    });
-
-    test("an empty stretch after an action is the next change back to normal", async ({ page }) => {
-        await mount(page, { stopExportThenEmpty: true });
-        await openDetail(page);
-        await expect(strip(page).locator("[data-next-change]")).toHaveText(/^13:00 · /);
-        await expect(strip(page).locator("[data-next-change]")).toHaveAttribute("data-tone", "normal");
-    });
-
-    test("a candidate whose condition is not met is not the next change", async ({ page }) => {
-        await mount(page, { noCharge: true });
-        await openDetail(page);
-        await expect(strip(page).locator("[data-next-change]")).toHaveCount(0);
-    });
-
-    test("today's modes that fail to load say so, and retry", async ({ page }) => {
-        await mount(page, { modesFail: true });
-        await openDetail(page);
-        await expect(content(page).locator("[data-strip-failed]")).toContainText("Today's modes could not be read.");
-        expect((await segments(page)).every((segment) => segment.planned === "true")).toBe(true);
-        await page.evaluate(() => { window.__modesFail = false; });
-        await content(page).locator("[data-strip-failed] button").click();
-        await expect(content(page).locator("[data-strip-failed]")).toHaveCount(0);
-        expect((await segments(page))[0]).toEqual({ tone: "normal", planned: "false", from: "00:00", to: "06:00" });
-        expect(await sectionRequests(page, "modes")).toBe(2);
-    });
-});
-
-test.describe("today's modes are read when the observed mode changes", () => {
-    test("a register change re-reads the comparison, and only a new observed mode re-reads the history", async ({ page }) => {
-        await mount(page);
-        await openDetail(page);
-        expect(await sectionRequests(page, "modes")).toBe(1);
-        const before = await overviewRequests(page);
-        // A compared register moves, but the registers still hold Normal.
-        await setStates(page, { "number.solax_export_control_user_limit": "9900.0" });
-        await expect.poll(() => overviewRequests(page)).toBeGreaterThan(before);
-        expect(await sectionRequests(page, "modes")).toBe(1);
-        // The inverter now shows another mode: today's modes are read again.
-        await page.evaluate(() => { window.__overview = { ...window.__overview, agreement: { ...window.__overview.agreement, observedOption: "charge_to_target_soc" } }; });
-        await setStates(page, { "select.solax_charger_use_mode": "Manual Mode" });
-        await expect.poll(() => sectionRequests(page, "modes")).toBe(2);
-    });
-
-    test("a register only another mode binds still re-reads the comparison", async ({ page }) => {
-        await mount(page);
-        await openDetail(page);
-        const before = await overviewRequests(page);
-        // Normal never writes the manual mode, but the observed mode is read from it too.
-        await setStates(page, { "select.solax_manual_mode_select": "Force Charge" });
-        await expect.poll(() => overviewRequests(page)).toBeGreaterThan(before);
-    });
-});
-
-test.describe("today's modes on a data change, a new day and a changed config", () => {
-    test("a data change reads today's modes once, after the overview it reloads", async ({ page }) => {
-        await mount(page);
-        await openDetail(page);
-        await expect.poll(() => page.evaluate(() => window.__modesCalls)).toBe(1);
-        const before = await overviewRequests(page);
-        await announceChange(page);
-        await expect.poll(() => overviewRequests(page)).toBeGreaterThan(before);
-        await expect.poll(() => page.evaluate(() => window.__modesCalls)).toBe(2);
-        await page.waitForTimeout(600);
-        expect(await page.evaluate(() => window.__modesCalls)).toBe(2);
-    });
-
-    test("when the overview stops offering the section, the strip drops today's modes and stops reading them", async ({ page }) => {
-        await mount(page);
-        await openDetail(page);
-        await expect.poll(async () => (await segments(page)).filter((segment) => segment.planned === "false").length).toBe(3);
-        await page.evaluate(() => { window.__overview = { ...window.__overview, sections: ["temperature"] }; });
-        await announceChange(page);
-        await expect.poll(async () => (await segments(page)).filter((segment) => segment.planned === "false").length).toBe(0);
-        expect(await page.evaluate(() => window.__modesCalls)).toBe(1);
-    });
-
-    test("a section without modes says why the strip has only the plan", async ({ page }) => {
-        await mount(page, { modesNull: true });
-        await openDetail(page);
-        await expect(content(page).locator("[data-strip-no-registers]")).toHaveText(
-            "Not every mode register of the profile is found, so today's modes can't be read: only the plan is drawn.");
-        expect((await segments(page)).every((segment) => segment.planned === "true")).toBe(true);
-    });
-
-    test("yesterday's modes give way on a new day, so a failed read says so", async ({ page }) => {
-        await mount(page, { modesThenFail: true });
-        await openDetail(page);
-        await expect.poll(async () => (await segments(page)).filter((segment) => segment.planned === "false").length).toBe(3);
-        await page.clock.setFixedTime(new Date("2026-10-22T00:01:00Z"));
-        await content(page).evaluate((element: any) => element.requestUpdate());
-        await expect(content(page).locator("[data-strip-failed]")).toContainText("Today's modes could not be read.");
-        expect((await segments(page)).every((segment) => segment.planned === "true")).toBe(true);
-    });
-
-    test("yesterday's modes from a lagging backend are never today's, so a failed retry says so", async ({ page }) => {
-        await mount(page, { modesYesterdayThenFail: true });
-        await openDetail(page);
-        await expect.poll(() => page.evaluate(() => window.__modesCalls)).toBe(1);
-        // An answer for another day is retried once the new-day retry interval passed.
-        await page.clock.setFixedTime(new Date("2026-10-21T12:00:31Z"));
-        await content(page).evaluate((element: any) => element.requestUpdate());
-        await expect.poll(() => page.evaluate(() => window.__modesCalls)).toBe(2);
-        await expect(content(page).locator("[data-strip-failed]")).toContainText("Today's modes could not be read.");
-        expect((await segments(page)).every((segment) => segment.planned === "true")).toBe(true);
-    });
-});
-
-test.describe("the strip in Home Assistant's time zone", () => {
-    test.use({ timezoneId: "America/New_York" });
-
-    test("midnight to noon tomorrow, the hours and the chain's time are Home Assistant's, not the browser's", async ({ page }) => {
-        // 12:00 UTC is 14:00 in Prague: the strip runs from Prague's midnight, 22:00 UTC, for 36 h.
-        await mount(page, { timeZone: "Europe/Prague" });
-        await openDetail(page);
-        const ticks = strip(page).locator(".hours span");
-        await expect(ticks.first()).toHaveText("00");
-        await expect(ticks.first()).toHaveAttribute("style", /left: 0\.00%/);
-        await expect(ticks.nth(1)).toHaveText("06");
-        await expect(ticks.nth(1)).toHaveAttribute("style", /left: 16\.67%/);
-        await expect(ticks.last()).toHaveText("12");
-        await expect(strip(page).locator("[data-now] line")).toHaveAttribute("x1", "389");
-        // The recorded 00:00 UTC stretch starts 2 h into Prague's day.
-        await expect(strip(page).locator("[data-segment]").first()).toHaveAttribute("style", /left: 5\.56%/);
-        await expect(chain(page).locator(".picture-scope")).toHaveText("Now · 14:00");
-        await expect(strip(page).locator("[data-next-change]")).toHaveText("16:00 · Charge to 80 %");
-    });
-});
-
-test.describe("the flow", () => {
-    test("Now: solar, battery and grid in; house, battery and export out, around the inverter's AC power", async ({ page }) => {
-        await mount(page);
-        await openDetail(page);
-        await expect(flow(page).locator("[data-scope-label]")).toHaveText("Now · 12:00");
-        await expect(flow(page).locator("[data-glyph='inverter']")).toHaveCount(1);
-        await expect(flow(page).locator("[data-centre-value]")).toHaveText("AC 3.5 kW");
-        await expect(flowLabel(page, "in", "solar")).toContainText("4.2 kW");
-        await expect(flowLabel(page, "in", "battery")).toContainText("500 W");
-        await expect(flowLabel(page, "in", "grid")).toHaveClass(/none/);
-        await expect(flowLabel(page, "out", "house")).toContainText("1.2 kW");
-        await expect(flowLabel(page, "out", "battery")).toHaveClass(/none/);
-        await expect(flowLabel(page, "out", "grid")).toContainText("3.5 kW");
-        await expect(flowLabel(page, "out", "grid")).toContainText("Export");
-        await expect(flow(page).locator("[data-total='in']")).toHaveText("In 4.7 kW");
-        await expect(flow(page).locator("[data-total='out']")).toHaveText("Out 4.7 kW");
-    });
-
-    test("an unreadable house meter leaves every edge unknown, never 0", async ({ page }) => {
-        await mount(page, { house: "unavailable" });
-        await openDetail(page);
-        for (const [side, id] of [["in", "solar"], ["in", "battery"], ["out", "house"], ["out", "grid"]] as const) {
-            await expect(flowLabel(page, side, id)).toContainText("–");
-        }
-        await expect(flow(page).locator("[data-ribbon]")).toHaveCount(0);
-        await expect(flow(page).locator("[data-total]")).toHaveCount(0);
-    });
-
-    test("Today is requested only once chosen, from the same edges, with the unresolved energy said", async ({ page }) => {
-        await mount(page);
-        await openDetail(page);
-        expect(await sectionRequests(page, "flows")).toBe(0);
-        await flow(page).locator("[data-scope='today']").click();
-        await expect(flowLabel(page, "in", "solar")).toContainText("11 kWh");
-        expect(await sectionRequests(page, "flows")).toBe(1);
-        await expect(flow(page).locator("[data-scope-label]")).toHaveText("Today · 00:00–12:00");
-        await expect(flowLabel(page, "in", "battery")).toContainText("3.6 kWh");
-        await expect(flowLabel(page, "in", "grid")).toContainText("2.7 kWh");
-        await expect(flowLabel(page, "out", "house")).toContainText("9.9 kWh");
-        await expect(flowLabel(page, "out", "battery")).toContainText("5.7 kWh");
-        await expect(flowLabel(page, "out", "grid")).toContainText("2.0 kWh");
-        await expect(flow(page).locator("[data-centre-value]")).toHaveText("18 kWh");
-        await expect(flow(page).locator("[data-flow-note]")).toHaveText([
-            "0.40 kWh of today's solar is not resolved to a destination.",
-            "0.30 kWh of today's charge has no known source.",
-        ]);
-        await expect(flow(page).locator("[data-total='in']")).toHaveText("In 18 kWh");
-        await expect(flow(page).locator("[data-total='out']")).toHaveText("Out 18 kWh");
-    });
-
-    test("tapping the flow opens how the inverter is operating", async ({ page }) => {
-        await mount(page);
-        await openDetail(page);
-        await flow(page).locator("[data-side='in']").click();
-        await expect(header(page, "operating")).toHaveAttribute("aria-expanded", "true");
-    });
-});
-
-test.describe("motion and the centre value", () => {
-    test("Now: ribbons with energy shimmer, the glyph pulses and the AC power sits under it; Today stands still", async ({ page }) => {
-        await mount(page);
-        await openDetail(page);
-        await expect(flow(page)).toHaveAttribute("active", "");
-        await expect(flow(page).locator("[data-centre-value]")).toHaveText("AC 3.5 kW");
-        await expect(flow(page).locator("[data-side='in'] [data-ribbon='solar']")).toHaveAttribute("data-animated", "");
-        // Every drawn ribbon has energy on it, and shimmers.
-        await expect(flow(page).locator("[data-ribbon]:not([data-animated])")).toHaveCount(0);
-        // Nothing comes from the grid: no ribbon, so nothing shimmers.
-        await expect(flowLabel(page, "in", "grid")).toHaveClass(/none/);
-        await expect(flow(page).locator("[data-side='in'] [data-ribbon='grid']")).toHaveCount(0);
-        await flow(page).locator("[data-scope='today']").click();
-        // Everything that went out, the unknown destinations included.
-        await expect(flow(page).locator("[data-centre-value]")).toHaveText("18 kWh");
-        await expect(flow(page)).not.toHaveAttribute("active");
-        await expect(flow(page).locator("[data-ribbon]").first()).toBeAttached();
-        await expect(flow(page).locator("[data-animated]")).toHaveCount(0);
-    });
-
-    const cases: Array<[Variant, string, boolean]> = [
-        [{ acPhase: "20" }, "AC 60 W", true],
-        [{ acPhase: "10" }, "AC 30 W", false],
-        [{ acPhase: "unavailable" }, "–", false],
-    ];
-    for (const [variant, value, active] of cases) {
-        test(`${JSON.stringify(variant)} shows ${value} under the glyph, ${active ? "pulsing" : "still"}`, async ({ page }) => {
-            await mount(page, variant);
-            await openDetail(page);
-            await expect(flow(page).locator("[data-centre-value]")).toHaveText(value);
-            if (active) await expect(flow(page)).toHaveAttribute("active", "");
-            else await expect(flow(page)).not.toHaveAttribute("active");
-        });
-    }
-
-    test("reduced motion stops the shimmer and the pulse", async ({ page }) => {
-        await mount(page);
-        await openDetail(page);
-        await expectReducedMotionStill(page, flow(page));
-    });
-});
-
-test.describe("answers", () => {
-    test("one open at a time under the tiles, and evidence is the second disclosure", async ({ page }) => {
-        await mount(page);
-        await openDetail(page);
-        await open(page, "why");
-        await open(page, "limits");
-        await expect(question(page, "why")).toHaveCount(0);
-        await expect(question(page, "limits").locator("[data-row='export-limit']")).toContainText("9.9 kW");
-        await expect(question(page, "limits").locator("[data-row='eps_min_soc']")).toHaveCount(0);
-        await evidence(page, "limits").click();
-        await expect(question(page, "limits").locator("[data-row='eps_min_soc']")).toContainText("10 %");
-        await expect(question(page, "limits").locator("[data-row='main_breaker_limit']")).toContainText("25 A");
-    });
-
-    test("operating: today's temperature is requested and drawn only when the question opens", async ({ page }) => {
-        await mount(page);
-        await openDetail(page);
-        expect(await sectionRequests(page, "temperature")).toBe(0);
-        await open(page, "operating");
-        const chart = question(page, "operating").locator("helman-day-line-chart");
-        await expect(chart).toBeVisible();
-        expect(await sectionRequests(page, "temperature")).toBe(1);
-        await expect(chart.locator(".summary")).toContainText("Today 37.5 °C to 48.5 °C, mean 43.2 °C; warmest around 11:55. 89 % of the day so far is recorded.");
-        // The morning gap stays a gap: the line breaks in two.
-        const path = await chart.locator("path.line").getAttribute("d");
-        expect((path ?? "").split("M").length - 1).toBe(2);
-
-        await evidence(page, "operating").click();
-        const phases = question(page, "operating").locator("[data-phases] tbody tr");
-        await expect(phases).toHaveCount(3);
-        await expect(phases.first()).toContainText("235.3 V");
-    });
-
-    test("the chart is read by keyboard, not hover alone", async ({ page }) => {
-        await mount(page);
-        await openDetail(page);
-        await open(page, "operating");
-        const plot = question(page, "operating").locator("helman-day-line-chart .plot");
-        await plot.scrollIntoViewIfNeeded();
-        await plot.focus();
-        let previousTop: number | undefined;
-        await expect.poll(async () => {
-            const state = await plot.evaluate(async (element) => {
-                // Deliver focus scrolling before checking the controller's queued work.
-                await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-                const chart = element.getRootNode() as ShadowRoot;
-                const host = chart.host as any;
-                return {
-                    top: element.getBoundingClientRect().top,
-                    ready: host.series.length > 0 && !host.isUpdatePending && host._tooltip._frame === 0,
-                };
-            });
-            const settled = state.ready && state.top === previousTop;
-            previousTop = state.top;
-            return settled;
-        }).toBe(true);
-        await page.keyboard.press("End");
-        const tooltip = question(page, "operating").locator("helman-day-line-chart .hover-tooltip");
-        await expect(tooltip).toBeVisible();
-        await expect(tooltip).toContainText("11:55–12:00");
-        await page.keyboard.press("Home");
-        await expect(tooltip).toContainText("00:00–00:05");
-        await page.keyboard.press("Escape");
-        await expect(tooltip).toHaveCount(0);
-    });
-
-    test("a keyboard selection replaces a queued viewport dismissal, and later scrolling dismisses it", async ({ page }) => {
-        await mount(page);
-        await openDetail(page);
-        await open(page, "operating");
-        const chart = question(page, "operating").locator("helman-day-line-chart");
-        await expect(chart.locator("path.line")).toHaveCount(1);
-        await chart.evaluate(async (element: any) => {
-            await element.updateComplete;
-            const plot = element.shadowRoot.querySelector(".plot");
-            // Both actions happen before the controller's queued dismissal runs.
-            plot.dispatchEvent(new KeyboardEvent("keydown", { key: "Home" }));
-            window.dispatchEvent(new Event("scroll"));
-            plot.dispatchEvent(new KeyboardEvent("keydown", { key: "End" }));
-        });
-        await expect.poll(() => chart.evaluate(async (element: any) => {
-            await element.updateComplete;
-            return element._tooltip._frame === 0 && !element.isUpdatePending;
-        })).toBe(true);
-        const tooltip = chart.locator(".hover-tooltip");
-        await expect(tooltip).toContainText("11:55–12:00");
-        await page.evaluate(() => window.dispatchEvent(new Event("scroll")));
-        await expect(tooltip).toHaveCount(0);
-    });
-
-    test("a failed history request explains itself, retries, and does not block the overview", async ({ page }) => {
-        await mount(page, { sectionFails: true });
-        await openDetail(page);
-        await open(page, "operating");
-        await expect(question(page, "operating")).toContainText("Today's history could not be loaded.");
-        await expect(question(page, "operating").locator("[data-row='ac-total']")).toContainText("3.5 kW");
-        await expect(content(page).locator("[data-overview]")).toBeVisible();
-        await question(page, "operating").getByRole("button", { name: "Try again" }).click();
-        expect(await sectionRequests(page, "temperature")).toBe(2);
-    });
-
-    test("trust: the readings open more-info, and the hardware facts are evidence", async ({ page }) => {
-        await mount(page);
-        await openDetail(page);
-        await open(page, "trust");
-        await expect(question(page, "trust").locator("[data-row='link-rate'] button.reading")).toHaveAttribute("data-entity", "sensor.solax_inverter_communication_success_rate");
-        await evidence(page, "trust").click();
-        await expect(question(page, "trust").locator("[data-row='firmware']")).toContainText("DSP 1.46");
-        await expect(question(page, "trust").locator("[data-row='mppt_count']")).toContainText("2");
-    });
-
-    test("keyboard: tab to a tile, open it, reach its evidence", async ({ page }) => {
-        await mount(page);
-        await openDetail(page);
-        await tile(page, "limits").locator("button").focus();
-        await page.keyboard.press("Enter");
-        await expect(header(page, "limits")).toHaveAttribute("aria-expanded", "true");
-        await evidence(page, "limits").focus();
-        await page.keyboard.press("Space");
-        await expect(question(page, "limits").locator("[data-row='eps_restart_soc']")).toBeVisible();
-    });
-
-    test("closing and reopening starts at the overview, on Now", async ({ page }) => {
-        await mount(page);
-        await openDetail(page);
-        await open(page, "why");
-        await flow(page).locator("[data-scope='today']").click();
-        await page.locator("node-detail-dialog ha-dialog").evaluate((dialog: any) => dialog.close());
-        await expect(content(page)).toHaveCount(0);
-        await openDetail(page);
-        await expect(content(page).locator("helman-node-question")).toHaveCount(0);
-        await expect(flow(page)).toHaveAttribute("data-flow-scope", "now");
-    });
-});
-
-test.describe("a Custom inverter", () => {
-    test("answers from its config: no registers, no modes read, only the plan on the strip, no trust tile", async ({ page }) => {
-        await mount(page, { profile: false });
-        await openDetail(page);
-        await expect(content(page).locator(".status")).toHaveText("Helman last commanded: Normal.");
-        await expect(tile(page, "trust")).toHaveCount(0);
-        await expect(box(page, "inverter").locator(".box-detail")).toHaveText("not readable");
-        expect(await sectionRequests(page, "modes")).toBe(0);
-        expect((await segments(page)).every((segment) => segment.planned === "true")).toBe(true);
-        await expect(content(page).locator("[data-strip-no-history]")).toBeVisible();
-        await open(page, "why");
-        await expect(question(page, "why").locator("[data-row='agreement']")).toHaveCount(0);
-        await open(page, "operating");
-        await expect(question(page, "operating").locator("helman-day-line-chart")).toHaveCount(0);
-        expect(await sectionRequests(page)).toBe(0);
-        await open(page, "limits");
-        await expect(question(page, "limits").locator("[data-row='soc-range']")).toContainText("10–100 %");
-        await expect(question(page, "limits").locator("[data-row='export-limit']")).toHaveCount(0);
-    });
-});
-
-/** The review screenshots: an evening discharge, a midday charge, and the chain's two other states. */
-const STATES: Array<[string, Variant]> = [
-    ["evening", { solar: "0", house: "1800", battery: "-1500", grid: "300", acPhase: "500" }],
-    ["midday", { solar: "6500", house: "900", battery: "3200", grid: "-2400", acPhase: "1100" }],
-    ["mismatch", { agreement: "mismatch" }],
-    ["execution-off", { executionEnabled: false }],
-];
-
-test.describe("screenshots", { tag: "@screens" }, () => {
-    for (const [name, width, height] of [["mobile-360", 360, 760], ["desktop-1280", 1280, 900]] as const) {
-        for (const [state, variant] of STATES) {
-            test(`the ${state} overview at ${name}`, async ({ page }) => {
-                await page.setViewportSize({ width, height });
-                await mount(page, variant);
-                // Home Assistant's default light theme colours the specs otherwise leave unset.
-                await page.addStyleTag({ content: "html { --divider-color: rgba(0, 0, 0, 0.12); --secondary-background-color: #e5e5e5; --card-background-color: #fff; --primary-color: #03a9f4; --primary-text-color: #212121; --secondary-text-color: #727272; --disabled-text-color: #bdbdbd; }" });
-                await openDetail(page);
-                await expect(strip(page).locator("[data-segment]").first()).toBeVisible();
-                await page.screenshot({ path: `${SCREENS}/inverter-${state}-${name}-now.png`, fullPage: true });
-                if (state === "evening" || state === "midday") {
-                    await flow(page).locator("[data-scope='today']").click();
-                    await expect(flowLabel(page, "in", "solar")).toContainText("kWh");
-                    await page.screenshot({ path: `${SCREENS}/inverter-${state}-${name}-today.png`, fullPage: true });
-                    await open(page, "operating");
-                    await expect(question(page, "operating").locator("helman-day-line-chart svg")).toBeVisible();
-                    await page.screenshot({ path: `${SCREENS}/inverter-${state}-${name}-operating.png`, fullPage: true });
-                } else {
-                    await open(page, "why");
-                    await evidence(page, "why").click();
-                    await page.screenshot({ path: `${SCREENS}/inverter-${state}-${name}-why.png`, fullPage: true });
-                }
-                const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-                expect(overflow).toBeLessThanOrEqual(0);
-            });
-        }
-    }
-});
-
-test("the load share converts a rating in kW and phases in W to one unit", async ({ page }) => {
-    await mount(page, { ratedKw: true });
-    await openDetail(page);
-    await expect(tile(page, "operating").locator(".detail")).toHaveText("AC 3.5 kW · 35 % of rating");
-});
-
-
-test("section requests: a section is read while shown, re-read on a data change and dropped once hidden", async ({ page }) => {
-    await mount(page);
-    await openDetail(page);
-    const reads = () => sectionReads(page, "inverter");
-    await expect.poll(reads).toEqual({ modes: 1 });
-    await open(page, "operating");
-    await expect.poll(reads).toEqual({ modes: 1, temperature: 1 });
-    // A closed answer's figures are dropped: reopened, it is read again.
-    await header(page, "operating").click();
-    await open(page, "operating");
-    await expect.poll(reads).toEqual({ modes: 1, temperature: 2 });
-    await flow(page).locator("[data-scope='today']").click();
-    await expect.poll(reads).toEqual({ modes: 1, temperature: 2, flows: 1 });
-    await announceChange(page);
-    await expect.poll(reads).toEqual({ modes: 2, temperature: 3, flows: 2 });
-    await flow(page).locator("[data-scope='now']").click();
-    await flow(page).locator("[data-scope='today']").click();
-    await expect(flowLabel(page, "in", "solar")).toContainText("kWh");
+    await expect(content(page).locator("helman-detail-section[data-schedule]")).toHaveCount(1);
     await page.waitForTimeout(300);
-    expect(await reads()).toEqual({ modes: 2, temperature: 3, flows: 2 });
+    await expect(content(page).locator("helman-detail-section[data-forecast]")).toHaveCount(0);
 });
 
+// History & statistics, Technical details -------------------------------------
 
-test("the temperature is read on opening and on a data change, never by its age", async ({ page }) => {
+test("inverter History header gives today's temperature range, collapsed; the body has the chart, the link and the limits", async ({ page }) => {
+    await mount(page, { linkRate: "97.46" });
+    await page.locator(".inverter-cell").click();
+    const section = content(page).locator("helman-detail-section[data-history]");
+    await expect(section.locator("[slot=summary]")).toHaveText("38–49 °C today");
+    await expect(section.locator("[slot=summary] b")).toHaveText("38–49 °C");
+    await expect(section.locator("[data-history-body]")).toHaveCount(0);
+    await section.locator("button").first().click();
+    await expect(section.locator("[data-row=temperature] .value")).toHaveText("38–49 °C");
+    await expect(section.locator("helman-day-line-chart[data-temperature-chart] [data-now]")).toHaveCount(1);
+    await expect(section.locator("[data-row=link] .value")).toHaveText("97.4 % · link unreliable");
+    await expect(section.locator("[data-row=export-limit] .value")).toHaveText("up to 9.9 kW");
+    await expect(section.locator("[data-row=solar-input] .value")).toHaveText("not limited");
+    await expect(section.locator("[data-row=soc-range] .value")).toHaveText("10–100 %");
+});
+
+test("inverter Technical details shows the registers, the executor and the configuration to an admin", async ({ page }) => {
+    await mount(page, { admin: true });
+    await page.locator(".inverter-cell").click();
+    const section = content(page).locator("helman-detail-section[data-technical]");
+    await section.locator("button").first().click();
+    await expect(section.locator("[data-registers] tbody tr")).toHaveCount(2);
+    await expect(section.locator("[data-row=executor] .value")).toContainText("Applied");
+    await expect(section.locator("[data-row=last-command] .value")).toContainText("Normal");
+    for (const key of ["use_mode", "manual_mode", "remote_control", "remote_control_mode", "link_success_rate", "link_quarantined_registers"]) {
+        await expect(section.locator(`[data-row=${key}]`)).toHaveCount(1);
+    }
+    await expect(section.locator("[data-row=firmware], [data-row=phase_balance]")).toHaveCount(0);
+});
+
+test("inverter Technical details is not rendered for a non-admin", async ({ page }) => {
     await mount(page);
-    await openDetail(page);
-    await open(page, "operating");
-    await expect.poll(async () => (await sectionReads(page, "inverter")).temperature).toBe(1);
-    await page.clock.setFixedTime(new Date("2026-10-21T12:06:00Z"));
-    await content(page).evaluate((element: any) => element.requestUpdate());
-    // The modes refresh by their age; the temperature does not.
-    await expect.poll(async () => (await sectionReads(page, "inverter")).modes).toBe(2);
-    await page.waitForTimeout(300);
-    expect((await sectionReads(page, "inverter")).temperature).toBe(1);
+    await page.locator(".inverter-cell").click();
+    await expect(content(page).locator("helman-detail-section[data-history]")).toHaveCount(1);
+    await expect(content(page).locator("helman-detail-section[data-technical]")).toHaveCount(0);
 });

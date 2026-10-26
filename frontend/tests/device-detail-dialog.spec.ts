@@ -1,13 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
-import {
-    expandBreakdownGroups,
-    loadCardBundle as loadInspectorBundle,
-    mountInspector,
-    selectDaySlots,
-    waitForDayChart,
-} from "./support/inspector-aggregate-harness";
+import { installFixedClock } from "./support/fixed-clock";
 import { loadBundle } from "./support/card-page";
 import { treeNode, treePayload } from "./support/payload-builders";
 import type { TreeItemDTO } from "../cards/helman-api";
@@ -76,6 +70,11 @@ async function mountCard(
     page: Page,
     stats: Record<string, unknown> = {},
     schedulableBoiler = false,
+    energyUnit = "kWh",
+    today = TODAY_KWH,
+    projections: Record<string, Array<[string, number]>> = {},
+    generatedAt = "2026-10-21T12:00:00+00:00",
+    admin = false,
 ): Promise<void> {
     await loadBundle(page, "helman-card");
     await installHaStubs(page);
@@ -127,7 +126,7 @@ async function mountCard(
     });
 
     await page.evaluate(
-        async ({ tree, today, lastHour, stats }) => {
+        async ({ tree, today, lastHour, stats, energyUnit, projections, generatedAt, admin }) => {
             const state = (value: string, attributes: Record<string, unknown> = {}) => ({ state: value, attributes });
             (window as any).__statRequests = [];
             (window as any).__deviceStatsRequests = [];
@@ -135,6 +134,7 @@ async function mountCard(
                 language: "en",
                 locale: { language: "en" },
                 config: { time_zone: "UTC" },
+                user: { is_admin: admin },
                 connection: {
                     sendMessagePromise: async () => ({}),
                     subscribeMessage: window.__mockHass().connection.subscribeMessage,
@@ -143,7 +143,7 @@ async function mountCard(
                     "sensor.solar": state("0"),
                     "sensor.house": state("2000"),
                     "sensor.boiler_power": state("1200", { unit_of_measurement: "W" }),
-                    "sensor.boiler_energy": state("10", { unit_of_measurement: "kWh" }),
+                    "sensor.boiler_energy": state("10", { unit_of_measurement: energyUnit }),
                     "sensor.pump_share": state("300"),
                     "sensor.house_unmeasured": state("500"),
                     "switch.boiler": { entity_id: "switch.boiler", state: "on", attributes: {} },
@@ -159,6 +159,11 @@ async function mountCard(
                         (window as any).__deviceStatsRequests.push(msg.device_key);
                         return (stats as Record<string, unknown>)[msg.device_key] ?? null;
                     },
+                    "helman/get_appliance_projections": async () => ({
+                        generatedAt,
+                        appliances: Object.fromEntries(Object.entries(projections).map(([id, points]) =>
+                            [id, { series: points.map(([slotId, energyKwh]) => ({ slotId, energyKwh })) }])),
+                    }),
                     "recorder/statistic_during_period": async (msg: any) => {
                         (window as any).__statRequests.push(msg);
                         return { change: msg.calendar ? today : lastHour };
@@ -170,346 +175,202 @@ async function mountCard(
             card.hass = hass;
             document.body.appendChild(card);
         },
-        { tree, today: TODAY_KWH, lastHour: LAST_HOUR_KWH, stats },
+        { tree, today, lastHour: LAST_HOUR_KWH, stats, energyUnit, projections, generatedAt, admin },
     );
 
     await expect.poll(() => rowNames(page)).toContain("Boiler");
 }
 
 /** Names of every device row on the page, through every shadow root. */
+
 function rowNames(page: Page): Promise<string[]> {
-    return page.evaluate(() =>
-        (window as any).__deepAll(document, "helman-tree-item").map((row: any) =>
-            (row.shadowRoot?.querySelector(".deviceName")?.textContent ?? "").trim()));
+    return page.evaluate(() => (window as any).__deepAll(document, "helman-tree-item").map((row: any) =>
+        (row.shadowRoot?.querySelector(".deviceName")?.textContent ?? "").trim()));
 }
 
-/** Click a part of the named row: its name, its chevron, or any selector inside. */
-async function clickInRow(page: Page, name: string, selector: string): Promise<void> {
-    await page.evaluate(({ name, selector }) => {
+async function openDevice(page: Page, name: string): Promise<void> {
+    await page.evaluate((name) => {
         const row = (window as any).__deepAll(document, "helman-tree-item").find((candidate: any) =>
             (candidate.shadowRoot?.querySelector(".deviceName")?.textContent ?? "").trim() === name);
         if (!row) throw new Error(`no row named ${name}`);
-        (row.shadowRoot.querySelector(selector) as HTMLElement).click();
-    }, { name, selector });
+        (row.shadowRoot.querySelector(".deviceName") as HTMLElement).click();
+    }, name);
 }
 
-/** What the open device dialog shows, or null when no dialog is open. */
-function openDialog(page: Page): Promise<null | { title: string; tiles: string[]; hasChart: boolean }> {
-    return page.evaluate(() => {
-        const dialog = (window as any).__deepAll(document, "node-detail-dialog")[0] as any;
-        const haDialog = dialog?.shadowRoot?.querySelector("ha-dialog") as any;
-        if (!haDialog?.open) return null;
-        const content = haDialog.querySelector("node-detail-device-content") as any;
-        return {
-            title: haDialog.querySelector('[slot="headerTitle"]')?.textContent.trim(),
-            tiles: Array.from(content?.shadowRoot?.querySelectorAll(".tile") ?? []).map((tile: any) =>
-                tile.textContent.replace(/\s+/g, " ").trim()),
-            hasChart: !!content?.shadowRoot?.querySelector(".history-graph-stub"),
-        };
-    });
-}
-
-/** The open dialog's headline tile: its figure's colour class and its hover. */
-function energyTile(page: Page): Promise<{ source?: string; title: string | null }> {
-    return page.evaluate(() => {
-        const content = (window as any).__deepAll(document, "node-detail-device-content")[0];
-        const value = content.shadowRoot.querySelector(".tile.energy .device-energy");
-        const figure = value?.querySelector(".device-energy-value");
-        return {
-            source: ["on", "running", "day", "configured"].find((source) => figure?.classList.contains(source)),
-            title: value?.getAttribute("title") ?? null,
-        };
-    });
-}
-
-test.describe("device detail from the power card", () => {
-    test.beforeEach(async ({ page }) => {
-        await mountCard(page);
-    });
-
-    test("a metered device's name opens its detail with energy tiles and a chart", async ({ page }) => {
-        await clickInRow(page, "Boiler", ".deviceName");
-
-        await expect.poll(() => openDialog(page)).toEqual({
-            title: "Boiler",
-            tiles: ["Today 1.25 kWh", "Last hour 0.30 kWh"],
-            hasChart: true,
-        });
-        // Its own meter, over today's calendar day and the last rolling hour.
-        const stats = await page.evaluate(() => (window as any).__statRequests);
-        expect(stats).toEqual(expect.arrayContaining([
-            expect.objectContaining({ statistic_id: "sensor.boiler_energy", types: ["change"], calendar: { period: "day" } }),
-            expect.objectContaining({ statistic_id: "sensor.boiler_energy", types: ["change"], rolling_window: { duration: { hours: 1 } } }),
-        ]));
-        expect(await page.evaluate(() => (window as any).__chartConfigs)).toEqual([{
-            type: "history-graph",
-            hours_to_show: 24,
-            entities: ["sensor.boiler_power", "switch.boiler"],
-        }]);
-    });
-
-    test("section requests: each figure is read once per opened device, never on a live tick", async ({ page }) => {
-        await clickInRow(page, "Boiler", ".deviceName");
-        await expect.poll(() => openDialog(page)).toEqual({ title: "Boiler", tiles: ["Today 1.25 kWh", "Last hour 0.30 kWh"], hasChart: true });
-        const reads = () => page.evaluate(() => ({
-            energy: (window as any).__statRequests.length,
-            stats: (window as any).__deviceStatsRequests.length,
-            chart: (window as any).__chartConfigs.length,
-        }));
-        const opened = await reads();
-        expect(opened).toEqual({ energy: 2, stats: 1, chart: 1 });
-        await page.evaluate(async () => {
-            const content = (window as any).__deepAll(document, "node-detail-device-content")[0];
-            content.hass = { ...content.hass, states: { ...content.hass.states, "sensor.boiler_power": { state: "1300", attributes: { unit_of_measurement: "W" } } } };
-            await content.updateComplete;
-        });
-        await page.waitForTimeout(300);
-        expect(await reads()).toEqual(opened);
-    });
-
-    for (const [unit, value, expected] of [
-        ["kW", "3", "3.0 kW"],
-        ["KW", "3", "3.0 kW"],
-        ["kw", "3", "3.0 kW"],
-        ["MW", "0.003", "3.0 kW"],
-        ["mW", "500", "—"],
-        ["VA", "3", "—"],
-    ]) {
-        test(`device detail converts live ${unit} readings`, async ({ page }) => {
-            await clickInRow(page, "Boiler", ".deviceName");
-            await page.evaluate(({ unit, value }) => {
-                const content = (window as any).__deepAll(document, "node-detail-device-content")[0];
-                content.hass = {
-                    ...content.hass,
-                    states: {
-                        ...content.hass.states,
-                        "sensor.boiler_power": { state: value, attributes: { unit_of_measurement: unit } },
-                    },
-                };
-            }, { unit, value });
-            await expect.poll(() => page.evaluate(() => {
-                const content = (window as any).__deepAll(document, "node-detail-device-content")[0];
-                return content.shadowRoot.querySelector(".power")?.textContent.trim();
-            })).toBe(expected);
-        });
-    }
-
-    test("a meterless device opens with no energy tiles", async ({ page }) => {
-        await clickInRow(page, "Boiler", ".childrenToggle");
-        await expect.poll(() => rowNames(page)).toContain("Pump");
-
-        await clickInRow(page, "Pump", ".deviceName");
-        await expect.poll(() => openDialog(page)).toEqual({ title: "Pump", tiles: [], hasChart: true });
-        expect(await page.evaluate(() => (window as any).__statRequests)).toEqual([]);
-    });
-
-    test("the chevron sits before the name and toggles children without opening anything", async ({ page }) => {
-        const order = await page.evaluate(() => {
-            const row = (window as any).__deepAll(document, "helman-tree-item").find((candidate: any) =>
-                candidate.shadowRoot?.querySelector(".deviceName")?.textContent.trim() === "Boiler");
-            const chevron = row.shadowRoot.querySelector(".childrenToggle");
-            const name = row.shadowRoot.querySelector(".deviceName");
-            return {
-                chevron: chevron?.textContent.trim(),
-                before: !!(chevron.compareDocumentPosition(name) & Node.DOCUMENT_POSITION_FOLLOWING),
-            };
-        });
-        expect(order).toEqual({ chevron: "►", before: true });
-
-        expect(await rowNames(page)).not.toContain("Pump");
-        await clickInRow(page, "Boiler", ".childrenToggle");
-        await expect.poll(() => rowNames(page)).toContain("Pump");
-        expect(await openDialog(page)).toBeNull();
-
-        await clickInRow(page, "Boiler", ".childrenToggle");
-        await expect.poll(() => rowNames(page)).not.toContain("Pump");
-        expect(await openDialog(page)).toBeNull();
-    });
-
-    test("the unmeasured row's name opens nothing", async ({ page }) => {
-        const unmeasured = await page.evaluate(() =>
-            (window as any).__deepAll(document, "helman-tree-item")
-                .find((row: any) => row.device?.isUnmeasured)
-                ?.shadowRoot.querySelector(".deviceName").textContent.trim());
-        expect(unmeasured).toBeTruthy();
-        await clickInRow(page, unmeasured, ".deviceName");
-        expect(await openDialog(page)).toBeNull();
-    });
-
-    test("a virtual group's name still toggles and opens nothing", async ({ page }) => {
-        await page.evaluate(() => {
-            const chip = (window as any).__deepAll(document, "button.chip")
-                .find((button: HTMLElement) => button.textContent?.trim() === "Room");
-            chip.click();
-        });
-        await expect.poll(() => rowNames(page)).toContain("Kitchen (K)");
-        expect(await rowNames(page)).not.toContain("Boiler");
-
-        await clickInRow(page, "Kitchen (K)", ".deviceName");
-        await expect.poll(() => rowNames(page)).toContain("Boiler");
-        expect(await openDialog(page)).toBeNull();
-    });
-
-    test("the switch badge and the watts still open more-info", async ({ page }) => {
-        await page.evaluate(() => {
-            const row = (window as any).__deepAll(document, "helman-tree-item").find((candidate: any) =>
-                candidate.shadowRoot?.querySelector(".deviceName")?.textContent.trim() === "Boiler");
-            const badge = row.shadowRoot.querySelector("helman-tree-item-icon")
-                .shadowRoot.querySelector("helman-appliance-switch-badge");
-            (badge.shadowRoot.querySelector("state-badge") as HTMLElement).click();
-            const watts = row.shadowRoot.querySelector("helman-tree-item-power-display");
-            (watts.shadowRoot.querySelector(".powerDisplay") as HTMLElement).click();
-        });
-        expect(await page.evaluate(() => (window as any).__moreInfo))
-            .toEqual(["switch.boiler", "sensor.boiler_power"]);
-        expect(await openDialog(page)).toBeNull();
-    });
+test("device name opens a shared Overview with today's measured energy", async ({ page }) => {
+    await mountCard(page);
+    await openDevice(page, "Boiler");
+    const detail = page.locator("node-detail-dialog");
+    await expect(detail.locator('[slot="headerTitle"]')).toHaveText("Boiler");
+    await expect(detail.locator('[slot="headerTitle"] ha-icon, [slot="headerTitle"] ha-state-icon')).toHaveCount(0);
+    await expect(detail.locator("node-detail-device-content helman-detail-headline")).toContainText("1.25 kWh used today");
+    await expect(detail.locator("helman-switch-tile")).toHaveCount(1);
 });
 
-/** A metered boiler's record: days, runs, and both power figures. */
+for (const [unit, change, caption] of [["Wh", 500, "0.50 kWh used today"], ["MWh", 0.00125, "1.25 kWh used today"]] as const) {
+    test(`today's ${unit} recorder change is displayed in kWh`, async ({ page }) => {
+        await mountCard(page, {}, false, unit, change);
+        await openDevice(page, "Boiler");
+        await expect(page.locator("node-detail-device-content helman-detail-headline")).toContainText(caption);
+    });
+}
+
+test("device headline opens its power entity and the Schedule starts collapsed", async ({ page }) => {
+    await mountCard(page, {}, true);
+    await openDevice(page, "Boiler");
+    const detail = page.locator("node-detail-dialog");
+    await detail.locator("helman-detail-headline [data-headline]").click();
+    expect(await page.evaluate(() => (window as any).__moreInfo)).toContain("sensor.boiler_power");
+    const schedule = detail.locator("helman-detail-section[data-schedule] button").first();
+    await expect(schedule).toHaveAttribute("aria-expanded", "false");
+    await schedule.click();
+    await expect(schedule).toHaveAttribute("aria-expanded", "true");
+});
+
+// Forecast -------------------------------------------------------------------
+
+test("device Forecast header sums the planned runs to noon tomorrow, and the body draws and lists them", async ({ page }) => {
+    await installFixedClock(page);
+    await mountCard(page, {}, true, "kWh", TODAY_KWH, {
+        boiler: [
+            // Already over, then two runs, then one past tomorrow noon.
+            ["2026-10-21T11:00:00+00:00", 0.5],
+            ["2026-10-21T12:00:00+00:00", 0.5], ["2026-10-21T12:15:00+00:00", 0.5],
+            ["2026-10-21T13:00:00+00:00", 0.4], ["2026-10-21T13:15:00+00:00", 0.4],
+            ["2026-10-22T13:00:00+00:00", 0.5],
+        ],
+    });
+    await openDevice(page, "Boiler");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-forecast]");
+    await expect(section.locator("[slot=summary]")).toHaveText("≈ 1.8 kWh more by noon tomorrow");
+    await expect(section.locator("[slot=summary] b")).toHaveText("≈ 1.8 kWh");
+    await expect(section.locator("[data-forecast-body]")).toHaveCount(0);
+    await section.locator("button").first().click();
+    const runs = section.locator("[data-run]");
+    await expect(runs).toHaveCount(2);
+    await expect(runs.nth(0)).toContainText("12:00 PM–12:30 PM");
+    await expect(runs.nth(0)).toContainText("≈ 1.0 kWh");
+    await expect(runs.nth(1)).toContainText("01:00 PM–01:30 PM");
+    await expect(runs.nth(1)).toContainText("≈ 0.80 kWh");
+    const chart = section.locator("helman-day-line-chart");
+    await expect(chart.locator("path.line.dashed")).toHaveCount(1);
+    await expect(chart.locator("[data-now]")).toHaveCount(1);
+    expect(await section.locator("helman-help-tip").evaluate((tip: any) => tip.explanation)).toContain("learned 2.0 kW");
+});
+
+test("device Forecast normalises the slot in progress by what was left of it", async ({ page }) => {
+    await installFixedClock(page);
+    await page.clock.setFixedTime(new Date("2026-10-21T12:14:00Z"));
+    // 3 kW with one minute left in the 12:00 slot is 0.05 kWh; the next slot is a full 0.75 kWh.
+    await mountCard(page, {}, true, "kWh", TODAY_KWH, {
+        boiler: [["2026-10-21T12:00:00+00:00", 0.05], ["2026-10-21T12:15:00+00:00", 0.75]],
+    }, "2026-10-21T12:14:00+00:00");
+    await openDevice(page, "Boiler");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-forecast]");
+    await section.locator("button").first().click();
+    const power = await section.locator("helman-day-line-chart").evaluate((chart: any) =>
+        chart.series[0].points.slice(0, 2).map((point: { v: number }) => Math.round(point.v * 1000) / 1000));
+    expect(power).toEqual([3, 3]);
+    expect(await section.locator("helman-help-tip").evaluate((tip: any) => tip.explanation)).toContain("learned 3.0 kW");
+});
+
+test("device Forecast drops what ran in the slot in progress since the projection was generated", async ({ page }) => {
+    await installFixedClock(page);
+    await page.clock.setFixedTime(new Date("2026-10-21T12:10:00Z"));
+    // Generated at 12:00 with the 12:00 slot whole: a third of it is left at 12:10, so 0.5 kWh counts as 0.17.
+    await mountCard(page, {}, true, "kWh", TODAY_KWH, {
+        boiler: [["2026-10-21T12:00:00+00:00", 0.5], ["2026-10-21T12:15:00+00:00", 0.5]],
+    }, "2026-10-21T12:00:00+00:00");
+    await openDevice(page, "Boiler");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-forecast]");
+    await expect(section.locator("[slot=summary] b")).toHaveText("≈ 0.67 kWh");
+    await section.locator("button").first().click();
+    await expect(section.locator("[data-run]")).toHaveCount(1);
+    await expect(section.locator("[data-run]")).toContainText("≈ 0.67 kWh");
+});
+
+test("device without projected energy has no Forecast section", async ({ page }) => {
+    await mountCard(page, {}, true);
+    await openDevice(page, "Boiler");
+    await expect(page.locator("node-detail-device-content [data-overview]")).toBeVisible();
+    await expect.poll(() => page.evaluate(() => (window as any).__deepAll(document, "node-detail-device-content").length)).toBe(1);
+    await page.waitForTimeout(300);
+    await expect(page.locator("node-detail-device-content helman-detail-section[data-forecast]")).toHaveCount(0);
+});
+
+// History & statistics, Technical details ------------------------------------------
+
 const BOILER_STATS = {
-    daily_kwh: { mean: 2.4, median: 2.25, min: 0, max: 5.5, days: 29 },
-    runs_per_day: 1.5333,
-    run_minutes: { median: 42.4, min: 12, max: 180 },
-    run_kwh: { median: 1.4, min: 0.35, max: 6 },
-    running_kw: 2.1,
-    on_kwh_per_hour: 0.8,
+    "sensor.boiler_energy": {
+        daily_kwh: { median: 4.1, min: 1.2, max: 6.8, mean: 4.0, days: 14 },
+        runs_per_day: 2,
+        run_minutes: { median: 105, min: 60, max: 150 },
+        run_kwh: { median: 3.4, min: 2, max: 5 },
+        on_kwh_per_hour: 1.8,
+    },
 };
 
-/** The boiler's hover: every measure, in their fixed order. */
-const BOILER_MEASURES = [
-    "Average while switched on: 800 W",
-    "Average power while active: 2.1 kW",
-    "Daily average: 100 W",
-    "Per day: 2.40 kWh",
-].join("\n");
-
-test.describe("device detail usage statistics", () => {
-    test("a metered device shows its learned days under its meter tiles", async ({ page }) => {
-        await mountCard(page, { "sensor.boiler_energy": BOILER_STATS });
-
-        await clickInRow(page, "Boiler", ".deviceName");
-
-        // Not schedulable: its power while active heads the row, and its average
-        // while switched on takes the second power tile, so neither shows twice.
-        await expect.poll(async () => (await openDialog(page))?.tiles).toEqual([
-            "Today 1.25 kWh",
-            "Last hour 0.30 kWh",
-            "Average power while active 2.1 kW",
-            "Typical day 2.25 kWh 0.00–5.50 kWh · mean 2.40 kWh",
-            "Runs per day 1.5",
-            "Typical run 42 min · 1.40 kWh 12–180 min · 0.35–6.00 kWh",
-            "Average while switched on 800 W",
-        ]);
-        expect(await page.evaluate(() => (window as any).__deviceStatsRequests))
-            .toEqual(["sensor.boiler_energy"]);
-        // Learned: green, with every measure in its hover and no scheduler note.
-        expect(await energyTile(page)).toEqual({ source: "running", title: BOILER_MEASURES });
-        const title = await page.evaluate(() => {
-            const content = (window as any).__deepAll(document, "node-detail-device-content")[0];
-            return content.shadowRoot.querySelector(".section-title")?.textContent.trim();
-        });
-        expect(title).toBe("Last 29 days");
-    });
-
-    test("a schedulable device heads with its average while switched on", async ({ page }) => {
-        await mountCard(page, { "sensor.boiler_energy": BOILER_STATS }, true);
-
-        await clickInRow(page, "Boiler", ".deviceName");
-
-        await expect.poll(async () => (await openDialog(page))?.tiles).toEqual([
-            "Today 1.25 kWh",
-            "Last hour 0.30 kWh",
-            "Average while switched on 800 W",
-            "Typical day 2.25 kWh 0.00–5.50 kWh · mean 2.40 kWh",
-            "Runs per day 1.5",
-            "Typical run 42 min · 1.40 kWh 12–180 min · 0.35–6.00 kWh",
-            "Average power while active 2.1 kW",
-        ]);
-        expect(await energyTile(page)).toEqual({
-            source: "on",
-            title: `${BOILER_MEASURES}\nThe device scheduler projects with this figure`,
-        });
-    });
-
-    test("a meterless child shows its statistics on their own", async ({ page }) => {
-        await mountCard(page, {
-            pump: {
-                daily_kwh: { mean: 0.3, median: 0.25, min: 0, max: 1.2, days: 29 },
-                runs_per_day: 3,
-                run_minutes: { median: 20, min: 5, max: 60 },
-                run_kwh: { median: 0.1, min: 0.02, max: 0.3 },
-                running_kw: 0.3,
-                on_kwh_per_hour: 0.3,
-            },
-        });
-        await clickInRow(page, "Boiler", ".childrenToggle");
-        await expect.poll(() => rowNames(page)).toContain("Pump");
-
-        await clickInRow(page, "Pump", ".deviceName");
-
-        await expect.poll(async () => (await openDialog(page))?.tiles).toEqual([
-            // Schedulable: its average while switched on first.
-            "Average while switched on 300 W",
-            "Typical day 0.25 kWh 0.00–1.20 kWh · mean 0.30 kWh",
-            "Runs per day 3.0",
-            "Typical run 20 min · 0.10 kWh 5–60 min · 0.02–0.30 kWh",
-            "Average power while active 300 W",
-        ]);
-        // Keyed by the device id, the card's deviceKey for a meterless child.
-        expect(await page.evaluate(() => (window as any).__deviceStatsRequests)).toEqual(["pump"]);
-        expect(await page.evaluate(() => (window as any).__statRequests)).toEqual([]);
-    });
-
-    test("a record without runs shows only its typical day, and its mean over the day", async ({ page }) => {
-        await mountCard(page, {
-            "sensor.boiler_energy": {
-                daily_kwh: { mean: 2.4, median: 2.25, min: 0, max: 5.5, days: 29 },
-            },
-        });
-
-        await clickInRow(page, "Boiler", ".deviceName");
-
-        await expect.poll(async () => (await openDialog(page))?.tiles).toEqual([
-            "Today 1.25 kWh",
-            "Last hour 0.30 kWh",
-            "Daily average 100 W",
-            "Typical day 2.25 kWh 0.00–5.50 kWh · mean 2.40 kWh",
-        ]);
-        // No power while active: the daily mean over 24 hours, in orange.
-        expect(await energyTile(page)).toEqual({
-            source: "day",
-            title: "Average while switched on: —\nAverage power while active: —\nDaily average: 100 W\nPer day: 2.40 kWh",
-        });
-    });
+test("device History header gives the learned average while on, collapsed; the body has the last 24 hours and the typical tiles", async ({ page }) => {
+    await mountCard(page, BOILER_STATS, true);
+    await openDevice(page, "Boiler");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
+    await expect(section.locator("[slot=summary]")).toHaveText("1.8 kW while on");
+    await expect(section.locator("[slot=summary] b")).toHaveText("1.8 kW");
+    await expect(section.locator("[data-history-body]")).toHaveCount(0);
+    expect(await page.evaluate(() => (window as any).__chartConfigs.length)).toBe(0);
+    await section.locator("button").first().click();
+    await expect(section.locator(".history-graph-stub")).toHaveCount(1);
+    expect(await page.evaluate(() => (window as any).__chartConfigs)).toEqual([{ type: "history-graph", hours_to_show: 24, entities: ["sensor.boiler_power", "switch.boiler"] }]);
+    await expect(section.locator(".section-title")).toHaveText(["Last 24 hours", "Typical, learned from the last 14 days"]);
+    const tiles = section.locator("[data-typical] [data-stat]");
+    await expect(tiles).toHaveCount(4);
+    await expect(tiles.nth(0)).toContainText("4.1 kWh");
+    await expect(tiles.nth(0)).toContainText("a typical day (1.2–6.8 kWh)");
+    await expect(tiles.nth(1)).toContainText("2 runs");
+    await expect(tiles.nth(2)).toContainText("1 h 45 min");
+    await expect(tiles.nth(2)).toContainText("a typical run ≈ 3.4 kWh");
+    await expect(tiles.nth(3)).toContainText("1.8 kW");
+    await expect(tiles.nth(3)).toContainText("average while on");
 });
 
-test.describe("device detail from the solar inspector", () => {
-    test("a box in the house breakdown opens the same dialog", async ({ page }) => {
-        await loadInspectorBundle(page);
-        await installHaStubs(page);
-        await mountInspector(page);
-        await waitForDayChart(page);
-        await selectDaySlots(page, 720, null);
-        await expandBreakdownGroups(page);
-
-        await clickInRow(page, "Washer", ".deviceName");
-
-        // Its own meter: both tiles, even with no figure from the recorder.
-        await expect.poll(() => openDialog(page)).toEqual({
-            title: "Washer",
-            tiles: ["Today —", "Last hour —"],
-            hasChart: true,
-        });
-        expect(await page.evaluate(() => (window as any).__chartConfigs)).toEqual([{
-            type: "history-graph",
-            hours_to_show: 24,
-            entities: ["sensor.washer_power", "switch.washer"],
-        }]);
-        // Asked for by its controllable id, which the backend resolves to its
-        // meter; its effective meter is never used, a meterless child's being
-        // its parent's.
-        expect(await page.evaluate(() => (window as any).__deviceStatsRequests))
-            .toEqual(["washer"]);
-    });
+test("device Technical details lists its entities for an admin, and is absent for anyone else", async ({ page }) => {
+    await mountCard(page, {}, true, "kWh", TODAY_KWH, {}, "2026-10-21T12:00:00+00:00", true);
+    await openDevice(page, "Boiler");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-technical]");
+    await expect(section.locator("[slot=summary]")).toHaveCount(0);
+    await section.locator("button").first().click();
+    await expect(section.locator("[data-row=switch] .value")).toHaveText("switch.boiler");
+    await expect(section.locator("[data-row=power-sensor] .value")).toHaveText("sensor.boiler_power");
+    await expect(section.locator("[data-row^=runtime-]")).toHaveCount(1);
 });
+
+test("device Technical details is not rendered for a non-admin", async ({ page }) => {
+    await mountCard(page, {}, true);
+    await openDevice(page, "Boiler");
+    await expect(page.locator("node-detail-device-content helman-detail-section[data-history]")).toHaveCount(1);
+    await expect(page.locator("node-detail-device-content helman-detail-section[data-technical]")).toHaveCount(0);
+});
+
+// Closing divider ----------------------------------------------------------------
+
+/** The detail's and each section's bottom border width, by name. */
+async function sectionBottomBorders(page: Page): Promise<Record<string, string>> {
+    return page.evaluate(() => Object.fromEntries((window as any).__deepAll(document, "node-detail-device-content, helman-detail-section")
+        .map((element: Element) => [["schedule", "forecast", "history", "technical"].find((name) => element.hasAttribute(`data-${name}`)) ?? "detail",
+            getComputedStyle(element).borderBottomWidth])));
+}
+
+for (const [label, schedulable, projections, admin, borders] of [
+    ["History & statistics, without a Schedule", false, {}, false, { detail: "0px", history: "1px" }],
+    ["History & statistics after the Schedule", true, {}, false, { detail: "0px", schedule: "0px", history: "1px" }],
+    ["History & statistics after the Forecast", true, { boiler: [["2026-10-21T12:00:00+00:00", 0.5]] }, false, { detail: "0px", schedule: "0px", forecast: "0px", history: "1px" }],
+    ["Technical details for an admin", true, {}, true, { detail: "0px", schedule: "0px", history: "0px", technical: "1px" }],
+] as const) {
+    test(`the last section, ${label}, and only it is closed off from the footer`, async ({ page }) => {
+        await installFixedClock(page);
+        await mountCard(page, {}, schedulable, "kWh", TODAY_KWH, projections as Record<string, Array<[string, number]>>, "2026-10-21T12:00:00+00:00", admin);
+        await page.evaluate(() => document.body.style.setProperty("--divider-color", "#d4d4d8"));
+        await openDevice(page, "Boiler");
+        await expect.poll(() => sectionBottomBorders(page)).toEqual(borders);
+    });
+}

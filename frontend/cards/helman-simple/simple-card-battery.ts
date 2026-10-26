@@ -1,5 +1,5 @@
 import { formatPower } from "../shared/format";
-import { LitElement, css, html } from "lit-element";
+import { LitElement, css, html, svg } from "lit-element";
 import { customElement, property, state } from "lit/decorators.js";
 
 import { helmanColorVars } from "../color-vars";
@@ -141,10 +141,13 @@ export class SimpleCardBattery extends LitElement {
     @property({ type: Number }) public power = 0;
     @property({ type: Number }) public soc = 0;
     @property({ type: Number }) public minSoc = 10;
+    @property({ type: Number }) public maxSoc = 100;
     /** When charging: color of the energy source (solar yellow, grid blue, or blended). */
     @property({ type: String }) public sourceColor?: string;
     /** When true: renders SVG at 40px and suppresses the power label (for use as an icon). */
     @property({ type: Boolean }) public compact = false;
+    /** When true with `compact`: dashed marks and labels at `minSoc` and `maxSoc`, the range the battery is used in. */
+    @property({ type: Boolean }) public rangeMarks = false;
 
     // State properties
     @state() private _view?: BatteryView;
@@ -231,6 +234,11 @@ export class SimpleCardBattery extends LitElement {
                         x="${v.innerX}" y="${v.innerFillY}"
                         width="${v.innerWidth}" height="${v.innerFillHeight}" rx="2"
                         clip-path="url(#${this._clipId})"/>
+                    ${this.compact && this.rangeMarks ? [this.minSoc, this.maxSoc].map((mark) => {
+                        const y = BODY_TOP + BODY_HEIGHT * (1 - mark / 100);
+                        return svg`<line x1="1" x2="57" y1=${y} y2=${y} stroke="var(--primary-text-color)" stroke-width="2" stroke-dasharray="4 3"/>
+                            <text x="61" y=${y} dominant-baseline="middle" font-size="15" fill="var(--secondary-text-color)">${mark}</text>`;
+                    }) : ''}
 
                     <!-- SoC percentage inside -->
                     <text class="soc-label"

@@ -37,6 +37,11 @@ export function timeZone(hass: HomeAssistant): string {
     return hass.config?.time_zone || "UTC";
 }
 
+/** HA's language, which times and figures are formatted in. */
+export function hassLocale(hass: HomeAssistant): string {
+    return hass.locale?.language ?? hass.language ?? "cs";
+}
+
 /** Whether figures are for another day: their period's, or without one the day they were requested. */
 function otherDay(payload: unknown, requestedAt: number, zone: string): boolean {
     const start = (payload as { period?: { start: string } } | null)?.period?.start;
@@ -101,13 +106,11 @@ export class SectionResource<T> {
 
     /**
      * Read a shown section that has nothing yet or is stale, while the page
-     * is visible. A hidden one is dropped, or with `keepHidden` keeps its
-     * figures for when it is shown again.
+     * is visible. A hidden one is dropped.
      */
-    sync(keepHidden = false): void {
+    sync(): void {
         if (!this._options.shown()) {
-            if (keepHidden) this.cancel();
-            else this.drop();
+            this.drop();
         } else if (this.state === null) {
             void this.load();
         } else if (this.state.status !== "loading" && !document.hidden) {
@@ -120,14 +123,9 @@ export class SectionResource<T> {
         }
     }
 
-    /**
-     * Re-read the figures shown, if the section is still shown; figures kept
-     * while hidden are marked stale, so they are re-read once shown.
-     */
+    /** Re-read the figures shown, if the section is still shown. */
     reload(): void {
-        if (this.state === null) return;
-        if (this._options.shown()) void this.load();
-        else this.requestedAt = this._settledAt = 0;
+        if (this.state !== null && this._options.shown()) void this.load();
     }
 
     /** Forget the figures; a read in flight answers nobody. */
