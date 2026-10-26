@@ -49,6 +49,12 @@ type Variant = {
     flowsUnavailable?: string;
     /** The slot in progress holds a charge candidate whose condition is not met. */
     candidateNow?: boolean;
+    /** Schedule execution is switched off. */
+    executionOff?: boolean;
+    /** The slot in progress plans a charge that would apply if execution were on. */
+    chargeNow?: boolean;
+    /** The mode the inverter reports; `normal` unless given, `null` when it reads none. */
+    observed?: string | null;
 };
 
 declare global {
@@ -150,13 +156,14 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             const hour = at.getUTCHours() + (at.getUTCDate() - 21) * 24;
             let action: ScheduleActionDTO = { kind: "normal", setBy: "automation" };
             if (hour >= 14 && hour < 16) action = { kind: "charge_to_target_soc", targetSoc: 80, setBy: "automation" };
+            if (v.chargeNow && hour === 12) action = { kind: "charge_to_target_soc", targetSoc: 80, setBy: "automation" };
             if (v.candidateNow && hour === 12) action = { kind: "charge_to_target_soc", targetSoc: 80, setBy: "automation", conditionMet: false };
             if (hour >= 18 && hour < 19) action = { kind: "discharge_to_target_soc", targetSoc: 30, setBy: "automation", conditionMet: false };
             slots.push({ id, controllables: { inverter: action } });
         }
         const schedule: SchedulePayload = {
             ...scheduleDefaults,
-            executionEnabled: true,
+            executionEnabled: !v.executionOff,
             slots,
             runtime: {
                 activeSlotId: "2026-10-21T12:00:00+00:00",
@@ -180,7 +187,10 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             },
         };
         const flowsSection = window.__flowsSection("battery", { unavailable: v.flowsUnavailable ?? null, flows: v.flowsUnavailable ? null : { ...window.__flowsSection("battery").flows, solarToGrid: 2.0 } });
-        const inverter = window.__inverterOverview({ entities: v.ratedPower ? { rated_power: "sensor.solax_inverter_power_type" } : {} });
+        const inverter = window.__inverterOverview({
+            entities: v.ratedPower ? { rated_power: "sensor.solax_inverter_power_type" } : {},
+            agreement: { status: "match", reason: null, commanded: null, observedOption: v.observed === undefined ? "normal" : v.observed, observedFrom: [], registers: [] },
+        });
         window.__moreInfo = [];
         document.addEventListener("hass-more-info", (event) => window.__moreInfo.push((event as CustomEvent).detail.entityId));
         window.__BatteryHass = window.__configureNodeDetail({
@@ -211,12 +221,26 @@ test("battery Overview has SoC, recent-rate estimate, destination gauge and inve
     await expect(page.locator("node-detail-inverter-content")).toBeVisible();
 });
 
-test("battery mode now shows an unmet candidate as the normal mode it runs", async ({ page }) => {
+test("battery mode now shows the mode the inverter reports while an unmet candidate is planned", async ({ page }) => {
     await mount(page, { candidateNow: true });
     await openDetail(page);
     const mode = content(page).locator("[data-inverter-control] .row").nth(1).locator(".value");
     await expect(mode).toHaveText("Normal");
-    await expect(mode).not.toContainText("Charge to");
+    await expect(mode).not.toContainText("Charg");
+});
+
+test("battery mode now shows the inverter's mode, not the planned charge, while execution is off", async ({ page }) => {
+    await mount(page, { executionOff: true, chargeNow: true, observed: "normal" });
+    await openDetail(page);
+    const mode = content(page).locator("[data-inverter-control] .row").nth(1).locator(".value");
+    await expect(mode).toHaveText("Normal");
+    await expect(mode).not.toContainText("Charg");
+});
+
+test("battery mode now shows a dash when the inverter reports no mode", async ({ page }) => {
+    await mount(page, { observed: null });
+    await openDetail(page);
+    await expect(content(page).locator("[data-inverter-control] .row").nth(1).locator(".value")).toHaveText("—");
 });
 
 test("battery headline, gauge and power card agree where the grid meter disagrees with the balance", async ({ page }) => {

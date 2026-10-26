@@ -6,8 +6,12 @@ import type {
     BatteryChargeDTO,
     BatteryChargeSectionPayload,
     BatteryDetailPayload,
+    InverterDetailPayload,
     InverterRuntimeDTO,
 } from "../helman-api";
+import { getSharedHelmanStore } from "../shared/data/store";
+import { dispatchWatchedEntities } from "../shared/hass-change";
+import { SectionResource } from "./section-resource";
 import { currencyFromPriceUnit } from "../helman-solar-inspector/money-model";
 
 import "../shared/soc-glyph";
@@ -15,12 +19,11 @@ import type { SocDirection } from "../shared/soc-glyph";
 import { getScheduleActionTone, scheduleActionToneStyles } from "../shared/schedule/action-tones";
 import { INVERTER_CONTROLLABLE_ID } from "../shared/schedule/schedule-types";
 import { IDLE_W, NodeDetailContentBase, type NodeFlow } from "./node-detail-base";
-import { INVERTER_PLAN_INSPECTOR_CONFIG } from "./node-detail-inverter-content";
+import { INVERTER_PLAN_INSPECTOR_CONFIG, inverterModeLabel } from "./node-detail-inverter-content";
 import { readEnergyKWh, readingNumber } from "./node-detail-readings";
 import { readReserve, type Reserve } from "./battery-reserve";
 import {
     currentRun,
-    effectiveAction,
     inverterRuns,
     nextChange,
     renderCurrentSlot,
@@ -98,6 +101,28 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
         shown: () => this._open === "charge",
     });
 
+    /** The mode the inverter reports, read from its own overview and re-read when its mode registers change. */
+    private _inverterStates = "";
+    private readonly _inverter: SectionResource<InverterDetailPayload> = this._section("inverter", {
+        fetch: async () => {
+            const payload = await getSharedHelmanStore(this.hass).getNodeDetail<InverterDetailPayload>({ node: "inverter" }, { fresh: true });
+            this._inverterStates = this._inverterSignature(payload);
+            dispatchWatchedEntities(this, "node-detail", this._inverterEntities(payload));
+            return payload;
+        },
+        shown: () => true,
+        keepOnError: true,
+        staleness: (payload) => payload === null || this._inverterSignature(payload) !== this._inverterStates,
+    });
+
+    private _inverterEntities(payload: InverterDetailPayload): string[] {
+        return [payload.mode?.entityId, ...payload.agreement.observedFrom].filter((id): id is string => !!id);
+    }
+
+    private _inverterSignature(payload: InverterDetailPayload): string {
+        return this._inverterEntities(payload).map((id) => this.hass.states[id]?.state ?? "").join("|");
+    }
+
     /**
      * The BMS state and run mode the overview's condition was computed from,
      * and the lifetime counters behind its cycle count. The counters step every
@@ -140,7 +165,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
         const flow = this.params.flows;
         const lowest = direction === "idle" ? null : this._lowest(this._ceilings(overview, direction === "charge" ? "charge" : "discharge"));
         const binding = lowest && power !== null && Math.abs(power) >= AT_CEILING * lowest.watts;
-        const run = currentRun(this._plan.runs, Date.now());
+        const observed = this._inverter.payload?.agreement.observedOption ?? null;
         return html`
             <div class="content" data-overview>
                 ${this._renderException(overview)}
@@ -170,7 +195,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
                         <button type="button" class="link-button inverter-link" aria-label=${this.localize("node_detail.shared.battery_inverter")}
                             @click=${() => this.dispatchEvent(new CustomEvent(NODE_DETAIL_REQUEST_EVENT, { detail: { target: "inverter" }, bubbles: true, composed: true }))}>${this.localize("node_detail.shared.the_inverter")}</button></div>
                     <div class="row"><span class="label">${this.localize("node_detail.shared.mode_now_label")}</span>
-                        <span class="value">${run ? this._actionLabel(effectiveAction(run.action)) : this.localize("node_detail.control.nothing_scheduled")}</span></div>
+                        <span class="value">${observed ? inverterModeLabel(this.localize, observed) : "—"}</span></div>
                 </div>
             </div>
         `;

@@ -101,6 +101,11 @@ interface ChainBox {
  * strip, and again when the observed mode changes or they go stale; today's
  * temperature only while its question is open.
  */
+/** The short name of an inverter mode, as the inverter detail and the battery's "Mode now" show it. */
+export function inverterModeLabel(localize: (key: string) => string, kind: ScheduleActionKind): string {
+    return localize(`node_detail.inverter.mode_short.${kind}`);
+}
+
 @customElement("node-detail-inverter-content")
 export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDetailPayload, QuestionId> {
     static styles = [helmanColorVars, nodeDetailSharedStyles, nodeDetailQuestionStyles, nodeDetailPictureStyles, scheduleActionToneStyles, css`
@@ -974,7 +979,7 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
     }
 
     private _modeLabel(kind: ScheduleActionKind): string {
-        return this._t(`mode_short.${kind}`);
+        return inverterModeLabel(this.localize, kind);
     }
 }
 
