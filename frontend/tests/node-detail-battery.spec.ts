@@ -424,6 +424,16 @@ test("battery Forecast header says full now when the battery is at its ceiling a
     await expect(section.locator("[data-row=full] .value")).toHaveText("now");
 });
 
+test("battery Forecast lowest is the SoC now when the plan only charges", async ({ page }) => {
+    await mount(page, { currentSoc: 20, socPath: [{ soc: 30 }, { soc: 40 }, { soc: 50 }] });
+    await openDetail(page);
+    const section = forecastSection(page);
+    await expect(section.locator("[slot=summary]")).toHaveText("Lowest 20 % now");
+    await openForecast(page);
+    await expect(section.locator("[data-row=lowest] .value")).toHaveText("20 % now");
+    await expect(section.locator("helman-day-line-chart [data-marker]")).toHaveCount(1);
+});
+
 test("battery Forecast header says at the floor now when the battery is at its floor already", async ({ page }) => {
     await mount(page, { currentSoc: 10, socPath: [{ soc: 10, min: true }, { soc: 30 }, { soc: 100, max: true }] });
     await openDetail(page);

@@ -141,6 +141,7 @@
         "battery_lasts": "vydrží do {time}",
         "battery_floor_now": "teď na spodní hranici",
         "battery_lowest": "nejméně {soc} v {time}",
+        "battery_lowest_now": "nejméně {soc} teď",
         "battery_chart": "Nabití · dnes → zítra v poledne",
         "battery_help": "Z plánu: předpověď slunce a spotřeby domu a naplánované režimy. Od odhadu „při nedávném tempu“ se liší, když se má slunce změnit.",
         "battery_full_row": "Plná ({ceiling})",

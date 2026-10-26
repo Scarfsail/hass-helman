@@ -25,6 +25,8 @@ export interface DayLineSeries {
     points: DayLinePoint[];
     /** A planned or forecast series: drawn dashed. */
     dashed?: boolean;
+    /** This series' own bucket length, ms, for where its line breaks; the chart's `bucketMs` without it. */
+    bucketMs?: number;
 }
 
 export interface DayLineReference {
@@ -306,7 +308,7 @@ export class HelmanDayLineChart extends LitElement {
                         width=${Math.max(2, x(Math.min(span.end, this.end)) - x(Math.max(span.start, this.start)))} height="4" rx="1" fill=${span.color}></rect>
                 `)}
                 ${this.series.map((series) => svg`
-                    <path class="line ${series.dashed ? "dashed" : ""}" data-series=${series.key} stroke=${series.color} d=${this._path(series.points, x, y)}></path>
+                    <path class="line ${series.dashed ? "dashed" : ""}" data-series=${series.key} stroke=${series.color} d=${this._path(series.points, x, y, series.bucketMs ?? this.bucketMs)}></path>
                 `)}
                 ${this.markers.map((marker) => svg`
                     <circle data-marker cx=${x(marker.t)} cy=${y(marker.v)} r="4" fill=${marker.color}></circle>
@@ -326,15 +328,15 @@ export class HelmanDayLineChart extends LitElement {
         `;
     }
 
-    private _path(points: DayLinePoint[], x: (t: number) => number, y: (v: number) => number): string {
+    private _path(points: DayLinePoint[], x: (t: number) => number, y: (v: number) => number, bucketMs: number): string {
         let path = "";
         let previous: number | null = null;
         for (const point of points) {
-            const gap = previous === null || point.t - previous > this.bucketMs * 1.5;
+            const gap = previous === null || point.t - previous > bucketMs * 1.5;
             const at = `${x(point.t).toFixed(1)},${y(point.v).toFixed(1)}`;
             // A step holds its value to the next bucket: up or down at the boundary, then across.
             path += gap ? `M${at}` : this.step ? `V${y(point.v).toFixed(1)}` : `L${at}`;
-            if (this.step) path += `H${x(point.t + this.bucketMs).toFixed(1)}`;
+            if (this.step) path += `H${x(point.t + bucketMs).toFixed(1)}`;
             previous = point.t;
         }
         return path;

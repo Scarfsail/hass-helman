@@ -241,6 +241,7 @@
         "battery_lasts": "lasts until {time}",
         "battery_floor_now": "at the floor now",
         "battery_lowest": "lowest {soc} at {time}",
+        "battery_lowest_now": "lowest {soc} now",
         "battery_chart": "Charge · today → tomorrow noon",
         "battery_help": "From the plan: forecast solar and house use, and the scheduled modes. It differs from the \"at the recent rate\" estimate when solar is expected to change.",
         "battery_full_row": "Full ({ceiling})",

@@ -397,7 +397,7 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
                 title: forecast("solar_chart"),
                 help: model.corrected && bias ? fillTemplate(forecast("solar_help"), { n: bias.explainability.usableDays }) : forecast("solar_help_raw"),
                 series: [
-                    { key: "actual", label: forecast("actual"), color: "var(--helman-solar)", points: actual },
+                    { key: "actual", label: forecast("actual"), color: "var(--helman-solar)", points: actual, bucketMs: (this._production.payload?.power?.bucketMinutes ?? 5) * 60_000 },
                     { key: "forecast", label: forecast("forecast"), color: "var(--helman-solar)", points: planned, dashed: true },
                 ],
                 references: rated !== null ? [{ value: rated / 1000, label: fillTemplate(this._t("limits.rating_short"), { power: formatPower(rated).display }) }] : [],

@@ -43,6 +43,21 @@ test("a planned series is dashed, the actual one solid, and the legend says whic
     await expect(chart.locator(".legend")).toContainText("planned");
 });
 
+test("a series breaks its line by its own bucket length, not the chart's", async ({ page }) => {
+    const five = [0, 5, 10, 30, 35].map((m) => ({ t: START + m * 60_000, v: 1 }));
+    const fifteen = [0, 15, 30, 50, 65].map((m) => ({ t: START + m * 60_000, v: 1 }));
+    await mountChart(page, {
+        series: [
+            { key: "fine", label: "fine", color: "red", bucketMs: 300_000, points: five },
+            { key: "coarse", label: "coarse", color: "blue", points: fifteen },
+        ],
+    });
+    const chart = page.locator("helman-day-line-chart");
+    // The same 20-minute hole breaks 5-minute data and not 15-minute data.
+    expect(((await chart.locator('path[data-series="fine"]').getAttribute("d")) ?? "").match(/M/g)).toHaveLength(2);
+    expect(((await chart.locator('path[data-series="coarse"]').getAttribute("d")) ?? "").match(/M/g)).toHaveLength(1);
+});
+
 test("the now marker is a vertical line at now, labelled on the time axis in place of a nearby hour", async ({ page }) => {
     await mountChart(page, {
         series: [{ key: "planned", label: "planned", color: "red", dashed: true, points: points(START, START + 36 * HOUR, () => 1) }],

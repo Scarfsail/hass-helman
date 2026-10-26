@@ -236,6 +236,8 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
                 ? ["battery_floor_now", {}]
                 : soc.floorAt !== null
                 ? ["battery_lasts", { time: time(soc.floorAt) }]
+                : soc.lowest.t === context.now
+                ? ["battery_lowest_now", { soc: this._percent(soc.lowest.v) }]
                 : ["battery_lowest", { soc: this._percent(soc.lowest.v), time: time(soc.lowest.t) }],
         ];
         const template = (key: string) => this.localize(`node_detail.shared.forecast.${key}`);
@@ -266,7 +268,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
                 <div class="row" data-row="full"><span class="label"><span style="color: ${FULL_COLOR}">●</span> ${fillTemplate(this.localize("node_detail.shared.forecast.battery_full_row"), { ceiling: this._percent(soc.ceiling) })}</span>
                     <span class="value">${soc.full ? about(soc.full.t) : none}</span></div>
                 <div class="row" data-row="lowest"><span class="label"><span style="color: ${LOWEST_COLOR}">●</span> ${this.localize("node_detail.shared.forecast.battery_lowest_row")}</span>
-                    <span class="value">${fillTemplate(this.localize("node_detail.shared.forecast.at"), { value: this._percent(soc.lowest.v), time: forecastWhen(soc.lowest.t, context) })}</span></div>
+                    <span class="value">${soc.lowest.t === context.now ? `${this._percent(soc.lowest.v)} ${nowText}` : fillTemplate(this.localize("node_detail.shared.forecast.at"), { value: this._percent(soc.lowest.v), time: time(soc.lowest.t) })}</span></div>
                 <div class="row" data-row="floor"><span class="label">${fillTemplate(this.localize("node_detail.shared.forecast.battery_floor_row"), { floor: this._percent(soc.floor) })}</span>
                     <span class="value">${soc.floorAt !== null ? time(soc.floorAt) : none}</span></div>
             </div>
@@ -305,7 +307,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
         const atFloor = (v: number) => v <= floor + 0.5;
         const full = atCeiling(current.v) ? current : ahead.find((point) => point.slot.hitMaxSoc || atCeiling(point.v)) ?? null;
         const empty = atFloor(current.v) ? current : ahead.find((point) => point.slot.hitMinSoc || atFloor(point.v)) ?? null;
-        const lowest = ahead.reduce((low, point) => point.v < low.v ? point : low, ahead[0]);
+        const lowest = ahead.reduce((low, point) => point.v < low.v ? point : low, current);
         return {
             actual, planned: planned.map(({ t, v }) => ({ t, v })), floor, ceiling,
             full: full && { t: full.t, v: full.v }, floorAt: empty?.t ?? null, lowest: { t: lowest.t, v: lowest.v },
