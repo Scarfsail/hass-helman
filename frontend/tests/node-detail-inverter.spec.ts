@@ -51,6 +51,8 @@ type Variant = {
     plannedChargeNow?: boolean;
     userOverrideNow?: boolean;
     runtimeFailed?: boolean;
+    /** The slot in progress charges to a target the battery has reached: the executor holds it with stop discharging. */
+    targetReachedNow?: boolean;
     timeZone?: string;
 };
 
@@ -112,7 +114,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
         const states: Record<string, unknown> = {
             "sensor.solar": s(v.solar ?? "4200", "W"), "sensor.grid": s(v.grid ?? "-300", "W"), "sensor.battery": s(v.battery ?? "-500", "W"),
             "sensor.house": s(v.house ?? "1200", "W"), "number.min_soc": s("10", "%"), "number.max_soc": s("100", "%"),
-            "select.helman_inverter_mode": s("normal", undefined, { friendly_name: "Helman inverter mode" }),
+            "select.helman_inverter_mode": s(v.targetReachedNow ? "stop_discharging" : "normal", undefined, { friendly_name: "Helman inverter mode" }),
         };
         const entities: Record<string, string | null> = { battery_min_soc: "number.min_soc", battery_max_soc: "number.max_soc" };
         if (profile) {
@@ -135,7 +137,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             entities,
             maxAllowedExportPower: 9900,
             agreement: profile
-                ? { status: v.agreement ?? "match", reason: v.agreement === "unknown" ? "unavailable" : null, commanded: "normal", observedOption: v.agreement === "mismatch" ? null : "normal",
+                ? { status: v.agreement ?? "match", reason: v.agreement === "unknown" ? "unavailable" : null, commanded: v.targetReachedNow ? "stop_discharging" : "normal", observedOption: v.agreement === "mismatch" ? null : v.targetReachedNow ? "stop_discharging" : "normal",
                     observedFrom: ["number.solax_export_control_user_limit", "select.solax_charger_use_mode", "select.solax_manual_mode_select"], registers }
                 : { status: "unknown", reason: "no_profile", commanded: "normal", observedOption: null, observedFrom: [], registers: [] },
             condition: v.condition === "off_grid" ? { kind: "off_grid", runMode: "Off-Grid", entityId: "sensor.solax_run_mode" } : null,
@@ -184,7 +186,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             if (!v.noCharge && hour >= 14 && hour < 16) action = { kind: "charge_to_target_soc", targetSoc: 80, setBy: "automation" };
             if (hour >= 18 && hour < 19) action = { kind: "discharge_to_target_soc", targetSoc: 30, setBy: "automation", conditionMet: false };
             if (v.candidateNow && hour < 14) action = { kind: "discharge_to_target_soc", targetSoc: 30, setBy: "automation", conditionMet: false };
-            if (v.plannedChargeNow && hour < 14) action = { kind: "charge_to_target_soc", targetSoc: 80, setBy: "automation" };
+            if ((v.plannedChargeNow || v.targetReachedNow) && hour < 14) action = { kind: "charge_to_target_soc", targetSoc: 80, setBy: "automation" };
             if (v.userOverrideNow && hour < 14) action = { kind: "normal", setBy: "user" };
             slots.push({ id, controllables: action ? { inverter: action } : {} });
         }
@@ -194,7 +196,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             slots,
             runtime: {
                 activeSlotId: "2026-10-21T12:00:00+00:00",
-                controllables: { inverter: { actionKind: "apply", outcome: v.runtimeFailed ? "failed" : "success", executedAction: { kind: "normal" }, reason: "scheduled" } },
+                controllables: { inverter: { actionKind: "apply", outcome: v.runtimeFailed ? "failed" : "success", executedAction: { kind: v.targetReachedNow ? "stop_discharging" : "normal" }, reason: v.targetReachedNow ? "target_soc_reached" : "scheduled" } },
             },
         };
         window.__modesFail = !!v.modesFail;
@@ -293,6 +295,15 @@ test("inverter does not claim agreement when the plan differs from the last comm
     await mount(page, { plannedChargeNow: true });
     await page.locator(".inverter-cell").click();
     await expect(content(page).locator("[data-verdict]")).toContainText("last command differs from the plan");
+});
+
+test("inverter agrees when a charge to target holds the battery at its reached target", async ({ page }) => {
+    await mount(page, { targetReachedNow: true });
+    await page.locator(".inverter-cell").click();
+    const c = content(page);
+    await expect(c.locator("[data-verdict]")).toContainText("Everything agrees");
+    await expect(c.locator("[data-verdict]")).not.toContainText("Not applied");
+    await expect(c.locator("[data-box=plan]")).toContainText("Target SoC reached");
 });
 
 test("inverter reports disabled execution in its verdict", async ({ page }) => {

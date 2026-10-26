@@ -17,6 +17,7 @@ import "../shared/mode-strip";
 import { modeStripWindow, type ModeChange, type ModeSegment } from "../shared/mode-strip";
 import { inverterGlyph } from "../shared/node-glyphs";
 import { getScheduleActionTone, scheduleActionToneStyles, type ScheduleActionTone } from "../shared/schedule/action-tones";
+import { getScheduleReasonLabel } from "../shared/schedule/model/schedule-labels";
 import { INVERTER_CONTROLLABLE_ID } from "../shared/schedule/schedule-types";
 import "../shared/day-line-chart";
 import type { DayLineSeries } from "../shared/day-line-chart";
@@ -344,10 +345,12 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
         const [plan, command, inverter] = this._chainBoxes(overview);
         const mismatch = overview.agreement.status === "mismatch";
         const current = this._plan.runs.find((run) => run.startMs <= Date.now() && (run.endMs === null || Date.now() < run.endMs));
-        const planned = current ? effectiveAction(current.action).kind : null;
+        const runtime = runtimeFor<InverterRuntimeDTO>(this._plan.schedule, INVERTER_CONTROLLABLE_ID, Date.now());
+        // A target reached resolves to holding the battery there: that is the plan, carried out.
+        const resolved = runtime?.reason === "target_soc_reached" ? runtime.executedAction?.kind : undefined;
+        const planned = current ? resolved ?? effectiveAction(current.action).kind : null;
         const commanded = this._commandedKind(overview);
         const planMismatch = planned !== null && commanded !== null && planned !== commanded;
-        const runtime = runtimeFor<InverterRuntimeDTO>(this._plan.schedule, INVERTER_CONTROLLABLE_ID, Date.now());
         const reason = notApplied ? this._t("why.execution_off_short")
             : planMismatch ? this._t("chain.plan_mismatch")
                 : runtime?.outcome === "failed" ? this._t("chain.executor_failed")
@@ -382,6 +385,7 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
             value: planned ? this._actionLabel(planned) : this._t("why.nothing_scheduled"),
             detail: [
                 run?.action.conditionMet === false ? fillTemplate(this._t("chain.candidate"), { action: this._actionLabel(run.action) }) : null,
+                run && runtime?.reason === "target_soc_reached" ? getScheduleReasonLabel(runtime.reason, this.localize) : null,
                 this._plan.schedule ? this._t(this._plan.schedule.executionEnabled ? "why.execution_on_short" : "why.execution_off_short") : null,
             ].filter(Boolean).join(" · ") || null,
             tone: planned ? getScheduleActionTone(planned.kind) : "neutral",
