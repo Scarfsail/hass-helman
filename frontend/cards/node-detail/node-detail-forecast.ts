@@ -1,4 +1,4 @@
-import { html, nothing, type TemplateResult } from "lit";
+import { html, type TemplateResult } from "lit";
 import type { ApplianceProjectionsPayload } from "../helman-api";
 import type { HomeAssistant } from "../../types/ha";
 import { fillTemplate, type LocalizeFunction } from "../localize/localize";
@@ -9,7 +9,7 @@ import type { DayLineMarker, DayLinePoint, DayLineReference, DayLineSeries, DayL
 import { dayKey, todayAndTomorrow } from "./node-detail-schedule";
 import { hassLocale, timeZone } from "./section-resource";
 import "../shared/day-line-chart";
-import "./detail-section";
+import { renderSummarySection } from "./detail-section";
 import "./help-tip";
 
 /**
@@ -28,13 +28,7 @@ export function renderForecastSection(
     toggle: (open: boolean) => void,
     body: () => TemplateResult,
 ): TemplateResult {
-    return html`
-        <helman-detail-section data-forecast icon="mdi:chart-line" .title=${localize("node_detail.shared.forecast.title")}
-            .expanded=${open} @expanded-changed=${(event: CustomEvent<boolean>) => toggle(event.detail)}>
-            <span slot="summary">${summary}</span>
-            ${open ? html`<div class="content" data-forecast-body>${body()}</div>` : nothing}
-        </helman-detail-section>
-    `;
+    return renderSummarySection("forecast", "mdi:chart-line", localize("node_detail.shared.forecast.title"), summary, open, toggle, body);
 }
 
 /** Where and when a forecast chart is drawn. */

@@ -74,6 +74,7 @@ async function mountCard(
     today = TODAY_KWH,
     projections: Record<string, Array<[string, number]>> = {},
     generatedAt = "2026-10-21T12:00:00+00:00",
+    admin = false,
 ): Promise<void> {
     await loadBundle(page, "helman-card");
     await installHaStubs(page);
@@ -125,7 +126,7 @@ async function mountCard(
     });
 
     await page.evaluate(
-        async ({ tree, today, lastHour, stats, energyUnit, projections, generatedAt }) => {
+        async ({ tree, today, lastHour, stats, energyUnit, projections, generatedAt, admin }) => {
             const state = (value: string, attributes: Record<string, unknown> = {}) => ({ state: value, attributes });
             (window as any).__statRequests = [];
             (window as any).__deviceStatsRequests = [];
@@ -133,6 +134,7 @@ async function mountCard(
                 language: "en",
                 locale: { language: "en" },
                 config: { time_zone: "UTC" },
+                user: { is_admin: admin },
                 connection: {
                     sendMessagePromise: async () => ({}),
                     subscribeMessage: window.__mockHass().connection.subscribeMessage,
@@ -173,7 +175,7 @@ async function mountCard(
             card.hass = hass;
             document.body.appendChild(card);
         },
-        { tree, today, lastHour: LAST_HOUR_KWH, stats, energyUnit, projections, generatedAt },
+        { tree, today, lastHour: LAST_HOUR_KWH, stats, energyUnit, projections, generatedAt, admin },
     );
 
     await expect.poll(() => rowNames(page)).toContain("Boiler");
@@ -203,7 +205,6 @@ test("device name opens a shared Overview with today's measured energy", async (
     await expect(detail.locator('[slot="headerTitle"] ha-icon, [slot="headerTitle"] ha-state-icon')).toHaveCount(0);
     await expect(detail.locator("node-detail-device-content helman-detail-headline")).toContainText("1.25 kWh used today");
     await expect(detail.locator("helman-switch-tile")).toHaveCount(1);
-    await expect(detail.locator("helman-node-flow, helman-node-tile, helman-node-question")).toHaveCount(0);
 });
 
 for (const [unit, change, caption] of [["Wh", 500, "0.50 kWh used today"], ["MWh", 0.00125, "1.25 kWh used today"]] as const) {
@@ -297,31 +298,77 @@ test("device without projected energy has no Forecast section", async ({ page })
     await expect(page.locator("node-detail-device-content helman-detail-section[data-forecast]")).toHaveCount(0);
 });
 
+// History & statistics, Technical details ------------------------------------------
+
+const BOILER_STATS = {
+    "sensor.boiler_energy": {
+        daily_kwh: { median: 4.1, min: 1.2, max: 6.8, mean: 4.0, days: 14 },
+        runs_per_day: 2,
+        run_minutes: { median: 105, min: 60, max: 150 },
+        run_kwh: { median: 3.4, min: 2, max: 5 },
+        on_kwh_per_hour: 1.8,
+    },
+};
+
+test("device History header gives the learned average while on, collapsed; the body has the last 24 hours and the typical tiles", async ({ page }) => {
+    await mountCard(page, BOILER_STATS, true);
+    await openDevice(page, "Boiler");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
+    await expect(section.locator("[slot=summary]")).toHaveText("1.8 kW while on");
+    await expect(section.locator("[slot=summary] b")).toHaveText("1.8 kW");
+    await expect(section.locator("[data-history-body]")).toHaveCount(0);
+    expect(await page.evaluate(() => (window as any).__chartConfigs.length)).toBe(0);
+    await section.locator("button").first().click();
+    await expect(section.locator(".history-graph-stub")).toHaveCount(1);
+    expect(await page.evaluate(() => (window as any).__chartConfigs)).toEqual([{ type: "history-graph", hours_to_show: 24, entities: ["sensor.boiler_power", "switch.boiler"] }]);
+    await expect(section.locator(".section-title")).toHaveText(["Last 24 hours", "Typical, learned from the last 14 days"]);
+    const tiles = section.locator("[data-typical] [data-stat]");
+    await expect(tiles).toHaveCount(4);
+    await expect(tiles.nth(0)).toContainText("4.1 kWh");
+    await expect(tiles.nth(0)).toContainText("a typical day (1.2–6.8 kWh)");
+    await expect(tiles.nth(1)).toContainText("2 runs");
+    await expect(tiles.nth(2)).toContainText("1 h 45 min");
+    await expect(tiles.nth(2)).toContainText("a typical run ≈ 3.4 kWh");
+    await expect(tiles.nth(3)).toContainText("1.8 kW");
+    await expect(tiles.nth(3)).toContainText("average while on");
+});
+
+test("device Technical details lists its entities for an admin, and is absent for anyone else", async ({ page }) => {
+    await mountCard(page, {}, true, "kWh", TODAY_KWH, {}, "2026-10-21T12:00:00+00:00", true);
+    await openDevice(page, "Boiler");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-technical]");
+    await expect(section.locator("[slot=summary]")).toHaveCount(0);
+    await section.locator("button").first().click();
+    await expect(section.locator("[data-row=switch] .value")).toHaveText("switch.boiler");
+    await expect(section.locator("[data-row=power-sensor] .value")).toHaveText("sensor.boiler_power");
+    await expect(section.locator("[data-row^=runtime-]")).toHaveCount(1);
+});
+
+test("device Technical details is not rendered for a non-admin", async ({ page }) => {
+    await mountCard(page, {}, true);
+    await openDevice(page, "Boiler");
+    await expect(page.locator("node-detail-device-content helman-detail-section[data-history]")).toHaveCount(1);
+    await expect(page.locator("node-detail-device-content helman-detail-section[data-technical]")).toHaveCount(0);
+});
+
 // Closing divider ----------------------------------------------------------------
 
 /** The detail's and each section's bottom border width, by name. */
 async function sectionBottomBorders(page: Page): Promise<Record<string, string>> {
     return page.evaluate(() => Object.fromEntries((window as any).__deepAll(document, "node-detail-device-content, helman-detail-section")
-        .map((element: Element) => [element.hasAttribute("data-schedule") ? "schedule" : element.hasAttribute("data-forecast") ? "forecast" : "detail",
+        .map((element: Element) => [["schedule", "forecast", "history", "technical"].find((name) => element.hasAttribute(`data-${name}`)) ?? "detail",
             getComputedStyle(element).borderBottomWidth])));
 }
 
-test("a device without sections ends on its Overview, with no divider above the footer", async ({ page }) => {
-    await mountCard(page);
-    await page.evaluate(() => document.body.style.setProperty("--divider-color", "#d4d4d8"));
-    await openDevice(page, "Boiler");
-    await expect(page.locator("node-detail-device-content [data-overview]")).toBeVisible();
-    await page.waitForTimeout(300);
-    expect(await sectionBottomBorders(page)).toEqual({ detail: "0px" });
-});
-
-for (const [label, projections, borders] of [
-    ["the Schedule", {}, { detail: "0px", schedule: "1px" }],
-    ["the Forecast after the Schedule", { boiler: [["2026-10-21T12:00:00+00:00", 0.5]] }, { detail: "0px", schedule: "0px", forecast: "1px" }],
+for (const [label, schedulable, projections, admin, borders] of [
+    ["History & statistics, without a Schedule", false, {}, false, { detail: "0px", history: "1px" }],
+    ["History & statistics after the Schedule", true, {}, false, { detail: "0px", schedule: "0px", history: "1px" }],
+    ["History & statistics after the Forecast", true, { boiler: [["2026-10-21T12:00:00+00:00", 0.5]] }, false, { detail: "0px", schedule: "0px", forecast: "0px", history: "1px" }],
+    ["Technical details for an admin", true, {}, true, { detail: "0px", schedule: "0px", history: "0px", technical: "1px" }],
 ] as const) {
     test(`the last section, ${label}, and only it is closed off from the footer`, async ({ page }) => {
         await installFixedClock(page);
-        await mountCard(page, {}, true, "kWh", TODAY_KWH, projections as Record<string, Array<[string, number]>>);
+        await mountCard(page, {}, schedulable, "kWh", TODAY_KWH, projections as Record<string, Array<[string, number]>>, "2026-10-21T12:00:00+00:00", admin);
         await page.evaluate(() => document.body.style.setProperty("--divider-color", "#d4d4d8"));
         await openDevice(page, "Boiler");
         await expect.poll(() => sectionBottomBorders(page)).toEqual(borders);

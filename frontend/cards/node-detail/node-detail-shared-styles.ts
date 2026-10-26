@@ -108,6 +108,51 @@ export const nodeDetailSharedStyles = css`
         letter-spacing: 0.08em;
     }
 
+    /* History & statistics: a part of the row above it, figures as tiles, energy by source. */
+    .row.indent {
+        padding-left: 14px;
+    }
+    /* History and technical figures read as plain text; a key figure is bolded where it is. */
+    [data-history-body] .row .value,
+    [data-technical-body] .row .value {
+        font-weight: inherit;
+    }
+    .stat-tiles {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+    }
+    .stat-tiles.two {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+    .stat-value {
+        font-size: 18px;
+        overflow-wrap: anywhere;
+    }
+    .stat-caption {
+        font-size: 12px;
+        line-height: 1.45;
+        color: var(--secondary-text-color);
+    }
+    /* HA's history graph sits on the section, not in a card of its own. */
+    hui-history-graph-card {
+        --ha-card-background: transparent;
+        --ha-card-border-width: 0;
+        --ha-card-box-shadow: none;
+    }
+    .share-bar {
+        display: flex;
+        gap: 2px;
+        height: 16px;
+    }
+    .share-bar > span {
+        min-width: 4px;
+        border-radius: 4px;
+    }
+    .swatch-mark {
+        margin-right: 4px;
+    }
+
     .error {
         margin: 0;
         font-size: 0.85rem;
@@ -244,51 +289,12 @@ export const nodeDetailQuestionStyles = css`
     }
 `;
 
-/**
- * The pictured node details: a picture or glyph that opens the question it
- * absorbed, the answer tiles and the open answer under them.
- */
+/** The inverter's plan → command → inverter chain, and a meter bar under a figure. */
 export const nodeDetailPictureStyles = css`
-    .glyph,
-    .picture {
-        display: block;
-        padding: 0;
-        border: none;
-        background: none;
-        color: inherit;
-        font: inherit;
-        text-align: inherit;
-        cursor: pointer;
-        border-radius: 8px;
-    }
-    .picture {
-        width: 100%;
-    }
     .picture.chain {
         display: flex;
         flex-direction: column;
         gap: 4px;
-    }
-    .glyph:focus-visible,
-    .picture:focus-visible {
-        outline: 2px solid var(--primary-color);
-        outline-offset: 2px;
-    }
-    .picture-scope {
-        font-size: 0.75rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        color: var(--secondary-text-color);
-    }
-    .tiles {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
-        gap: 8px;
-        margin-top: 4px;
-    }
-    helman-node-question {
-        margin-top: 4px;
     }
     .meter {
         display: block;

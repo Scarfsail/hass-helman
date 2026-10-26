@@ -4,7 +4,7 @@ import type { HomeAssistant } from "../../types/ha";
 import type { LocalizeFunction } from "../localize/localize";
 import { fillTemplate } from "../localize/localize";
 import type { TreeItem } from "../shared/data/tree-item";
-import { formatPower } from "../shared/format";
+import { formatKwh, formatMinutes, formatPower } from "../shared/format";
 import { convertToKWh, isSupportedEnergyUnit } from "../helman/energy-unit-converter";
 import { readPowerW } from "../shared/power-reading";
 import { dispatchWatchedEntities } from "../shared/hass-change";
@@ -12,11 +12,17 @@ import type { DeviceDetailParams } from "./node-detail-types";
 import { deviceControllableIds, deviceDirectControls } from "./node-detail-utils";
 import { estimatedConsumerMix } from "./live-flows";
 import { SectionResource } from "./section-resource";
-import type { ApplianceProjectionsPayload } from "../helman-api";
+import type { ApplianceProjectionsPayload, ApplianceRuntimeDTO, DeviceStats, DeviceStatsSpread } from "../helman-api";
+import { callHelman } from "../shared/data/helman-commands";
+import { deviceEnergyMeasures } from "../shared/devices/device-energy";
+import { ScheduleController } from "./schedule-controller";
+import { runtimeText, runtimeFor } from "./node-detail-schedule";
+import {
+    HistoryGraphResource, historyRow, historySummary, renderHistorySection, renderTechnicalSection, sectionNotReady, statTile, subTitle,
+} from "./node-detail-history";
 import { getSharedHelmanStore } from "../shared/data/store";
 import { DataChangedController } from "../shared/data/data-changed";
 import { SLOT_MS } from "../shared/time/slot-time";
-import { formatKwh } from "../shared/format";
 import { boldTemplate } from "./detail-section";
 import { helmanColorVars } from "../color-vars";
 import {
@@ -62,19 +68,49 @@ export class NodeDetailDeviceContent extends LitElement {
         staleness: (_payload, requestedAt) => requestedAt < Math.floor(Date.now() / SLOT_MS) * SLOT_MS,
         keepOnError: false,
     });
+    /** The learned usage record, for the History header: read on opening; `null` when there is none. */
+    private readonly _stats = new SectionResource<DeviceStats | null>(this, "stats", {
+        // The backend resolves a metered device's id to its meter.
+        fetch: () => callHelman(this.hass, "helman/get_device_stats", { device_key: this.params.item.deviceKey! }),
+        shown: () => !!this.params.item.deviceKey,
+        staleness: () => false,
+    });
+    /** HA's history graph of the device's power and switch, once History & statistics is open. */
+    private readonly _chart = new HistoryGraphResource(this, () => this._chartEntities(), () => this._historyOpen);
+    /** The plan, for the executor's outcome in Technical details, followed once that is open. */
+    private readonly _plan = new ScheduleController(this, () => []);
+    private _planStarted = false;
     @state() private _forecastOpen = false;
+    @state() private _historyOpen = false;
+    @state() private _technicalOpen = false;
     private _loadedItem?: TreeItem;
 
     constructor() {
         super();
         new DataChangedController(this, () => this.hass, {}, () => this._projection.reload());
     }
-    protected willUpdate(_changed: PropertyValues<this>): void {
+    protected willUpdate(): void {
+        this._plan.reset();
         const item = this.params?.item;
         if (!item || !this.hass) return;
-        if (item !== this._loadedItem) { this._loadedItem = item; this._energy.drop(); this._projection.drop(); this._forecastOpen = false; }
-        this._energy.sync();
-        this._projection.sync();
+        const sections = [this._energy, this._projection, this._stats];
+        if (item !== this._loadedItem) {
+            this._loadedItem = item;
+            for (const section of [...sections, this._chart]) section.drop();
+            this._forecastOpen = this._historyOpen = this._technicalOpen = false;
+        }
+        for (const section of sections) section.sync();
+        this._chart.follow(this.hass);
+        if (this._technicalOpen && !this._planStarted) {
+            this._planStarted = true;
+            this._plan.start(this.hass);
+        }
+    }
+
+    disconnectedCallback(): void {
+        super.disconnectedCallback();
+        this._plan.stop();
+        this._planStarted = false;
     }
     protected updated(changed: PropertyValues<this>): void {
         if (changed.has("params")) dispatchWatchedEntities(this, "node-detail:device-climate", [deviceDirectControls(this.params.item)?.climateEntityId]);
@@ -105,7 +141,71 @@ export class NodeDetailDeviceContent extends LitElement {
             ${ids.length ? html`<helman-who-decides .hass=${this.hass} .localize=${this.localize} .controllableId=${ids[0]}></helman-who-decides>` : nothing}
         </div></div>
         <slot name="schedule"></slot>
-        ${this._renderForecast(ids)}`;
+        ${this._renderForecast(ids)}
+        ${this._renderHistory()}
+        ${renderTechnicalSection(this.hass, this.localize, this._technicalOpen, (open) => { this._technicalOpen = open; }, () => this._renderTechnical(ids))}`;
+    }
+
+    /** The power sensor and the switch, which HA's history graph draws. */
+    private _chartEntities(): string[] {
+        const item = this.params.item;
+        return [powerEntity(item), deviceDirectControls(item)?.switchEntityId ?? item.switchEntityId].filter((id): id is string => !!id);
+    }
+
+    /**
+     * Its power and switch over the last 24 hours, and what it typically
+     * uses, as learned over its window. None for a device with neither.
+     */
+    private _renderHistory() {
+        if (!this._chart.available() && !this.params.item.deviceKey) return nothing;
+        const stats = this._stats.payload;
+        const measures = deviceEnergyMeasures(stats ?? undefined);
+        const whileOn = measures.on ?? measures.running;
+        const h = (key: string) => this.localize(`node_detail.shared.history.${key}`);
+        const summary = historySummary(this._stats, this.localize, whileOn !== undefined ? boldTemplate(h("device_summary"), { kw: formatPower(whileOn).display }) : null);
+        return renderHistorySection(this.localize, summary, this._historyOpen, (open) => { this._historyOpen = open; }, () => html`
+            ${this._chart.render(this.localize)}
+            ${this.params.item.deviceKey ? this._renderTypical() : nothing}
+        `);
+    }
+
+    /** A typical day, how often and how long it runs, and its average while on: 2×2 tiles. */
+    private _renderTypical() {
+        const notReady = sectionNotReady(this._stats, this.localize);
+        if (notReady) return notReady;
+        const stats = this._stats.payload;
+        const h = (key: string) => this.localize(`node_detail.shared.history.${key}`);
+        if (!stats) return html`<p class="note" data-no-stats>${h("device_no_stats")}</p>`;
+        const range = (spread: DeviceStatsSpread, digits: number) => `${spread.min.toFixed(digits)}–${spread.max.toFixed(digits)}`;
+        const day = stats.daily_kwh;
+        const measures = deviceEnergyMeasures(stats);
+        const whileOn = measures.on ?? measures.running;
+        const run = stats.run_minutes && stats.run_kwh ? { minutes: stats.run_minutes.median, kwh: stats.run_kwh.median } : null;
+        return html`
+            ${subTitle(day ? fillTemplate(h("device_typical"), { days: day.days }) : h("device_typical_undated"))}
+            <div class="stat-tiles two" data-typical>
+                ${day ? statTile(`${formatKwh(day.median)} kWh`, fillTemplate(h("device_day"), { range: range(day, 1) }), "day") : nothing}
+                ${typeof stats.runs_per_day === "number" ? statTile(fillTemplate(h("device_runs"), { n: Math.round(stats.runs_per_day * 10) / 10 }), h("device_runs_caption"), "runs") : nothing}
+                ${run ? statTile(formatMinutes(run.minutes), fillTemplate(h("device_run"), { kwh: formatKwh(run.kwh) }), "run") : nothing}
+                ${whileOn !== undefined ? statTile(formatPower(whileOn).display, h("device_while_on"), "while-on") : nothing}
+            </div>
+        `;
+    }
+
+    /** The executor's outcome for each of its lanes in the slot in progress, and the entities it is read and switched through. */
+    private _renderTechnical(ids: readonly string[]) {
+        const item = this.params.item;
+        const direct = deviceDirectControls(item);
+        const t = (key: string) => this.localize(`node_detail.shared.technical.${key}`);
+        const now = Date.now();
+        return html`<div class="rows">
+            ${ids.map((id) => {
+                const runtime = runtimeFor<ApplianceRuntimeDTO>(this._plan.schedule, id, now);
+                return historyRow(ids.length > 1 ? `${t("executor")} · ${id}` : t("executor"), runtime ? runtimeText(runtime, this.localize) : t("no_runtime"), `runtime-${id}`);
+            })}
+            ${historyRow(t("switch_entity"), direct?.switchEntityId ?? item.switchEntityId ?? "—", "switch")}
+            ${historyRow(t("power_entity"), item.powerSensorId ?? "—", "power-sensor")}
+        </div>`;
     }
 
     /**

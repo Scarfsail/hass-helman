@@ -59,6 +59,8 @@ type Variant = {
     socPath?: Array<{ soc: number; min?: boolean; max?: boolean }>;
     /** The forecast's SoC now; 67 unless given. */
     currentSoc?: number;
+    /** The viewer is an admin. */
+    admin?: boolean;
 };
 
 declare global {
@@ -143,7 +145,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 solarPricedKwh: 0, solarUnpricedKwh: 0, paidRate: null, forgoneRate: null, paidCost: 0, forgoneValue: 0,
             }
             : {
-                chargedKwh: 6.0, solarKwh: 4.2, gridKwh: 1.5, unknownKwh: 0.3, gridPricedKwh: 1.0, gridTariffKwh: 0, gridUnpricedKwh: 0.5,
+                chargedKwh: 6.2, solarKwh: 4.2, gridKwh: 1.5, unknownKwh: 0.5, gridPricedKwh: 1.0, gridTariffKwh: 0, gridUnpricedKwh: 0.5,
                 solarPricedKwh: 4.2, solarUnpricedKwh: 0, paidRate: 4.0, forgoneRate: 1.2, paidCost: 4.0, forgoneValue: 5.04,
             };
         const section = {
@@ -202,6 +204,8 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
         document.addEventListener("hass-more-info", (event) => window.__moreInfo.push((event as CustomEvent).detail.entityId));
         window.__BatteryHass = window.__configureNodeDetail({
             states, tree, overviews: { battery: overview, inverter }, sections: { battery: { flows: flowsSection, charge: section } }, forecast: v.forecastFails ? "error" : forecast, schedule,
+            replies: { "recorder/statistic_during_period": { min: 6, max: 14 } },
+            hass: v.admin ? { user: { is_admin: true } } : {},
         });
         window.__BatteryRequests = window.__NodeDetailRequests;
     }, { v: variant, tree: cardTree(), forecastDefaults: forecastPayload(), scheduleDefaults: scheduleSlots({ slotMinutes: 15 }) });
@@ -223,7 +227,6 @@ test("battery Overview has SoC, recent-rate estimate, destination gauge and inve
     await expect(content(page).locator("simple-card-battery")).toHaveCount(1);
     await expect(content(page).locator("[data-estimate]")).toContainText("4 h");
     await expect(content(page).locator("helman-flow-gauge")).toHaveAttribute("direction", "to");
-    await expect(content(page).locator("helman-node-flow, helman-node-tile, helman-node-question")).toHaveCount(0);
     await content(page).getByRole("button", { name: /Controlled through the inverter/ }).click();
     await expect(page.locator("node-detail-inverter-content")).toBeVisible();
 });
@@ -462,4 +465,56 @@ test("battery Forecast offers a retry when the forecast fails", async ({ page })
     await expect(section.locator("[slot=summary]")).toHaveText("The forecast could not be loaded.");
     await openForecast(page);
     await expect(section.locator("[data-forecast-failed]")).toBeVisible();
+});
+
+// History & statistics, Technical details -------------------------------------
+
+test("battery History header gives today's charge and discharge, collapsed; the body splits the charge and shows health", async ({ page }) => {
+    await mount(page);
+    await openDetail(page);
+    const section = content(page).locator("helman-detail-section[data-history]");
+    await expect(section.locator("[slot=summary]")).toHaveText("Today +6.2 / −4.1 kWh");
+    await expect(section.locator("[slot=summary] b")).toHaveText(["+6.2", "−4.1 kWh"]);
+    await expect(section.locator("[data-history-body]")).toHaveCount(0);
+    expect(await page.evaluate(() => window.__NodeDetailRequests.some((r) => r.type === "helman/get_node_detail" && r.section === "charge"))).toBe(false);
+    await section.locator("button").first().click();
+    await expect(section.locator("[data-row=charged] .value")).toHaveText("6.2 kWh");
+    await expect(section.locator("[data-row=from-solar]")).toHaveClass(/indent/);
+    await expect(section.locator("[data-row=from-solar] .value")).toHaveText("4.2 kWh");
+    await expect(section.locator("[data-row=from-grid] .value")).toContainText("1.5 kWh · paid ≈");
+    await expect(section.locator("[data-row=from-unknown]")).toHaveClass(/indent/);
+    await expect(section.locator("[data-row=from-unknown] .label")).toHaveText("source not known");
+    await expect(section.locator("[data-row=from-unknown] .value")).toHaveText("0.50 kWh");
+    // Where the charge came from adds up to the charge the header gives.
+    const parts = await section.locator("[data-row^=from-] .value").allTextContents();
+    expect(parts.reduce((sum, text) => sum + parseFloat(text), 0)).toBeCloseTo(6.2, 5);
+    await expect(section.locator("[data-row=discharged] .value")).toHaveText("4.1 kWh");
+    const tiles = section.locator("[data-stat]");
+    await expect(tiles).toHaveCount(3);
+    await expect(tiles.nth(0)).toContainText("170");
+    await expect(tiles.nth(0)).toContainText("full cycles so far");
+    await expect(tiles.nth(1)).toContainText("24 °C");
+    await expect(tiles.nth(1)).toContainText("cells now; 6–14 today");
+    await expect(tiles.nth(2)).toContainText("12 mV");
+    await expect(tiles.nth(2)).toContainText("cell gap; fine below 50");
+});
+
+test("battery Technical details shows the slot, the executor and the BMS readings to an admin", async ({ page }) => {
+    await mount(page, { admin: true });
+    await openDetail(page);
+    const section = content(page).locator("helman-detail-section[data-technical]");
+    await expect(section.locator("[slot=summary]")).toHaveCount(0);
+    await section.locator("button").first().click();
+    await expect(section.locator("[data-row=executor] .value")).toContainText("Applied");
+    for (const key of ["bms_charge_max_current", "bms_discharge_max_current", "battery_voltage", "battery_current", "bms_connect_state", "cell_voltage_high", "cell_voltage_low"]) {
+        await expect(section.locator(`[data-row=${key}]`)).toHaveCount(1);
+    }
+    await expect(section.locator("[data-row=battery_temperature], [data-row=battery_type]")).toHaveCount(0);
+});
+
+test("battery Technical details is not rendered for a non-admin", async ({ page }) => {
+    await mount(page);
+    await openDetail(page);
+    await expect(content(page).locator("helman-detail-section[data-history]")).toHaveCount(1);
+    await expect(content(page).locator("helman-detail-section[data-technical]")).toHaveCount(0);
 });

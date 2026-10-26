@@ -62,3 +62,10 @@ export const ZERO_KWH_DISPLAY_THRESHOLD = GRID_SURPLUS_DISPLAY_ZERO_THRESHOLD_KW
 export function isZeroKwhDisplayValue(kwh: number): boolean {
     return Math.abs(kwh) < ZERO_KWH_DISPLAY_THRESHOLD;
 }
+
+/** Minutes as "1 h 5 min", rounded once, so 119.7 reads 2 h 0 min, never 1 h 60 min. */
+export function formatMinutes(minutes: number): string {
+    const total = Math.round(minutes);
+    const hours = Math.floor(total / 60);
+    return hours > 0 ? `${hours} h ${total % 60} min` : `${total} min`;
+}

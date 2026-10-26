@@ -279,15 +279,18 @@ export function sameAction(left: ScheduleActionDTO, right: ScheduleActionDTO): b
         && (left.conditionMet !== false) === (right.conditionMet !== false);
 }
 
-/** The executor's record in words: what it did, how it went and why. */
-export function runtimeText(runtime: InverterRuntimeDTO, localize: LocalizeFunction): string {
+/**
+ * An executor's record in words: what it did, how it went, the inverter's
+ * executed action and reason, and when it failed, why.
+ */
+export function runtimeText(runtime: ControllableRuntimeDTO, localize: LocalizeFunction): string {
     const t = (key: string) => localize(`node_detail.inverter.${key}`);
     const parts = [t(`runtime.action.${runtime.actionKind}`), t(`runtime.outcome.${runtime.outcome}`)];
-    if (runtime.executedAction) parts.push(getScheduleActionLabel(runtime.executedAction, localize));
-    const reason = getScheduleReasonLabel(runtime.reason, localize);
+    if ("executedAction" in runtime && runtime.executedAction) parts.push(getScheduleActionLabel(runtime.executedAction, localize));
+    const reason = "reason" in runtime ? getScheduleReasonLabel(runtime.reason, localize) : null;
     if (reason) parts.push(reason);
-    if (runtime.outcome === "failed" && runtime.message) parts.push(runtime.message);
-    return parts.join(" · ");
+    if (runtime.outcome === "failed") parts.push(runtime.message ?? runtime.errorCode ?? "");
+    return parts.filter(Boolean).join(" · ");
 }
 
 /**

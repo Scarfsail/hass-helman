@@ -66,3 +66,19 @@ test("a help popup near the right edge stays inside a 390 px viewport", async ({
     }).toBe(true);
 });
 
+
+test("the question, tile and flow components are gone and nothing imports them", async () => {
+    const { readdirSync, readFileSync, statSync, existsSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const root = join(__dirname, "..");
+    for (const file of ["cards/shared/node-question.ts", "cards/shared/node-tile.ts", "cards/shared/node-flow.ts", "tests/support/node-flow.ts"]) {
+        expect(existsSync(join(root, file)), file).toBe(false);
+    }
+    const sources = (dir: string): string[] => readdirSync(dir).flatMap((name) => {
+        const path = join(dir, name);
+        return statSync(path).isDirectory() ? sources(path) : path.endsWith(".ts") ? [path] : [];
+    });
+    const importers = [...sources(join(root, "cards")), ...sources(join(root, "tests"))]
+        .filter((path) => /from\s+["'][^"']*\/node-(question|tile|flow)["']|import\s+["'][^"']*\/node-(question|tile|flow)["']/.test(readFileSync(path, "utf8")));
+    expect(importers).toEqual([]);
+});

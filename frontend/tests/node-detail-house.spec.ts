@@ -36,7 +36,8 @@ type Variant = {
     noMeasured?: boolean;
     /** Today's report cannot be built. */
     todayUnavailable?: boolean;
-    rankingUnavailable?: boolean;
+    /** The viewer is an admin. */
+    admin?: boolean;
     /** Schedule execution is switched off. */
     executionOff?: boolean;
     noSlots?: boolean;
@@ -223,24 +224,6 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 kwh: Array.from({ length: 7 }, (_, day) => Array.from({ length: 24 }, (_, hour) => (day === 2 && hour === 18 ? 1.6 : 0.3 + hour / 100))),
             },
         };
-        const ranking = {
-            report: "ranking", startDate: "2026-10-21", endDate: "2026-10-21", priceUnit: "CZK/kWh",
-            complete: false, asOf: "2026-10-21T11:55:00+00:00", range: { minDate: "2026-01-01", maxDate: "2026-10-21" },
-            meters: { grid: true, solar: true, battery: true, house: true },
-            chargeOrigin: {}, solarTotals: {}, houseKwh: 20, ambiguousKwh: 0, unattributedKwh: 2, mismatchKwh: 0,
-            nodes: [
-                { id: "house", label: "", icon: null, estimated: false, unmeasured: false, kwh: 20, coverage: 1, firstHour: null,
-                  parentId: null, depth: 0, children: ["sensor.ev_energy"],
-                  sources: { solar: 8, battery: 4, grid: 6, unattributed: 2 },
-                  money: { paid: { amount: 25.4, pricedKwh: 18, unpricedKwh: 2, tariffKwh: 0 }, forgone: { amount: 6.1, pricedKwh: 18, unpricedKwh: 2 } },
-                  overallocatedKwh: 0 },
-                { id: "sensor.ev_energy", label: "EV", icon: null, estimated: false, unmeasured: false, kwh: 6, coverage: 1, firstHour: null,
-                  parentId: "house", depth: 1, children: [],
-                  sources: { solar: 2, battery: 1, grid: 3, unattributed: 0 },
-                  money: { paid: { amount: 12, pricedKwh: 6, unpricedKwh: 0, tariffKwh: 0 }, forgone: { amount: 1.2, pricedKwh: 6, unpricedKwh: 0 } },
-                  overallocatedKwh: 0 },
-            ],
-        };
         // The plan: the boiler from 13:00 to 14:00, the EV a candidate 15:00–16:00.
         const slots: ScheduleSlotDTO[] = [];
         for (let i = 0; i < 48; i += 1) {
@@ -277,7 +260,8 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             },
         };
         window.__HouseHass = window.__configureNodeDetail({
-            states, tree, overviews: { house: overview, inverter: window.__inverterOverview({ maxAllowedExportPower: null }) }, sections: { house: { today, pattern, ranking: { node: "house", section: "ranking", asOf: ranking.asOf, period: today.period, unavailable: v.rankingUnavailable ? "no_house_meter" : null, report: v.rankingUnavailable ? null : ranking } } }, forecast, schedule,
+            states, tree, overviews: { house: overview, inverter: window.__inverterOverview({ maxAllowedExportPower: null }) }, sections: { house: { today, pattern } }, forecast, schedule,
+            hass: v.admin ? { user: { is_admin: true } } : {},
             // The boiler's run is projected at 0.5 kWh a slot.
             replies: { "helman/get_appliance_projections": { generatedAt: "2026-10-21T12:00:00+00:00", appliances: {
                 boiler: { series: slots.filter((slot) => slot.controllables.boiler).map((slot) => ({ slotId: slot.id, energyKwh: 0.5 })) },
@@ -299,7 +283,6 @@ test("house Overview shows the P1 detail layout", async ({ page }) => {
     await expect(c.locator("helman-detail-headline")).toBeVisible();
     await expect(c.locator("helman-flow-gauge")).toHaveCount(1);
     await expect(c).toContainText("biggest users");
-    await expect(c.locator("helman-node-flow, helman-node-tile, helman-node-question")).toHaveCount(0);
 });
 
 test("house headline, gauge and power card agree where the grid meter disagrees with the balance", async ({ page }) => {
@@ -409,4 +392,51 @@ test("house Forecast busiest hour counts only what is left of the slot in progre
     await section.locator("button").first().click();
     // At 12:59 only 0.1 kWh of the 12:45 slot's 1.5 kWh remains, so 13:00's 0.8 kWh is the busiest hour.
     await expect(section.locator("[data-row=busiest] .value")).toHaveText("13:00, ≈ 0.80 kWh");
+});
+
+// History & statistics, Technical details -------------------------------------
+
+async function openHouse(page: Page): Promise<void> {
+    await page.locator(".node-cell:has(simple-card-house)").click();
+    await expect(content(page).locator("[data-overview]")).toBeVisible();
+}
+
+test("house History header compares today with the usual, collapsed; the body has the bars, the grid-free share, the overnight base and the biggest users", async ({ page }) => {
+    await mount(page);
+    await openHouse(page);
+    const section = content(page).locator("helman-detail-section[data-history]");
+    await expect(section.locator("[slot=summary]")).toHaveText("9.2 kWh today · usual 8.0");
+    await expect(section.locator("[slot=summary] b")).toHaveText(["9.2 kWh", "8.0"]);
+    await expect(section.locator("[data-history-body]")).toHaveCount(0);
+    expect(await page.evaluate(() => window.__HouseRequests.some((r) => r.section === "today"))).toBe(false);
+    await section.locator("button").first().click();
+    await expect(section.locator(".section-title").first()).toContainText("Today so far vs a usual Wednesday by");
+    await expect(section.locator("[data-bar=today]")).toContainText("Today 9.2 kWh");
+    await expect(section.locator("[data-bar=usual]")).toContainText("Usual 8.0 kWh");
+    await expect(section.locator("[data-difference]")).toHaveText("15 % above usual.");
+    await expect(section.locator("[data-row=overnight] .value")).toHaveText("182 W (always-on base)");
+    await expect(section.locator("[data-row=independence] .value")).toHaveText("60 %");
+    const users = section.locator("[data-users] .row");
+    await expect(users).toHaveCount(4);
+    await expect(users.nth(0)).toContainText("EV");
+    await expect(users.nth(1)).toContainText("Oven");
+    await expect(section.locator("[data-row=rest] .value")).toHaveText("5.0 kWh");
+});
+
+test("house Technical details shows the forecast's status and training, the usual range and the unmeasured energy to an admin", async ({ page }) => {
+    await mount(page, { admin: true });
+    await openHouse(page);
+    const section = content(page).locator("helman-detail-section[data-technical]");
+    await section.locator("button").first().click();
+    await expect(section.locator("[data-row=forecast-status] .value")).not.toHaveText("—");
+    await expect(section.locator("[data-row=learned-from] .value")).toContainText("42");
+    await expect(section.locator("[data-row=usual-range] .value")).toHaveText("0.18–0.45 kWh");
+    await expect(section.locator("[data-row=unmeasured] .value")).toHaveText("3.5 kWh");
+});
+
+test("house Technical details is not rendered for a non-admin", async ({ page }) => {
+    await mount(page);
+    await openHouse(page);
+    await expect(content(page).locator("helman-detail-section[data-history]")).toHaveCount(1);
+    await expect(content(page).locator("helman-detail-section[data-technical]")).toHaveCount(0);
 });
