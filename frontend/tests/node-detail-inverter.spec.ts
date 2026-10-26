@@ -385,3 +385,12 @@ test("inverter Schedule says why nothing happened is drawn, and a failed read is
     await openSchedule();
     await expect(note).toHaveText("A Custom inverter has no mode registers to read: only the plan is drawn.");
 });
+
+test("inverter has a Schedule but no Forecast section: its future is its schedule", async ({ page }) => {
+    await mount(page);
+    await page.locator(".inverter-cell").click();
+    await expect(content(page).locator("[data-overview]")).toBeVisible();
+    await expect(content(page).locator("helman-detail-section[data-schedule]")).toHaveCount(1);
+    await page.waitForTimeout(300);
+    await expect(content(page).locator("helman-detail-section[data-forecast]")).toHaveCount(0);
+});

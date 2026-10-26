@@ -11,7 +11,7 @@ import { ForecastLoader } from "../shared/data/forecast-loader";
 import { startNowClock } from "../shared/now-clock";
 import { isoDateInTimeZone, todayKey } from "../shared/time/day-key";
 import { getSharedHelmanStore } from "../shared/data/store";
-import { NEW_DAY_RETRY_MS, SectionResource, TODAY_REFRESH_MS, timeZone, type SectionOptions, type SectionState } from "./section-resource";
+import { NEW_DAY_RETRY_MS, SectionResource, TODAY_REFRESH_MS, hassLocale, timeZone, type SectionOptions, type SectionState } from "./section-resource";
 import { ScheduleController, type PlanSpan } from "./schedule-controller";
 import { formatScheduleTime } from "../shared/schedule/model/schedule-time";
 import {
@@ -29,6 +29,7 @@ import { dispatchWatchedEntities } from "../shared/hass-change";
 
 import { IDLE_W } from "./live-flows";
 import { LANE_HISTORY_EVENT, type LaneHistory } from "./node-detail-types";
+import { forecastChartContext, renderForecastSection, type ForecastChartContext } from "./node-detail-forecast";
 
 export { IDLE_W };
 
@@ -124,6 +125,8 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
     @state() protected _forecastFailed = false;
     /** Which scope the node's flow shows; every opening starts on Now. */
     @state() protected _flowScope: FlowScope = "now";
+    /** Whether the Forecast section is open; every opening starts closed. */
+    @state() protected _forecastOpen = false;
 
     /** The node the detail asks `helman/get_node_detail` for, and its localize namespace. */
     protected abstract readonly _node: NodeDetailNode;
@@ -384,6 +387,46 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
     }
 
     // ── Rendering ───────────────────────────────────────────────────────────
+
+    /**
+     * The detail's body: the Overview, then the Schedule section the dialog
+     * slots in, then the node's own sections.
+     */
+    render() {
+        const overview = this._overview.status === "ready" ? this._overview.payload : null;
+        return html`
+            <div class="overview">${this._renderNotReady() ?? this._renderOverview(overview!)}</div>
+            <slot name="schedule"></slot>
+            ${overview ? this._renderForecast(overview) : nothing}
+        `;
+    }
+
+    /** The Overview, once the overview landed. */
+    protected abstract _renderOverview(overview: O): TemplateResult;
+
+    /** The Forecast section; none by default, and none while there is nothing to show. */
+    protected _renderForecast(_overview: O): TemplateResult | typeof nothing {
+        return nothing;
+    }
+
+    /** The Forecast section around `summary`, its body rendered only while open. */
+    protected _forecastSection(summary: TemplateResult | string, body: () => TemplateResult): TemplateResult {
+        return renderForecastSection(this.localize, summary, this._forecastOpen, (open) => { this._forecastOpen = open; }, body);
+    }
+
+    /**
+     * The forecast-based Forecast section: `null` while the forecast loads,
+     * the failure with its retry when none could be loaded, else `ready`.
+     */
+    protected _forecastPending(): TemplateResult | typeof nothing | null {
+        if (this._forecast) return null;
+        return this._forecastFailed ? this._forecastSection(this.localize("node_detail.forecast_failed"), () => this._renderForecastFailed()) : nothing;
+    }
+
+    /** Where and when the forecast charts draw. */
+    protected get _chartContext(): ForecastChartContext {
+        return forecastChartContext(this.hass, this.localize);
+    }
 
     /** The one exception a detail shows. */
     protected _exceptionBanner(text: string) {
@@ -674,7 +717,7 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
     }
 
     protected get _locale(): string {
-        return this.hass.locale?.language ?? this.hass.language ?? "cs";
+        return hassLocale(this.hass);
     }
 
     protected _time(ms: number): string {

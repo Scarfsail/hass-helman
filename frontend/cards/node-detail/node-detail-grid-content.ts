@@ -27,6 +27,9 @@ import "../helman-simple/simple-card-grid";
 import "./detail-headline";
 import "./flow-gauge";
 import "./help-tip";
+import { forecastWhen, holdAtSlots, remainingShare, renderForecastChart, type ForecastChartContext } from "./node-detail-forecast";
+import { modeStripWindow } from "../shared/mode-strip";
+import { SLOT_MS } from "../shared/time/slot-time";
 
 type QuestionId = "voltage" | "phases" | "money" | "next" | "outage";
 
@@ -263,10 +266,7 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
 
     // ── Rendering ───────────────────────────────────────────────────────────
 
-    render() {
-        const notReady = this._renderNotReady();
-        if (notReady || this._overview.status !== "ready") return notReady;
-        const overview = this._overview.payload;
+    protected _renderOverview(overview: GridDetailPayload) {
         const power = this.params.gridPower;
         const importing = power !== null && power >= 0;
         const idle = power !== null && Math.abs(power) <= IDLE_W;
@@ -285,8 +285,8 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
                     .caption=${[power === null ? this.localize("node_detail.grid.unavailable") : this.localize(`node_detail.shared.grid_${idle ? "idle" : importing ? "importing" : "exporting"}`)]}>
                     <simple-card-grid slot="icon" .compact=${true} .power=${power ?? 0}></simple-card-grid>
                 </helman-detail-headline>
-                ${power === null ? nothing : html`<helman-flow-gauge .direction=${importing ? "to" : "from"} .localize=${this.localize}
-                    .items=${gridMix(flows, power)}></helman-flow-gauge>`}
+                <helman-flow-gauge .direction=${idle || power === null ? "flow" : importing ? "to" : "from"} .localize=${this.localize}
+                    .items=${gridMix(flows, power)}></helman-flow-gauge>
                 ${grid && (buy !== null || sell !== null) ? html`<div class="tile" data-price>
                     <div class="row"><span class="label">${this.localize("node_detail.shared.grid_price_now")}</span>
                         <span class="value">${[
@@ -301,6 +301,78 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
                     : this.localize("node_detail.shared.grid_phases_no_breaker")}
                     <helman-help-tip .explanation=${fillTemplate(this.localize("node_detail.shared.grid_phase_help"), { amps: breaker ?? "?" })}></helman-help-tip></div>
                 <div class="tile">${this._renderPhasePicture(overview)}</div>
+            </div>
+        `;
+    }
+
+    // Forecast ----------------------------------------------------------------
+
+    /** The buy price to tomorrow noon, its cheapest and dearest stretch, and the grid use the plan expects. */
+    protected _renderForecast() {
+        const pending = this._forecastPending();
+        if (pending !== null) return pending;
+        const grid = this._forecast!.grid;
+        const context = this._chartContext;
+        const end = modeStripWindow(context.now, context.timeZone).end;
+        const from = Math.floor(context.now / SLOT_MS) * SLOT_MS;
+        // A price holds until the next one, and the last for as long as the one before it did.
+        const points = grid.importPricePoints.map((point) => ({ t: Date.parse(point.timestamp), v: point.value }));
+        const last = points[points.length - 1];
+        const until = last ? last.t + (points.length > 1 ? last.t - points[points.length - 2].t : SLOT_MS) : from;
+        const prices = holdAtSlots(points, from, Math.min(until, end) - SLOT_MS);
+        if (!prices.length) return nothing;
+        const cheapest = extremeStretch(prices, (a, b) => a < b);
+        const dearest = extremeStretch(prices, (a, b) => a > b);
+        const text = (key: string) => this.localize(`node_detail.shared.forecast.${key}`);
+        const stretch = (run: Stretch) => ({ range: forecastWhen(run.start, context, run.end), price: this._price(run.value, grid.importPriceUnit) });
+        // Each figure is one unbreakable unit: a narrow header wraps only between them.
+        const unbroken = (value: string) => value.replace(/ /g, "\u00a0");
+        const summary = boldTemplate(text("grid_summary"), {
+            range: unbroken(forecastWhen(cheapest.start, context, cheapest.end)), price: unbroken(this._price(cheapest.value, grid.importPriceUnit)),
+        });
+        return this._forecastSection(summary, () => html`
+            ${renderForecastChart(context, {
+                title: text("grid_chart"),
+                help: text("grid_help"),
+                series: [{ key: "buy", label: text("grid_buy"), color: "var(--primary-text-color)", points: prices }],
+                spans: [{ start: cheapest.start, end: cheapest.end, color: CHEAPEST_COLOR }],
+                step: true,
+                formatValue: (value) => this._price(value, grid.importPriceUnit),
+            })}
+            <div class="rows">
+                <div class="row" data-row="dearest"><span class="label">${text("grid_dearest")}</span><span class="value">${fillTemplate(text("grid_stretch"), stretch(dearest))}</span></div>
+                <div class="row" data-row="cheapest"><span class="label"><span style="color: ${CHEAPEST_COLOR}">▬</span> ${text("grid_cheapest")}</span><span class="value">${fillTemplate(text("grid_stretch"), stretch(cheapest))}</span></div>
+            </div>
+            ${this._renderPlannedGridUse(context, end)}
+        `);
+    }
+
+    /** The plan's grid import and export to tomorrow noon, one row per stretch of one direction. */
+    private _renderPlannedGridUse(context: ForecastChartContext, end: number) {
+        const runs: Array<{ start: number; end: number; direction: "import" | "export"; kwh: number }> = [];
+        for (const slot of this._forecast!.grid.series) {
+            const start = Date.parse(slot.timestamp);
+            const slotEnd = start + slot.durationHours * 3_600_000;
+            if (slotEnd <= context.now || start >= end) continue;
+            const direction = flowDirection(slot.importedFromGridKwh, slot.exportedToGridKwh);
+            if (direction === "balanced") continue;
+            // The slot in progress counts only what is still ahead of it.
+            const kwh = (direction === "import" ? slot.importedFromGridKwh : slot.exportedToGridKwh) * remainingShare(start, context.now, slot.durationHours * 3_600_000);
+            const last = runs[runs.length - 1];
+            if (last && last.direction === direction && last.end === start) {
+                last.end = slotEnd;
+                last.kwh += kwh;
+            } else {
+                runs.push({ start, end: slotEnd, direction, kwh });
+            }
+        }
+        if (!runs.length) return nothing;
+        const text = (key: string) => this.localize(`node_detail.shared.forecast.${key}`);
+        return html`
+            <div class="section-title">${text("grid_planned")}</div>
+            <div class="rows" data-planned>${runs.map((run) => html`
+                <div class="row" data-run=${run.direction}><span><b>${forecastWhen(run.start, context, run.end)}</b></span>
+                    <span class="value">${fillTemplate(text(`grid_${run.direction}`), { kwh: `≈ ${formatKwh(run.kwh)} kWh` })}</span></div>`)}
             </div>
         `;
     }
@@ -1063,6 +1135,22 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         return formatMoney(value, unit);
     }
 
+}
+
+/** The cheapest stretch on the Forecast chart. */
+const CHEAPEST_COLOR = "var(--success-color, #43a047)";
+
+/** A stretch of equal prices. */
+interface Stretch { start: number; end: number; value: number }
+
+/** The first stretch of consecutive slots at the price `better` than every other, slot by slot. */
+function extremeStretch(points: ReadonlyArray<{ t: number; v: number }>, better: (a: number, b: number) => boolean): Stretch {
+    const best = points.reduce((winner, point) => better(point.v, winner.v) ? point : winner, points[0]);
+    let end = best.t + SLOT_MS;
+    for (const point of points) {
+        if (point.t === end && point.v === best.v) end += SLOT_MS;
+    }
+    return { start: best.t, end, value: best.v };
 }
 
 /** Which way a slot's planned grid flow mostly goes; a few Wh either way is balanced. */

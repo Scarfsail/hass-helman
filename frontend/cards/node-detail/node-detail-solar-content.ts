@@ -17,7 +17,7 @@ import { BATT_COLOR, GRID_EXPORT_COLOR, HOUSE_COLOR, NEUTRAL_LIGHT_COLOR } from 
 import { helmanColorVars } from "../color-vars";
 import { ACTUAL_FILL_OPACITY, CHART_COLORS } from "../helman-solar-inspector/chart-colors";
 import { getScheduleLocalTimeParts } from "../shared/schedule/model/schedule-time";
-import { renderNowMarker } from "../helman-solar-inspector/now-marker";
+import { renderNowMarker } from "../shared/now-marker";
 import { panelGlyph } from "../shared/node-glyphs";
 import { scheduleActionToneStyles } from "../shared/schedule/action-tones";
 
@@ -42,6 +42,9 @@ import type { SolarDetailParams } from "./node-detail-types";
 import "../helman-simple/simple-card-solar";
 import "./detail-headline";
 import "./flow-gauge";
+import { boldTemplate } from "./detail-section";
+import { renderForecastChart } from "./node-detail-forecast";
+import { modeStripWindow } from "../shared/mode-strip";
 
 type QuestionId = "production" | "destinations" | "limits" | "strings" | "outlook";
 
@@ -256,6 +259,21 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
         .muted {
             color: var(--secondary-text-color);
         }
+        .day-row .label {
+            flex: 0 0 3em;
+        }
+        .day-bar {
+            flex: 1;
+            height: 10px;
+            border-radius: 3px;
+            background: var(--secondary-background-color);
+            overflow: hidden;
+        }
+        .day-bar > span {
+            display: block;
+            height: 100%;
+            background: var(--helman-solar);
+        }
     `];
 
     protected readonly _node = "solar" as const;
@@ -264,10 +282,10 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
 
     /** The inverter's plan, for the control intent. */
     private readonly _plan = this._useSchedule(inverterRuns);
-    /** Today's production, for the curve, while the overview offers it. */
+    /** Today's production, for the Forecast chart, while the section is open and the overview offers it. */
     private readonly _production = this._section<SolarProductionSectionPayload>("production", {
         fetch: () => this._readSection("production"),
-        shown: () => this._offers("production"),
+        shown: () => this._offers("production") && this._forecastOpen,
     });
     /** Today's strings, while Today's flow or their answer shows them. */
     private readonly _strings = this._section<SolarStringsSectionPayload>("strings", {
@@ -308,10 +326,7 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
 
     // ── Rendering ───────────────────────────────────────────────────────────
 
-    render() {
-        const notReady = this._renderNotReady();
-        if (notReady || this._overview.status !== "ready") return notReady;
-        const overview = this._overview.payload;
+    protected _renderOverview(overview: SolarDetailPayload) {
         const power = this._powerNow();
         const rated = this._ratedW(overview);
         const flows = this.params.flows;
@@ -341,6 +356,78 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
                     })}</div>` : nothing}
             </div>
         `;
+    }
+
+    // Forecast ----------------------------------------------------------------
+
+    /**
+     * What is still to come today and tomorrow: today's production against
+     * the forecast, its key moments, and the next days' totals.
+     */
+    protected _renderForecast(overview: SolarDetailPayload) {
+        const pending = this._forecastPending();
+        if (pending !== null) return pending;
+        const model = this._model();
+        if (!model) return nothing;
+        const tomorrow = model.days[1]?.kwh ?? null;
+        const values = { kwh: `≈ ${formatKwh(model.remainingKwh)} kWh`, tomorrow: tomorrow === null ? "?" : `${formatKwh(tomorrow)} kWh` };
+        const template = this.localize(`node_detail.shared.forecast.${tomorrow === null ? "solar_summary_today" : "solar_summary"}`);
+        return this._forecastSection(boldTemplate(template, values), () => this._renderForecastBody(overview, model));
+    }
+
+    private _renderForecastBody(overview: SolarDetailPayload, model: ForecastModel) {
+        const context = this._chartContext;
+        const forecast = (key: string) => this.localize(`node_detail.shared.forecast.${key}`);
+        const end = modeStripWindow(context.now, context.timeZone).end;
+        const slotW = (wh: number) => Math.max(0, wh) / (SLOT_MS / 3_600_000);
+        const planned = getEffectiveSolarForecastPoints(this._forecast!.solar)
+            .map((point) => ({ t: Date.parse(point.timestamp) + SLOT_MS / 2, v: slotW(point.value) / 1000 }))
+            .filter((point) => point.t <= end);
+        const actual = (this._production.payload?.power?.points ?? []).map((point) => ({ t: Date.parse(point.start), v: Math.max(0, point.mean) / 1000 }));
+        const rated = this._ratedW(overview);
+        const peak = model.todaySlots.reduce<{ start: number; wh: number } | null>((best, slot) => !best || slot.wh > best.wh ? slot : best, null);
+        const soFar = readEnergyKWh(this.hass, overview.entities.today_energy);
+        const comparison = model.comparison;
+        const days = model.days.slice(1).filter((day) => day.kwh !== null);
+        const most = Math.max(0, ...days.map((day) => day.kwh!));
+        const bias = this._forecast!.solar.biasCorrection;
+        const row = (key: string, label: unknown, value: unknown) => html`<div class="row" data-row=${key}><span class="label">${label}</span><span class="value">${value}</span></div>`;
+        return html`
+            ${renderForecastChart(context, {
+                title: forecast("solar_chart"),
+                help: model.corrected && bias ? fillTemplate(forecast("solar_help"), { n: bias.explainability.usableDays }) : forecast("solar_help_raw"),
+                series: [
+                    { key: "actual", label: forecast("actual"), color: "var(--helman-solar)", points: actual, bucketMs: (this._production.payload?.power?.bucketMinutes ?? 5) * 60_000 },
+                    { key: "forecast", label: forecast("forecast"), color: "var(--helman-solar)", points: planned, dashed: true },
+                ],
+                references: rated !== null ? [{ value: rated / 1000, label: fillTemplate(this._t("limits.rating_short"), { power: formatPower(rated).display }) }] : [],
+                markers: peak && peak.wh > 0 ? [{ t: peak.start + SLOT_MS / 2, v: slotW(peak.wh) / 1000, color: "var(--helman-solar)" }] : [],
+                formatValue: (value) => formatPower(value * 1000).display,
+            })}
+            <div class="rows">
+                ${soFar !== null ? row("total", forecast("solar_total"), html`≈ ${formatKwh(soFar + model.remainingKwh)} kWh <span class="label">${fillTemplate(forecast("solar_total_parts"), {
+                    so_far: formatKwh(soFar), to_come: formatKwh(model.remainingKwh) })}</span>`) : nothing}
+                ${peak && peak.wh > 0 ? row("peak", html`<span style="color: var(--helman-solar)">●</span> ${forecast("solar_peak")}`, html`${fillTemplate(forecast("at"), {
+                    value: formatPower(slotW(peak.wh)).display, time: this._time(peak.start) })}${peak.start + SLOT_MS <= context.now ? html` <span class="label">${forecast("solar_passed")}</span>` : nothing}`) : nothing}
+                ${model.endsAt !== null ? row("ends", forecast("solar_ends"), `≈ ${this._time(model.endsAt)}`) : nothing}
+                ${comparison && comparison.forecastKwh > 0 ? row("versus", forecast("solar_versus"), fillTemplate(forecast(comparison.actualKwh >= comparison.forecastKwh ? "above" : "below"), {
+                    pct: Math.round(Math.abs(comparison.actualKwh / comparison.forecastKwh - 1) * 100) })) : nothing}
+            </div>
+            ${days.length ? html`
+                <div class="section-title">${forecast("solar_days")}</div>
+                <div class="rows" data-days>${days.map((day) => html`
+                    <div class="row day-row" data-day=${day.key}><span class="label">${this._weekday(day.key, day.firstMs)}</span>
+                        <span class="day-bar"><span style="width: ${most > 0 ? (day.kwh! / most * 100).toFixed(1) : 0}%"></span></span>
+                        <span class="value">${formatKwh(day.kwh!)} kWh</span></div>`)}
+                </div>` : nothing}
+        `;
+    }
+
+    /** A day of the outlook by its weekday. */
+    private _weekday(key: string, firstMs: number | null): string {
+        return firstMs !== null
+            ? new Intl.DateTimeFormat(this._locale, { weekday: "short", timeZone: this._timeZone }).format(firstMs)
+            : new Intl.DateTimeFormat(this._locale, { weekday: "short", timeZone: "UTC" }).format(Date.parse(`${key}T12:00:00Z`));
     }
 
     /** The open question's answer and evidence, full width under the tiles. */

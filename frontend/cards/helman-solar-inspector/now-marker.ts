@@ -1,5 +1,6 @@
-import { nothing, svg } from "lit";
+import { nothing } from "lit";
 import { getScheduleLocalTimeParts } from "../shared/schedule/model/schedule-time";
+import { renderNowMarker } from "../shared/now-marker";
 
 /**
  * The vertical "now" line the schedule band draws, for the SVG charts above it.
@@ -25,28 +26,6 @@ export function nowMinutesOnDay(
         return null;
     }
     return parts.hour * 60 + parts.minute;
-}
-
-/**
- * The line itself, spanning `top`..`bottom` of whichever chart draws it.
- *
- * Colour and width match the band's `.now-marker`, so the whole stack reads as
- * one mark drawn straight down the page. Two details keep it that way rather
- * than merely close: the stroke does not scale with the viewBox, so it is 2 CSS
- * pixels at any chart width the way the band's 2px div always is; and the line
- * is snapped to a whole pixel, so those two pixels land on two pixels instead of
- * smearing across three and reading heavier than the band.
- */
-export function renderNowMarker(x: number, top: number, bottom: number, title: string) {
-    const snapped = Math.round(x);
-    return svg`
-        <line
-            x1=${snapped} y1=${top} x2=${snapped} y2=${bottom}
-            stroke="var(--primary-color)" stroke-width="2"
-            vector-effect="non-scaling-stroke"
-            pointer-events="none"
-        ><title>${title}</title></line>
-    `;
 }
 
 /**

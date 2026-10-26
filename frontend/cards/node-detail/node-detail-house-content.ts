@@ -30,22 +30,31 @@ import {
     isScheduleEvChargerAction,
 } from "../shared/schedule/schedule-types";
 import { todayKey } from "../shared/time/day-key";
+import { getScheduleLocalTimeParts } from "../shared/schedule/model/schedule-time";
 import "../helman-device-reports/device-report-ranking";
 import { IDLE_W, NodeDetailContentBase, type NodeFlow } from "./node-detail-base";
 import { readingNumber } from "./node-detail-readings";
 import { powerUnitFactor, readPowerW } from "../shared/power-reading";
-import { dayKey, laneRuns, todayAndTomorrow, withinTodayTomorrow } from "./node-detail-schedule";
+import { dayKey, laneRuns, withinTodayTomorrow } from "./node-detail-schedule";
 import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { HouseDetailParams } from "./node-detail-types";
 import { NODE_DETAIL_REQUEST_EVENT } from "./node-detail-types";
 import "../helman-simple/simple-card-house";
 import "./detail-headline";
 import "./flow-gauge";
+import { boldTemplate } from "./detail-section";
+import { forecastWhen, projectedKwh, projectedSlots, remainingShare, renderForecastChart } from "./node-detail-forecast";
+import { modeStripWindow } from "../shared/mode-strip";
+import type { ApplianceProjectionsPayload } from "../helman-api";
+import { getSharedHelmanStore } from "../shared/data/store";
 
 type QuestionId = "sources" | "consumers" | "next" | "pattern" | "phases";
 
 /** The consumers the flow draws by name; the rest is "everything else". */
 const TOP_CONSUMERS = 3;
+
+/** A planned appliance run on the Forecast chart. */
+const RUN_COLOR = "color-mix(in srgb, var(--helman-house) 60%, var(--primary-text-color))";
 
 /** The house's sources, in the order every split and row shows them. */
 const SOURCES = [
@@ -349,6 +358,13 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         fetch: () => this._readSection("today"),
         shown: () => this._offers("today"),
     });
+    /** The plan's projected energy, for each planned run's figure, while the Forecast section is open. */
+    private readonly _projection = this._section<ApplianceProjectionsPayload>("projection", {
+        // Never shared: a projection is a function of the schedule, re-read because it changed.
+        fetch: () => getSharedHelmanStore(this.hass).getApplianceProjections(),
+        shown: () => this._forecastOpen,
+        staleness: (_payload, requestedAt) => requestedAt < Math.floor(Date.now() / SLOT_MS) * SLOT_MS,
+    });
     /** The pattern answer's history, while it is open. */
     private readonly _pattern = this._section<HousePatternSectionPayload>("pattern", {
         fetch: () => this._readSection("pattern"),
@@ -377,6 +393,12 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         yield Math.ceil(Date.now() / SLOT_MS) * SLOT_MS;
     }
 
+    protected _start(): void {
+        super._start();
+        // The Forecast header says what is still to come today while it is closed.
+        void this._loadForecast();
+    }
+
     // ── Disclosure ──────────────────────────────────────────────────────────
 
     protected _setOpen(id: QuestionId | null): void {
@@ -387,10 +409,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
 
     // ── Rendering ───────────────────────────────────────────────────────────
 
-    render() {
-        const notReady = this._renderNotReady();
-        if (notReady || this._overview.status !== "ready") return notReady;
-        const overview = this._overview.payload;
+    protected _renderOverview(overview: HouseDetailPayload) {
         const phases = this._phaseEstimate();
         const power = this._powerNow();
         const flows = this.params.flows;
@@ -449,6 +468,68 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
             : html`<div class=${rowClass} style=${style}>${inner}</div>`;
     }
 
+
+    // Forecast ----------------------------------------------------------------
+
+    /** What the house will still use today, the forecast to tomorrow noon and the planned appliance runs. */
+    protected _renderForecast() {
+        const pending = this._forecastPending();
+        if (pending !== null) return pending;
+        const rest = this._restOfDayKwh();
+        if (rest === null) return nothing;
+        return this._forecastSection(boldTemplate(this.localize("node_detail.shared.forecast.house_summary"), { kwh: `≈ ${formatKwh(rest)} kWh` }),
+            () => this._renderForecastBody(rest));
+    }
+
+    private _renderForecastBody(rest: number) {
+        const forecast = this._forecast!.house_consumption;
+        const context = this._chartContext;
+        const text = (key: string) => this.localize(`node_detail.shared.forecast.${key}`);
+        const end = modeStripWindow(context.now, context.timeZone).end;
+        const kw = (kwh: number) => Math.max(0, kwh) / (SLOT_MS / 3_600_000);
+        const slots = [forecast.currentSlot, ...forecast.series].filter((slot) => slot !== undefined)
+            .map((slot) => ({ start: Date.parse(slot!.timestamp), kwh: slot!.nonDeferrable.value }))
+            .filter((slot) => slot.start < end);
+        const actual = forecast.actualHistory.map((slot) => ({ t: Date.parse(slot.timestamp) + SLOT_MS / 2, v: kw(slot.nonDeferrable.value) }));
+        // The busiest local hour of the rest of today, by its forecast energy.
+        const today = dayKey(context.now, context.timeZone);
+        const hours = new Map<number, number>();
+        for (const slot of slots) {
+            if (slot.start + SLOT_MS <= context.now || dayKey(slot.start, context.timeZone) !== today) continue;
+            const hour = slot.start - (getScheduleLocalTimeParts(slot.start, context.timeZone)?.minute ?? 0) * 60_000;
+            hours.set(hour, (hours.get(hour) ?? 0) + Math.max(0, slot.kwh) * remainingShare(slot.start, context.now));
+        }
+        const busiest = [...hours].reduce<[number, number] | null>((best, hour) => !best || hour[1] > best[1] ? hour : best, null);
+        const runs = this._plan.runs.filter((run) => run.startMs < end);
+        const projection = this._projection.payload;
+        return html`
+            ${renderForecastChart(context, {
+                title: text("house_chart"),
+                help: fillTemplate(text("house_help"), { n: Math.min(forecast.historyDaysAvailable, forecast.trainingWindowDays) }),
+                series: [
+                    { key: "actual", label: text("actual"), color: "var(--helman-house)", points: actual },
+                    { key: "forecast", label: text("forecast"), color: "var(--helman-house)", dashed: true,
+                        points: slots.map((slot) => ({ t: slot.start + SLOT_MS / 2, v: kw(slot.kwh) })) },
+                ],
+                spans: runs.map((run) => ({ start: run.startMs, end: run.endMs ?? end, color: RUN_COLOR })),
+                formatValue: (value) => formatPower(value * 1000).display,
+            })}
+            ${runs.length ? html`<p class="note"><span style="color: ${RUN_COLOR}">▬</span> ${text("house_run_legend")}</p>` : nothing}
+            <div class="rows">
+                <div class="row" data-row="rest"><span class="label">${text("house_rest")}</span><span class="value">≈ ${formatKwh(rest)} kWh</span></div>
+                ${busiest ? html`<div class="row" data-row="busiest"><span class="label">${text("house_busiest")}</span>
+                    <span class="value">${fillTemplate(text("house_busiest_value"), { time: this._time(busiest[0]), kwh: `≈ ${formatKwh(busiest[1])} kWh` })}</span></div>` : nothing}
+            </div>
+            ${runs.length ? html`
+                <div class="section-title">${text("house_runs")}</div>
+                <div class="rows" data-runs>${runs.map((run) => {
+                    const kwh = projection ? projectedKwh(projectedSlots(projection, [run.id], context.now, end), run.startMs, run.endMs ?? end) : 0;
+                    return html`<div class="row" data-run data-candidate=${run.candidate ? "true" : "false"}>
+                        <span><b>${forecastWhen(run.startMs, context, run.endMs ?? undefined)}</b> ${run.name}${run.candidate ? html` <span class="label">· ${text("candidate")}</span>` : nothing}</span>
+                        <span class="value">${kwh > 0 ? `≈ ${formatKwh(kwh)} kWh` : ""}</span></div>`;
+                })}</div>` : nothing}
+        `;
+    }
 
     /** The open question's answer and evidence, full width under the tiles. */
     protected _renderOpen(overview: HouseDetailPayload, phases: PhaseEstimate) {
@@ -887,9 +968,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
     }
 
     private _runTime(run: PlannedRun): string {
-        const range = fillTemplate(this._t("period_range"), { start: this._time(run.startMs), end: run.endMs === null ? "…" : this._time(run.endMs) });
-        const [, tomorrow] = todayAndTomorrow(Date.now(), this._timeZone);
-        return dayKey(run.startMs, this._timeZone) === tomorrow ? fillTemplate(this._t("next.tomorrow"), { range }) : range;
+        return forecastWhen(run.startMs, this._chartContext, run.endMs ?? undefined);
     }
 
     /**
@@ -909,7 +988,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
             const start = Date.parse(slot.timestamp);
             const end = start + SLOT_MS;
             if (!Number.isFinite(start) || end <= now || dayKey(start, this._timeZone) !== today) continue;
-            kwh += Math.max(0, slot.nonDeferrable.value) * Math.min(1, (end - Math.max(start, now)) / SLOT_MS);
+            kwh += Math.max(0, slot.nonDeferrable.value) * remainingShare(start, now);
         }
         return kwh;
     }

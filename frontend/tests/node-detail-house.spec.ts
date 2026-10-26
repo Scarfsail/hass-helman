@@ -50,6 +50,8 @@ type Variant = {
     noBoiler?: boolean;
     /** Helman's house remainder sensor, its median lagging the meters. */
     houseRemainder?: string;
+    /** The house forecast is 1.5 kWh in the 12:45 slot and 0.2 kWh in every later one. */
+    lateSlot?: boolean;
 };
 
 declare global {
@@ -261,7 +263,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             nonDeferrable: { value: kwh, lower: kwh * 0.6, upper: kwh * 1.5 },
             deferrableConsumers: [],
         });
-        const now = Date.parse("2026-10-21T12:00:00Z");
+        const now = Date.parse(v.lateSlot ? "2026-10-21T12:45:00Z" : "2026-10-21T12:00:00Z");
         const forecast: ForecastPayload = {
             ...forecastDefaults,
             solar: { ...forecastDefaults.solar, status: "unavailable", points: [], actualHistory: [] },
@@ -270,12 +272,16 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 status: "available", generatedAt: "2026-10-21T12:00:00+00:00", unit: "kWh",
                 trainingWindowDays: 56, historyDaysAvailable: 42, requiredHistoryDays: 14, model: "hour_of_week",
                 actualHistory: [],
-                currentSlot: houseSlot(now, 0.3),
-                series: Array.from({ length: 140 }, (_, i) => houseSlot(now + (i + 1) * 900_000, 0.25)),
+                currentSlot: houseSlot(now, v.lateSlot ? 1.5 : 0.3),
+                series: Array.from({ length: 140 }, (_, i) => houseSlot(now + (i + 1) * 900_000, v.lateSlot ? 0.2 : 0.25)),
             },
         };
         window.__HouseHass = window.__configureNodeDetail({
             states, tree, overviews: { house: overview, inverter: window.__inverterOverview({ maxAllowedExportPower: null }) }, sections: { house: { today, pattern, ranking: { node: "house", section: "ranking", asOf: ranking.asOf, period: today.period, unavailable: v.rankingUnavailable ? "no_house_meter" : null, report: v.rankingUnavailable ? null : ranking } } }, forecast, schedule,
+            // The boiler's run is projected at 0.5 kWh a slot.
+            replies: { "helman/get_appliance_projections": { generatedAt: "2026-10-21T12:00:00+00:00", appliances: {
+                boiler: { series: slots.filter((slot) => slot.controllables.boiler).map((slot) => ({ slotId: slot.id, energyKwh: 0.5 })) },
+            } } },
         });
         window.__HouseRequests = window.__NodeDetailRequests;
     }, { v: variant, tree, forecastDefaults: forecastPayload(), scheduleDefaults: scheduleSlots({ slotMinutes: 15 }) });
@@ -368,4 +374,39 @@ test("house Schedule excludes a future charge candidate with unmet condition", a
     await page.locator(".node-cell:has(simple-card-house)").click();
     await expect(page.locator("node-detail-dialog helman-detail-section[data-schedule] [slot=summary]"))
         .toContainText("Nothing planned");
+});
+
+// Forecast -------------------------------------------------------------------
+
+test("house Forecast header says what is still to come today, and the body the busiest hour and the planned runs", async ({ page }) => {
+    await mount(page);
+    await page.locator(".node-cell:has(simple-card-house)").click();
+    const section = content(page).locator("helman-detail-section[data-forecast]");
+    // 0.3 kWh in the slot in progress and 0.25 kWh in each of the 47 after it today.
+    await expect(section.locator("[slot=summary]")).toHaveText("≈ 12 kWh more today");
+    await expect(section.locator("[slot=summary] b")).toHaveText("≈ 12 kWh");
+    await expect(section.locator("[data-forecast-body]")).toHaveCount(0);
+    await section.locator("button").first().click();
+    await expect(section.locator("[data-row=rest] .value")).toHaveText("≈ 12 kWh");
+    await expect(section.locator("[data-row=busiest] .value")).toHaveText(/^12:00, ≈ 1\.\d kWh$/);
+    const runs = section.locator("[data-runs] [data-run]");
+    await expect(runs).toHaveCount(2);
+    await expect(runs.nth(0)).toContainText("13:00–14:00 Boiler");
+    await expect(runs.nth(0).locator(".value")).toHaveText("≈ 2.0 kWh");
+    await expect(runs.nth(1)).toContainText("15:00–16:00 EV");
+    await expect(runs.nth(1)).toHaveAttribute("data-candidate", "true");
+    const chart = section.locator("helman-day-line-chart");
+    await expect(chart.locator("path.line.dashed")).toHaveCount(1);
+    await expect(chart.locator("[data-span]")).toHaveCount(2);
+    expect(await section.locator("helman-help-tip").evaluate((tip: any) => tip.explanation)).toContain("last 42 days");
+});
+
+test("house Forecast busiest hour counts only what is left of the slot in progress", async ({ page }) => {
+    await mount(page, { lateSlot: true });
+    await page.clock.setFixedTime(new Date("2026-10-21T12:59:00Z"));
+    await page.locator(".node-cell:has(simple-card-house)").click();
+    const section = content(page).locator("helman-detail-section[data-forecast]");
+    await section.locator("button").first().click();
+    // At 12:59 only 0.1 kWh of the 12:45 slot's 1.5 kWh remains, so 13:00's 0.8 kWh is the busiest hour.
+    await expect(section.locator("[data-row=busiest] .value")).toHaveText("13:00, ≈ 0.80 kWh");
 });

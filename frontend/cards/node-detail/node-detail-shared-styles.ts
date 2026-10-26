@@ -5,6 +5,17 @@ export const nodeDetailSharedStyles = css`
         display: block;
     }
 
+    /* A detail's Overview; the sections after it run edge to edge. */
+    .overview {
+        padding: 0 var(--ha-space-6, 24px) var(--ha-space-5, 20px);
+    }
+
+    /* The last section is closed off from the footer; a detail without sections ends on its Overview, unlined. */
+    helman-detail-section:last-child,
+    slot[name="schedule"]:last-child::slotted(helman-detail-section) {
+        border-bottom: 1px solid var(--divider-color);
+    }
+
     .content {
         display: flex;
         flex-direction: column;

@@ -2,6 +2,7 @@ import { prepareNodeDetailPage, mountSimpleCard, liveFigures } from "./support/n
 import { cardTree, forecastPayload, scheduleSlots } from "./support/payload-builders";
 import type { ForecastPayload, ForecastStatus, ScheduleActionDTO, SchedulePayload, ScheduleSlotDTO } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
+import { formatKwh } from "../cards/shared/format";
 
 /**
  * The solar node detail on the simple card.
@@ -334,4 +335,36 @@ test("solar headline opens its meter in Home Assistant", async ({ page }) => {
     await page.locator(".node-cell:has(simple-card-solar)").click();
     await content(page).locator("helman-detail-headline [data-headline]").click();
     expect(await page.evaluate(() => (window as any).__headlineInfo)).toContain("sensor.solar");
+});
+
+// Forecast -------------------------------------------------------------------
+
+test("solar Forecast header says what is still to come today and tomorrow, and the body its key moments", async ({ page }) => {
+    await mount(page);
+    await page.locator(".node-cell:has(simple-card-solar)").click();
+    const section = content(page).locator("helman-detail-section[data-forecast]");
+    const points = forecastPoints(false).adjusted;
+    const kwh = (from: number, to: number) => points.filter((point) => Date.parse(point.timestamp) >= from && Date.parse(point.timestamp) < to)
+        .reduce((sum, point) => sum + point.value, 0) / 1000;
+    const rest = kwh(NOW, DAY_START + 86_400_000);
+    const tomorrow = kwh(DAY_START + 86_400_000, DAY_START + 2 * 86_400_000);
+    await expect(section.locator("[slot=summary]")).toHaveText(`≈ ${formatKwh(rest)} kWh still to come · tomorrow ${formatKwh(tomorrow)} kWh`);
+    await expect(section.locator("[slot=summary] b")).toHaveCount(2);
+    await expect(section.locator("[data-forecast-body]")).toHaveCount(0);
+    // The production section is the body's alone: read once the section opens.
+    expect(await page.evaluate(() => window.__SolarRequests.filter((r) => r.section === "production").length)).toBe(0);
+    await section.locator("button").first().click();
+    await expect(section.locator("[data-row=total] .value")).toHaveText(`≈ ${formatKwh(18.4 + rest)} kWh (18 so far + ${formatKwh(rest)} to come)`);
+    await expect(section.locator("[data-row=peak] .value")).toHaveText("5.9 kW at 12:00");
+    await expect(section.locator("[data-row=ends] .value")).toHaveText("≈ 18:00");
+    await expect(section.locator("[data-row=versus] .value")).toHaveText("8 % below");
+    await expect(section.locator("[data-days] [data-day]")).toHaveCount(5);
+    await expect(section.locator("[data-days] [data-day]").first()).toContainText(`${formatKwh(tomorrow)} kWh`);
+    const chart = section.locator("helman-day-line-chart");
+    await expect(chart.locator("path.line")).toHaveCount(2);
+    await expect(chart.locator("path.line.dashed")).toHaveCount(1);
+    await expect(chart.locator("line.reference")).toHaveCount(1);
+    await expect(chart.locator(".reference-label")).toContainText("10.0 kW");
+    expect(await section.locator("helman-help-tip").evaluate((tip: any) => tip.explanation)).toContain("over the last 21 days");
+    expect(await page.evaluate(() => window.__SolarRequests.filter((r) => r.section === "production").length)).toBe(1);
 });

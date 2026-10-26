@@ -274,10 +274,7 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
 
     // ── Rendering ───────────────────────────────────────────────────────────
 
-    render() {
-        const notReady = this._renderNotReady();
-        if (notReady || this._overview.status !== "ready") return notReady;
-        const overview = this._overview.payload;
+    protected _renderOverview(overview: InverterDetailPayload) {
         const mode = overview.agreement.observedOption;
         const ac = this._acPower(overview);
         const rated = this._watts(overview, "rated_power");
