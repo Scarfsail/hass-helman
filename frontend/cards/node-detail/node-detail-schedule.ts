@@ -1,11 +1,13 @@
 import { html, nothing, type TemplateResult } from "lit";
-import type { ControllableRuntimeDTO, InverterRuntimeDTO, ScheduleActionDTO, ScheduleControllableActionDTO, SchedulePayload, ScheduleSlotDTO } from "../helman-api";
-import type { LocalizeFunction } from "../localize/localize";
+import type { ControllableRuntimeDTO, InverterRuntimeDTO, ScheduleActionDTO, ScheduleActionKind, ScheduleControllableActionDTO, SchedulePayload, ScheduleSlotDTO } from "../helman-api";
+import { fillTemplate, type LocalizeFunction } from "../localize/localize";
 import {
     addDaysToDayKey,
+    formatScheduleTime,
     getScheduleDayKey,
     resolveScheduleSlotBoundaries,
 } from "../shared/schedule/model/schedule-time";
+import { getScheduleApplianceActionPresentation } from "../shared/schedule/model/schedule-appliance-action-presentation";
 import { getScheduleActionLabel, getScheduleReasonLabel } from "../shared/schedule/model/schedule-labels";
 import { INVERTER_CONTROLLABLE_ID } from "../shared/schedule/schedule-types";
 import { getScheduleControllableActionIdentityKey, isScheduleApplianceActionEnabled, isScheduleInverterAction } from "../shared/schedule/schedule-types";
@@ -108,6 +110,40 @@ export function nextLaneChange(runs: ScheduleRun<ScheduleControllableActionDTO>[
     return null;
 }
 
+/** One row of a lane's upcoming changes: when, what, whether it is a candidate and whether the lane is at rest. */
+export interface LaneChange {
+    startMs: number;
+    endMs: number | null;
+    action: ScheduleControllableActionDTO;
+    candidate: boolean;
+    /** The lane at rest: an appliance idle, the inverter in its normal mode. */
+    atRest: boolean;
+}
+
+/**
+ * Every change on a lane after now, today and tomorrow: each run whose
+ * effective action differs from the run before it, or whose author does
+ * while the lane does something; a change of author while it rests is no
+ * change. A candidate is its own row, with the action it would take; the
+ * effective action of one that is not met is the lane at rest. `runs` are
+ * `laneRuns` by author.
+ */
+export function upcomingLaneChanges(runs: ScheduleRun<ScheduleControllableActionDTO>[], now: number, timeZone: string): LaneChange[] {
+    const inverterLane = runs.some((run) => isScheduleInverterAction(run.action) && run.action.kind !== "empty");
+    const changes: LaneChange[] = [];
+    let previous: string | null = null;
+    for (const run of withinTodayTomorrow(runs, now, timeZone)) {
+        const candidate = run.action.conditionMet === false;
+        const action = candidate ? run.action : effectiveLaneAction(run.action, inverterLane);
+        const effective = effectiveLaneKey(candidate ? { ...action, conditionMet: true } : action);
+        const atRest = !candidate && (effective === "idle" || (isScheduleInverterAction(action) && action.kind === "normal"));
+        const key = `${candidate ? "candidate:" : ""}${effective}${atRest ? "" : `|${action.setBy ?? ""}`}`;
+        if (run.startMs > now && key !== previous) changes.push({ startMs: run.startMs, endMs: run.endMs, action, candidate, atRest });
+        previous = key;
+    }
+    return changes;
+}
+
 /** First future appliance start today or tomorrow, skipping idle and unmet candidates. */
 export function nextLaneStart(runs: ScheduleRun<ScheduleControllableActionDTO>[], now: number, timeZone: string): ScheduleRun<ScheduleControllableActionDTO> | null {
     const days = todayAndTomorrow(now, timeZone);
@@ -137,11 +173,51 @@ function effectiveLaneKey(action: ScheduleControllableActionDTO): string {
     return getScheduleControllableActionIdentityKey(effective as ScheduleControllableActionDTO);
 }
 
-export function laneActionLabel(action: ScheduleControllableActionDTO, localize: LocalizeFunction): string {
+/**
+ * An action's label. With the lane's appliance kind, an empty stretch reads
+ * as the appliance at rest: off, or not charging.
+ */
+export function laneActionLabel(action: ScheduleControllableActionDTO, localize: LocalizeFunction, applianceKind?: string | null): string {
+    if (applianceKind && isScheduleInverterAction(action) && action.kind === "empty") {
+        return laneActionLabel(applianceKind === "ev_charger" ? { charge: false } : applianceKind === "climate" ? { mode: "off" } : { on: false }, localize);
+    }
     if (isScheduleInverterAction(action)) return getScheduleActionLabel(action, localize);
     if ("on" in action) return localize(`node_detail.control.${action.on ? "on" : "off"}`);
     if ("charge" in action) return localize(`node_detail.shared.${action.charge ? "charging" : "idle"}`);
-    return "mode" in action ? action.mode : localize("node_detail.shared.schedule.none");
+    return "mode" in action
+        ? getScheduleApplianceActionPresentation({ appliance: { kind: "climate", icon: "" }, action, localize }).label
+        : localize("node_detail.shared.schedule.none");
+}
+
+/** The short name of an inverter mode, as the details and the Schedule strip show it. */
+export function inverterModeLabel(localize: (key: string) => string, kind: ScheduleActionKind): string {
+    return localize(`node_detail.inverter.mode_short.${kind}`);
+}
+
+/**
+ * What a lane is doing now by the plan, and until when unless the run lasts
+ * to the plan's end: "Nothing planned", with no run, when it does nothing.
+ * Runs `byAuthor` end where the author changes.
+ */
+export function laneDoingNow(
+    schedule: SchedulePayload,
+    controllableId: string,
+    now: number,
+    localize: LocalizeFunction,
+    locale: string,
+    timeZone: string,
+    { byAuthor = false }: { byAuthor?: boolean } = {},
+): { text: string; run: ScheduleRun<ScheduleControllableActionDTO> | null } {
+    const runs = laneRuns(schedule, controllableId, now, { byAuthor });
+    const run = runs.find((candidate) => candidate.startMs <= now && (candidate.endMs === null || now < candidate.endMs));
+    const action = run ? effectiveLaneAction(run.action, controllableId === INVERTER_CONTROLLABLE_ID) : null;
+    if (!run || action === null || (isScheduleInverterAction(action) && action.kind === "empty")) {
+        return { text: localize("node_detail.shared.schedule.none"), run: null };
+    }
+    const label = laneActionLabel(action, localize);
+    const text = run.endMs === null || run.endMs === runs[runs.length - 1].endMs ? label
+        : `${label} ${fillTemplate(localize("node_detail.shared.until"), { time: formatScheduleTime(run.endMs, locale, timeZone) })}`;
+    return { text, run };
 }
 
 /** The run in progress at `now`, unless it is an empty stretch. */

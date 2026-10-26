@@ -369,5 +369,29 @@ test("charger Overview shows an unmet current candidate as idle", async ({ page 
     await mount(page, { windows: [{ from: 11.75, to: 14, candidate: true }] });
     await openDevice(page, "Garage EV");
     const planned = content(page).locator("helman-who-decides .row").nth(1);
-    await expect(planned.locator("span").last()).toContainText("idle, until");
+    await expect(planned.locator("span").last()).toContainText("idle until");
+});
+
+test("charger Schedule strip draws today's charging before now and the plan after it, with the changes to come", async ({ page }) => {
+    await mount(page);
+    await openDevice(page, "Garage EV");
+    await page.locator("node-detail-dialog helman-detail-section[data-schedule] button").first().click();
+    const control = page.locator("helman-node-control");
+    await expect(control.locator("[data-strip-title]")).toHaveText("Today → tomorrow noon");
+    const segments = control.locator("helman-mode-strip [data-segment]");
+    await expect(segments).toHaveCount(4);
+    expect(await segments.evaluateAll((all) => all.map((s) => [s.getAttribute("data-planned"), s.getAttribute("data-tone"), s.getAttribute("data-candidate")])))
+        .toEqual([["false", "charge", "false"], ["false", "charge", "false"], ["true", "charge", "false"], ["true", "neutral", "true"]]);
+    // The stretch still charging runs to now, where the plan takes over.
+    await expect(segments.nth(1)).toHaveAttribute("data-end", String(Date.parse("2026-10-21T12:00:00Z")));
+    expect(await control.locator("[data-change-row]").allInnerTexts()).toEqual([
+        "14:00 Idle\ndefault",
+        "22:00–02:00 Charging\ncandidate",
+        "02:00 Idle\ndefault",
+    ]);
+    // What was charged and what is planned to charge are one mode, named once.
+    expect(await control.locator("helman-mode-strip [data-legend-entry]").allInnerTexts()).toEqual(["Charging", "Charging · candidate"]);
+    await expect(control.locator("[data-history-note]")).toHaveCount(0);
+    await expect(control.locator("[data-edit-blocks]")).toBeVisible();
+    await expect(control.locator("[data-change]")).toHaveText("Override…");
 });

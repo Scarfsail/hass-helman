@@ -13,8 +13,7 @@ import type { HelmanSolarInspectorCardConfig } from "../helman-solar-inspector/H
 import { helmanColorVars } from "../color-vars";
 import { commandedModeKind } from "../helman-api";
 
-import "../shared/mode-strip";
-import { modeStripWindow, type ModeChange, type ModeSegment } from "../shared/mode-strip";
+import type { ModeSegment } from "../shared/mode-strip";
 import { inverterGlyph } from "../shared/node-glyphs";
 import { getScheduleActionTone, scheduleActionToneStyles, type ScheduleActionTone } from "../shared/schedule/action-tones";
 import { getScheduleReasonLabel } from "../shared/schedule/model/schedule-labels";
@@ -27,6 +26,7 @@ import {
     currentRun,
     dayKey,
     effectiveAction,
+    inverterModeLabel,
     inverterRuns,
     nextChange,
     renderCurrentSlot,
@@ -98,13 +98,10 @@ interface ChainBox {
  * Readings are read live from `hass`; the backend overview supplies the entity
  * ids and the comparison, and is re-read when a compared register changes.
  * Today's observed modes (the `modes` section) are read on opening for the
- * strip, and again when the observed mode changes or they go stale; today's
+ * Schedule section's strip, and again when the observed mode changes or they go stale; today's
  * temperature only while its question is open.
  */
-/** The short name of an inverter mode, as the inverter detail and the battery's "Mode now" show it. */
-export function inverterModeLabel(localize: (key: string) => string, kind: ScheduleActionKind): string {
-    return localize(`node_detail.inverter.mode_short.${kind}`);
-}
+export { inverterModeLabel };
 
 @customElement("node-detail-inverter-content")
 export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDetailPayload, QuestionId> {
@@ -441,77 +438,32 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
         `;
     }
 
-    // Strip -------------------------------------------------------------------
+    // Lane history -----------------------------------------------------------
 
-    /**
-     * Today's observed modes, solid, and the plan's from now to noon
-     * tomorrow, hatched, with the next change flagged in its tone. The strip
-     * opens *next*.
-     */
-    protected _renderStrip(overview: InverterDetailPayload) {
-        const now = Date.now();
-        const { start, end } = modeStripWindow(now, this._timeZone);
-        const change = nextChange(this._plan.runs, Date.now(), this._timeZone);
-        const next: ModeChange | null = change ? {
-            at: change.startMs,
-            tone: getScheduleActionTone(change.action.kind),
-            label: this._time(change.startMs) + " · " + this._actionLabel(change.action),
-        } : null;
-        return html`
-            <button class="picture strip" data-strip title=${this._t("q.next")} aria-expanded=${this._open === "next" ? "true" : "false"}
-                @click=${() => this._setOpen(this._open === "next" ? null : "next")}>
-                <span class="picture-scope">${this._t("strip.scope")}</span>
-                <helman-mode-strip
-                    .start=${start}
-                    .end=${end}
-                    .now=${now}
-                    .segments=${this._stripSegments(overview, now)}
-                    .next=${next}
-                    .timeZone=${this._timeZone}
-                    .locale=${this._locale}
-                ></helman-mode-strip>
-            </button>
-            ${this._modes.state?.status === "error" ? html`
-                <p class="note" data-strip-failed>${this._t("strip.history_failed")}
-                    <button class="link-button" @click=${() => this._modes.load()}>${this._t("retry")}</button>
-                </p>
-            ` : nothing}
-            ${!overview.sections.includes("modes") ? html`<p class="note" data-strip-no-history>${this._t("strip.no_history")}</p>`
-                : this._modes.payload?.modes === null ? html`<p class="note" data-strip-no-registers>${this._t("strip.no_registers")}</p>`
-                : nothing}
-        `;
+    protected updated(changed: Map<string, unknown>): void {
+        super.updated(changed);
+        if (this._overview.status !== "ready") return;
+        const overview = this._overview.payload;
+        const failed = this._modes.state?.status === "error";
+        const note = failed ? this._t("strip.history_failed")
+            : !overview.sections.includes("modes") ? this._t("strip.no_history")
+            : this._modes.payload?.modes === null ? this._t("strip.no_registers")
+            : null;
+        this._reportLaneHistory({ segments: this._historySegments(overview), note, retry: failed ? { label: this._t("retry"), load: () => this._modes.load() } : null });
     }
 
     /**
-     * The recorded stretches, a stretch the registers held no mode in left
-     * as a gap, and the plan's runs from now: what the executor applies, in
-     * its tone, or neutral while execution is off.
+     * Today's recorded modes for the Schedule strip, a stretch the registers
+     * held no mode in left as a gap; the one still held runs on while the
+     * registers still show it.
      */
-    private _stripSegments(overview: InverterDetailPayload, now: number): ModeSegment[] {
-        const segments: ModeSegment[] = [];
-        const modes = this._modes.payload?.modes ?? null;
-        for (const stretch of modes ?? []) {
-            if (stretch.kind === null) continue;
-            // Still held: drawn to now while the registers still show it.
-            const open = stretch.open && overview.agreement.observedOption === stretch.kind;
-            segments.push({
-                start: Date.parse(stretch.start),
-                end: open ? now : Date.parse(stretch.end),
-                tone: getScheduleActionTone(stretch.kind),
-                label: this._modeLabel(stretch.kind),
-            });
-        }
-        const executing = this._plan.schedule?.executionEnabled === true;
-        for (const run of this._plan.runs) {
-            const action = effectiveAction(run.action);
-            segments.push({
-                start: Math.max(run.startMs, now),
-                end: run.endMs ?? Infinity,
-                tone: executing ? getScheduleActionTone(action.kind) : "neutral",
-                label: this._actionLabel(action) + (executing ? "" : " – " + this._t("chain.not_applied")),
-            });
-        }
-        return segments;
+    private _historySegments(overview: InverterDetailPayload): ModeSegment[] {
+        return (this._modes.payload?.modes ?? []).flatMap((stretch) => stretch.kind === null ? [] : [{
+            start: Date.parse(stretch.start),
+            end: stretch.open && overview.agreement.observedOption === stretch.kind ? Infinity : Date.parse(stretch.end),
+            tone: getScheduleActionTone(stretch.kind),
+            label: this._modeLabel(stretch.kind),
+        }]);
     }
 
     // Flow --------------------------------------------------------------------

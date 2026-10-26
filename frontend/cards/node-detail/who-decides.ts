@@ -6,7 +6,7 @@ import { LaneOwnershipController } from "./lane-ownership";
 import type { ControlStatus } from "./lane-ownership";
 import { formatScheduleTime } from "../shared/schedule/model/schedule-time";
 import { DialogHistoryController } from "../shared/dialog-history-controller";
-import { effectiveLaneAction, laneActionLabel, laneRuns, nextLaneChange } from "./node-detail-schedule";
+import { laneDoingNow, laneRuns, nextLaneChange } from "./node-detail-schedule";
 import type { ControlOverrideDialog } from "./control-override-dialog";
 import "./help-tip";
 import { nodeDetailSharedStyles } from "./node-detail-shared-styles";
@@ -56,17 +56,14 @@ export class HelmanWhoDecides extends LitElement {
         const now = Date.now();
         const schedule = this._lanes.snapshot.schedule;
         const runs = schedule ? laneRuns(schedule, this.controllableId, now, { byAuthor: true }) : [];
-        const current = runs.find((run) => run.startMs <= now && (run.endMs === null || now < run.endMs));
         const next = nextLaneChange(runs, now, this._lanes.timeZone);
-        const action = current ? laneActionLabel(effectiveLaneAction(current.action), this.localize) : this.localize("node_detail.control.nothing_scheduled");
         const time = next ? new Date(next.startMs).toLocaleTimeString(this._lanes.locale, { hour: "2-digit", minute: "2-digit", timeZone: this._lanes.timeZone }) : null;
-        const until = current?.endMs === null || current?.endMs === undefined ? null
-            : formatScheduleTime(current.endMs, this._lanes.locale, this._lanes.timeZone);
-        const reason = current?.action.setBy === "user"
+        const doing = schedule
+            ? laneDoingNow(schedule, this.controllableId, now, this.localize, this._lanes.locale, this._lanes.timeZone, { byAuthor: true })
+            : { text: this.localize("node_detail.shared.schedule.none"), run: null };
+        const reason = doing.run?.action.setBy === "user"
             ? this.localize("node_detail.shared.you") : this.localize("node_detail.shared.helman_schedule");
-        const planned = current
-            ? `${action}${until ? `, ${fillTemplate(this.localize("node_detail.shared.until"), { time: until })}` : ""} · ${reason}`
-            : action;
+        const planned = doing.run ? `${doing.text} · ${reason}` : doing.text;
         const status = this._lanes.status(this.controllableId);
         const who = ownershipText(status, this.localize, this._lanes.locale, this._lanes.timeZone);
         const controllable = this._lanes.roster?.find((entry) => entry.id === this.controllableId);

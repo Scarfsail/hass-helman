@@ -202,6 +202,20 @@ test.describe("the house's lanes", () => {
         await expect(lane(page, "garage").locator("[data-status]")).toHaveText("Not automated");
     });
 
+    test("each row says what its lane is doing now, under a help, before the system switches", async ({ page }) => {
+        await mount(page, { admin: true, schedule: plan([["12:00", "13:00", { "pump-a": user({ on: true }) }]]) });
+        await openHouseControl(page);
+        await expect(lane(page, "inverter").locator("[data-lane-doing]")).toHaveText("· Normal");
+        await expect(lane(page, "pump-a").locator("[data-lane-doing]")).toHaveText("· on until 13:00");
+        await expect(lane(page, "boiler").locator("[data-lane-doing]")).toHaveText("· Nothing planned");
+        expect(await house(page).locator("[data-lanes] helman-help-tip").evaluate((tip: any) => tip.explanation))
+            .toBe("Every device Helman can control, what it is doing, and who decides. Tap one to open its own detail.");
+        expect(await house(page).locator("[data-lanes], [data-system]").evaluateAll((all) => all.map((element) => element.hasAttribute("data-lanes"))))
+            .toEqual([true, false]);
+        await expect(house(page).locator("[data-automation] .label")).toHaveText("Automation (optimizers plan the schedule)");
+        await expect(house(page).locator("[data-execution] .label")).toHaveText("Schedule execution (the plan is applied)");
+    });
+
     test("without a controllable inverter there is no inverter row", async ({ page }) => {
         await mount(page, { noInverter: true });
         await openHouseControl(page);

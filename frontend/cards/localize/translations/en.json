@@ -137,7 +137,18 @@
       "schedule": {
         "next": "Next: {action} at {time}",
         "house_next": "Next: {device} starts {time}",
-        "none": "Nothing planned"
+        "none": "Nothing planned",
+        "strip": "Today → tomorrow noon",
+        "strip_inverter": "Modes · today → tomorrow noon",
+        "strip_battery": "Inverter modes · today → tomorrow noon",
+        "battery_help": "The battery has no schedule of its own: these blocks are the inverter's, and editing them changes the inverter.",
+        "happened": "happened",
+        "planned": "planned",
+        "candidate": "candidate",
+        "no_changes": "No changes planned today or tomorrow",
+        "edit_blocks": "Edit blocks",
+        "buttons_help": "\"Edit blocks\" opens the schedule day editor with this device selected. \"Override\" sets a fixed state until a time you pick.",
+        "default": "default"
       },
       "who": "Who decides",
       "planned_now": "Planned now",
@@ -224,16 +235,10 @@
         "not_automated": "Not automated"
       },
       "execution_off_note": "Schedule execution is off: Helman makes no hardware change, whatever the schedule holds.",
-      "battery_lane": "The battery is controlled through the inverter's schedule: these controls change the inverter.",
-      "hardware_now": "Hardware now",
-      "scheduled_now": "Scheduled now",
-      "nothing_scheduled": "Nothing scheduled",
-      "unavailable": "unavailable",
       "not_on_roster": "Helman has no controllable for this node.",
       "unsupported_authoring": "This appliance's actions cannot be authored in the schedule yet, so a new manual override cannot be set here.",
       "on": "on",
       "off": "off",
-      "change": "Change",
       "return_to_automatic": "Return to automatic",
       "returned": "Returned to automatic.",
       "return_failed": "Could not return to automatic:",
@@ -247,7 +252,10 @@
         "execution": "Schedule execution",
         "execution_failed": "Could not change schedule execution:",
         "lanes": "Who controls what",
-        "no_lanes": "Helman controls nothing in this house."
+        "no_lanes": "Helman controls nothing in this house.",
+        "lanes_help": "Every device Helman can control, what it is doing, and who decides. Tap one to open its own detail.",
+        "automation_explain": "(optimizers plan the schedule)",
+        "execution_explain": "(the plan is applied)"
       },
       "override": {
         "title": "Manual override",
@@ -497,7 +505,6 @@
         "executor_failed": "the scheduled command failed"
       },
       "strip": {
-        "scope": "Modes · today to noon tomorrow",
         "history_failed": "Today's modes could not be read.",
         "no_history": "A Custom inverter has no mode registers to read: only the plan is drawn.",
         "no_registers": "Not every mode register of the profile is found, so today's modes can't be read: only the plan is drawn."
@@ -1499,13 +1506,7 @@
         "evidence_note": "Readings as reported by the charger, each with its own update time."
       },
       "strip": {
-        "scope": "Charging · today to noon tomorrow",
-        "charged": "Charging",
-        "starts": "starts charging",
-        "stops": "stops charging",
-        "history_failed": "Today's charging could not be read.",
-        "completion_reach": "Under the current plan ≈ {limit} by {time}: an estimate, not a guarantee.",
-        "completion_short": "Under the current plan ≈ {soc} of {limit} by {time}, {kwh} short: an estimate, not a guarantee."
+        "history_failed": "Today's charging could not be read."
       },
       "glyph": {
         "limit": "limit {soc}"
@@ -1601,6 +1602,15 @@
     "reason": {
       "scheduled": "As scheduled",
       "target_soc_reached": "Target SoC reached"
+    },
+    "appliance": {
+      "climate": {
+        "mode": {
+          "off": "Off",
+          "heat": "Heat",
+          "cool": "Cool"
+        }
+      }
     }
   },
   "device_energy": {

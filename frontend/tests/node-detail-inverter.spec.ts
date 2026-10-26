@@ -331,3 +331,57 @@ test("inverter Schedule does not promise an unmet discharge candidate", async ({
         .toContainText("Nothing planned");
 });
 
+
+test("inverter Schedule strip draws the observed modes before now and the plan after it, in two rows", async ({ page }) => {
+    await mount(page);
+    await page.locator(".inverter-cell").click();
+    await page.locator("node-detail-dialog helman-detail-section[data-schedule] button").first().click();
+    const control = page.locator("helman-node-control");
+    await expect(control.locator("[data-strip-title]")).toHaveText("Modes · today → tomorrow noon");
+    const strip = control.locator("helman-mode-strip");
+    const happened = strip.locator("[data-row=happened] [data-segment]");
+    const planned = strip.locator("[data-row=planned] [data-segment]");
+    // The recorded stretches, the Modbus blip a gap, the mode still held running to now.
+    await expect(happened).toHaveCount(3);
+    expect(await happened.evaluateAll((segments) => segments.map((s) => [s.getAttribute("data-tone"), s.getAttribute("data-planned")])))
+        .toEqual([["normal", "false"], ["charge", "false"], ["normal", "false"]]);
+    await expect(happened.last()).toHaveAttribute("data-end", String(Date.parse("2026-10-21T12:00:00Z")));
+    // The plan from now on, the unmet discharge dashed and neutral.
+    await expect(planned.first()).toHaveAttribute("data-start", String(Date.parse("2026-10-21T12:00:00Z")));
+    expect(await planned.evaluateAll((segments) => segments.map((s) => [s.getAttribute("data-tone"), s.getAttribute("data-candidate")])))
+        .toEqual([["normal", "false"], ["charge", "false"], ["normal", "false"], ["neutral", "true"], ["normal", "false"]]);
+    // Observed and planned modes by the same names, each named once.
+    expect(await strip.locator("[data-legend-entry]").allInnerTexts()).toEqual(["Normal", "Charging", "Discharging · candidate"]);
+    await expect(control.locator("[data-history-note]")).toHaveCount(0);
+    // Today and tomorrow's changes: who set each, a candidate as its range.
+    const rows = control.locator("[data-change-row]");
+    expect(await rows.allInnerTexts()).toEqual([
+        "14:00 Charge to 80 %\nHelman's schedule",
+        "16:00 Normal\ndefault",
+        "18:00–19:00 Discharge to 30 %\ncandidate",
+        "19:00 Normal\ndefault",
+    ]);
+});
+
+test("inverter Schedule says why nothing happened is drawn, and a failed read is tried again", async ({ page }) => {
+    const openSchedule = async () => {
+        await page.locator(".inverter-cell").click();
+        await page.locator("node-detail-dialog helman-detail-section[data-schedule] button").first().click();
+    };
+    const note = page.locator("helman-node-control [data-history-note]");
+    await mount(page, { modesFail: true });
+    await openSchedule();
+    await expect(note).toContainText("Today's modes could not be read.");
+    await page.evaluate(() => { window.__modesFail = false; });
+    await note.locator("[data-history-retry]").click();
+    await expect(note).toHaveCount(0);
+    await expect(page.locator("helman-node-control helman-mode-strip [data-row=happened] [data-segment]")).toHaveCount(3);
+
+    await mount(page, { modesNull: true });
+    await openSchedule();
+    await expect(note).toHaveText("Not every mode register of the profile is found, so today's modes can't be read: only the plan is drawn.");
+
+    await mount(page, { profile: false });
+    await openSchedule();
+    await expect(note).toHaveText("A Custom inverter has no mode registers to read: only the plan is drawn.");
+});

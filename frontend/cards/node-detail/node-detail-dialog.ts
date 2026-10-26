@@ -5,7 +5,7 @@ import { repeat } from "lit/directives/repeat.js";
 import { nothing, TemplateResult } from "lit-html";
 import type { HomeAssistant } from "../../types/ha";
 import type { LocalizeFunction } from "../localize/localize";
-import type { NodeDetailParams, NodeDetailSectionRequest } from "./node-detail-types";
+import { LANE_HISTORY_EVENT, NO_LANE_HISTORY, type LaneHistory, type NodeDetailParams, type NodeDetailSectionRequest } from "./node-detail-types";
 import type { TreeItem } from "../shared/data/tree-item";
 import { INVERTER_CONTROLLABLE_ID } from "../shared/schedule/schedule-types";
 import { getSharedScheduleOwner } from "../shared/schedule/schedule-owner";
@@ -64,6 +64,8 @@ export class NodeDetailDialog extends LitElement {
     @state() private _settingsOpen = false;
     @state() private _scheduleExpanded = false;
     @state() private _schedule: SchedulePayload | null = null;
+    /** What the node's lane did today, as its detail reports it for the Schedule strip. */
+    @state() private _laneHistory: LaneHistory = NO_LANE_HISTORY;
     private _scheduleUnsubscribe?: () => void;
     private _sectionTarget: string | null = null;
     private _sectionRequest: NodeDetailSectionRequest | null = null;
@@ -71,6 +73,12 @@ export class NodeDetailDialog extends LitElement {
     connectedCallback(): void {
         super.connectedCallback();
         if (this.hass) this._watchSchedule();
+    }
+
+    /** The detail's lane history bubbles within this shadow root, not out of it. */
+    protected firstUpdated(changed: Map<string, unknown>): void {
+        super.firstUpdated(changed);
+        this.renderRoot.addEventListener(LANE_HISTORY_EVENT, this._onLaneHistory as EventListener);
     }
 
     disconnectedCallback(): void { super.disconnectedCallback(); this._scheduleUnsubscribe?.(); this._scheduleUnsubscribe = undefined; }
@@ -88,7 +96,10 @@ export class NodeDetailDialog extends LitElement {
         const target = this.open && this.params ? this._targetKey() : null;
         const request = target !== null ? this.params.sectionRequest ?? null : null;
         if (target !== this._sectionTarget || request !== this._sectionRequest) {
-            if (target !== this._sectionTarget) this._settingsOpen = false;
+            if (target !== this._sectionTarget) {
+                this._settingsOpen = false;
+                this._laneHistory = NO_LANE_HISTORY;
+            }
             this._sectionTarget = target;
             this._sectionRequest = request;
             this._scheduleExpanded = request?.section === "schedule";
@@ -201,7 +212,7 @@ export class NodeDetailDialog extends LitElement {
             .filter((run) => run !== null).sort((a, b) => a!.startMs - b!.startMs);
         const first = changes[0];
         return first ? boldTemplate(this.localize("node_detail.shared.schedule.next"), {
-            action: laneActionLabel(first.action, this.localize), time: formatScheduleTime(first.startMs, locale, zone),
+            action: laneActionLabel(first.action, this.localize, this.params.nodeType === "device" ? this.params.item.applianceKind : null), time: formatScheduleTime(first.startMs, locale, zone),
         }) : this.localize("node_detail.shared.schedule.none");
     }
 
@@ -232,11 +243,17 @@ export class NodeDetailDialog extends LitElement {
                     .localize=${this.localize}
                     .controllableId=${controllableId}
                     .titled=${controllableIds.length > 1}
-                    .note=${this.params.nodeType === "battery" ? this.localize("node_detail.control.battery_lane") : null}
+                    .battery=${this.params.nodeType === "battery"}
+                    .history=${this._laneHistory}
                 ></helman-node-control>
             `)}
         `;
     }
+
+    private _onLaneHistory = (event: CustomEvent<LaneHistory>): void => {
+        event.stopPropagation();
+        this._laneHistory = event.detail;
+    };
 
     private _renderSettings() {
         if (!this._settingsOpen || this.params.nodeType !== "device" || !this.params.item.deviceKey) return nothing;
