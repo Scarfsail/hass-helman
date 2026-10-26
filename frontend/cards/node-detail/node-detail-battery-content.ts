@@ -38,11 +38,20 @@ import "../helman-simple/simple-card-battery";
 import "./detail-headline";
 import "./flow-gauge";
 import "./help-tip";
+import { boldTemplate } from "./detail-section";
+import { forecastWhen, renderForecastChart } from "./node-detail-forecast";
+import { modeStripWindow } from "../shared/mode-strip";
+import type { DayLinePoint } from "../shared/day-line-chart";
+import { SLOT_MS } from "../shared/time/slot-time";
 
 type QuestionId = "reserve" | "next" | "limits" | "charge" | "diagnostics";
 
 /** Within this share of the lowest known ceiling, the power is "at" it. */
 const AT_CEILING = 0.95;
+
+/** The Forecast chart's key moments: full, and the lowest charge. */
+const FULL_COLOR = "var(--success-color, #43a047)";
+const LOWEST_COLOR = "var(--error-color, #db4437)";
 
 /** A battery colder than this gets an observation, never a verdict. */
 const COLD_C = 10;
@@ -145,6 +154,12 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
         }
     }
 
+    protected _start(): void {
+        super._start();
+        // The Forecast header names the key moments while it is closed.
+        void this._loadForecast();
+    }
+
     // ── Disclosure ──────────────────────────────────────────────────────────
 
     protected _setOpen(id: QuestionId | null): void {
@@ -154,10 +169,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
 
     // ── Rendering ───────────────────────────────────────────────────────────
 
-    render() {
-        const notReady = this._renderNotReady();
-        if (notReady || this._overview.status !== "ready") return notReady;
-        const overview = this._overview.payload;
+    protected _renderOverview(overview: BatteryDetailPayload) {
         const reserve = readReserve(this.hass, overview);
         const estimate = this._estimate(overview);
         const power = this.params.power;
@@ -180,7 +192,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
                 ${estimate?.kind === "time" ? html`
                     <p class="estimate" data-estimate>${estimate.text} <span class="muted">${this.localize("node_detail.shared.battery_recent_rate")}</span><helman-help-tip .explanation=${this.localize("node_detail.shared.battery_rate_help")}></helman-help-tip></p>
                 ` : nothing}
-                <helman-flow-gauge .direction=${direction === "charge" ? "from" : "to"} .localize=${this.localize}
+                <helman-flow-gauge .direction=${direction === "charge" ? "from" : direction === "discharge" ? "to" : "flow"} .localize=${this.localize}
                     .items=${flow ? direction === "charge" ? [
                         { node: "solar", powerW: flow.solarToBattery }, { node: "grid", powerW: flow.gridToBattery },
                     ] : direction === "discharge" ? [
@@ -200,6 +212,104 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
                 </div>
             </div>
         `;
+    }
+
+    // Forecast ----------------------------------------------------------------
+
+    /**
+     * The planned SoC until tomorrow noon and its key moments: when the
+     * battery is full, and when it reaches the floor, else its lowest charge.
+     */
+    protected _renderForecast() {
+        const pending = this._forecastPending();
+        if (pending !== null) return pending;
+        const context = this._chartContext;
+        const soc = this._socForecast(context.now);
+        if (!soc) return nothing;
+        const nowText = this.localize("node_detail.shared.now");
+        // A limit the battery is at already reads "now", not the next slot's end.
+        const time = (ms: number) => ms === context.now ? nowText : forecastWhen(ms, context);
+        const about = (ms: number) => ms === context.now ? nowText : `≈ ${time(ms)}`;
+        const parts: Array<[string, Record<string, string>]> = [
+            ...(soc.full ? [["battery_full", { time: about(soc.full.t) }] as [string, Record<string, string>]] : []),
+            soc.floorAt === context.now
+                ? ["battery_floor_now", {}]
+                : soc.floorAt !== null
+                ? ["battery_lasts", { time: time(soc.floorAt) }]
+                : ["battery_lowest", { soc: this._percent(soc.lowest.v), time: time(soc.lowest.t) }],
+        ];
+        const template = (key: string) => this.localize(`node_detail.shared.forecast.${key}`);
+        const none = template("not_within");
+        // The parts join as one phrase, whichever comes first starting it; a narrow header wraps only between them.
+        const capital = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+        return this._forecastSection(html`${parts.map(([key, values], index) => html`${index ? " · " : ""}<span style="white-space: nowrap">${boldTemplate(index ? template(key) : capital(template(key)), values)}</span>`)}`, () => html`
+            ${renderForecastChart(context, {
+                title: this.localize("node_detail.shared.forecast.battery_chart"),
+                help: this.localize("node_detail.shared.forecast.battery_help"),
+                series: [
+                    { key: "actual", label: this.localize("node_detail.shared.forecast.actual"), color: "var(--helman-battery)", points: soc.actual },
+                    { key: "planned", label: this.localize("node_detail.shared.forecast.planned"), color: "var(--helman-battery)", points: soc.planned, dashed: true },
+                ],
+                references: [
+                    { value: soc.ceiling, label: this._percent(soc.ceiling) },
+                    { value: soc.floor, label: this._percent(soc.floor) },
+                ],
+                // The floor and the ceiling are the SoC's scale: no ticks of their own.
+                ticks: [],
+                markers: [
+                    ...(soc.full ? [{ ...soc.full, color: FULL_COLOR }] : []),
+                    { ...soc.lowest, color: LOWEST_COLOR },
+                ],
+                formatValue: (value) => this._percent(value),
+            })}
+            <div class="rows">
+                <div class="row" data-row="full"><span class="label"><span style="color: ${FULL_COLOR}">●</span> ${fillTemplate(this.localize("node_detail.shared.forecast.battery_full_row"), { ceiling: this._percent(soc.ceiling) })}</span>
+                    <span class="value">${soc.full ? about(soc.full.t) : none}</span></div>
+                <div class="row" data-row="lowest"><span class="label"><span style="color: ${LOWEST_COLOR}">●</span> ${this.localize("node_detail.shared.forecast.battery_lowest_row")}</span>
+                    <span class="value">${fillTemplate(this.localize("node_detail.shared.forecast.at"), { value: this._percent(soc.lowest.v), time: forecastWhen(soc.lowest.t, context) })}</span></div>
+                <div class="row" data-row="floor"><span class="label">${fillTemplate(this.localize("node_detail.shared.forecast.battery_floor_row"), { floor: this._percent(soc.floor) })}</span>
+                    <span class="value">${soc.floorAt !== null ? time(soc.floorAt) : none}</span></div>
+            </div>
+        `);
+    }
+
+    /**
+     * The forecast's SoC: what it was today (its actual history, joined to the
+     * SoC now) and what the plan expects to tomorrow noon, each slot at its
+     * end, with the moments the header and the chart name: `now` for a limit
+     * the battery is at already. `null` without a planned slot.
+     */
+    private _socForecast(now: number): {
+        actual: DayLinePoint[]; planned: DayLinePoint[]; floor: number; ceiling: number;
+        full: DayLinePoint | null; floorAt: number | null; lowest: DayLinePoint;
+    } | null {
+        const battery = this._forecast?.battery_capacity;
+        if (!battery || (battery.status !== "available" && battery.status !== "partial") || battery.currentSoc === null) return null;
+        const end = modeStripWindow(now, this._timeZone).end;
+        const current = { t: now, v: battery.currentSoc };
+        const planned = [current, ...battery.series
+            .map((slot) => ({ t: Date.parse(slot.timestamp) + slot.durationHours * 3_600_000, v: slot.socPct, slot }))
+            .filter((point) => point.t > now && point.t <= end)];
+        if (planned.length < 2) return null;
+        const actual: DayLinePoint[] = [];
+        for (const slot of battery.actualHistory) {
+            const start = Date.parse(slot.timestamp);
+            if (!actual.length) actual.push({ t: start, v: slot.startSocPct });
+            actual.push({ t: start + SLOT_MS, v: slot.socPct });
+        }
+        if (actual.length) actual.push(current);
+        const floor = battery.minSoc ?? 0;
+        const ceiling = battery.maxSoc ?? 100;
+        const ahead = planned.slice(1) as Array<DayLinePoint & { slot: (typeof battery.series)[number] }>;
+        const atCeiling = (v: number) => v >= ceiling - 0.5;
+        const atFloor = (v: number) => v <= floor + 0.5;
+        const full = atCeiling(current.v) ? current : ahead.find((point) => point.slot.hitMaxSoc || atCeiling(point.v)) ?? null;
+        const empty = atFloor(current.v) ? current : ahead.find((point) => point.slot.hitMinSoc || atFloor(point.v)) ?? null;
+        const lowest = ahead.reduce((low, point) => point.v < low.v ? point : low, ahead[0]);
+        return {
+            actual, planned: planned.map(({ t, v }) => ({ t, v })), floor, ceiling,
+            full: full && { t: full.t, v: full.v }, floorAt: empty?.t ?? null, lowest: { t: lowest.t, v: lowest.v },
+        };
     }
 
     /** The open question's answer and evidence, full width under the tiles. */

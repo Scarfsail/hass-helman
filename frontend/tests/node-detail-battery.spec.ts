@@ -55,6 +55,10 @@ type Variant = {
     chargeNow?: boolean;
     /** The mode the inverter reports; `normal` unless given, `null` when it reads none. */
     observed?: string | null;
+    /** The planned SoC at the end of each 15-minute slot from 12:00, and whether the slot hits the floor or the ceiling. */
+    socPath?: Array<{ soc: number; min?: boolean; max?: boolean }>;
+    /** The forecast's SoC now; 67 unless given. */
+    currentSoc?: number;
 };
 
 declare global {
@@ -170,20 +174,23 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 controllables: { inverter: { actionKind: "apply", outcome: "success", executedAction: { kind: "normal" }, reason: "scheduled" } },
             },
         };
-        const forecastSlot = (iso: string, soc: number) => ({
+        const forecastSlot = (iso: string, soc: number, hitMinSoc = false, hitMaxSoc = false) => ({
             timestamp: iso, durationHours: 0.25, solarKwh: 0, baselineHouseKwh: 0, netKwh: 0, chargedKwh: 0, dischargedKwh: 0,
             remainingEnergyKwh: 0, socPct: soc, importedFromGridKwh: 0, exportedToGridKwh: 0,
-            hitMinSoc: false, hitMaxSoc: false, limitedByChargePower: false, limitedByDischargePower: false,
+            hitMinSoc, hitMaxSoc, limitedByChargePower: false, limitedByDischargePower: false,
         });
         const forecast: ForecastPayload = {
             ...forecastDefaults,
             battery_capacity: {
                 ...forecastDefaults.battery_capacity,
                 status: "available", generatedAt: null, startedAt: null, unit: "kWh",
-                model: null, nominalCapacityKwh: 17.3, currentRemainingEnergyKwh: 11.6, currentSoc: 67, minSoc: 10, maxSoc: 100,
+                model: null, nominalCapacityKwh: 17.3, currentRemainingEnergyKwh: 11.6, currentSoc: v.currentSoc ?? 67, minSoc: 10, maxSoc: 100,
                 chargeEfficiency: 0.95, dischargeEfficiency: 0.95, maxChargePowerW: 5000, maxDischargePowerW: 6000,
-                partialReason: null, coverageUntil: null, actualHistory: [],
-                series: [forecastSlot(`${day}T12:00:00+00:00`, 66), forecastSlot(`${day}T12:15:00+00:00`, 64)],
+                partialReason: null, coverageUntil: null,
+                actualHistory: [{ timestamp: `${day}T11:30:00+00:00`, startSocPct: 70, socPct: 69 }, { timestamp: `${day}T11:45:00+00:00`, startSocPct: 69, socPct: 67 }],
+                series: v.socPath
+                    ? v.socPath.map((slot, index) => forecastSlot(new Date(Date.parse(`${day}T12:00:00Z`) + index * 900_000).toISOString(), slot.soc, slot.min, slot.max))
+                    : [forecastSlot(`${day}T12:00:00+00:00`, 66), forecastSlot(`${day}T12:15:00+00:00`, 64)],
             },
         };
         const flowsSection = window.__flowsSection("battery", { unavailable: v.flowsUnavailable ?? null, flows: v.flowsUnavailable ? null : { ...window.__flowsSection("battery").flows, solarToGrid: 2.0 } });
@@ -353,4 +360,84 @@ test("battery caption colours the power in the discharge colour", async ({ page 
     const part = content(page).locator("helman-detail-headline [data-direction]");
     await expect(part).toContainText("discharging");
     await expect(part).toHaveCSS("color", "rgb(220, 38, 38)");
+});
+
+// Forecast -------------------------------------------------------------------
+
+const forecastSection = (page: Page) => content(page).locator("helman-detail-section[data-forecast]");
+
+async function openForecast(page: Page): Promise<void> {
+    await forecastSection(page).locator("button").first().click();
+    await expect(forecastSection(page).locator("[data-forecast-body]")).toBeVisible();
+}
+
+test("battery Forecast header names when it is full and how long it lasts, while closed", async ({ page }) => {
+    await mount(page, { socPath: [{ soc: 80 }, { soc: 95 }, { soc: 100, max: true }, { soc: 70 }, { soc: 40 }, { soc: 15 }, { soc: 10, min: true }] });
+    await openDetail(page);
+    const section = forecastSection(page);
+    await expect(section.locator("[slot=summary]")).toHaveText("Full ≈ 12:45 · lasts until 13:45");
+    await expect(section.locator("[slot=summary] b")).toHaveText(["≈ 12:45", "13:45"]);
+    await expect(section.locator("[data-forecast-body]")).toHaveCount(0);
+    await openForecast(page);
+    await expect(section.locator("[data-row=full] .value")).toHaveText("≈ 12:45");
+    await expect(section.locator("[data-row=lowest] .value")).toHaveText("10 % at 13:45");
+    await expect(section.locator("[data-row=floor]")).toContainText("Reaches the 10 % floor");
+    await expect(section.locator("[data-row=floor] .value")).toHaveText("13:45");
+    // Actual and planned SoC, the floor and the ceiling, a dot for full and one for the lowest.
+    const chart = section.locator("helman-day-line-chart");
+    await expect(chart.locator("path.line")).toHaveCount(2);
+    await expect(chart.locator("path.line.dashed")).toHaveCount(1);
+    await expect(chart.locator("line.reference")).toHaveCount(2);
+    // The floor and the ceiling label the SoC axis; it has no ticks of its own.
+    await expect(chart.locator(".reference-label")).toHaveText(["100 %", "10 %"]);
+    await expect(chart.locator(".axis-label[text-anchor=end]")).toHaveCount(0);
+    await expect(chart.locator("[data-marker]")).toHaveCount(2);
+    await expect(chart.locator("[data-now]")).toHaveCount(1);
+    await expect(section.locator("helman-help-tip")).toHaveCount(1);
+});
+
+test("battery Forecast header gives the lowest charge when the floor is never reached", async ({ page }) => {
+    await mount(page, { socPath: [{ soc: 80 }, { soc: 95 }, { soc: 100, max: true }, { soc: 70 }, { soc: 40 }, { soc: 55 }] });
+    await openDetail(page);
+    const section = forecastSection(page);
+    await expect(section.locator("[slot=summary]")).toHaveText("Full ≈ 12:45 · lowest 40 % at 13:15");
+    await openForecast(page);
+    await expect(section.locator("[data-row=lowest] .value")).toHaveText("40 % at 13:15");
+    await expect(section.locator("[data-row=floor] .value")).toHaveText("Not within the forecast");
+});
+
+test("battery Forecast header leaves out full when the plan never fills it", async ({ page }) => {
+    await mount(page, { socPath: [{ soc: 60 }, { soc: 50 }, { soc: 55 }] });
+    await openDetail(page);
+    const section = forecastSection(page);
+    await expect(section.locator("[slot=summary]")).toHaveText("Lowest 50 % at 12:30");
+    await openForecast(page);
+    await expect(section.locator("[data-row=full] .value")).toHaveText("Not within the forecast");
+});
+
+test("battery Forecast header says full now when the battery is at its ceiling already", async ({ page }) => {
+    await mount(page, { currentSoc: 100, socPath: [{ soc: 100, max: true }, { soc: 90 }, { soc: 50 }] });
+    await openDetail(page);
+    const section = forecastSection(page);
+    await expect(section.locator("[slot=summary]")).toHaveText("Full now · lowest 50 % at 12:45");
+    await openForecast(page);
+    await expect(section.locator("[data-row=full] .value")).toHaveText("now");
+});
+
+test("battery Forecast header says at the floor now when the battery is at its floor already", async ({ page }) => {
+    await mount(page, { currentSoc: 10, socPath: [{ soc: 10, min: true }, { soc: 30 }, { soc: 100, max: true }] });
+    await openDetail(page);
+    const section = forecastSection(page);
+    await expect(section.locator("[slot=summary]")).toHaveText("Full ≈ 12:45 · at the floor now");
+    await openForecast(page);
+    await expect(section.locator("[data-row=floor] .value")).toHaveText("now");
+});
+
+test("battery Forecast offers a retry when the forecast fails", async ({ page }) => {
+    await mount(page, { forecastFails: true });
+    await openDetail(page);
+    const section = forecastSection(page);
+    await expect(section.locator("[slot=summary]")).toHaveText("The forecast could not be loaded.");
+    await openForecast(page);
+    await expect(section.locator("[data-forecast-failed]")).toBeVisible();
 });

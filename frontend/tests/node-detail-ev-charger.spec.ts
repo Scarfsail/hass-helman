@@ -281,6 +281,10 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                     return projection;
                 },
                 "recorder/statistic_during_period": { change: 1 },
+                // The car's SoC this morning, as HA's recorder has it.
+                "history/history_during_period": { "sensor.kona_soc": [
+                    { s: "45", lu: Date.parse("2026-10-21T00:00:00Z") / 1000 }, { s: "50", lu: Date.parse("2026-10-21T09:10:00Z") / 1000 },
+                ] },
                 "helman/get_node_detail": async (msg: {
                     type: string;
                     node?: string;
@@ -355,7 +359,7 @@ test("charger car tile gives the limit, needed energy and ETA", async ({ page })
     await expect(c.locator("[data-car] [data-limit-marker]")).toHaveCount(1);
     await expect(c.locator("[data-car]")).toContainText("Still needed");
     await expect(c.locator("helman-who-decides")).toBeVisible();
-    await expect(c.locator("helman-node-flow, helman-mode-strip")).toHaveCount(0);
+    await expect(c.locator("[data-overview]").locator("helman-node-flow, helman-mode-strip")).toHaveCount(0);
 });
 
 test("charger Schedule does not promise an unmet charge candidate", async ({ page }) => {
@@ -394,4 +398,43 @@ test("charger Schedule strip draws today's charging before now and the plan afte
     await expect(control.locator("[data-history-note]")).toHaveCount(0);
     await expect(control.locator("[data-edit-blocks]")).toBeVisible();
     await expect(control.locator("[data-change]")).toHaveText("Override…");
+});
+
+// Forecast -------------------------------------------------------------------
+
+const forecastSection = (page: Page) => content(page).locator("helman-detail-section[data-forecast]");
+
+test("charger Forecast header names the shortfall when the plan does not reach the limit", async ({ page }) => {
+    // 8 slots × 1.6 kWh from 12:00 to 14:00 bring 12.8 of the 19.2 kWh the Kona needs.
+    await mount(page);
+    await openDevice(page, "Garage EV");
+    const section = forecastSection(page);
+    await expect(section.locator("[slot=summary]")).toHaveText("6.4 kWh short of 80 % by 14:00");
+    await expect(section.locator("[data-forecast-body]")).toHaveCount(0);
+    await section.locator("button").first().click();
+    await expect(section.locator("[data-row=end-of-plan] .value")).toHaveText("70 %, 6.4 kWh short");
+    await expect(section.locator("[data-row=candidate] .value")).toHaveText("Likely, 22:00–02:00");
+    const chart = section.locator("helman-day-line-chart");
+    await expect(chart.locator("path.line")).toHaveCount(2);
+    await expect(chart.locator("path.line.dashed")).toHaveCount(1);
+    await expect(chart.locator(".reference-label")).toHaveText("limit 80 %");
+});
+
+test("charger Forecast header confirms the limit is reached, and the candidate stays one", async ({ page }) => {
+    // 3 kWh a slot reaches 19.2 kWh in the slot ending 13:45.
+    await mount(page, { slotKwh: 3 });
+    await openDevice(page, "Garage EV");
+    const section = forecastSection(page);
+    await expect(section.locator("[slot=summary]")).toHaveText("Reaches 80 % by 13:45 ✓");
+    await section.locator("button").first().click();
+    await expect(section.locator("[data-row=end-of-plan] .value")).toHaveText("80 %, limit reached");
+    await expect(section.locator("[data-row=candidate] .value")).toHaveText("No, stays a candidate");
+});
+
+test("charger shows no Forecast without a projection for its car", async ({ page }) => {
+    await mount(page, { projectionEmpty: true });
+    await openDevice(page, "Garage EV");
+    await expect(content(page).locator("[data-overview]")).toBeVisible();
+    await page.waitForTimeout(300);
+    await expect(forecastSection(page)).toHaveCount(0);
 });

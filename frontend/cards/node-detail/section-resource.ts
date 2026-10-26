@@ -37,6 +37,11 @@ export function timeZone(hass: HomeAssistant): string {
     return hass.config?.time_zone || "UTC";
 }
 
+/** HA's language, which times and figures are formatted in. */
+export function hassLocale(hass: HomeAssistant): string {
+    return hass.locale?.language ?? hass.language ?? "cs";
+}
+
 /** Whether figures are for another day: their period's, or without one the day they were requested. */
 function otherDay(payload: unknown, requestedAt: number, zone: string): boolean {
     const start = (payload as { period?: { start: string } } | null)?.period?.start;

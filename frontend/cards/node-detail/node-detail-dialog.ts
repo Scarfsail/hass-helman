@@ -36,11 +36,9 @@ import { deviceControllableIds } from "./node-detail-utils";
 @customElement("node-detail-dialog")
 export class NodeDetailDialog extends LitElement {
     static styles = css`
-        /* The sections run edge to edge, so the body pads the overview only. */
+        /* The sections run edge to edge, so the detail pads its overview only. */
         ha-dialog { --dialog-content-padding: 0; }
         .header-title { display: inline-flex; align-items: center; }
-        .overview { padding: 0 var(--ha-space-6, 24px) var(--ha-space-5, 20px); }
-        helman-detail-section:last-of-type { border-bottom: 1px solid var(--divider-color); }
         .settings-button {
             margin-inline-end: auto;
         }
@@ -176,18 +174,16 @@ export class NodeDetailDialog extends LitElement {
         return this.params.nodeType === "device" ? deviceControllableIds(this.params.item) : [];
     }
 
+    /** The node's detail, with the Schedule section slotted in after its Overview. */
     private _renderBody(): TemplateResult {
         const schedule = this._renderSchedule();
-        const content = html`<div class="overview">${this._renderContent()}</div>`;
-        if (schedule === null) return content;
-        return html`
-            ${content}
-            <helman-detail-section data-schedule icon="mdi:calendar-month-outline" .title=${this.localize("node_detail.control.tab.schedule")}
+        return this._renderContent(schedule === null ? nothing : html`
+            <helman-detail-section slot="schedule" data-schedule icon="mdi:calendar-month-outline" .title=${this.localize("node_detail.control.tab.schedule")}
                 .expanded=${this._scheduleExpanded} @expanded-changed=${(event: CustomEvent<boolean>) => { this._scheduleExpanded = event.detail; }}>
                 <span slot="summary">${this._scheduleSummary()}</span>
                 ${schedule}
             </helman-detail-section>
-        `;
+        `);
     }
 
     /** The Schedule header's summary, its values in bold. */
@@ -269,7 +265,7 @@ export class NodeDetailDialog extends LitElement {
         `;
     }
 
-    private _renderContent(): TemplateResult {
+    private _renderContent(schedule: TemplateResult | typeof nothing): TemplateResult {
         switch (this.params.nodeType) {
             case "battery":
                 return html`
@@ -277,7 +273,7 @@ export class NodeDetailDialog extends LitElement {
                         .hass=${this.hass}
                         .localize=${this.localize}
                         .params=${this.params}
-                    ></node-detail-battery-content>
+                    >${schedule}</node-detail-battery-content>
                 `;
             case "solar":
                 return html`
@@ -285,7 +281,7 @@ export class NodeDetailDialog extends LitElement {
                         .hass=${this.hass}
                         .localize=${this.localize}
                         .params=${this.params}
-                    ></node-detail-solar-content>
+                    >${schedule}</node-detail-solar-content>
                 `;
             case "grid":
                 return html`
@@ -293,7 +289,7 @@ export class NodeDetailDialog extends LitElement {
                         .hass=${this.hass}
                         .localize=${this.localize}
                         .params=${this.params}
-                    ></node-detail-grid-content>
+                    >${schedule}</node-detail-grid-content>
                 `;
             case "house":
                 return html`
@@ -301,7 +297,7 @@ export class NodeDetailDialog extends LitElement {
                         .hass=${this.hass}
                         .localize=${this.localize}
                         .params=${this.params}
-                    ></node-detail-house-content>
+                    >${schedule}</node-detail-house-content>
                 `;
             case "inverter":
                 return html`
@@ -309,7 +305,7 @@ export class NodeDetailDialog extends LitElement {
                         .hass=${this.hass}
                         .localize=${this.localize}
                         .params=${this.params}
-                    ></node-detail-inverter-content>
+                    >${schedule}</node-detail-inverter-content>
                 `;
             case "device": {
                 const chargerId = this._evChargerId(this.params.item);
@@ -320,7 +316,7 @@ export class NodeDetailDialog extends LitElement {
                             .localize=${this.localize}
                             .deviceId=${chargerId}
                             .params=${this.params}
-                        ></node-detail-ev-charger-content>
+                        >${schedule}</node-detail-ev-charger-content>
                     `;
                 }
                 return html`
@@ -328,7 +324,7 @@ export class NodeDetailDialog extends LitElement {
                         .hass=${this.hass}
                         .localize=${this.localize}
                         .params=${this.params}
-                    ></node-detail-device-content>
+                    >${schedule}</node-detail-device-content>
                 `;
             }
         }

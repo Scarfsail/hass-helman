@@ -253,13 +253,36 @@ test("grid gauge adds up to the headline where the house meter disagrees with th
     expect(await liveFigures(page, "node-detail-grid-content", "grid")).toMatchObject({ card: 1100, gauge: 1100 });
 });
 
-test("grid gauge stays away while the headline is idle", async ({ page }) => {
+test("grid gauge shows an empty placeholder under a direction-neutral title while the headline is idle", async ({ page }) => {
     await mount(page, { grid: "0", solar: "0", house: "83", battery: "0" });
     await page.locator(".node-cell:has(simple-card-grid)").click();
     const c = content(page);
     await expect(c.locator("helman-detail-headline")).toContainText("not exchanging with the grid now");
-    await expect(c.locator("helman-flow-gauge")).toBeHidden();
+    const gauge = c.locator("helman-flow-gauge");
+    await expect(gauge.locator(".title")).toContainText("Flow · now");
+    await expect(gauge.locator("[data-idle]")).toHaveText("Nothing flowing now");
+    await expect(gauge.locator("button")).toHaveCount(0);
     expect(await liveFigures(page, "node-detail-grid-content", "grid")).toMatchObject({ card: 0, gauge: 0 });
+});
+
+test("grid gauge keeps its place and height when the grid switches from idle to importing", async ({ page }) => {
+    await mount(page, { grid: "0", solar: "0", house: "83", battery: "0" });
+    await page.locator(".node-cell:has(simple-card-grid)").click();
+    const c = content(page);
+    const gauge = c.locator("helman-flow-gauge");
+    await expect(gauge.locator("[data-idle]")).toBeVisible();
+    const idle = await gauge.boundingBox();
+    await page.evaluate(() => {
+        const card = document.querySelector("helman-simple-card") as any;
+        const hass = window.__NodeDetailHass;
+        const states = { ...hass.states, "sensor.grid": { ...hass.states["sensor.grid"], state: "1200" }, "sensor.house": { ...hass.states["sensor.house"], state: "1200" } };
+        window.__NodeDetailHass = { ...hass, states };
+        card.hass = window.__NodeDetailHass;
+    });
+    await expect(gauge.locator("button")).not.toHaveCount(0);
+    await expect(gauge.locator(".title")).toContainText("Going to · now");
+    const importing = await gauge.boundingBox();
+    expect(importing).toEqual(idle);
 });
 
 test("grid price tile bolds each price and keeps each one whole", async ({ page }) => {
@@ -278,5 +301,37 @@ test("grid Overview says unavailable, not a direction, when the grid power senso
     await expect(headline).toContainText("unavailable");
     await expect(headline).not.toContainText(/exporting|importing/i);
     await expect(headline).not.toContainText(/[←→]/);
-    await expect(content(page).locator("helman-flow-gauge")).toHaveCount(0);
+    await expect(content(page).locator("helman-flow-gauge [data-idle]")).toHaveText("Nothing flowing now");
+});
+
+// Forecast -------------------------------------------------------------------
+
+test("grid Forecast header names the cheapest stretch, and the body the dearest one and the planned grid use", async ({ page }) => {
+    await mount(page);
+    await page.locator(".node-cell:has(simple-card-grid)").click();
+    const section = content(page).locator("helman-detail-section[data-forecast]");
+    // 4.20 from 12:00 and again from 13:00, 5.10 from 14:00 for the hour the previous price held.
+    await expect(section.locator("[slot=summary]")).toHaveText("Cheapest 12:00–14:00 · 4.20 CZK/kWh");
+    await expect(section.locator("[slot=summary] b")).toHaveText(["12:00–14:00", "4.20 CZK/kWh"]);
+    await expect(section.locator("[data-forecast-body]")).toHaveCount(0);
+    await section.locator("button").first().click();
+    await expect(section.locator("[data-row=cheapest] .value")).toHaveText("12:00–14:00 · 4.20 CZK/kWh");
+    await expect(section.locator("[data-row=dearest] .value")).toHaveText("14:00–15:00 · 5.10 CZK/kWh");
+    const planned = section.locator("[data-planned] [data-run]");
+    await expect(planned).toHaveCount(2);
+    await expect(planned.nth(0)).toContainText("12:00–12:30");
+    await expect(planned.nth(0)).toContainText("Export ≈ 0.60 kWh");
+    await expect(planned.nth(1)).toContainText("15:00–15:15");
+    await expect(planned.nth(1)).toContainText("Import ≈ 0.40 kWh");
+    const chart = section.locator("helman-day-line-chart");
+    await expect(chart.locator("path.line")).toHaveCount(1);
+    await expect(chart.locator("[data-span]")).toHaveCount(1);
+    await expect(chart.locator("[data-now]")).toHaveCount(1);
+});
+
+test("grid shows no Forecast without import prices", async ({ page }) => {
+    await mount(page, { noImportPrice: true });
+    await page.locator(".node-cell:has(simple-card-grid)").click();
+    await expect(content(page).locator("[data-overview]")).toBeVisible();
+    await expect(content(page).locator("helman-detail-section[data-forecast]")).toHaveCount(0);
 });

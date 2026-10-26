@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
+import { installFixedClock } from "./support/fixed-clock";
 import { loadBundle } from "./support/card-page";
 import { treeNode, treePayload } from "./support/payload-builders";
 import type { TreeItemDTO } from "../cards/helman-api";
@@ -71,6 +72,7 @@ async function mountCard(
     schedulableBoiler = false,
     energyUnit = "kWh",
     today = TODAY_KWH,
+    projections: Record<string, Array<[string, number]>> = {},
 ): Promise<void> {
     await loadBundle(page, "helman-card");
     await installHaStubs(page);
@@ -122,7 +124,7 @@ async function mountCard(
     });
 
     await page.evaluate(
-        async ({ tree, today, lastHour, stats, energyUnit }) => {
+        async ({ tree, today, lastHour, stats, energyUnit, projections }) => {
             const state = (value: string, attributes: Record<string, unknown> = {}) => ({ state: value, attributes });
             (window as any).__statRequests = [];
             (window as any).__deviceStatsRequests = [];
@@ -154,6 +156,11 @@ async function mountCard(
                         (window as any).__deviceStatsRequests.push(msg.device_key);
                         return (stats as Record<string, unknown>)[msg.device_key] ?? null;
                     },
+                    "helman/get_appliance_projections": async () => ({
+                        generatedAt: "2026-10-21T12:00:00+00:00",
+                        appliances: Object.fromEntries(Object.entries(projections).map(([id, points]) =>
+                            [id, { series: points.map(([slotId, energyKwh]) => ({ slotId, energyKwh })) }])),
+                    }),
                     "recorder/statistic_during_period": async (msg: any) => {
                         (window as any).__statRequests.push(msg);
                         return { change: msg.calendar ? today : lastHour };
@@ -165,7 +172,7 @@ async function mountCard(
             card.hass = hass;
             document.body.appendChild(card);
         },
-        { tree, today, lastHour: LAST_HOUR_KWH, stats, energyUnit },
+        { tree, today, lastHour: LAST_HOUR_KWH, stats, energyUnit, projections },
     );
 
     await expect.poll(() => rowNames(page)).toContain("Boiler");
@@ -217,3 +224,74 @@ test("device headline opens its power entity and the Schedule starts collapsed",
     await schedule.click();
     await expect(schedule).toHaveAttribute("aria-expanded", "true");
 });
+
+// Forecast -------------------------------------------------------------------
+
+test("device Forecast header sums the planned runs to noon tomorrow, and the body draws and lists them", async ({ page }) => {
+    await installFixedClock(page);
+    await mountCard(page, {}, true, "kWh", TODAY_KWH, {
+        boiler: [
+            // Already over, then two runs, then one past tomorrow noon.
+            ["2026-10-21T11:00:00+00:00", 0.5],
+            ["2026-10-21T12:00:00+00:00", 0.5], ["2026-10-21T12:15:00+00:00", 0.5],
+            ["2026-10-21T13:00:00+00:00", 0.4], ["2026-10-21T13:15:00+00:00", 0.4],
+            ["2026-10-22T13:00:00+00:00", 0.5],
+        ],
+    });
+    await openDevice(page, "Boiler");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-forecast]");
+    await expect(section.locator("[slot=summary]")).toHaveText("≈ 1.8 kWh more by noon tomorrow");
+    await expect(section.locator("[slot=summary] b")).toHaveText("≈ 1.8 kWh");
+    await expect(section.locator("[data-forecast-body]")).toHaveCount(0);
+    await section.locator("button").first().click();
+    const runs = section.locator("[data-run]");
+    await expect(runs).toHaveCount(2);
+    await expect(runs.nth(0)).toContainText("12:00 PM–12:30 PM");
+    await expect(runs.nth(0)).toContainText("≈ 1.0 kWh");
+    await expect(runs.nth(1)).toContainText("01:00 PM–01:30 PM");
+    await expect(runs.nth(1)).toContainText("≈ 0.80 kWh");
+    const chart = section.locator("helman-day-line-chart");
+    await expect(chart.locator("path.line.dashed")).toHaveCount(1);
+    await expect(chart.locator("[data-now]")).toHaveCount(1);
+    expect(await section.locator("helman-help-tip").evaluate((tip: any) => tip.explanation)).toContain("learned 2.0 kW");
+});
+
+test("device without projected energy has no Forecast section", async ({ page }) => {
+    await mountCard(page, {}, true);
+    await openDevice(page, "Boiler");
+    await expect(page.locator("node-detail-device-content [data-overview]")).toBeVisible();
+    await expect.poll(() => page.evaluate(() => (window as any).__deepAll(document, "node-detail-device-content").length)).toBe(1);
+    await page.waitForTimeout(300);
+    await expect(page.locator("node-detail-device-content helman-detail-section[data-forecast]")).toHaveCount(0);
+});
+
+// Closing divider ----------------------------------------------------------------
+
+/** The detail's and each section's bottom border width, by name. */
+async function sectionBottomBorders(page: Page): Promise<Record<string, string>> {
+    return page.evaluate(() => Object.fromEntries((window as any).__deepAll(document, "node-detail-device-content, helman-detail-section")
+        .map((element: Element) => [element.hasAttribute("data-schedule") ? "schedule" : element.hasAttribute("data-forecast") ? "forecast" : "detail",
+            getComputedStyle(element).borderBottomWidth])));
+}
+
+test("a device without sections ends on its Overview, with no divider above the footer", async ({ page }) => {
+    await mountCard(page);
+    await page.evaluate(() => document.body.style.setProperty("--divider-color", "#d4d4d8"));
+    await openDevice(page, "Boiler");
+    await expect(page.locator("node-detail-device-content [data-overview]")).toBeVisible();
+    await page.waitForTimeout(300);
+    expect(await sectionBottomBorders(page)).toEqual({ detail: "0px" });
+});
+
+for (const [label, projections, borders] of [
+    ["the Schedule", {}, { detail: "0px", schedule: "1px" }],
+    ["the Forecast after the Schedule", { boiler: [["2026-10-21T12:00:00+00:00", 0.5]] }, { detail: "0px", schedule: "0px", forecast: "1px" }],
+] as const) {
+    test(`the last section, ${label}, and only it is closed off from the footer`, async ({ page }) => {
+        await installFixedClock(page);
+        await mountCard(page, {}, true, "kWh", TODAY_KWH, projections as Record<string, Array<[string, number]>>);
+        await page.evaluate(() => document.body.style.setProperty("--divider-color", "#d4d4d8"));
+        await openDevice(page, "Boiler");
+        await expect.poll(() => sectionBottomBorders(page)).toEqual(borders);
+    });
+}

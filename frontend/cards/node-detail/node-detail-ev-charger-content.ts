@@ -18,7 +18,7 @@ import { helmanColorVars } from "../color-vars";
 import { currencyFromPriceUnit } from "../helman-solar-inspector/money-model";
 import { getSharedHelmanStore } from "../shared/data/store";
 
-import type { ModeSegment } from "../shared/mode-strip";
+import { modeStripWindow, type ModeSegment } from "../shared/mode-strip";
 import type { FlowItem } from "../shared/node-flow";
 import "../shared/soc-glyph";
 import { scheduleActionToneStyles } from "../shared/schedule/action-tones";
@@ -38,6 +38,9 @@ import "./detail-headline";
 import "./flow-gauge";
 import "./switch-tile";
 import "./who-decides";
+import { boldTemplate } from "./detail-section";
+import { forecastWhen, holdAtSlots, renderForecastChart } from "./node-detail-forecast";
+import type { DayLinePoint } from "../shared/day-line-chart";
 
 type QuestionId = "progress" | "plan" | "waiting" | "today" | "trust";
 
@@ -92,7 +95,11 @@ type VehicleSelection =
 
 /** What the plan's projection says for the selected car, or why it says nothing. */
 type Completion =
-    | { kind: "estimate"; endSoc: number; endMs: number | null; reachMs: number | null; suppliedKwh: number; shortfallKwh: number }
+    | {
+        kind: "estimate"; endSoc: number; endMs: number | null; reachMs: number | null; suppliedKwh: number; shortfallKwh: number;
+        /** The projected SoC at the end of each counted slot. */
+        path: DayLinePoint[];
+    }
     | { kind: "unsupported"; reason: string };
 
 /**
@@ -124,6 +131,7 @@ type Completion =
 @customElement("node-detail-ev-charger-content")
 export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerDetailPayload, QuestionId> {
     static styles = [helmanColorVars, nodeDetailSharedStyles, nodeDetailQuestionStyles, nodeDetailPictureStyles, scheduleActionToneStyles, css`
+        .ok { color: var(--success-color, #43a047); }
         [data-car] .meter { position: relative; height: 10px; margin: 4px 0; border-radius: 5px; overflow: visible; }
         [data-car] .meter-fill { border-radius: 5px; background: var(--success-color, #43a047); }
         [data-limit-marker] { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--primary-text-color); }
@@ -181,6 +189,16 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         staleness: (_payload, requestedAt) => requestedAt < Math.floor(Date.now() / SLOT_MS) * SLOT_MS,
         keepOnError: false,
     });
+    /**
+     * The selected car's recorded SoC since midnight, for the Forecast chart,
+     * while the section is open: HA's own history of the car's SoC entity,
+     * held at each slot boundary. A failed read draws no actual line.
+     */
+    private readonly _socHistory = this._section<DayLinePoint[]>("soc-history", {
+        fetch: () => this._readSocHistory(),
+        shown: () => this._forecastOpen && this._selection().kind === "selected",
+        staleness: (_payload, requestedAt) => requestedAt < Math.floor(Date.now() / SLOT_MS) * SLOT_MS,
+    });
     /** Today's attribution, while Today or its question is chosen. */
     private readonly _today = this._section<EvChargerTodaySectionPayload>("today", {
         fetch: () => this._readSection("today"),
@@ -210,6 +228,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         if (changed.has("deviceId") && changed.get("deviceId") !== undefined && this._started) {
             this._overview = { status: "loading" };
             this._setOpen(null);
+            this._forecastOpen = false;
             // Every opening starts on Now.
             this._flowScope = "now";
             // The sections shown are read again in the update.
@@ -268,10 +287,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
 
     // ── Rendering ───────────────────────────────────────────────────────────
 
-    render() {
-        const notReady = this._renderNotReady();
-        if (notReady || this._overview.status !== "ready") return notReady;
-        const overview = this._overview.payload;
+    protected _renderOverview(overview: EvChargerDetailPayload) {
         const selection = this._selection();
         const power = this._powerW(overview);
         const charging = this._charging(overview);
@@ -294,6 +310,88 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
                 ${this._renderCarTile(overview, selection)}
             </div>
         `;
+    }
+
+    // Forecast ----------------------------------------------------------------
+
+    /**
+     * Whether the plan brings the selected car to its limit: the completion
+     * the plan answer estimates, its SoC path after the recorded SoC today,
+     * and whether a candidate window would be needed. None without an estimate.
+     */
+    protected _renderForecast() {
+        const projection = this._projection.state;
+        if (projection?.status === "error") {
+            return this._forecastSection(this._t("plan.projection_failed"), () => html`
+                <button class="link-button" @click=${() => this._projection.load()}>${this._t("retry")}</button>`);
+        }
+        const selection = this._selection();
+        if (!projection || projection.status !== "ready" || selection.kind !== "selected") return nothing;
+        const completion = this._completion(selection, projection.payload);
+        if (completion.kind !== "estimate") return nothing;
+        const car = selection.car;
+        const limit = this._percent(car.limit!);
+        const reached = completion.reachMs !== null;
+        const forecast = (key: string) => this.localize(`node_detail.shared.forecast.${key}`);
+        const context = this._chartContext;
+        const summary = reached
+            ? html`${boldTemplate(forecast("ev_reaches"), { limit, time: forecastWhen(completion.reachMs!, context) })} <span class="ok">✓</span>`
+            : boldTemplate(forecast("ev_short"), { kwh: `${formatKwh(completion.shortfallKwh)} kWh`, limit, time: completion.endMs === null ? "?" : forecastWhen(completion.endMs, context) });
+        return this._forecastSection(summary, () => this._renderForecastBody(car, completion as Extract<Completion, { kind: "estimate" }>));
+    }
+
+    private _renderForecastBody(car: Vehicle, completion: Extract<Completion, { kind: "estimate" }>) {
+        const context = this._chartContext;
+        const end = modeStripWindow(context.now, context.timeZone).end;
+        const forecast = (key: string) => this.localize(`node_detail.shared.forecast.${key}`);
+        const now = { t: context.now, v: car.soc! };
+        const actual = this._socHistory.payload ?? [];
+        const reached = completion.reachMs !== null;
+        const endSoc = this._percent(reached ? car.limit! : Math.floor(completion.endSoc));
+        const candidate = this._plan.runs.find((window) => window.candidate && window.vehicleId === car.vehicle.id && (window.endMs === null || window.endMs > context.now));
+        return html`
+            ${renderForecastChart(context, {
+                title: forecast("ev_chart"),
+                help: forecast("ev_help"),
+                series: [
+                    { key: "actual", label: forecast("actual"), color: "var(--success-color, #43a047)", points: actual.length ? [...actual, now] : [] },
+                    { key: "planned", label: forecast("planned"), color: "var(--success-color, #43a047)", dashed: true,
+                        // Held between the windows: the car keeps its charge until the next one.
+                        points: [now, ...holdAtSlots(completion.path, Math.ceil(context.now / SLOT_MS) * SLOT_MS, end, car.soc!)] },
+                ],
+                references: [{ value: car.limit!, label: fillTemplate(forecast("ev_limit"), { limit: this._percent(car.limit!) }) }],
+                formatValue: (value) => this._percent(value),
+            })}
+            <div class="rows">
+                <div class="row" data-row="end-of-plan"><span class="label">${forecast("ev_end")}</span>
+                    <span class="value">${reached ? fillTemplate(forecast("ev_end_reached"), { soc: endSoc })
+                        : fillTemplate(forecast("ev_end_short"), { soc: endSoc, kwh: `${formatKwh(completion.shortfallKwh)} kWh` })}</span></div>
+                ${candidate ? html`<div class="row" data-row="candidate"><span class="label">${forecast("ev_candidate")}</span>
+                    <span class="value">${reached ? forecast("ev_candidate_no")
+                        : fillTemplate(forecast("ev_candidate_yes"), { window: forecastWhen(candidate.startMs, context, candidate.endMs ?? undefined) })}</span></div>` : nothing}
+            </div>
+        `;
+    }
+
+    /**
+     * The selected car's SoC since midnight from HA's history, the value in
+     * force at each slot boundary up to now: a car reports when it likes, so
+     * the line is held between its readings rather than broken.
+     */
+    private async _readSocHistory(): Promise<DayLinePoint[]> {
+        const selection = this._selection();
+        if (selection.kind !== "selected") return [];
+        const entityId = selection.car.vehicle.telemetry.socEntityId;
+        const now = Date.now();
+        const { start } = modeStripWindow(now, this._timeZone);
+        const result = await this.hass.callWS<Record<string, Array<{ s: string; lu: number }>>>({
+            type: "history/history_during_period", start_time: new Date(start).toISOString(), end_time: new Date(now).toISOString(),
+            entity_ids: [entityId], minimal_response: true, no_attributes: true, significant_changes_only: false,
+        });
+        const readings = (result?.[entityId] ?? [])
+            .map((state) => ({ t: state.lu * 1000, v: Number(state.s) }))
+            .filter((reading) => Number.isFinite(reading.v) && reading.v >= 0 && reading.v <= 100);
+        return holdAtSlots(readings, start, now);
     }
 
     private _renderCarTile(overview: EvChargerDetailPayload, selection: VehicleSelection) {
@@ -719,6 +817,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         let reachMs: number | null = null;
         let endMs: number | null = null;
         let counted = 0;
+        const path: DayLinePoint[] = [];
         const points = [...series].sort((a, b) => (boundaries.get(a.slotId)?.startMs ?? 0) - (boundaries.get(b.slotId)?.startMs ?? 0));
         for (const point of points) {
             if (point.vehicleId !== car.vehicle.id) continue;
@@ -736,6 +835,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
             suppliedKwh += point.energyKwh;
             counted += 1;
             endMs = slot.endMs;
+            if (slot.endMs !== null) path.push({ t: slot.endMs, v: Math.min(car.limit, car.soc + suppliedKwh / car.capacityKwh * 100) });
             if (reachMs === null && suppliedKwh >= car.neededKwh - 1e-9) reachMs = slot.endMs;
         }
         if (counted === 0) return unsupported("no_projection");
@@ -746,6 +846,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
             reachMs,
             suppliedKwh,
             shortfallKwh: Math.max(0, car.neededKwh - suppliedKwh),
+            path,
         };
     }
 

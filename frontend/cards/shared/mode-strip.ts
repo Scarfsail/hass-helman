@@ -1,7 +1,7 @@
 import { pad2 } from "./time/slot-time";
 import { LitElement, css, html, nothing } from "lit";
 import { customElement, property } from "lit/decorators.js";
-import { renderNowMarker } from "../helman-solar-inspector/now-marker";
+import { renderNowMarker } from "./now-marker";
 import { scheduleActionToneStyles, type ScheduleActionTone } from "./schedule/action-tones";
 import { formatScheduleTime, getScheduleLocalDayStartMs, getScheduleLocalTimeParts } from "./schedule/model/schedule-time";
 

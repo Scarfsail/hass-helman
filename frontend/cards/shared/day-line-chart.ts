@@ -2,6 +2,7 @@ import { pad2 } from "./time/slot-time";
 import { LitElement, css, html, nothing, svg } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import { formatScheduleTime, getScheduleLocalTimeParts } from "./schedule/model/schedule-time";
+import { renderNowMarker } from "./now-marker";
 import {
     HoverTooltipController,
     hoverTooltipStyles,
@@ -22,11 +23,27 @@ export interface DayLineSeries {
     label: string;
     color: string;
     points: DayLinePoint[];
+    /** A planned or forecast series: drawn dashed. */
+    dashed?: boolean;
 }
 
 export interface DayLineReference {
     value: number;
     label: string;
+}
+
+/** A key moment, a coloured dot on the chart. */
+export interface DayLineMarker {
+    t: number;
+    v: number;
+    color: string;
+}
+
+/** A stretch of time, a coloured bar along the bottom of the plot. */
+export interface DayLineSpan {
+    start: number;
+    end: number;
+    color: string;
 }
 
 /** A labeled range of values, shaded behind the lines. */
@@ -99,6 +116,14 @@ export class HelmanDayLineChart extends LitElement {
             stroke-linejoin: round;
             stroke-linecap: round;
         }
+        .line.dashed {
+            stroke-dasharray: 6 4;
+            stroke-linecap: butt;
+        }
+        .now-label {
+            fill: var(--primary-text-color);
+            font-size: 10px;
+        }
         .cursor {
             stroke: var(--primary-text-color);
             stroke-width: 1;
@@ -120,6 +145,13 @@ export class HelmanDayLineChart extends LitElement {
             vertical-align: middle;
             border-radius: 2px;
         }
+        .legend-swatch.dashed {
+            width: 18px;
+            height: 0;
+            border-top: 2px dashed;
+            border-radius: 0;
+            background: none !important;
+        }
         .summary {
             margin: 4px 0 0;
             font-size: 0.8rem;
@@ -129,8 +161,17 @@ export class HelmanDayLineChart extends LitElement {
 
     @property({ attribute: false }) public series: DayLineSeries[] = [];
     @property({ attribute: false }) public references: DayLineReference[] = [];
+    /** The values the axis labels, in place of three spread over the range: none where the references label the chart. */
+    @property({ attribute: false }) public ticks: number[] | null = null;
     /** Always inside the drawn range, so a reading's place against a band shows. */
     @property({ attribute: false }) public bands: DayLineBand[] = [];
+    @property({ attribute: false }) public markers: DayLineMarker[] = [];
+    @property({ attribute: false }) public spans: DayLineSpan[] = [];
+    /** Each point holds its value for a bucket: drawn as steps, as a price or a planned power is. */
+    @property({ type: Boolean }) public step = false;
+    /** The moment now, epoch ms: a vertical line labelled {@link nowLabel}, when inside the window. */
+    @property({ attribute: false }) public now: number | null = null;
+    @property() public nowLabel = "now";
     /** The window drawn, epoch ms: a whole local day, in the reading's time zone. */
     @property({ type: Number }) public start = 0;
     @property({ type: Number }) public end = 0;
@@ -186,7 +227,7 @@ export class HelmanDayLineChart extends LitElement {
             ${this.series.length > 1 ? html`
                 <div class="legend">
                     ${this.series.map((series) => html`
-                        <span><span class="legend-swatch" style="background: ${series.color}"></span>${series.label}</span>
+                        <span><span class="legend-swatch ${series.dashed ? "dashed" : ""}" style="background: ${series.color}; border-color: ${series.color}"></span>${series.label}</span>
                     `)}
                 </div>
             ` : nothing}
@@ -236,8 +277,11 @@ export class HelmanDayLineChart extends LitElement {
     private _renderSvg() {
         const scales = this._scales();
         const { x, y } = scales;
-        const ticks = [scales.low + (scales.high - scales.low) * 0.1, (scales.low + scales.high) / 2, scales.high - (scales.high - scales.low) * 0.1];
-        const hourTicks = this._hourTicks();
+        const ticks = this.ticks ?? [scales.low + (scales.high - scales.low) * 0.1, (scales.low + scales.high) / 2, scales.high - (scales.high - scales.low) * 0.1];
+        const nowX = this.now !== null && this.now >= this.start && this.now <= this.end ? x(this.now) : null;
+        // An hour label under the now label would be overdrawn by it.
+        const hourTicks = this._hourTicks().filter(({ t }) => nowX === null || Math.abs(x(t) - nowX) > 24);
+        const bottom = HEIGHT - PAD.bottom;
         const selectedT = this._selected !== null ? this._times[this._selected] : null;
         return html`
             <svg viewBox="0 0 ${this._width} ${HEIGHT}" aria-hidden="true">
@@ -257,9 +301,20 @@ export class HelmanDayLineChart extends LitElement {
                     <line class="reference" x1=${PAD.left} x2=${this._width - PAD.right} y1=${y(reference.value)} y2=${y(reference.value)}></line>
                     <text class="reference-label" x=${this._width - PAD.right} y=${y(reference.value) - 3} text-anchor="end">${reference.label}</text>
                 `)}
-                ${this.series.map((series) => svg`
-                    <path class="line" stroke=${series.color} d=${this._path(series.points, x, y)}></path>
+                ${this.spans.map((span) => svg`
+                    <rect class="span" data-span x=${x(Math.max(span.start, this.start))} y=${bottom - 6}
+                        width=${Math.max(2, x(Math.min(span.end, this.end)) - x(Math.max(span.start, this.start)))} height="4" rx="1" fill=${span.color}></rect>
                 `)}
+                ${this.series.map((series) => svg`
+                    <path class="line ${series.dashed ? "dashed" : ""}" data-series=${series.key} stroke=${series.color} d=${this._path(series.points, x, y)}></path>
+                `)}
+                ${this.markers.map((marker) => svg`
+                    <circle data-marker cx=${x(marker.t)} cy=${y(marker.v)} r="4" fill=${marker.color}></circle>
+                `)}
+                ${nowX !== null ? svg`
+                    <g data-now>${renderNowMarker(nowX, PAD.top, bottom, formatScheduleTime(this.now!, this.locale, this.timeZone))}</g>
+                    <text class="now-label" x=${nowX} y=${HEIGHT - 6} text-anchor="middle">${this.nowLabel}</text>
+                ` : nothing}
                 ${selectedT !== null ? svg`
                     <line class="cursor" x1=${x(selectedT)} x2=${x(selectedT)} y1=${PAD.top} y2=${HEIGHT - PAD.bottom}></line>
                     ${this.series.map((series) => {
@@ -275,8 +330,11 @@ export class HelmanDayLineChart extends LitElement {
         let path = "";
         let previous: number | null = null;
         for (const point of points) {
-            const command = previous === null || point.t - previous > this.bucketMs * 1.5 ? "M" : "L";
-            path += `${command}${x(point.t).toFixed(1)},${y(point.v).toFixed(1)}`;
+            const gap = previous === null || point.t - previous > this.bucketMs * 1.5;
+            const at = `${x(point.t).toFixed(1)},${y(point.v).toFixed(1)}`;
+            // A step holds its value to the next bucket: up or down at the boundary, then across.
+            path += gap ? `M${at}` : this.step ? `V${y(point.v).toFixed(1)}` : `L${at}`;
+            if (this.step) path += `H${x(point.t + this.bucketMs).toFixed(1)}`;
             previous = point.t;
         }
         return path;
