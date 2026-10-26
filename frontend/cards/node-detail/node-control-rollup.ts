@@ -13,11 +13,13 @@ import { INVERTER_CONTROLLABLE_ID } from "../shared/schedule/schedule-types";
 import { schedulingSharedStyles } from "../shared/schedule/styles/scheduling-shared-styles";
 import { AdminConfigController } from "./admin-config-controller";
 import { LaneOwnershipController } from "./lane-ownership";
+import { laneDoingNow } from "./node-detail-schedule";
+import "./help-tip";
 import { nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import { NODE_DETAIL_REQUEST_EVENT, type NodeDetailRequestDetail, type NodeDetailTarget } from "./node-detail-types";
 import { deviceControllableIds } from "./node-detail-utils";
 
-/** One lane of the house roll-up and the detail whose Schedule tab drives it. */
+/** One lane of the house roll-up and the detail whose Schedule section drives it. */
 export interface ControlLane {
     controllableId: string;
     target: NodeDetailTarget;
@@ -26,7 +28,7 @@ export interface ControlLane {
 /**
  * The house roll-up's lanes: the inverter first when it is configured, then
  * every schedulable controllable of the house tree once, in tree order, each
- * to the first device whose Schedule tab drives it. A meter shared by several
+ * to the first device whose Schedule section drives it. A meter shared by several
  * controllables is one destination for each of its lanes. A device is listed
  * by its configuration, whatever its meter reads now.
  */
@@ -47,7 +49,7 @@ export function houseControlLanes(houseNode: TreeItem | null, inverterConfigured
     return lanes;
 }
 
-/** Ask the power card for a node's Schedule tab. */
+/** Ask the power card for a node's detail with its Schedule section expanded. */
 function requestControl(node: HTMLElement, target: NodeDetailTarget): void {
     fireEvent<NodeDetailRequestDetail>(node, NODE_DETAIL_REQUEST_EVENT, { target, section: "schedule" });
 }
@@ -66,8 +68,7 @@ const rollupStyles = css`
         display: flex;
         align-items: center;
         justify-content: space-between;
-        flex-wrap: wrap;
-        gap: 4px 12px;
+        gap: 12px;
         width: 100%;
         box-sizing: border-box;
         min-height: 44px;
@@ -89,10 +90,33 @@ const rollupStyles = css`
         outline-offset: -2px;
     }
     .lane-name {
+        flex: 1;
         display: flex;
         flex-direction: column;
         min-width: 0;
         overflow-wrap: anywhere;
+    }
+    .explain {
+        color: var(--secondary-text-color);
+    }
+    .switch-row .label {
+        font-size: 14px;
+        color: var(--primary-text-color);
+    }
+    /* A small filled chip, muted; a manual lane tinted in the user's authorship colour. */
+    .lane .chip.status {
+        flex: none;
+        min-height: 0;
+        padding: 3px 10px;
+        font-size: 12px;
+        border: none;
+        box-shadow: none;
+        background: var(--secondary-background-color);
+        color: var(--secondary-text-color);
+    }
+    .lane .chip.status.authorship-user {
+        background: color-mix(in srgb, var(--schedule-authorship-color) 22%, transparent);
+        color: var(--schedule-authorship-color);
     }
     .lane-device {
         font-size: 0.8rem;
@@ -101,9 +125,10 @@ const rollupStyles = css`
 `;
 
 /**
- * The house's Schedule tab: the system switches, and who controls each lane
- * of the house now, one row per lane so that lanes owned differently are
- * never summed into one status. A row opens its device's Schedule tab.
+ * The house's Schedule section: who controls each lane of the house now and
+ * what it is doing, one row per lane so that lanes owned differently are
+ * never summed into one status, then the system switches. A row opens its
+ * device's detail with the Schedule section expanded.
  *
  * Schedule execution is the shared schedule owner's switch, for everyone the
  * schedule endpoint lets write it. The automation master switch is an
@@ -133,11 +158,19 @@ export class HelmanHouseControl extends LitElement {
         const rows = roster === null ? [] : houseControlLanes(this.houseNode, roster.some((entry) => entry.id === INVERTER_CONTROLLABLE_ID));
         return html`
             <div class="content" data-house-control>
+                <div class="rows" data-lanes>
+                    <div class="section-title">${this._t("lanes")}<helman-help-tip .explanation=${this._t("lanes_help")}></helman-help-tip></div>
+                    ${roster === null
+                        ? html`<p class="note" data-roster-pending>${this.localize(`node_detail.control.status.${lanes.rosterFailed ? "unavailable" : "loading"}`)}</p>`
+                        : nothing}
+                    ${rows.map((row) => this._renderLane(row, roster))}
+                    ${rows.length === 0 && roster !== null ? html`<p class="note" data-no-lanes>${this._t("no_lanes")}</p>` : nothing}
+                </div>
                 <div class="rows" data-system>
                     <div class="section-title">${this._t("system")}</div>
                     ${this._config.isAdmin ? this._renderAutomationSwitch() : nothing}
                     <div class="switch-row" data-execution>
-                        <span class="label">${this._t("execution")}</span>
+                        <span class="label">${this._t("execution")} <span class="explain">${this._t("execution_explain")}</span></span>
                         <ha-switch
                             .checked=${live(schedule?.executionEnabled ?? false)}
                             .disabled=${schedule === null || lanes.snapshot.togglingExecution || this._executionPending}
@@ -146,14 +179,6 @@ export class HelmanHouseControl extends LitElement {
                         ></ha-switch>
                     </div>
                     ${this._executionError ? html`<p class="error" role="alert" data-execution-error>${this._executionError}</p>` : nothing}
-                </div>
-                <div class="rows" data-lanes>
-                    <div class="section-title">${this._t("lanes")}</div>
-                    ${roster === null
-                        ? html`<p class="note" data-roster-pending>${this.localize(`node_detail.control.status.${lanes.rosterFailed ? "unavailable" : "loading"}`)}</p>`
-                        : nothing}
-                    ${rows.map((row) => this._renderLane(row, roster))}
-                    ${rows.length === 0 && roster !== null ? html`<p class="note" data-no-lanes>${this._t("no_lanes")}</p>` : nothing}
                 </div>
             </div>
         `;
@@ -166,7 +191,7 @@ export class HelmanHouseControl extends LitElement {
             && booleanValue(getValueAtPath(config, ["automation", "enabled"]), true);
         return html`
             <div class="switch-row" data-automation>
-                <span class="label">${this._t("automation")}</span>
+                <span class="label">${this._t("automation")} <span class="explain">${this._t("automation_explain")}</span></span>
                 <ha-switch
                     .checked=${live(enabled)}
                     .disabled=${config === null || this._config.saving !== null}
@@ -180,19 +205,30 @@ export class HelmanHouseControl extends LitElement {
         `;
     }
 
-    /** A lane by its roster name, under the device it belongs to when that is named otherwise. */
+    /**
+     * A lane by its roster name and what it is doing now, under the device it
+     * belongs to when that is named otherwise, with who owns it.
+     */
     private _renderLane(lane: ControlLane, roster: readonly ScheduleControllable[] | null) {
         const name = roster?.find((entry) => entry.id === lane.controllableId)?.name ?? lane.controllableId;
         const device = typeof lane.target === "string" ? null : lane.target.displayName || lane.target.name;
+        const doing = this._doing(lane.controllableId);
         return html`
             <button type="button" class="lane" data-lane=${lane.controllableId} @click=${() => requestControl(this, lane.target)}>
                 <span class="lane-name">
-                    <span data-lane-name>${name}</span>
+                    <span><span data-lane-name>${name}</span>${doing ? html` <span class="explain" data-lane-doing>· ${doing}</span>` : nothing}</span>
                     ${device !== null && device !== name ? html`<span class="lane-device" data-lane-device>${device}</span>` : nothing}
                 </span>
                 ${this._lanes.renderStatus(this._lanes.status(lane.controllableId), this.localize)}
             </button>
         `;
+    }
+
+    /** What the lane is doing now by the plan, and until when; `null` before the plan is read. */
+    private _doing(controllableId: string): string | null {
+        const schedule = this._lanes.snapshot.schedule;
+        if (!schedule) return null;
+        return laneDoingNow(schedule, controllableId, Date.now(), this.localize, this._lanes.locale, this._lanes.timeZone).text;
     }
 
     private _setAutomation(enabled: boolean): void {

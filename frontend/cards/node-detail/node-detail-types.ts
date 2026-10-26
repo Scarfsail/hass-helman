@@ -1,3 +1,4 @@
+import type { ModeSegment } from "../shared/mode-strip";
 import type { TreeItem } from "../shared/data/tree-item";
 import type { LiveFlows } from "./live-flows";
 
@@ -23,6 +24,25 @@ export interface NodeDetailSectionRequest {
  * so it reaches the card from inside the open detail's own shadow roots.
  */
 export const NODE_DETAIL_REQUEST_EVENT = "helman-node-detail-request";
+
+/**
+ * A detail reports what its node's lane did today, for the Schedule
+ * section's strip: a `LaneHistory`. Bubbles to the dialog around the
+ * detail, not composed.
+ */
+export const LANE_HISTORY_EVENT = "helman-lane-history";
+
+/**
+ * What a lane did today: its stretches, the one still going open-ended, and
+ * a note when they can't be read, with the read to try again and its label.
+ */
+export interface LaneHistory {
+    segments: ModeSegment[];
+    note: string | null;
+    retry: { label: string; load: () => void } | null;
+}
+
+export const NO_LANE_HISTORY: LaneHistory = { segments: [], note: null, retry: null };
 
 export interface NodeDetailRequestDetail {
     target: NodeDetailTarget;

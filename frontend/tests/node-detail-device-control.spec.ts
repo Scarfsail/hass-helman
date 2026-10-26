@@ -207,7 +207,7 @@ test.describe("a schedulable device", () => {
         await mount(page, plan([["12:00", "13:00", { boiler: auto({ on: true, conditionMet: false }) }]]));
         await openDevice(page, "Boiler");
         const overview = page.locator("node-detail-device-content helman-who-decides");
-        await expect(overview.locator(".row").nth(1).locator("span").last()).toContainText("off, until");
+        await expect(overview.locator(".row").nth(1).locator("span").last()).toContainText("off until");
         await overview.locator("button").first().click();
         await expect(overrideDialog(page)).toBeVisible();
         await expect.poll(() => page.evaluate(() => window.history.state?.__helmanWhoDecidesOverrideId)).toBeTruthy();
@@ -237,8 +237,20 @@ test.describe("a schedulable device", () => {
         ]));
         await openDevice(page, "Boiler");
         const overview = page.locator("node-detail-device-content helman-who-decides");
-        await expect(overview.locator(".row").nth(1).locator("span").last()).toHaveText("on, until 14:00 · You");
+        await expect(overview.locator(".row").nth(1).locator("span").last()).toHaveText("on until 14:00 · You");
         await expect(page.locator("node-detail-dialog helman-detail-section[data-schedule] [slot=summary]")).toContainText("Next: off at 17:00");
+    });
+
+    test("a climate lane's changes name its modes in words", async ({ page }) => {
+        await mount(page, plan([["13:00", "14:00", { klima: auto({ mode: "heat" }) }]]));
+        await openControl(page, "Klima");
+        expect(await controls(page).locator("[data-change-row]").allInnerTexts()).toEqual(["13:00 Heat\nHelman's schedule", "14:00 Off\ndefault"]);
+    });
+
+    test("Planned now says nothing is planned in the house roll-up's words", async ({ page }) => {
+        await mount(page, plan());
+        await openDevice(page, "Boiler");
+        await expect(page.locator("node-detail-device-content helman-who-decides .row").nth(1).locator("span").last()).toHaveText("Nothing planned");
     });
 
     test("the switch help names the next planned change", async ({ page }) => {

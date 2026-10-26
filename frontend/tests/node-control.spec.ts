@@ -133,6 +133,9 @@ async function mount(page: Page, setup: Setup = {}, card = "helman-simple-card")
                     id: "inverter", name: "Inverter", kind: "inverter", primaryEntityId: "select.helman_inverter_mode",
                     supportsAuthoring: true, normalState: "normal", actionOptions: Object.fromEntries(kinds.map((kind) => [kind, kind])),
                 }] }; },
+                // What the day editor reads as it opens.
+                "helman/get_entity_actual_history": { entities: {} },
+                "helman/get_appliance_projections": { appliances: [] },
                 "helman/get_automation_coverage": () => {
                     if (window.__coverageFails) throw new Error("coverage down");
                     return {
@@ -282,18 +285,69 @@ test.describe("who owns the lane", () => {
         await expect(status(page)).toHaveText("Automatic");
     });
 
-    test("the hardware's live state and the scheduled action are shown apart", async ({ page }) => {
-        await mount(page, { schedule: plan([["12:00", "13:00", { inverter: user("stop_export") }]]) });
-        await openControl(page);
-        await expect(control(page).locator("[data-now]")).toContainText("Normal");
-        await expect(control(page).locator("[data-scheduled]")).toContainText("Stop export");
-    });
-
-    test("the battery is controlled on the inverter's lane, and says so", async ({ page }) => {
+    test("the battery shows the inverter's lane, its strip titled and explained as the inverter's", async ({ page }) => {
         await mount(page, { schedule: plan([["12:00", "13:00", { inverter: user("stop_export") }]]) });
         await openControl(page, "battery");
-        await expect(control(page).locator("[data-lane-note]")).toContainText("inverter");
+        await expect(control(page).locator("[data-strip-title]")).toHaveText(/^Inverter modes · today → tomorrow noon/);
+        expect(await control(page).locator("[data-strip-title] helman-help-tip").evaluate((tip: any) => tip.explanation))
+            .toContain("editing them changes the inverter");
+        // One strip, not the inverter's own two rows.
+        await expect(control(page).locator("helman-mode-strip [data-row]")).toHaveCount(0);
         await expect(status(page)).toHaveText("Manual until Today 13:00");
+    });
+});
+
+test.describe("the plan", () => {
+    test("lists today's and tomorrow's changes with who set them, a candidate by its range", async ({ page }) => {
+        await mount(page, { schedule: plan([
+            ["12:00", "13:00", { inverter: user("stop_export") }],
+            ["15:00", "16:00", { inverter: auto("charge_to_target_soc", { targetSoc: 80 }) }],
+            ["2026-10-22T01:00:00Z", "2026-10-22T02:00:00Z", { inverter: auto("discharge_to_target_soc", { targetSoc: 30, conditionMet: false }) }],
+        ]) });
+        await openControl(page, "battery");
+        expect(await control(page).locator("[data-change-row]").allInnerTexts()).toEqual([
+            "13:00 Normal\ndefault",
+            "15:00 Charge to 80 %\nHelman's schedule",
+            "16:00 Normal\ndefault",
+            "01:00–02:00 Discharge to 30 %\ncandidate",
+            "02:00 Normal\ndefault",
+        ]);
+        const planned = control(page).locator("helman-mode-strip [data-segment][data-planned=true]");
+        expect(await planned.evaluateAll((segments) => segments.map((s) => s.getAttribute("data-tone"))))
+            .toEqual(["stop", "normal", "charge", "normal", "neutral", "normal"]);
+        await expect(planned.nth(4)).toHaveAttribute("data-candidate", "true");
+    });
+
+    test("a change of author while the lane rests is no change; a change of author while it acts is", async ({ page }) => {
+        await mount(page, { schedule: plan([
+            ["13:00", "14:00", { inverter: auto("stop_export") }],
+            ["14:00", "15:00", { inverter: user("stop_export") }],
+            ["15:00", "16:00", { inverter: user("normal") }],
+        ]) });
+        await openControl(page, "battery");
+        expect(await control(page).locator("[data-change-row]").allInnerTexts()).toEqual([
+            "13:00 Stop export\nHelman's schedule",
+            "14:00 Stop export\nYou",
+            "15:00 Normal\nYou",
+        ]);
+    });
+
+    test("names each mode once in the legend, by the inverter's short mode names; modes that share a tone share an entry", async ({ page }) => {
+        await mount(page, { schedule: plan([
+            ["13:00", "14:00", { inverter: auto("stop_export") }],
+            ["14:00", "15:00", { inverter: auto("stop_discharging") }],
+            ["15:00", "16:00", { inverter: auto("charge_to_target_soc", { targetSoc: 80 }) }],
+            ["16:00", "17:00", { inverter: auto("charge_to_target_soc", { targetSoc: 90 }) }],
+        ]) });
+        await openControl(page, "battery");
+        expect(await control(page).locator("helman-mode-strip [data-legend-entry]").allInnerTexts())
+            .toEqual(["Normal", "No export / No discharging", "Charging"]);
+    });
+
+    test("says when nothing changes today or tomorrow", async ({ page }) => {
+        await mount(page);
+        await openControl(page);
+        await expect(control(page).locator("[data-no-changes]")).toHaveText("No changes planned today or tomorrow");
     });
 });
 
@@ -474,6 +528,8 @@ test.describe("the automation rows", () => {
         await mount(page, { admin: true, holdSave: true });
         await openControl(page);
         await expect(control(page).locator("[data-optimizer]")).toHaveCount(2);
+        // Each automation by its localised name alone, never its raw id.
+        await expect(control(page).locator('[data-optimizer="export_price"] [data-edit]')).toHaveText("Export price");
         await expect(toggle(page, "export_price")).toHaveJSProperty("checked", true);
         await expect(toggle(page, "export_price")).toHaveJSProperty("disabled", false);
         await flip(page, "export_price", false);
@@ -539,6 +595,32 @@ test.describe("the automation rows", () => {
         await expect.poll(() => requests(page, "helman/set_schedule").then((list) => list.length)).toBe(1);
         expect(await requests(page, "helman/get_config")).toHaveLength(0);
     });
+});
+
+/** The day editor the card hosts: whether it is open and the lane it selected. */
+const dayEditor = (page: Page, card: string) => page.evaluate(async (card) => {
+    const host = document.querySelector(card)!.shadowRoot!.querySelector("scheduling-day-editor-host") as any;
+    await host.updateComplete;
+    const editor = host.shadowRoot.querySelector("scheduling-entity-day-editor") as any;
+    return { open: editor?.open === true, selected: editor?._selectedLaneKey ?? null };
+}, card);
+
+test.describe("Edit blocks", () => {
+    for (const card of ["helman-simple-card", "helman-card"]) {
+        test(`opens ${card}'s day editor over the detail on the lane, and closing it returns to the detail`, async ({ page }) => {
+            await mount(page, {}, card);
+            await openControl(page);
+            await control(page).locator("[data-edit-blocks]").click();
+            await expect.poll(() => dayEditor(page, card)).toEqual({ open: true, selected: "inverter" });
+            await page.evaluate((card) => {
+                const host = document.querySelector(card)!.shadowRoot!.querySelector("scheduling-day-editor-host") as any;
+                host.shadowRoot.querySelector("scheduling-entity-day-editor").shadowRoot.querySelector("ha-dialog").close();
+            }, card);
+            await expect.poll(() => dayEditor(page, card).then((editor) => editor.open)).toBe(false);
+            await expect(control(page)).toBeVisible();
+            await expect(scheduleButton(page)).toHaveAttribute("aria-expanded", "true");
+        });
+    }
 });
 
 test.describe("on both cards and a phone", () => {

@@ -18,11 +18,10 @@ import { helmanColorVars } from "../color-vars";
 import { currencyFromPriceUnit } from "../helman-solar-inspector/money-model";
 import { getSharedHelmanStore } from "../shared/data/store";
 
-import "../shared/mode-strip";
-import { modeStripWindow, type ModeChange, type ModeSegment } from "../shared/mode-strip";
+import type { ModeSegment } from "../shared/mode-strip";
 import type { FlowItem } from "../shared/node-flow";
 import "../shared/soc-glyph";
-import { scheduleActionToneStyles, type ScheduleActionTone } from "../shared/schedule/action-tones";
+import { scheduleActionToneStyles } from "../shared/schedule/action-tones";
 import { getScheduleApplianceActionPresentation } from "../shared/schedule/model/schedule-appliance-action-presentation";
 import { resolveScheduleSlotBoundaries, type ScheduleSlotBoundary } from "../shared/schedule/model/schedule-time";
 import { IDLE_W, NodeDetailContentBase, type NodeFlow } from "./node-detail-base";
@@ -30,7 +29,7 @@ import { staleToday } from "./section-resource";
 import { readEnergyKWh, readingNumber } from "./node-detail-readings";
 import { dispatchWatchedEntities } from "../shared/hass-change";
 import { powerUnitFactor } from "../shared/power-reading";
-import { mergeRuns, runtimeFor, withinTodayTomorrow } from "./node-detail-schedule";
+import { laneActionLabel, mergeRuns, runtimeFor, withinTodayTomorrow } from "./node-detail-schedule";
 import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { DeviceDetailParams } from "./node-detail-types";
 import { deviceDirectControls } from "./node-detail-utils";
@@ -109,7 +108,7 @@ type Completion =
  * Live readings come from `hass` and the house's live split from the card;
  * the backend overview supplies the entity ids and the charger's reported
  * status, its `segment` section today's recorded charging and the start of
- * the charging segment, read on opening for the strip. The cars come from the
+ * the charging segment, read on opening for the Schedule section's strip. The cars come from the
  * appliance roster (the charger's own appliance metadata), the plan from the
  * shared schedule owner, the plan's projected energy from
  * `helman/get_appliance_projections` on opening for the completion line, and
@@ -222,6 +221,14 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
 
     protected updated(changed: Map<string, unknown>): void {
         super.updated(changed);
+        if (this._overview.status === "ready") {
+            const failed = this._segment.state?.status === "error";
+            this._reportLaneHistory({
+                segments: this._historySegments(this._overview.payload),
+                note: failed ? this._t("strip.history_failed") : null,
+                retry: failed ? { label: this._t("retry"), load: () => this._segment.load() } : null,
+            });
+        }
         // The cars' entities are watched from the read that resolved them, once it answered.
         const appliance = this._appliance.state;
         if (appliance?.status === "ready" && appliance !== this._announcedAppliance) {
@@ -324,120 +331,24 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         }
     }
 
-    /** The effective window in progress: execution on and its condition met. */
-    private _effectiveWindowNow(): ChargeWindow | null {
-        if (!this._plan.schedule?.executionEnabled) return null;
-        const now = Date.now();
-        return this._plan.runs.find((window) => !window.candidate && window.startMs <= now) ?? null;
-    }
+    // Lane history -----------------------------------------------------------
 
     /**
-     * When the plan next switches charging: off where the effective windows
-     * in progress end, or on where the next one starts. Adjacent windows are
-     * one stretch of charging; a candidate is not executed and changes nothing.
+     * Today's recorded charging for the Schedule strip, the stretch still
+     * going running on while the charger charges.
      */
-    private _planChange(): { at: number; charge: boolean } | null {
-        if (!this._plan.schedule?.executionEnabled) return null;
-        const effective = this._plan.runs.filter((window) => !window.candidate);
-        const current = this._effectiveWindowNow();
-        if (!current) return effective[0] ? { at: effective[0].startMs, charge: true } : null;
-        let end = current.endMs;
-        for (const window of effective) if (end !== null && window.startMs === end) end = window.endMs;
-        return end === null ? null : { at: end, charge: false };
-    }
-
-    // Strip -------------------------------------------------------------------
-
-    /**
-     * Charging so far today, as recorded, and the planned windows to noon
-     * tomorrow, with the plan's next change flagged; the projected completion
-     * is the line under it. The strip opens the plan.
-     */
-    protected _renderStrip(selection: VehicleSelection) {
-        const now = Date.now();
-        const { start, end } = modeStripWindow(now, this._timeZone);
-        const change = this._planChange();
-        const next: ModeChange | null = change ? {
-            at: change.at,
-            tone: this._evTone(change.charge),
-            label: this._time(change.at) + " · " + this._t(change.charge ? "strip.starts" : "strip.stops"),
-        } : null;
-        return html`
-            <button class="picture strip" data-strip title=${this._t("q.plan")} aria-expanded=${this._open === "plan" ? "true" : "false"}
-                @click=${() => this._setOpen(this._open === "plan" ? null : "plan")}>
-                <span class="picture-scope">${this._t("strip.scope")}</span>
-                <helman-mode-strip
-                    .start=${start}
-                    .end=${end}
-                    .now=${now}
-                    .segments=${this._stripSegments(now)}
-                    .next=${next}
-                    .timeZone=${this._timeZone}
-                    .locale=${this._locale}
-                ></helman-mode-strip>
-            </button>
-            ${this._segment.state?.status === "error" ? html`<p class="note" data-strip-failed>${this._t("strip.history_failed")}</p>` : nothing}
-            <p class="note" data-completion-line>${this._completionLine(selection)}</p>
-        `;
-    }
-
-    /**
-     * Today's recorded charging, the stretch still going drawn to now, and
-     * each planned window from now: an effective one in the charge tone, one
-     * that is not executed neutral.
-     */
-    private _stripSegments(now: number): ModeSegment[] {
-        const segments: ModeSegment[] = [];
-        const section = this._segment.payload;
-        const overview = this._overview.status === "ready" ? this._overview.payload : null;
-        for (const stretch of section?.charging ?? []) {
-            const open = stretch.open && overview !== null && this._charging(overview);
-            segments.push({
-                start: Date.parse(stretch.start),
-                end: open ? now : Date.parse(stretch.end),
-                tone: this._evTone(true),
-                label: this._t("strip.charged"),
-            });
-        }
-        const executing = this._plan.schedule?.executionEnabled === true;
-        for (const window of this._plan.runs) {
-            const effective = executing && !window.candidate;
-            segments.push({
-                start: Math.max(window.startMs, now),
-                end: window.endMs ?? Infinity,
-                tone: effective ? this._evTone(true) : "neutral",
-                label: this._t(window.candidate ? "plan.candidate" : effective ? "plan.effective" : "plan.not_executed"),
-            });
-        }
-        return segments;
-    }
-
-    /** The scheduler's tone for an EV action that charges or stops charging. */
-    private _evTone(charge: boolean): ScheduleActionTone {
-        return getScheduleApplianceActionPresentation({
+    private _historySegments(overview: EvChargerDetailPayload): ModeSegment[] {
+        const tone = getScheduleApplianceActionPresentation({
             appliance: { kind: "ev_charger", icon: "" },
-            action: { charge },
+            action: { charge: true },
             localize: this.localize,
         }).tone;
-    }
-
-    /** The existing completion, as one line: the limit's time, or the charge at the plan's end and the shortfall. */
-    private _completionLine(selection: VehicleSelection): string {
-        const projection = this._projection.state;
-        if (projection === null || projection.status === "loading") return this._t("plan.projection_loading");
-        if (projection.status === "error") return this._t("plan.projection_failed");
-        const completion = this._completion(selection, projection.payload);
-        if (completion.kind === "unsupported") return this._t(`plan.unsupported.${completion.reason}`);
-        const car = (selection as { kind: "selected"; car: Vehicle }).car;
-        return completion.reachMs !== null
-            ? fillTemplate(this._t("strip.completion_reach"), { limit: this._percent(car.limit!), time: this._time(completion.reachMs) })
-            : fillTemplate(this._t("strip.completion_short"), {
-                // Short of the limit is never rounded up onto it.
-                soc: this._percent(Math.floor(completion.endSoc)),
-                limit: this._percent(car.limit!),
-                time: completion.endMs === null ? "?" : this._time(completion.endMs),
-                kwh: (formatKwh(Math.abs(completion.shortfallKwh)) + " kWh"),
-            });
+        return (this._segment.payload?.charging ?? []).map((stretch) => ({
+            start: Date.parse(stretch.start),
+            end: stretch.open && this._charging(overview) ? Infinity : Date.parse(stretch.end),
+            tone,
+            label: laneActionLabel({ charge: true }, this.localize),
+        }));
     }
 
     // Flow --------------------------------------------------------------------

@@ -28,6 +28,7 @@ import { entityName, openMoreInfo, readingNumber, readingText } from "./node-det
 import { dispatchWatchedEntities } from "../shared/hass-change";
 
 import { IDLE_W } from "./live-flows";
+import { LANE_HISTORY_EVENT, type LaneHistory } from "./node-detail-types";
 
 export { IDLE_W };
 
@@ -138,6 +139,8 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
     /** When the clock next moves something shown; the now-clock re-renders then. */
     private _nextBoundary = Infinity;
     private _stopClock?: () => void;
+    /** The lane history last reported, as its key: reported again only once it changes. */
+    private _laneHistoryKey = "";
     /** The plan, for a detail that reads it. */
     private _scheduleController: ScheduleController<PlanSpan> | null = null;
     /** Every section the detail reads, in the order they are read; the base reads, refreshes and drops them. */
@@ -301,6 +304,14 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
         const controller = new ScheduleController(this, read);
         this._scheduleController = controller;
         return controller;
+    }
+
+    /** Report what the node's lane did today to the Schedule section, once it changed. */
+    protected _reportLaneHistory(history: LaneHistory): void {
+        const key = JSON.stringify(history);
+        if (key === this._laneHistoryKey) return;
+        this._laneHistoryKey = key;
+        this.dispatchEvent(new CustomEvent<LaneHistory>(LANE_HISTORY_EVENT, { detail: history, bubbles: true }));
     }
 
     /** Declare a section the detail reads; the base reads, refreshes and drops it. */

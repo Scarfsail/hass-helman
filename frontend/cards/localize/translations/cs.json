@@ -37,7 +37,18 @@
       "schedule": {
         "next": "Dále: {action} v {time}",
         "house_next": "Dále: {device} začne v {time}",
-        "none": "Nic není naplánováno"
+        "none": "Nic není naplánováno",
+        "strip": "Dnes → zítra poledne",
+        "strip_inverter": "Režimy · dnes → zítra poledne",
+        "strip_battery": "Režimy střídače · dnes → zítra poledne",
+        "battery_help": "Baterie nemá vlastní plán: tyto bloky patří střídači a jejich úprava mění střídač.",
+        "happened": "proběhlo",
+        "planned": "plánováno",
+        "candidate": "kandidát",
+        "no_changes": "Dnes ani zítra nejsou naplánované žádné změny",
+        "edit_blocks": "Upravit bloky",
+        "buttons_help": "„Upravit bloky“ otevře denní editor plánu s vybraným tímto zařízením. „Přepsat“ nastaví pevný stav až do zvoleného času.",
+        "default": "výchozí"
       },
       "who": "Kdo rozhoduje",
       "planned_now": "Teď v plánu",
@@ -124,16 +135,10 @@
         "not_automated": "Bez automatizace"
       },
       "execution_off_note": "Vykonávání rozvrhu je vypnuté: Helman nemění nic na hardwaru, ať rozvrh obsahuje cokoli.",
-      "battery_lane": "Baterie se řídí rozvrhem střídače: tyto ovládací prvky mění střídač.",
-      "hardware_now": "Hardware teď",
-      "scheduled_now": "Naplánováno teď",
-      "nothing_scheduled": "Nic naplánováno",
-      "unavailable": "nedostupné",
       "not_on_roster": "Helman pro tento uzel nemá ovladatelné zařízení.",
       "unsupported_authoring": "Akce tohoto spotřebiče zatím nelze v rozvrhu autorovat, proto zde nelze nastavit nový ruční zásah.",
       "on": "zapnuto",
       "off": "vypnuto",
-      "change": "Změnit",
       "return_to_automatic": "Vrátit automatice",
       "returned": "Vráceno automatice.",
       "return_failed": "Vrácení automatice se nezdařilo:",
@@ -147,7 +152,10 @@
         "execution": "Vykonávání rozvrhu",
         "execution_failed": "Vykonávání rozvrhu se nepodařilo změnit:",
         "lanes": "Kdo co ovládá",
-        "no_lanes": "Helman v tomto domě nic neovládá."
+        "no_lanes": "Helman v tomto domě nic neovládá.",
+        "lanes_help": "Každé zařízení, které Helman umí řídit, co právě dělá a kdo rozhoduje. Klepnutím otevřete jeho vlastní detail.",
+        "automation_explain": "(optimalizátory plánují rozvrh)",
+        "execution_explain": "(plán se uplatňuje)"
       },
       "override": {
         "title": "Ruční zásah",
@@ -1184,7 +1192,6 @@
         "executor_failed": "plánovaný příkaz selhal"
       },
       "strip": {
-        "scope": "Režimy · dnes do zítřejšího poledne",
         "history_failed": "Dnešní režimy se nepodařilo načíst.",
         "no_history": "Vlastní střídač nemá registry režimu ke čtení: kreslí se jen plán.",
         "no_registers": "Ne všechny registry režimu profilu jsou nalezeny, takže dnešní režimy nelze přečíst: kreslí se jen plán."
@@ -1400,13 +1407,7 @@
         "evidence_note": "Údaje, jak je nabíječka hlásí, každý se svým časem aktualizace."
       },
       "strip": {
-        "scope": "Nabíjení · dnes do zítřejšího poledne",
-        "charged": "Nabíjení",
-        "starts": "začne nabíjet",
-        "stops": "přestane nabíjet",
-        "history_failed": "Dnešní nabíjení se nepodařilo načíst.",
-        "completion_reach": "Podle současného plánu ≈ {limit} do {time}: odhad, ne záruka.",
-        "completion_short": "Podle současného plánu ≈ {soc} z {limit} do {time}, chybí {kwh}: odhad, ne záruka."
+        "history_failed": "Dnešní nabíjení se nepodařilo načíst."
       },
       "glyph": {
         "limit": "limit {soc}"

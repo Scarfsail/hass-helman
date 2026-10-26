@@ -253,7 +253,6 @@ export const nodeDetailPictureStyles = css`
     .picture {
         width: 100%;
     }
-    .picture.strip,
     .picture.chain {
         display: flex;
         flex-direction: column;
