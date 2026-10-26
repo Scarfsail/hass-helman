@@ -51,6 +51,8 @@ type Variant = {
     ratedPower?: string;
     /** Today's flows section: a fixed day, or the reports' reason for none. */
     flowsUnavailable?: string;
+    /** The viewer is an admin. */
+    admin?: boolean;
 };
 
 declare global {
@@ -161,6 +163,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
         const inverter = window.__inverterOverview({ entities: v.ratedPower ? { rated_power: "sensor.solax_inverter_power_type" } : {} });
         window.__GridHass = window.__configureNodeDetail({
             states, tree, overviews: { grid: overview, inverter }, sections: { grid: { flows: flowsSection, voltage: v.sectionFails ? "error" : section, money } }, forecast,
+            hass: v.admin ? { user: { is_admin: true } } : {},
         });
         window.__GridRequests = window.__NodeDetailRequests;
     }, { v: variant, tree: cardTree(variant.gridSign), forecastDefaults: forecastPayload() });
@@ -179,7 +182,6 @@ test("grid Overview shows the P1 detail layout", async ({ page }) => {
     await expect(c.locator("helman-detail-headline")).toBeVisible();
     await expect(c.locator("[data-phase-picture]")).toBeVisible();
     await expect(c.locator("helman-flow-gauge")).toHaveCount(1);
-    await expect(c.locator("helman-node-flow, helman-node-tile, helman-node-question")).toHaveCount(0);
 });
 
 test("grid Overview shows the off-grid warning", async ({ page }) => {
@@ -346,4 +348,48 @@ test("grid shows no Forecast without import prices", async ({ page }) => {
     await page.locator(".node-cell:has(simple-card-grid)").click();
     await expect(content(page).locator("[data-overview]")).toBeVisible();
     await expect(content(page).locator("helman-detail-section[data-forecast]")).toHaveCount(0);
+});
+
+// History & statistics, Technical details -------------------------------------
+
+async function openGrid(page: Page): Promise<void> {
+    await page.locator(".node-cell:has(simple-card-grid)").click();
+    await expect(content(page).locator("[data-overview]")).toBeVisible();
+}
+
+test("grid History header gives today's bought energy, collapsed; the body has the money and today's voltage", async ({ page }) => {
+    await mount(page);
+    await openGrid(page);
+    const section = content(page).locator("helman-detail-section[data-history]");
+    await expect(section.locator("[slot=summary]")).toHaveText("8.4 kWh bought today");
+    await expect(section.locator("[slot=summary] b")).toHaveText("8.4 kWh");
+    await expect(section.locator("[data-history-body]")).toHaveCount(0);
+    await section.locator("button").first().click();
+    await expect(section.locator("[data-row=bought] .value")).toHaveText(/^8\.4 kWh · .*42/);
+    await expect(section.locator("[data-row=sold] .value")).toHaveText(/^13 kWh · .*18/);
+    await expect(section.locator("[data-row=net] .value")).toHaveText(/^−.*23/);
+    expect(await section.locator("[data-row=net] helman-help-tip").evaluate((tip: any) => tip.explanation)).toBe("An estimate from the prices Helman knows, not your bill.");
+    const chart = section.locator("helman-day-line-chart[data-voltage-chart]");
+    await expect(chart.locator("path.line")).toHaveCount(3);
+    await expect(chart.locator("line.reference")).toHaveCount(1);
+    await expect(section.locator("[data-row=voltage-range] .value")).toHaveText("230–246 V");
+});
+
+test("grid Technical details shows the export limits, the grid state and the phase currents to an admin", async ({ page }) => {
+    await mount(page, { admin: true });
+    await openGrid(page);
+    const section = content(page).locator("helman-detail-section[data-technical]");
+    await section.locator("button").first().click();
+    await expect(section.locator("[data-row=export-limit]")).toHaveCount(1);
+    await expect(section.locator("[data-row=export-cap]")).toHaveCount(1);
+    await expect(section.locator("[data-row=grid-state] .value")).toContainText("Normal Mode");
+    await expect(section.locator("[data-row^=current-l]")).toHaveCount(3);
+    await expect(section.locator("[data-row=current-l2] .value")).toContainText("25.0 A");
+});
+
+test("grid Technical details is not rendered for a non-admin", async ({ page }) => {
+    await mount(page);
+    await openGrid(page);
+    await expect(content(page).locator("helman-detail-section[data-history]")).toHaveCount(1);
+    await expect(content(page).locator("helman-detail-section[data-technical]")).toHaveCount(0);
 });

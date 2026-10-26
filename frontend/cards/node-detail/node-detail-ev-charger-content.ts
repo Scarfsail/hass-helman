@@ -19,17 +19,14 @@ import { currencyFromPriceUnit } from "../helman-solar-inspector/money-model";
 import { getSharedHelmanStore } from "../shared/data/store";
 
 import { modeStripWindow, type ModeSegment } from "../shared/mode-strip";
-import type { FlowItem } from "../shared/node-flow";
-import "../shared/soc-glyph";
-import { scheduleActionToneStyles } from "../shared/schedule/action-tones";
 import { getScheduleApplianceActionPresentation } from "../shared/schedule/model/schedule-appliance-action-presentation";
 import { resolveScheduleSlotBoundaries, type ScheduleSlotBoundary } from "../shared/schedule/model/schedule-time";
-import { IDLE_W, NodeDetailContentBase, type NodeFlow } from "./node-detail-base";
+import { IDLE_W, NodeDetailContentBase } from "./node-detail-base";
 import { staleToday } from "./section-resource";
 import { readEnergyKWh, readingNumber } from "./node-detail-readings";
 import { dispatchWatchedEntities } from "../shared/hass-change";
 import { powerUnitFactor } from "../shared/power-reading";
-import { laneActionLabel, mergeRuns, runtimeFor, withinTodayTomorrow } from "./node-detail-schedule";
+import { runtimeText, laneActionLabel, mergeRuns, runtimeFor, withinTodayTomorrow } from "./node-detail-schedule";
 import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { DeviceDetailParams } from "./node-detail-types";
 import { deviceDirectControls } from "./node-detail-utils";
@@ -40,20 +37,10 @@ import "./switch-tile";
 import "./who-decides";
 import { boldTemplate } from "./detail-section";
 import { forecastWhen, holdAtSlots, renderForecastChart, stillAhead } from "./node-detail-forecast";
+import {
+    HistoryGraphResource, historyRow, historySummary, kwhText, renderShareBar, sectionNotReady, subTitle,
+} from "./node-detail-history";
 import type { DayLinePoint } from "../shared/day-line-chart";
-
-type QuestionId = "progress" | "plan" | "waiting" | "today" | "trust";
-
-/** The schedule's canonical slot: the plan's slot in progress moves on at each. */
-
-/**
- * A session duration counter beyond a week is not read as a duration: it is
- * shown as read in the evidence, never turned into a time or an average.
- */
-const MAX_SESSION_MINUTES = 7 * 24 * 60;
-
-/** Duration units the session counter converts from, to minutes. */
-const MINUTES: Record<string, number> = { s: 1 / 60, min: 1, h: 60, d: 1440 };
 
 /** Two readings further apart than this were not taken together. */
 const COMPARABLE_MS = 30_000;
@@ -103,9 +90,7 @@ type Completion =
     | { kind: "unsupported"; reason: string };
 
 /**
- * The EV charger detail: how the charge is progressing, when charging is
- * planned and whether it reaches the target, why it is not charging, what
- * powered it today and whether its readings can be trusted.
+ * The EV charger detail.
  *
  * The Overview opens on the power headline (the charger's switch as its icon,
  * the charging state and the session's energy as caption), then the estimated
@@ -114,35 +99,24 @@ type Completion =
  *
  * Live readings come from `hass` and the house's live split from the card;
  * the backend overview supplies the entity ids and the charger's reported
- * status, its `segment` section today's recorded charging and the start of
- * the charging segment, read on opening for the Schedule section's strip. The cars come from the
+ * status, its `segment` section today's recorded charging, read on opening
+ * for the Schedule section's strip, and its `today` section what charged it
+ * today, read on opening for the History header. The cars come from the
  * appliance roster (the charger's own appliance metadata), the plan from the
- * shared schedule owner, the plan's projected energy from
- * `helman/get_appliance_projections` on opening for the completion line, and
- * today's attribution from the node detail's `today` section once Today or
- * its question is chosen.
+ * shared schedule owner and the plan's projected energy from
+ * `helman/get_appliance_projections` on opening, for the Forecast header.
  *
- * The hardware's session counters are the session; a transition into charging
- * only starts a segment. Today's attribution is a separate, whole-day figure.
- * With several cars and none named by the plan, no car's charge is shown. A
- * time at current power is not a ready-by time, and a projected completion is
- * an estimate under the current plan, never a guarantee.
+ * Today's attribution is a whole-day figure, not the session. With several
+ * cars and none named by the plan, no car's charge is shown. A projected
+ * completion is an estimate under the current plan, never a guarantee.
  */
 @customElement("node-detail-ev-charger-content")
-export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerDetailPayload, QuestionId> {
-    static styles = [helmanColorVars, nodeDetailSharedStyles, nodeDetailQuestionStyles, nodeDetailPictureStyles, scheduleActionToneStyles, css`
+export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerDetailPayload> {
+    static styles = [helmanColorVars, nodeDetailSharedStyles, nodeDetailQuestionStyles, nodeDetailPictureStyles, css`
         .ok { color: var(--success-color, #43a047); }
         [data-car] .meter { position: relative; height: 10px; margin: 4px 0; border-radius: 5px; overflow: visible; }
         [data-car] .meter-fill { border-radius: 5px; background: var(--success-color, #43a047); }
         [data-limit-marker] { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--primary-text-color); }
-        .muted {
-            color: var(--secondary-text-color);
-        }
-        ul {
-            margin: 0;
-            padding-left: 18px;
-            font-size: 0.9rem;
-        }
     `];
 
     protected readonly _node = "ev_charger" as const;
@@ -199,11 +173,13 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         shown: () => this._forecastOpen && this._selection().kind === "selected",
         staleness: (_payload, requestedAt) => requestedAt < Math.floor(Date.now() / SLOT_MS) * SLOT_MS,
     });
-    /** Today's attribution, while Today or its question is chosen. */
+    /** What charged it today, for the History header: read on opening. */
     private readonly _today = this._section<EvChargerTodaySectionPayload>("today", {
         fetch: () => this._readSection("today"),
-        shown: () => this._open === "today" || this._flowScope === "today",
+        shown: () => this._overview.status === "ready",
     });
+    /** HA's history graph of the charger's power over the last 24 hours, once History & statistics is open. */
+    private readonly _chart = new HistoryGraphResource(this, () => [this._powerEntity()].filter((id): id is string => id !== null), () => this._historyOpen);
     /** The appliance answer the cars' entities were last announced for. */
     private _announcedAppliance: unknown = null;
     /** The run mode today's charging was read under; a new one re-reads it. */
@@ -227,15 +203,17 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         // Another charger in the same element: nothing shown is its.
         if (changed.has("deviceId") && changed.get("deviceId") !== undefined && this._started) {
             this._overview = { status: "loading" };
-            this._setOpen(null);
-            this._forecastOpen = false;
-            // Every opening starts on Now.
-            this._flowScope = "now";
+            this._forecastOpen = this._historyOpen = this._technicalOpen = false;
             // The sections shown are read again in the update.
-            for (const section of this._sections) section.drop();
+            for (const section of [...this._sections, this._chart]) section.drop();
             void this._loadOverview(true);
         }
         super.willUpdate(changed);
+        if (this._started) this._chart.follow(this.hass);
+    }
+
+    protected _stop(): void {
+        this._chart.cancel();
     }
 
     protected updated(changed: Map<string, unknown>): void {
@@ -278,11 +256,6 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
     /** The slot in progress names the car and dates the projection; the windows, which the base follows, start and end. */
     protected *_clockBoundaries(): Iterable<number> {
         yield Math.ceil((Date.now() + 1) / SLOT_MS) * SLOT_MS;
-    }
-
-    /** Today is the charger's `today` section: its sources, without the phases. */
-    protected _todayResource() {
-        return this._today;
     }
 
     // ── Rendering ───────────────────────────────────────────────────────────
@@ -411,22 +384,90 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         </div>`;
     }
 
-    /** The open question's answer and evidence, full width under the tiles. */
-    protected _renderOpen(overview: EvChargerDetailPayload, selection: VehicleSelection) {
-        switch (this._open) {
-            case "progress":
-                return this._question("progress", this._progressPreview(overview, selection), () => this._renderProgress(overview, selection), () => this._renderProgressEvidence(overview, selection), "evidence");
-            case "plan":
-                return this._question("plan", this._planPreview(), () => this._renderPlan(selection), () => this._renderPlanEvidence(overview, selection), "evidence");
-            case "waiting":
-                return this._question("waiting", this._waitingPreview(overview, selection), () => this._renderWaiting(overview, selection), () => this._renderWaitingEvidence(overview), "evidence");
-            case "today":
-                return this._question("today", this._todayPreview(), () => this._renderToday(), () => this._renderTodayEvidence(), "evidence");
-            case "trust":
-                return this._question("trust", this._trustPreview(overview), () => this._renderTrust(overview), () => this._renderTrustEvidence(overview), "technical");
-            default:
-                return nothing;
-        }
+    // History & statistics -----------------------------------------------------
+
+    /** What charged it today by source, with what the grid share cost, and its power over the last 24 hours. */
+    protected _renderHistory(_overview: EvChargerDetailPayload) {
+        const charger = this._today.payload?.charger ?? null;
+        const summary = historySummary(this._today, this.localize, charger
+            ? boldTemplate(this._h("ev_summary"), { kwh: kwhText(charger.kwh), pct: charger.kwh > 0 ? Math.round(charger.sources.solar / charger.kwh * 100) : 0 })
+            : null);
+        return this._historySection(summary, () => html`
+            ${subTitle(this._h("charged_today"))}
+            ${this._renderToday()}
+            ${this._chart.render(this.localize)}
+        `);
+    }
+
+    private _renderToday() {
+        const notReady = sectionNotReady(this._today, this.localize);
+        if (notReady) return notReady;
+        const payload = this._today.payload!;
+        const charger = payload.charger;
+        if (!charger) return html`<p class="note" data-today-unavailable>${this._h("ev_today_unavailable")}</p>`;
+        const paid = charger.money.paid;
+        return html`
+            ${renderShareBar(this.localize, [
+                { node: "solar", kwh: charger.sources.solar }, { node: "battery", kwh: charger.sources.battery }, { node: "grid", kwh: charger.sources.grid },
+                { node: "unknown", kwh: charger.sources.unattributed },
+            ], this._h("source_unknown_cap"))}
+            <div class="rows" data-sources>
+                ${historyRow(this._h("from_solar_cap"), kwhText(charger.sources.solar), "from-solar")}
+                ${historyRow(this._h("from_battery_cap"), kwhText(charger.sources.battery), "from-battery")}
+                ${historyRow(this._h("from_grid_cap"), paid !== null && charger.sources.grid > 0
+                    ? fillTemplate(this._h("kwh_paid"), { kwh: kwhText(charger.sources.grid), money: `≈ ${this._formatMoney(paid, currencyFromPriceUnit(payload.priceUnit))}` })
+                    : kwhText(charger.sources.grid), "from-grid")}
+                ${charger.sources.unattributed > 0 ? historyRow(this._h("source_unknown_cap"), kwhText(charger.sources.unattributed), "from-unknown") : nothing}
+            </div>
+        `;
+    }
+
+    /** The charger's power sensor: its overview's, else the device's own. */
+    private _powerEntity(): string | null {
+        const overview = this._overview.status === "ready" ? this._overview.payload : null;
+        return overview?.entities.power ?? this.params?.item.powerSensorId ?? null;
+    }
+
+    // Technical details ---------------------------------------------------------
+
+    /**
+     * Execution and the executor's outcome, the current window's settings and
+     * the charger's charge mode, when the projection was generated, the link
+     * and fault state, and the total power against the sum of the phases.
+     */
+    protected _renderTechnical(overview: EvChargerDetailPayload) {
+        const now = Date.now();
+        const runtime = runtimeFor<ApplianceRuntimeDTO>(this._plan.schedule, this.deviceId, now);
+        const window = this._plan.runs.find((run) => run.startMs <= now && (run.endMs === null || now < run.endMs)) ?? null;
+        const projection = this._projection.payload;
+        const fault = this._fault(overview);
+        const comparison = this._comparison(overview);
+        const t = (key: string) => this.localize(`node_detail.shared.technical.${key}`);
+        const mode = window?.useMode ? this.localize(`scheduling.appliance.ev.mode.${window.useMode === "ECO" ? "eco" : "fast"}`) : null;
+        const settings = window ? [mode, window.ecoGear].filter(Boolean).join(" · ") || "—" : t("no_window");
+        return html`
+            <div class="rows">
+                ${this._plan.schedule ? this._row(this._t("plan.execution"), this._t(this._plan.schedule.executionEnabled ? "plan.execution_on_value" : "plan.execution_off_value"), "execution") : nothing}
+                ${this._row(t("executor"), runtime ? runtimeText(runtime, this.localize) : t("no_runtime"), "runtime")}
+                ${this._row(t("window_settings"), settings, "window")}
+                ${this._optionalRow(overview, "charge_mode", "plan.charge_mode")}
+                ${this._row(this._t("plan.generated"), projection ? this._time(Date.parse(projection.generatedAt)) : "—", "generated")}
+            </div>
+            ${subTitle(t("link"))}
+            <div class="rows">
+                ${this._row(this._t("trust.fault"), fault ?? (this._faultKnown(overview) ? this._t("trust.no_fault") : this._t("unavailable")), "fault")}
+                ${this._optionalRow(overview, "network_status", "trust.network")}
+                ${this._optionalRow(overview, "link_success_rate", "trust.link")}
+            </div>
+            ${subTitle(this._t("trust.comparison"))}
+            <div class="rows">
+                ${comparison.kind === "compared" ? html`
+                    ${this._row(this._t("trust.total"), formatPower(comparison.totalW).display + " · " + this._time(comparison.totalAt), "total")}
+                    ${this._row(this._t("trust.phase_sum"), formatPower(comparison.phaseSumW).display + " · " + this._time(comparison.phasesAt), "phase-sum")}
+                    ${this._row(this._t("trust.difference"), formatPower(Math.abs(comparison.differenceW)).display, "difference")}
+                ` : html`<p class="note" data-incomparable>${this._t(`trust.incomparable.${comparison.kind}`)}</p>`}
+            </div>
+        `;
     }
 
     // Lane history -----------------------------------------------------------
@@ -447,328 +488,6 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
             tone,
             label: laneActionLabel({ charge: true }, this.localize),
         }));
-    }
-
-    // Flow --------------------------------------------------------------------
-
-    /**
-     * The car's flow around its charge: the sources in, the house's live mix
-     * applied to the charger's power, an estimate said as one; the charger's
-     * phases out in the phase colours, on Now only. Today is the `today`
-     * section's sources alone: per-phase energy is not recorded. The car
-     * opens the progress, the flow today's sources.
-     */
-    protected _renderCarFlow(overview: EvChargerDetailPayload, selection: VehicleSelection) {
-        const flow = this._flowScope === "now" ? this._nowFlow(overview) : this._todayFlow();
-        const car = selection.kind === "selected" ? selection.car : null;
-        // A device opened without the card's live split (the solar inspector's) has no scale: minimum widths.
-        return this._renderFlow(flow, this.params?.flowScaleW ?? null, "today", html`
-            <button
-                slot="centre"
-                class="glyph"
-                data-glyph
-                aria-label=${this._t("q.progress")}
-                aria-expanded=${this._open === "progress" ? "true" : "false"}
-                @click=${() => this._setOpen(this._open === "progress" ? null : "progress")}
-            >
-                <helman-soc-glyph
-                    hide-min
-                    .soc=${car?.soc ?? null}
-                    .max=${car?.limit ?? null}
-                    .maxLabel=${car?.limit != null ? fillTemplate(this._t("glyph.limit"), { soc: this._percent(car.limit) }) : null}
-                    .roomLabel=${car?.neededKwh != null && car.neededKwh > 0 ? (formatKwh(Math.abs(car.neededKwh)) + " kWh") : null}
-                    .direction=${this._charging(overview) ? "charge" : "idle"}
-                ></helman-soc-glyph>
-            </button>
-        `);
-    }
-
-    /** The house's live mix applied to the charger's power, W, and its phases; unknown without either, never 0. */
-    private _nowFlow(overview: EvChargerDetailPayload): NodeFlow {
-        const power = this._powerW(overview);
-        const format = this._fmt("now");
-        const mix = estimatedConsumerMix(this.params?.flows, power);
-        const inputs = (["solar", "battery", "grid"] as const).map((node) => {
-            const share = mix.find((item) => item.node === node);
-            return this._flowItem(node, share?.powerW ?? null, format);
-        });
-        const outputs: FlowItem[] = [1, 2, 3]
-            .filter((phase) => overview.entities[`charge_power_l${phase}`])
-            .map((phase) => {
-                const watts = this._power(overview.entities[`charge_power_l${phase}`]);
-                return { id: `phase-${phase}`, label: `L${phase}`, value: watts, display: format(watts), color: `var(--helman-phase-l${phase})` };
-            });
-        const flow = this._flowShell("now", inputs, outputs, {
-            centre: () => format(power),
-            active: this._isActive(power),
-            notes: power !== null && power > IDLE_W ? [this._t("flow.mix_estimate")] : [],
-        });
-        // Without phase readings nothing is drawn out, which is not 0 W out.
-        return outputs.length ? flow : { ...flow, totalOut: null };
-    }
-
-    /** Today's sources from the `today` section, kWh; energy of no known source is a footnote, never a source. */
-    private _todayFlow(): NodeFlow {
-        const payload = this._today.payload;
-        const charger = payload?.charger ?? null;
-        const energy = this._fmt("today");
-        const paid = charger?.money.paid ?? null;
-        const inputs = (["solar", "battery", "grid"] as const).map((node) => this._flowItem(node, charger ? charger.sources[node] : null, energy));
-        if (paid !== null && (charger?.sources.grid ?? 0) > 0) {
-            inputs[2] = { ...inputs[2], note: fillTemplate(this.localize("node_detail.flow.paid_estimate"), { value: this._formatMoney(paid, currencyFromPriceUnit(payload!.priceUnit)) }) };
-        }
-        const notes: string[] = [];
-        const status = this._todayStatus();
-        if (status) notes.push(status);
-        if (charger && charger.sources.unattributed > 0) {
-            notes.push(fillTemplate(this._t("flow.unattributed"), { kwh: energy(charger.sources.unattributed) }));
-        }
-        const flow = this._flowShell("today", inputs, [], {
-            // Charged: every source and the unattributed rest.
-            centre: (sumIn) => energy(sumIn),
-            notes,
-            unresolvedIn: charger?.sources.unattributed ?? 0,
-        });
-        // Per-phase energy is not recorded: nothing goes out.
-        return { ...flow, totalOut: null };
-    }
-
-    /** Why Today has no sources to draw: loading, failed or unavailable; `null` once it has them. */
-    private _todayStatus(): string | null {
-        const today = this._today.state;
-        if (today === null || today.status === "loading") return this._t("today.loading");
-        if (today.status === "error") return this._t("today.failed");
-        if (!today.payload.charger) {
-            return this._t(["no_charger_node", "no_house_node", "no_house_meter"].includes(today.payload.unavailable ?? "")
-                ? `today.unavailable_${today.payload.unavailable}` : "today.unavailable_not_loaded");
-        }
-        return null;
-    }
-
-    // Tiles -------------------------------------------------------------------
-
-    /** The hardware's session energy and duration. */
-    protected _renderSessionTile(overview: EvChargerDetailPayload) {
-        if (this._pluggedIn(overview) === false) return this._tile("progress", this._t("progress.no_car"), null);
-        const session = this._sessionKWh(overview);
-        const minutes = this._sessionMinutes(overview);
-        return this._tile("progress", session === null ? "–" : (formatKwh(Math.abs(session)) + " kWh"),
-            minutes === null ? this._t("tile.session") : fillTemplate(this._t("tile.session_for"), { duration: this._duration(minutes) }));
-    }
-
-    /** Charging and since when, or what the readings support as why not. */
-    protected _renderWaitingTile(overview: EvChargerDetailPayload, selection: VehicleSelection) {
-        const waiting = this._waiting(overview, selection);
-        if (waiting.kind === "charging") {
-            const since = this._segment.payload?.chargingSince ?? null;
-            return this._tile("waiting", this._t("tile.charging"), since ? fillTemplate(this._t("tile.charging_since"), { time: this._time(Date.parse(since)) }) : null, nothing, "charge");
-        }
-        if (waiting.kind === "fault") return this._tile("waiting", this._t("tile.fault"), waiting.text, nothing, "stop");
-        if (waiting.kind === "no_car") return this._tile("waiting", this._t("progress.no_car"), null);
-        return this._tile("waiting", this._t("tile.not_charging"), waiting.reasons.length === 1 ? waiting.reasons[0] : this._t("waiting.unknown_short"));
-    }
-
-    /** The total power against the sum of its phases, when they compare. */
-    protected _renderReadingsTile(overview: EvChargerDetailPayload) {
-        const fault = this._fault(overview);
-        if (fault) return this._tile("trust", this._t("tile.fault"), fault, nothing, "stop");
-        const comparison = this._comparison(overview);
-        if (comparison.kind === "compared") {
-            return this._tile("trust", formatPower(comparison.totalW).display, fillTemplate(this._t("tile.phase_sum"), { power: formatPower(comparison.phaseSumW).display }));
-        }
-        const power = this._powerW(overview);
-        return this._tile("trust", power === null ? "–" : formatPower(power).display, this._t("tile.not_compared"));
-    }
-
-    // Progress ------------------------------------------------------------------
-
-    private _progressPreview(overview: EvChargerDetailPayload, selection: VehicleSelection): string {
-        if (this._pluggedIn(overview) === false) return this._t("progress.no_car");
-        const parts: string[] = [];
-        const session = this._sessionKWh(overview);
-        if (session !== null) parts.push(fillTemplate(this._t("progress.session_short"), { kwh: (formatKwh(Math.abs(session)) + " kWh") }));
-        if (selection.kind === "selected" && selection.car.neededKwh !== null) {
-            parts.push(selection.car.neededKwh <= 0
-                ? this._t("progress.reached_short")
-                : fillTemplate(this._t("progress.needed_short"), { kwh: (formatKwh(Math.abs(selection.car.neededKwh)) + " kWh") }));
-        }
-        return parts.length ? parts.join(" · ") : this._t("progress.no_figures");
-    }
-
-    private _renderProgress(overview: EvChargerDetailPayload, selection: VehicleSelection) {
-        const unavailable = this._t("unavailable");
-        const session = this._sessionKWh(overview);
-        const minutes = this._sessionMinutes(overview);
-        const pluggedIn = this._pluggedIn(overview);
-        const eta = this._eta(overview, selection);
-        return html`
-            ${pluggedIn === false ? html`<p class="note" data-no-session>${this._t("progress.no_session")}</p>` : nothing}
-            <div class="section-title">${this._t(pluggedIn === false ? "progress.last_session" : "progress.session")}</div>
-            ${this._row(this._t("progress.session_energy"), session === null ? unavailable : (formatKwh(Math.abs(session)) + " kWh"), "session-energy", this._t("progress.hardware_scope"))}
-            ${this._row(this._t("progress.session_duration"), minutes === null ? unavailable : this._duration(minutes), "session-duration", this._t("progress.hardware_scope"))}
-            ${this._renderSegment()}
-            ${!overview.profile ? html`<p class="note">${this._t("progress.no_profile")}</p>` : nothing}
-            <div class="section-title">${this._t("progress.car")}</div>
-            ${this._renderCar(selection)}
-            ${pluggedIn !== false ? this._row(this._t("progress.eta"), eta ?? this._etaMissing(overview, selection), "eta") : nothing}
-            <p class="note">${this._t("progress.explain")}</p>
-        `;
-    }
-
-    /** The recorded start of the charging segment; nothing while not charging or unknown. */
-    private _renderSegment() {
-        const segment = this._segment.state;
-        if (segment?.status === "error") {
-            return html`
-                <p class="note">${this._t("progress.segment_failed")}</p>
-                <button class="link-button" @click=${() => this._segment.load()}>${this._t("retry")}</button>
-            `;
-        }
-        const since = segment?.status === "ready" ? segment.payload.chargingSince : null;
-        return since
-            ? this._row(this._t("progress.segment"), fillTemplate(this._t("progress.segment_value"), { time: this._time(Date.parse(since)) }), "segment")
-            : nothing;
-    }
-
-    /** The selected car's charge and what it still needs; never another car's. */
-    private _renderCar(selection: VehicleSelection) {
-        if (selection.kind === "none") return html`<p class="note" data-no-vehicle>${this._t("car.none")}</p>`;
-        if (selection.kind === "ambiguous") {
-            return html`<p class="note" data-ambiguous>${fillTemplate(this._t("car.ambiguous"), { count: String(selection.count) })}</p>`;
-        }
-        const car = selection.car;
-        const unavailable = this._t("unavailable");
-        return html`
-            ${this._row(this._t("car.name"), car.vehicle.name, "car-name", this._t(`car.selected_${car.selectedBy}`))}
-            ${this._row(this._t("car.soc"), car.soc === null ? unavailable : this._percent(car.soc), "car-soc", undefined, car.vehicle.telemetry.socEntityId)}
-            ${this._row(this._t("car.limit"), car.limit === null ? this._t("car.no_limit") : this._percent(car.limit), "car-limit", undefined, car.vehicle.telemetry.chargeLimitEntityId)}
-            ${this._row(this._t("car.needed"), car.neededKwh === null
-                ? this._t("car.needed_unknown")
-                : car.neededKwh <= 0 ? this._t("car.reached") : (formatKwh(Math.abs(car.neededKwh)) + " kWh"), "car-needed")}
-        `;
-    }
-
-    private _renderProgressEvidence(overview: EvChargerDetailPayload, selection: VehicleSelection) {
-        const session = this._sessionKWh(overview);
-        const minutes = this._sessionMinutes(overview);
-        const phases = this._phases(overview);
-        const active = phases.filter((watts) => watts !== null && watts > IDLE_W).length;
-        const known = phases.every((watts) => watts !== null);
-        return html`
-            ${session !== null && minutes !== null && minutes > 0 ? this._row(this._t("progress.average"),
-                formatPower(session / (minutes / 60) * 1000).display, "average", this._t("progress.average_scope")) : nothing}
-            ${minutes === null && this._reading(overview, "session_duration") !== null ? html`
-                ${this._row(this._t("progress.duration_raw"), this._reading(overview, "session_duration")!, "duration-raw", undefined, overview.entities.session_duration)}
-                <p class="note" data-duration-implausible>${this._t("progress.duration_unusable")}</p>
-            ` : nothing}
-            ${phases.map((watts, index) => watts === null ? nothing
-                : this._row(fillTemplate(this._t("progress.phase"), { phase: String(index + 1) }), formatPower(watts).display, `phase-${index + 1}`))}
-            ${known ? this._row(this._t("progress.active_phases"), String(active), "active-phases") : nothing}
-            ${this._optionalRow(overview, "active_phase", "progress.active_phase")}
-            ${known && active === 1 ? html`<p class="note" data-single-phase>${this._t("progress.single_phase")}</p>` : nothing}
-            ${selection.kind === "selected" ? html`
-                ${selection.car.capacityKwh !== null ? this._row(this._t("car.capacity"), (formatKwh(Math.abs(selection.car.capacityKwh)) + " kWh"), "car-capacity", this._t("car.capacity_scope")) : nothing}
-                ${this._row(this._t("car.soc_source"), this._name(selection.car.vehicle.telemetry.socEntityId), "car-soc-source")}
-                ${selection.car.vehicle.telemetry.chargeLimitEntityId
-                    ? this._row(this._t("car.limit_source"), this._name(selection.car.vehicle.telemetry.chargeLimitEntityId), "car-limit-source") : nothing}
-            ` : nothing}
-            <p class="note">${this._t("progress.calculation")}</p>
-        `;
-    }
-
-    /**
-     * The time to the car's limit at the charger's power now: constant power,
-     * no pauses, taper or losses. `null` while not charging or without a need.
-     */
-    private _eta(overview: EvChargerDetailPayload, selection: VehicleSelection): string | null {
-        const power = this._powerW(overview);
-        if (!this._charging(overview) || power === null || power <= IDLE_W) return null;
-        if (selection.kind !== "selected" || selection.car.neededKwh === null || selection.car.neededKwh <= 0) return null;
-        const minutes = selection.car.neededKwh / (power / 1000) * 60;
-        if (!Number.isFinite(minutes)) return null;
-        // Coarse on purpose: the assumption behind it is coarse.
-        const step = minutes < 60 ? 5 : 15;
-        const rounded = Math.max(step, Math.round(minutes / step) * step);
-        return fillTemplate(this._t("eta"), { duration: this._duration(rounded), limit: this._percent(selection.car.limit!) });
-    }
-
-    /** Why there is no time at current power. */
-    private _etaMissing(overview: EvChargerDetailPayload, selection: VehicleSelection): string {
-        const power = this._powerW(overview);
-        if (!this._charging(overview) || power === null || power <= IDLE_W) return this._t("progress.eta_not_charging");
-        if (selection.kind === "selected" && selection.car.neededKwh !== null && selection.car.neededKwh <= 0) return this._t("car.reached");
-        return this._t("progress.eta_no_target");
-    }
-
-    // Plan --------------------------------------------------------------------
-
-    private _planPreview(): string {
-        if (this._plan.failed) return this._t("plan.failed");
-        const window = this._nextEffectiveWindow();
-        if (window) return fillTemplate(this._t("next_window"), { window: this._windowTime(window) });
-        if (this._plan.schedule && !this._plan.schedule.executionEnabled && this._plan.runs.length) return this._t("plan.execution_off_short");
-        return this._plan.runs.length ? this._t("plan.candidates_only_short") : this._t("plan.none");
-    }
-
-    private _renderPlan(selection: VehicleSelection) {
-        if (this._plan.failed) {
-            return html`
-                <p class="note">${this._t("plan.failed")}</p>
-                <button class="link-button" @click=${() => this._plan.refresh()}>${this._t("retry")}</button>
-            `;
-        }
-        if (!this._plan.schedule) return html`<p class="note">${this._t("plan.loading")}</p>`;
-        const windows = this._plan.runs;
-        return html`
-            ${!this._plan.schedule.executionEnabled ? html`<p class="note" data-execution-off>${this._t("plan.execution_off")}</p>` : nothing}
-            ${windows.length ? windows.map((window) => this._renderWindow(window)) : html`<p class="note" data-no-windows>${this._t("plan.none")}</p>`}
-            <div class="section-title">${this._t("plan.completion")}</div>
-            ${this._renderCompletion(selection)}
-        `;
-    }
-
-    private _renderWindow(window: ChargeWindow) {
-        const appliance = this._appliance.payload;
-        const vehicle = appliance?.vehicles.find((item) => item.id === window.vehicleId);
-        const details = [
-            [window.useMode, window.ecoGear].filter(Boolean).join(" "),
-            vehicle?.name ?? null,
-        ].filter(Boolean).join(" · ");
-        const effective = !window.candidate && this._plan.schedule?.executionEnabled === true;
-        return html`
-            <div class="row" data-window data-effective=${effective ? "true" : "false"}>
-                <span class="label">${this._windowTime(window)}${details ? html`<br><span class="note">${details}</span>` : nothing}</span>
-                <span class="value ${effective ? "" : "muted"}">${this._t(window.candidate ? "plan.candidate" : effective ? "plan.effective" : "plan.not_executed")}</span>
-            </div>
-        `;
-    }
-
-    private _renderCompletion(selection: VehicleSelection) {
-        const projection = this._projection.state;
-        if (projection === null || projection.status === "loading") return html`<p class="note" data-projection-loading>${this._t("plan.projection_loading")}</p>`;
-        if (projection.status === "error") {
-            return html`
-                <p class="note">${this._t("plan.projection_failed")}</p>
-                <button class="link-button" @click=${() => this._projection.load()}>${this._t("retry")}</button>
-            `;
-        }
-        const completion = this._completion(selection, projection.payload);
-        if (completion.kind === "unsupported") {
-            return html`<p class="note" data-completion=${completion.reason}>${this._t(`plan.unsupported.${completion.reason}`)}</p>`;
-        }
-        const car = (selection as { kind: "selected"; car: Vehicle }).car;
-        return html`
-            ${this._row(this._t("plan.end_soc"), fillTemplate(this._t("plan.end_soc_value"), {
-                // Short of the limit is never rounded up onto it.
-                soc: this._percent(completion.reachMs === null ? Math.floor(completion.endSoc) : completion.endSoc),
-                limit: this._percent(car.limit!),
-                time: completion.endMs === null ? "?" : this._time(completion.endMs),
-            }), "end-soc", this._t("plan.estimate_scope"))}
-            ${this._row(this._t("plan.reach"), completion.reachMs !== null
-                ? fillTemplate(this._t("plan.reach_value"), { time: this._time(completion.reachMs) })
-                : fillTemplate(this._t("plan.shortfall"), { kwh: (formatKwh(Math.abs(completion.shortfallKwh)) + " kWh") }), "reach", this._t("plan.estimate_scope"))}
-            <p class="note">${this._t("plan.explain")}</p>
-        `;
     }
 
     /**
@@ -851,28 +570,6 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         };
     }
 
-    private _renderPlanEvidence(overview: EvChargerDetailPayload, selection: VehicleSelection) {
-        const runtime = runtimeFor<ApplianceRuntimeDTO>(this._plan.schedule, this.deviceId, Date.now());
-        const projection = this._projection.payload;
-        const supplied = projection ? this._completion(selection, projection) : null;
-        return html`
-            ${this._plan.schedule ? this._row(this._t("plan.execution"), this._t(this._plan.schedule.executionEnabled ? "plan.execution_on_value" : "plan.execution_off_value"), "execution") : nothing}
-            ${this._optionalRow(overview, "use_mode", "plan.use_mode")}
-            ${this._optionalRow(overview, "eco_gear", "plan.eco_gear")}
-            ${this._optionalRow(overview, "charge_mode", "plan.charge_mode")}
-            ${this._row(this._t("plan.runtime"), runtime ? this._runtimeText(runtime) : this._t("plan.no_runtime"), "runtime")}
-            ${supplied?.kind === "estimate" ? this._row(this._t("plan.supplied"), (formatKwh(Math.abs(supplied.suppliedKwh)) + " kWh"), "supplied") : nothing}
-            ${projection ? this._row(this._t("plan.generated"), this._time(Date.parse(projection.generatedAt)), "generated") : nothing}
-            <p class="note">${this._t("plan.evidence_note")}</p>
-        `;
-    }
-
-    private _runtimeText(runtime: ApplianceRuntimeDTO): string {
-        const parts = [this.localize(`node_detail.inverter.runtime.action.${runtime.actionKind}`), this.localize(`node_detail.inverter.runtime.outcome.${runtime.outcome}`)];
-        if (runtime.outcome === "failed" && runtime.message) parts.push(runtime.message);
-        return parts.join(" · ");
-    }
-
     // Waiting -----------------------------------------------------------------
 
     /**
@@ -923,159 +620,6 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         if (waiting.kind === "no_car") return this._t("waiting.no_car_short");
         if (waiting.reasons.length === 1) return waiting.reasons[0];
         return this._t("waiting.unknown_short");
-    }
-
-    private _renderWaiting(overview: EvChargerDetailPayload, selection: VehicleSelection) {
-        const waiting = this._waiting(overview, selection);
-        if (waiting.kind === "fault") return html`<p data-waiting="fault">${fillTemplate(this._t("waiting.fault"), { fault: waiting.text })}</p>`;
-        if (waiting.kind === "charging") return html`<p data-waiting="charging">${this._t("waiting.charging_long")}</p>`;
-        if (waiting.kind === "no_car") return html`<p data-waiting="no_car">${fillTemplate(this._t("waiting.no_car"), { state: overview.status!.runMode })}</p>`;
-        const { reasons, eco } = waiting;
-        return html`
-            ${reasons.length === 1
-                ? html`<p data-waiting="reason">${reasons[0]}</p>`
-                : html`
-                    <p data-waiting="unknown">${this._t(reasons.length ? "waiting.several" : "waiting.unknown")}</p>
-                    ${reasons.length ? html`<ul>${reasons.map((reason) => html`<li>${reason}</li>`)}</ul>` : nothing}
-                `}
-            ${eco ? html`<p class="note" data-eco>${fillTemplate(this._t("waiting.eco"), {
-                start: this._reading(overview, "green_start_power") ?? this._t("unknown"),
-                grid: this._reading(overview, "grid_power") ?? this._t("unknown"),
-            })}</p>` : nothing}
-            ${overview.status === null ? html`<p class="note">${this._t(overview.profile ? "waiting.no_status" : "waiting.no_profile")}</p>` : nothing}
-        `;
-    }
-
-    private _renderWaitingEvidence(overview: EvChargerDetailPayload) {
-        const current = this._plan.runs.find((window) => window.startMs <= Date.now());
-        return html`
-            ${this._optionalRow(overview, "run_mode", "waiting.run_mode")}
-            ${this._optionalRow(overview, "charge_switch", "waiting.charge_switch")}
-            ${this._optionalRow(overview, "use_mode", "plan.use_mode")}
-            ${this._optionalRow(overview, "eco_gear", "plan.eco_gear")}
-            ${this._optionalRow(overview, "green_start_power", "waiting.green_start_power")}
-            ${this._optionalRow(overview, "grid_power", "waiting.grid_power")}
-            ${this._plan.schedule ? this._row(this._t("plan.execution"), this._t(this._plan.schedule.executionEnabled ? "plan.execution_on_value" : "plan.execution_off_value"), "execution") : nothing}
-            ${this._row(this._t("waiting.scheduled_now"), current
-                ? this._windowTime(current) + (current.candidate ? " – " + this._t("plan.candidate") : "")
-                : this._t("waiting.nothing_scheduled"), "scheduled-now")}
-            <p class="note">${this._t("waiting.evidence_note")}</p>
-        `;
-    }
-
-    // Today -------------------------------------------------------------------
-
-    private _todayPreview(): string | null {
-        const payload = this._today.payload;
-        const charger = payload?.charger;
-        if (!charger) return null;
-        const parts = [fillTemplate(this._t("today.kwh_short"), { kwh: (formatKwh(Math.abs(charger.kwh)) + " kWh") })];
-        if (charger.money.paid !== null) {
-            parts.push(fillTemplate(this._t("today.paid_short"), { value: this._formatMoney(charger.money.paid, currencyFromPriceUnit(payload!.priceUnit)) }));
-        }
-        return parts.join(" · ");
-    }
-
-    private _renderToday() {
-        const today = this._today.state;
-        if (today === null || today.status === "loading") return html`<p class="note" data-today-loading>${this._t("today.loading")}</p>`;
-        if (today.status === "error") {
-            return html`
-                <p class="note">${this._t("today.failed")}</p>
-                <button class="link-button" @click=${() => this._today.load()}>${this._t("retry")}</button>
-            `;
-        }
-        const payload = today.payload;
-        const period = this._row(this._t("today.period_label"), fillTemplate(this._t("today.period"), { time: this._time(Date.parse(payload.asOf)) }), "period");
-        const charger = payload.charger;
-        if (!charger) {
-            const reason = ["no_charger_node", "no_house_node", "no_house_meter"].includes(payload.unavailable ?? "")
-                ? `today.unavailable_${payload.unavailable}` : "today.unavailable_not_loaded";
-            return html`${period}<p class="note" data-today-unavailable>${this._t(reason)}</p>`;
-        }
-        const currency = currencyFromPriceUnit(payload.priceUnit);
-        const share = (kwh: number) => charger.kwh > 0
-            ? fillTemplate(this._t("today.share"), { kwh: (formatKwh(Math.abs(kwh)) + " kWh"), share: this._share(kwh / charger.kwh) })
-            : (formatKwh(Math.abs(kwh)) + " kWh");
-        return html`
-            ${period}
-            ${this._row(this._t("today.kwh"), (formatKwh(Math.abs(charger.kwh)) + " kWh"), "today-kwh")}
-            ${charger.kwh > 0 ? html`
-                ${this._row(this._t("today.solar"), share(charger.sources.solar), "today-solar")}
-                ${this._row(this._t("today.battery"), share(charger.sources.battery), "today-battery")}
-                ${this._row(this._t("today.grid"), share(charger.sources.grid), "today-grid")}
-                ${charger.sources.unattributed > 0 ? this._row(this._t("today.unattributed"), share(charger.sources.unattributed), "today-unattributed") : nothing}
-                ${this._row(this._t("today.paid"), charger.money.paid === null ? this._t("unknown") : this._formatMoney(charger.money.paid, currency), "today-paid", this._t("today.paid_scope"))}
-            ` : nothing}
-            <p class="note" data-not-session>${this._t("today.not_session")}</p>
-        `;
-    }
-
-    private _renderTodayEvidence() {
-        const payload = this._today.payload;
-        if (!payload) return html`<p class="note">${this._t("today.attribution_note")}</p>`;
-        const charger = payload.charger;
-        const currency = currencyFromPriceUnit(payload.priceUnit);
-        return html`
-            ${this._row(this._t("today.period_bounds"), this._time(Date.parse(payload.period.start)) + " – " + this._time(Math.min(Date.parse(payload.asOf), Date.parse(payload.period.end))), "period-bounds")}
-            ${charger ? html`
-                ${this._row(this._t("today.coverage"), this._share(charger.coverage), "coverage")}
-                ${this._row(this._t("today.priced"), fillTemplate(this._t("today.priced_value"), {
-                    priced: (formatKwh(Math.abs(charger.money.paidPricedKwh)) + " kWh"),
-                    unpriced: (formatKwh(Math.abs(charger.money.paidUnpricedKwh)) + " kWh"),
-                }), "priced")}
-                ${charger.money.forgone !== null ? this._row(this._t("today.forgone"), this._formatMoney(charger.money.forgone, currency), "forgone", this._t("today.forgone_scope")) : nothing}
-                ${charger.estimated ? html`<p class="note">${this._t("today.estimated")}</p>` : nothing}
-            ` : nothing}
-            <p class="note">${this._t("today.attribution_note")}</p>
-        `;
-    }
-
-    // Trust -------------------------------------------------------------------
-
-    private _trustPreview(overview: EvChargerDetailPayload): string {
-        const fault = this._fault(overview);
-        if (fault) return fillTemplate(this._t("trust.fault_short"), { fault });
-        const parts: string[] = [];
-        const network = this._reading(overview, "network_status");
-        if (network !== null) parts.push(fillTemplate(this._t("trust.network_short"), { state: network }));
-        const comparison = this._comparison(overview);
-        if (comparison.kind === "compared") parts.push(fillTemplate(this._t("trust.difference_short"), { watts: formatPower(Math.abs(comparison.differenceW)).display }));
-        return parts.length ? parts.join(" · ") : this._t("trust.none");
-    }
-
-    private _renderTrust(overview: EvChargerDetailPayload) {
-        const fault = this._fault(overview);
-        const comparison = this._comparison(overview);
-        return html`
-            ${this._row(this._t("trust.fault"), fault ?? (this._faultKnown(overview) ? this._t("trust.no_fault") : this._t("unavailable")), "fault")}
-            ${this._optionalRow(overview, "network_status", "trust.network")}
-            ${this._optionalRow(overview, "link_success_rate", "trust.link")}
-            <div class="section-title">${this._t("trust.comparison")}</div>
-            ${comparison.kind === "compared" ? html`
-                ${this._row(this._t("trust.total"), formatPower(comparison.totalW).display + " · " + this._time(comparison.totalAt), "total")}
-                ${this._row(this._t("trust.phase_sum"), formatPower(comparison.phaseSumW).display + " · " + this._time(comparison.phasesAt), "phase-sum")}
-                ${this._row(this._t("trust.difference"), formatPower(Math.abs(comparison.differenceW)).display, "difference")}
-            ` : html`<p class="note" data-incomparable>${this._t(`trust.incomparable.${comparison.kind}`)}</p>`}
-            <p class="note">${this._t("trust.explain")}</p>
-        `;
-    }
-
-    private _renderTrustEvidence(overview: EvChargerDetailPayload) {
-        const rows = [
-            this._optionalRow(overview, "fault_code", "trust.fault_code"),
-            this._optionalRow(overview, "fault_description", "trust.fault_description"),
-            this._optionalRow(overview, "temperature", "trust.temperature"),
-            this._optionalRow(overview, "firmware", "trust.firmware"),
-            this._optionalRow(overview, "auth_priority", "trust.auth_priority"),
-            this._optionalRow(overview, "main_breaker_limit", "trust.main_breaker_limit"),
-            this._optionalRow(overview, "lock", "trust.lock"),
-            this._optionalRow(overview, "grid_power", "waiting.grid_power"),
-        ];
-        return html`
-            ${rows.every((row) => row === nothing) ? html`<p class="note">${this._t("trust.no_readings")}</p>` : rows}
-            <p class="note">${this._t("trust.evidence_note")}</p>
-        `;
     }
 
     /**
@@ -1131,31 +675,12 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         return kwh === null || kwh < 0 ? null : kwh;
     }
 
-    /** The hardware's session duration in minutes; `null` unreadable or beyond a plausible session. */
-    private _sessionMinutes(overview: EvChargerDetailPayload): number | null {
-        const entityId = overview.entities.session_duration;
-        const value = readingNumber(this.hass, entityId);
-        const unit = entityId ? this.hass.states[entityId]?.attributes.unit_of_measurement as string | undefined : undefined;
-        const factor = unit ? MINUTES[unit] : undefined;
-        if (value === null || factor === undefined) return null;
-        const minutes = value * factor;
-        return minutes >= 0 && minutes <= MAX_SESSION_MINUTES ? minutes : null;
-    }
-
     /** Charging as reported; a Custom charger without a status, by its power. */
     private _charging(overview: EvChargerDetailPayload): boolean {
         if (overview.status) return overview.status.kind === "charging";
         if (overview.entities.run_mode) return false;
         const power = this._powerW(overview);
         return power !== null && power > IDLE_W;
-    }
-
-    /** Whether a car is plugged in, as reported; `null` when the charger does not say. */
-    private _pluggedIn(overview: EvChargerDetailPayload): boolean | null {
-        const kind = overview.status?.kind;
-        if (kind === "charging" || kind === "waiting") return true;
-        if (kind === "no_car") return false;
-        return null;
     }
 
     private _faultKnown(overview: EvChargerDetailPayload): boolean {

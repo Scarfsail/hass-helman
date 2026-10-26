@@ -107,18 +107,6 @@ export async function mountSimpleCard(page: Page, options?: NodeDetailOptions, t
     }, tag);
 }
 
-export const nodeDetailLocators = (node: string) => {
-    const content = (page: Page) => page.locator(`node-detail-${node}-content`);
-    const question = (page: Page, id: string) => page.locator(`helman-node-question[data-question="${id}"]`);
-    const flow = (page: Page) => content(page).locator("helman-node-flow");
-    return { content, question, flow,
-        header: (page: Page, id: string) => question(page, id).locator("button.header"),
-        evidence: (page: Page, id: string) => question(page, id).locator("button.evidence-toggle"),
-        tile: (page: Page, id: string) => page.locator(`helman-node-tile[data-question="${id}"]`),
-        flowLabel: (page: Page, side: "in" | "out", id: string) => flow(page).locator(`[data-side="${side}"] [data-flow="${id}"]`),
-    };
-};
-
 export async function sectionRequestLog(page: Page, node: string, section?: string): Promise<MockRequest[]> {
     return page.evaluate(({ node, section }) => window.__NodeDetailRequests.filter((r) =>
         r.type === "helman/get_node_detail" && r.node === node && r.section && (section === undefined || r.section === section)), { node, section });

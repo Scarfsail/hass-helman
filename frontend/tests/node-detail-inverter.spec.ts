@@ -54,6 +54,8 @@ type Variant = {
     /** The slot in progress charges to a target the battery has reached: the executor holds it with stop discharging. */
     targetReachedNow?: boolean;
     timeZone?: string;
+    /** The viewer is an admin. */
+    admin?: boolean;
 };
 
 declare global {
@@ -206,7 +208,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
         window.__InverterHass = window.__configureNodeDetail({
             states, tree, overviews: { inverter: overview }, sections: { inverter: { flows: flowsSection, modes, temperature: section } }, schedule,
             timeZone: v.timeZone,
-            hass: { connection: { subscribeMessage: async (listener: (event: unknown) => void, request: { type: string }) => {
+            hass: { ...(v.admin ? { user: { is_admin: true } } : {}), connection: { subscribeMessage: async (listener: (event: unknown) => void, request: { type: string }) => {
                 if (request.type === "helman/subscribe_updates") window.__dataChanged.push(listener);
                 return () => undefined;
             } } },
@@ -260,7 +262,6 @@ test("inverter Overview shows the P1 detail layout", async ({ page }) => {
     await expect(c.locator("helman-detail-headline")).toBeVisible();
     await expect(c.locator("[data-chain] [data-box]")).toHaveCount(3);
     await expect(c.locator("[data-verdict]")).toBeVisible();
-    await expect(c.locator("helman-node-flow, helman-node-tile, helman-node-question")).toHaveCount(0);
 });
 
 test("Back closes the Overview mode override and keeps the inverter detail", async ({ page }) => {
@@ -393,4 +394,43 @@ test("inverter has a Schedule but no Forecast section: its future is its schedul
     await expect(content(page).locator("helman-detail-section[data-schedule]")).toHaveCount(1);
     await page.waitForTimeout(300);
     await expect(content(page).locator("helman-detail-section[data-forecast]")).toHaveCount(0);
+});
+
+// History & statistics, Technical details -------------------------------------
+
+test("inverter History header gives today's temperature range, collapsed; the body has the chart, the link and the limits", async ({ page }) => {
+    await mount(page, { linkRate: "97.46" });
+    await page.locator(".inverter-cell").click();
+    const section = content(page).locator("helman-detail-section[data-history]");
+    await expect(section.locator("[slot=summary]")).toHaveText("38–49 °C today");
+    await expect(section.locator("[slot=summary] b")).toHaveText("38–49 °C");
+    await expect(section.locator("[data-history-body]")).toHaveCount(0);
+    await section.locator("button").first().click();
+    await expect(section.locator("[data-row=temperature] .value")).toHaveText("38–49 °C");
+    await expect(section.locator("helman-day-line-chart[data-temperature-chart] [data-now]")).toHaveCount(1);
+    await expect(section.locator("[data-row=link] .value")).toHaveText("97.4 % · link unreliable");
+    await expect(section.locator("[data-row=export-limit] .value")).toHaveText("up to 9.9 kW");
+    await expect(section.locator("[data-row=solar-input] .value")).toHaveText("not limited");
+    await expect(section.locator("[data-row=soc-range] .value")).toHaveText("10–100 %");
+});
+
+test("inverter Technical details shows the registers, the executor and the configuration to an admin", async ({ page }) => {
+    await mount(page, { admin: true });
+    await page.locator(".inverter-cell").click();
+    const section = content(page).locator("helman-detail-section[data-technical]");
+    await section.locator("button").first().click();
+    await expect(section.locator("[data-registers] tbody tr")).toHaveCount(2);
+    await expect(section.locator("[data-row=executor] .value")).toContainText("Applied");
+    await expect(section.locator("[data-row=last-command] .value")).toContainText("Normal");
+    for (const key of ["use_mode", "manual_mode", "remote_control", "remote_control_mode", "link_success_rate", "link_quarantined_registers"]) {
+        await expect(section.locator(`[data-row=${key}]`)).toHaveCount(1);
+    }
+    await expect(section.locator("[data-row=firmware], [data-row=phase_balance]")).toHaveCount(0);
+});
+
+test("inverter Technical details is not rendered for a non-admin", async ({ page }) => {
+    await mount(page);
+    await page.locator(".inverter-cell").click();
+    await expect(content(page).locator("helman-detail-section[data-history]")).toHaveCount(1);
+    await expect(content(page).locator("helman-detail-section[data-technical]")).toHaveCount(0);
 });

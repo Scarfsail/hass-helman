@@ -9,7 +9,6 @@ import type {
     InverterTemperatureSectionPayload,
     ScheduleActionKind,
 } from "../helman-api";
-import type { HelmanSolarInspectorCardConfig } from "../helman-solar-inspector/HelmanSolarInspectorCardConfig";
 import { helmanColorVars } from "../color-vars";
 import { commandedModeKind } from "../helman-api";
 
@@ -20,20 +19,16 @@ import { getScheduleReasonLabel } from "../shared/schedule/model/schedule-labels
 import { INVERTER_CONTROLLABLE_ID } from "../shared/schedule/schedule-types";
 import "../shared/day-line-chart";
 import type { DayLineSeries } from "../shared/day-line-chart";
-import { IDLE_W, NodeDetailContentBase, type NodeFlow } from "./node-detail-base";
+import { IDLE_W, NodeDetailContentBase } from "./node-detail-base";
 import { staleToday } from "./section-resource";
 import {
     currentRun,
-    dayKey,
     effectiveAction,
     inverterModeLabel,
     inverterRuns,
-    nextChange,
     renderCurrentSlot,
     runtimeFor,
     runtimeText,
-    todayAndTomorrow,
-    type ScheduleRun,
 } from "./node-detail-schedule";
 import { powerUnitFactor } from "../shared/power-reading";
 import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
@@ -41,36 +36,16 @@ import type { InverterDetailParams } from "./node-detail-types";
 import { LaneOwnershipController } from "./lane-ownership";
 import { DialogHistoryController } from "../shared/dialog-history-controller";
 import type { ControlOverrideDialog } from "./control-override-dialog";
+import { boldTemplate } from "./detail-section";
+import { historyRow, historySummary, sectionNotReady, subTitle } from "./node-detail-history";
 import "./detail-headline";
 import "./help-tip";
 import "./control-override-dialog";
-import type { LiveFlows } from "./live-flows";
-
-type QuestionId = "why" | "next" | "limits" | "operating" | "trust";
 
 const PHASES = [1, 2, 3] as const;
 
-/** A flow between two nodes, live and today. */
-type FlowEdge = Exclude<keyof LiveFlows, "gridPower">;
-
-/**
- * The inspector under "What will it do next?": the battery SoC plan with the
- * schedule strip, on the dialog's surface. Prices, money and the month/year
- * views answer other questions, so they are hidden; the bias diagnostics stay
- * off. Mirrors the Training tab's embed configs in
- * `config-editor/solar-inspector-embed.ts`. The battery detail's plan answer
- * shows the same view.
- */
-export const INVERTER_PLAN_INSPECTOR_CONFIG: HelmanSolarInspectorCardConfig = {
-    type: "custom:helman-solar-inspector-card",
-    transparent_background: true,
-    hide_price_strip: true,
-    hide_money_strip: true,
-    hide_aggregate_views: true,
-    show_bias_ratio: false,
-    daylight_only_default: false,
-    chart_series: ["batterySocForecast", "batterySocActual"],
-};
+/** A link whose readings succeed at least this often, %, with no register quarantined, is healthy. */
+const LINK_HEALTHY_PCT = 99;
 
 /** One box of the plan → command → inverter chain. */
 interface ChainBox {
@@ -98,13 +73,13 @@ interface ChainBox {
  * Readings are read live from `hass`; the backend overview supplies the entity
  * ids and the comparison, and is re-read when a compared register changes.
  * Today's observed modes (the `modes` section) are read on opening for the
- * Schedule section's strip, and again when the observed mode changes or they go stale; today's
- * temperature only while its question is open.
+ * Schedule section's strip, and again when the observed mode changes or they
+ * go stale; today's temperature on opening too, for the History header.
  */
 export { inverterModeLabel };
 
 @customElement("node-detail-inverter-content")
-export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDetailPayload, QuestionId> {
+export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDetailPayload> {
     static styles = [helmanColorVars, nodeDetailSharedStyles, nodeDetailQuestionStyles, nodeDetailPictureStyles, scheduleActionToneStyles, css`
         .runs {
             list-style: none;
@@ -235,16 +210,10 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
 
     /** The inverter's plan. */
     private readonly _plan = this._useSchedule(inverterRuns);
-    /**
-     * Today's temperature, while the operating answer is open; read on
-     * opening and re-read on a data change only. A refresh follows a data
-     * change: what was shown may be out of date, so a failure replaces it.
-     */
+    /** Today's temperature, for the History header's range: read on opening and kept current. */
     private readonly _temperature = this._section<InverterTemperatureSectionPayload>("temperature", {
         fetch: () => this._readSection("temperature"),
-        shown: () => this._open === "operating" && this._offers("temperature"),
-        staleness: () => false,
-        keepOnError: false,
+        shown: () => this._offers("temperature"),
     });
     /** The observed mode today's modes were read under; a new one re-reads them. */
     private _modesObserved: ScheduleActionKind | null = null;
@@ -304,24 +273,6 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
                     @closed=${this._onOverrideClosed}></control-override-dialog>` : nothing}
             </div>
         `;
-    }
-
-    /** The open question's answer and evidence, full width under the tiles. */
-    protected _renderOpen(overview: InverterDetailPayload) {
-        switch (this._open) {
-            case "why":
-                return this._question("why", this._whyPreview(), () => this._renderWhy(overview), () => this._renderWhyEvidence(overview), "evidence");
-            case "next":
-                return this._question("next", this._nextPreview(), () => this._renderNext(), () => this._renderNextEvidence(), "evidence");
-            case "limits":
-                return this._question("limits", this._limitsPreview(overview), () => this._renderLimits(overview), () => this._renderLimitsEvidence(overview), "technical");
-            case "operating":
-                return this._question("operating", this._operatingPreview(overview), () => this._renderOperating(overview), () => this._renderOperatingEvidence(overview), "technical");
-            case "trust":
-                return overview.profile ? this._question("trust", this._trustPreview(overview), () => this._renderTrust(overview), () => this._renderTrustEvidence(overview), "technical") : nothing;
-            default:
-                return nothing;
-        }
     }
 
     /** A fault or off-grid operation the hardware reports, else a reported mismatch. */
@@ -463,177 +414,6 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
         }]);
     }
 
-    // Flow --------------------------------------------------------------------
-
-    /**
-     * Solar, battery and grid in; house, battery and export out, around the
-     * inverter with its AC power now. Live from the card on Now, today's kWh
-     * from the `flows` section on Today. The flow opens *operating*.
-     */
-    protected _renderInverterFlow(overview: InverterDetailPayload) {
-        const flow = this._flowScope === "now" ? this._nowFlow(overview) : this._todayFlow();
-        return this._renderFlow(flow, this.params.flowScaleW, "operating", html`<span slot="centre">${inverterGlyph()}</span>`);
-    }
-
-    /** The card's live split, W; unknown without the solar, battery or house reading, never 0. */
-    private _nowFlow(overview: InverterDetailPayload): NodeFlow {
-        const power = this._fmt("now");
-        const { inputs, outputs } = this._sides(this.params.flows, power);
-        const ac = this._acPower(overview);
-        return this._flowShell("now", inputs, outputs, {
-            centre: () => ac === null ? null : fillTemplate(this._t("operating.ac_short"), { value: power(ac) }),
-            active: this._isActive(ac),
-        });
-    }
-
-    /**
-     * Today's kWh from the `flows` section, the same edges as Now. Energy
-     * whose source or destination is not known is said in the footnotes and
-     * added to its side's total, never forced into a ribbon.
-     */
-    private _todayFlow(): NodeFlow {
-        const flows = this._flows.payload?.flows ?? null;
-        const energy = this._fmt("today");
-        const { inputs, outputs } = this._sides(flows, energy);
-        const status = this._todayFlowsNote();
-        const notes: string[] = status ? [status] : [];
-        const unresolvedSolar = flows?.solarUnresolved ?? 0;
-        const unknownCharge = flows?.unknownToBattery ?? 0;
-        const unknownHouse = flows?.unknownToHouse ?? 0;
-        if (unresolvedSolar > 0) notes.push(fillTemplate(this.localize("node_detail.solar.flow.unresolved"), { kwh: energy(unresolvedSolar) }));
-        if (unknownCharge > 0) notes.push(fillTemplate(this.localize("node_detail.battery.flow.unknown_charge"), { kwh: energy(unknownCharge) }));
-        if (unknownHouse > 0) notes.push(fillTemplate(this._t("flow.unknown_house"), { kwh: energy(unknownHouse) }));
-        return this._flowShell("today", inputs, outputs, {
-            centre: (_sumIn, sumOut) => energy(sumOut),
-            notes,
-            unresolvedIn: unresolvedSolar,
-            unresolvedOut: unknownCharge + unknownHouse,
-        });
-    }
-
-    /** Solar, battery and grid in; house, battery and export out: each the sum of its edges. */
-    private _sides(flows: Partial<Record<FlowEdge, number | null>> | null, format: (value: number | null) => string) {
-        const sum = (...keys: FlowEdge[]) => this._sumEdges(flows, keys);
-        return {
-            inputs: [
-                this._flowItem("solar", sum("solarToHouse", "solarToBattery", "solarToGrid"), format),
-                this._flowItem("battery", sum("batteryToHouse", "batteryToGrid"), format),
-                this._flowItem("grid", sum("gridToHouse", "gridToBattery"), format),
-            ],
-            outputs: [
-                this._flowItem("house", sum("solarToHouse", "batteryToHouse", "gridToHouse"), format),
-                this._flowItem("battery", sum("solarToBattery", "gridToBattery"), format),
-                this._exportItem(sum("solarToGrid", "batteryToGrid"), format),
-            ],
-        };
-    }
-
-    /** What goes out to the grid: an export, in the grid's colour. */
-    private _exportItem(value: number | null, format: (value: number | null) => string) {
-        return { ...this._flowItem("grid", value, format), label: this._t("flow.export") };
-    }
-
-    // Tiles -------------------------------------------------------------------
-
-    /** The export cap the inverter holds, and the battery's SoC range as a bar. */
-    protected _renderLimitsTile(overview: InverterDetailPayload) {
-        const exportLimit = this._watts(overview, "export_limit") ?? overview.maxAllowedExportPower;
-        const low = this._number(overview, "battery_min_soc");
-        const high = this._number(overview, "battery_max_soc");
-        const soc = this._socRange(overview);
-        if (exportLimit === null && soc === null) return this._tile("limits", "–", this._t("limits.none"));
-        const detail = [
-            exportLimit !== null ? this._t("tile.export_cap") : null,
-            soc ? fillTemplate(this._t("limits.soc_short"), { range: soc }) : null,
-        ].filter(Boolean).join(" · ");
-        const bar = low !== null && high !== null && low >= 0 && high <= 100 && high >= low ? html`
-            <span class="meter soc-range" data-soc-range data-min=${low} data-max=${high}>
-                <span class="meter-fill" style="margin-left: ${low}%; width: ${high - low}%"></span>
-            </span>
-        ` : nothing;
-        return this._tile("limits", exportLimit !== null ? "≤ " + formatPower(exportLimit).display : "–", detail, bar);
-    }
-
-    /** The temperature, and the AC load as a share of the inverter's rating, without thresholds. */
-    protected _renderOperatingTile(overview: InverterDetailPayload) {
-        const ac = this._acPower(overview);
-        const rated = this._watts(overview, "rated_power");
-        const share = ac !== null && rated !== null && rated > 0 ? Math.abs(ac) / rated : null;
-        const detail = ac === null ? null
-            : share === null ? fillTemplate(this._t("operating.ac_short"), { value: formatPower(ac).display })
-            : fillTemplate(this._t("tile.ac_share"), { value: formatPower(ac).display, share: this._share(share) });
-        const bar = share !== null ? html`
-            <span class="meter load" data-load-meter><span class="meter-fill" style="width: ${Math.min(100, share * 100).toFixed(1)}%"></span></span>
-        ` : nothing;
-        return this._tile("operating", this._reading(overview, "inverter_temperature") ?? "–", detail, bar);
-    }
-
-    /** The link's success rate and the quarantined registers, as the integration reports them. */
-    protected _renderTrustTile(overview: InverterDetailPayload) {
-        const rate = this._reading(overview, "link_success_rate");
-        const quarantined = this._number(overview, "link_quarantined_registers");
-        if (rate === null && quarantined === null) return this._tile("trust", "–", this._t("trust.unavailable"));
-        return this._tile(
-            "trust",
-            rate ?? "–",
-            quarantined !== null ? fillTemplate(this._t("trust.quarantined_short"), { count: String(quarantined) }) : null,
-        );
-    }
-
-    // Why ---------------------------------------------------------------------
-
-    private _whyPreview(): string | null {
-        const run = currentRun(this._plan.runs, Date.now());
-        const parts = [run ? this._actionLabel(run.action) : this._t("why.nothing_scheduled")];
-        if (this._plan.schedule) parts.push(this._t(this._plan.schedule.executionEnabled ? "why.execution_on_short" : "why.execution_off_short"));
-        return parts.join(" · ");
-    }
-
-    private _renderWhy(overview: InverterDetailPayload) {
-        const run = currentRun(this._plan.runs, Date.now());
-        const runtime = runtimeFor<InverterRuntimeDTO>(this._plan.schedule, INVERTER_CONTROLLABLE_ID, Date.now());
-        const commanded = this._commandedKind(overview);
-        return html`
-            ${this._row(this._t("why.scheduled_now"), run
-                ? this._scheduledText(run)
-                : this._t("why.nothing_scheduled"), "scheduled")}
-            ${this._plan.schedule ? this._row(this._t("why.execution"), this._t(this._plan.schedule.executionEnabled ? "why.execution_on" : "why.execution_off"), "execution") : nothing}
-            ${this._row(this._t("why.executor"), runtime ? runtimeText(runtime, this.localize) : this._t("why.no_runtime"), "executor")}
-            ${this._row(this._t("why.last_command"), commanded ? this._modeLabel(commanded) : this._commandedRaw(overview) ?? this._t("unavailable"), "last-command")}
-            ${overview.agreement.reason !== "no_profile" ? this._row(this._t("why.observed"), this._agreementText(overview), "agreement") : nothing}
-            <p class="note">${this._t("why.explain")}</p>
-        `;
-    }
-
-    private _renderWhyEvidence(overview: InverterDetailPayload) {
-        const registers = overview.agreement.registers;
-        return html`
-            ${registers.length ? html`
-                <div class="section-title">${this._t("why.registers")}</div>
-                <table data-registers>
-                    <thead><tr><th>${this._t("why.register")}</th><th>${this._t("why.expected")}</th><th>${this._t("why.actual")}</th><th></th></tr></thead>
-                    <tbody>
-                        ${registers.map((register) => html`
-                            <tr>
-                                <td>${this._name(register.entityId)}</td>
-                                <td>${String(register.expected)}</td>
-                                <td>${register.actual ?? this._t("unavailable")}</td>
-                                <td>${this._t(register.matches === true ? "why.match_yes" : register.matches === false ? "why.match_no" : "why.match_unknown")}</td>
-                            </tr>
-                        `)}
-                    </tbody>
-                </table>
-            ` : nothing}
-            ${this._optionalRow(overview, "use_mode", "why.use_mode")}
-            ${this._optionalRow(overview, "manual_mode", "why.manual_mode")}
-            ${this._optionalRow(overview, "remote_control", "why.remote_control")}
-            ${this._optionalRow(overview, "remote_control_mode", "why.remote_control_mode")}
-            ${this._optionalRow(overview, "active_power_target", "why.active_power_target")}
-            ${this._optionalRow(overview, "active_power_real", "why.active_power_real")}
-            <p class="note">${this._t("why.evidence_note")}</p>
-        `;
-    }
-
     private _agreementText(overview: InverterDetailPayload): string {
         const agreement = overview.agreement;
         if (agreement.status === "match") return this._t("agreement.match");
@@ -645,230 +425,115 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
         return this._t(`agreement.${agreement.reason ?? "unavailable"}`);
     }
 
-    private _scheduledText(run: ScheduleRun): string {
-        const parts = [this._actionLabel(run.action)];
-        if (run.endMs !== null) parts.push(fillTemplate(this._t("why.until"), { time: this._time(run.endMs) }));
-        let text = parts.join(" ");
-        if (run.action.conditionMet === false) text += " – " + this._t("why.candidate");
-        return text;
+    // History & statistics -----------------------------------------------------
+
+    /** Today's temperature range and chart, how reliably the link reads, and the limits in force. */
+    protected _renderHistory(overview: InverterDetailPayload) {
+        const stats = this._temperature.payload?.temperature ?? null;
+        const range = stats && stats.min !== null && stats.max !== null ? this._temperatureRange(stats.min, stats.max, stats.unit) : null;
+        const summary = historySummary(this._temperature, this.localize, range ? boldTemplate(this._h("inverter_summary"), { range }) : null);
+        return this._historySection(summary, () => html`
+            ${subTitle(this._h("today"))}
+            <div class="rows">${historyRow(this.localize("node_detail.shared.temperature"), range ?? "—", "temperature")}</div>
+            ${this._renderTemperatureChart()}
+            ${this._renderLinkRate(overview)}
+            ${subTitle(this._h("limits"))}
+            <div class="rows">${this._renderLimits(overview)}</div>
+        `);
     }
 
-    // Next ----------------------------------------------------------------------
-
-    private _nextPreview(): string | null {
-        const next = nextChange(this._plan.runs, Date.now(), this._timeZone);
-        return next
-            ? fillTemplate(this._t("next_change"), { time: this._time(next.startMs), action: this._actionLabel(next.action) })
-            : this._t("no_change");
+    private _temperatureRange(min: number, max: number, unit: string | null): string {
+        return `${Math.round(min)}–${Math.round(max)}${unit ? ` ${unit}` : ""}`;
     }
 
-    private _renderNext() {
-        const runs = this._upcomingRuns();
-        const today = this._dayKey(Date.now());
-        let lastDay: string | null = null;
-        return html`
-            ${runs.length ? html`
-                <ul class="runs" data-runs>
-                    ${runs.map((run) => {
-                        const day = this._dayKey(run.startMs);
-                        const heading = day !== lastDay ? html`<li class="day-label">${this._t(day === today ? "next.today" : "next.tomorrow")}</li>` : nothing;
-                        lastDay = day;
-                        return html`
-                            ${heading}
-                            <li>
-                                <span class="run-time">${this._range(run)}</span>
-                                <span class=${run.action.conditionMet === false ? "muted" : ""}>
-                                    ${this._actionLabel(run.action)}${run.action.conditionMet === false ? " (" + this._t("next.candidate") + ")" : ""}
-                                </span>
-                            </li>
-                        `;
-                    })}
-                </ul>
-            ` : html`<p class="note">${this._t("no_change")}</p>`}
-            <p class="note">${this._t("next.explain")}</p>
-            <div class="plan" data-plan>${this._inspector("next", INVERTER_PLAN_INSPECTOR_CONFIG)}</div>
-        `;
-    }
-
-    private _renderNextEvidence() {
-        return renderCurrentSlot(currentRun(this._plan.runs, Date.now()), runtimeFor<InverterRuntimeDTO>(this._plan.schedule, INVERTER_CONTROLLABLE_ID, Date.now()), this.localize, (label, value) => this._row(label, value));
-    }
-
-    // Limits --------------------------------------------------------------------
-
-    private _limitsPreview(overview: InverterDetailPayload): string | null {
-        const parts: string[] = [];
-        const exportLimit = this._number(overview, "export_limit");
-        if (exportLimit !== null) parts.push(fillTemplate(this._t("limits.export_short"), { value: formatPower(exportLimit).display }));
-        const soc = this._socRange(overview);
-        if (soc) parts.push(fillTemplate(this._t("limits.soc_short"), { range: soc }));
-        return parts.length ? parts.join(" · ") : this._t("limits.none");
-    }
-
-    private _renderLimits(overview: InverterDetailPayload) {
-        const exportLimit = this._number(overview, "export_limit");
-        const pvLimit = this._number(overview, "pv_power_limit");
-        const soc = this._socRange(overview);
-        const rows = [
-            exportLimit !== null ? this._row(this._t("limits.export_limit"), formatPower(exportLimit).display, "export-limit", this._t("limits.scope_inverter"), overview.entities.export_limit) : nothing,
-            overview.maxAllowedExportPower !== null ? this._row(this._t("limits.export_cap"), formatPower(overview.maxAllowedExportPower).display, "export-cap", this._t("limits.scope_helman")) : nothing,
-            pvLimit !== null ? this._row(this._t("limits.pv_limit"), formatPower(pvLimit).display, "pv-limit", this._t("limits.scope_remote"), overview.entities.pv_power_limit) : nothing,
-            this._optionalRow(overview, "battery_charge_max_current", "limits.charge_current"),
-            this._optionalRow(overview, "battery_discharge_max_current", "limits.discharge_current"),
-            soc ? this._row(this._t("limits.soc_range"), soc, "soc-range", this._t("limits.scope_config")) : nothing,
-        ];
-        return html`
-            ${rows.every((row) => row === nothing) ? html`<p class="note">${this._t("limits.none")}</p>` : rows}
-            <p class="note">${this._t("limits.explain")}</p>
-        `;
-    }
-
-    private _renderLimitsEvidence(overview: InverterDetailPayload) {
-        return html`
-            ${this._optionalRow(overview, "eps_min_soc", "limits.eps_min")}
-            ${this._optionalRow(overview, "eps_restart_soc", "limits.eps_restart")}
-            ${this._optionalRow(overview, "main_breaker_limit", "limits.main_breaker")}
-            <p class="note">${this._t("limits.evidence_note")}</p>
-        `;
-    }
-
-    // Operating -----------------------------------------------------------------
-
-    private _operatingPreview(overview: InverterDetailPayload): string | null {
-        const parts: string[] = [];
-        const ac = this._acPower(overview);
-        if (ac !== null) parts.push(fillTemplate(this._t("operating.ac_short"), { value: formatPower(ac).display }));
-        else parts.push(fillTemplate(this._t("operating.solar_short"), { value: formatPower(this.params.solarPower).display }));
-        const temperature = this._reading(overview, "inverter_temperature");
-        if (temperature) parts.push(temperature);
-        return parts.join(" · ");
-    }
-
-    private _renderOperating(overview: InverterDetailPayload) {
-        const ac = this._acPower(overview);
-        const battery = this.params.batteryPower;
-        const batteryMode = battery > 50 ? "charging" : battery < -50 ? "discharging" : "idle";
-        return html`
-            ${"ac_power_l1" in overview.entities
-                ? this._row(this._t("operating.ac_total"), ac !== null ? formatPower(ac).display : this._t("unavailable"), "ac-total")
-                : nothing}
-            ${this._row(this._t("operating.solar"), formatPower(this.params.solarPower).display, "solar")}
-            ${this._row(this._t("operating.battery"), formatPower(Math.abs(battery)).display + " · " + this._t(`operating.battery_${batteryMode}`), "battery")}
-            ${"ac_power_l1" in overview.entities ? html`<p class="note">${this._t("operating.derived_note")}</p>` : nothing}
-            ${overview.sections.includes("temperature") ? this._renderTemperature() : nothing}
-        `;
-    }
-
-    private _renderTemperature() {
-        const section = this._temperature.state;
-        const title = html`<div class="section-title">${this._t("operating.temperature_today")}</div>`;
-        if (section === null || section.status === "loading") {
-            return html`${title}<p class="note" data-temperature-loading>${this._t("operating.loading_history")}</p>`;
-        }
-        if (section.status === "error") {
-            return html`
-                ${title}
-                <p class="note">${this._t("operating.history_failed")}</p>
-                <button class="link-button" @click=${() => this._temperature.load()}>${this._t("retry")}</button>
-            `;
-        }
-        const stats = section.payload.temperature;
-        if (!stats || stats.points.length === 0 || stats.mean === null) {
-            return html`${title}<p class="note">${this._t("operating.temperature_none")}</p>`;
-        }
-        const unit = stats.unit ?? "";
-        const format = (value: number) => value.toFixed(1) + (unit ? " " + unit : "");
+    private _renderTemperatureChart() {
+        const notReady = sectionNotReady(this._temperature, this.localize);
+        if (notReady) return notReady;
+        const stats = this._temperature.payload?.temperature;
+        if (!stats || stats.points.length === 0) return nothing;
+        const format = (value: number) => value.toFixed(1) + (stats.unit ? " " + stats.unit : "");
         const series: DayLineSeries[] = [{
             key: "temperature",
-            label: this._t("figure.temperature"),
+            label: this.localize("node_detail.shared.temperature"),
             color: "var(--accent-color, #ff9800)",
             points: stats.points.map((point) => ({ t: Date.parse(point.start), v: point.mean, min: point.min, max: point.max })),
         }];
-        const summary = fillTemplate(this._t("operating.temperature_summary"), {
-            min: format(stats.min!),
-            max: format(stats.max!),
-            mean: format(stats.mean),
-            max_at: stats.maxAt ? this._time(Date.parse(stats.maxAt)) : "?",
-            coverage: Math.round(stats.coverage * 100) + " %",
-        });
         return html`
-            ${title}
             <helman-day-line-chart
                 data-temperature-chart
                 .series=${series}
-                .start=${Date.parse(section.payload.period.start)}
-                .end=${Date.parse(section.payload.period.end)}
+                .start=${Date.parse(this._temperature.payload!.period.start)}
+                .end=${Date.parse(this._temperature.payload!.period.end)}
                 .bucketMs=${stats.bucketMinutes * 60_000}
+                .now=${Date.now()}
+                .nowLabel=${this.localize("node_detail.shared.now")}
                 .timeZone=${this._timeZone}
                 .locale=${this._locale}
                 .formatValue=${format}
-                .summary=${summary}
             ></helman-day-line-chart>
-            <p class="note">${this._t(stats.extrema === "recorded" ? "operating.extrema_recorded" : "operating.extrema_statistics")}</p>
         `;
     }
 
-    private _renderOperatingEvidence(overview: InverterDetailPayload) {
-        const hasPhases = PHASES.some((phase) => overview.entities["ac_power_l" + phase]);
-        const cell = (key: string) => this._reading(overview, key) ?? "–";
+    /** The share of readings that succeeded, and whether that makes the link healthy. */
+    private _renderLinkRate(overview: InverterDetailPayload) {
+        const rate = this._number(overview, "link_success_rate");
+        if (rate === null) return nothing;
+        const quarantined = this._number(overview, "link_quarantined_registers");
+        const healthy = rate >= LINK_HEALTHY_PCT && !(quarantined !== null && quarantined > 0);
+        return html`<div class="rows">${historyRow(this._h("link"), html`${Math.floor(rate * 10) / 10} % <span class="label">· ${this._h(healthy ? "link_healthy" : "link_unreliable")}</span>`, "link")}</div>`;
+    }
+
+    /** The export cap, the solar input limit and the battery's SoC range the inverter holds. */
+    private _renderLimits(overview: InverterDetailPayload) {
+        const exportLimit = this._watts(overview, "export_limit") ?? overview.maxAllowedExportPower;
+        const pvLimit = this._watts(overview, "pv_power_limit");
+        const rated = this._watts(overview, "rated_power");
+        const limited = pvLimit !== null && (rated === null || pvLimit < rated);
+        const soc = this._socRange(overview);
         return html`
-            ${hasPhases ? html`
-                <table data-phases>
-                    <thead><tr>
-                        <th>${this._t("operating.phase")}</th><th>W</th><th>V</th><th>A</th><th>Hz</th>
-                    </tr></thead>
-                    <tbody>
-                        ${PHASES.map((phase) => html`
-                            <tr>
-                                <td>L${phase}</td>
-                                <td>${cell("ac_power_l" + phase)}</td>
-                                <td>${cell("ac_voltage_l" + phase)}</td>
-                                <td>${cell("ac_current_l" + phase)}</td>
-                                <td>${cell("ac_frequency_l" + phase)}</td>
-                            </tr>
-                        `)}
-                    </tbody>
+            ${historyRow(this._h("export_limit"), exportLimit === null ? "—" : fillTemplate(this._h("up_to"), { power: formatPower(exportLimit).display }), "export-limit")}
+            ${historyRow(this._h("solar_input"), limited ? fillTemplate(this._h("limited_to"), { power: formatPower(pvLimit!).display }) : this._h("not_limited"), "solar-input")}
+            ${historyRow(this._h("battery_between"), soc ?? "—", "soc-range")}
+        `;
+    }
+
+    // Technical details ---------------------------------------------------------
+
+    /** The registers against the last command, what the executor did, the inverter's configuration and its link. */
+    protected _renderTechnical(overview: InverterDetailPayload) {
+        const now = Date.now();
+        const runtime = runtimeFor<InverterRuntimeDTO>(this._plan.schedule, INVERTER_CONTROLLABLE_ID, now);
+        const commanded = this._commandedKind(overview);
+        const registers = overview.agreement.registers;
+        const t = (key: string) => this.localize(`node_detail.shared.technical.${key}`);
+        return html`
+            ${registers.length ? html`
+                ${subTitle(this._t("why.registers"))}
+                <table data-registers>
+                    <thead><tr><th>${this._t("why.register")}</th><th>${this._t("why.expected")}</th><th>${this._t("why.actual")}</th><th></th></tr></thead>
+                    <tbody>${registers.map((register) => html`<tr>
+                        <td>${this._name(register.entityId)}</td>
+                        <td>${String(register.expected)}</td>
+                        <td>${register.actual ?? this._t("unavailable")}</td>
+                        <td>${this._t(register.matches === true ? "why.match_yes" : register.matches === false ? "why.match_no" : "why.match_unknown")}</td>
+                    </tr>`)}</tbody>
                 </table>
             ` : nothing}
-            ${this._optionalRow(overview, "phase_balance", "operating.phase_balance")}
-            ${this._optionalRow(overview, "inverter_temperature", "operating.temperature_now")}
-            ${this._optionalRow(overview, "run_mode", "operating.run_mode")}
-            ${hasPhases ? nothing : html`<p class="note">${this._t("operating.no_phases")}</p>`}
-        `;
-    }
-
-    // Trust ---------------------------------------------------------------------
-
-    private _trustPreview(overview: InverterDetailPayload): string | null {
-        const rate = this._reading(overview, "link_success_rate");
-        const quarantined = this._number(overview, "link_quarantined_registers");
-        if (rate === null && quarantined === null) return this._t("trust.unavailable");
-        const parts: string[] = [];
-        if (rate !== null) parts.push(fillTemplate(this._t("trust.rate_short"), { value: rate }));
-        if (quarantined !== null) parts.push(fillTemplate(this._t("trust.quarantined_short"), { count: String(quarantined) }));
-        return parts.join(" · ");
-    }
-
-    private _renderTrust(overview: InverterDetailPayload) {
-        const rate = this._reading(overview, "link_success_rate");
-        const quarantined = this._number(overview, "link_quarantined_registers");
-        return html`
-            ${rate === null && quarantined === null ? html`<p class="note">${this._t("trust.unavailable")}</p>` : nothing}
-            ${rate !== null ? this._row(this._t("trust.link_rate"), rate, "link-rate", undefined, overview.entities.link_success_rate) : nothing}
-            ${quarantined !== null ? this._row(this._t("trust.quarantined"), String(quarantined), "quarantined", undefined, overview.entities.link_quarantined_registers) : nothing}
-            <p class="note">${this._t("trust.explain")}</p>
-        `;
-    }
-
-    private _renderTrustEvidence(overview: InverterDetailPayload) {
-        return html`
-            ${this._optionalRow(overview, "firmware", "trust.firmware")}
-            ${this._optionalRow(overview, "hardware_version", "trust.hardware_version")}
-            ${this._optionalRow(overview, "rated_power", "trust.rated_power")}
-            ${this._optionalRow(overview, "mppt_count", "trust.mppt_count")}
-            ${this._optionalRow(overview, "lock_state", "trust.lock_state")}
-            ${this._optionalRow(overview, "grid_mode_runtime", "trust.grid_runtime")}
-            ${this._optionalRow(overview, "eps_mode_runtime", "trust.eps_runtime")}
+            <div class="rows">
+                ${renderCurrentSlot(currentRun(this._plan.runs, now), runtime, this.localize, (label, value) => this._row(label, value))}
+                ${this._row(t("executor"), runtime ? runtimeText(runtime, this.localize) : t("no_runtime"), "executor")}
+                ${this._row(this._t("why.last_command"), [commanded ? this._modeLabel(commanded) : this._commandedRaw(overview) ?? this._t("unavailable"),
+                    overview.agreement.reason !== "no_profile" ? this._agreementText(overview) : null].filter(Boolean).join(" · "), "last-command")}
+            </div>
+            ${subTitle(t("configuration"))}
+            <div class="rows">
+                ${this._optionalRow(overview, "use_mode", "why.use_mode")}
+                ${this._optionalRow(overview, "manual_mode", "why.manual_mode")}
+                ${this._optionalRow(overview, "remote_control", "why.remote_control")}
+                ${this._optionalRow(overview, "remote_control_mode", "why.remote_control_mode")}
+                ${this._optionalRow(overview, "link_success_rate", "trust.link_rate")}
+                ${this._optionalRow(overview, "link_quarantined_registers", "trust.quarantined")}
+            </div>
         `;
     }
 
@@ -904,27 +569,6 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
     private _commandedRaw(overview: InverterDetailPayload): string | null {
         const live = overview.mode ? this.hass.states[overview.mode.entityId]?.state : undefined;
         return live && live !== "unavailable" && live !== "unknown" ? live : null;
-    }
-
-    // ── Schedule ────────────────────────────────────────────────────────────
-
-    /** Today's and tomorrow's runs, empty stretches left out. */
-    private _upcomingRuns(): ScheduleRun[] {
-        const [today, tomorrow] = todayAndTomorrow(Date.now(), this._timeZone);
-        return this._plan.runs.filter((run) => {
-            const day = this._dayKey(run.startMs);
-            return run.action.kind !== "empty" && (day === today || day === tomorrow);
-        });
-    }
-
-    // ── Formatting ──────────────────────────────────────────────────────────
-
-    private _range(run: ScheduleRun): string {
-        return run.endMs === null ? this._time(run.startMs) + "+" : this._time(run.startMs) + "–" + this._time(run.endMs);
-    }
-
-    private _dayKey(ms: number): string | null {
-        return dayKey(ms, this._timeZone);
     }
 
     private _modeLabel(kind: ScheduleActionKind): string {

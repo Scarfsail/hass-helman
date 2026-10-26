@@ -64,6 +64,8 @@ type Variant = {
     battery?: string;
     /** Today's flows section: the reports' reason for none. */
     flowsUnavailable?: string;
+    /** The viewer is an admin. */
+    admin?: boolean;
 };
 
 /** Raw forecast Wh for the slot starting at `ms`. */
@@ -258,31 +260,10 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 },
             },
         };
-        // The inspector's own day read, so its embeds draw the day they show.
-        const wh = (rows: Array<{ timestamp: string; value: number }>) => rows.filter((row) => row.timestamp.startsWith("2026-10-21")).map((row) => ({ slot: row.timestamp.slice(11, 16), valueWh: row.value }));
-        const sum = (rows: Array<{ valueWh: number }>) => rows.reduce((total, row) => total + row.valueWh, 0);
-        const series = { raw: wh(points.raw), corrected: wh(points.adjusted), actual: wh(points.actual) };
-        const inspectorDay = window.__inspectorDay({ date: "2026-10-21", timezone: "UTC", dataGranularityMinutes: 15, status: "applied", effectiveVariant: "adjusted",
-            trainedAt: "2026-10-21T03:00:00+00:00",
-            range: { minDate: "2026-10-01", maxDate: "2026-10-26", canGoPrevious: true, canGoNext: true, isToday: true, isFuture: false },
-            series: { ...series, invalidated: [], factors: [], impact: [], houseForecast: [], houseActual: [], houseActualBreakdown: [],
-                houseForecastBreakdown: [], batterySocForecast: [], batterySocActual: [], gridForecast: [], gridActual: [],
-                batteryForecast: [], batteryActual: [], importPrice: [], exportPrice: [], moneyActual: [], moneyForecast: [],
-            },
-            totals: { rawWh: sum(series.raw), correctedWh: sum(series.corrected), actualWh: sum(series.actual),
-                houseForecastWh: null, houseActualWh: null, gridForecastWh: null, gridActualWh: null,
-                batteryForecastWh: null, batteryActualWh: null, moneyActual: null, moneyForecast: null,
-            },
-            availability: { hasProfile: false },
-            batterySocBounds: [], priceUnit: null, trainingExplainability: null,
-        });
         const inverter = window.__inverterOverview();
         window.__SolarHass = window.__configureNodeDetail({
             states, tree, overviews: { solar: overview, inverter }, sections: { solar: { ...sections, ...(v.sectionFails ? { production: "error" } : {}) } }, forecast: v.forecastFails ? "error" : forecast, schedule,
-            replies: {
-                "helman/solar_bias/inspector": inspectorDay,
-                "helman/solar_bias/day_aggregates": { days: [] },
-            },
+            hass: v.admin ? { user: { is_admin: true } } : {},
         });
         window.__SolarRequests = window.__NodeDetailRequests;
     }, { v: variant, points: forecastPoints(!!variant.night), tree: cardTree(), forecastDefaults: forecastPayload(), scheduleDefaults: scheduleSlots({ slotMinutes: 15 }) });
@@ -299,8 +280,6 @@ test("solar Overview shows the P1 detail layout", async ({ page }) => {
     await expect(c.locator("[data-overview]")).toBeVisible();
     await expect(c.locator("helman-detail-headline")).toContainText("4.2 kW");
     await expect(c.locator("helman-flow-gauge")).toHaveCount(1);
-    await expect(c.locator("helman-node-flow, helman-node-tile, helman-node-question")).toHaveCount(0);
-    await expect(c.locator("helman-node-flow, helman-node-tile, helman-node-question")).toHaveCount(0);
 });
 
 test("solar headline, gauge and power card agree where the grid meter disagrees with the balance", async ({ page }) => {
@@ -367,4 +346,59 @@ test("solar Forecast header says what is still to come today and tomorrow, and t
     await expect(chart.locator(".reference-label")).toContainText("10.0 kW");
     expect(await section.locator("helman-help-tip").evaluate((tip: any) => tip.explanation)).toContain("over the last 21 days");
     expect(await page.evaluate(() => window.__SolarRequests.filter((r) => r.section === "production").length)).toBe(1);
+});
+
+// History & statistics, Technical details -------------------------------------
+
+async function openSolar(page: Page): Promise<void> {
+    await page.locator(".node-cell:has(simple-card-solar)").click();
+    await expect(content(page).locator("[data-overview]")).toBeVisible();
+}
+
+test("solar History header gives today's production, collapsed; the body has where it went, the strings and the lifetime total", async ({ page }) => {
+    await mount(page);
+    await openSolar(page);
+    const section = content(page).locator("helman-detail-section[data-history]");
+    await expect(section.locator("[slot=summary]")).toHaveText("18 kWh produced today");
+    await expect(section.locator("[slot=summary] b")).toHaveText("18 kWh");
+    await expect(section.locator("[data-history-body]")).toHaveCount(0);
+    expect(await page.evaluate(() => window.__SolarRequests.some((r) => r.section === "destinations" || r.section === "strings"))).toBe(false);
+    await section.locator("button").first().click();
+    await expect(section.locator("[data-row=used_house] .value")).toHaveText("6.5 kWh");
+    await expect(section.locator("[data-row=stored_battery] .value")).toHaveText("4.2 kWh");
+    await expect(section.locator("[data-row=sold_grid] .value")).toHaveText("5.8 kWh");
+    await expect(section.locator("[data-row=not_resolved] .value")).toHaveText("1.5 kWh");
+    // Where it went adds up to the production the header gives.
+    const parts = await section.locator("[data-destinations] .value").allTextContents();
+    expect(parts.reduce((sum, text) => sum + parseFloat(text), 0)).toBeCloseTo(18, 5);
+    await expect(section.locator("helman-day-line-chart[data-strings-chart] path.line")).toHaveCount(2);
+    await expect(section.locator("[data-row=lifetime] .value")).toHaveText("51.7 MWh");
+});
+
+test("solar History leaves out the strings chart with one string", async ({ page }) => {
+    await mount(page, { singleString: true });
+    await openSolar(page);
+    const section = content(page).locator("helman-detail-section[data-history]");
+    await section.locator("button").first().click();
+    await expect(section.locator("[data-row=lifetime]")).toHaveCount(1);
+    await expect(section.locator("helman-day-line-chart[data-strings-chart]")).toHaveCount(0);
+});
+
+test("solar Technical details compares the raw and corrected forecast for an admin", async ({ page }) => {
+    await mount(page, { admin: true });
+    await openSolar(page);
+    const section = content(page).locator("helman-detail-section[data-technical]");
+    await section.locator("button").first().click();
+    await expect(section.locator("[data-row=correction] .value")).toHaveText("× 0.90");
+    await expect(section.locator("[data-row=bias-status] .value")).toHaveText("applied");
+    await expect(section.locator("[data-row=bias-days] .value")).toHaveText("21");
+    await expect(section.locator("[data-row=raw] .value")).toContainText("kWh");
+    await expect(section.locator("[data-row=corrected] .value")).toContainText("kWh");
+});
+
+test("solar Technical details is not rendered for a non-admin", async ({ page }) => {
+    await mount(page);
+    await openSolar(page);
+    await expect(content(page).locator("helman-detail-section[data-history]")).toHaveCount(1);
+    await expect(content(page).locator("helman-detail-section[data-technical]")).toHaveCount(0);
 });

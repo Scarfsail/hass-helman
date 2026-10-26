@@ -58,6 +58,8 @@ type Variant = {
     timeZone?: string;
     /** The profile's L3 power is not in the registry. */
     noPhase3?: boolean;
+    /** The viewer is not an admin. */
+    nonAdmin?: boolean;
     todayFails?: boolean;
     /** The boiler's user action from 12:00 to 13:00, another lane's override. */
     userBoiler?: boolean;
@@ -272,7 +274,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
         window.__EvChargerHass = window.__configureNodeDetail({
             states, tree, overviews: { ev_charger: overview }, sections: { ev_charger: { today, segment } }, schedule,
             timeZone: v.timeZone,
-            hass: { user: { is_admin: true } },
+            hass: { user: { is_admin: !v.nonAdmin } },
             replies: {
                 "helman/set_schedule": schedule,
                 "helman/get_appliances": appliances,
@@ -329,7 +331,6 @@ test("ev-charger Overview shows the P1 detail layout", async ({ page }) => {
     await expect(c.locator("helman-switch-tile")).toHaveCount(1);
     await expect(c.locator("helman-flow-gauge")).toHaveCount(1);
     await expect(c.locator("[data-car]")).toHaveCount(1);
-    await expect(c.locator("helman-node-flow, helman-node-tile, helman-node-question")).toHaveCount(0);
 });
 
 test("charger gauge adds up to its headline, small shares included", async ({ page }) => {
@@ -359,7 +360,7 @@ test("charger car tile gives the limit, needed energy and ETA", async ({ page })
     await expect(c.locator("[data-car] [data-limit-marker]")).toHaveCount(1);
     await expect(c.locator("[data-car]")).toContainText("Still needed");
     await expect(c.locator("helman-who-decides")).toBeVisible();
-    await expect(c.locator("[data-overview]").locator("helman-node-flow, helman-mode-strip")).toHaveCount(0);
+    await expect(c.locator("[data-overview]").locator("helman-mode-strip")).toHaveCount(0);
 });
 
 test("charger Schedule does not promise an unmet charge candidate", async ({ page }) => {
@@ -445,4 +446,93 @@ test("charger shows no Forecast without a projection for its car", async ({ page
     await expect(content(page).locator("[data-overview]")).toBeVisible();
     await page.waitForTimeout(300);
     await expect(forecastSection(page)).toHaveCount(0);
+});
+
+// History & statistics, Technical details -------------------------------------
+
+test("ev-charger History header gives today's charge and its solar share, collapsed; the body splits it by source and draws the last 24 hours", async ({ page }) => {
+    await mount(page);
+    await page.evaluate(() => {
+        (window as any).__chartConfigs = [];
+        (window as any).loadCardHelpers = async () => ({ createCardElement: (config: unknown) => {
+            (window as any).__chartConfigs.push(config);
+            const element = document.createElement("div");
+            element.className = "history-graph-stub";
+            return element;
+        } });
+    });
+    await openDevice(page, "Garage EV");
+    const section = content(page).locator("helman-detail-section[data-history]");
+    await expect(section.locator("[slot=summary]")).toHaveText("6.4 kWh today · 63 % solar");
+    await expect(section.locator("[slot=summary] b")).toHaveText(["6.4 kWh", "63"]);
+    await expect(section.locator("[data-history-body]")).toHaveCount(0);
+    await section.locator("button").first().click();
+    await expect(section.locator("[data-share-bar] [data-share]")).toHaveCount(4);
+    await expect(section.locator("[data-share-bar]")).toHaveAttribute("aria-label", "Solar 63 %, Battery 6 %, Grid 28 %, Source unknown 3 %");
+    expect(await section.locator("[data-share=solar]").evaluate((element) => getComputedStyle(element).backgroundColor))
+        .toBe(await section.locator("[data-share-bar]").evaluate((element) => {
+            const probe = document.createElement("span");
+            probe.style.background = "var(--helman-solar)";
+            element.appendChild(probe);
+            const color = getComputedStyle(probe).backgroundColor;
+            probe.remove();
+            return color;
+        }));
+    await expect(section.locator("[data-row=from-solar] .value")).toHaveText("4.0 kWh");
+    await expect(section.locator("[data-row=from-battery] .value")).toContainText("kWh");
+    await expect(section.locator("[data-row=from-grid] .value")).toContainText("1.8 kWh · paid ≈");
+    await expect(section.locator("[data-row=from-unknown] .value")).toHaveText("0.20 kWh");
+    // The rows add up to the header's figure, and the bar's solar share is the header's.
+    const rows = await section.locator("[data-sources] .value").allTextContents();
+    expect(rows.reduce((sum, text) => sum + parseFloat(text), 0)).toBeCloseTo(6.4, 5);
+    const width = (selector: string) => section.locator(selector).evaluate((element) => element.getBoundingClientRect().width);
+    expect(await width("[data-share=solar]") / await width("[data-share-bar]")).toBeCloseTo(4.0 / 6.4, 1);
+    await expect(section.locator(".history-graph-stub")).toHaveCount(1);
+    expect(await page.evaluate(() => (window as any).__chartConfigs)).toEqual([{ type: "history-graph", hours_to_show: 24, entities: ["sensor.ev_power"] }]);
+});
+
+test("ev-charger History keeps its last-24-hours graph across a data change", async ({ page }) => {
+    await mount(page);
+    await page.evaluate(() => {
+        (window as any).__chartConfigs = [];
+        (window as any).loadCardHelpers = async () => ({ createCardElement: (config: unknown) => {
+            (window as any).__chartConfigs.push(config);
+            const element = document.createElement("div");
+            element.className = "history-graph-stub";
+            return element;
+        } });
+    });
+    await openDevice(page, "Garage EV");
+    const section = content(page).locator("helman-detail-section[data-history]");
+    await section.locator("button").first().click();
+    await expect(section.locator(".history-graph-stub")).toHaveCount(1);
+    await section.locator(".history-graph-stub").evaluate((element) => { (element as any).__marked = true; });
+    await page.evaluate(() => window.__fireDataChanged("schedule"));
+    await page.waitForTimeout(300);
+    await expect(section.locator(".history-graph-stub")).toHaveCount(1);
+    expect(await section.locator(".history-graph-stub").evaluate((element) => (element as any).__marked === true)).toBe(true);
+    expect(await page.evaluate(() => (window as any).__chartConfigs.length)).toBe(1);
+});
+
+test("ev-charger Technical details shows execution, the window, the projection, the link and the phase comparison to an admin", async ({ page }) => {
+    await mount(page);
+    await openDevice(page, "Garage EV");
+    const section = content(page).locator("helman-detail-section[data-technical]");
+    await expect(section.locator("[slot=summary]")).toHaveCount(0);
+    await section.locator("button").first().click();
+    await expect(section.locator("[data-row=execution]")).toHaveCount(1);
+    await expect(section.locator("[data-row=runtime]")).toHaveCount(1);
+    await expect(section.locator("[data-row=window] .value")).toHaveText("Fast · 6A");
+    await expect(section.locator("[data-row=charge_mode] .value")).toContainText("Fast");
+    await expect(section.locator("[data-row=generated]")).toHaveCount(1);
+    await expect(section.locator("[data-row=fault]")).toHaveCount(1);
+    await expect(section.locator("[data-row=network_status]")).toHaveCount(1);
+    await expect(section.locator("[data-row=total], [data-incomparable]")).not.toHaveCount(0);
+});
+
+test("ev-charger Technical details is not rendered for a non-admin", async ({ page }) => {
+    await mount(page, { nonAdmin: true });
+    await openDevice(page, "Garage EV");
+    await expect(content(page).locator("helman-detail-section[data-history]")).toHaveCount(1);
+    await expect(content(page).locator("helman-detail-section[data-technical]")).toHaveCount(0);
 });
