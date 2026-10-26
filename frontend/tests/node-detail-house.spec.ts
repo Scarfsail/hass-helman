@@ -48,6 +48,8 @@ type Variant = {
     boilerSetByUser?: boolean;
     boilerOffFirst?: boolean;
     noBoiler?: boolean;
+    /** Helman's house remainder sensor, its median lagging the meters. */
+    houseRemainder?: string;
 };
 
 declare global {
@@ -106,7 +108,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             "sensor.breaker_power": s("900", "W"),
             "sensor.pump_power": s("600", "W"),
             "sensor.helman_unmeasured_power_breaker_energy": s("300", "W"),
-            "sensor.helman_unmeasured_power_house": s("300", "W"),
+            "sensor.helman_unmeasured_power_house": s(v.houseRemainder ?? "300", "W"),
             "sensor.helman_solar_source_ratio": s("50", "%"),
             "sensor.helman_battery_source_ratio": s("20", "%"),
             "sensor.helman_grid_source_ratio": s("30", "%"),
@@ -335,6 +337,23 @@ test("house expands biggest users and opens the selected device", async ({ page 
     await expect(c).toContainText("Not measured");
     await c.getByRole("button", { name: /Heat pump/ }).click();
     await expect(page.locator("node-detail-device-content")).toBeVisible();
+});
+
+test("house biggest users add up to the headline, whatever the remainder sensor reads", async ({ page }) => {
+    // 7.5 kW of loads in 7.8 kW of house leave 300 W no meter explains; the sensor's median still reads 90 W.
+    await mount(page, { houseRemainder: "90" });
+    await page.locator(".node-cell:has(simple-card-house)").click();
+    const c = content(page);
+    const rows = () => c.locator(".user-row .user-amount").evaluateAll((amounts) => amounts.map((amount) => {
+        const [, value, unit, pct] = amount.textContent!.replace(/\s+/g, " ").match(/([\d.]+) (k?W) (\d+) %/)!;
+        return { watts: Number(value) * (unit === "kW" ? 1000 : 1), pct: Number(pct) };
+    }));
+    const total = (list: Array<{ watts: number; pct: number }>) => list.reduce((sum, row) => ({ watts: sum.watts + row.watts, pct: sum.pct + row.pct }), { watts: 0, pct: 0 });
+    await expect(c.getByRole("button", { name: /Everything else/ })).toContainText("1.8 kW 23 %");
+    expect(total(await rows())).toEqual({ watts: 7800, pct: 100 });
+    await c.getByRole("button", { name: /Everything else/ }).click();
+    await expect(c.locator(".user-row", { hasText: "Not measured" })).toContainText("300 W 4 %");
+    expect(total(await rows())).toEqual({ watts: 7800, pct: 100 });
 });
 
 test("house Schedule skips an off transition and finds the later start", async ({ page }) => {

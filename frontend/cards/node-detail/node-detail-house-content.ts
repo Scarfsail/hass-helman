@@ -396,8 +396,11 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         const flows = this.params.flows;
         const loads = phases.loads.filter((load) => load.watts !== null && load.watts > 0).sort((a, b) => b.watts! - a.watts!);
         const visible = this._allUsers ? loads : loads.slice(0, TOP_CONSUMERS);
-        const hasUnmeasured = phases.houseRemainderW !== null || power !== null;
-        const unmeasuredW = phases.houseRemainderW ?? (power === null ? 0 : Math.max(0, power - loads.reduce((sum, load) => sum + (load.watts ?? 0), 0)));
+        // What no meter explains is the headline less the loads, from the same
+        // states: the rows then add up to the house. The backend's remainder
+        // sensor is a median over several seconds and never adds up to it.
+        const hasUnmeasured = power !== null;
+        const unmeasuredW = power === null ? 0 : Math.max(0, power - loads.reduce((sum, load) => sum + (load.watts ?? 0), 0));
         const otherW = loads.slice(TOP_CONSUMERS).reduce((sum, load) => sum + (load.watts ?? 0), unmeasuredW);
         const otherCount = Math.max(0, loads.length - TOP_CONSUMERS) + (hasUnmeasured ? 1 : 0);
         return html`
