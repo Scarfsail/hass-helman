@@ -11,7 +11,7 @@ import type {
 } from "../helman-api";
 import { getSharedHelmanStore } from "../shared/data/store";
 import { dispatchWatchedEntities } from "../shared/hass-change";
-import { SectionResource } from "./section-resource";
+import { NEW_DAY_RETRY_MS, SectionResource } from "./section-resource";
 import { currencyFromPriceUnit } from "../helman-solar-inspector/money-model";
 
 import "../shared/soc-glyph";
@@ -107,12 +107,13 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
         fetch: async () => {
             const payload = await getSharedHelmanStore(this.hass).getNodeDetail<InverterDetailPayload>({ node: "inverter" }, { fresh: true });
             this._inverterStates = this._inverterSignature(payload);
-            dispatchWatchedEntities(this, "node-detail", this._inverterEntities(payload));
+            dispatchWatchedEntities(this, "node-detail:inverter", this._inverterEntities(payload));
             return payload;
         },
         shown: () => true,
         keepOnError: true,
-        staleness: (payload) => payload === null || this._inverterSignature(payload) !== this._inverterStates,
+        // A failed read is retried at the interval a stale day is, not on every render.
+        staleness: (payload, requestedAt) => payload === null ? Date.now() - requestedAt > NEW_DAY_RETRY_MS : this._inverterSignature(payload) !== this._inverterStates,
     });
 
     private _inverterEntities(payload: InverterDetailPayload): string[] {

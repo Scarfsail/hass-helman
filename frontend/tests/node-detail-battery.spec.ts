@@ -243,6 +243,83 @@ test("battery mode now shows a dash when the inverter reports no mode", async ({
     await expect(content(page).locator("[data-inverter-control] .row").nth(1).locator(".value")).toHaveText("—");
 });
 
+for (const first of ["battery", "inverter"] as const) {
+    test(`battery keeps watching its own entities and the inverter's mode when the ${first} overview answers first`, async ({ page }) => {
+        await mount(page);
+        await page.evaluate((first) => {
+            const hass = window.__BatteryHass;
+            const original = hass.callWS;
+            const held: Record<string, () => void> = {};
+            (window as any).__releaseOverview = (node: string) => held[node]?.();
+            hass.callWS = async (request: any) => {
+                if (request.type !== "helman/get_node_detail" || request.section) return original(request);
+                const hold = new Promise<void>((resolve) => { held[request.node] = resolve; });
+                const answer = await original(request);
+                await hold;
+                if (request.node !== "inverter") return answer;
+                // The inverter reports whatever its mode register reads when asked.
+                const charging = ((window as any).__currentHass ?? hass).states["select.helman_inverter_mode"]?.state === "charge";
+                return { ...answer, mode: { entityId: "select.helman_inverter_mode", actionOptions: {} },
+                    agreement: { ...answer.agreement, observedOption: charging ? "charge_to_target_soc" : "normal" } };
+            };
+            hass.states["select.helman_inverter_mode"] = { entity_id: "select.helman_inverter_mode", state: "idle", attributes: {}, last_changed: "", last_updated: "", context: { id: "" } };
+            void first;
+        }, first);
+        await page.locator(".node-cell:has(simple-card-battery)").click();
+        const second = first === "battery" ? "inverter" : "battery";
+        for (const node of [first, second]) {
+            await expect.poll(() => page.evaluate((n) => window.__NodeDetailRequests.some((r) => r.type === "helman/get_node_detail" && r.node === n && !r.section), node)).toBe(true);
+            await page.evaluate((n) => (window as any).__releaseOverview(n), node);
+        }
+        const mode = content(page).locator("[data-inverter-control] .row").nth(1).locator(".value");
+        await expect(mode).toHaveText("Normal");
+        await expect(content(page).locator("[data-estimate]")).toContainText("4 h");
+        const change = (entity: string, state: string) => page.evaluate(({ entity, state }) => {
+            const card = document.querySelector("helman-simple-card") as any;
+            const hass = (window as any).__currentHass ?? window.__BatteryHass;
+            (window as any).__currentHass = { ...hass, states: { ...hass.states, [entity]: { ...hass.states[entity], state } } };
+            card.hass = (window as any).__currentHass;
+        }, { entity, state });
+        // A battery-only entity (time to empty) still refreshes what is shown.
+        await change("sensor.helman_battery_time_to_empty", "60");
+        await expect(content(page).locator("[data-estimate]")).toContainText("1 h");
+        // The inverter's mode register re-reads the inverter overview.
+        const inverterReads = () => page.evaluate(() => window.__NodeDetailRequests.filter((r) => r.type === "helman/get_node_detail" && r.node === "inverter" && !r.section).length);
+        const before = await inverterReads();
+        await change("select.helman_inverter_mode", "charge");
+        await expect.poll(inverterReads).toBe(before + 1);
+        await page.evaluate(() => (window as any).__releaseOverview("inverter"));
+        await expect(mode).toContainText("Charg");
+    });
+}
+
+test("battery backs off retrying a failed inverter read and shows a dash", async ({ page }) => {
+    await mount(page);
+    await page.evaluate(() => {
+        const hass = window.__BatteryHass;
+        const original = hass.callWS;
+        hass.callWS = (request: any) => {
+            if (request.type !== "helman/get_node_detail" || request.node !== "inverter" || request.section) return original(request);
+            window.__NodeDetailRequests.push({ ...request });
+            return Promise.reject(new Error("inverter down"));
+        };
+    });
+    const calls = () => page.evaluate(() => window.__NodeDetailRequests.filter((r) => r.type === "helman/get_node_detail" && r.node === "inverter" && !r.section).length);
+    const before = await calls();
+    await openDetail(page);
+    const mode = content(page).locator("[data-inverter-control] .row").nth(1).locator(".value");
+    await expect(mode).toHaveText("—");
+    for (let i = 0; i < 3; i += 1) {
+        await page.evaluate((i) => {
+            const card = document.querySelector("helman-simple-card") as any;
+            card.hass = { ...window.__BatteryHass, states: { ...window.__BatteryHass.states, "sensor.tick": { state: String(i), attributes: {} } } };
+        }, i);
+        await page.waitForTimeout(100);
+    }
+    expect(await calls() - before).toBe(1);
+    await expect(mode).toHaveText("—");
+});
+
 test("battery headline, gauge and power card agree where the grid meter disagrees with the balance", async ({ page }) => {
     // 2.1 kW discharging while solar covers the house: the balance exports it all; the grid meter reads 0.3 kW.
     await mount(page);
