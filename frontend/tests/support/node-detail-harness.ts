@@ -33,22 +33,12 @@ export function inverterOverview(overrides: Record<string, unknown> = {}) {
         condition: null, sections: [], ...overrides };
 }
 
-export function flowsSection(node: string, overrides: Record<string, unknown> = {}) {
-    return { node, section: "flows", asOf: "2026-10-21T12:00:00+00:00",
-        period: { start: "2026-10-21T00:00:00+00:00", end: "2026-10-22T00:00:00+00:00" },
-        priceUnit: "CZK/kWh", complete: false, unavailable: null,
-        flows: { solarToHouse: 5.1, solarToBattery: 4.2, solarToGrid: 5.8, solarUnresolved: 0.4,
-            gridToBattery: 1.5, unknownToBattery: 0.3, gridToBatteryCost: 4.0,
-            batteryToHouse: 3.6, gridToHouse: 1.2, unknownToHouse: 0.1, batteryToGrid: 0 }, ...overrides };
-}
-
 declare global {
     interface Window {
         __NodeDetailHass: any;
         __NodeDetailRequests: MockRequest[];
         __configureNodeDetail: (options: NodeDetailOptions) => any;
         __nodeDetailState: typeof state;
-        __flowsSection: typeof flowsSection;
         __inverterOverview: typeof inverterOverview;
     }
 }
@@ -59,7 +49,7 @@ export async function prepareNodeDetailPage(page: Page): Promise<void> {
     await page.setContent("<!doctype html><html><body style='margin:0'></body></html>");
     await installMockHass(page);
     await page.addScriptTag({ content: HA_DIALOG_STUB });
-    await page.addScriptTag({ content: `window.__nodeDetailState = ${state.toString()}; window.__flowsSection = ${flowsSection.toString()}; window.__inverterOverview = ${inverterOverview.toString()};` });
+    await page.addScriptTag({ content: `window.__nodeDetailState = ${state.toString()}; window.__inverterOverview = ${inverterOverview.toString()};` });
     await page.evaluate(() => {
         window.__configureNodeDetail = (options) => {
             window.__NodeDetailRequests = [];

@@ -8,16 +8,18 @@ device's ``deviceKey``::
 
     {"daily_kwh": {"mean", "median", "min", "max", "days"},
      "runs_per_day": float,
+     "daily_runs": {"min", "max"},
      "run_minutes": {"median", "min", "max"},
      "run_kwh": {"median", "min", "max"},
      "running_kw": float,
      "on_kwh_per_hour": float}
 
 Every key is left out when history does not answer it. ``daily_kwh`` covers
-the complete local days in the window, zero days included. A run clipped by
-either edge of the window is left out of the run figures, since its length is
-unknown, but its energy still counts toward ``running_kw``: energy over the
-hours the device actually drew. ``on_kwh_per_hour`` is the job's estimate --
+the complete local days in the window, zero days included, and ``daily_runs``
+counts the runs starting on each of those days the run figures observe. A run
+clipped by either edge of the window is left out of the run figures, since its
+length is unknown, but its energy still counts toward ``running_kw``: energy
+over the hours the device actually drew. ``on_kwh_per_hour`` is the job's estimate --
 energy per hour the running signal is on, idle on-time included -- which is
 what a ``history_average`` forecast uses.
 
@@ -63,17 +65,20 @@ def metered_record(
     window_start: datetime,
     window_end: datetime,
     daily_kwh: Sequence[float],
+    days: Sequence[Span],
     power_states: Sequence[Any] | None = None,
     power_value_type: str = "default",
     running: Sequence[Span] | None = None,
+    observed: Sequence[Span] | None = None,
     on_kwh_per_hour: float | None = None,
 ) -> dict[str, Any] | None:
     """The record of a device with its own meter.
 
-    ``daily_kwh`` is its meter's change over each complete local day, so a
-    parent's includes its metered children. Runs come only from a power
+    ``daily_kwh`` is its meter's change over each complete local day in
+    ``days``, so a parent's includes its metered children. Runs come only from a power
     sensor's ``power_states``: above the standby floor, and within
-    ``running`` -- its running signal's active intervals -- when it has one.
+    ``running`` -- its running signal's active intervals -- when it has one;
+    ``observed`` are the intervals that signal reported any state at all.
     """
     runs: list[Piece] = []
     covered_start = window_start
@@ -87,8 +92,20 @@ def metered_record(
             # runs per day count only the time the readings cover.
             covered_start = pieces[0][0]
             covered = sum((end - start for start, end, _ in pieces), timedelta())
+            # Nor is a day the readings do not fully cover a zero-run day.
+            days = [day for day in days if _covers(pieces, day)]
+            # Nor is a day the running signal was unavailable for: gated by
+            # it, the power shows no runs there either.
+            if observed is not None:
+                days = [day for day in days if _covers(observed, day)]
     return _record(
-        covered_start, window_end, daily_kwh, runs, on_kwh_per_hour, covered=covered
+        covered_start,
+        window_end,
+        daily_kwh,
+        days,
+        runs,
+        on_kwh_per_hour,
+        covered=covered,
     )
 
 
@@ -99,6 +116,7 @@ def member_record(
     local_tz: tzinfo,
     member_energy: Sequence[Piece],
     on_kwh_per_hour: float | None,
+    observed: Sequence[Span] | None = None,
 ) -> dict[str, Any] | None:
     """The record of a meterless child, from its share of the meter.
 
@@ -106,7 +124,8 @@ def member_record(
     record cannot drift from its estimate or its live share. It runs while its
     signal is active: touching segments are one run. ``window_start`` is where
     its meter's history begins, so days the recorder no longer holds are not
-    counted as zero days.
+    counted as zero days, and a day its signal's ``observed`` intervals do
+    not cover is no zero-run day either.
     """
     runs: list[Piece] = []
     for start, end, kwh in member_energy:
@@ -114,10 +133,19 @@ def member_record(
             runs[-1] = (runs[-1][0], end, runs[-1][2] + kwh)
         else:
             runs.append((start, end, kwh))
-    daily = _energy_by_day(
-        member_energy, local_midnights(window_start, window_end, local_tz)
+    midnights = local_midnights(window_start, window_end, local_tz)
+    daily = _energy_by_day(member_energy, midnights)
+    days = list(zip(midnights, midnights[1:]))
+    if observed is not None:
+        days = [day for day in days if _covers(observed, day)]
+    return _record(
+        window_start,
+        window_end,
+        daily,
+        days,
+        runs,
+        on_kwh_per_hour,
     )
-    return _record(window_start, window_end, daily, runs, on_kwh_per_hour)
 
 
 def local_midnights(
@@ -304,12 +332,14 @@ def _record(
     window_start: datetime,
     window_end: datetime,
     daily_kwh: Sequence[float],
+    days: Sequence[Span],
     runs: Sequence[Piece],
     on_kwh_per_hour: float | None,
     *,
     covered: timedelta | None = None,
 ) -> dict[str, Any] | None:
-    """``covered`` is the time the history observed, when less than the window."""
+    """``days`` are the complete local days the run figures observe, and
+    ``covered`` the time the history observed, when less than the window."""
     record: dict[str, Any] = {}
     if daily_kwh:
         record["daily_kwh"] = {
@@ -326,6 +356,12 @@ def _record(
             digits=1,
         )
         record["run_kwh"] = _spread([kwh for _start, _end, kwh in complete])
+        day_runs = [
+            sum(day_start <= run[0] < day_end for run in complete)
+            for day_start, day_end in days
+        ]
+        if day_runs:
+            record["daily_runs"] = {"min": min(day_runs), "max": max(day_runs)}
     running_hours = sum((end - start) / _HOUR for start, end, _ in runs)
     if running_hours > 0:
         record["running_kw"] = round(
@@ -334,6 +370,20 @@ def _record(
     if on_kwh_per_hour is not None:
         record["on_kwh_per_hour"] = on_kwh_per_hour
     return record or None
+
+
+def _covers(pieces: Sequence[Piece] | Sequence[Span], span: Span) -> bool:
+    """Whether the sorted, disjoint ``pieces`` (or spans) cover all of ``span``."""
+    start, end = span
+    seen = sum(
+        (
+            min(piece_end, end) - max(piece_start, start)
+            for piece_start, piece_end, *_ in pieces
+            if piece_start < end and start < piece_end
+        ),
+        timedelta(),
+    )
+    return seen >= end - start
 
 
 def _spread(values: Sequence[float], *, digits: int = 4) -> dict[str, float]:

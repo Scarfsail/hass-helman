@@ -8,7 +8,7 @@ import { test, expect, type Page } from "@playwright/test";
  *
  * Mounted on the real `helman-simple-card` against a fake backend that answers
  * the device tree, `helman/get_node_detail` (the battery overview and its
- * charge and flows sections), the schedule and the forecast. What is pinned is
+ * charge section), the schedule and the forecast. What is pinned is
  * the shared visual language (a status pill, the Now/Today flow around the SoC
  * glyph, answer tiles, readings that open more-info), the disclosure contract
  * (the pictures open the questions they absorb, one open answer under the
@@ -45,8 +45,6 @@ type Variant = {
     soc?: string;
     /** The inverter's rated power register, W; absent without one. */
     ratedPower?: string;
-    /** Today's flows section: a fixed day, or the reports' reason for none. */
-    flowsUnavailable?: string;
     /** The slot in progress holds a charge candidate whose condition is not met. */
     candidateNow?: boolean;
     /** Schedule execution is switched off. */
@@ -195,7 +193,6 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                     : [forecastSlot(`${day}T12:00:00+00:00`, 66), forecastSlot(`${day}T12:15:00+00:00`, 64)],
             },
         };
-        const flowsSection = window.__flowsSection("battery", { unavailable: v.flowsUnavailable ?? null, flows: v.flowsUnavailable ? null : { ...window.__flowsSection("battery").flows, solarToGrid: 2.0 } });
         const inverter = window.__inverterOverview({
             entities: v.ratedPower ? { rated_power: "sensor.solax_inverter_power_type" } : {},
             agreement: { status: "match", reason: null, commanded: null, observedOption: v.observed === undefined ? "normal" : v.observed, observedFrom: [], registers: [] },
@@ -203,7 +200,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
         window.__moreInfo = [];
         document.addEventListener("hass-more-info", (event) => window.__moreInfo.push((event as CustomEvent).detail.entityId));
         window.__BatteryHass = window.__configureNodeDetail({
-            states, tree, overviews: { battery: overview, inverter }, sections: { battery: { flows: flowsSection, charge: section } }, forecast: v.forecastFails ? "error" : forecast, schedule,
+            states, tree, overviews: { battery: overview, inverter }, sections: { battery: { charge: section } }, forecast: v.forecastFails ? "error" : forecast, schedule,
             replies: { "recorder/statistic_during_period": { min: 6, max: 14 } },
             hass: v.admin ? { user: { is_admin: true } } : {},
         });

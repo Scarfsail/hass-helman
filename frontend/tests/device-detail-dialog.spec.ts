@@ -304,6 +304,7 @@ const BOILER_STATS = {
     "sensor.boiler_energy": {
         daily_kwh: { median: 4.1, min: 1.2, max: 6.8, mean: 4.0, days: 14 },
         runs_per_day: 2,
+        daily_runs: { min: 1, max: 3 },
         run_minutes: { median: 105, min: 60, max: 150 },
         run_kwh: { median: 3.4, min: 2, max: 5 },
         on_kwh_per_hour: 1.8,
@@ -327,10 +328,23 @@ test("device History header gives the learned average while on, collapsed; the b
     await expect(tiles.nth(0)).toContainText("4.1 kWh");
     await expect(tiles.nth(0)).toContainText("a typical day (1.2–6.8 kWh)");
     await expect(tiles.nth(1)).toContainText("2 runs");
+    await expect(tiles.nth(1)).toContainText("a typical day (1–3 runs)");
     await expect(tiles.nth(2)).toContainText("1 h 45 min");
     await expect(tiles.nth(2)).toContainText("a typical run ≈ 3.4 kWh");
     await expect(tiles.nth(3)).toContainText("1.8 kW");
     await expect(tiles.nth(3)).toContainText("average while on");
+});
+
+test("device runs tile keeps the plain caption for stats learned before the daily run range", async ({ page }) => {
+    const { daily_runs: _, ...stats } = BOILER_STATS["sensor.boiler_energy"];
+    await mountCard(page, { "sensor.boiler_energy": stats }, true);
+    await openDevice(page, "Boiler");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
+    await section.locator("button").first().click();
+    const runs = section.locator("[data-typical] [data-stat]").nth(1);
+    await expect(runs).toContainText("2 runs");
+    await expect(runs).toContainText("a typical day");
+    await expect(runs).not.toContainText("(");
 });
 
 test("device Technical details lists its entities for an admin, and is absent for anyone else", async ({ page }) => {

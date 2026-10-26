@@ -436,8 +436,26 @@ class TestSolarTotals(DatasetTestCase):
                 "batteryKwh": 2.0,
                 "exportKwh": 2.0,
                 "measuredExportKwh": 2.0,
+                "exportMoney": 0.0,
+                "exportPricedKwh": 0.0,
             },
         )
+
+    def test_solar_export_is_priced_by_its_hours_export_rate(self):
+        # Hour 0 is priced, hour 1 has no rate, and hour 2 is priced but has
+        # no source mix (no import row): only hour 0's export counts.
+        dataset, _ = self.house_split(
+            {
+                0: {"H": 1, "S": 4, "E": 3},
+                1: {"H": 1, "S": 3, "E": 2},
+                2: {"H": 1, "S": 3, "E": 2, "I": None},
+            },
+            export_rate={0: 0.5, 2: 9.0},
+        )
+        totals = dataset.solar_totals
+        self.assertAlmostEqual(totals.export_kwh, 5)
+        self.assertAlmostEqual(totals.export_priced_kwh, 3)
+        self.assertAlmostEqual(totals.export_money, 1.5)
 
     def test_battery_export_in_one_hour_never_absorbs_solar_left_over_in_another(self):
         # Midday: 5 kWh solar, 1 used, nothing charged or exported, 4 unexplained.

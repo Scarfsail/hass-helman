@@ -8,7 +8,7 @@ import { test, expect, type Page } from "@playwright/test";
  *
  * Mounted on the real `helman-simple-card` against a fake backend that answers
  * the device tree, `helman/get_node_detail` (the grid overview and its voltage
- * and flows sections), today's span aggregates and the forecast. What is
+ * and money sections), today's span aggregates and the forecast. What is
  * pinned is the shared visual language (a status pill, the phase picture, the
  * Now/Today flow around the pylon, answer tiles), the disclosure contract (the
  * pictures open the questions they absorb, one open answer under the tiles,
@@ -49,8 +49,6 @@ type Variant = {
     grid?: string;
     /** The inverter's rated power register, W; absent without one. */
     ratedPower?: string;
-    /** Today's flows section: a fixed day, or the reports' reason for none. */
-    flowsUnavailable?: string;
     /** The viewer is an admin. */
     admin?: boolean;
 };
@@ -159,10 +157,9 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 ],
             },
         };
-        const flowsSection = window.__flowsSection("grid", { unavailable: v.flowsUnavailable ?? null, ...(v.flowsUnavailable ? { flows: null } : {}) });
         const inverter = window.__inverterOverview({ entities: v.ratedPower ? { rated_power: "sensor.solax_inverter_power_type" } : {} });
         window.__GridHass = window.__configureNodeDetail({
-            states, tree, overviews: { grid: overview, inverter }, sections: { grid: { flows: flowsSection, voltage: v.sectionFails ? "error" : section, money } }, forecast,
+            states, tree, overviews: { grid: overview, inverter }, sections: { grid: { voltage: v.sectionFails ? "error" : section, money } }, forecast,
             hass: v.admin ? { user: { is_admin: true } } : {},
         });
         window.__GridRequests = window.__NodeDetailRequests;
