@@ -38,6 +38,7 @@ def _record(power, *, running=None, on_kwh_per_hour=None):
         window_start=DAY_START,
         window_end=DAY_END,
         daily_kwh=[],
+        days=[],
         power_states=power,
         running=running,
         on_kwh_per_hour=on_kwh_per_hour,
@@ -125,13 +126,19 @@ class DailyTests(unittest.TestCase):
         record = device_stats.metered_record(
             window_start=DAY_START,
             window_end=DAY_START + timedelta(days=3),
-            daily_kwh=[],
+            daily_kwh=[0.0, 0.0, 1.0],
+            days=[
+                (DAY_START + timedelta(days=day), DAY_START + timedelta(days=day + 1))
+                for day in range(3)
+            ],
             power_states=_power(
                 (0, _at(0, day=22)), (1000, _at(10, day=22)), (0, _at(11, day=22))
             ),
         )
 
         self.assertEqual(record["runs_per_day"], 1.0)
+        # Nor are the purged days zero-run days.
+        self.assertEqual(record["daily_runs"], {"min": 1, "max": 1})
 
     def test_an_unavailable_stretch_is_not_counted_as_idle_time(self) -> None:
         # Two days of window, one of them unavailable: one run in the day
@@ -140,6 +147,7 @@ class DailyTests(unittest.TestCase):
             window_start=DAY_START,
             window_end=DAY_START + timedelta(days=2),
             daily_kwh=[],
+            days=[],
             power_states=_power(
                 (0, _at(0)),
                 (1000, _at(10)),
@@ -150,14 +158,77 @@ class DailyTests(unittest.TestCase):
 
         self.assertEqual(record["runs_per_day"], 1.0)
 
+    def test_daily_runs_span_the_days_zero_run_days_included(self) -> None:
+        """Two runs on the first day, none on the second, one on the third."""
+        record = device_stats.member_record(
+            window_start=DAY_START,
+            window_end=DAY_START + timedelta(days=3),
+            local_tz=UTC,
+            member_energy=[
+                (_at(8), _at(9), 1.0),
+                (_at(18), _at(19), 1.0),
+                (_at(10, day=22), _at(11, day=22), 1.0),
+            ],
+            on_kwh_per_hour=None,
+        )
+
+        self.assertEqual(record["daily_runs"], {"min": 0, "max": 2})
+
+    def test_daily_runs_leave_out_runs_clipped_by_the_window(self) -> None:
+        # One whole run a day, plus a run already on when the window opens
+        # and one still on when it closes.
+        record = device_stats.metered_record(
+            window_start=DAY_START,
+            window_end=DAY_START + timedelta(days=2),
+            daily_kwh=[1.0, 1.0],
+            days=[(DAY_START, DAY_END), (DAY_END, DAY_END + timedelta(days=1))],
+            power_states=_power(
+                (1000, DAY_START),
+                (0, _at(1)),
+                (1000, _at(10)),
+                (0, _at(11)),
+                (1000, _at(10, day=21)),
+                (0, _at(11, day=21)),
+                (1000, _at(23, day=21)),
+            ),
+        )
+
+        self.assertEqual(record["daily_runs"], {"min": 1, "max": 1})
+
+    def test_daily_runs_leave_out_a_day_the_power_sensor_was_offline(self) -> None:
+        # One run a day, but the power sensor is unavailable all of the
+        # middle day while the meter keeps reading.
+        record = device_stats.metered_record(
+            window_start=DAY_START,
+            window_end=DAY_START + timedelta(days=3),
+            daily_kwh=[1.0, 1.0, 1.0],
+            days=[
+                (DAY_START + timedelta(days=day), DAY_START + timedelta(days=day + 1))
+                for day in range(3)
+            ],
+            power_states=_power(
+                (0, _at(0)),
+                (1000, _at(10)),
+                (0, _at(11)),
+                ("unavailable", _at(0, day=21)),
+                (0, _at(0, day=22)),
+                (1000, _at(10, day=22)),
+                (0, _at(11, day=22)),
+            ),
+        )
+
+        self.assertEqual(record["runs_per_day"], 1.0)
+        self.assertEqual(record["daily_runs"], {"min": 1, "max": 1})
+
     def test_without_a_power_sensor_only_the_days_and_the_signal_figure(self) -> None:
         plain = device_stats.metered_record(
-            window_start=DAY_START, window_end=DAY_END, daily_kwh=[1.0, 2.0]
+            window_start=DAY_START, window_end=DAY_END, daily_kwh=[1.0, 2.0], days=[]
         )
         signalled = device_stats.metered_record(
             window_start=DAY_START,
             window_end=DAY_END,
             daily_kwh=[1.0, 2.0],
+            days=[],
             on_kwh_per_hour=0.5,
         )
 

@@ -104,6 +104,11 @@ def build_grid_overview(
     }
 
 
+def money_amount(money: Any, kwh: Any) -> float | None:
+    """A money figure, ``0`` when no energy flowed, ``None`` when none was priced."""
+    return money if money is not None else 0.0 if kwh == 0 else None
+
+
 async def async_grid_section(
     hass: Any, ctx: NodeDetailContext, section: str, now: datetime
 ) -> dict[str, Any]:
@@ -117,15 +122,12 @@ async def async_grid_section(
         day = local_now.date().isoformat()
         aggregate = await ctx.day_aggregates(day) if ctx.day_aggregates else {}
         row = next((item for item in aggregate.get("days", []) if item.get("date") == day), None)
-        def amount(money: Any, kwh: Any) -> float | None:
-            return money if money is not None else 0.0 if kwh == 0 else None
-
         return {
             "node": "grid", "section": "money", "asOf": local_now.isoformat(),
             "priceUnit": aggregate.get("priceUnit"),
             "unavailable": None if row is not None else "no_day_aggregate",
-            "importCost": amount(row.get("moneyCost"), row.get("gridImportKwh")) if row else None,
-            "exportRevenue": amount(row.get("moneyGain"), row.get("gridExportKwh")) if row else None,
+            "importCost": money_amount(row.get("moneyCost"), row.get("gridImportKwh")) if row else None,
+            "exportRevenue": money_amount(row.get("moneyGain"), row.get("gridExportKwh")) if row else None,
             "importKwh": row.get("gridImportKwh") if row else None,
             "exportKwh": row.get("gridExportKwh") if row else None,
             "importPricedKwh": row.get("moneyCostKwh") if row else None,

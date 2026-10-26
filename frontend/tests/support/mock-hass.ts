@@ -164,10 +164,6 @@ export async function installMockHass(page: Page): Promise<void> {
                 if (!["inverter", "grid", "battery", "solar", "house", "ev_charger"].includes(String(node))) {
                     throw new Error(`No node detail for '${String(node)}'`);
                 }
-                if (request.section === "flows") return {
-                    node, section: "flows", asOf, period, priceUnit: null, complete: false,
-                    unavailable: "not_loaded", flows: null,
-                };
                 if (request.section) {
                     const section = request.section;
                     const empty = { node, section, asOf, period, priceUnit: null, complete: false, unavailable: "not_loaded" };

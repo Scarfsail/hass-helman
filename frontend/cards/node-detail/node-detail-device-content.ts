@@ -176,7 +176,7 @@ export class NodeDetailDeviceContent extends LitElement {
         const stats = this._stats.payload;
         const h = (key: string) => this.localize(`node_detail.shared.history.${key}`);
         if (!stats) return html`<p class="note" data-no-stats>${h("device_no_stats")}</p>`;
-        const range = (spread: DeviceStatsSpread, digits: number) => `${spread.min.toFixed(digits)}–${spread.max.toFixed(digits)}`;
+        const range = (spread: Pick<DeviceStatsSpread, "min" | "max">, digits: number) => `${spread.min.toFixed(digits)}–${spread.max.toFixed(digits)}`;
         const day = stats.daily_kwh;
         const measures = deviceEnergyMeasures(stats);
         const whileOn = measures.on ?? measures.running;
@@ -185,7 +185,7 @@ export class NodeDetailDeviceContent extends LitElement {
             ${subTitle(day ? fillTemplate(h("device_typical"), { days: day.days }) : h("device_typical_undated"))}
             <div class="stat-tiles two" data-typical>
                 ${day ? statTile(`${formatKwh(day.median)} kWh`, fillTemplate(h("device_day"), { range: range(day, 1) }), "day") : nothing}
-                ${typeof stats.runs_per_day === "number" ? statTile(fillTemplate(h("device_runs"), { n: Math.round(stats.runs_per_day * 10) / 10 }), h("device_runs_caption"), "runs") : nothing}
+                ${typeof stats.runs_per_day === "number" ? statTile(fillTemplate(h("device_runs"), { n: Math.round(stats.runs_per_day * 10) / 10 }), stats.daily_runs ? fillTemplate(h("device_runs_range"), { range: range(stats.daily_runs, 0) }) : h("device_runs_caption"), "runs") : nothing}
                 ${run ? statTile(formatMinutes(run.minutes), fillTemplate(h("device_run"), { kwh: formatKwh(run.kwh) }), "run") : nothing}
                 ${whileOn !== undefined ? statTile(formatPower(whileOn).display, h("device_while_on"), "while-on") : nothing}
             </div>

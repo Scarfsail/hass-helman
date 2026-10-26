@@ -618,10 +618,9 @@ def _metered_record(
     meter_states = histories.states(subject.meter, window_start)
     unit = histories.unit(subject.meter)
     observations = recorder._parse_energy_observations(meter_states, default_unit=unit)
+    midnights = local_midnights(window_start, window_end, local_tz)
     daily = recorder.own_energy_observations(
-        recorder._observation_pairs(observations),
-        [],
-        local_midnights(window_start, window_end, local_tz),
+        recorder._observation_pairs(observations), [], midnights
     )
     on_kwh_per_hour = None
     running = None
@@ -650,6 +649,11 @@ def _metered_record(
         window_start=runs_start,
         window_end=window_end,
         daily_kwh=list(daily.values()),
+        days=[
+            (start, end)
+            for start, end in zip(midnights, midnights[1:])
+            if start in daily
+        ],
         power_states=(
             histories.states(subject.power_entity_id, runs_start)
             if subject.power_entity_id is not None

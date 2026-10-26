@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { mountSimpleCard, state, inverterOverview, flowsSection } from "./support/node-detail-harness";
+import { mountSimpleCard, state, inverterOverview } from "./support/node-detail-harness";
 import { cardTree } from "./support/payload-builders";
 import { installMockHass } from "./support/mock-hass";
 import { CARD_BUNDLE } from "./support/card-page";
@@ -37,7 +37,6 @@ test.describe("EnergyCardHost", () => {
                 sections: {
                     inverter: {
                         modes,
-                        flows: flowsSection("inverter"),
                     },
                 },
             }, tag);
@@ -190,7 +189,7 @@ test.describe("EnergyCardHost", () => {
                     mode: { entityId: "select.helman_inverter_mode", actionOptions: { normal: "normal" } },
                 }),
             },
-            sections: { inverter: { flows: flowsSection("inverter") } },
+            sections: {},
         });
         await page.locator(".inverter-cell").click();
         await expect(page.locator("node-detail-inverter-content")).toBeVisible();

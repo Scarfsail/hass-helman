@@ -195,6 +195,10 @@ class SolarTotals:
     export_kwh: float = 0.0
     #: Export measured in the hours with a source mix, from any source.
     measured_export_kwh: float = 0.0
+    #: The solar export priced at its hour's export rate, and the kWh of it
+    #: that had one.
+    export_money: float = 0.0
+    export_priced_kwh: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -284,7 +288,7 @@ def build_device_dataset(
         nodes=nodes,
         mix=mix,
         charge_origin=_charge_origin(flows, history),
-        solar_totals=_solar_totals(flows),
+        solar_totals=_solar_totals(flows, history.export_rate),
         import_rate=history.import_rate,
         import_rate_source=history.import_rate_source,
         export_rate=history.export_rate,
@@ -596,9 +600,16 @@ def _charge_origin(flows: dict[datetime, _HourFlows], history: SpanHistory) -> C
     )
 
 
-def _solar_totals(flows: dict[datetime, _HourFlows]) -> SolarTotals:
+def _solar_totals(
+    flows: dict[datetime, _HourFlows], export_rate: Mapping[datetime, float]
+) -> SolarTotals:
     """The per-hour solar flows summed, by whether the hour has a source mix."""
     attributed = [flow for flow in flows.values() if flow.attributable]
+    export = price_hourly_series(
+        {hour: flow.solar_to_grid for hour, flow in flows.items() if flow.attributable},
+        export_rate,
+        key_fn=lambda _hour: None,
+    ).get(None, MoneySide())
     return SolarTotals(
         attributed_kwh=sum(flow.solar for flow in attributed),
         unattributed_kwh=sum(flow.solar for flow in flows.values() if not flow.attributable),
@@ -606,6 +617,8 @@ def _solar_totals(flows: dict[datetime, _HourFlows]) -> SolarTotals:
         battery_kwh=sum(flow.solar_to_battery for flow in attributed),
         export_kwh=sum(flow.solar_to_grid for flow in attributed),
         measured_export_kwh=sum(flow.exported for flow in attributed),
+        export_money=export.amount,
+        export_priced_kwh=export.priced_kwh,
     )
 
 

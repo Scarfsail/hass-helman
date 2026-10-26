@@ -11,6 +11,7 @@ import {
     type SolarStringsSectionPayload,
 } from "../helman-api";
 import { NEUTRAL_LIGHT_COLOR } from "../color-utils";
+import { currencyFromPriceUnit } from "../helman-solar-inspector/money-model";
 import { helmanColorVars } from "../color-vars";
 
 import { addDaysToDayKey } from "../shared/schedule/model/schedule-time";
@@ -390,14 +391,17 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
     private _renderDestinations() {
         const notReady = sectionNotReady(this._destinations, this.localize);
         if (notReady) return notReady;
-        const destinations = this._destinations.payload!.destinations;
+        const payload = this._destinations.payload!;
+        const destinations = payload.destinations;
         if (!destinations) return html`<p class="note" data-destinations-unavailable>${this._h("solar_went_unavailable")}</p>`;
-        const row = (node: string, key: string, kwh: number) => historyRow(html`<span class="swatch-mark" style=${`color: var(--helman-${node})`}>■</span>${this._h(key)}`, kwhText(kwh), key);
+        const row = (node: string, key: string, value: string) => historyRow(html`<span class="swatch-mark" style=${`color: var(--helman-${node})`}>■</span>${this._h(key)}`, value, key);
+        const sold = destinations.exportMoney === null || !payload.priceUnit ? kwhText(destinations.exportKwh)
+            : fillTemplate(this._h("kwh_sold"), { kwh: kwhText(destinations.exportKwh), money: this._formatMoney(destinations.exportMoney, currencyFromPriceUnit(payload.priceUnit)) });
         return html`<div class="rows" data-destinations>
-            ${row("house", "used_house", destinations.houseKwh)}
-            ${row("battery", "stored_battery", destinations.batteryKwh)}
-            ${row("grid", "sold_grid", destinations.exportKwh)}
-            ${destinations.unresolvedKwh > 0 ? row("neutral-light", "not_resolved", destinations.unresolvedKwh) : nothing}
+            ${row("house", "used_house", kwhText(destinations.houseKwh))}
+            ${row("battery", "stored_battery", kwhText(destinations.batteryKwh))}
+            ${row("grid", "sold_grid", sold)}
+            ${destinations.unresolvedKwh > 0 ? row("neutral-light", "not_resolved", kwhText(destinations.unresolvedKwh)) : nothing}
         </div>`;
     }
 

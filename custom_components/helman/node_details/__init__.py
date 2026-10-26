@@ -5,8 +5,6 @@ A request without ``section`` gets the overview: the entity ids the card reads
 live, and the facts only the backend can tell (resolved telemetry, the
 configuration agreement). A request with a ``section`` gets only that section's
 history-derived figures, so a closed answer never costs a recorder read.
-Every energy node also answers ``flows``, today's edges between the nodes,
-from the one function in :mod:`.flows`.
 """
 
 from __future__ import annotations
@@ -21,7 +19,6 @@ from ..controllables.spec import CONTROLLABLE_KIND_EV_CHARGER
 from .context import NodeDetailContext
 from .battery import async_battery_section, build_battery_overview
 from .ev_charger import async_ev_charger_section, build_ev_charger_overview
-from .flows import FLOWS_SECTION, async_flows_section
 from .grid import async_grid_section, build_grid_overview
 from .house import async_house_section, build_house_overview
 from .inverter import async_inverter_section, build_inverter_overview
@@ -55,27 +52,27 @@ NODE_DETAILS: dict[str, NodeDetail] = {
     "inverter": NodeDetail(
         overview=build_inverter_overview,
         section=async_inverter_section,
-        sections=frozenset({"temperature", "modes", FLOWS_SECTION}),
+        sections=frozenset({"temperature", "modes"}),
     ),
     "grid": NodeDetail(
         overview=build_grid_overview,
         section=async_grid_section,
-        sections=frozenset({"voltage", "money", FLOWS_SECTION}),
+        sections=frozenset({"voltage", "money"}),
     ),
     "battery": NodeDetail(
         overview=build_battery_overview,
         section=async_battery_section,
-        sections=frozenset({"charge", FLOWS_SECTION}),
+        sections=frozenset({"charge"}),
     ),
     "solar": NodeDetail(
         overview=build_solar_overview,
         section=async_solar_section,
-        sections=frozenset({"production", "strings", "destinations", FLOWS_SECTION}),
+        sections=frozenset({"production", "strings", "destinations"}),
     ),
     "house": NodeDetail(
         overview=build_house_overview,
         section=async_house_section,
-        sections=frozenset({"today", "ranking", "pattern", FLOWS_SECTION}),
+        sections=frozenset({"today", "ranking", "pattern"}),
     ),
     "ev_charger": NodeDetail(
         overview=build_ev_charger_overview,
@@ -119,8 +116,6 @@ async def async_get_node_detail(
         raise NodeDetailError(
             "unknown_section", f"The {node} detail has no section {section!r}"
         )
-    if section == FLOWS_SECTION:
-        return await async_flows_section(hass, ctx, node, now)
     return await detail.section(hass, ctx, section, now, *device_args)
 
 
