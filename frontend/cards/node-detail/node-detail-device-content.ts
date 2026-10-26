@@ -134,10 +134,9 @@ export class NodeDetailDeviceContent extends LitElement {
         const bySlot = new Map(slots.map((slot) => [slot.startMs, slot.kwh]));
         const points = [];
         // Off between the runs is planned too: zero, not a gap.
-        // The projection holds only what remained of the slot in progress when it was generated.
-        const generated = Date.parse(this._projection.payload?.generatedAt ?? "");
+        // The slots hold only what is still ahead of the slot in progress.
         const power = (startMs: number, kwh: number) => {
-            const share = remainingShare(startMs, Number.isFinite(generated) ? generated : context.now);
+            const share = remainingShare(startMs, context.now);
             return share > 0 ? slotKw(kwh / share) : 0;
         };
         for (let t = first; t < end; t += SLOT_MS) points.push({ t, v: power(t, bySlot.get(t) ?? 0) });

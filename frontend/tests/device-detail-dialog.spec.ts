@@ -273,6 +273,21 @@ test("device Forecast normalises the slot in progress by what was left of it", a
     expect(await section.locator("helman-help-tip").evaluate((tip: any) => tip.explanation)).toContain("learned 3.0 kW");
 });
 
+test("device Forecast drops what ran in the slot in progress since the projection was generated", async ({ page }) => {
+    await installFixedClock(page);
+    await page.clock.setFixedTime(new Date("2026-10-21T12:10:00Z"));
+    // Generated at 12:00 with the 12:00 slot whole: a third of it is left at 12:10, so 0.5 kWh counts as 0.17.
+    await mountCard(page, {}, true, "kWh", TODAY_KWH, {
+        boiler: [["2026-10-21T12:00:00+00:00", 0.5], ["2026-10-21T12:15:00+00:00", 0.5]],
+    }, "2026-10-21T12:00:00+00:00");
+    await openDevice(page, "Boiler");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-forecast]");
+    await expect(section.locator("[slot=summary] b")).toHaveText("≈ 0.67 kWh");
+    await section.locator("button").first().click();
+    await expect(section.locator("[data-run]")).toHaveCount(1);
+    await expect(section.locator("[data-run]")).toContainText("≈ 0.67 kWh");
+});
+
 test("device without projected energy has no Forecast section", async ({ page }) => {
     await mountCard(page, {}, true);
     await openDevice(page, "Boiler");

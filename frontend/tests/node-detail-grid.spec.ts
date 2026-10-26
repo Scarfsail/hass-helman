@@ -37,6 +37,8 @@ type Variant = {
     noExportPrice?: boolean;
     /** The grid node's power sign: `-1` (the default) for a positive-is-import meter, `1` for positive-is-export. */
     gridSign?: 1 | -1;
+    /** The planned export of the 12:00 slot, kWh; 0.3 by default. */
+    firstSlotExportKwh?: number;
     /** The grid power sensor reads unavailable. */
     gridUnavailable?: boolean;
     /** The solar, house and battery meters' states, W. */
@@ -149,7 +151,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 currentExportPrice: v.noExportPrice ? null : 1.5, exportPriceUnit: "CZK/kWh",
                 exportPricePoints: v.noExportPrice ? [] : [{ timestamp: `${day}T12:00:00+00:00`, value: 1.5 }],
                 series: [
-                    slot(`${day}T12:00:00+00:00`, 0, 0.3),
+                    slot(`${day}T12:00:00+00:00`, 0, v.firstSlotExportKwh ?? 0.3),
                     slot(`${day}T12:15:00+00:00`, 0, 0.3),
                     slot(`${day}T15:00:00+00:00`, 0.4, 0),
                 ],
@@ -327,6 +329,16 @@ test("grid Forecast header names the cheapest stretch, and the body the dearest 
     await expect(chart.locator("path.line")).toHaveCount(1);
     await expect(chart.locator("[data-span]")).toHaveCount(1);
     await expect(chart.locator("[data-now]")).toHaveCount(1);
+});
+
+test("grid planned use counts only what is left of the slot in progress", async ({ page }) => {
+    await mount(page, { firstSlotExportKwh: 0.75 });
+    await page.clock.setFixedTime(new Date("2026-10-21T12:14:00Z"));
+    await page.locator(".node-cell:has(simple-card-grid)").click();
+    const section = content(page).locator("helman-detail-section[data-forecast]");
+    await section.locator("button").first().click();
+    // One minute of the 12:00 slot's 0.75 kWh is 0.05 kWh, plus the 12:15 slot's 0.3 kWh.
+    await expect(section.locator("[data-planned] [data-run]").nth(0)).toContainText("Export ≈ 0.35 kWh");
 });
 
 test("grid shows no Forecast without import prices", async ({ page }) => {

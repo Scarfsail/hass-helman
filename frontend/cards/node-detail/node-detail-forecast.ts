@@ -120,9 +120,19 @@ export function slotKw(kwh: number): number {
     return kwh / (SLOT_MS / HOUR_MS);
 }
 
-/** The share of the slot starting at `startMs` still ahead at `at`: 1 for a future slot, less in progress. */
-export function remainingShare(startMs: number, at: number): number {
-    return Math.max(0, Math.min(1, (startMs + SLOT_MS - Math.max(startMs, at)) / SLOT_MS));
+/**
+ * The share of the slot starting at `startMs` (of `durationMs`, a standard slot
+ * unless the backend supplies a partial one) still ahead at `at`: 1 for a
+ * future slot, less in progress, 0 once over.
+ */
+export function remainingShare(startMs: number, at: number, durationMs: number = SLOT_MS): number {
+    return durationMs > 0 ? Math.max(0, Math.min(1, (startMs + durationMs - Math.max(startMs, at)) / durationMs)) : 0;
+}
+
+/** What of a projected slot's energy, cut at generation, is still ahead at `now`. */
+export function stillAhead(startMs: number, generated: number, now: number): number {
+    const then = Number.isFinite(generated) ? remainingShare(startMs, generated) : 1;
+    return then > 0 ? Math.min(1, remainingShare(startMs, now) / then) : 1;
 }
 
 export interface ProjectedSlot {
@@ -139,16 +149,19 @@ export interface ProjectedRun {
 
 /**
  * The energy the projection plans for `ids` (summed per slot) from the slot in
- * progress at `now` to `end`, in time order.
+ * progress at `now` to `end`, in time order. The backend already cut the slot
+ * in progress to what was left of it when the projection was generated; what
+ * has run since is taken off too, so the slot counts only what is still ahead.
  */
 export function projectedSlots(payload: ApplianceProjectionsPayload | null, ids: readonly string[], now: number, end: number): ProjectedSlot[] {
     const bySlot = new Map<number, number>();
     const from = Math.floor(now / SLOT_MS) * SLOT_MS;
+    const generated = Date.parse(payload?.generatedAt ?? "");
     for (const id of ids) {
         for (const point of payload?.appliances?.[id]?.series ?? []) {
             const startMs = getScheduleSlotStartMs(point.slotId);
             if (startMs === null || startMs < from || startMs >= end || !(point.energyKwh > 0)) continue;
-            bySlot.set(startMs, (bySlot.get(startMs) ?? 0) + point.energyKwh);
+            bySlot.set(startMs, (bySlot.get(startMs) ?? 0) + point.energyKwh * stillAhead(startMs, generated, now));
         }
     }
     return [...bySlot].sort(([a], [b]) => a - b).map(([startMs, kwh]) => ({ startMs, kwh }));

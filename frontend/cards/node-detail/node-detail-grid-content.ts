@@ -27,7 +27,7 @@ import "../helman-simple/simple-card-grid";
 import "./detail-headline";
 import "./flow-gauge";
 import "./help-tip";
-import { forecastWhen, holdAtSlots, renderForecastChart, type ForecastChartContext } from "./node-detail-forecast";
+import { forecastWhen, holdAtSlots, remainingShare, renderForecastChart, type ForecastChartContext } from "./node-detail-forecast";
 import { modeStripWindow } from "../shared/mode-strip";
 import { SLOT_MS } from "../shared/time/slot-time";
 
@@ -356,7 +356,8 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
             if (slotEnd <= context.now || start >= end) continue;
             const direction = flowDirection(slot.importedFromGridKwh, slot.exportedToGridKwh);
             if (direction === "balanced") continue;
-            const kwh = direction === "import" ? slot.importedFromGridKwh : slot.exportedToGridKwh;
+            // The slot in progress counts only what is still ahead of it.
+            const kwh = (direction === "import" ? slot.importedFromGridKwh : slot.exportedToGridKwh) * remainingShare(start, context.now, slot.durationHours * 3_600_000);
             const last = runs[runs.length - 1];
             if (last && last.direction === direction && last.end === start) {
                 last.end = slotEnd;

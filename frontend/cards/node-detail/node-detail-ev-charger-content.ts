@@ -39,7 +39,7 @@ import "./flow-gauge";
 import "./switch-tile";
 import "./who-decides";
 import { boldTemplate } from "./detail-section";
-import { forecastWhen, holdAtSlots, renderForecastChart } from "./node-detail-forecast";
+import { forecastWhen, holdAtSlots, renderForecastChart, stillAhead } from "./node-detail-forecast";
 import type { DayLinePoint } from "../shared/day-line-chart";
 
 type QuestionId = "progress" | "plan" | "waiting" | "today" | "trust";
@@ -832,7 +832,8 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
                 return unsupported("candidate_first");
             }
             if (!Number.isFinite(point.energyKwh) || point.energyKwh < 0) return unsupported("no_projection");
-            suppliedKwh += point.energyKwh;
+            // The slot in progress counts only what has not been charged since the projection.
+            suppliedKwh += point.energyKwh * stillAhead(slot.startMs, generatedAt, now);
             counted += 1;
             endMs = slot.endMs;
             if (slot.endMs !== null) path.push({ t: slot.endMs, v: Math.min(car.limit, car.soc + suppliedKwh / car.capacityKwh * 100) });

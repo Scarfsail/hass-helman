@@ -420,6 +420,14 @@ test("charger Forecast header names the shortfall when the plan does not reach t
     await expect(chart.locator(".reference-label")).toHaveText("limit 80 %");
 });
 
+test("charger Forecast counts only what is left of the slot in progress", async ({ page }) => {
+    await mount(page);
+    // Projected at 12:00 with the 12:00 slot whole; at 12:10 a third of its 1.6 kWh is left: 11.2 + 0.53 supplied of 19.2.
+    await page.clock.setFixedTime(new Date("2026-10-21T12:10:00Z"));
+    await openDevice(page, "Garage EV");
+    await expect(forecastSection(page).locator("[slot=summary]")).toHaveText("7.5 kWh short of 80 % by 14:00");
+});
+
 test("charger Forecast header confirms the limit is reached, and the candidate stays one", async ({ page }) => {
     // 3 kWh a slot reaches 19.2 kWh in the slot ending 13:45.
     await mount(page, { slotKwh: 3 });
