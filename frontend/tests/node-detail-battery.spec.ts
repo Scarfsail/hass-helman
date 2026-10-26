@@ -416,7 +416,7 @@ test("battery Forecast header leaves out full when the plan never fills it", asy
 });
 
 test("battery Forecast header says full now when the battery is at its ceiling already", async ({ page }) => {
-    await mount(page, { currentSoc: 100, socPath: [{ soc: 100, max: true }, { soc: 90 }, { soc: 50 }] });
+    await mount(page, { currentSoc: 100, soc: "100", socPath: [{ soc: 100, max: true }, { soc: 90 }, { soc: 50 }] });
     await openDetail(page);
     const section = forecastSection(page);
     await expect(section.locator("[slot=summary]")).toHaveText("Full now · lowest 50 % at 12:45");
@@ -425,7 +425,7 @@ test("battery Forecast header says full now when the battery is at its ceiling a
 });
 
 test("battery Forecast lowest is the SoC now when the plan only charges", async ({ page }) => {
-    await mount(page, { currentSoc: 20, socPath: [{ soc: 30 }, { soc: 40 }, { soc: 50 }] });
+    await mount(page, { currentSoc: 20, soc: "20", socPath: [{ soc: 30 }, { soc: 40 }, { soc: 50 }] });
     await openDetail(page);
     const section = forecastSection(page);
     await expect(section.locator("[slot=summary]")).toHaveText("Lowest 20 % now");
@@ -434,8 +434,20 @@ test("battery Forecast lowest is the SoC now when the plan only charges", async 
     await expect(section.locator("helman-day-line-chart [data-marker]")).toHaveCount(1);
 });
 
+test("battery Forecast uses the live SoC for now, not the snapshot's", async ({ page }) => {
+    await mount(page, { currentSoc: 20, soc: "35", socPath: [{ soc: 30 }, { soc: 40 }, { soc: 50 }] });
+    await openDetail(page);
+    const section = forecastSection(page);
+    await expect(section.locator("[slot=summary]")).not.toContainText("20 %");
+    await expect(section.locator("[slot=summary]")).toHaveText(/^Lowest 30 % at /);
+    await openForecast(page);
+    await expect(section.locator("[data-row=lowest] .value")).toHaveText(/^30 % at /);
+    const actual = await section.locator("helman-day-line-chart").evaluate((chart: any) => chart.series.find((line: any) => line.key === "actual").points.at(-1).v);
+    expect(actual).toBe(35);
+});
+
 test("battery Forecast header says at the floor now when the battery is at its floor already", async ({ page }) => {
-    await mount(page, { currentSoc: 10, socPath: [{ soc: 10, min: true }, { soc: 30 }, { soc: 100, max: true }] });
+    await mount(page, { currentSoc: 10, soc: "10", socPath: [{ soc: 10, min: true }, { soc: 30 }, { soc: 100, max: true }] });
     await openDetail(page);
     const section = forecastSection(page);
     await expect(section.locator("[slot=summary]")).toHaveText("Full ≈ 12:45 · at the floor now");

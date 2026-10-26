@@ -220,11 +220,11 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
      * The planned SoC until tomorrow noon and its key moments: when the
      * battery is full, and when it reaches the floor, else its lowest charge.
      */
-    protected _renderForecast() {
+    protected _renderForecast(overview: BatteryDetailPayload) {
         const pending = this._forecastPending();
         if (pending !== null) return pending;
         const context = this._chartContext;
-        const soc = this._socForecast(context.now);
+        const soc = this._socForecast(context.now, this._number(overview, "soc"));
         if (!soc) return nothing;
         const nowText = this.localize("node_detail.shared.now");
         // A limit the battery is at already reads "now", not the next slot's end.
@@ -279,16 +279,17 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
      * The forecast's SoC: what it was today (its actual history, joined to the
      * SoC now) and what the plan expects to tomorrow noon, each slot at its
      * end, with the moments the header and the chart name: `now` for a limit
-     * the battery is at already. `null` without a planned slot.
+     * the battery is at already. `null` without a planned slot. The SoC now is the
+     * live reading, the forecast's own only when that is unavailable.
      */
-    private _socForecast(now: number): {
+    private _socForecast(now: number, liveSoc: number | null): {
         actual: DayLinePoint[]; planned: DayLinePoint[]; floor: number; ceiling: number;
         full: DayLinePoint | null; floorAt: number | null; lowest: DayLinePoint;
     } | null {
         const battery = this._forecast?.battery_capacity;
-        if (!battery || (battery.status !== "available" && battery.status !== "partial") || battery.currentSoc === null) return null;
+        if (!battery || (battery.status !== "available" && battery.status !== "partial") || (liveSoc ?? battery.currentSoc) === null) return null;
         const end = modeStripWindow(now, this._timeZone).end;
-        const current = { t: now, v: battery.currentSoc };
+        const current = { t: now, v: (liveSoc ?? battery.currentSoc)! };
         const planned = [current, ...battery.series
             .map((slot) => ({ t: Date.parse(slot.timestamp) + slot.durationHours * 3_600_000, v: slot.socPct, slot }))
             .filter((point) => point.t > now && point.t <= end)];
