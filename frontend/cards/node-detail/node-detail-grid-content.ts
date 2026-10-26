@@ -279,14 +279,14 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         return html`
             <div class="content" data-overview>
                 ${this._renderException(overview)}
-                <helman-detail-headline style=${idle ? "" : `--detail-headline-color: ${importing ? GRID_IMPORT_COLOR : GRID_EXPORT_COLOR}`}
+                <helman-detail-headline style=${idle || power === null ? "" : `--detail-headline-color: ${importing ? GRID_IMPORT_COLOR : GRID_EXPORT_COLOR}`}
                     .value=${power === null ? "—" : idle ? formatPower(Math.abs(power)).display : `${importing ? "←" : "→"} ${formatPower(Math.abs(power)).display}`}
                     .entityId=${this.params.powerEntityId}
-                    .caption=${[this.localize(`node_detail.shared.grid_${idle ? "idle" : importing ? "importing" : "exporting"}`)]}>
+                    .caption=${[power === null ? this.localize("node_detail.grid.unavailable") : this.localize(`node_detail.shared.grid_${idle ? "idle" : importing ? "importing" : "exporting"}`)]}>
                     <simple-card-grid slot="icon" .compact=${true} .power=${power ?? 0}></simple-card-grid>
                 </helman-detail-headline>
-                <helman-flow-gauge .direction=${importing ? "to" : "from"} .localize=${this.localize}
-                    .items=${gridMix(flows, power)}></helman-flow-gauge>
+                ${power === null ? nothing : html`<helman-flow-gauge .direction=${importing ? "to" : "from"} .localize=${this.localize}
+                    .items=${gridMix(flows, power)}></helman-flow-gauge>`}
                 ${grid && (buy !== null || sell !== null) ? html`<div class="tile" data-price>
                     <div class="row"><span class="label">${this.localize("node_detail.shared.grid_price_now")}</span>
                         <span class="value">${[

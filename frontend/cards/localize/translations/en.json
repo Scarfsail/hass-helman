@@ -181,7 +181,6 @@
       "override_mode": "Override mode…",
       "ev_off": "switched off",
       "ev_charging": "charging now",
-      "ev_session": "{kwh} kWh added this session, since {time}",
       "ev_of": "of",
       "ev_limit": "limit",
       "ev_needed": "Still needed",

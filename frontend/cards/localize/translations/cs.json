@@ -81,7 +81,6 @@
       "override_mode": "Přepsat režim…",
       "ev_off": "vypnuto",
       "ev_charging": "právě nabíjí",
-      "ev_session": "v této relaci přidáno {kwh} kWh od {time}",
       "ev_of": "z",
       "ev_limit": "limitu",
       "ev_needed": "Ještě potřeba",

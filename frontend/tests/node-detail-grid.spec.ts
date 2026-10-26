@@ -270,3 +270,13 @@ test("grid price tile bolds each price and keeps each one whole", async ({ page 
     await expect(price.locator(".price-part b")).toHaveCount(2);
     await expect(price.locator(".price-part").first()).toHaveCSS("display", "inline-block");
 });
+
+test("grid Overview says unavailable, not a direction, when the grid power sensor is unavailable", async ({ page }) => {
+    await mount(page, { gridUnavailable: true });
+    await page.locator(".node-cell:has(simple-card-grid)").click();
+    const headline = content(page).locator("helman-detail-headline");
+    await expect(headline).toContainText("unavailable");
+    await expect(headline).not.toContainText(/exporting|importing/i);
+    await expect(headline).not.toContainText(/[←→]/);
+    await expect(content(page).locator("helman-flow-gauge")).toHaveCount(0);
+});

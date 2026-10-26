@@ -270,12 +270,9 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         const charging = this._charging(overview);
         const direct = deviceDirectControls(this.params.item);
         const session = this._sessionKWh(overview);
-        const since = this._segment.payload?.chargingSince;
         const caption = [direct?.switchEntityId && this.hass.states[direct.switchEntityId]?.state === "off"
             ? this.localize("node_detail.shared.ev_off") : charging ? this.localize("node_detail.shared.ev_charging") : this._waitingPreview(overview, selection)];
-        if (session !== null) caption.push(since
-            ? fillTemplate(this.localize("node_detail.shared.ev_session"), { kwh: formatKwh(session), time: this._time(Date.parse(since)) })
-            : fillTemplate(this.localize("node_detail.shared.ev_session_total"), { kwh: formatKwh(session) }));
+        if (session !== null) caption.push(fillTemplate(this.localize("node_detail.shared.ev_session_total"), { kwh: formatKwh(session) }));
         return html`
             <div class="content" data-overview>
                 ${this._fault(overview) ? this._exceptionBanner(fillTemplate(this._t("exception.fault"), { fault: this._fault(overview)! })) : nothing}
