@@ -303,6 +303,42 @@ for (const first of ["battery", "inverter"] as const) {
     });
 }
 
+test("a mode register that changes while the inverter read is in flight reads the inverter again", async ({ page }) => {
+    await mount(page);
+    await page.evaluate(() => {
+        const hass = window.__BatteryHass;
+        const original = hass.callWS;
+        const held: Array<() => void> = [];
+        let hold = false;
+        (window as any).__holdInverter = () => { hold = true; };
+        (window as any).__releaseInverter = () => held.shift()?.();
+        hass.callWS = async (request: any) => {
+            if (request.type !== "helman/get_node_detail" || request.node !== "inverter" || request.section) return original(request);
+            const answer = await original(request);
+            if (hold) await new Promise<void>((resolve) => held.push(resolve));
+            return { ...answer, mode: { entityId: "select.helman_inverter_mode", actionOptions: {} } };
+        };
+        hass.states["select.helman_inverter_mode"] = { entity_id: "select.helman_inverter_mode", state: "idle", attributes: {}, last_changed: "", last_updated: "", context: { id: "" } };
+    });
+    await openDetail(page);
+    await expect(content(page).locator("[data-inverter-control]")).toHaveCount(1);
+    const change = (state: string) => page.evaluate((state) => {
+        const card = document.querySelector("helman-simple-card") as any;
+        const hass = (window as any).__currentHass ?? window.__BatteryHass;
+        (window as any).__currentHass = { ...hass, states: { ...hass.states, "select.helman_inverter_mode": { ...hass.states["select.helman_inverter_mode"], state } } };
+        card.hass = (window as any).__currentHass;
+    }, state);
+    const inverterReads = () => page.evaluate(() => window.__NodeDetailRequests.filter((r) => r.type === "helman/get_node_detail" && r.node === "inverter" && !r.section).length);
+    const before = await inverterReads();
+    await page.evaluate(() => (window as any).__holdInverter());
+    await change("charge");
+    await expect.poll(inverterReads).toBe(before + 1);
+    // The register is back where the last answer was read under, but the read in flight was sent under "charge".
+    await change("idle");
+    await page.evaluate(() => (window as any).__releaseInverter());
+    await expect.poll(inverterReads).toBe(before + 2);
+});
+
 test("battery backs off retrying a failed inverter read and shows a dash", async ({ page }) => {
     await mount(page);
     await page.evaluate(() => {

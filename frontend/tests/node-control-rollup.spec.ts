@@ -393,3 +393,24 @@ test("a Schedule request expands the section for the requested device", async ({
     await expect(controls(page).locator("[data-control]")).toHaveAttribute("data-control", "boiler");
     expect(await hostState(page)).toEqual({ target: "sensor.boiler_energy", section: "schedule" });
 });
+
+for (const [row, control] of [["boiler", "boiler"], ["inverter", "inverter"]] as const) {
+    test(`a Schedule request for the ${row} expands, scrolls to and focuses the section`, async ({ page }) => {
+        await page.setViewportSize({ width: 360, height: 420 });
+        await mount(page);
+        await openHouseControl(page);
+        await page.evaluate(() => {
+            (window as any).__scrolled = [];
+            const original = HTMLElement.prototype.scrollIntoView;
+            HTMLElement.prototype.scrollIntoView = function (this: HTMLElement, ...args: any[]) {
+                (window as any).__scrolled.push(this.hasAttribute("data-schedule"));
+                return original.apply(this, args as any);
+            };
+        });
+        await lane(page, row).click();
+        await expect(controls(page).locator("[data-control]")).toHaveAttribute("data-control", control);
+        await expect(scheduleButton(page)).toHaveAttribute("aria-expanded", "true");
+        await expect(scheduleButton(page)).toBeFocused();
+        expect(await page.evaluate(() => (window as any).__scrolled)).toContain(true);
+    });
+}

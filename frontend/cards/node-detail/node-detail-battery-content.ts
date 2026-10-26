@@ -113,9 +113,12 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
     /** The mode the inverter reports, read from its own overview and re-read when its mode registers change. */
     private _inverterStates = "";
     private readonly _inverter: SectionResource<InverterDetailPayload> = this._section("inverter", {
+        // A refresh compares the states as they are when it is sent: a change while it is in flight re-reads.
+        onRequest: () => { const shown = this._inverter.payload; if (shown) this._inverterStates = this._inverterSignature(shown); },
         fetch: async () => {
+            const previous = this._inverter.payload;
             const payload = await getSharedHelmanStore(this.hass).getNodeDetail<InverterDetailPayload>({ node: "inverter" }, { fresh: true });
-            this._inverterStates = this._inverterSignature(payload);
+            if (!previous) this._inverterStates = this._inverterSignature(payload);
             dispatchWatchedEntities(this, "node-detail:inverter", this._inverterEntities(payload));
             return payload;
         },
