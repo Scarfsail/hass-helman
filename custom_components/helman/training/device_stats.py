@@ -116,6 +116,7 @@ def member_record(
     local_tz: tzinfo,
     member_energy: Sequence[Piece],
     on_kwh_per_hour: float | None,
+    observed: Sequence[Span] | None = None,
 ) -> dict[str, Any] | None:
     """The record of a meterless child, from its share of the meter.
 
@@ -123,7 +124,8 @@ def member_record(
     record cannot drift from its estimate or its live share. It runs while its
     signal is active: touching segments are one run. ``window_start`` is where
     its meter's history begins, so days the recorder no longer holds are not
-    counted as zero days.
+    counted as zero days, and a day its signal's ``observed`` intervals do
+    not cover is no zero-run day either.
     """
     runs: list[Piece] = []
     for start, end, kwh in member_energy:
@@ -133,11 +135,14 @@ def member_record(
             runs.append((start, end, kwh))
     midnights = local_midnights(window_start, window_end, local_tz)
     daily = _energy_by_day(member_energy, midnights)
+    days = list(zip(midnights, midnights[1:]))
+    if observed is not None:
+        days = [day for day in days if _covers(observed, day)]
     return _record(
         window_start,
         window_end,
         daily,
-        list(zip(midnights, midnights[1:])),
+        days,
         runs,
         on_kwh_per_hour,
     )

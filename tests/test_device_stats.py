@@ -249,6 +249,26 @@ class DailyTests(unittest.TestCase):
         self.assertEqual(record["runs_per_day"], 0.6667)
         self.assertEqual(record["daily_runs"], {"min": 1, "max": 1})
 
+    def test_a_childs_daily_runs_leave_out_a_day_its_signal_was_unavailable(
+        self,
+    ) -> None:
+        # A meterless child runs once on each outer day; its signal is
+        # unavailable all of the middle day.
+        record = device_stats.member_record(
+            window_start=DAY_START,
+            window_end=DAY_START + timedelta(days=3),
+            local_tz=UTC,
+            member_energy=[
+                (_at(10), _at(11), 1.0),
+                (_at(10, day=22), _at(11, day=22), 1.0),
+            ],
+            on_kwh_per_hour=None,
+            observed=[(DAY_START, _at(0, day=21)), (_at(0, day=22), _at(0, day=23))],
+        )
+
+        self.assertEqual(record["runs_per_day"], 0.6667)
+        self.assertEqual(record["daily_runs"], {"min": 1, "max": 1})
+
     def test_without_a_power_sensor_only_the_days_and_the_signal_figure(self) -> None:
         plain = device_stats.metered_record(
             window_start=DAY_START, window_end=DAY_END, daily_kwh=[1.0, 2.0], days=[]

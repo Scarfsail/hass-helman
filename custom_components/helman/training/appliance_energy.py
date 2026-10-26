@@ -443,6 +443,7 @@ class ApplianceEnergyTrainingJob:
                             window_end=window_end,
                             local_tz=local_tz,
                             member_energy=fit.member_energy[subject.device_key],
+                            observed=_observed(signal_states, start, window_end),
                             on_kwh_per_hour=fit.estimates[subject.device_key],
                         )
                         if meter_states and signal_states
@@ -643,17 +644,7 @@ def _metered_record(
             window_end=window_end,
             active_states=active_states,
         )
-        # Every state it reported but ``unavailable``/``unknown``: the time
-        # the signal was observed at all, on or off.
-        observed = recorder._build_active_state_intervals(
-            states=signal_states,
-            window_start=window_start,
-            window_end=window_end,
-            active_states=tuple(
-                {str(state.state).strip().lower() for state in signal_states}
-                - {"unavailable", "unknown", ""}
-            ),
-        )
+        observed = _observed(signal_states, window_start, window_end)
         # Runs are gated by the signal, so before its first row nothing says
         # whether the device ran: the run figures start where it does.
         runs_start = _covered_start(signal_states, window_start)
@@ -675,6 +666,22 @@ def _metered_record(
         running=running,
         observed=observed,
         on_kwh_per_hour=on_kwh_per_hour,
+    )
+
+
+def _observed(
+    signal_states: Sequence[Any], window_start: datetime, window_end: datetime
+) -> list[tuple[datetime, datetime]]:
+    """Where a running signal reported every state but ``unavailable``/``unknown``:
+    the time it was observed at all, on or off."""
+    return recorder._build_active_state_intervals(
+        states=signal_states,
+        window_start=window_start,
+        window_end=window_end,
+        active_states=tuple(
+            {str(state.state).strip().lower() for state in signal_states}
+            - {"unavailable", "unknown", ""}
+        ),
     )
 
 
