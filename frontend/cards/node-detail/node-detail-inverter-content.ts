@@ -1,6 +1,6 @@
 import { formatPower } from "../shared/format";
 import { css, html, nothing, svg } from "lit";
-import { customElement, property } from "lit/decorators.js";
+import { customElement, property, state } from "lit/decorators.js";
 import { fillTemplate } from "../localize/localize";
 import type {
     InverterDetailPayload,
@@ -17,10 +17,11 @@ import "../shared/mode-strip";
 import { modeStripWindow, type ModeChange, type ModeSegment } from "../shared/mode-strip";
 import { inverterGlyph } from "../shared/node-glyphs";
 import { getScheduleActionTone, scheduleActionToneStyles, type ScheduleActionTone } from "../shared/schedule/action-tones";
+import { getScheduleReasonLabel } from "../shared/schedule/model/schedule-labels";
 import { INVERTER_CONTROLLABLE_ID } from "../shared/schedule/schedule-types";
 import "../shared/day-line-chart";
 import type { DayLineSeries } from "../shared/day-line-chart";
-import { NodeDetailContentBase, type NodeFlow } from "./node-detail-base";
+import { IDLE_W, NodeDetailContentBase, type NodeFlow } from "./node-detail-base";
 import { staleToday } from "./section-resource";
 import {
     currentRun,
@@ -37,6 +38,12 @@ import {
 import { powerUnitFactor } from "../shared/power-reading";
 import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { InverterDetailParams } from "./node-detail-types";
+import { LaneOwnershipController } from "./lane-ownership";
+import { DialogHistoryController } from "../shared/dialog-history-controller";
+import type { ControlOverrideDialog } from "./control-override-dialog";
+import "./detail-headline";
+import "./help-tip";
+import "./control-override-dialog";
 import type { LiveFlows } from "./live-flows";
 
 type QuestionId = "why" | "next" | "limits" | "operating" | "trust";
@@ -79,11 +86,8 @@ interface ChainBox {
  * The inverter detail: what Helman commanded, what the hardware shows, and
  * what comes next.
  *
- * It opens on a status pill, then two pictures: the plan → command →
- * inverter chain, which absorbs *why*, and the mode strip from midnight to
- * noon tomorrow, which absorbs *next*. The Now/Today flow around the
- * inverter follows, then the *Limits*, *Operating* and *Trust* tiles; one
- * answer is open at a time, full width under the tiles.
+ * The Overview opens on the mode headline (what the mode does as caption),
+ * then the plan → command → inverter chain and the output tile.
  *
  * Four facts are kept apart throughout: the schedule's intent (this slot's
  * action), the last command (Helman's mode control), the executor's outcome
@@ -97,6 +101,11 @@ interface ChainBox {
  * strip, and again when the observed mode changes or they go stale; today's
  * temperature only while its question is open.
  */
+/** The short name of an inverter mode, as the inverter detail and the battery's "Mode now" show it. */
+export function inverterModeLabel(localize: (key: string) => string, kind: ScheduleActionKind): string {
+    return localize(`node_detail.inverter.mode_short.${kind}`);
+}
+
 @customElement("node-detail-inverter-content")
 export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDetailPayload, QuestionId> {
     static styles = [helmanColorVars, nodeDetailSharedStyles, nodeDetailQuestionStyles, nodeDetailPictureStyles, scheduleActionToneStyles, css`
@@ -132,34 +141,29 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
         }
         .chain-row {
             display: grid;
-            grid-template-columns: minmax(0, 1fr) 30px minmax(0, 1fr) 30px minmax(0, 1fr);
+            grid-template-columns: minmax(0, 1fr) 20px minmax(0, 1fr) 20px minmax(0, 1fr);
             align-items: stretch;
-            margin-top: 4px;
         }
         .box {
             display: flex;
             flex-direction: column;
-            gap: 2px;
+            gap: 4px;
             min-width: 0;
-            padding: 6px 8px;
-            border-radius: 8px;
-            border: 2px solid var(--schedule-action-tone-border);
-            background: var(--schedule-action-tone-bg);
+            padding: 10px;
+            border-radius: 10px;
+            background: var(--secondary-background-color);
         }
         .box.mismatch {
-            border-color: var(--error-color, #db4437);
+            outline: 1px solid var(--error-color, #db4437);
             background: color-mix(in srgb, var(--error-color, #db4437) 12%, transparent);
         }
         .box-label {
-            font-size: 0.68rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
+            font-size: 12px;
+            line-height: 1.45;
             color: var(--secondary-text-color);
         }
         .box-value {
-            font-weight: 700;
-            font-size: 0.88rem;
+            font-size: 13px;
             line-height: 1.2;
             overflow-wrap: anywhere;
             color: var(--schedule-action-tone-color);
@@ -168,7 +172,7 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
             color: var(--error-color, #db4437);
         }
         .box-detail {
-            font-size: 0.72rem;
+            font-size: 0.75rem;
             line-height: 1.2;
             color: var(--secondary-text-color);
             overflow-wrap: anywhere;
@@ -179,14 +183,10 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
             align-items: center;
             justify-content: center;
             gap: 2px;
-            color: var(--secondary-text-color);
-            font-size: 0.6rem;
-            line-height: 1.1;
-            text-align: center;
-            overflow-wrap: anywhere;
+            color: var(--success-color, #43a047);
         }
         .link svg {
-            width: 26px;
+            width: 18px;
             height: 12px;
             stroke: currentColor;
             stroke-width: 1.6;
@@ -203,11 +203,38 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
         .load .meter-fill {
             --meter-accent: var(--helman-neutral);
         }
+        .inverter-icon.active { animation: inverter-glow 2s ease-in-out infinite; }
+        [data-verdict] { margin: 0; color: var(--warning-color, #c27c0e); }
+        [data-verdict][data-agrees] { color: var(--success-color, #43a047); }
+        [data-output] ~ .meter { height: 8px; margin: 0; --meter-accent: var(--primary-text-color); }
+        @keyframes inverter-glow {
+            50% { filter: drop-shadow(0 0 8px var(--helman-neutral)); }
+        }
+        @media (prefers-reduced-motion: reduce) { .inverter-icon.active { animation: none; } }
     `];
 
     protected readonly _node = "inverter" as const;
 
     @property({ attribute: false }) public params!: InverterDetailParams;
+    @state() private _overrideOpen = false;
+    private readonly _lanes = new LaneOwnershipController(this, () => this.hass);
+    private readonly _history = new DialogHistoryController(this, "__helmanInverterOverrideId", {
+        onBack: () => {
+            const dialog = this.renderRoot.querySelector<ControlOverrideDialog>("control-override-dialog");
+            if (dialog === null) return false;
+            queueMicrotask(() => dialog.requestClose());
+            return true;
+        },
+        close: () => { this._overrideOpen = false; },
+    });
+    private _openOverride(): void {
+        this._overrideOpen = true;
+        this._history.push();
+    }
+    private _onOverrideClosed = (): void => {
+        this._history.closed();
+        this._overrideOpen = false;
+    };
 
     /** The inverter's plan. */
     private readonly _plan = this._useSchedule(inverterRuns);
@@ -254,24 +281,39 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
         const notReady = this._renderNotReady();
         if (notReady || this._overview.status !== "ready") return notReady;
         const overview = this._overview.payload;
+        const mode = overview.agreement.observedOption;
+        const ac = this._acPower(overview);
+        const rated = this._watts(overview, "rated_power");
+        const pct = ac !== null && rated !== null && rated > 0 ? Math.round(Math.abs(ac) / rated * 100) : null;
+        const controllable = this._lanes.roster?.find((item) => item.id === INVERTER_CONTROLLABLE_ID);
         return html`
-            <div class="content">
-                ${this._renderSummary(overview)}
+            <div class="content" data-overview>
+                ${this._renderException(overview)}
+                <helman-detail-headline .value=${mode ? this._modeLabel(mode) : "—"}
+                    .entityId=${overview.mode?.entityId ?? null}
+                    .caption=${mode && mode !== "empty" ? [this.localize("node_detail.shared.mode_now"), this.localize(`node_detail.shared.mode_does.${mode}`)] : [this.localize("node_detail.shared.mode_now")]}>
+                    <span slot="icon" class=${`inverter-icon ${ac !== null && Math.abs(ac) > IDLE_W ? "active" : ""}`}>${inverterGlyph()}</span>
+                </helman-detail-headline>
+                <div class="section-title">${this.localize("node_detail.shared.inverter_chain")}
+                    <helman-help-tip .explanation=${this.localize("node_detail.shared.inverter_chain_help")}></helman-help-tip></div>
                 ${this._renderChain(overview)}
-                ${this._renderStrip(overview)}
-                ${this._renderInverterFlow(overview)}
-                <div class="tiles">
-                    ${this._renderLimitsTile(overview)}
-                    ${this._renderOperatingTile(overview)}
-                    ${overview.profile ? this._renderTrustTile(overview) : nothing}
+                <div class="tile">
+                    <div class="row" data-output><span class="label">${this.localize("node_detail.shared.output_now")}</span>
+                        <span>${ac === null ? "—" : formatPower(Math.abs(ac)).display}${pct !== null && rated !== null ? html` <span class="label">· ${pct} % ${this.localize("node_detail.shared.of_rating")} ${formatPower(rated).display}</span>` : nothing}</span></div>
+                    ${pct !== null ? html`<span class="meter"><span class="meter-fill" style=${`width:${Math.min(100, pct)}%`}></span></span>` : nothing}
+                    <div class="row"><span class="label">${this.localize("node_detail.shared.temperature")}</span><span>${this._reading(overview, "inverter_temperature") ?? "—"}</span></div>
                 </div>
-                ${this._renderOpen(overview)}
+                <button type="button" class="outline-button" ?disabled=${!controllable?.supportsAuthoring} @click=${this._openOverride}>${this.localize("node_detail.shared.override_mode")}</button>
+                ${this._overrideOpen && controllable ? html`<control-override-dialog .hass=${this.hass} .localize=${this.localize}
+                    .controllable=${controllable} .normalized=${this._lanes.normalized}
+                    .executionEnabled=${this._lanes.snapshot.schedule?.executionEnabled ?? false} .open=${true}
+                    @closed=${this._onOverrideClosed}></control-override-dialog>` : nothing}
             </div>
         `;
     }
 
     /** The open question's answer and evidence, full width under the tiles. */
-    private _renderOpen(overview: InverterDetailPayload) {
+    protected _renderOpen(overview: InverterDetailPayload) {
         switch (this._open) {
             case "why":
                 return this._question("why", this._whyPreview(), () => this._renderWhy(overview), () => this._renderWhyEvidence(overview), "evidence");
@@ -288,22 +330,11 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
         }
     }
 
-    /** The last command in its mode's tone, and at most one reported condition. */
-    private _renderSummary(overview: InverterDetailPayload) {
-        const commanded = this._commandedKind(overview);
-        const raw = this._commandedRaw(overview);
-        const status = commanded || raw
-            ? fillTemplate(this._t("status.commanded"), { mode: commanded ? this._modeLabel(commanded) : raw! })
-            : this._t("status.no_command");
-        const tone: ScheduleActionTone = commanded ? getScheduleActionTone(commanded) : "neutral";
-        // A fault or off-grid operation the hardware reports, leading to the operating answer.
+    /** A fault or off-grid operation the hardware reports, else a reported mismatch. */
+    private _renderException(overview: InverterDetailPayload) {
         const condition = overview.condition;
-        return html`
-            <div class="summary" data-overview>
-                <p class="status pill action-tone-${tone}" data-tone=${tone}>${status}</p>
-                ${condition ? this._exceptionBanner(fillTemplate(this._t(`exception.${condition.kind}`), { state: condition.runMode }), "operating") : nothing}
-            </div>
-        `;
+        if (condition) return this._exceptionBanner(fillTemplate(this._t(`exception.${condition.kind}`), { state: condition.runMode }));
+        return overview.agreement.status === "mismatch" ? this._exceptionBanner(this._t("exception.mismatch")) : nothing;
     }
 
     // Chain -------------------------------------------------------------------
@@ -318,10 +349,19 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
         const notApplied = this._plan.schedule !== null && !this._plan.schedule.executionEnabled;
         const [plan, command, inverter] = this._chainBoxes(overview);
         const mismatch = overview.agreement.status === "mismatch";
+        const current = this._plan.runs.find((run) => run.startMs <= Date.now() && (run.endMs === null || Date.now() < run.endMs));
+        const runtime = runtimeFor<InverterRuntimeDTO>(this._plan.schedule, INVERTER_CONTROLLABLE_ID, Date.now());
+        // A target reached resolves to holding the battery there: that is the plan, carried out.
+        const resolved = runtime?.reason === "target_soc_reached" ? runtime.executedAction?.kind : undefined;
+        const planned = current ? resolved ?? effectiveAction(current.action).kind : null;
+        const commanded = this._commandedKind(overview);
+        const planMismatch = planned !== null && commanded !== null && planned !== commanded;
+        const reason = notApplied ? this._t("why.execution_off_short")
+            : planMismatch ? this._t("chain.plan_mismatch")
+                : runtime?.outcome === "failed" ? this._t("chain.executor_failed")
+                    : mismatch ? this._t("exception.mismatch") : null;
         return html`
-            <button class="picture chain" data-chain title=${this._t("q.why")} aria-expanded=${this._open === "why" ? "true" : "false"}
-                @click=${() => this._setOpen(this._open === "why" ? null : "why")}>
-                <span class="picture-scope">${this._nowScopeLabel()}</span>
+            <div class="picture chain" data-chain>
                 <span class="chain-row">
                     ${this._renderBox(plan)}
                     ${this._renderLink(notApplied)}
@@ -329,13 +369,10 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
                     ${this._renderLink(false)}
                     ${this._renderBox(inverter)}
                 </span>
-            </button>
-            ${mismatch ? html`
-                <div class="exception" role="status" data-exception>
-                    <span>${this._t("exception.mismatch")}</span>
-                    <button class="link-button" @click=${() => this._setOpen("why")}>${this._t("exception.details")}</button>
-                </div>
-            ` : nothing}
+            </div>
+            <p data-verdict ?data-agrees=${!reason && planned !== null && commanded !== null && overview.agreement.status === "match"}>${reason ? fillTemplate(this.localize("node_detail.shared.inverter_not_applied"), { why: reason })
+                : planned !== null && commanded !== null && overview.agreement.status === "match"
+                    ? this.localize("node_detail.shared.inverter_agrees") : this._t("chain.unknown")}</p>
         `;
     }
 
@@ -353,6 +390,7 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
             value: planned ? this._actionLabel(planned) : this._t("why.nothing_scheduled"),
             detail: [
                 run?.action.conditionMet === false ? fillTemplate(this._t("chain.candidate"), { action: this._actionLabel(run.action) }) : null,
+                run && runtime?.reason === "target_soc_reached" ? getScheduleReasonLabel(runtime.reason, this.localize) : null,
                 this._plan.schedule ? this._t(this._plan.schedule.executionEnabled ? "why.execution_on_short" : "why.execution_off_short") : null,
             ].filter(Boolean).join(" · ") || null,
             tone: planned ? getScheduleActionTone(planned.kind) : "neutral",
@@ -393,13 +431,12 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
     /** An arrow; broken, and said so, where the plan is not applied. */
     private _renderLink(broken: boolean) {
         return html`
-            <span class="link ${broken ? "broken" : ""}" data-link=${broken ? "broken" : "applied"}>
+            <span class="link ${broken ? "broken" : ""}" data-link=${broken ? "broken" : "applied"} title=${broken ? this._t("chain.not_applied") : nothing}>
                 <svg viewBox="0 0 26 12" aria-hidden="true">
                     ${broken
                         ? svg`<path d="M1 6 H8 M15 6 H20 M17 2 L22 6 L17 10 M9 10 L12 2 M12 10 L15 2"></path>`
                         : svg`<path d="M1 6 H20 M17 2 L22 6 L17 10"></path>`}
                 </svg>
-                ${broken ? html`<span>${this._t("chain.not_applied")}</span>` : nothing}
             </span>
         `;
     }
@@ -411,7 +448,7 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
      * tomorrow, hatched, with the next change flagged in its tone. The strip
      * opens *next*.
      */
-    private _renderStrip(overview: InverterDetailPayload) {
+    protected _renderStrip(overview: InverterDetailPayload) {
         const now = Date.now();
         const { start, end } = modeStripWindow(now, this._timeZone);
         const change = nextChange(this._plan.runs, Date.now(), this._timeZone);
@@ -484,7 +521,7 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
      * inverter with its AC power now. Live from the card on Now, today's kWh
      * from the `flows` section on Today. The flow opens *operating*.
      */
-    private _renderInverterFlow(overview: InverterDetailPayload) {
+    protected _renderInverterFlow(overview: InverterDetailPayload) {
         const flow = this._flowScope === "now" ? this._nowFlow(overview) : this._todayFlow();
         return this._renderFlow(flow, this.params.flowScaleW, "operating", html`<span slot="centre">${inverterGlyph()}</span>`);
     }
@@ -550,7 +587,7 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
     // Tiles -------------------------------------------------------------------
 
     /** The export cap the inverter holds, and the battery's SoC range as a bar. */
-    private _renderLimitsTile(overview: InverterDetailPayload) {
+    protected _renderLimitsTile(overview: InverterDetailPayload) {
         const exportLimit = this._watts(overview, "export_limit") ?? overview.maxAllowedExportPower;
         const low = this._number(overview, "battery_min_soc");
         const high = this._number(overview, "battery_max_soc");
@@ -569,7 +606,7 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
     }
 
     /** The temperature, and the AC load as a share of the inverter's rating, without thresholds. */
-    private _renderOperatingTile(overview: InverterDetailPayload) {
+    protected _renderOperatingTile(overview: InverterDetailPayload) {
         const ac = this._acPower(overview);
         const rated = this._watts(overview, "rated_power");
         const share = ac !== null && rated !== null && rated > 0 ? Math.abs(ac) / rated : null;
@@ -583,7 +620,7 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
     }
 
     /** The link's success rate and the quarantined registers, as the integration reports them. */
-    private _renderTrustTile(overview: InverterDetailPayload) {
+    protected _renderTrustTile(overview: InverterDetailPayload) {
         const rate = this._reading(overview, "link_success_rate");
         const quarantined = this._number(overview, "link_quarantined_registers");
         if (rate === null && quarantined === null) return this._tile("trust", "–", this._t("trust.unavailable"));
@@ -942,7 +979,7 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
     }
 
     private _modeLabel(kind: ScheduleActionKind): string {
-        return this._t(`mode_short.${kind}`);
+        return inverterModeLabel(this.localize, kind);
     }
 }
 

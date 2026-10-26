@@ -39,6 +39,9 @@ import {
 } from "./node-detail-schedule";
 import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { SolarDetailParams } from "./node-detail-types";
+import "../helman-simple/simple-card-solar";
+import "./detail-headline";
+import "./flow-gauge";
 
 type QuestionId = "production" | "destinations" | "limits" | "strings" | "outlook";
 
@@ -106,11 +109,9 @@ interface ForecastModel {
  * went, whether anything limits it, how the strings contribute and what to
  * expect.
  *
- * It opens on a status pill, today's production curve against the forecast
- * and the solar Now/Today flow from the strings around the panel. The
- * pictures absorb three questions: the curve opens the production, the flow
- * the destinations and the panel the strings. The other two are tiles; one
- * answer is open at a time, full width under the tiles.
+ * The Overview opens on the power headline (producing or not, and the share
+ * of the inverter rating as caption), then the gauge of where the power goes
+ * and, with two strings or more, each string's power now.
  *
  * Live readings come from `hass` and the live flow from the card; the backend
  * overview supplies the entity ids, the string mapping and the configured
@@ -311,23 +312,39 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
         const notReady = this._renderNotReady();
         if (notReady || this._overview.status !== "ready") return notReady;
         const overview = this._overview.payload;
-        const model = this._model();
+        const power = this._powerNow();
+        const rated = this._ratedW(overview);
+        const flows = this.params.flows;
+        const producing = power !== null && power > IDLE_W;
+        const caption = [this.localize(producing ? "node_detail.shared.solar_producing" : "node_detail.shared.solar_idle")];
+        if (producing && rated !== null && rated > 0) caption.push(fillTemplate(this.localize("node_detail.shared.solar_rating"), {
+            pct: Math.round(power / rated * 100), rating: formatPower(rated).display,
+        }));
         return html`
-            <div class="content">
-                ${this._renderSummary(overview)}
-                ${this._renderCurve(overview, model)}
-                ${this._renderSolarFlow(overview)}
-                <div class="tiles">
-                    ${this._renderOutlookTile(model)}
-                    ${this._renderLimitsTile(overview)}
-                </div>
-                ${this._renderOpen(overview, model)}
+            <div class="content" data-overview>
+                ${this._renderException(overview)}
+                <helman-detail-headline .value=${power === null ? "—" : formatPower(power).display}
+                    .entityId=${overview.entities.power ?? null} .caption=${caption}>
+                    <simple-card-solar slot="icon" .compact=${true} .power=${power ?? 0}></simple-card-solar>
+                </helman-detail-headline>
+                <helman-flow-gauge direction="to" .localize=${this.localize}
+                    .items=${flows && producing ? [
+                        { node: "house", powerW: flows.solarToHouse },
+                        { node: "battery", powerW: flows.solarToBattery },
+                        { node: "grid", powerW: flows.solarToGrid },
+                    ] : []}></helman-flow-gauge>
+                ${overview.strings.length >= 2 ? html`<div class="section-title">${this.localize("node_detail.shared.strings_now")}</div>
+                    <div class="tile">${overview.strings.map((string) => {
+                        const watts = this._watts(overview, `pv_power_${string}`);
+                        return html`<div class="row" data-string=${string}><span>${fillTemplate(this._t("strings.string"), { n: String(string) })}</span>
+                            <span>${watts === null ? "—" : formatPower(watts).display}</span></div>`;
+                    })}</div>` : nothing}
             </div>
         `;
     }
 
     /** The open question's answer and evidence, full width under the tiles. */
-    private _renderOpen(overview: SolarDetailPayload, model: ForecastModel | null) {
+    protected _renderOpen(overview: SolarDetailPayload, model: ForecastModel | null) {
         switch (this._open) {
             case "production":
                 return this._question("production", this._productionPreview(model), () => this._renderProduction(overview, model), () => this._renderProductionEvidence(overview, model), "evidence");
@@ -346,19 +363,9 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
         }
     }
 
-    private _renderSummary(overview: SolarDetailPayload) {
-        const power = this._powerNow();
-        const status = power === null
-            ? this._t("status.unavailable")
-            : power > IDLE_W
-            ? fillTemplate(this._t("status.producing"), { power: formatPower(power).display })
-            : this._t("status.not_producing");
-        return html`
-            <div class="summary" data-overview>
-                <p class="status pill action-tone-neutral" data-tone="neutral">${status}</p>
-                ${overview.condition ? this._exceptionBanner(fillTemplate(this._t(`exception.${overview.condition.kind}`), { state: overview.condition.runMode }), "limits") : nothing}
-            </div>
-        `;
+    /** An off-grid or fault run mode the inverter reports. */
+    private _renderException(overview: SolarDetailPayload) {
+        return overview.condition ? this._exceptionBanner(fillTemplate(this._t(`exception.${overview.condition.kind}`), { state: overview.condition.runMode })) : nothing;
     }
 
     // Production curve --------------------------------------------------------
@@ -371,7 +378,7 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
      * gaps kept as gaps; the forecast is the corrected forecast's slots. A tap
      * opens the production answer.
      */
-    private _renderCurve(overview: SolarDetailPayload, model: ForecastModel | null) {
+    protected _renderCurve(overview: SolarDetailPayload, model: ForecastModel | null) {
         const section = this._production.state;
         const offered = overview.sections.includes("production");
         const payload = this._production.payload;
@@ -484,7 +491,7 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
      * maps, is one input. Unresolved solar is a footnote, never a ribbon. The
      * flow opens the destinations, the panel the strings.
      */
-    private _renderSolarFlow(overview: SolarDetailPayload) {
+    protected _renderSolarFlow(overview: SolarDetailPayload) {
         const flow = this._flowScope === "now" ? this._nowFlow(overview) : this._todayFlow(overview);
         const power = this._powerNow();
         const glyph = panelGlyph(power !== null && power > IDLE_W);
@@ -572,7 +579,7 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
     // Tiles -------------------------------------------------------------------
 
     /** Tomorrow's forecast, with the week's days as a strip. */
-    private _renderOutlookTile(model: ForecastModel | null) {
+    protected _renderOutlookTile(model: ForecastModel | null) {
         if (!model) {
             return this._tile("outlook", "–", this._forecastFailed ? this.localize("node_detail.forecast_failed") : this._forecastMissing());
         }
@@ -595,7 +602,7 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
      * The inverter's AC rating, with the PV input now against it; without
      * one, the export cap. A meter against the rating is not a clipping claim.
      */
-    private _renderLimitsTile(overview: SolarDetailPayload) {
+    protected _renderLimitsTile(overview: SolarDetailPayload) {
         const rated = this._ratedW(overview);
         if (rated !== null) {
             const power = this._powerNow();

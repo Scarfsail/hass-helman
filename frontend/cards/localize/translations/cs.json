@@ -25,10 +25,93 @@
     }
   },
   "node_detail": {
+    "shared": {
+      "now": "teď",
+      "estimated": "odhad",
+      "gauge": {
+        "from": "Odkud přichází",
+        "to": "Kam odchází",
+        "tap": "Klepnutím otevřete detail uzlu {node}",
+        "estimate_help": "Odhad: aktuální podíl slunce, baterie a sítě v domě přiřazený tomuto zařízení. Zdroje jednotlivých zařízení se neměří."
+      },
+      "schedule": {
+        "next": "Dále: {action} v {time}",
+        "house_next": "Dále: {device} začne v {time}",
+        "none": "Nic není naplánováno"
+      },
+      "who": "Kdo rozhoduje",
+      "planned_now": "Teď v plánu",
+      "until": "do {time}",
+      "you": "Vy",
+      "override": "Přepsat…",
+      "switch_help": "Klepnutím zařízení ručně přepnete. Stav vydrží do příští plánované změny v {time}, pak znovu převezme řízení plán. Podržením otevřete podrobnosti v Home Assistantu. Pro delší ruční stav použijte Přepsat.",
+      "switch_help_no_time": "Klepnutím zařízení ručně přepnete. Stav vydrží do příští plánované změny, pak znovu převezme řízení plán. Podržením otevřete podrobnosti v Home Assistantu. Pro delší ruční stav použijte Přepsat.",
+      "device_today": "dnes spotřebováno {kwh} kWh",
+      "device_state_on": "zapnuto",
+      "device_state_off": "vypnuto",
+      "climate_controls": "Ovládání topení/klimatizace",
+      "solar_producing": "právě vyrábí",
+      "solar_rating": "{pct} % z výkonu střídače {rating}",
+      "grid_importing": "právě odebírá ze sítě",
+      "grid_exporting": "právě dodává do sítě",
+      "grid_idle": "teď nevyměňuje energii se sítí",
+      "grid_price_buy": "{buy} za odběr",
+      "grid_price_sell": "{sell} za dodávku",
+      "grid_next_price": "V {time} se změní na",
+      "grid_phase_help": "Každý pruh je jedna fáze: vpravo od středu je odběr, vlevo dodávka. Plný pruh odpovídá hlavnímu jističi {amps} A. Běžné napětí je 207–253 V.",
+      "house_used": "právě spotřebovává dům",
+      "house_biggest": "Kam odchází · teď · největší odběratelé",
+      "everything_else": "Všechno ostatní · dalších {count}",
+      "not_measured": "Neměřeno",
+      "show_less": "Zobrazit méně",
+      "charging": "nabíjí se",
+      "discharging": "vybíjí se",
+      "idle": "nečinná",
+      "battery_range": "využití mezi {floor} a {ceiling} %",
+      "battery_rate_help": "Odhad při nedávném výkonu prodlužuje posledních 15 minut nabíjení. Odhad podle plánu je v Předpovědi. Čárkované značky na ikoně ukazují rozsah, ve kterém Helman baterii využívá.",
+      "battery_capped_charge": "Nabíjení je nyní omezeno na {power}",
+      "battery_capped_discharge": "Vybíjení je nyní omezeno na {power}",
+      "battery_inverter": "Řízeno přes střídač",
+      "mode_now": "režim nyní",
+      "inverter_chain": "Udělal střídač to, co plán požadoval?",
+      "inverter_chain_help": "Plán říká, co má být nyní; Helman odeslal ukazuje poslední příkaz; Střídač hlásí skutečný stav. Nesoulad znamená, že se příkaz neprovedl.",
+      "output_now": "Výstup nyní (AC)",
+      "of_rating": "z",
+      "temperature": "Teplota",
+      "override_mode": "Přepsat režim…",
+      "ev_off": "vypnuto",
+      "ev_charging": "právě nabíjí",
+      "ev_of": "z",
+      "ev_limit": "limitu",
+      "ev_needed": "Ještě potřeba",
+      "ev_at_power": "Při tomto výkonu",
+      "helman_schedule": "Helmanův plán",
+      "you_until": "Vy, do {time}",
+      "inverter_agrees": "✓ Vše souhlasí",
+      "inverter_not_applied": "Neprovedeno: {why}",
+      "battery_cold_cause": "Články jsou studené ({temperature}), proto správa baterie omezuje proud.",
+      "grid_price_now": "Cena nyní",
+      "grid_phases": "Fáze · zatížení vůči jističi {amps} A · napětí",
+      "grid_phases_no_breaker": "Fáze · zatížení · napětí",
+      "strings_now": "Stringy teď",
+      "controlled_through": "Řízeno přes",
+      "the_inverter": "střídač →",
+      "mode_now_label": "Režim nyní",
+      "battery_recent_rate": "při nedávném tempu",
+      "ev_eta": "≈ {duration} → limit kolem {time}",
+      "ev_session_total": "v této relaci přidáno {kwh} kWh",
+      "mode_does": {
+        "normal": "solár kryje dům, přebytek nabíjí baterii",
+        "stop_charging": "baterie se nenabíjí",
+        "stop_discharging": "baterie drží svůj stav nabití",
+        "charge_to_target_soc": "baterie se nabíjí na cílový stav",
+        "discharge_to_target_soc": "baterie se vybíjí na cílový stav",
+        "stop_export": "do sítě se nic neprodává"
+      },
+      "solar_idle": "teď nevyrábí"
+    },
     "control": {
-      "tabs": "Pohledy detailu",
       "tab": {
-        "overview": "Přehled",
         "schedule": "Plán"
       },
       "status": {
@@ -48,8 +131,6 @@
       "unavailable": "nedostupné",
       "not_on_roster": "Helman pro tento uzel nemá ovladatelné zařízení.",
       "unsupported_authoring": "Akce tohoto spotřebiče zatím nelze v rozvrhu autorovat, proto zde nelze nastavit nový ruční zásah.",
-      "scheduled_note": "Helmanův plán může zařízení při příští plánované změně přepnout zpět. Pro časově omezený zásah použijte Plán.",
-      "direct_label": "Ovládání",
       "on": "zapnuto",
       "off": "vypnuto",
       "change": "Změnit",
@@ -125,12 +206,6 @@
       "technical": "Technické údaje",
       "next_change": "Dále: {action} od {time}",
       "next_estimate": "Při nedávném výkonu: {estimate}",
-      "status": {
-        "charging": "Nabíjí se výkonem {power}.",
-        "discharging": "Vybíjí se výkonem {power}.",
-        "idle": "V klidu ({power}).",
-        "unavailable": "Výkon baterie teď nemá žádný údaj."
-      },
       "glyph": {
         "min": "min {soc}",
         "max": "max {soc}"
@@ -322,11 +397,6 @@
       "forecast_unavailable": "Předpověď výroby zatím není k dispozici.",
       "forecast_not_configured": "Předpověď výroby není nastavena.",
       "period": "Dnes {start}–{end}",
-      "status": {
-        "producing": "Vyrábí {power}.",
-        "not_producing": "Teď nevyrábí.",
-        "unavailable": "Výkon panelů teď nemá žádný údaj."
-      },
       "next": {
         "until": "Předpověď: výroba zhruba do {time}",
         "from": "Předpověď: výroba zhruba od {time}",
@@ -543,12 +613,6 @@
       "phase": "Fáze",
       "loading_history": "Načítám dnešní historii…",
       "history_failed": "Dnešní historii se nepodařilo načíst.",
-      "status": {
-        "importing": "Odebírá ze sítě {power}.",
-        "exporting": "Dodává do sítě {power}.",
-        "idle": "Se sítí si teď téměř nic nevyměňuje ({power}).",
-        "unavailable": "Výkon sítě teď není k dispozici."
-      },
       "power": {
         "import": "odběr {power}",
         "export": "dodávka {power}",
@@ -726,10 +790,6 @@
       "period_range": "{start}–{end}",
       "share_value": "{kwh} ({share})",
       "incomplete": "Dnešní statistiky ještě nejsou kompletní; čísla se mohou mírně posunout.",
-      "status": {
-        "using": "Spotřeba {power}.",
-        "unavailable": "Teď chybí údaj o výkonu domu."
-      },
       "mix": {
         "solar": "FV {share}",
         "battery": "baterie {share}",
@@ -953,10 +1013,6 @@
       "off": "vypnuto",
       "evidence": "Jak se to určuje",
       "technical": "Technické údaje",
-      "status": {
-        "commanded": "Helman naposledy nastavil: {mode}.",
-        "no_command": "Helman zatím žádný režim nenastavil."
-      },
       "figure": {
         "temperature": "Teplota"
       },
@@ -1113,8 +1169,8 @@
       },
       "chain": {
         "plan": "Plán",
-        "command": "Poslední příkaz",
-        "inverter": "Střídač",
+        "command": "Helman odeslal",
+        "inverter": "Střídač hlásí",
         "executor": "vykonavatel: {outcome}",
         "no_runtime": "bez záznamu vykonavatele",
         "match": "odpovídá",
@@ -1123,7 +1179,9 @@
         "not_read": "nečitelné",
         "other_mode": "jiný režim",
         "not_applied": "neprovádí se",
-        "candidate": "{action}: kandidát, neprovádí se"
+        "candidate": "{action}: kandidát, neprovádí se",
+        "plan_mismatch": "poslední příkaz neodpovídá plánu",
+        "executor_failed": "plánovaný příkaz selhal"
       },
       "strip": {
         "scope": "Režimy · dnes do zítřejšího poledne",
@@ -1153,16 +1211,6 @@
       "technical": "Technické údaje",
       "next_window": "Další okno nabíjení: {window}",
       "eta": "≈ {duration} do {limit} při současném výkonu",
-      "status": {
-        "charging": "Nabíjí výkonem {power}.",
-        "waiting": "Auto je připojené, nenabíjí ({state}).",
-        "no_car": "Není připojené žádné auto ({state}).",
-        "fault": "Nabíječka hlásí poruchu ({state}).",
-        "reported": "Nabíječka hlásí {state}.",
-        "drawing": "Odebírá {power}.",
-        "not_drawing": "Neodebírá výkon ({power}).",
-        "unavailable": "Výkon nabíječky teď není k dispozici."
-      },
       "exception": {
         "fault": "Nabíječka hlásí poruchu: {fault}.",
         "details": "Zobrazit podrobnosti"

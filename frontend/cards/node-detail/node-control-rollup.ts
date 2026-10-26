@@ -49,10 +49,12 @@ export function houseControlLanes(houseNode: TreeItem | null, inverterConfigured
 
 /** Ask the power card for a node's Schedule tab. */
 function requestControl(node: HTMLElement, target: NodeDetailTarget): void {
-    fireEvent<NodeDetailRequestDetail>(node, NODE_DETAIL_REQUEST_EVENT, { target, tab: "schedule" });
+    fireEvent<NodeDetailRequestDetail>(node, NODE_DETAIL_REQUEST_EVENT, { target, section: "schedule" });
 }
 
 const rollupStyles = css`
+    /* The Schedule section's body keeps its own tighter rhythm. */
+    .content { gap: 8px; }
     .switch-row {
         display: flex;
         align-items: center;

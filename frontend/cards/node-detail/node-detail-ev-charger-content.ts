@@ -25,16 +25,20 @@ import "../shared/soc-glyph";
 import { scheduleActionToneStyles, type ScheduleActionTone } from "../shared/schedule/action-tones";
 import { getScheduleApplianceActionPresentation } from "../shared/schedule/model/schedule-appliance-action-presentation";
 import { resolveScheduleSlotBoundaries, type ScheduleSlotBoundary } from "../shared/schedule/model/schedule-time";
-import { IDLE_W, NodeDetailContentBase, type FlowNode, type NodeFlow } from "./node-detail-base";
+import { IDLE_W, NodeDetailContentBase, type NodeFlow } from "./node-detail-base";
 import { staleToday } from "./section-resource";
-import { openMoreInfo, readEnergyKWh, readingNumber } from "./node-detail-readings";
+import { readEnergyKWh, readingNumber } from "./node-detail-readings";
 import { dispatchWatchedEntities } from "../shared/hass-change";
 import { powerUnitFactor } from "../shared/power-reading";
 import { mergeRuns, runtimeFor, withinTodayTomorrow } from "./node-detail-schedule";
 import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { DeviceDetailParams } from "./node-detail-types";
 import { deviceDirectControls } from "./node-detail-utils";
-import "./device-direct-control";
+import { estimatedConsumerMix } from "./live-flows";
+import "./detail-headline";
+import "./flow-gauge";
+import "./switch-tile";
+import "./who-decides";
 
 type QuestionId = "progress" | "plan" | "waiting" | "today" | "trust";
 
@@ -97,12 +101,10 @@ type Completion =
  * planned and whether it reaches the target, why it is not charging, what
  * powered it today and whether its readings can be trusted.
  *
- * It opens on a status pill, the charging strip (charging so far today and the
- * planned windows to noon tomorrow, with the projected completion under it)
- * and the Now/Today flow around the car. The pictures absorb three
- * questions: the car opens the progress, the strip the plan, the flow today's
- * sources. The other two are tiles beside the session's; one answer is open
- * at a time, full width under the tiles.
+ * The Overview opens on the power headline (the charger's switch as its icon,
+ * the charging state and the session's energy as caption), then the estimated
+ * source mix, who decides the charger now, and the selected car's tile: its
+ * SoC against the limit, the energy still needed and the time at this power.
  *
  * Live readings come from `hass` and the house's live split from the card;
  * the backend overview supplies the entity ids and the charger's reported
@@ -123,17 +125,10 @@ type Completion =
 @customElement("node-detail-ev-charger-content")
 export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerDetailPayload, QuestionId> {
     static styles = [helmanColorVars, nodeDetailSharedStyles, nodeDetailQuestionStyles, nodeDetailPictureStyles, scheduleActionToneStyles, css`
-        button.status {
-            font-family: inherit;
-            text-align: left;
-            cursor: pointer;
-        }
+        [data-car] .meter { position: relative; height: 10px; margin: 4px 0; border-radius: 5px; overflow: visible; }
+        [data-car] .meter-fill { border-radius: 5px; background: var(--success-color, #43a047); }
+        [data-limit-marker] { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--primary-text-color); }
         .muted {
-            color: var(--secondary-text-color);
-        }
-        .estimate {
-            margin: 0;
-            font-size: 0.85rem;
             color: var(--secondary-text-color);
         }
         ul {
@@ -271,35 +266,48 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         if (notReady || this._overview.status !== "ready") return notReady;
         const overview = this._overview.payload;
         const selection = this._selection();
-        const eta = this._flowScope === "now" ? this._eta(overview, selection) : null;
+        const power = this._powerW(overview);
+        const charging = this._charging(overview);
         const direct = deviceDirectControls(this.params.item);
-        const summary = this._renderSummary(overview);
+        const session = this._sessionKWh(overview);
+        const caption = [direct?.switchEntityId && this.hass.states[direct.switchEntityId]?.state === "off"
+            ? this.localize("node_detail.shared.ev_off") : charging ? this.localize("node_detail.shared.ev_charging") : this._waitingPreview(overview, selection)];
+        if (session !== null) caption.push(fillTemplate(this.localize("node_detail.shared.ev_session_total"), { kwh: formatKwh(session) }));
         return html`
-            <div class="content">
-                ${direct ? html`
-                    <helman-device-direct-control
-                        .hass=${this.hass}
-                        .localize=${this.localize}
-                        .switchEntityId=${direct.switchEntityId}
-                        .climateEntityId=${direct.climateEntityId}
-                        .scheduled=${true}
-                    >${summary}</helman-device-direct-control>
-                ` : summary}
-                ${this._renderStrip(selection)}
-                ${this._renderCarFlow(overview, selection)}
-                ${eta ? html`<p class="estimate" data-estimate>${eta}</p>` : nothing}
-                <div class="tiles">
-                    ${this._renderSessionTile(overview)}
-                    ${this._renderWaitingTile(overview, selection)}
-                    ${this._renderReadingsTile(overview)}
-                </div>
-                ${this._renderOpen(overview, selection)}
+            <div class="content" data-overview>
+                ${this._fault(overview) ? this._exceptionBanner(fillTemplate(this._t("exception.fault"), { fault: this._fault(overview)! })) : nothing}
+                <helman-detail-headline .value=${power === null ? "—" : formatPower(power).display}
+                    .entityId=${overview.entities.power ?? this.params.item.powerSensorId ?? null} .caption=${caption}>
+                    ${direct?.switchEntityId ? html`<helman-switch-tile slot="icon" .hass=${this.hass} .localize=${this.localize}
+                        .entityId=${direct.switchEntityId} fallbackIcon="mdi:car-electric"></helman-switch-tile>`
+                        : html`<ha-icon slot="icon" icon="mdi:car-electric"></ha-icon>`}
+                </helman-detail-headline>
+                <helman-flow-gauge direction="from" .items=${estimatedConsumerMix(this.params.flows, power)} .estimated=${true} .localize=${this.localize}></helman-flow-gauge>
+                <helman-who-decides .hass=${this.hass} .localize=${this.localize} .controllableId=${this.deviceId}></helman-who-decides>
+                ${this._renderCarTile(overview, selection)}
             </div>
         `;
     }
 
+    private _renderCarTile(overview: EvChargerDetailPayload, selection: VehicleSelection) {
+        if (selection.kind !== "selected") return html`<div class="tile">${this._t(selection.kind === "none" ? "car.none" : "car.ambiguous")}</div>`;
+        const car = selection.car;
+        const power = this._powerW(overview);
+        const minutes = power && power > IDLE_W && car.neededKwh !== null ? car.neededKwh / (power / 1000) * 60 : null;
+        return html`<div class="tile" data-car>
+            <div class="row"><span>${car.vehicle.name}</span><span><strong>${car.soc ?? "?"} %</strong> <span class="label">${this.localize("node_detail.shared.ev_of")} ${car.limit ?? "?"} % ${this.localize("node_detail.shared.ev_limit")}</span></span></div>
+            <div class="meter"><span class="meter-fill" style=${`width:${Math.max(0, Math.min(100, car.soc ?? 0))}%`}></span>
+                ${car.limit !== null ? html`<span data-limit-marker style=${`left:${Math.max(0, Math.min(100, car.limit))}%`}></span>` : nothing}
+            </div>
+            <div class="row"><span class="label">${this.localize("node_detail.shared.ev_needed")}</span><span>${car.neededKwh === null ? "—" : `${formatKwh(car.neededKwh)} kWh`}</span></div>
+            ${minutes !== null ? html`<div class="row"><span class="label">${this.localize("node_detail.shared.ev_at_power")}</span><span>${fillTemplate(this.localize("node_detail.shared.ev_eta"), {
+                duration: this._duration(minutes), time: this._time(Date.now() + minutes * 60_000),
+            })}</span></div>` : nothing}
+        </div>`;
+    }
+
     /** The open question's answer and evidence, full width under the tiles. */
-    private _renderOpen(overview: EvChargerDetailPayload, selection: VehicleSelection) {
+    protected _renderOpen(overview: EvChargerDetailPayload, selection: VehicleSelection) {
         switch (this._open) {
             case "progress":
                 return this._question("progress", this._progressPreview(overview, selection), () => this._renderProgress(overview, selection), () => this._renderProgressEvidence(overview, selection), "evidence");
@@ -314,34 +322,6 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
             default:
                 return nothing;
         }
-    }
-
-    private _renderSummary(overview: EvChargerDetailPayload) {
-        const power = this._powerW(overview);
-        const kind = overview.status?.kind;
-        const tone: ScheduleActionTone = this._charging(overview) ? "charge" : kind === "fault" ? "stop" : "neutral";
-        // At most one exception: a fault the charger reports, linked to the readings answer.
-        const fault = this._fault(overview);
-        const powerId = overview.entities.power ?? this.params.item.powerSensorId;
-        return html`
-            <div class="summary" data-overview>
-                ${powerId
-                    ? html`<button class="status pill action-tone-${tone}" data-tone=${tone} data-power-entity=${powerId} @click=${() => openMoreInfo(this, powerId)}>${this._statusText(overview, power)}</button>`
-                    : html`<p class="status pill action-tone-${tone}" data-tone=${tone}>${this._statusText(overview, power)}</p>`}
-                ${fault ? this._exceptionBanner(fillTemplate(this._t("exception.fault"), { fault }), "trust") : nothing}
-            </div>
-        `;
-    }
-
-    /** The status as the charger reports it; a Custom charger's from its power. */
-    private _statusText(overview: EvChargerDetailPayload, power: number | null): string {
-        const status = overview.status;
-        const values = { power: power === null ? "?" : formatPower(power).display, state: status?.runMode ?? "" };
-        if (status) return fillTemplate(this._t(`status.${status.kind}`), values);
-        const runMode = this._reading(overview, "run_mode");
-        if (runMode !== null) return fillTemplate(this._t("status.reported"), { state: runMode });
-        if (power === null) return this._t("status.unavailable");
-        return fillTemplate(this._t(power > IDLE_W ? "status.drawing" : "status.not_drawing"), values);
     }
 
     /** The effective window in progress: execution on and its condition met. */
@@ -373,7 +353,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
      * tomorrow, with the plan's next change flagged; the projected completion
      * is the line under it. The strip opens the plan.
      */
-    private _renderStrip(selection: VehicleSelection) {
+    protected _renderStrip(selection: VehicleSelection) {
         const now = Date.now();
         const { start, end } = modeStripWindow(now, this._timeZone);
         const change = this._planChange();
@@ -469,7 +449,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
      * section's sources alone: per-phase energy is not recorded. The car
      * opens the progress, the flow today's sources.
      */
-    private _renderCarFlow(overview: EvChargerDetailPayload, selection: VehicleSelection) {
+    protected _renderCarFlow(overview: EvChargerDetailPayload, selection: VehicleSelection) {
         const flow = this._flowScope === "now" ? this._nowFlow(overview) : this._todayFlow();
         const car = selection.kind === "selected" ? selection.car : null;
         // A device opened without the card's live split (the solar inspector's) has no scale: minimum widths.
@@ -496,16 +476,12 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
 
     /** The house's live mix applied to the charger's power, W, and its phases; unknown without either, never 0. */
     private _nowFlow(overview: EvChargerDetailPayload): NodeFlow {
-        const flows = this.params?.flows ?? null;
         const power = this._powerW(overview);
         const format = this._fmt("now");
-        const mix: Array<[FlowNode, number]> = flows
-            ? [["solar", flows.solarToHouse], ["battery", flows.batteryToHouse], ["grid", flows.gridToHouse]]
-            : [];
-        const house = mix.reduce((sum, [, watts]) => sum + watts, 0);
+        const mix = estimatedConsumerMix(this.params?.flows, power);
         const inputs = (["solar", "battery", "grid"] as const).map((node) => {
-            const share = mix.find(([key]) => key === node)?.[1];
-            return this._flowItem(node, power === null || share === undefined || house <= 0 ? null : power * share / house, format);
+            const share = mix.find((item) => item.node === node);
+            return this._flowItem(node, share?.powerW ?? null, format);
         });
         const outputs: FlowItem[] = [1, 2, 3]
             .filter((phase) => overview.entities[`charge_power_l${phase}`])
@@ -563,7 +539,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
     // Tiles -------------------------------------------------------------------
 
     /** The hardware's session energy and duration. */
-    private _renderSessionTile(overview: EvChargerDetailPayload) {
+    protected _renderSessionTile(overview: EvChargerDetailPayload) {
         if (this._pluggedIn(overview) === false) return this._tile("progress", this._t("progress.no_car"), null);
         const session = this._sessionKWh(overview);
         const minutes = this._sessionMinutes(overview);
@@ -572,7 +548,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
     }
 
     /** Charging and since when, or what the readings support as why not. */
-    private _renderWaitingTile(overview: EvChargerDetailPayload, selection: VehicleSelection) {
+    protected _renderWaitingTile(overview: EvChargerDetailPayload, selection: VehicleSelection) {
         const waiting = this._waiting(overview, selection);
         if (waiting.kind === "charging") {
             const since = this._segment.payload?.chargingSince ?? null;
@@ -584,7 +560,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
     }
 
     /** The total power against the sum of its phases, when they compare. */
-    private _renderReadingsTile(overview: EvChargerDetailPayload) {
+    protected _renderReadingsTile(overview: EvChargerDetailPayload) {
         const fault = this._fault(overview);
         if (fault) return this._tile("trust", this._t("tile.fault"), fault, nothing, "stop");
         const comparison = this._comparison(overview);

@@ -6,16 +6,20 @@ import type {
     BatteryChargeDTO,
     BatteryChargeSectionPayload,
     BatteryDetailPayload,
+    InverterDetailPayload,
     InverterRuntimeDTO,
 } from "../helman-api";
+import { getSharedHelmanStore } from "../shared/data/store";
+import { dispatchWatchedEntities } from "../shared/hass-change";
+import { NEW_DAY_RETRY_MS, SectionResource } from "./section-resource";
 import { currencyFromPriceUnit } from "../helman-solar-inspector/money-model";
 
 import "../shared/soc-glyph";
 import type { SocDirection } from "../shared/soc-glyph";
-import { getScheduleActionTone, scheduleActionToneStyles, type ScheduleActionTone } from "../shared/schedule/action-tones";
+import { getScheduleActionTone, scheduleActionToneStyles } from "../shared/schedule/action-tones";
 import { INVERTER_CONTROLLABLE_ID } from "../shared/schedule/schedule-types";
 import { IDLE_W, NodeDetailContentBase, type NodeFlow } from "./node-detail-base";
-import { INVERTER_PLAN_INSPECTOR_CONFIG } from "./node-detail-inverter-content";
+import { INVERTER_PLAN_INSPECTOR_CONFIG, inverterModeLabel } from "./node-detail-inverter-content";
 import { readEnergyKWh, readingNumber } from "./node-detail-readings";
 import { readReserve, type Reserve } from "./battery-reserve";
 import {
@@ -27,7 +31,13 @@ import {
     runtimeText,
 } from "./node-detail-schedule";
 import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
+import { helmanColorVars } from "../color-vars";
 import type { BatteryDetailParams } from "./node-detail-types";
+import { NODE_DETAIL_REQUEST_EVENT } from "./node-detail-types";
+import "../helman-simple/simple-card-battery";
+import "./detail-headline";
+import "./flow-gauge";
+import "./help-tip";
 
 type QuestionId = "reserve" | "next" | "limits" | "charge" | "diagnostics";
 
@@ -51,10 +61,10 @@ interface Ceilings {
  * battery will do next, what limits it, where today's charge came from and what
  * the diagnostics tell.
  *
- * It opens on a status pill and the battery's Now/Today flow around its SoC
- * glyph. The pictures absorb two questions: the glyph opens the reserve, the
- * flow opens today's charge. The other three are tiles; one answer is open at
- * a time, full width under the tiles.
+ * The Overview opens on the SoC headline (the battery glyph with its reserve
+ * range when known, the charge or discharge power and the range as caption),
+ * then the time at the recent rate, the flow gauge, a notice when a ceiling
+ * binds, and the tile naming the inverter and the mode it runs now.
  *
  * Live readings come from `hass` and the live flow from the card; the backend
  * overview supplies the entity ids, the configured ceilings and the throughput
@@ -66,15 +76,17 @@ interface Ceilings {
  */
 @customElement("node-detail-battery-content")
 export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetailPayload, QuestionId> {
-    static styles = [nodeDetailSharedStyles, nodeDetailQuestionStyles, nodeDetailPictureStyles, scheduleActionToneStyles, css`
+    static styles = [helmanColorVars, nodeDetailSharedStyles, nodeDetailQuestionStyles, nodeDetailPictureStyles, scheduleActionToneStyles, css`
         .muted {
             color: var(--secondary-text-color);
         }
         .estimate {
             margin: 0;
-            font-size: 0.85rem;
-            color: var(--secondary-text-color);
         }
+        .notice { background: color-mix(in srgb, var(--warning-color, #ffa600) 16%, var(--card-background-color)); }
+        .notice-title { color: var(--warning-color, #ffa600); }
+        .inverter-link { min-height: 0; padding: 0; font-weight: inherit; text-decoration: underline; }
+        .notice-cause { font-size: 12px; line-height: 1.45; }
     `];
 
     protected readonly _node = "battery" as const;
@@ -88,6 +100,29 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
         fetch: () => this._readSection("charge"),
         shown: () => this._open === "charge",
     });
+
+    /** The mode the inverter reports, read from its own overview and re-read when its mode registers change. */
+    private _inverterStates = "";
+    private readonly _inverter: SectionResource<InverterDetailPayload> = this._section("inverter", {
+        fetch: async () => {
+            const payload = await getSharedHelmanStore(this.hass).getNodeDetail<InverterDetailPayload>({ node: "inverter" }, { fresh: true });
+            this._inverterStates = this._inverterSignature(payload);
+            dispatchWatchedEntities(this, "node-detail:inverter", this._inverterEntities(payload));
+            return payload;
+        },
+        shown: () => true,
+        keepOnError: true,
+        // A failed read is retried at the interval a stale day is, not on every render.
+        staleness: (payload, requestedAt) => payload === null ? Date.now() - requestedAt > NEW_DAY_RETRY_MS : this._inverterSignature(payload) !== this._inverterStates,
+    });
+
+    private _inverterEntities(payload: InverterDetailPayload): string[] {
+        return [payload.mode?.entityId, ...payload.agreement.observedFrom].filter((id): id is string => !!id);
+    }
+
+    private _inverterSignature(payload: InverterDetailPayload): string {
+        return this._inverterEntities(payload).map((id) => this.hass.states[id]?.state ?? "").join("|");
+    }
 
     /**
      * The BMS state and run mode the overview's condition was computed from,
@@ -124,26 +159,51 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
         if (notReady || this._overview.status !== "ready") return notReady;
         const overview = this._overview.payload;
         const reserve = readReserve(this.hass, overview);
-        const estimate = this._flowScope === "now" ? this._estimate(overview) : null;
+        const estimate = this._estimate(overview);
+        const power = this.params.power;
+        const soc = this._number(overview, "soc");
+        const direction = this._direction();
+        const flow = this.params.flows;
+        const lowest = direction === "idle" ? null : this._lowest(this._ceilings(overview, direction === "charge" ? "charge" : "discharge"));
+        const binding = lowest && power !== null && Math.abs(power) >= AT_CEILING * lowest.watts;
+        const observed = this._inverter.payload?.agreement.observedOption ?? null;
         return html`
-            <div class="content">
-                ${this._renderSummary(overview)}
-                ${this._renderBatteryFlow(overview, reserve)}
+            <div class="content" data-overview>
+                ${this._renderException(overview)}
+                <helman-detail-headline .value=${soc === null ? "—" : `${Math.round(soc)} %`}
+                    .entityId=${overview.entities.soc ?? null}
+                    .caption=${[power === null ? "—" : html`<span data-direction style=${direction === "idle" ? "" : `color: var(--helman-${direction})`}>${direction === "charge" ? this.localize("node_detail.shared.charging") : direction === "discharge" ? this.localize("node_detail.shared.discharging") : this.localize("node_detail.shared.idle")} ${formatPower(Math.abs(power)).display}</span>`,
+                        fillTemplate(this.localize("node_detail.shared.battery_range"), { floor: reserve?.minSoc ?? "?", ceiling: reserve?.maxSoc ?? "?" })]}>
+                    <simple-card-battery slot="icon" .compact=${true} .rangeMarks=${reserve != null} .power=${power ?? 0} .soc=${soc ?? 0}
+                        .minSoc=${reserve?.minSoc ?? 0} .maxSoc=${reserve?.maxSoc ?? 100}></simple-card-battery>
+                </helman-detail-headline>
                 ${estimate?.kind === "time" ? html`
-                    <p class="estimate" data-estimate>${fillTemplate(this._t("next_estimate"), { estimate: estimate.text })}</p>
+                    <p class="estimate" data-estimate>${estimate.text} <span class="muted">${this.localize("node_detail.shared.battery_recent_rate")}</span><helman-help-tip .explanation=${this.localize("node_detail.shared.battery_rate_help")}></helman-help-tip></p>
                 ` : nothing}
-                <div class="tiles">
-                    ${this._renderNextTile()}
-                    ${this._renderLimitsTile(overview)}
-                    ${this._renderDiagnosticsTile(overview)}
+                <helman-flow-gauge .direction=${direction === "charge" ? "from" : "to"} .localize=${this.localize}
+                    .items=${flow ? direction === "charge" ? [
+                        { node: "solar", powerW: flow.solarToBattery }, { node: "grid", powerW: flow.gridToBattery },
+                    ] : direction === "discharge" ? [
+                        { node: "house", powerW: flow.batteryToHouse }, { node: "grid", powerW: flow.batteryToGrid },
+                    ] : [] : []}></helman-flow-gauge>
+                ${binding ? html`<div class="tile notice" data-binding>
+                    <span class="notice-title">${fillTemplate(this.localize(`node_detail.shared.battery_capped_${direction}`), { power: formatPower(lowest.watts).display })}</span>
+                    <span class="notice-cause">${lowest.source === "bms" && this._celsius(overview, "battery_temperature") !== null && this._celsius(overview, "battery_temperature")! < COLD_C
+                        ? fillTemplate(this.localize("node_detail.shared.battery_cold_cause"), { temperature: this._reading(overview, "battery_temperature") ?? "?" })
+                        : this._t(`limits.source_${lowest.source}`)}</span></div>` : nothing}
+                <div class="tile" data-inverter-control>
+                    <div class="row"><span class="label">${this.localize("node_detail.shared.controlled_through")}</span>
+                        <button type="button" class="link-button inverter-link" aria-label=${this.localize("node_detail.shared.battery_inverter")}
+                            @click=${() => this.dispatchEvent(new CustomEvent(NODE_DETAIL_REQUEST_EVENT, { detail: { target: "inverter" }, bubbles: true, composed: true }))}>${this.localize("node_detail.shared.the_inverter")}</button></div>
+                    <div class="row"><span class="label">${this.localize("node_detail.shared.mode_now_label")}</span>
+                        <span class="value">${observed ? inverterModeLabel(this.localize, observed) : "—"}</span></div>
                 </div>
-                ${this._renderOpen(overview, reserve)}
             </div>
         `;
     }
 
     /** The open question's answer and evidence, full width under the tiles. */
-    private _renderOpen(overview: BatteryDetailPayload, reserve: Reserve | null) {
+    protected _renderOpen(overview: BatteryDetailPayload, reserve: Reserve | null) {
         switch (this._open) {
             case "reserve":
                 return this._question("reserve", this._reservePreview(reserve), () => this._renderReserve(overview, reserve), () => this._renderReserveEvidence(overview, reserve), "evidence");
@@ -160,24 +220,10 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
         }
     }
 
-    private _renderSummary(overview: BatteryDetailPayload) {
-        const power = this.params.power;
-        const status = power === null
-            ? this._t("status.unavailable")
-            : Math.abs(power) <= IDLE_W
-            ? fillTemplate(this._t("status.idle"), { power: formatPower(Math.abs(power)).display })
-            : fillTemplate(this._t(power > 0 ? "status.charging" : "status.discharging"), { power: formatPower(Math.abs(power)).display });
-        const direction = this._direction();
-        const tone: ScheduleActionTone = direction === "idle" ? "neutral" : direction;
-        // At most one exception: a BMS state or run mode the hardware reports.
+    /** At most one exception: a BMS state or run mode the hardware reports. */
+    private _renderException(overview: BatteryDetailPayload) {
         const condition = overview.condition;
-        return html`
-            <div class="summary" data-overview>
-                <p class="status pill action-tone-${tone}" data-tone=${tone}>${status}</p>
-                ${condition ? this._exceptionBanner(fillTemplate(this._t(`exception.${condition.kind}`), { state: condition.state }),
-                    condition.kind === "off_grid" ? "reserve" : "diagnostics") : nothing}
-            </div>
-        `;
+        return condition ? this._exceptionBanner(fillTemplate(this._t(`exception.${condition.kind}`), { state: condition.state })) : nothing;
     }
 
     /** Which way the battery's power moves now; idle without a reading. */
@@ -194,7 +240,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
      * the card on Now, today's kWh from the `flows` section on Today. The
      * glyph opens the reserve; the flow opens today's charge.
      */
-    private _renderBatteryFlow(overview: BatteryDetailPayload, reserve: Reserve | null) {
+    protected _renderBatteryFlow(overview: BatteryDetailPayload, reserve: Reserve | null) {
         const flow = this._flowScope === "now" ? this._nowFlow() : this._todayFlow(overview);
         const soc = this._number(overview, "soc");
         return this._renderFlow(flow, this.params.flowScaleW, "charge", html`
@@ -286,7 +332,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
     // Tiles -------------------------------------------------------------------
 
     /** The plan's next change, in its action's tone. */
-    private _renderNextTile() {
+    protected _renderNextTile() {
         const change = nextChange(this._plan.runs, Date.now(), this._timeZone);
         if (!change) return this._tile("next", this._t("tile.no_change"), null, nothing, "neutral");
         return this._tile("next", this._time(change.startMs), this._actionLabel(change.action), nothing, getScheduleActionTone(change.action.kind));
@@ -296,7 +342,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
      * The lowest known ceiling in the direction the battery moves, charge at
      * idle, with the power now against it while it moves.
      */
-    private _renderLimitsTile(overview: BatteryDetailPayload) {
+    protected _renderLimitsTile(overview: BatteryDetailPayload) {
         const direction = this._direction();
         const side = direction === "discharge" ? "discharge" : "charge";
         const lowest = this._lowest(this._ceilings(overview, side));
@@ -311,7 +357,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
     }
 
     /** Temperature, the cell voltage gap from the highest and lowest cell, and cycles. */
-    private _renderDiagnosticsTile(overview: BatteryDetailPayload) {
+    protected _renderDiagnosticsTile(overview: BatteryDetailPayload) {
         const parts: string[] = [];
         const high = this._volts(overview, "cell_voltage_high");
         const low = this._volts(overview, "cell_voltage_low");

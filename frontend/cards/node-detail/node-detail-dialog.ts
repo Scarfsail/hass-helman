@@ -5,11 +5,16 @@ import { repeat } from "lit/directives/repeat.js";
 import { nothing, TemplateResult } from "lit-html";
 import type { HomeAssistant } from "../../types/ha";
 import type { LocalizeFunction } from "../localize/localize";
-import type { NodeDetailParams, NodeDetailTab, NodeDetailTabRequest } from "./node-detail-types";
+import type { NodeDetailParams, NodeDetailSectionRequest } from "./node-detail-types";
 import type { TreeItem } from "../shared/data/tree-item";
 import { INVERTER_CONTROLLABLE_ID } from "../shared/schedule/schedule-types";
-import { dispatchWatchedEntities } from "../shared/hass-change";
-import { loadHaEntityToggle } from "../shared/load-ha-elements";
+import { getSharedScheduleOwner } from "../shared/schedule/schedule-owner";
+import type { SchedulePayload } from "../helman-api";
+import { formatScheduleTime } from "../shared/schedule/model/schedule-time";
+import { laneActionLabel, laneRuns, nextLaneChange, nextLaneStart } from "./node-detail-schedule";
+import { houseControlLanes } from "./node-control-rollup";
+import { boldTemplate } from "./detail-section";
+import "./detail-section";
 import "./node-detail-battery-content";
 import "./node-detail-solar-content";
 import "./node-detail-grid-content";
@@ -21,52 +26,21 @@ import "./node-control";
 import "./node-control-rollup";
 import type { HelmanDeviceEditDialog } from "../shared/devices/helman-device-edit-dialog";
 import "../shared/devices/helman-device-edit-dialog";
-import { deviceControllableIds, deviceDirectControls } from "./node-detail-utils";
-const TABS: readonly NodeDetailTab[] = ["overview", "schedule"];
+import { deviceControllableIds } from "./node-detail-utils";
 
 /**
- * A node's detail in Home Assistant's dialog. A node with controls opens on
- * its Overview with a Schedule tab beside it, or on the tab the power card was
- * asked for; only the tab shown is in the page, so a hidden one reads nothing.
+ * A node's detail in Home Assistant's dialog. A node with controls has a
+ * collapsible Schedule section; requests can open that section immediately.
  * Another node swaps in place, inside the one history entry the dialog holds.
  */
 @customElement("node-detail-dialog")
 export class NodeDetailDialog extends LitElement {
     static styles = css`
-        .tabs {
-            display: flex;
-            gap: 4px;
-            border-bottom: 1px solid var(--divider-color);
-            margin-bottom: 8px;
-        }
-        .tabs button {
-            font: inherit;
-            font-size: 0.9rem;
-            min-height: 40px;
-            padding: 4px 16px;
-            border: none;
-            border-bottom: 2px solid transparent;
-            background: none;
-            color: var(--secondary-text-color);
-            cursor: pointer;
-        }
-        .tabs button[aria-selected="true"] {
-            border-bottom-color: var(--primary-color);
-            color: var(--primary-text-color);
-            font-weight: 600;
-        }
-        .tabs button:focus-visible {
-            outline: 2px solid var(--primary-color);
-            outline-offset: -2px;
-        }
-        .header-title {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .header-title ha-icon, .header-title ha-state-icon {
-            flex: none;
-        }
+        /* The sections run edge to edge, so the body pads the overview only. */
+        ha-dialog { --dialog-content-padding: 0; }
+        .header-title { display: inline-flex; align-items: center; }
+        .overview { padding: 0 var(--ha-space-6, 24px) var(--ha-space-5, 20px); }
+        helman-detail-section:last-of-type { border-bottom: 1px solid var(--divider-color); }
         .settings-button {
             margin-inline-end: auto;
         }
@@ -87,46 +61,46 @@ export class NodeDetailDialog extends LitElement {
     @property({ attribute: false }) public params!: NodeDetailParams;
     @property({ type: Boolean }) public open = false;
 
-    @state() private _tab: NodeDetailTab = "overview";
     @state() private _settingsOpen = false;
-    @state() private _stateIconReady = !!customElements.get("ha-state-icon");
-    /** The node the tab was chosen for; an opening or another node starts on the tab requested. */
-    private _tabTarget: string | null = null;
-    /** The request the tab was chosen for; a new one selects its tab, even on the same node. */
-    private _tabRequest: NodeDetailTabRequest | null = null;
+    @state() private _scheduleExpanded = false;
+    @state() private _schedule: SchedulePayload | null = null;
+    private _scheduleUnsubscribe?: () => void;
+    private _sectionTarget: string | null = null;
+    private _sectionRequest: NodeDetailSectionRequest | null = null;
 
     connectedCallback(): void {
         super.connectedCallback();
-        loadHaEntityToggle()
-            .then(() => { this._stateIconReady = true; })
-            .catch((error) => console.error("node-detail-dialog: failed to load HA's state icon", error));
+        if (this.hass) this._watchSchedule();
+    }
+
+    disconnectedCallback(): void { super.disconnectedCallback(); this._scheduleUnsubscribe?.(); this._scheduleUnsubscribe = undefined; }
+
+    private _watchSchedule(): void {
+        if (this._scheduleUnsubscribe || !this.hass) return;
+        this._scheduleUnsubscribe = getSharedScheduleOwner(this.hass).subscribe((snapshot) => { this._schedule = snapshot.schedule; });
     }
 
     // Lifecycle methods
     willUpdate(changedProperties: Map<string, unknown>): void {
         super.willUpdate(changedProperties);
+        if (changedProperties.has("hass")) this._watchSchedule();
         if (!changedProperties.has("open") && !changedProperties.has("params")) return;
         const target = this.open && this.params ? this._targetKey() : null;
-        const request = target !== null ? this.params.tabRequest ?? null : null;
-        if (target !== this._tabTarget || request !== this._tabRequest) {
-            if (target !== this._tabTarget) this._settingsOpen = false;
-            this._tabTarget = target;
-            this._tabRequest = request;
-            this._tab = request?.tab ?? "overview";
-            // A Schedule request swaps the content the press came from: focus lands on the tab, not the dialog.
-            if (request?.tab === "schedule") {
-                void this.updateComplete.then(() => this.shadowRoot?.querySelector<HTMLElement>('[data-tab="schedule"]')?.focus());
-            }
+        const request = target !== null ? this.params.sectionRequest ?? null : null;
+        if (target !== this._sectionTarget || request !== this._sectionRequest) {
+            if (target !== this._sectionTarget) this._settingsOpen = false;
+            this._sectionTarget = target;
+            this._sectionRequest = request;
+            this._scheduleExpanded = request?.section === "schedule";
+            void this.updateComplete.then(() => {
+                const section = this.shadowRoot?.querySelector<HTMLElement>("helman-detail-section[data-schedule]");
+                if (section && request?.section === "schedule") { section.scrollIntoView({ block: "nearest" }); section.shadowRoot?.querySelector<HTMLElement>("button")?.focus(); }
+            });
         }
     }
 
     updated(changedProperties: Map<string, unknown>): void {
         super.updated(changedProperties);
-        if (changedProperties.has("params") || changedProperties.has("open")) {
-            const switchId = this.open && this.params?.nodeType === "device"
-                ? deviceDirectControls(this.params.item)?.switchEntityId : null;
-            dispatchWatchedEntities(this, "node-detail:header-icon", [switchId]);
-        }
         if (!this.open || !this.params || this._history.active) {
             return;
         }
@@ -149,7 +123,6 @@ export class NodeDetailDialog extends LitElement {
                 .ariaLabelledBy=${"node-detail-dialog-title"}
             >
                 <span id="node-detail-dialog-title" slot="headerTitle" class="header-title">
-                    ${this.params.nodeType === "device" ? this._renderDeviceIcon(this.params.item) : nothing}
                     ${title}
                 </span>
                 ${this._renderBody()}
@@ -177,26 +150,13 @@ export class NodeDetailDialog extends LitElement {
         return this.localize(`node_detail.title.${this.params.nodeType}`);
     }
 
-    private _deviceIcon(item: TreeItem): string {
-        return item.icon || (item.applianceKind === "ev_charger" ? "mdi:car-electric"
-            : item.climateEntityId ? "mdi:air-conditioner" : "mdi:power-plug");
-    }
-
-    private _renderDeviceIcon(item: TreeItem): TemplateResult {
-        const switchId = deviceDirectControls(item)?.switchEntityId;
-        const stateObj = switchId ? this.hass.states[switchId] : undefined;
-        return this._stateIconReady && stateObj
-            ? html`<ha-state-icon .hass=${this.hass} .stateObj=${stateObj}></ha-state-icon>`
-            : html`<ha-icon .icon=${this._deviceIcon(item)}></ha-icon>`;
-    }
-
     /** The params are rebuilt on every card render: the node is its type, and a device its item. */
     private _targetKey(): string {
         return this.params.nodeType === "device" ? `device:${this.params.item.id}` : this.params.nodeType;
     }
 
     /**
-     * The lanes a node's Schedule tab drives, once each in tree order: the
+     * The lanes a node's Schedule section drives, once each in tree order: the
      * battery is driven through the inverter's, a device through its own and
      * those its meter stands for, as a meter shared by several controllables.
      */
@@ -207,30 +167,46 @@ export class NodeDetailDialog extends LitElement {
 
     private _renderBody(): TemplateResult {
         const schedule = this._renderSchedule();
-        if (schedule === null) return this._renderContent();
+        const content = html`<div class="overview">${this._renderContent()}</div>`;
+        if (schedule === null) return content;
         return html`
-            <div class="tabs" role="tablist" aria-label=${this.localize("node_detail.control.tabs")} @keydown=${this._onTabKeydown}>
-                ${TABS.map((tab) => html`
-                    <button
-                        type="button"
-                        role="tab"
-                        id=${`node-detail-tab-${tab}`}
-                        data-tab=${tab}
-                        aria-selected=${this._tab === tab ? "true" : "false"}
-                        aria-controls="node-detail-tabpanel"
-                        tabindex=${this._tab === tab ? "0" : "-1"}
-                        @click=${() => { this._tab = tab; }}
-                    >${this.localize(`node_detail.control.tab.${tab}`)}</button>
-                `)}
-            </div>
-            <div role="tabpanel" id="node-detail-tabpanel" aria-labelledby=${`node-detail-tab-${this._tab}`}>
-                ${this._tab === "overview" ? this._renderContent() : schedule}
-            </div>
+            ${content}
+            <helman-detail-section data-schedule icon="mdi:calendar-month-outline" .title=${this.localize("node_detail.control.tab.schedule")}
+                .expanded=${this._scheduleExpanded} @expanded-changed=${(event: CustomEvent<boolean>) => { this._scheduleExpanded = event.detail; }}>
+                <span slot="summary">${this._scheduleSummary()}</span>
+                ${schedule}
+            </helman-detail-section>
         `;
     }
 
+    /** The Schedule header's summary, its values in bold. */
+    private _scheduleSummary(): TemplateResult | string {
+        const schedule = this._schedule;
+        if (!schedule) return this.localize("node_detail.shared.schedule.none");
+        const now = Date.now();
+        const zone = this.hass.config.time_zone;
+        const locale = this.hass.locale?.language ?? this.hass.language ?? "en";
+        if (this.params.nodeType === "house") {
+            const lanes = houseControlLanes(this.params.houseNode, true).filter((lane) => lane.controllableId !== INVERTER_CONTROLLABLE_ID);
+            const changes = lanes.map((lane) => ({ lane, run: nextLaneStart(laneRuns(schedule, lane.controllableId, now), now, zone) }))
+                .filter((entry) => entry.run !== null)
+                .sort((a, b) => a.run!.startMs - b.run!.startMs);
+            const first = changes[0];
+            return first?.run ? boldTemplate(this.localize("node_detail.shared.schedule.house_next"), {
+                device: typeof first.lane.target === "string" ? first.lane.target : first.lane.target.displayName || first.lane.target.name,
+                time: formatScheduleTime(first.run.startMs, locale, zone),
+            }) : this.localize("node_detail.shared.schedule.none");
+        }
+        const changes = this._controllableIds().map((id) => nextLaneChange(laneRuns(schedule, id, now), now, zone))
+            .filter((run) => run !== null).sort((a, b) => a!.startMs - b!.startMs);
+        const first = changes[0];
+        return first ? boldTemplate(this.localize("node_detail.shared.schedule.next"), {
+            action: laneActionLabel(first.action, this.localize), time: formatScheduleTime(first.startMs, locale, zone),
+        }) : this.localize("node_detail.shared.schedule.none");
+    }
+
     /**
-     * The Schedule tab's content; `null` for a node without one. The house
+     * The Schedule section's content; `null` for a node without one. The house
      * rolls up its lanes, and other schedulable nodes drive their own lanes.
      */
     private _renderSchedule(): TemplateResult | null {
@@ -274,20 +250,6 @@ export class NodeDetailDialog extends LitElement {
                 @closed=${() => { this._settingsOpen = false; }}
             ></helman-device-edit-dialog>
         `;
-    }
-
-    /** The tab list's arrow keys, Home and End move the selection and its focus. */
-    private _onTabKeydown(event: KeyboardEvent): void {
-        const index = TABS.indexOf(this._tab);
-        const next = event.key === "ArrowRight" ? TABS[(index + 1) % TABS.length]
-            : event.key === "ArrowLeft" ? TABS[(index + TABS.length - 1) % TABS.length]
-            : event.key === "Home" ? TABS[0]
-            : event.key === "End" ? TABS[TABS.length - 1]
-            : null;
-        if (next === null) return;
-        event.preventDefault();
-        this._tab = next;
-        void this.updateComplete.then(() => this.shadowRoot?.querySelector<HTMLElement>(`[data-tab="${next}"]`)?.focus());
     }
 
     private _renderContent(): TemplateResult {

@@ -125,10 +125,93 @@
     }
   },
   "node_detail": {
+    "shared": {
+      "now": "now",
+      "estimated": "estimated",
+      "gauge": {
+        "from": "Coming from",
+        "to": "Going to",
+        "tap": "Tap to open the {node} detail",
+        "estimate_help": "Estimated: the house's current mix of solar, battery and grid, applied to this device. Devices are not metered per source."
+      },
+      "schedule": {
+        "next": "Next: {action} at {time}",
+        "house_next": "Next: {device} starts {time}",
+        "none": "Nothing planned"
+      },
+      "who": "Who decides",
+      "planned_now": "Planned now",
+      "until": "until {time}",
+      "you": "You",
+      "override": "Override…",
+      "switch_help": "Tap the tile to switch it by hand. That holds until Helman's next planned change at {time}, then the schedule takes over again. Hold the tile for Home Assistant's details. To keep a manual state longer, use Override.",
+      "switch_help_no_time": "Tap the tile to switch it by hand. That holds until Helman's next planned change, then the schedule takes over again. Hold the tile for Home Assistant's details. To keep a manual state longer, use Override.",
+      "device_today": "{kwh} kWh used today",
+      "device_state_on": "on",
+      "device_state_off": "off",
+      "climate_controls": "Climate controls",
+      "solar_producing": "producing now",
+      "solar_rating": "{pct}% of the {rating} inverter rating",
+      "grid_importing": "importing from the grid now",
+      "grid_exporting": "exporting to the grid now",
+      "grid_idle": "not exchanging with the grid now",
+      "grid_price_buy": "{buy} to buy",
+      "grid_price_sell": "{sell} to sell",
+      "grid_next_price": "Changes at {time} to",
+      "grid_phase_help": "Each bar is one phase: right of the centre line is import, left is export, and a full bar is the {amps} A main breaker. Normal voltage is 207–253 V.",
+      "house_used": "used by the house now",
+      "house_biggest": "Going to · now · biggest users",
+      "everything_else": "Everything else · {count} more",
+      "not_measured": "Not measured",
+      "show_less": "Show less",
+      "charging": "charging",
+      "discharging": "discharging",
+      "idle": "idle",
+      "battery_range": "used between {floor} and {ceiling} %",
+      "battery_rate_help": "‘At the recent rate’ extends the last 15 minutes of charging. The plan-based estimate is in Forecast. The dashed marks on the icon are the range Helman uses the battery in.",
+      "battery_capped_charge": "Charging is capped at {power} right now",
+      "battery_capped_discharge": "Discharging is capped at {power} right now",
+      "battery_inverter": "Controlled through the inverter",
+      "mode_now": "mode now",
+      "inverter_chain": "Did the inverter do what the plan asked?",
+      "inverter_chain_help": "Plan is what the schedule wants now, Helman sent is the last command, and Inverter reports is what the inverter says it is doing. A mismatch means the command didn't take effect.",
+      "output_now": "Output now (AC)",
+      "of_rating": "of",
+      "temperature": "Temperature",
+      "override_mode": "Override mode…",
+      "ev_off": "switched off",
+      "ev_charging": "charging now",
+      "ev_of": "of",
+      "ev_limit": "limit",
+      "ev_needed": "Still needed",
+      "ev_at_power": "At this power",
+      "helman_schedule": "Helman's schedule",
+      "you_until": "You, until {time}",
+      "inverter_agrees": "✓ Everything agrees",
+      "inverter_not_applied": "Not applied: {why}",
+      "battery_cold_cause": "The cells are cold ({temperature}), so the battery management limits the current.",
+      "grid_price_now": "Price now",
+      "grid_phases": "Phases · load vs {amps} A breaker · voltage",
+      "grid_phases_no_breaker": "Phases · load · voltage",
+      "strings_now": "Strings now",
+      "controlled_through": "Controlled through",
+      "the_inverter": "the inverter →",
+      "mode_now_label": "Mode now",
+      "battery_recent_rate": "at the recent rate",
+      "ev_eta": "≈ {duration} → limit around {time}",
+      "ev_session_total": "{kwh} kWh added this session",
+      "mode_does": {
+        "normal": "solar covers the house, the surplus charges the battery",
+        "stop_charging": "the battery does not charge",
+        "stop_discharging": "the battery keeps its charge",
+        "charge_to_target_soc": "the battery charges to its target",
+        "discharge_to_target_soc": "the battery discharges to its target",
+        "stop_export": "nothing is sold to the grid"
+      },
+      "solar_idle": "not producing now"
+    },
     "control": {
-      "tabs": "Detail views",
       "tab": {
-        "overview": "Overview",
         "schedule": "Schedule"
       },
       "status": {
@@ -148,8 +231,6 @@
       "unavailable": "unavailable",
       "not_on_roster": "Helman has no controllable for this node.",
       "unsupported_authoring": "This appliance's actions cannot be authored in the schedule yet, so a new manual override cannot be set here.",
-      "scheduled_note": "Helman's schedule may switch this back at its next planned change. Use Schedule for a bounded override.",
-      "direct_label": "Control",
       "on": "on",
       "off": "off",
       "change": "Change",
@@ -245,10 +326,6 @@
       "off": "off",
       "evidence": "How this is worked out",
       "technical": "Technical readings",
-      "status": {
-        "commanded": "Helman last commanded: {mode}.",
-        "no_command": "Helman has not commanded a mode yet."
-      },
       "figure": {
         "temperature": "Temperature"
       },
@@ -405,8 +482,8 @@
       },
       "chain": {
         "plan": "Plan",
-        "command": "Last command",
-        "inverter": "Inverter",
+        "command": "Helman sent",
+        "inverter": "Inverter reports",
         "executor": "executor {outcome}",
         "no_runtime": "no executor record",
         "match": "matches",
@@ -415,7 +492,9 @@
         "not_read": "not readable",
         "other_mode": "another mode",
         "not_applied": "not applied",
-        "candidate": "{action}: a candidate, not executed"
+        "candidate": "{action}: a candidate, not executed",
+        "plan_mismatch": "the last command differs from the plan",
+        "executor_failed": "the scheduled command failed"
       },
       "strip": {
         "scope": "Modes · today to noon tomorrow",
@@ -444,12 +523,6 @@
       "phase": "Phase",
       "loading_history": "Loading today's history…",
       "history_failed": "Today's history could not be loaded.",
-      "status": {
-        "importing": "Importing {power} from the grid.",
-        "exporting": "Exporting {power} to the grid.",
-        "idle": "Hardly any grid flow right now ({power}).",
-        "unavailable": "No grid power reading right now."
-      },
       "power": {
         "import": "importing {power}",
         "export": "exporting {power}",
@@ -619,12 +692,6 @@
       "technical": "Technical readings",
       "next_change": "Next: {action} from {time}",
       "next_estimate": "At the recent rate: {estimate}",
-      "status": {
-        "charging": "Charging at {power}.",
-        "discharging": "Discharging at {power}.",
-        "idle": "Idle ({power}).",
-        "unavailable": "No battery power reading right now."
-      },
       "glyph": {
         "min": "min {soc}",
         "max": "max {soc}"
@@ -816,11 +883,6 @@
       "forecast_unavailable": "No solar forecast is available yet.",
       "forecast_not_configured": "No solar forecast is configured.",
       "period": "Today {start}–{end}",
-      "status": {
-        "producing": "Producing {power}.",
-        "not_producing": "Not producing right now.",
-        "unavailable": "No solar power reading right now."
-      },
       "next": {
         "until": "Forecast: production until around {time}",
         "from": "Forecast: production from around {time}",
@@ -1045,10 +1107,6 @@
       "period_range": "{start}–{end}",
       "share_value": "{kwh} ({share})",
       "incomplete": "Today's statistics are not complete yet; the figures can still move a little.",
-      "status": {
-        "using": "Using {power}.",
-        "unavailable": "No house power reading right now."
-      },
       "mix": {
         "solar": "solar {share}",
         "battery": "battery {share}",
@@ -1252,16 +1310,6 @@
       "technical": "Technical readings",
       "next_window": "Next charging window: {window}",
       "eta": "≈ {duration} to {limit} at current power",
-      "status": {
-        "charging": "Charging at {power}.",
-        "waiting": "Car plugged in, not charging ({state}).",
-        "no_car": "No car connected ({state}).",
-        "fault": "The charger reports a fault ({state}).",
-        "reported": "The charger reports {state}.",
-        "drawing": "Drawing {power}.",
-        "not_drawing": "Not drawing power ({power}).",
-        "unavailable": "No charger power reading right now."
-      },
       "exception": {
         "fault": "The charger reports a fault: {fault}.",
         "details": "Show details"

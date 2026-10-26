@@ -374,12 +374,11 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview, Q exte
 
     // ── Rendering ───────────────────────────────────────────────────────────
 
-    /** The one exception a detail shows, with a link to the answer that explains it. */
-    protected _exceptionBanner(text: string, target: Q) {
+    /** The one exception a detail shows. */
+    protected _exceptionBanner(text: string) {
         return html`
             <div class="exception" role="status" data-exception>
                 <span>${text}</span>
-                <button class="link-button" @click=${() => this._setOpen(target)}>${this._t("exception.details")}</button>
             </div>
         `;
     }
