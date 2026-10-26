@@ -220,6 +220,35 @@ class DailyTests(unittest.TestCase):
         self.assertEqual(record["runs_per_day"], 1.0)
         self.assertEqual(record["daily_runs"], {"min": 1, "max": 1})
 
+    def test_daily_runs_leave_out_a_day_the_running_signal_was_unavailable(
+        self,
+    ) -> None:
+        # One run on each outer day, but the running signal is unavailable
+        # all of the middle day while the power sensor keeps reading.
+        record = device_stats.metered_record(
+            window_start=DAY_START,
+            window_end=DAY_START + timedelta(days=3),
+            daily_kwh=[1.0, 1.0, 1.0],
+            days=[
+                (DAY_START + timedelta(days=day), DAY_START + timedelta(days=day + 1))
+                for day in range(3)
+            ],
+            power_states=_power(
+                (0, _at(0)),
+                (1000, _at(10)),
+                (0, _at(11)),
+                (1000, _at(10, day=21)),
+                (0, _at(11, day=21)),
+                (1000, _at(10, day=22)),
+                (0, _at(11, day=22)),
+            ),
+            running=[(_at(10), _at(11)), (_at(10, day=22), _at(11, day=22))],
+            observed=[(DAY_START, _at(0, day=21)), (_at(0, day=22), _at(0, day=23))],
+        )
+
+        self.assertEqual(record["runs_per_day"], 0.6667)
+        self.assertEqual(record["daily_runs"], {"min": 1, "max": 1})
+
     def test_without_a_power_sensor_only_the_days_and_the_signal_figure(self) -> None:
         plain = device_stats.metered_record(
             window_start=DAY_START, window_end=DAY_END, daily_kwh=[1.0, 2.0], days=[]

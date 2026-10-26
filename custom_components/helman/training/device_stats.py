@@ -69,6 +69,7 @@ def metered_record(
     power_states: Sequence[Any] | None = None,
     power_value_type: str = "default",
     running: Sequence[Span] | None = None,
+    observed: Sequence[Span] | None = None,
     on_kwh_per_hour: float | None = None,
 ) -> dict[str, Any] | None:
     """The record of a device with its own meter.
@@ -76,7 +77,8 @@ def metered_record(
     ``daily_kwh`` is its meter's change over each complete local day in
     ``days``, so a parent's includes its metered children. Runs come only from a power
     sensor's ``power_states``: above the standby floor, and within
-    ``running`` -- its running signal's active intervals -- when it has one.
+    ``running`` -- its running signal's active intervals -- when it has one;
+    ``observed`` are the intervals that signal reported any state at all.
     """
     runs: list[Piece] = []
     covered_start = window_start
@@ -92,6 +94,10 @@ def metered_record(
             covered = sum((end - start for start, end, _ in pieces), timedelta())
             # Nor is a day the readings do not fully cover a zero-run day.
             days = [day for day in days if _covers(pieces, day)]
+            # Nor is a day the running signal was unavailable for: gated by
+            # it, the power shows no runs there either.
+            if observed is not None:
+                days = [day for day in days if _covers(observed, day)]
     return _record(
         covered_start,
         window_end,
@@ -361,13 +367,13 @@ def _record(
     return record or None
 
 
-def _covers(pieces: Sequence[Piece], span: Span) -> bool:
-    """Whether the sorted, disjoint ``pieces`` cover all of ``span``."""
+def _covers(pieces: Sequence[Piece] | Sequence[Span], span: Span) -> bool:
+    """Whether the sorted, disjoint ``pieces`` (or spans) cover all of ``span``."""
     start, end = span
     seen = sum(
         (
             min(piece_end, end) - max(piece_start, start)
-            for piece_start, piece_end, _ in pieces
+            for piece_start, piece_end, *_ in pieces
             if piece_start < end and start < piece_end
         ),
         timedelta(),

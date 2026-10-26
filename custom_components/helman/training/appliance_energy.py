@@ -624,6 +624,7 @@ def _metered_record(
     )
     on_kwh_per_hour = None
     running = None
+    observed = None
     runs_start = window_start
     if subject.running_signal is not None:
         entity_id, activity = subject.running_signal
@@ -641,6 +642,17 @@ def _metered_record(
             window_start=window_start,
             window_end=window_end,
             active_states=active_states,
+        )
+        # Every state it reported but ``unavailable``/``unknown``: the time
+        # the signal was observed at all, on or off.
+        observed = recorder._build_active_state_intervals(
+            states=signal_states,
+            window_start=window_start,
+            window_end=window_end,
+            active_states=tuple(
+                {str(state.state).strip().lower() for state in signal_states}
+                - {"unavailable", "unknown", ""}
+            ),
         )
         # Runs are gated by the signal, so before its first row nothing says
         # whether the device ran: the run figures start where it does.
@@ -661,6 +673,7 @@ def _metered_record(
         ),
         power_value_type=subject.power_value_type,
         running=running,
+        observed=observed,
         on_kwh_per_hour=on_kwh_per_hour,
     )
 
