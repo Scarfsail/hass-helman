@@ -59,6 +59,10 @@ export class NodeDetailDialog extends LitElement {
     @property({ attribute: false }) public params!: NodeDetailParams;
     @property({ type: Boolean }) public open = false;
 
+    public releaseHistory(): Promise<void> {
+        return this._history.release();
+    }
+
     @state() private _settingsOpen = false;
     @state() private _scheduleExpanded = false;
     @state() private _schedule: SchedulePayload | null = null;

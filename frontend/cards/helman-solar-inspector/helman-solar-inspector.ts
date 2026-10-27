@@ -57,6 +57,7 @@ import type {
 import { currencyFromPriceUnit } from "./money-model";
 import "../helman/tree-item-list";
 import "../node-detail/node-detail-dialog";
+import type { NodeDetailDialog } from "../node-detail/node-detail-dialog";
 import type { NodeDetailParams } from "../node-detail/node-detail-types";
 import { TreeItem } from "../shared/data/tree-item";
 import type { ShowControllableDetailDetail } from "../shared/schedule/components/scheduling-entity-day-band";
@@ -1160,6 +1161,7 @@ export class HelmanSolarInspector extends LitElement {
             params = buildNodeDetailParams(context, "inverter");
           }
           if (this._nodeDetail !== null) {
+            await this.shadowRoot?.querySelector<NodeDetailDialog>("node-detail-dialog")?.releaseHistory();
             this._nodeDetail = null;
             await this.updateComplete;
           }

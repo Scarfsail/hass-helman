@@ -23,6 +23,7 @@ import {
     SHOW_CONTROLLABLE_DETAIL_EVENT,
     type ShowControllableDetailDetail,
 } from "./schedule/components/scheduling-entity-day-band";
+import type { NodeDetailDialog } from "../node-detail/node-detail-dialog";
 import { deviceForControllable } from "../node-detail/node-control-rollup";
 import {
     NODE_DETAIL_REQUEST_EVENT,
@@ -396,6 +397,7 @@ export class EnergyCardHost implements ReactiveController {
         const target = deviceForControllable(this._energyNodes.houseNode, controllableId);
         if (target !== null) {
             if (this._dialogRequest !== null) {
+                await this.host.shadowRoot?.querySelector<NodeDetailDialog>("node-detail-dialog")?.releaseHistory();
                 this.closeDialog();
                 await this.host.updateComplete;
             }

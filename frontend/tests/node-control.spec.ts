@@ -727,6 +727,7 @@ test.describe("Schedule lane icons in power card editor", () => {
 
     for (const card of ["helman-simple-card", "helman-card"]) {
         test(`lane whose controllable a house device drives opens that device's dialog from ${card}`, async ({ page }) => {
+            await page.evaluate(() => window.history.replaceState({ dashboard: "energy" }, ""));
             await openDayEditor(page, card);
             await clickLaneIcon(page, card, "boiler");
             const detail = page.locator("node-detail-dialog");
@@ -738,6 +739,12 @@ test.describe("Schedule lane icons in power card editor", () => {
             await detail.locator("ha-dialog").evaluate((dialog: any) => dialog.close());
             await expect(detail).toHaveCount(0);
             await expect.poll(() => dayEditor(page, card)).toEqual({ open: true, selected: "inverter" });
+            await page.evaluate(({ card }) => {
+                const host = document.querySelector(card)!.shadowRoot!.querySelector("scheduling-day-editor-host") as any;
+                const editor = host.shadowRoot.querySelector("scheduling-entity-day-editor") as any;
+                editor.shadowRoot.querySelector("ha-dialog").close();
+            }, { card });
+            await expect.poll(() => page.evaluate(() => window.history.state)).toEqual({ dashboard: "energy" });
         });
 
         test(`inverter lane opens the inverter detail dialog from ${card}`, async ({ page }) => {
