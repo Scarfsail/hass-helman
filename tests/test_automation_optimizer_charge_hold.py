@@ -245,6 +245,16 @@ class ChargeHoldOptimizerTests(unittest.TestCase):
         )
         self.assertNotIn(_slot_id(5, 30), held)
 
+    def test_written_actions_record_the_optimizer_kind(self) -> None:
+        result = build_charge_hold_optimizer(_make_config()).optimize(
+            _make_snapshot(day_context=_day_context()), _make_config()
+        )
+        self.assertTrue(_held_slot_ids(result))
+        for slot_id in _held_slot_ids(result):
+            self.assertEqual(
+                inverter_action(result.slots[slot_id]).optimizer, "charge_hold"
+            )
+
     def test_the_charge_set_need_not_be_contiguous(self) -> None:
         """The bug of issue #79: the cheapest slots are what matters, not a run.
 

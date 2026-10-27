@@ -32,6 +32,12 @@ class GridFlowForecastBuilderTests(unittest.TestCase):
                     "exportedToGridKwh": 0.0,
                     "availableSurplusKwh": 0.15,
                     "remainingEnergyKwh": 5.1,
+                    "setBy": "automation",
+                    "optimizer": "charge_from_grid",
+                    "hitMinSoc": False,
+                    "hitMaxSoc": True,
+                    "limitedByChargePower": False,
+                    "limitedByDischargePower": False,
                 }
             ],
         }
@@ -50,6 +56,11 @@ class GridFlowForecastBuilderTests(unittest.TestCase):
                     "importedFromGridKwh": 0.2,
                     "exportedToGridKwh": 0.0,
                     "availableSurplusKwh": 0.15,
+                    "setBy": "automation",
+                    "optimizer": "charge_from_grid",
+                    "hitMinSoc": False,
+                    "hitMaxSoc": True,
+                    "limitedByChargePower": False,
                 }
             ],
         )

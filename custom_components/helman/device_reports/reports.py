@@ -296,6 +296,8 @@ def build_report(
             "batteryKwh": _round_kwh(dataset.solar_totals.battery_kwh),
             "exportKwh": _round_kwh(dataset.solar_totals.export_kwh),
             "measuredExportKwh": _round_kwh(dataset.solar_totals.measured_export_kwh),
+            "exportMoney": _round_money(dataset.solar_totals.export_money),
+            "exportPricedKwh": _round_kwh(dataset.solar_totals.export_priced_kwh),
         },
         "houseKwh": _round_kwh(dataset.house.total_kwh),
         "ambiguousKwh": _round_kwh(dataset.ambiguous_kwh),

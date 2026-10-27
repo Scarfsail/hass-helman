@@ -39,6 +39,11 @@ def _make_snapshot(*, schedule_adjusted: bool = True) -> dict:
                 "importedFromGridKwh": 0.2,
                 "exportedToGridKwh": 0.0,
                 "availableSurplusKwh": 0.0,
+                "setBy": "automation",
+                "optimizer": "charge_from_grid",
+                "hitMinSoc": True,
+                "hitMaxSoc": False,
+                "limitedByChargePower": False,
             },
             {
                 "timestamp": "2026-03-20T21:45:00+01:00",
@@ -99,6 +104,32 @@ class GridFlowForecastResponseTests(unittest.TestCase):
         self.assertFalse(response["scheduleAdjusted"])
         self.assertIn("availableSurplusKwh", response["series"][0])
         self.assertNotIn("baseline", response["series"][0])
+
+    def test_cause_fields_are_copied_only_where_present(self) -> None:
+        response = grid_flow_forecast_response.build_grid_flow_forecast_response(
+            _make_snapshot(), forecast_days=1,
+        )
+        self.assertEqual(
+            {
+                key: response["series"][1][key]
+                for key in (
+                    "setBy",
+                    "optimizer",
+                    "hitMinSoc",
+                    "hitMaxSoc",
+                    "limitedByChargePower",
+                )
+            },
+            {
+                "setBy": "automation",
+                "optimizer": "charge_from_grid",
+                "hitMinSoc": True,
+                "hitMaxSoc": False,
+                "limitedByChargePower": False,
+            },
+        )
+        self.assertNotIn("setBy", response["series"][0])
+        self.assertNotIn("hitMinSoc", response["series"][0])
 
 
 if __name__ == "__main__":

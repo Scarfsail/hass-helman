@@ -450,7 +450,10 @@ class ApplianceRuntimeOptimizerTests(unittest.TestCase):
         placed = _placed_slots(result, appliance.id)
         self.assertEqual(set(placed), cheap)
         for action in placed.values():
-            self.assertEqual(action, {"on": True, "setBy": "automation"})
+            self.assertEqual(
+                action,
+                {"on": True, "setBy": "automation", "optimizer": "appliance_runtime"},
+            )
 
     def test_places_candidate_actions_when_condition_not_met(self) -> None:
         appliance = _generic()
@@ -472,7 +475,12 @@ class ApplianceRuntimeOptimizerTests(unittest.TestCase):
         for action in placed.values():
             self.assertEqual(
                 action,
-                {"on": True, "setBy": "automation", "conditionMet": False},
+                {
+                    "on": True,
+                    "setBy": "automation",
+                    "optimizer": "appliance_runtime",
+                    "conditionMet": False,
+                },
             )
 
     def test_manual_runtime_reduces_remaining_budget(self) -> None:
@@ -782,7 +790,10 @@ class ApplianceRuntimeOptimizerTests(unittest.TestCase):
         placed = _placed_slots(result, appliance.id)
         self.assertEqual(set(placed), cheap)
         for action in placed.values():
-            self.assertEqual(action, {"mode": "heat", "setBy": "automation"})
+            self.assertEqual(
+                action,
+                {"mode": "heat", "setBy": "automation", "optimizer": "appliance_runtime"},
+            )
 
     def test_does_not_mutate_snapshot_schedule(self) -> None:
         appliance = _generic()

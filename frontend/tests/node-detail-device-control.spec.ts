@@ -241,6 +241,15 @@ test.describe("a schedulable device", () => {
         await expect(page.locator("node-detail-dialog helman-detail-section[data-schedule] [slot=summary]")).toContainText("Next: off at 17:00");
     });
 
+    test("Planned now names the optimizer that placed the run in progress", async ({ page }) => {
+        await mount(page, plan([["12:00", "14:00", { boiler: auto({ on: true, optimizer: "appliance_runtime" }) }]]));
+        await openDevice(page, "Boiler");
+        const overview = page.locator("node-detail-device-content helman-who-decides");
+        await expect(overview.locator(".row").nth(1).locator("span").last()).toHaveText("on until 14:00 · Appliance runtime");
+        // Who controls the lane stays Helman's schedule.
+        await expect(overview.locator(".row").first().locator(":scope > span").last()).toHaveText("Helman's schedule");
+    });
+
     test("a climate lane's changes name its modes in words", async ({ page }) => {
         await mount(page, plan([["13:00", "14:00", { klima: auto({ mode: "heat" }) }]]));
         await openControl(page, "Klima");

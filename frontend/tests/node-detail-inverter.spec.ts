@@ -174,7 +174,6 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 stretch("08:10", "12:00", "normal", true),
             ],
         };
-        const flowsSection = window.__flowsSection("inverter", { flows: { ...window.__flowsSection("inverter").flows, solarToGrid: 2.0, unknownToHouse: 0 } });
         // 15-minute slots from 11:45 today for a day and a half.
         const slots: ScheduleSlotDTO[] = [];
         const start = Date.parse(`${day}T11:45:00Z`);
@@ -206,7 +205,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
         window.__modesCalls = 0;
         window.__dataChanged = [];
         window.__InverterHass = window.__configureNodeDetail({
-            states, tree, overviews: { inverter: overview }, sections: { inverter: { flows: flowsSection, modes, temperature: section } }, schedule,
+            states, tree, overviews: { inverter: overview }, sections: { inverter: { modes, temperature: section } }, schedule,
             timeZone: v.timeZone,
             hass: { ...(v.admin ? { user: { is_admin: true } } : {}), connection: { subscribeMessage: async (listener: (event: unknown) => void, request: { type: string }) => {
                 if (request.type === "helman/subscribe_updates") window.__dataChanged.push(listener);
@@ -232,8 +231,6 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                         }
                         return modes;
                     }
-                    if (msg.section === "flows")
-                        return flowsSection;
                     if (msg.section) {
                         if (v.sectionFails)
                             throw new Error("recorder down");

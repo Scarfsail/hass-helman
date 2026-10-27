@@ -252,6 +252,15 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
         charges = [slot_id for slot_id, kind in actions.items() if kind == "charge_to_target_soc"]
         self.assertEqual(charges, [_slot_id(6, 45), _slot_id(7), _slot_id(7, 15), _slot_id(7, 30), _slot_id(7, 45)])
 
+    def test_written_actions_record_the_optimizer_kind(self) -> None:
+        result = self._run_with_fake_simulator(holds_needed=4, charges_needed=3)
+        optimizers = {
+            inverter_action(slot_actions).optimizer
+            for slot_actions in result.slots.values()
+            if inverter_action(slot_actions).set_by == "automation"
+        }
+        self.assertEqual(optimizers, {"charge_from_grid"})
+
     def test_simulated_charge_rounds_fractional_target_up(self) -> None:
         result = self._run_with_fake_simulator(
             holds_needed=99,

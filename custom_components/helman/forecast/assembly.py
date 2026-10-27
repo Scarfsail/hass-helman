@@ -93,6 +93,8 @@ def build_battery_forecast_schedule_signature(
             slot_id,
             inverter_action(actions).kind,
             inverter_action(actions).target_soc,
+            inverter_action(actions).set_by,
+            inverter_action(actions).optimizer,
         )
         for slot_id, actions in sorted(schedule_document.slots.items())
     )

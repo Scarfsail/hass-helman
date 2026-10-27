@@ -28,7 +28,7 @@ import { INVERTER_CONTROLLABLE_ID, isScheduleApplianceActionEnabled, isScheduleI
 import { schedulingSharedStyles } from "../shared/schedule/styles/scheduling-shared-styles";
 import { AdminConfigController } from "./admin-config-controller";
 import { currentManualRun, LaneOwnershipController } from "./lane-ownership";
-import { effectiveLaneAction, inverterModeLabel, laneActionLabel, laneRuns, upcomingLaneChanges, type LaneChange } from "./node-detail-schedule";
+import { effectiveLaneAction, inverterModeLabel, laneActionLabel, laneRuns, optimizerName, scheduleReason, upcomingLaneChanges, type LaneChange } from "./node-detail-schedule";
 import { NO_LANE_HISTORY, type LaneHistory } from "./node-detail-types";
 import { nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import "../shared/optimizer/helman-optimizer-edit-dialog";
@@ -263,13 +263,13 @@ export class HelmanNodeControl extends LitElement {
     }
 
     /**
-     * Who set a change: you, or Helman's schedule (the plan does not name the
-     * optimizer); that it is a candidate; or the default, for the lane at rest.
+     * Who set a change: you, the optimizer, or Helman's schedule; that it is a
+     * candidate; or the default, for the lane at rest.
      */
     private _why(change: LaneChange): string {
         if (change.candidate) return this._s("candidate");
-        if (change.action.setBy === "user") return this.localize("node_detail.shared.you");
-        return change.atRest ? this._s("default") : this.localize("node_detail.shared.helman_schedule");
+        if (change.action.setBy !== "user" && change.atRest) return this._s("default");
+        return scheduleReason(change.action, this.localize);
     }
 
     /**
@@ -320,7 +320,7 @@ export class HelmanNodeControl extends LitElement {
                     : nothing}
                 ${coverage === null ? nothing : ids.length === 0 ? html`<p class="note">${this._t("no_automations")}</p>` : ids.map((id) => {
                     const row = this._optimizerRow(id);
-                    const name = row?.kind ? `${editor(`editor.values.${row.kind}`)}` : id;
+                    const name = (row?.kind ? optimizerName(row.kind, editor) : null) ?? id;
                     return html`
                         <div class="optimizer" data-optimizer=${id}>
                             <button type="button" class="link-button" data-edit @click=${() => this._openDialog({ kind: "optimizer", optimizerId: id })}>

@@ -157,6 +157,8 @@ export interface DeviceStats {
     /** kWh over the complete local days in the window, zero days included. */
     daily_kwh?: DeviceStatsSpread & { mean: number; days: number };
     runs_per_day?: number;
+    /** The fewest and most runs started on one of the `daily_kwh` days. */
+    daily_runs?: { min: number; max: number };
     run_minutes?: DeviceStatsSpread;
     run_kwh?: DeviceStatsSpread;
     /** Energy over the hours the device actually draws power. */
@@ -419,6 +421,13 @@ export interface GridForecastSlotDTO {
     importedFromGridKwh: number;
     exportedToGridKwh: number;
     availableSurplusKwh?: number;
+    // Who placed the scheduled action that shapes the slot, when it is one.
+    setBy?: ScheduleSetBy;
+    optimizer?: string;
+    // The battery limits the simulation hit in the slot.
+    hitMinSoc?: boolean;
+    hitMaxSoc?: boolean;
+    limitedByChargePower?: boolean;
 }
 
 export interface ForecastBandValueDTO {
@@ -540,6 +549,8 @@ export interface ScheduleActionDTO {
     kind: ScheduleActionKind;
     targetSoc?: number;
     setBy?: ScheduleSetBy;
+    // The kind of the optimizer that placed the action, when one did.
+    optimizer?: string;
     // False marks a "candidate": placed by an optimizer whose execution
     // condition is not currently met. Rendered muted; not executed.
     conditionMet?: boolean;
@@ -554,18 +565,21 @@ export interface ScheduleEvChargerActionDTO {
     useMode?: EvChargerUseMode;
     ecoGear?: string;
     setBy?: ScheduleSetBy;
+    optimizer?: string;
     conditionMet?: boolean;
 }
 
 export interface ScheduleGenericApplianceActionDTO {
     on: boolean;
     setBy?: ScheduleSetBy;
+    optimizer?: string;
     conditionMet?: boolean;
 }
 
 export interface ScheduleClimateApplianceActionDTO {
     mode: ClimateApplianceMode;
     setBy?: ScheduleSetBy;
+    optimizer?: string;
     conditionMet?: boolean;
 }
 
@@ -1027,42 +1041,6 @@ export interface BatteryChargeSectionPayload {
 }
 
 /**
- * Today's energy between the nodes, kWh, from the ranking report. An edge whose
- * meters are not configured is `null`, never a zero; unresolved energy keeps
- * its own figure rather than being forced into a destination.
- */
-export interface TodayFlowsDTO {
-    solarToHouse: number | null;
-    solarToBattery: number | null;
-    solarToGrid: number | null;
-    /** Solar the meters do not explain. */
-    solarUnresolved: number | null;
-    gridToBattery: number | null;
-    /** Battery charge of unknown origin. */
-    unknownToBattery: number | null;
-    /** The grid charge's paid cost, an estimate; `null` where unpriced. */
-    gridToBatteryCost: number | null;
-    batteryToHouse: number | null;
-    gridToHouse: number | null;
-    /** House energy whose source is not known. */
-    unknownToHouse: number | null;
-    batteryToGrid: number | null;
-}
-
-/** The `flows` section every energy node answers: today's flows, or why there are none. */
-export interface FlowsSectionPayload {
-    node: NodeDetailNode;
-    section: "flows";
-    asOf: string;
-    period: { start: string; end: string };
-    /** The price unit the money is in, such as `CZK/kWh`. */
-    priceUnit: string | null;
-    complete: boolean;
-    unavailable: string | null;
-    flows: TodayFlowsDTO | null;
-}
-
-/**
  * The solar detail's overview. `entities` carries the solar node's `power` and
  * `today_energy` meters, the lifetime counter (`lifetime_energy`), the grid's
  * `today_export` and the profile's string, cap and setting telemetry (absent
@@ -1129,6 +1107,9 @@ export interface SolarDestinationsDTO {
     measuredExportKwh: number;
     /** Measured export the solar did not account for: the battery's. */
     otherExportKwh: number;
+    /** The solar export's money at each hour's export rate; `null` when none of it was priced, `0` when nothing was exported. */
+    exportMoney: number | null;
+    exportPricedKwh: number;
 }
 
 export interface SolarDestinationsSectionPayload {

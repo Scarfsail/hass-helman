@@ -7,7 +7,6 @@ from custom_components.helman.slot_grid import SLOT
 import importlib
 import unittest
 from datetime import datetime, timezone
-from types import SimpleNamespace
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
@@ -97,15 +96,15 @@ class _FakeScheduleOverlay:
         self,
         *,
         horizon_end: datetime,
-        actions_by_slot: dict[datetime, SimpleNamespace] | None = None,
+        actions_by_slot: dict[datetime, ScheduleAction] | None = None,
     ) -> None:
         self.horizon_end = horizon_end
         self._actions_by_slot = {} if actions_by_slot is None else dict(actions_by_slot)
 
-    def lookup_action(self, slot_start: datetime) -> SimpleNamespace:
+    def lookup_action(self, slot_start: datetime) -> ScheduleAction:
         return self._actions_by_slot.get(
             slot_start,
-            SimpleNamespace(kind="normal", target_soc=None),
+            ScheduleAction(kind="normal", target_soc=None),
         )
 
 
@@ -118,6 +117,7 @@ from custom_components.helman import (  # noqa: E402
 # The builder no longer imports this itself — it only ever asks whether the
 # battery is configured — so the tests take it from where it lives.
 from custom_components.helman.battery_state import BatteryEntityConfig  # noqa: E402
+from custom_components.helman.scheduling.schedule import ScheduleAction  # noqa: E402
 
 
 class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
@@ -494,7 +494,11 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         schedule_overlay = _FakeScheduleOverlay(
             horizon_end=datetime(2026, 3, 22, 21, 0, tzinfo=TZ),
             actions_by_slot={
-                started_at: SimpleNamespace(kind="stop_charging", target_soc=None)
+                started_at: ScheduleAction(
+                    kind="stop_charging",
+                    set_by="automation",
+                    optimizer="charge_hold",
+                )
             },
         )
 
@@ -553,6 +557,12 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["series"][0]["baselineSocPct"], 52.0)
         self.assertEqual(payload["series"][1]["remainingEnergyKwh"], 5.0)
         self.assertEqual(payload["series"][1]["baselineRemainingEnergyKwh"], 5.2)
+        # The scheduled slot says who placed it; the baseline slot after it
+        # carries no author.
+        self.assertEqual(payload["series"][0]["setBy"], "automation")
+        self.assertEqual(payload["series"][0]["optimizer"], "charge_hold")
+        self.assertNotIn("setBy", payload["series"][1])
+        self.assertNotIn("optimizer", payload["series"][1])
 
     async def test_build_with_stop_export_overlay_curtails_remaining_surplus(self) -> None:
         module, builder = self._make_builder()
@@ -571,7 +581,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         schedule_overlay = _FakeScheduleOverlay(
             horizon_end=datetime(2026, 3, 22, 21, 0, tzinfo=TZ),
             actions_by_slot={
-                started_at: SimpleNamespace(kind="stop_export", target_soc=None)
+                started_at: ScheduleAction(kind="stop_export", target_soc=None)
             },
         )
 
@@ -643,7 +653,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         schedule_overlay = _FakeScheduleOverlay(
             horizon_end=datetime(2026, 3, 22, 21, 0, tzinfo=TZ),
             actions_by_slot={
-                started_at: SimpleNamespace(kind="stop_export", target_soc=None)
+                started_at: ScheduleAction(kind="stop_export", target_soc=None)
             },
         )
 
@@ -783,7 +793,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         schedule_overlay = _FakeScheduleOverlay(
             horizon_end=datetime(2026, 3, 22, 21, 0, tzinfo=TZ),
             actions_by_slot={
-                started_at: SimpleNamespace(kind="stop_discharging", target_soc=None)
+                started_at: ScheduleAction(kind="stop_discharging", target_soc=None)
             },
         )
 
@@ -857,11 +867,11 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         schedule_overlay = _FakeScheduleOverlay(
             horizon_end=datetime(2026, 3, 22, 21, 0, tzinfo=TZ),
             actions_by_slot={
-                datetime(2026, 3, 20, 21, 30, tzinfo=TZ): SimpleNamespace(
+                datetime(2026, 3, 20, 21, 30, tzinfo=TZ): ScheduleAction(
                     kind="stop_charging",
                     target_soc=None,
                 ),
-                datetime(2026, 3, 20, 21, 45, tzinfo=TZ): SimpleNamespace(
+                datetime(2026, 3, 20, 21, 45, tzinfo=TZ): ScheduleAction(
                     kind="stop_charging",
                     target_soc=None,
                 ),
@@ -940,8 +950,8 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         schedule_overlay = _FakeScheduleOverlay(
             horizon_end=datetime(2026, 3, 22, 21, 0, tzinfo=TZ),
             actions_by_slot={
-                started_at: SimpleNamespace(kind="stop_charging", target_soc=None),
-                datetime(2026, 3, 20, 21, 15, tzinfo=TZ): SimpleNamespace(
+                started_at: ScheduleAction(kind="stop_charging", target_soc=None),
+                datetime(2026, 3, 20, 21, 15, tzinfo=TZ): ScheduleAction(
                     kind="charge_to_target_soc",
                     target_soc=70,
                 ),
@@ -1015,7 +1025,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         schedule_overlay = _FakeScheduleOverlay(
             horizon_end=datetime(2026, 3, 22, 21, 0, tzinfo=TZ),
             actions_by_slot={
-                started_at: SimpleNamespace(kind="charge_to_target_soc", target_soc=70)
+                started_at: ScheduleAction(kind="charge_to_target_soc", target_soc=70)
             },
         )
 
@@ -1087,7 +1097,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         schedule_overlay = _FakeScheduleOverlay(
             horizon_end=datetime(2026, 3, 22, 21, 0, tzinfo=TZ),
             actions_by_slot={
-                current_slot_start: SimpleNamespace(
+                current_slot_start: ScheduleAction(
                     kind="charge_to_target_soc",
                     target_soc=60,
                 )
@@ -1162,7 +1172,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         schedule_overlay = _FakeScheduleOverlay(
             horizon_end=datetime(2026, 3, 22, 21, 0, tzinfo=TZ),
             actions_by_slot={
-                started_at: SimpleNamespace(
+                started_at: ScheduleAction(
                     kind="discharge_to_target_soc",
                     target_soc=30,
                 )
@@ -1237,7 +1247,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         schedule_overlay = _FakeScheduleOverlay(
             horizon_end=datetime(2026, 3, 22, 21, 0, tzinfo=TZ),
             actions_by_slot={
-                current_slot_start: SimpleNamespace(
+                current_slot_start: ScheduleAction(
                     kind="discharge_to_target_soc",
                     target_soc=40,
                 )
@@ -1311,7 +1321,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         schedule_overlay = _FakeScheduleOverlay(
             horizon_end=datetime(2026, 3, 20, 21, 30, tzinfo=TZ),
             actions_by_slot={
-                started_at: SimpleNamespace(kind="stop_charging", target_soc=None)
+                started_at: ScheduleAction(kind="stop_charging", target_soc=None)
             },
         )
 
@@ -1388,7 +1398,7 @@ class BatteryCapacityForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         schedule_overlay = _FakeScheduleOverlay(
             horizon_end=datetime(2026, 3, 22, 21, 0, tzinfo=TZ),
             actions_by_slot={
-                started_at: SimpleNamespace(kind="unsupported_action", target_soc=80)
+                started_at: ScheduleAction(kind="unsupported_action", target_soc=80)
             },
         )
 
@@ -1540,16 +1550,16 @@ class ExtractedSimulatorParityTests(unittest.TestCase):
         overlay = _FakeScheduleOverlay(
             horizon_end=datetime(2026, 3, 22, 21, 0, tzinfo=TZ),
             actions_by_slot={
-                slot_inputs[1].slot_key: SimpleNamespace(
+                slot_inputs[1].slot_key: ScheduleAction(
                     kind="charge_to_target_soc", target_soc=80
                 ),
-                slot_inputs[2].slot_key: SimpleNamespace(
+                slot_inputs[2].slot_key: ScheduleAction(
                     kind="stop_charging", target_soc=None
                 ),
-                slot_inputs[3].slot_key: SimpleNamespace(
+                slot_inputs[3].slot_key: ScheduleAction(
                     kind="discharge_to_target_soc", target_soc=30
                 ),
-                slot_inputs[4].slot_key: SimpleNamespace(
+                slot_inputs[4].slot_key: ScheduleAction(
                     kind="stop_discharging", target_soc=None
                 ),
             },

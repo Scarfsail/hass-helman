@@ -4,6 +4,22 @@ from copy import deepcopy
 from typing import Any
 
 from .forecast_response import envelope, parse_ts, read_entries, slice_to_horizon
+from .forecast_series_fields import GRID_FLOW_EFFECTIVE_SERIES_FIELDS
+
+#: Always present on a public entry.
+_REQUIRED_FIELDS = (
+    "timestamp",
+    "durationHours",
+    "importedFromGridKwh",
+    "exportedToGridKwh",
+)
+
+#: Copied onto a public entry only when the snapshot entry carries them.
+_OPTIONAL_FIELDS = tuple(
+    field
+    for field in GRID_FLOW_EFFECTIVE_SERIES_FIELDS
+    if field not in _REQUIRED_FIELDS
+)
 
 _DROP_FIELDS = {
     "sourceGranularityMinutes",
@@ -37,14 +53,8 @@ def build_grid_flow_forecast_response(
 
 
 def _build_public_entry(entry: dict[str, Any]) -> dict[str, Any]:
-    public_entry = {
-        "timestamp": deepcopy(entry.get("timestamp")),
-        "durationHours": deepcopy(entry.get("durationHours")),
-        "importedFromGridKwh": deepcopy(entry.get("importedFromGridKwh")),
-        "exportedToGridKwh": deepcopy(entry.get("exportedToGridKwh")),
-    }
-    if "availableSurplusKwh" in entry:
-        public_entry["availableSurplusKwh"] = deepcopy(
-            entry.get("availableSurplusKwh")
-        )
+    public_entry = {key: deepcopy(entry.get(key)) for key in _REQUIRED_FIELDS}
+    for key in _OPTIONAL_FIELDS:
+        if key in entry:
+            public_entry[key] = deepcopy(entry[key])
     return public_entry

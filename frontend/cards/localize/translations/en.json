@@ -287,7 +287,10 @@
         "grid_stretch": "{range} · {price}",
         "grid_planned": "Planned grid use",
         "grid_import": "Import {kwh}",
-        "grid_export": "Export {kwh}"
+        "grid_export": "Export {kwh}",
+        "grid_battery_empty": "battery empty",
+        "grid_battery_full": "battery full",
+        "grid_charge_limit": "charge limit"
       },
       "history": {
         "title": "History & statistics",
@@ -298,12 +301,14 @@
         "today": "Today",
         "last_24h": "Last 24 hours",
         "kwh_paid": "{kwh} · paid {money}",
+        "kwh_sold": "{kwh} · ≈ {money}",
         "device_summary": "{kw} while on",
         "device_typical": "Typical, learned from the last {days} days",
         "device_typical_undated": "Typical, learned",
         "device_day": "a typical day ({range} kWh)",
         "device_runs": "{n} runs",
         "device_runs_caption": "a typical day",
+        "device_runs_range": "a typical day ({range} runs)",
         "device_run": "a typical run ≈ {kwh} kWh",
         "device_while_on": "average while on",
         "device_no_stats": "Not enough history learned yet.",

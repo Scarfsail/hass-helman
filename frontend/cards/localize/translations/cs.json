@@ -187,7 +187,10 @@
         "grid_stretch": "{range} · {price}",
         "grid_planned": "Plánované využití sítě",
         "grid_import": "Odběr {kwh}",
-        "grid_export": "Dodávka {kwh}"
+        "grid_export": "Dodávka {kwh}",
+        "grid_battery_empty": "baterie prázdná",
+        "grid_battery_full": "baterie plná",
+        "grid_charge_limit": "limit nabíjení"
       },
       "history": {
         "title": "Historie a statistiky",
@@ -198,12 +201,14 @@
         "today": "Dnes",
         "last_24h": "Posledních 24 hodin",
         "kwh_paid": "{kwh} · zaplaceno {money}",
+        "kwh_sold": "{kwh} · ≈ {money}",
         "device_summary": "{kw} při zapnutí",
         "device_typical": "Obvykle, naučeno za posledních {days} dní",
         "device_typical_undated": "Obvykle, naučeno",
         "device_day": "běžný den ({range} kWh)",
         "device_runs": "{n}× běh",
         "device_runs_caption": "za běžný den",
+        "device_runs_range": "za běžný den ({range}× běh)",
         "device_run": "běžný běh ≈ {kwh} kWh",
         "device_while_on": "průměr při zapnutí",
         "device_no_stats": "Zatím není naučeno dost historie.",

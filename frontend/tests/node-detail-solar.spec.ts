@@ -9,7 +9,7 @@ import { formatKwh } from "../cards/shared/format";
  *
  * Mounted on the real `helman-simple-card` against a fake backend that answers
  * the device tree, `helman/get_node_detail` (the solar overview, its three
- * sections and its flows), the schedule and the forecast, at the fixed clock
+ * sections), the schedule and the forecast, at the fixed clock
  * (12:00 UTC). What is pinned is the shared visual language (a status pill,
  * the production curve, the Now/Today flow from the strings around the panel,
  * answer tiles), the disclosure contract (the pictures open the questions
@@ -45,6 +45,10 @@ type Variant = {
     forecastStatus?: ForecastStatus;
     /** The destinations: complete with some unresolved, battery-only export, or unavailable. */
     destinations?: "normal" | "batteryExport" | "unavailable";
+    /** The solar export had no export rate, so its money is unknown. */
+    unpricedExport?: boolean;
+    /** No export price is configured: the destinations carry no price unit. */
+    noPriceUnit?: boolean;
     /** The production section's request fails. */
     sectionFails?: boolean;
     /** The inverter reports off-grid operation. */
@@ -62,8 +66,6 @@ type Variant = {
     /** The house and battery meters' states, W. */
     house?: string;
     battery?: string;
-    /** Today's flows section: the reports' reason for none. */
-    flowsUnavailable?: string;
     /** The viewer is an admin. */
     admin?: boolean;
 };
@@ -207,29 +209,21 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
         const destinationsDTO = v.destinations === "batteryExport"
             ? {
                 producedKwh: 5.0, attributedKwh: 5.0, unattributedKwh: 0, houseKwh: 1.0, batteryKwh: 0, exportKwh: 0,
-                unresolvedKwh: 4.0, measuredExportKwh: 3.0, otherExportKwh: 3.0,
+                unresolvedKwh: 4.0, measuredExportKwh: 3.0, otherExportKwh: 3.0, exportMoney: 0, exportPricedKwh: 0,
             }
             : {
                 producedKwh: 18.0, attributedKwh: 17.0, unattributedKwh: 1.0, houseKwh: 6.5, batteryKwh: 4.2, exportKwh: 5.8,
                 unresolvedKwh: 1.5, measuredExportKwh: 7.4, otherExportKwh: 1.6,
+                ...(v.unpricedExport ? { exportMoney: null, exportPricedKwh: 0 } : { exportMoney: 7.25, exportPricedKwh: 5.8 }),
             };
         const destinations = {
             node: "solar", section: "destinations", asOf: "2026-10-21T12:00:00+00:00", period,
-            priceUnit: "CZK/kWh", complete: false,
+            priceUnit: v.noPriceUnit ? null : "CZK/kWh", complete: false,
             unavailable: v.destinations === "unavailable" ? "no_house_meter" : null,
             destinations: v.destinations === "unavailable" ? null : destinationsDTO,
             charge: v.destinations === "unavailable" ? null : charge,
         };
-        const flows = {
-            node: "solar", section: "flows", asOf: "2026-10-21T12:00:00+00:00", period,
-            priceUnit: "CZK/kWh", complete: false, unavailable: v.flowsUnavailable ?? null,
-            flows: v.flowsUnavailable ? null : {
-                solarToHouse: 5.1, solarToBattery: 4.2, solarToGrid: 5.8, solarUnresolved: 0.4,
-                gridToBattery: 1.5, unknownToBattery: 0.3, gridToBatteryCost: 4.0,
-                batteryToHouse: 3.6, gridToHouse: 1.2, unknownToHouse: 0.1, batteryToGrid: 0,
-            },
-        };
-        const sections: Record<string, unknown> = { production, strings, destinations, flows };
+        const sections: Record<string, unknown> = { production, strings, destinations };
         const slots: ScheduleSlotDTO[] = [];
         const start = Date.parse("2026-10-21T11:45:00Z");
         for (let i = 0; i < 36 * 4; i += 1) {
@@ -366,13 +360,29 @@ test("solar History header gives today's production, collapsed; the body has whe
     await section.locator("button").first().click();
     await expect(section.locator("[data-row=used_house] .value")).toHaveText("6.5 kWh");
     await expect(section.locator("[data-row=stored_battery] .value")).toHaveText("4.2 kWh");
-    await expect(section.locator("[data-row=sold_grid] .value")).toHaveText("5.8 kWh");
+    await expect(section.locator("[data-row=sold_grid] .value")).toHaveText("5.8 kWh · ≈ 7.25 CZK");
     await expect(section.locator("[data-row=not_resolved] .value")).toHaveText("1.5 kWh");
     // Where it went adds up to the production the header gives.
     const parts = await section.locator("[data-destinations] .value").allTextContents();
     expect(parts.reduce((sum, text) => sum + parseFloat(text), 0)).toBeCloseTo(18, 5);
     await expect(section.locator("helman-day-line-chart[data-strings-chart] path.line")).toHaveCount(2);
     await expect(section.locator("[data-row=lifetime] .value")).toHaveText("51.7 MWh");
+});
+
+test("solar History sells kWh only when none of the export was priced", async ({ page }) => {
+    await mount(page, { unpricedExport: true });
+    await openSolar(page);
+    const section = content(page).locator("helman-detail-section[data-history]");
+    await section.locator("button").first().click();
+    await expect(section.locator("[data-row=sold_grid] .value")).toHaveText("5.8 kWh");
+});
+
+test("solar History sells kWh only without an export price, even when nothing was sold", async ({ page }) => {
+    await mount(page, { destinations: "batteryExport", noPriceUnit: true });
+    await openSolar(page);
+    const section = content(page).locator("helman-detail-section[data-history]");
+    await section.locator("button").first().click();
+    await expect(section.locator("[data-row=sold_grid] .value")).toHaveText(`${formatKwh(0)} kWh`);
 });
 
 test("solar History leaves out the strings chart with one string", async ({ page }) => {

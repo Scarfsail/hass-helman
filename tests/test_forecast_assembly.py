@@ -172,9 +172,34 @@ class ScheduleSignatureTests(unittest.TestCase):
         self.assertEqual(
             assembly.build_battery_forecast_schedule_signature(document),
             (
-                (CURRENT_SLOT_ID, "charge_to_target_soc", 60),
-                (LATER_SLOT_ID, "stop_charging", None),
+                (CURRENT_SLOT_ID, "charge_to_target_soc", 60, None, None),
+                (LATER_SLOT_ID, "stop_charging", None, None, None),
             ),
+        )
+
+    def test_battery_signature_changes_when_only_the_author_changes(self) -> None:
+        # The grid forecast carries the slot's author, so a user taking over an
+        # optimizer's slot with the identical action must still rebuild it.
+        def signature(action: ScheduleAction):
+            return assembly.build_battery_forecast_schedule_signature(
+                _document(
+                    {CURRENT_SLOT_ID: build_controllable_actions(inverter=action)}
+                )
+            )
+
+        by_optimizer = signature(
+            ScheduleAction(
+                kind="stop_discharging",
+                set_by="automation",
+                optimizer="charge_hold",
+            )
+        )
+        by_user = signature(ScheduleAction(kind="stop_discharging", set_by="user"))
+
+        self.assertNotEqual(by_optimizer, by_user)
+        self.assertEqual(
+            by_optimizer,
+            ((CURRENT_SLOT_ID, "stop_discharging", None, "automation", "charge_hold"),),
         )
 
     def test_effective_signature_is_none_without_an_active_target_action(self) -> None:

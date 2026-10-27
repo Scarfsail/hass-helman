@@ -36,6 +36,7 @@ from ..vendors import INVERTER_TELEMETRY_KEY
 from .battery import charge_origin_kwh, today_ranking_report
 from .context import NodeDetailContext
 from .day_stats import BUCKET, async_day_stats, day_window
+from .grid import money_amount
 from .inverter import run_mode_condition
 
 STRINGS = (1, 2)
@@ -267,7 +268,8 @@ def solar_destinations(report: Mapping[str, Any]) -> dict[str, Any]:
     mix, is unresolved, never forced into a destination, so
     ``house + battery + export + unresolved = produced``. The export the solar
     did not account for (``otherExportKwh``) came from the battery. Every
-    figure is kWh over the report's period.
+    figure is kWh over the report's period, except ``exportMoney``: the solar
+    export priced at each hour's export rate, over ``exportPricedKwh`` of it.
     """
     totals = report.get("solarTotals") or {}
 
@@ -278,6 +280,7 @@ def solar_destinations(report: Mapping[str, Any]) -> dict[str, Any]:
     unattributed = kwh("unattributedKwh")
     house, battery, export = kwh("houseKwh"), kwh("batteryKwh"), kwh("exportKwh")
     measured_export = kwh("measuredExportKwh")
+    priced_export = kwh("exportPricedKwh")
     return {
         "producedKwh": round(attributed + unattributed, 3),
         "attributedKwh": round(attributed, 3),
@@ -288,6 +291,10 @@ def solar_destinations(report: Mapping[str, Any]) -> dict[str, Any]:
         "unresolvedKwh": round(max(0.0, attributed - house - battery - export) + unattributed, 3),
         "measuredExportKwh": round(measured_export, 3),
         "otherExportKwh": round(max(0.0, measured_export - export), 3),
+        "exportMoney": money_amount(
+            totals.get("exportMoney") if priced_export > 0 else None, export
+        ),
+        "exportPricedKwh": round(priced_export, 3),
     }
 
 

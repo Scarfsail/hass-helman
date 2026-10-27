@@ -443,6 +443,7 @@ class ApplianceEnergyTrainingJob:
                             window_end=window_end,
                             local_tz=local_tz,
                             member_energy=fit.member_energy[subject.device_key],
+                            observed=_observed(signal_states, start, window_end),
                             on_kwh_per_hour=fit.estimates[subject.device_key],
                         )
                         if meter_states and signal_states
@@ -618,13 +619,13 @@ def _metered_record(
     meter_states = histories.states(subject.meter, window_start)
     unit = histories.unit(subject.meter)
     observations = recorder._parse_energy_observations(meter_states, default_unit=unit)
+    midnights = local_midnights(window_start, window_end, local_tz)
     daily = recorder.own_energy_observations(
-        recorder._observation_pairs(observations),
-        [],
-        local_midnights(window_start, window_end, local_tz),
+        recorder._observation_pairs(observations), [], midnights
     )
     on_kwh_per_hour = None
     running = None
+    observed = None
     runs_start = window_start
     if subject.running_signal is not None:
         entity_id, activity = subject.running_signal
@@ -643,6 +644,7 @@ def _metered_record(
             window_end=window_end,
             active_states=active_states,
         )
+        observed = _observed(signal_states, window_start, window_end)
         # Runs are gated by the signal, so before its first row nothing says
         # whether the device ran: the run figures start where it does.
         runs_start = _covered_start(signal_states, window_start)
@@ -650,6 +652,11 @@ def _metered_record(
         window_start=runs_start,
         window_end=window_end,
         daily_kwh=list(daily.values()),
+        days=[
+            (start, end)
+            for start, end in zip(midnights, midnights[1:])
+            if start in daily
+        ],
         power_states=(
             histories.states(subject.power_entity_id, runs_start)
             if subject.power_entity_id is not None
@@ -657,7 +664,24 @@ def _metered_record(
         ),
         power_value_type=subject.power_value_type,
         running=running,
+        observed=observed,
         on_kwh_per_hour=on_kwh_per_hour,
+    )
+
+
+def _observed(
+    signal_states: Sequence[Any], window_start: datetime, window_end: datetime
+) -> list[tuple[datetime, datetime]]:
+    """Where a running signal reported every state but ``unavailable``/``unknown``:
+    the time it was observed at all, on or off."""
+    return recorder._build_active_state_intervals(
+        states=signal_states,
+        window_start=window_start,
+        window_end=window_end,
+        active_states=tuple(
+            {str(state.state).strip().lower() for state in signal_states}
+            - {"unavailable", "unknown", ""}
+        ),
     )
 
 
