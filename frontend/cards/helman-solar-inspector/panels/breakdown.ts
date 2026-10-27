@@ -224,8 +224,9 @@ export function renderBreakdownPanel(
 
   return html`
     <!-- No more-info handler here: helman-tree-item already turns its children's
-         show-more-info into the hass-more-info request HA listens for, and
-         that bubbles composed straight out of this card. Re-handling it would
+         show-more-info into the hass-more-info request HA listens for when an item
+         has no deviceKey, while an item with a deviceKey emits show-device-detail
+         which bubbles to the inspector host. Re-handling show-more-info here would
          open every dialog twice. -->
     <div class="house-breakdown">
       <div class="house-breakdown-title">

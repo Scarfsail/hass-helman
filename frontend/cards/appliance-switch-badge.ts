@@ -7,8 +7,8 @@ import type { HomeAssistant } from "../types/ha";
  *
  * Shared by the power card's device rows and the solar inspector's house
  * composition panel so a device is controlled the same way wherever it appears:
- * the badge shows live switch state and opens that entity's more-info dialog,
- * which is where the actual toggle lives.
+ * the badge shows live switch state and requests more-info by default, but hosts
+ * can decide what to do with it (such as opening the device detail dialog).
  *
  * Emits `show-more-info` rather than HA's `hass-more-info` so hosts can decide
  * what to do with it — the power card already funnels that event through its own

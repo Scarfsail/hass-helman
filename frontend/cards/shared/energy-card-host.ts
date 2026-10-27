@@ -1,11 +1,11 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { HomeAssistant } from "../../types/ha";
 import { TreeItem } from "./data/tree-item";
-import { hydrateItem } from "./data/tree-item-hydrator";
+import { hydrateDeviceTree } from "./data/tree-item-hydrator";
 import { HistoryEngine } from "./data/history-engine";
 import { getSharedHelmanStore } from "./data/store";
 import { DataChangedController } from "./data/data-changed";
-import type { HelmanUiConfig, InverterDetailPayload, TreePayload } from "../helman-api";
+import type { HelmanUiConfig, InverterDetailPayload } from "../helman-api";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import {
     hassContextChanged,
@@ -19,6 +19,11 @@ import {
     type OpenScheduleEditorDetail,
     type SchedulingDayEditorHost,
 } from "./schedule/dialogs/scheduling-day-editor-host";
+import {
+    SHOW_CONTROLLABLE_DETAIL_EVENT,
+    type ShowControllableDetailDetail,
+} from "./schedule/components/scheduling-entity-day-band";
+import { deviceForControllable } from "../node-detail/node-control-rollup";
 import {
     NODE_DETAIL_REQUEST_EVENT,
     type NodeDetailParams,
@@ -82,6 +87,7 @@ export class EnergyCardHost implements ReactiveController {
         this.host.addEventListener(WATCHED_ENTITIES_EVENT, this._handleWatchedEntities);
         this.host.addEventListener("show-node-detail", this._handleShowNodeDetail);
         this.host.addEventListener("show-device-detail", this._handleShowDeviceDetail);
+        this.host.addEventListener(SHOW_CONTROLLABLE_DETAIL_EVENT, this._handleShowControllableDetail);
         this.host.addEventListener(NODE_DETAIL_REQUEST_EVENT, this._handleNodeDetailRequest);
 
         if (this._latestHass) {
@@ -94,6 +100,7 @@ export class EnergyCardHost implements ReactiveController {
         this.host.removeEventListener(WATCHED_ENTITIES_EVENT, this._handleWatchedEntities);
         this.host.removeEventListener("show-node-detail", this._handleShowNodeDetail);
         this.host.removeEventListener("show-device-detail", this._handleShowDeviceDetail);
+        this.host.removeEventListener(SHOW_CONTROLLABLE_DETAIL_EVENT, this._handleShowControllableDetail);
         this.host.removeEventListener(NODE_DETAIL_REQUEST_EVENT, this._handleNodeDetailRequest);
 
         this._loadGeneration += 1;
@@ -210,7 +217,7 @@ export class EnergyCardHost implements ReactiveController {
                 this._localize = getLocalizeFunction(this._latestHass);
             }
 
-            const deviceTree = this._hydrateTreeItems(treePayload);
+            const deviceTree = hydrateDeviceTree(treePayload, this._localize ?? ((k: string) => k));
             const sourceNodes = this._collectSourceNodes(deviceTree);
             const engine = new HistoryEngine(
                 () => this._latestHass,
@@ -324,50 +331,6 @@ export class EnergyCardHost implements ReactiveController {
         this._updateReadings();
     }
 
-    private _hydrateTreeItems(payload: TreePayload): TreeItem[] {
-        const { sources, consumers, consumptionTotalSensorId, productionTotalSensorId, uiConfig } = payload;
-        const historyBuckets = uiConfig.history_buckets;
-        const roots: TreeItem[] = [];
-
-        const sourceTypeByDeviceId = new Map<string, string>();
-        for (const dto of sources) {
-            if (dto.sourceType) sourceTypeByDeviceId.set(dto.id, dto.sourceType);
-        }
-
-        const localize = this._localize ?? ((k: string) => k);
-
-        if (sources.length > 0) {
-            const sourcesNode = new TreeItem("sources", localize("card.sources_title"), null, null, historyBuckets);
-            sourcesNode.childrenCollapsed = false;
-            sourcesNode.icon = "mdi:lightning-bolt-outline";
-            sourcesNode.powerSensorId = productionTotalSensorId;
-            sourcesNode.children = sources.map((dto) => hydrateItem(dto, historyBuckets, localize));
-            roots.push(sourcesNode);
-        }
-
-        if (consumers.length > 0) {
-            const consumersNode = new TreeItem("consumers", localize("card.consumers_title"), null, null, historyBuckets);
-            consumersNode.hideChildren = true;
-            consumersNode.hideChildrenIndicator = true;
-            consumersNode.icon = "mdi:lightning-bolt-outline";
-            consumersNode.powerSensorId = consumptionTotalSensorId;
-            consumersNode.children = consumers.map((dto) => hydrateItem(dto, historyBuckets, localize));
-            const propagateSourceType = (items: TreeItem[]) => {
-                for (const item of items) {
-                    if (!item.sourceType) {
-                        item.sourceType = sourceTypeByDeviceId.get(item.id)
-                            ?? (item.id === "house" ? "house" : null);
-                    }
-                    propagateSourceType(item.children);
-                }
-            };
-            propagateSourceType(consumersNode.children);
-            roots.push(consumersNode);
-        }
-
-        return roots;
-    }
-
     private _collectSourceNodes(items: TreeItem[]): TreeItem[] {
         const sourceNodes: TreeItem[] = [];
         const collect = (itemList: TreeItem[]) => {
@@ -425,6 +388,25 @@ export class EnergyCardHost implements ReactiveController {
         event.stopPropagation();
         const item = (event as CustomEvent<{ item: TreeItem }>).detail.item;
         this.openNode(item);
+    };
+
+    private _handleShowControllableDetail = async (event: Event): Promise<void> => {
+        event.stopPropagation();
+        const { controllableId, entityId } = (event as CustomEvent<ShowControllableDetailDetail>).detail;
+        const target = deviceForControllable(this._energyNodes.houseNode, controllableId);
+        if (target !== null) {
+            if (this._dialogRequest !== null) {
+                this.closeDialog();
+                await this.host.updateComplete;
+            }
+            this.openNode(target);
+        } else {
+            this.host.dispatchEvent(new CustomEvent("hass-more-info", {
+                bubbles: true,
+                composed: true,
+                detail: { entityId },
+            }));
+        }
     };
 
     private _handleNodeDetailRequest = (event: Event): void => {

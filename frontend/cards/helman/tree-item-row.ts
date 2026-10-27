@@ -7,7 +7,7 @@ import { TreeItem, isItemVisible } from "../shared/data/tree-item";
 import "./tree-item-row";
 import "./tree-item-list";
 import "../shared/power-history-bars";
-import "./tree-item-icon";
+import { showDeviceDetailEvent } from "./tree-item-icon";
 import "./tree-item-power-display";
 import "./tree-item-info";
 
@@ -78,11 +78,7 @@ export class HelmanTreeItem extends LitElement {
             this._toggleChildren();
             return;
         }
-        this.dispatchEvent(new CustomEvent("show-device-detail", {
-            bubbles: true,
-            composed: true,
-            detail: { item: this.device },
-        }));
+        this.dispatchEvent(showDeviceDetailEvent(this.device));
     }
 
     static get styles() {

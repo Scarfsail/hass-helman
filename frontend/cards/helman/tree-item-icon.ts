@@ -11,6 +11,14 @@ import "../helman-simple/simple-card-battery";
 import "../helman-simple/simple-card-grid";
 import "../helman-simple/simple-card-house";
 
+export function showDeviceDetailEvent(item: TreeItem): CustomEvent<{ item: TreeItem }> {
+    return new CustomEvent("show-device-detail", {
+        bubbles: true,
+        composed: true,
+        detail: { item },
+    });
+}
+
 @customElement("helman-tree-item-icon")
 export class HelmanTreeItemIcon extends LitElement {
     // Static styles
@@ -49,13 +57,13 @@ export class HelmanTreeItemIcon extends LitElement {
     render(): TemplateResult | typeof nothing {
         const device = this.device;
         if (device.switchEntityId) {
-            // Shared with the solar inspector's composition panel so a device is
-            // controlled identically wherever it appears. The badge emits
-            // `show-more-info` itself, which this card already handles upstream.
+            // A device with a deviceKey opens its detail dialog; otherwise
+            // show-more-info bubbles to the row to open HA's more-info dialog.
             return html`
                 <helman-appliance-switch-badge
                     .hass=${this.hass}
                     .entityId=${device.switchEntityId}
+                    @show-more-info=${this._onSwitchBadgeMoreInfo}
                 ></helman-appliance-switch-badge>
             `;
         }
@@ -71,6 +79,12 @@ export class HelmanTreeItemIcon extends LitElement {
     }
 
     // Private helpers
+    private _onSwitchBadgeMoreInfo(e: CustomEvent): void {
+        if (!this.device.deviceKey) return;
+        e.stopPropagation();
+        this.dispatchEvent(showDeviceDetailEvent(this.device));
+    }
+
     private _fireToggleChildren() {
         this.dispatchEvent(new CustomEvent('toggle-children', { bubbles: true, composed: true }));
     }

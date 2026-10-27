@@ -22,6 +22,7 @@ declare global {
     interface Window {
         __schedule: SchedulePayload;
         __toasts: string[];
+        __moreInfo: string[];
         __setScheduleFails: boolean;
         __releaseNodeSave: (() => void) | null;
         __detailClosed: boolean;
@@ -94,6 +95,9 @@ interface Setup {
     timeZone?: string;
     /** The page's clock, before anything mounts. */
     now?: string;
+    appliances?: unknown[];
+    states?: Record<string, unknown>;
+    tree?: unknown;
 }
 
 async function mount(page: Page, setup: Setup = {}, card = "helman-simple-card"): Promise<void> {
@@ -102,12 +106,14 @@ async function mount(page: Page, setup: Setup = {}, card = "helman-simple-card")
     await page.evaluate(({ o, schedule, optimizers, tree }) => {
         const s = window.__nodeDetailState;
         window.__toasts = [];
+        window.__moreInfo = [];
         window.__setScheduleFails = false;
         window.__scheduleWrite = null;
         window.__releaseNodeSave = null;
         window.__coverageFails = !!o.coverageFails;
         window.__configFails = !!o.configFails;
         window.addEventListener("hass-notification", (event) => window.__toasts.push((event as CustomEvent).detail.message));
+        window.addEventListener("hass-more-info", (event) => window.__moreInfo.push((event as CustomEvent).detail.entityId));
         if (typeof schedule === "object") window.__schedule = schedule;
         const kinds = ["normal", "stop_charging", "stop_discharging", "charge_to_target_soc", "discharge_to_target_soc", "stop_export"];
         const coverage = o.coverage ?? "active";
@@ -116,6 +122,7 @@ async function mount(page: Page, setup: Setup = {}, card = "helman-simple-card")
             states: {
                 "sensor.solar": s("4200", "W"), "sensor.grid": s("-300", "W"), "sensor.battery": s("-500", "W"), "sensor.house": s("1200", "W"),
                 "select.helman_inverter_mode": s("normal", undefined, { friendly_name: "Helman inverter mode" }),
+                ...(o.states ?? {}),
             },
             overviews: { inverter: window.__inverterOverview({ configured: true }) },
             timeZone: o.timeZone,
@@ -129,10 +136,14 @@ async function mount(page: Page, setup: Setup = {}, card = "helman-simple-card")
                     if (window.__setScheduleFails) throw new Error("write refused");
                     return window.__schedule;
                 },
-                "helman/get_appliances": () => { if (o.rosterFails) throw new Error("roster down"); return { appliances: [{
-                    id: "inverter", name: "Inverter", kind: "inverter", primaryEntityId: "select.helman_inverter_mode",
-                    supportsAuthoring: true, normalState: "normal", actionOptions: Object.fromEntries(kinds.map((kind) => [kind, kind])),
-                }] }; },
+                "helman/get_appliances": () => {
+                    if (o.rosterFails) throw new Error("roster down");
+                    if (o.appliances) return { appliances: o.appliances };
+                    return { appliances: [{
+                        id: "inverter", name: "Inverter", kind: "inverter", primaryEntityId: "select.helman_inverter_mode",
+                        supportsAuthoring: true, normalState: "normal", actionOptions: Object.fromEntries(kinds.map((kind) => [kind, kind])),
+                    }] };
+                },
                 // What the day editor reads as it opens.
                 "helman/get_entity_actual_history": { entities: {} },
                 "helman/get_appliance_projections": { appliances: [] },
@@ -156,7 +167,7 @@ async function mount(page: Page, setup: Setup = {}, card = "helman-simple-card")
                 }) } : {}),
             },
         });
-    }, { o: setup, schedule: setup.schedule ?? plan(), optimizers: OPTIMIZERS, tree: card === "helman-card" ? FULL_CARD_TREE : undefined });
+    }, { o: setup, schedule: setup.schedule ?? plan(), optimizers: OPTIMIZERS, tree: setup.tree ?? (card === "helman-card" ? FULL_CARD_TREE : undefined) });
     await mountSimpleCard(page, undefined, card);
 }
 
@@ -637,6 +648,116 @@ test.describe("Edit blocks", () => {
             await expect.poll(() => dayEditor(page, card).then((editor) => editor.open)).toBe(false);
             await expect(control(page)).toBeVisible();
             await expect(scheduleButton(page)).toHaveAttribute("aria-expanded", "true");
+        });
+    }
+});
+
+test.describe("Schedule lane icons in power card editor", () => {
+    const APPLIANCES = [
+        {
+            id: "inverter", name: "Inverter", kind: "inverter", primaryEntityId: "select.helman_inverter_mode",
+            supportsAuthoring: true, normalState: "normal",
+        },
+        {
+            id: "boiler", name: "Boiler", kind: "generic", primaryEntityId: "switch.boiler",
+            supportsAuthoring: true, normalState: "off",
+            metadata: { icon: "mdi:water-boiler", scheduleCapabilities: { onOffToggle: true } },
+            controls: { switch: { entityId: "switch.boiler" } },
+        },
+        {
+            id: "unmatched", name: "Unmatched", kind: "generic", primaryEntityId: "switch.unmatched",
+            supportsAuthoring: true, normalState: "off",
+            metadata: { icon: "mdi:help", scheduleCapabilities: { onOffToggle: true } },
+            controls: { switch: { entityId: "switch.unmatched" } },
+        },
+    ];
+
+    const TREE_WITH_BOILER = treePayload({
+        sources: [
+            treeNode({ id: "solar", displayName: "Solar", powerSensorId: "sensor.solar", isSource: true, sourceType: "solar" }),
+            treeNode({ id: "battery", displayName: "Battery", powerSensorId: "sensor.battery", isSource: true, sourceType: "battery" }),
+        ],
+        consumers: [
+            treeNode({
+                id: "house", displayName: "House", powerSensorId: "sensor.house",
+                children: [
+                    treeNode({
+                        id: "boiler", displayName: "Boiler", powerSensorId: "sensor.boiler",
+                        switchEntityId: "switch.boiler", controllableIds: ["boiler"], ownControllableIds: ["boiler"],
+                        energyEntityId: "sensor.boiler_energy",
+                    }),
+                ],
+            }),
+        ],
+        consumptionTotalSensorId: null,
+        productionTotalSensorId: null,
+        uiConfig: { show_others_group: false, device_groupings: [], history_buckets: 3, history_bucket_duration: 5 },
+    });
+
+    const openDayEditor = async (page: Page, card: string) => {
+        await mount(page, {
+            appliances: APPLIANCES,
+            tree: TREE_WITH_BOILER,
+            states: {
+                "switch.boiler": { state: "off", attributes: { friendly_name: "Boiler" } },
+                "switch.unmatched": { state: "off", attributes: { friendly_name: "Unmatched" } },
+            },
+        }, card);
+        await expect.poll(() => page.locator(card).evaluate((el) =>
+            (el.shadowRoot?.querySelector("scheduling-day-editor-host") as any)?.lanes?.length ?? 0,
+        )).toBe(3);
+        await openControl(page);
+        await control(page).locator("[data-edit-blocks]").click();
+        await expect.poll(() => dayEditor(page, card)).toEqual({ open: true, selected: "inverter" });
+    };
+
+    const clickLaneIcon = async (page: Page, card: string, laneKey: string) => {
+        await page.evaluate(({ card, laneKey }) => {
+            const host = document.querySelector(card)!.shadowRoot!.querySelector("scheduling-day-editor-host") as any;
+            const editor = host.shadowRoot.querySelector("scheduling-entity-day-editor") as any;
+            const band = editor.shadowRoot.querySelector("scheduling-entity-day-band") as any;
+            const tracks = [...band.shadowRoot.querySelectorAll(".track-label")];
+            const laneTrack = tracks.find((track: any) => track.textContent.includes(laneKey === "boiler" ? "Boiler" : laneKey === "inverter" ? "Inverter" : "Unmatched"));
+            if (!laneTrack) throw new Error(`track for ${laneKey} not found`);
+            const badge = laneTrack.querySelector("state-badge, ha-icon");
+            if (!badge) throw new Error(`badge for ${laneKey} not found`);
+            badge.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
+        }, { card, laneKey });
+    };
+
+    for (const card of ["helman-simple-card", "helman-card"]) {
+        test(`lane whose controllable a house device drives opens that device's dialog from ${card}`, async ({ page }) => {
+            await openDayEditor(page, card);
+            await clickLaneIcon(page, card, "boiler");
+            const detail = page.locator("node-detail-dialog");
+            await expect(detail.locator('[slot="headerTitle"]')).toHaveText("Boiler");
+            expect(await page.evaluate(() => window.__moreInfo)).toEqual([]);
+            expect(await page.locator(card).evaluate((el) =>
+                [...el.shadowRoot!.querySelectorAll("scheduling-day-editor-host, node-detail-dialog")].map((e) => e.localName),
+            )).toEqual(["scheduling-day-editor-host", "node-detail-dialog"]);
+            await detail.locator("ha-dialog").evaluate((dialog: any) => dialog.close());
+            await expect(detail).toHaveCount(0);
+            await expect.poll(() => dayEditor(page, card)).toEqual({ open: true, selected: "inverter" });
+        });
+
+        test(`inverter lane opens the inverter detail dialog from ${card}`, async ({ page }) => {
+            await openDayEditor(page, card);
+            await clickLaneIcon(page, card, "inverter");
+            const detail = page.locator("node-detail-dialog");
+            await expect(detail.locator('[slot="headerTitle"]')).toHaveText("Inverter");
+            expect(await page.evaluate(() => window.__moreInfo)).toEqual([]);
+            expect(await page.locator(card).evaluate((el) =>
+                [...el.shadowRoot!.querySelectorAll("scheduling-day-editor-host, node-detail-dialog")].map((e) => e.localName),
+            )).toEqual(["scheduling-day-editor-host", "node-detail-dialog"]);
+            await detail.locator("ha-dialog").evaluate((dialog: any) => dialog.close());
+            await expect(detail).toHaveCount(0);
+            await expect.poll(() => dayEditor(page, card)).toEqual({ open: true, selected: "inverter" });
+        });
+
+        test(`unmatched lane falls back to more-info from ${card}`, async ({ page }) => {
+            await openDayEditor(page, card);
+            await clickLaneIcon(page, card, "unmatched");
+            expect(await page.evaluate(() => window.__moreInfo)).toEqual(["switch.unmatched"]);
         });
     }
 });

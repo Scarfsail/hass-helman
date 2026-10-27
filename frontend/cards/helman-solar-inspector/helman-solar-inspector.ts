@@ -57,7 +57,14 @@ import type {
 import { currencyFromPriceUnit } from "./money-model";
 import "../helman/tree-item-list";
 import "../node-detail/node-detail-dialog";
+import type { NodeDetailParams } from "../node-detail/node-detail-types";
 import { TreeItem } from "../shared/data/tree-item";
+import type { ShowControllableDetailDetail } from "../shared/schedule/components/scheduling-entity-day-band";
+import { getSharedHelmanStore } from "../shared/data/store";
+import { hydrateDeviceTree } from "../shared/data/tree-item-hydrator";
+import { readEnergyReadings, resolveEnergyNodes } from "../node-detail/node-detail-readings";
+import { buildNodeDetailContext, buildNodeDetailParams } from "../node-detail/node-detail-params-builder";
+import { deviceForControllable } from "../node-detail/node-control-rollup";
 import { findTrainingSlot, resolveSelectedTrainingDate } from "./solar-inspector-model.js";
 import { minutesToSlot, snapSlotToGrid } from "./slot-aggregation.js";
 import {
@@ -243,10 +250,10 @@ export class HelmanSolarInspector extends LitElement {
   private _editorHostElement?: SchedulingDayEditorHost;
   @state() private _editorHost: SchedulingDayEditorHost | null = null;
   /**
-   * The composition box whose device detail is open. The dialog shows the
-   * device now, live, not the selected slots.
+   * The node detail dialog open over the card (e.g. from the composition panel
+   * or a lane icon in the schedule strip).
    */
-  @state() private _deviceDetail: TreeItem | null = null;
+  @state() private _nodeDetail: NodeDetailParams | null = null;
   @state() private _payload: InspectorPayload | null = null;
   /**
    * The composition panels' group nodes, kept across renders so their
@@ -1040,6 +1047,7 @@ export class HelmanSolarInspector extends LitElement {
         class="body"
         @helman-open-schedule-editor=${this._handleOpenScheduleEditor}
         @show-device-detail=${this._handleShowDeviceDetail}
+        @show-controllable-detail=${this._handleShowControllableDetail}
       >
         <!-- One editor for the whole card. The band strip draws its day off
              this host and opens it on a lane press; a badge in the composition
@@ -1063,14 +1071,14 @@ export class HelmanSolarInspector extends LitElement {
               ></scheduling-day-editor-host>
             `
           : ""}
-        ${this._deviceDetail
+        ${this._nodeDetail
           ? html`
               <node-detail-dialog
                 .hass=${this.hass}
                 .localize=${this._localize}
                 .open=${true}
-                .params=${{ nodeType: "device", item: this._deviceDetail }}
-                @closed=${() => { this._deviceDetail = null; }}
+                .params=${this._nodeDetail}
+                @closed=${() => { this._nodeDetail = null; }}
               ></node-detail-dialog>
             `
           : ""}
@@ -1122,7 +1130,51 @@ export class HelmanSolarInspector extends LitElement {
 
   private _handleShowDeviceDetail = (event: CustomEvent<{ item: TreeItem }>): void => {
     event.stopPropagation();
-    this._deviceDetail = event.detail.item;
+    this._nodeDetail = { nodeType: "device", item: event.detail.item };
+  };
+
+  private _handleShowControllableDetail = async (event: CustomEvent<ShowControllableDetailDetail>): Promise<void> => {
+    event.stopPropagation();
+    const { controllableId, entityId } = event.detail;
+    if (this.hass) {
+      try {
+        const payload = await getSharedHelmanStore(this.hass).getDeviceTree();
+        const tree = hydrateDeviceTree(payload, this._localize);
+        const energyNodes = resolveEnergyNodes(tree);
+        const target = deviceForControllable(energyNodes.houseNode, controllableId);
+        if (target !== null) {
+          let params: NodeDetailParams;
+          if (target instanceof TreeItem) {
+            params = { nodeType: "device", item: target };
+          } else {
+            const readings = readEnergyReadings(this.hass, energyNodes);
+            const context = buildNodeDetailContext(readings, {
+              houseNode: energyNodes.houseNode,
+              gridPowerEntityId:
+                energyNodes.gridProducerNode?.powerSensorId ??
+                energyNodes.gridConsumerNode?.powerSensorId ??
+                null,
+              historyBuckets: payload.uiConfig.history_buckets,
+              historyBucketDuration: payload.uiConfig.history_bucket_duration,
+            });
+            params = buildNodeDetailParams(context, "inverter");
+          }
+          if (this._nodeDetail !== null) {
+            this._nodeDetail = null;
+            await this.updateComplete;
+          }
+          this._nodeDetail = params;
+          return;
+        }
+      } catch {
+        // Fall back to more-info below.
+      }
+    }
+    this.dispatchEvent(new CustomEvent("hass-more-info", {
+      bubbles: true,
+      composed: true,
+      detail: { entityId },
+    }));
   };
 
   private _renderNavigation() {

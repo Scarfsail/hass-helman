@@ -3,7 +3,7 @@ import { customElement, property, state } from "lit/decorators.js";
 import { live } from "lit/directives/live.js";
 import type { HomeAssistant } from "../../types/ha";
 import type { LocalizeFunction } from "../localize/localize";
-import type { TreeItem } from "../shared/data/tree-item";
+import { TreeItem } from "../shared/data/tree-item";
 import { fireEvent } from "../shared/fire-event";
 import { getValueAtPath, setValueAtPath } from "../shared/config/config-document";
 import { booleanValue } from "../shared/config/form-fields";
@@ -47,6 +47,17 @@ export function houseControlLanes(houseNode: TreeItem | null, inverterConfigured
     };
     visit(houseNode?.children ?? []);
     return lanes;
+}
+
+/**
+ * Resolves the NodeDetailTarget ("inverter" for the inverter lane, or the
+ * first TreeItem in the house tree that drives the controllable) for a
+ * schedulable controllable, reusing the house roll-up's assignment rule.
+ * Returns null for an unmatched controllable.
+ */
+export function deviceForControllable(houseNode: TreeItem | null | undefined, controllableId: string): NodeDetailTarget | null {
+    const lane = houseControlLanes(houseNode ?? null, true).find((lane) => lane.controllableId === controllableId);
+    return lane?.target ?? null;
 }
 
 /** Ask the power card for a node's detail with its Schedule section expanded. */

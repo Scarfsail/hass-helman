@@ -106,6 +106,13 @@ export interface EntityDayBandLaneSelectDetail {
     laneKey: string;
 }
 
+export const SHOW_CONTROLLABLE_DETAIL_EVENT = "show-controllable-detail";
+
+export interface ShowControllableDetailDetail {
+    controllableId: string;
+    entityId: string;
+}
+
 /** Which slot of which lane was pressed, on a band drawing the slot grid. */
 export interface EntityDayBandSlotSelectDetail {
     laneKey: string;
@@ -1724,7 +1731,7 @@ export class SchedulingEntityDayBand extends LitElement {
     /**
      * The lane's icon, live where it can be: with the entity's state to hand it
      * is that entity's own badge, coloured by what the entity is doing right
-     * now, and pressing it opens more-info -- the same identity target the
+     * now, and pressing it requests controllable detail -- the same identity target the
      * card's running list gives its rows. An entity the state machine cannot
      * answer for falls back to the flat icon the lane carries, so no lane ever
      * loses its icon.
@@ -1845,17 +1852,17 @@ export class SchedulingEntityDayBand extends LitElement {
     }
 
     /**
-     * The icon means "tell me about this entity", not "select this lane" -- so
+     * The icon means "tell me about this controllable / device", not "select this lane" -- so
      * it swallows the press that the label around it would otherwise turn into
-     * a lane selection.
+     * a lane selection, and asks the host for its detail.
      */
     private _handleLaneIconClick(event: Event, lane: EntityDayBandLane): void {
         event.preventDefault();
         event.stopPropagation();
-        this.dispatchEvent(new CustomEvent("hass-more-info", {
+        this.dispatchEvent(new CustomEvent<ShowControllableDetailDetail>(SHOW_CONTROLLABLE_DETAIL_EVENT, {
             bubbles: true,
             composed: true,
-            detail: { entityId: lane.entityId },
+            detail: { controllableId: lane.target, entityId: lane.entityId },
         }));
     }
 

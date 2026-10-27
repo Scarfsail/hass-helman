@@ -715,7 +715,7 @@ test.describe("solar inspector house composition", () => {
         expect(badges).toEqual([null, "switch.dishwasher", null]);
     });
 
-    test("clicking the control badge opens the switch, not the energy sensor", async ({ page }) => {
+    test("clicking the control badge opens the device dialog for an identified device", async ({ page }) => {
         await loadBundle(page, "helman-solar-inspector");
         await mountInspector(page, {
             withBreakdown: true,
@@ -725,6 +725,7 @@ test.describe("solar inspector house composition", () => {
                     label: "Dishwasher",
                     wh: 50,
                     switchEntityId: "switch.dishwasher",
+                    controllableIds: ["dishwasher"],
                 },
             ],
             unmeasuredWh: 100,
@@ -765,9 +766,60 @@ test.describe("solar inspector house composition", () => {
             );
         });
 
-        // The switch opened, and the row's own energy sensor did not.
+        const detail = page.locator("helman-solar-inspector node-detail-dialog");
+        await expect(detail.locator('[slot="headerTitle"]')).toHaveText("Dishwasher");
+        expect(await page.evaluate(() => (window as any).__moreInfo ?? [])).toEqual([]);
+    });
+
+    test("clicking the control badge on a box without deviceKey falls back to more-info", async ({ page }) => {
+        await loadBundle(page, "helman-solar-inspector");
+        await mountInspector(page, {
+            withBreakdown: true,
+            appliances: [
+                {
+                    entityId: null,
+                    label: "Multi controllable",
+                    wh: 50,
+                    switchEntityId: "switch.group",
+                    controllableIds: ["c1", "c2"],
+                },
+            ],
+            unmeasuredWh: 100,
+        });
+        await selectNoonSlot(page);
+
+        await expandBreakdownGroups(page);
+        await page.evaluate(() => {
+            const el = document.querySelector("helman-solar-inspector") as any;
+            const groups = [
+                ...el.shadowRoot
+                    .querySelector(".house-breakdown")
+                    .querySelector("helman-tree-item-list")
+                    .shadowRoot.querySelectorAll("helman-tree-item"),
+            ];
+            const devices = groups.flatMap((group: any) => [
+                ...(group.shadowRoot
+                    ?.querySelector("helman-tree-item-list")
+                    ?.shadowRoot?.querySelectorAll("helman-tree-item") ?? []),
+            ]);
+            const badge = [...devices]
+                .map((device: any) =>
+                    device.shadowRoot
+                        .querySelector("helman-tree-item-icon")
+                        ?.shadowRoot?.querySelector("helman-appliance-switch-badge"),
+                )
+                .find(Boolean) as any;
+            badge.dispatchEvent(
+                new CustomEvent("show-more-info", {
+                    bubbles: true,
+                    composed: true,
+                    detail: { entityId: "switch.group" },
+                }),
+            );
+        });
+
         expect(await page.evaluate(() => (window as any).__moreInfo)).toEqual([
-            "switch.dishwasher",
+            "switch.group",
         ]);
     });
 

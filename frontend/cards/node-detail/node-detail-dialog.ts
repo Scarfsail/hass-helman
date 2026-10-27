@@ -344,7 +344,9 @@ export class NodeDetailDialog extends LitElement {
         this.shadowRoot?.querySelector<HTMLElement>("[data-dialog='close']")?.click();
     }
 
-    private _onClosed(): void {
+    private _onClosed(event?: Event): void {
+        event?.stopPropagation();
+        if (!this.isConnected) return;
         this._history.closed();
 
         this.dispatchEvent(new CustomEvent("closed", { bubbles: true, composed: true }));

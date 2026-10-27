@@ -1,4 +1,4 @@
-import { TreeItemDTO } from "../../helman-api";
+import { TreeItemDTO, TreePayload } from "../../helman-api";
 import type { LocalizeFunction } from "../../localize/localize";
 import { TreeItem } from "./tree-item";
 
@@ -30,7 +30,7 @@ export function hydrateItem(dto: TreeItemDTO, historyBuckets: number, localize: 
     item.todayExportEntityId = dto.todayExportEntityId;
     item.groups = dto.groups;
     item.phase = dto.phase ?? null;
-    if (dto.groupBadgeTexts.length > 0) item.groupBadgeTexts = dto.groupBadgeTexts;
+    if (dto.groupBadgeTexts?.length) item.groupBadgeTexts = dto.groupBadgeTexts;
     if (dto.icon) item.icon = dto.icon;
     item.compact = dto.compact;
     item.show_additional_info = dto.showAdditionalInfo;
@@ -39,6 +39,48 @@ export function hydrateItem(dto: TreeItemDTO, historyBuckets: number, localize: 
     item.hideChildrenIndicator = dto.hideChildrenIndicator;
     item.sortChildrenByPower = dto.sortChildrenByPower;
     if (dto.ratioSensorId) item.ratioSensorId = dto.ratioSensorId;
-    item.children = dto.children.map(child => hydrateItem(child, historyBuckets, localize));
+    item.children = (dto.children ?? []).map(child => hydrateItem(child, historyBuckets, localize));
     return item;
+}
+
+export function hydrateDeviceTree(payload: TreePayload, localize: LocalizeFunction): TreeItem[] {
+    const { sources, consumers, consumptionTotalSensorId, productionTotalSensorId, uiConfig } = payload;
+    const historyBuckets = uiConfig.history_buckets;
+    const roots: TreeItem[] = [];
+
+    const sourceTypeByDeviceId = new Map<string, string>();
+    for (const dto of sources) {
+        if (dto.sourceType) sourceTypeByDeviceId.set(dto.id, dto.sourceType);
+    }
+
+    if (sources.length > 0) {
+        const sourcesNode = new TreeItem("sources", localize("card.sources_title"), null, null, historyBuckets);
+        sourcesNode.childrenCollapsed = false;
+        sourcesNode.icon = "mdi:lightning-bolt-outline";
+        sourcesNode.powerSensorId = productionTotalSensorId;
+        sourcesNode.children = sources.map((dto) => hydrateItem(dto, historyBuckets, localize));
+        roots.push(sourcesNode);
+    }
+
+    if (consumers.length > 0) {
+        const consumersNode = new TreeItem("consumers", localize("card.consumers_title"), null, null, historyBuckets);
+        consumersNode.hideChildren = true;
+        consumersNode.hideChildrenIndicator = true;
+        consumersNode.icon = "mdi:lightning-bolt-outline";
+        consumersNode.powerSensorId = consumptionTotalSensorId;
+        consumersNode.children = consumers.map((dto) => hydrateItem(dto, historyBuckets, localize));
+        const propagateSourceType = (items: TreeItem[]) => {
+            for (const item of items) {
+                if (!item.sourceType) {
+                    item.sourceType = sourceTypeByDeviceId.get(item.id)
+                        ?? (item.id === "house" ? "house" : null);
+                }
+                propagateSourceType(item.children);
+            }
+        };
+        propagateSourceType(consumersNode.children);
+        roots.push(consumersNode);
+    }
+
+    return roots;
 }
