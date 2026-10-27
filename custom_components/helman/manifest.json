@@ -1,7 +1,7 @@
 {
   "domain": "helman",
   "name": "Helman Energy",
-  "version": "5.68.0",
+  "version": "5.69.0",
   "integration_type": "service",
   "config_flow": true,
   "dependencies": [
