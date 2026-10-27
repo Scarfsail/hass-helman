@@ -142,6 +142,7 @@ class ScheduleWriter:
         snapshot: "OptimizationSnapshot",
         *,
         eligibility: "Eligibility",
+        optimizer: str,
         trace: "OptimizerTrace | None" = None,
         controllable_id: str = CONTROLLABLE_ID_INVERTER,
         pre_filters_ownership: bool = False,
@@ -151,6 +152,7 @@ class ScheduleWriter:
             slots=deepcopy(snapshot.schedule.slots),
         )
         self.eligibility = eligibility
+        self._optimizer = optimizer
         self._trace = trace or NULL_TRACE
         self._controllable_id = controllable_id
         self._pre_filters_ownership = pre_filters_ownership
@@ -175,6 +177,7 @@ class ScheduleWriter:
         return cls(
             snapshot,
             eligibility=eligibility,
+            optimizer=config.kind,
             trace=trace,
             controllable_id=controllable_id,
             pre_filters_ownership=pre_filters_ownership,
@@ -200,7 +203,8 @@ class ScheduleWriter:
         self.document.slots[slot_id] = {
             **current,
             self._controllable_id: stamp_automation(
-                SlotAction(payload=payload, condition_met=condition_met)
+                SlotAction(payload=payload, condition_met=condition_met),
+                optimizer=self._optimizer,
             ),
         }
         self._written_slot_ids.append(slot_id)

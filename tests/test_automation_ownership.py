@@ -169,6 +169,31 @@ class MergeAutomationResultTests(unittest.TestCase):
 
         self.assertFalse(inverter_action(merged.slots[SLOT_ID]).condition_met)
 
+    def test_merge_keeps_the_optimizer_the_writer_recorded(self) -> None:
+        merged = merge_automation_result(
+            baseline=_doc(execution_enabled=True),
+            automation_result=_doc(
+                execution_enabled=True,
+                slots={
+                    SLOT_ID: {
+                        "inverter": {
+                            "kind": SCHEDULE_ACTION_STOP_CHARGING,
+                            "setBy": "automation",
+                            "optimizer": "charge_hold",
+                        },
+                        "boiler": {
+                            "on": True,
+                            "setBy": "automation",
+                            "optimizer": "appliance_runtime",
+                        },
+                    }
+                },
+            ),
+        )
+
+        self.assertEqual(inverter_action(merged.slots[SLOT_ID]).optimizer, "charge_hold")
+        self.assertEqual(merged.slots[SLOT_ID]["boiler"].optimizer, "appliance_runtime")
+
     def test_merge_writes_new_automation_owned_appliance_action_beside_user_inverter(
         self,
     ) -> None:

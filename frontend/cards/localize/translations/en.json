@@ -287,7 +287,10 @@
         "grid_stretch": "{range} · {price}",
         "grid_planned": "Planned grid use",
         "grid_import": "Import {kwh}",
-        "grid_export": "Export {kwh}"
+        "grid_export": "Export {kwh}",
+        "grid_battery_empty": "battery empty",
+        "grid_battery_full": "battery full",
+        "grid_charge_limit": "charge limit"
       },
       "history": {
         "title": "History & statistics",

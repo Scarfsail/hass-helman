@@ -27,6 +27,11 @@ GRID_FLOW_EFFECTIVE_SERIES_FIELDS = (
     "importedFromGridKwh",
     "exportedToGridKwh",
     "availableSurplusKwh",
+    "setBy",
+    "optimizer",
+    "hitMinSoc",
+    "hitMaxSoc",
+    "limitedByChargePower",
 )
 
 def project_series_fields(

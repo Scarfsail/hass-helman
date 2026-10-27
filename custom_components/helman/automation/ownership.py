@@ -147,14 +147,17 @@ def _merge_slot_actions(
         if result_action is None:
             continue
 
-        merged[controllable_id] = stamp_automation(result_action)
+        merged[controllable_id] = replace(result_action, set_by="automation")
 
     return merged
 
 
-def stamp_automation(action: "SlotAction") -> "SlotAction":
-    """Mark an action as the automation's; its payload and candidacy are kept."""
-    return replace(action, set_by="automation")
+def stamp_automation(
+    action: "SlotAction", *, optimizer: str | None
+) -> "SlotAction":
+    """Mark an action as placed by the ``optimizer`` kind; its payload and
+    candidacy are kept."""
+    return replace(action, set_by="automation", optimizer=optimizer)
 
 
 def is_user_owned(action: "SlotAction | None") -> bool:

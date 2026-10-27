@@ -49,6 +49,7 @@ from custom_components.helman.scheduling.schedule import (
     schedule_document_to_dict,
     slot_to_dict,
     validate_slot_patch_request,
+    with_slot_set_by,
 )
 
 
@@ -330,6 +331,76 @@ class ScheduleHelperTests(unittest.TestCase):
                 },
             },
         )
+
+    def test_schedule_document_round_trip_preserves_optimizer(self) -> None:
+        slot_ids = iter_horizon_slot_ids(REFERENCE_TIME)
+        stored = {
+            "executionEnabled": True,
+            "slotMinutes": SCHEDULE_SLOT_MINUTES,
+            "slots": {
+                slot_ids[1]: {
+                    "inverter": {
+                        "kind": SCHEDULE_ACTION_STOP_CHARGING,
+                        "setBy": "automation",
+                        "optimizer": "charge_hold",
+                    },
+                    "boiler": {
+                        "on": True,
+                        "setBy": "automation",
+                        "optimizer": "appliance_runtime",
+                    },
+                },
+            },
+        }
+        doc = schedule_document_from_dict(stored)
+
+        self.assertEqual(
+            inverter_action(doc.slots[slot_ids[1]]).optimizer, "charge_hold"
+        )
+        self.assertEqual(doc.slots[slot_ids[1]]["boiler"].optimizer, "appliance_runtime")
+        self.assertEqual(schedule_document_to_dict(doc), stored)
+
+    def test_stored_action_without_optimizer_loads_as_not_recorded(self) -> None:
+        slot_ids = iter_horizon_slot_ids(REFERENCE_TIME)
+        stored = {
+            "executionEnabled": True,
+            "slotMinutes": SCHEDULE_SLOT_MINUTES,
+            "slots": {
+                slot_ids[1]: {
+                    "inverter": {
+                        "kind": SCHEDULE_ACTION_STOP_CHARGING,
+                        "setBy": "automation",
+                    },
+                },
+            },
+        }
+        doc = schedule_document_from_dict(stored)
+
+        self.assertIsNone(inverter_action(doc.slots[slot_ids[1]]).optimizer)
+        self.assertEqual(schedule_document_to_dict(doc), stored)
+
+    def test_a_user_write_clears_the_optimizer(self) -> None:
+        slot = ScheduleSlot(
+            id="2026-03-20T21:00:00+01:00",
+            controllables={
+                "inverter": {
+                    "kind": SCHEDULE_ACTION_STOP_CHARGING,
+                    "setBy": "automation",
+                    "optimizer": "charge_hold",
+                },
+                "boiler": {
+                    "on": True,
+                    "setBy": "automation",
+                    "optimizer": "appliance_runtime",
+                },
+            },
+        )
+
+        written = with_slot_set_by(slot, set_by="user")
+
+        for action in written.controllables.values():
+            self.assertEqual(action.set_by, "user")
+            self.assertIsNone(action.optimizer)
 
     def test_schedule_document_round_trip_preserves_non_empty_appliance_domains(self) -> None:
         slot_ids = iter_horizon_slot_ids(REFERENCE_TIME)

@@ -187,7 +187,10 @@
         "grid_stretch": "{range} · {price}",
         "grid_planned": "Plánované využití sítě",
         "grid_import": "Odběr {kwh}",
-        "grid_export": "Dodávka {kwh}"
+        "grid_export": "Dodávka {kwh}",
+        "grid_battery_empty": "baterie prázdná",
+        "grid_battery_full": "baterie plná",
+        "grid_charge_limit": "limit nabíjení"
       },
       "history": {
         "title": "Historie a statistiky",

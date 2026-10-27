@@ -195,7 +195,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         const ids = new Set(schedule.slots.flatMap((slot) => Object.keys(slot.controllables)));
         ids.delete(INVERTER_CONTROLLABLE_ID);
         const names = this._applianceNames();
-        const runs = [...ids].flatMap((id) => laneRuns(schedule, id, now, { byAuthor: true })
+        const runs = [...ids].flatMap((id) => laneRuns(schedule, id, now)
             .filter((run) => isScheduleApplianceActionEnabled(run.action as ScheduleApplianceActionDTO) === true)
             .map((run) => ({
             ...run,

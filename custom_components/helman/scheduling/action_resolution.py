@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from ..const import (
     SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
@@ -31,8 +31,8 @@ def resolve_executed_schedule_action(
             )
         if current_soc >= target_soc:
             return ScheduleActionResolution(
-                executed_action=ScheduleAction(
-                    kind=SCHEDULE_ACTION_STOP_DISCHARGING
+                executed_action=replace(
+                    action, kind=SCHEDULE_ACTION_STOP_DISCHARGING, target_soc=None
                 ),
                 reason="target_soc_reached",
             )
@@ -46,7 +46,9 @@ def resolve_executed_schedule_action(
             )
         if current_soc <= target_soc:
             return ScheduleActionResolution(
-                executed_action=ScheduleAction(kind=SCHEDULE_ACTION_STOP_CHARGING),
+                executed_action=replace(
+                    action, kind=SCHEDULE_ACTION_STOP_CHARGING, target_soc=None
+                ),
                 reason="target_soc_reached",
             )
         return ScheduleActionResolution(executed_action=action, reason="scheduled")

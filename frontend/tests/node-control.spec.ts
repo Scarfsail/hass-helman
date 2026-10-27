@@ -332,6 +332,24 @@ test.describe("the plan", () => {
         ]);
     });
 
+    test("names the optimizer that placed a change; a change of optimizer is a change of author", async ({ page }) => {
+        await mount(page, { schedule: plan([
+            ["13:00", "14:00", { inverter: auto("stop_export", { optimizer: "export_price" }) }],
+            ["14:00", "15:00", { inverter: auto("stop_export", { optimizer: "charge_hold" }) }],
+            ["15:00", "16:00", { inverter: auto("stop_charging") }],
+            ["16:00", "17:00", { inverter: auto("stop_discharging", { optimizer: "retired_kind" }) }],
+        ]) });
+        await openControl(page, "battery");
+        expect(await control(page).locator("[data-change-row]").allInnerTexts()).toEqual([
+            "13:00 Stop export\nExport price",
+            "14:00 Stop export\nCharge hold",
+            // Not recorded, or a kind without a name: Helman's schedule.
+            "15:00 Stop charging\nHelman's schedule",
+            "16:00 Stop discharging\nHelman's schedule",
+            "17:00 Normal\ndefault",
+        ]);
+    });
+
     test("names each mode once in the legend, by the inverter's short mode names; modes that share a tone share an entry", async ({ page }) => {
         await mount(page, { schedule: plan([
             ["13:00", "14:00", { inverter: auto("stop_export") }],
