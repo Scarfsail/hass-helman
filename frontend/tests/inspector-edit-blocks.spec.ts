@@ -39,6 +39,21 @@ async function mountInspector(page: Page): Promise<void> {
             }] },
             "helman/get_entity_actual_history": { entities: {} },
             "helman/get_appliance_projections": { appliances: [] },
+            "helman/get_device_tree": {
+                sources: [],
+                consumers: [{
+                    id: "house", displayName: "House", powerSensorId: "sensor.house",
+                    children: [{
+                        id: "boiler", displayName: "Boiler", powerSensorId: "sensor.boiler",
+                        switchEntityId: "switch.boiler", controllableIds: ["boiler"], ownControllableIds: ["boiler"],
+                        deviceKey: "sensor.boiler_energy", energyEntityId: "sensor.boiler_energy",
+                        children: [],
+                    }],
+                }],
+                consumptionTotalSensorId: null,
+                productionTotalSensorId: null,
+                uiConfig: { history_buckets: 1, history_bucket_duration: 5, device_groupings: [] },
+            },
         };
         for (const [command, reply] of Object.entries(replies)) w.__setMockReply(hass, command, reply);
         w.__inspector = () => document.querySelector("helman-solar-inspector-card")
@@ -83,4 +98,72 @@ test("Edit blocks opens the inspector's day editor over the device detail on its
     });
     await expect.poll(() => dayEditor(page).then((editor) => editor.open)).toBe(false);
     await expect(detail.locator("helman-node-control")).toBeVisible();
+});
+
+test("lane icon in the inspector's schedule strip opens the device detail dialog", async ({ page }) => {
+    await mountInspector(page);
+    await page.evaluate(() => {
+        const inspector = (window as any).__inspector();
+        const strip = inspector.shadowRoot.querySelector("helman-solar-schedule-band-strip");
+        const band = strip.shadowRoot.querySelector("scheduling-entity-day-band");
+        const badge = band.shadowRoot.querySelector(".track-label state-badge, .track-label ha-icon");
+        if (!badge) throw new Error("no badge in strip");
+        badge.dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
+    });
+    const detail = page.locator("helman-solar-inspector node-detail-dialog");
+    await expect(detail.locator('[slot="headerTitle"]')).toHaveText("Boiler");
+});
+
+test("lane icon for inverter in inspector opens the inverter detail dialog", async ({ page }) => {
+    await mountInspector(page);
+    await page.evaluate(() => {
+        const body = (window as any).__inspector().shadowRoot.querySelector(".body");
+        body.firstElementChild.dispatchEvent(new CustomEvent("show-controllable-detail", {
+            detail: { controllableId: "inverter", entityId: "select.helman_inverter_mode" },
+            bubbles: true,
+            composed: true,
+        }));
+    });
+    const detail = page.locator("helman-solar-inspector node-detail-dialog");
+    await expect(detail.locator('[slot="headerTitle"]')).toHaveText("Inverter");
+});
+
+test("remounting device detail from day editor over existing detail preserves history ownership", async ({ page }) => {
+    await mountInspector(page);
+    await page.evaluate(() => window.history.replaceState({ dashboard: "energy" }, ""));
+    await page.evaluate(() => {
+        const body = (window as any).__inspector().shadowRoot.querySelector(".body");
+        const item = {
+            id: "sensor.boiler_energy", name: "Boiler", displayName: "Boiler", children: [], valueType: "default",
+            isSource: false, isUnmeasured: false, powerValue: 0, powerHistory: [0], historyBuckets: 1,
+            switchEntityId: "switch.boiler", controllableIds: ["boiler"], ownControllableIds: ["boiler"], applianceKind: "generic",
+        };
+        body.firstElementChild.dispatchEvent(new CustomEvent("show-device-detail", { detail: { item }, bubbles: true, composed: true }));
+    });
+    const detail = page.locator("helman-solar-inspector node-detail-dialog");
+    await expect(detail.locator('[slot="headerTitle"]')).toHaveText("Boiler");
+    await detail.locator("helman-detail-section[data-schedule] button").first().click();
+    await detail.locator("helman-node-control [data-edit-blocks]").click();
+    await expect.poll(() => dayEditor(page)).toEqual({ open: true, selected: "boiler" });
+
+    await page.evaluate(() => {
+        const body = (window as any).__inspector().shadowRoot.querySelector(".body");
+        body.firstElementChild.dispatchEvent(new CustomEvent("show-controllable-detail", {
+            detail: { controllableId: "inverter", entityId: "select.helman_inverter_mode" },
+            bubbles: true,
+            composed: true,
+        }));
+    });
+    await expect(detail.locator('[slot="headerTitle"]')).toHaveText("Inverter");
+
+    await detail.locator("ha-dialog").evaluate((dialog: any) => dialog.close());
+    await expect(detail).toHaveCount(0);
+    await expect.poll(() => dayEditor(page)).toEqual({ open: true, selected: "boiler" });
+
+    await page.evaluate(() => {
+        const host = (window as any).__inspector().shadowRoot.querySelector("scheduling-day-editor-host");
+        host.shadowRoot.querySelector("scheduling-entity-day-editor").shadowRoot.querySelector("ha-dialog").close();
+    });
+    await expect.poll(() => dayEditor(page).then((editor) => editor.open)).toBe(false);
+    await expect.poll(() => page.evaluate(() => window.history.state)).toEqual({ dashboard: "energy" });
 });

@@ -1,6 +1,7 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 
 let nextHistoryEntryId = 0;
+const activeControllers = new Set<DialogHistoryController>();
 
 /** Each dialog owns one key, retaining the keys of dialogs underneath it. */
 export class DialogHistoryController implements ReactiveController {
@@ -20,10 +21,12 @@ export class DialogHistoryController implements ReactiveController {
     }
 
     hostConnected(): void {
+        activeControllers.add(this);
         window.addEventListener("popstate", this._handlePopState);
     }
 
     hostDisconnected(): void {
+        activeControllers.delete(this);
         window.removeEventListener("popstate", this._handlePopState);
         this._entryId = null;
         this._ignoreNextPopstate = false;
@@ -46,6 +49,24 @@ export class DialogHistoryController implements ReactiveController {
             this._ignoreNextPopstate = true;
             window.history.back();
         }
+    }
+
+    async release(): Promise<void> {
+        const consume = this.active && this._isCurrent(window.history.state);
+        this._entryId = null;
+        if (!consume) return;
+        const retainedState = { ...(window.history.state as Record<string, unknown>) };
+        delete retainedState[this._key];
+        for (const controller of activeControllers) {
+            if (controller !== this && controller.active) {
+                controller._ignoreNextPopstate = true;
+            }
+        }
+        await new Promise<void>((resolve) => {
+            window.addEventListener("popstate", () => resolve(), { once: true });
+            window.history.back();
+        });
+        window.history.replaceState(retainedState, "");
     }
 
     private _isCurrent(state: unknown): boolean {

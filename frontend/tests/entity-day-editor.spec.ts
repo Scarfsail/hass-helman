@@ -1733,4 +1733,46 @@ test.describe("entity day editor, explain mode", () => {
         });
         expect(label).toContain("Boiler");
     });
+
+    test("snapshotDraftState captures and restoreDraftState restores unsaved drafts and lane selection", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { multiLane: true });
+
+        const result = await page.evaluate(() => {
+            const el = document.querySelector("scheduling-entity-day-editor") as any;
+            el._drafts = { boiler: { "slot-1": { kind: "switch", on: true } } };
+            el._blockSplits = { boiler: new Set([12345]) };
+            el._selectedLaneKey = "boiler";
+            el._dayIndex = 1;
+
+            const snapshot = el.snapshotDraftState();
+
+            // Re-seed to empty
+            el._seedFromSlots();
+
+            // Restore for different target
+            el.restoreDraftState(snapshot, "inverter", null);
+            const forInverter = {
+                drafts: el._drafts,
+                selected: el._selectedLaneKey,
+                dayIndex: el._dayIndex,
+            };
+
+            // Restore for same target
+            el.restoreDraftState(snapshot, "boiler", null);
+            const forBoiler = {
+                drafts: el._drafts,
+                selected: el._selectedLaneKey,
+                dayIndex: el._dayIndex,
+            };
+
+            return { snapshot, forInverter, forBoiler };
+        });
+
+        expect(result.snapshot.drafts).toEqual({ boiler: { "slot-1": { kind: "switch", on: true } } });
+        expect(result.forInverter.drafts).toEqual({ boiler: { "slot-1": { kind: "switch", on: true } } });
+        expect(result.forInverter.selected).toBe("inverter");
+        expect(result.forInverter.dayIndex).toBe(1);
+        expect(result.forBoiler.selected).toBe("boiler");
+    });
 });

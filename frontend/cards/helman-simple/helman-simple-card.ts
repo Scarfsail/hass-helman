@@ -268,6 +268,10 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
                     </div>
                 </div>
             </ha-card>
+            <scheduling-day-editor-host
+                .hass=${this._hass}
+                .timeZone=${this._hass?.config?.time_zone || "UTC"}
+            ></scheduling-day-editor-host>
             ${this._host.dialogRequest !== null ? html`
                 <node-detail-dialog
                     .hass=${this._hass!}
@@ -277,10 +281,6 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
                     @closed=${() => this._closeNodeDetail()}
                 ></node-detail-dialog>
             ` : ''}
-            <scheduling-day-editor-host
-                .hass=${this._hass}
-                .timeZone=${this._hass?.config?.time_zone || "UTC"}
-            ></scheduling-day-editor-host>
         `;
     }
 

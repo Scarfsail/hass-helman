@@ -178,6 +178,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
             "entity-day-band-slot-select",
             "entity-day-band-time-hover",
             "entity-day-band-gap-select",
+            "show-controllable-detail",
             "hass-more-info",
         ]) {
             band.addEventListener(type, (event: Event) => {
@@ -403,9 +404,10 @@ test.describe("entity day band, read only", () => {
         });
 
         const events = await readEvents(page);
-        expect(events.filter((event) => event.type === "hass-more-info")).toHaveLength(1);
-        expect(events.find((event) => event.type === "hass-more-info")!.detail)
-            .toMatchObject({ entityId: "switch.boiler" });
+        expect(events.filter((event) => event.type === "show-controllable-detail")).toHaveLength(1);
+        expect(events.find((event) => event.type === "show-controllable-detail")!.detail)
+            .toMatchObject({ controllableId: "boiler", entityId: "switch.boiler" });
+        expect(events.filter((event) => event.type === "hass-more-info")).toHaveLength(0);
         expect(events.filter((event) => event.type === "entity-day-band-lane-select")).toHaveLength(0);
     });
 });

@@ -207,6 +207,27 @@ test("device name opens a shared Overview with today's measured energy", async (
     await expect(detail.locator("helman-switch-tile")).toHaveCount(1);
 });
 
+test("device row switch badge opens the same detail dialog as clicking the name", async ({ page }) => {
+    await mountCard(page);
+    await page.evaluate((name) => {
+        const row = (window as any).__deepAll(document, "helman-tree-item").find((candidate: any) =>
+            (candidate.shadowRoot?.querySelector(".deviceName")?.textContent ?? "").trim() === name);
+        if (!row) throw new Error(`no row named ${name}`);
+        const badge = row.shadowRoot
+            .querySelector("helman-tree-item-icon")
+            ?.shadowRoot?.querySelector("helman-appliance-switch-badge");
+        if (!badge) throw new Error("no switch badge on row");
+        badge.dispatchEvent(new CustomEvent("show-more-info", {
+            bubbles: true,
+            composed: true,
+            detail: { entityId: "switch.boiler" },
+        }));
+    }, "Boiler");
+    const detail = page.locator("node-detail-dialog");
+    await expect(detail.locator('[slot="headerTitle"]')).toHaveText("Boiler");
+    expect(await page.evaluate(() => (window as any).__moreInfo ?? [])).toEqual([]);
+});
+
 for (const [unit, change, caption] of [["Wh", 500, "0.50 kWh used today"], ["MWh", 0.00125, "1.25 kWh used today"]] as const) {
     test(`today's ${unit} recorder change is displayed in kWh`, async ({ page }) => {
         await mountCard(page, {}, false, unit, change);
