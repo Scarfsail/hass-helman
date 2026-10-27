@@ -750,12 +750,24 @@ test.describe("Schedule lane icons in power card editor", () => {
         test(`Edit blocks from device detail opened over day editor brings editor forward on that device from ${card}`, async ({ page }) => {
             await page.evaluate(() => window.history.replaceState({ dashboard: "energy" }, ""));
             await openDayEditor(page, card);
+            await page.evaluate(({ card }) => {
+                const host = document.querySelector(card)!.shadowRoot!.querySelector("scheduling-day-editor-host") as any;
+                const editor = host.shadowRoot.querySelector("scheduling-entity-day-editor") as any;
+                editor._drafts = {
+                    inverter: { "unsaved-inverter": { kind: "inverter", mode: "eco" } },
+                };
+            }, { card });
             await clickLaneIcon(page, card, "boiler");
             const detail = page.locator("node-detail-dialog");
             await expect(detail.locator('[slot="headerTitle"]')).toHaveText("Boiler");
             await scheduleButton(page).click();
             await control(page).locator("[data-edit-blocks]").click();
             await expect.poll(() => dayEditor(page, card)).toEqual({ open: true, selected: "boiler" });
+            await expect.poll(() => page.evaluate(({ card }) => {
+                const host = document.querySelector(card)!.shadowRoot!.querySelector("scheduling-day-editor-host") as any;
+                const editor = host.shadowRoot.querySelector("scheduling-entity-day-editor") as any;
+                return editor?._drafts?.inverter;
+            }, { card })).toEqual({ "unsaved-inverter": { kind: "inverter", mode: "eco" } });
             await page.evaluate(({ card }) => {
                 const host = document.querySelector(card)!.shadowRoot!.querySelector("scheduling-day-editor-host") as any;
                 const editor = host.shadowRoot.querySelector("scheduling-entity-day-editor") as any;

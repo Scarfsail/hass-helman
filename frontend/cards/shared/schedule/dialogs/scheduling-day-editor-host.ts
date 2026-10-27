@@ -230,10 +230,13 @@ export class SchedulingDayEditorHost extends LitElement {
     }
 
     private async _reopenFor(target: EntityScheduleTarget | null, dayKey: string | null): Promise<void> {
-        const opening = ++this._editorOpening;
-        await this.shadowRoot
-            ?.querySelector<SchedulingEntityDayEditor>("scheduling-entity-day-editor")
-            ?.releaseHistory();
+        let opening = ++this._editorOpening;
+        const existingEditor = this.shadowRoot?.querySelector<SchedulingEntityDayEditor>("scheduling-entity-day-editor");
+        const draftSnapshot = existingEditor?.snapshotDraftState();
+        const scheduleAtOpen = this._editorScheduleAtOpen;
+        const scheduleChanged = this._editorScheduleChanged;
+        const saveError = this._editorSaveError;
+        await existingEditor?.releaseHistory();
         if (opening !== this._editorOpening) {
             return;
         }
@@ -244,6 +247,19 @@ export class SchedulingDayEditorHost extends LitElement {
             return;
         }
         this._applyOpenFor(target, dayKey);
+        this._editorScheduleAtOpen = scheduleAtOpen;
+        this._editorScheduleChanged = scheduleChanged;
+        this._editorSaveError = saveError;
+        opening = this._editorOpening;
+        await this.updateComplete;
+        if (opening !== this._editorOpening) {
+            return;
+        }
+        if (draftSnapshot) {
+            this.shadowRoot
+                ?.querySelector<SchedulingEntityDayEditor>("scheduling-entity-day-editor")
+                ?.restoreDraftState(draftSnapshot, target, dayKey);
+        }
     }
 
     private _applyOpenFor(target: EntityScheduleTarget | null, dayKey: string | null = null): void {

@@ -70,7 +70,7 @@ const DEFAULT_NEW_BLOCK_DURATION_MS = 60 * 60 * 1000;
 /** What the dialog is for right now: authoring the day, or accounting for it. */
 type EntityDayEditorMode = "edit" | "explain";
 
-interface EntityScheduleEditSession {
+export interface EntityScheduleEditSession {
     /** Slots the block held when the edit began, so moving it can free them. */
     originalSlotIds: string[];
     startMs: number;
@@ -79,6 +79,16 @@ interface EntityScheduleEditSession {
     valid: boolean;
     /** The session had to raise its start to the day's editable boundary. */
     startClamped: boolean;
+}
+
+export interface EntityDayEditorDraftSnapshot {
+    baselineSlots: readonly ScheduleSlot[];
+    drafts: EntityScheduleDrafts;
+    blockSplits: EntityScheduleBlockSplits;
+    draftBeforeEdit: EntityScheduleDraft;
+    editing: EntityScheduleEditSession | null;
+    selectedLaneKey: string | null;
+    dayIndex: number;
 }
 
 /** Shared empty set, so a lane with no authored edges allocates nothing. */
@@ -475,12 +485,41 @@ export class SchedulingEntityDayEditor extends LitElement {
         result: EntityDayBandLane[];
     } | null = null;
     private _draftBeforeEdit: EntityScheduleDraft = {};
+    private _restoredDraft = false;
     /** Bumped per edit session, so the action editor knows a new one began. */
     private _editSessionId = 0;
     private readonly _history = new DialogHistoryController(this, "__helmanEntityScheduleDialogId", { close: () => this._close() });
 
     public releaseHistory(): Promise<void> {
         return this._history.release();
+    }
+
+    public snapshotDraftState(): EntityDayEditorDraftSnapshot {
+        return {
+            baselineSlots: this._baselineSlots,
+            drafts: this._drafts,
+            blockSplits: this._blockSplits,
+            draftBeforeEdit: this._draftBeforeEdit,
+            editing: this._editing,
+            selectedLaneKey: this._selectedLaneKey,
+            dayIndex: this._dayIndex,
+        };
+    }
+
+    public restoreDraftState(
+        snapshot: EntityDayEditorDraftSnapshot,
+        target: EntityScheduleTarget | null,
+        dayKey: string | null,
+    ): void {
+        this._baselineSlots = [...snapshot.baselineSlots];
+        this._drafts = snapshot.drafts;
+        this._blockSplits = snapshot.blockSplits;
+        this._draftBeforeEdit = target === snapshot.selectedLaneKey ? snapshot.draftBeforeEdit : {};
+        this._editing = target === snapshot.selectedLaneKey ? snapshot.editing : null;
+        this._selectedLaneKey = target;
+        this._dayIndex = dayKey === null ? snapshot.dayIndex : this._resolveInitialDayIndex();
+        this._restoredDraft = true;
+        this.requestUpdate();
     }
 
     private _syncExplanationStore(): void {
@@ -511,7 +550,9 @@ export class SchedulingEntityDayEditor extends LitElement {
 
         // Seed once per opening: later slot updates are the refresh case, which
         // the stale banner reports instead of applying.
-        if (this.open && (changedProperties.has("open") || changedProperties.has("target"))) {
+        if (this._restoredDraft) {
+            this._restoredDraft = false;
+        } else if (this.open && (changedProperties.has("open") || changedProperties.has("target"))) {
             this._seedFromSlots();
         }
 
