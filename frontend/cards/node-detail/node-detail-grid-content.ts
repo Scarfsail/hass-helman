@@ -6,6 +6,7 @@ import { fillTemplate } from "../localize/localize";
 import {
     type GridMoneySectionPayload,
     type GridDetailPayload,
+    type GridForecastSlotDTO,
     type GridVoltageSectionPayload,
 } from "../helman-api";
 import { currencyFromPriceUnit } from "../helman-solar-inspector/money-model";
@@ -26,6 +27,7 @@ import "./help-tip";
 import { forecastWhen, holdAtSlots, remainingShare, renderForecastChart, type ForecastChartContext } from "./node-detail-forecast";
 import { historyRow, historySummary, kwhText, sectionNotReady, subTitle } from "./node-detail-history";
 import { modeStripWindow } from "../shared/mode-strip";
+import { scheduleReason } from "./node-detail-schedule";
 import { SLOT_MS } from "../shared/time/slot-time";
 
 const PHASES = [1, 2, 3] as const;
@@ -292,7 +294,8 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
 
     /** The plan's grid import and export to tomorrow noon, one row per stretch of one direction. */
     private _renderPlannedGridUse(context: ForecastChartContext, end: number) {
-        const runs: Array<{ start: number; end: number; direction: "import" | "export"; kwh: number }> = [];
+        const text = (key: string) => this.localize(`node_detail.shared.forecast.${key}`);
+        const runs: Array<{ start: number; end: number; direction: "import" | "export"; reason: string | null; kwh: number }> = [];
         for (const slot of this._forecast!.grid.series) {
             const start = Date.parse(slot.timestamp);
             const slotEnd = start + slot.durationHours * 3_600_000;
@@ -301,23 +304,34 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
             if (direction === "balanced") continue;
             // The slot in progress counts only what is still ahead of it.
             const kwh = (direction === "import" ? slot.importedFromGridKwh : slot.exportedToGridKwh) * remainingShare(start, context.now, slot.durationHours * 3_600_000);
+            const reason = this._plannedGridReason(slot, direction, text);
             const last = runs[runs.length - 1];
-            if (last && last.direction === direction && last.end === start) {
+            if (last && last.direction === direction && last.reason === reason && last.end === start) {
                 last.end = slotEnd;
                 last.kwh += kwh;
             } else {
-                runs.push({ start, end: slotEnd, direction, kwh });
+                runs.push({ start, end: slotEnd, direction, reason, kwh });
             }
         }
         if (!runs.length) return nothing;
-        const text = (key: string) => this.localize(`node_detail.shared.forecast.${key}`);
         return html`
             <div class="section-title">${text("grid_planned")}</div>
             <div class="rows" data-planned>${runs.map((run) => html`
                 <div class="row" data-run=${run.direction}><span><b>${forecastWhen(run.start, context, run.end)}</b></span>
-                    <span class="value">${fillTemplate(text(`grid_${run.direction}`), { kwh: `≈ ${formatKwh(run.kwh)} kWh` })}</span></div>`)}
+                    <span class="value">${fillTemplate(text(`grid_${run.direction}`), { kwh: `≈ ${formatKwh(run.kwh)} kWh` })}${run.reason ? ` · ${run.reason}` : ""}</span></div>`)}
             </div>
         `;
+    }
+
+    /**
+     * Why a slot imports or exports: who scheduled it, else the battery limit
+     * that forces the flow; `null` when neither does.
+     */
+    private _plannedGridReason(slot: GridForecastSlotDTO, direction: "import" | "export", text: (key: string) => string): string | null {
+        if (slot.setBy || slot.optimizer) return scheduleReason(slot, this.localize);
+        if (direction === "import") return slot.hitMinSoc ? text("grid_battery_empty") : null;
+        if (slot.hitMaxSoc) return text("grid_battery_full");
+        return slot.limitedByChargePower ? text("grid_charge_limit") : null;
     }
 
     // History & statistics -----------------------------------------------------

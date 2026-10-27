@@ -39,6 +39,8 @@ type Variant = {
     gridSign?: 1 | -1;
     /** The planned export of the 12:00 slot, kWh; 0.3 by default. */
     firstSlotExportKwh?: number;
+    /** The grid forecast's slots instead of the default three: HH:MM today (UTC), import and export kWh, and what caused them. */
+    gridSlots?: Array<[time: string, imported: number, exported: number, cause?: object]>;
     /** The grid power sensor reads unavailable. */
     gridUnavailable?: boolean;
     /** The solar, house and battery meters' states, W. */
@@ -150,7 +152,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 ],
                 currentExportPrice: v.noExportPrice ? null : 1.5, exportPriceUnit: "CZK/kWh",
                 exportPricePoints: v.noExportPrice ? [] : [{ timestamp: `${day}T12:00:00+00:00`, value: 1.5 }],
-                series: [
+                series: v.gridSlots ? v.gridSlots.map(([time, imported, exported, cause]) => ({ ...slot(`${day}T${time}:00+00:00`, imported, exported), ...cause })) : [
                     slot(`${day}T12:00:00+00:00`, 0, v.firstSlotExportKwh ?? 0.3),
                     slot(`${day}T12:15:00+00:00`, 0, 0.3),
                     slot(`${day}T15:00:00+00:00`, 0.4, 0),
@@ -338,6 +340,35 @@ test("grid planned use counts only what is left of the slot in progress", async 
     await section.locator("button").first().click();
     // One minute of the 12:00 slot's 0.75 kWh is 0.05 kWh, plus the 12:15 slot's 0.3 kWh.
     await expect(section.locator("[data-planned] [data-run]").nth(0)).toContainText("Export ≈ 0.35 kWh");
+});
+
+test("grid planned use says why each stretch flows, and a change of reason starts a new row", async ({ page }) => {
+    const exportPrice = { setBy: "automation", optimizer: "export_price" };
+    await mount(page, { gridSlots: [
+        ["12:00", 0, 0.3, exportPrice],
+        ["12:15", 0, 0.3, exportPrice],
+        ["12:30", 0, 0.2, { hitMaxSoc: true }],
+        ["12:45", 0, 0.1, { limitedByChargePower: true }],
+        ["13:00", 0, 0.1, { hitMinSoc: false, hitMaxSoc: false, limitedByChargePower: false }],
+        ["15:00", 0.4, 0, { hitMinSoc: true }],
+        // A full battery does not explain an import.
+        ["15:15", 0.2, 0, { hitMaxSoc: true }],
+        ["16:00", 0.3, 0, { setBy: "user" }],
+    ] });
+    await page.locator(".node-cell:has(simple-card-grid)").click();
+    const section = content(page).locator("helman-detail-section[data-forecast]");
+    await section.locator("button").first().click();
+    const planned = section.locator("[data-planned] [data-run]");
+    expect(await planned.locator(".value").allInnerTexts()).toEqual([
+        "Export ≈ 0.60 kWh · Export price",
+        "Export ≈ 0.20 kWh · battery full",
+        "Export ≈ 0.10 kWh · charge limit",
+        "Export ≈ 0.10 kWh",
+        "Import ≈ 0.40 kWh · battery empty",
+        "Import ≈ 0.20 kWh",
+        "Import ≈ 0.30 kWh · You",
+    ]);
+    await expect(planned.nth(0)).toContainText("12:00–12:30");
 });
 
 test("grid shows no Forecast without import prices", async ({ page }) => {

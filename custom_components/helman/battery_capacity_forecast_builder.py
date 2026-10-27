@@ -391,6 +391,12 @@ class BatteryCapacityForecastBuilder:
                     slot_input.slot_start,
                     slot_input.duration_hours,
                 ).isoformat()
+                # Who placed the action, so the grid forecast can say why the
+                # slot imports or exports.
+                if action.set_by is not None:
+                    result.slot["setBy"] = action.set_by
+                if action.optimizer is not None:
+                    result.slot["optimizer"] = action.optimizer
             adjusted_series.append(result.slot)
 
         if not has_non_normal_adjustment:

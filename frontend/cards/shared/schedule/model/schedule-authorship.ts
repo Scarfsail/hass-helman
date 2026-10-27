@@ -47,9 +47,9 @@ export function stripScheduleSetBy(
 export function stripScheduleSetBy(
     action: ScheduleActionDTO | ScheduleApplianceActionDTO,
 ): ScheduleAction | ScheduleApplianceAction {
-    // Strip only setBy; keep kind/targetSoc/conditionMet so candidate actions
-    // still render muted in the plan.
-    const { setBy: _ignoredSetBy, ...valueAction } = action;
+    // Strip only the author (setBy, optimizer); keep kind/targetSoc/conditionMet
+    // so candidate actions still render muted in the plan.
+    const { setBy: _ignoredSetBy, optimizer: _ignoredOptimizer, ...valueAction } = action;
     return valueAction;
 }
 

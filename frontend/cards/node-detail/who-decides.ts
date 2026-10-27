@@ -6,7 +6,7 @@ import { LaneOwnershipController } from "./lane-ownership";
 import type { ControlStatus } from "./lane-ownership";
 import { formatScheduleTime } from "../shared/schedule/model/schedule-time";
 import { DialogHistoryController } from "../shared/dialog-history-controller";
-import { laneDoingNow, laneRuns, nextLaneChange } from "./node-detail-schedule";
+import { laneDoingNow, laneRuns, nextLaneChange, scheduleReason } from "./node-detail-schedule";
 import type { ControlOverrideDialog } from "./control-override-dialog";
 import "./help-tip";
 import { nodeDetailSharedStyles } from "./node-detail-shared-styles";
@@ -61,9 +61,7 @@ export class HelmanWhoDecides extends LitElement {
         const doing = schedule
             ? laneDoingNow(schedule, this.controllableId, now, this.localize, this._lanes.locale, this._lanes.timeZone, { byAuthor: true })
             : { text: this.localize("node_detail.shared.schedule.none"), run: null };
-        const reason = doing.run?.action.setBy === "user"
-            ? this.localize("node_detail.shared.you") : this.localize("node_detail.shared.helman_schedule");
-        const planned = doing.run ? `${doing.text} · ${reason}` : doing.text;
+        const planned = doing.run ? `${doing.text} · ${scheduleReason(doing.run.action, this.localize)}` : doing.text;
         const status = this._lanes.status(this.controllableId);
         const who = ownershipText(status, this.localize, this._lanes.locale, this._lanes.timeZone);
         const controllable = this._lanes.roster?.find((entry) => entry.id === this.controllableId);

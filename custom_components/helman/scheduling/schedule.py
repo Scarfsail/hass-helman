@@ -85,18 +85,20 @@ SCHEDULE_SLOT_KEYS = {"id", "controllables"}
 #: The keys every controllable's action carries beside its kind's own payload,
 #: on the wire and in storage. :func:`slot_action_from_dict` lifts them into
 #: :class:`SlotAction`, so no per-kind normalizer ever sees them.
-SLOT_ACTION_ENVELOPE_KEYS = frozenset({"setBy", "conditionMet"})
+SLOT_ACTION_ENVELOPE_KEYS = frozenset({"setBy", "optimizer", "conditionMet"})
 
 
 class ScheduleActionDict(TypedDict):
     kind: ScheduleActionKind
     targetSoc: NotRequired[int]
     setBy: NotRequired[ScheduleActionSetBy]
+    optimizer: NotRequired[str]
     conditionMet: NotRequired[bool]
 
 
 #: One controllable's action as it travels on the wire and in storage: its
-#: kind's payload with the envelope keys (``setBy``, ``conditionMet``) written
+#: kind's payload with the envelope keys (``setBy``, ``optimizer``,
+#: ``conditionMet``) written
 #: flat beside it. The inverter's payload is a ``kind``/``targetSoc`` pair, a
 #: generic appliance's is ``{"on": bool}``, a climate's a mode and an EV
 #: charger's a charge flag. The map they live in is keyed by controllable id and
@@ -122,8 +124,8 @@ class ScheduleAction:
     """The inverter's action: what :class:`SlotAction` carries as its payload.
 
     In a slot's map the envelope lives on the :class:`SlotAction`, never here:
-    the payload stored there always has ``set_by=None`` and
-    ``condition_met=True``. The two fields stay on the dataclass for the
+    the payload stored there always has ``set_by=None``, ``optimizer=None``
+    and ``condition_met=True``. The three fields stay on the dataclass for the
     inverter's *view* — :func:`inverter_action` folds the envelope back in, so
     the executor reports the attribution of the action it ran — and so a caller
     can hand :func:`build_controllable_actions` a complete inverter action.
@@ -132,6 +134,9 @@ class ScheduleAction:
     kind: ScheduleActionKind
     target_soc: int | None = None
     set_by: ScheduleActionSetBy | None = None
+    # The kind of the optimizer that placed the action; None when a user placed
+    # it or it was stored before the kind was recorded.
+    optimizer: str | None = None
     # False marks a "candidate" action: placed by an optimizer whose execution
     # condition is currently not met. Candidates are excluded from resource
     # accounting (demand/battery forecast) and are not executed, but remain in
@@ -157,6 +162,8 @@ class SlotAction:
 
     payload: ScheduleAction | Mapping[str, Any]
     set_by: ScheduleActionSetBy | None = None
+    # See :attr:`ScheduleAction.optimizer`.
+    optimizer: str | None = None
     # False marks a candidate; see :attr:`ScheduleAction.condition_met`.
     condition_met: bool = True
 
@@ -188,6 +195,7 @@ def build_controllable_actions(
         actions[CONTROLLABLE_ID_INVERTER] = SlotAction(
             payload=ScheduleAction(kind=inverter.kind, target_soc=inverter.target_soc),
             set_by=inverter.set_by,
+            optimizer=inverter.optimizer,
             condition_met=inverter.condition_met,
         )
     if appliances:
@@ -201,7 +209,10 @@ def inverter_action(actions: Mapping[str, SlotAction]) -> ScheduleAction:
     if action is None:
         return EMPTY_SCHEDULE_ACTION
     return replace(
-        action.payload, set_by=action.set_by, condition_met=action.condition_met
+        action.payload,
+        set_by=action.set_by,
+        optimizer=action.optimizer,
+        condition_met=action.condition_met,
     )
 
 
@@ -321,6 +332,8 @@ def action_to_dict(action: ScheduleAction) -> ScheduleActionDict:
         payload["targetSoc"] = action.target_soc
     if action.set_by is not None:
         payload["setBy"] = action.set_by
+    if action.optimizer is not None:
+        payload["optimizer"] = action.optimizer
     if not action.condition_met:
         payload["conditionMet"] = False
     return payload
@@ -368,6 +381,9 @@ def slot_action_from_dict(
         set_by=read_optional_schedule_action_set_by(
             data.get("setBy"), path=f"{context}.setBy"
         ),
+        # Not checked against the known kinds: a retired kind left in storage
+        # must not fail the whole schedule load.
+        optimizer=_read_non_empty_string(data.get("optimizer")),
         condition_met=data.get("conditionMet") is not False,
     )
 
@@ -381,6 +397,8 @@ def slot_action_to_dict(action: SlotAction) -> ControllableScheduleActionDict:
     )
     if action.set_by is not None:
         payload["setBy"] = action.set_by
+    if action.optimizer is not None:
+        payload["optimizer"] = action.optimizer
     if not action.condition_met:
         payload["conditionMet"] = False
     return payload
@@ -487,7 +505,7 @@ def with_slot_set_by(
     return ScheduleSlot(
         id=slot.id,
         controllables={
-            controllable_id: replace(action, set_by=set_by)
+            controllable_id: replace(action, set_by=set_by, optimizer=None)
             for controllable_id, action in slot.controllables.items()
         },
     )

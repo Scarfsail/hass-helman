@@ -421,6 +421,13 @@ export interface GridForecastSlotDTO {
     importedFromGridKwh: number;
     exportedToGridKwh: number;
     availableSurplusKwh?: number;
+    // Who placed the scheduled action that shapes the slot, when it is one.
+    setBy?: ScheduleSetBy;
+    optimizer?: string;
+    // The battery limits the simulation hit in the slot.
+    hitMinSoc?: boolean;
+    hitMaxSoc?: boolean;
+    limitedByChargePower?: boolean;
 }
 
 export interface ForecastBandValueDTO {
@@ -542,6 +549,8 @@ export interface ScheduleActionDTO {
     kind: ScheduleActionKind;
     targetSoc?: number;
     setBy?: ScheduleSetBy;
+    // The kind of the optimizer that placed the action, when one did.
+    optimizer?: string;
     // False marks a "candidate": placed by an optimizer whose execution
     // condition is not currently met. Rendered muted; not executed.
     conditionMet?: boolean;
@@ -556,18 +565,21 @@ export interface ScheduleEvChargerActionDTO {
     useMode?: EvChargerUseMode;
     ecoGear?: string;
     setBy?: ScheduleSetBy;
+    optimizer?: string;
     conditionMet?: boolean;
 }
 
 export interface ScheduleGenericApplianceActionDTO {
     on: boolean;
     setBy?: ScheduleSetBy;
+    optimizer?: string;
     conditionMet?: boolean;
 }
 
 export interface ScheduleClimateApplianceActionDTO {
     mode: ClimateApplianceMode;
     setBy?: ScheduleSetBy;
+    optimizer?: string;
     conditionMet?: boolean;
 }
 

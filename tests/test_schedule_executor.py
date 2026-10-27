@@ -44,6 +44,9 @@ from custom_components.helman.const import (  # noqa: E402
 from custom_components.helman.scheduling import (  # noqa: E402
     schedule_executor as schedule_executor_module,
 )
+from custom_components.helman.scheduling.action_resolution import (  # noqa: E402
+    resolve_executed_schedule_action,
+)
 from custom_components.helman.scheduling.schedule import (  # noqa: E402
     ScheduleAction,
     ScheduleControlConfig,
@@ -1146,6 +1149,34 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             executor.runtime.execution_status.active_slot_runtime.inverter.error_code,
             "not_configured",
         )
+
+
+class ResolveExecutedScheduleActionTests(unittest.TestCase):
+    def test_target_soc_reached_keeps_the_actions_author(self) -> None:
+        for kind, current_soc, expected_kind in (
+            (SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC, 80.0, SCHEDULE_ACTION_STOP_DISCHARGING),
+            (SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC, 20.0, SCHEDULE_ACTION_STOP_CHARGING),
+        ):
+            with self.subTest(kind=kind):
+                resolution = resolve_executed_schedule_action(
+                    action=ScheduleAction(
+                        kind=kind,
+                        target_soc=50,
+                        set_by="automation",
+                        optimizer="charge_from_grid",
+                    ),
+                    current_soc=current_soc,
+                )
+
+                self.assertEqual(resolution.reason, "target_soc_reached")
+                self.assertEqual(
+                    resolution.executed_action,
+                    ScheduleAction(
+                        kind=expected_kind,
+                        set_by="automation",
+                        optimizer="charge_from_grid",
+                    ),
+                )
 
 
 class ScheduleExecutorConcurrencyTests(unittest.IsolatedAsyncioTestCase):

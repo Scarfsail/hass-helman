@@ -1,6 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
-import type { ControllableRuntimeDTO, InverterRuntimeDTO, ScheduleActionDTO, ScheduleActionKind, ScheduleControllableActionDTO, SchedulePayload, ScheduleSlotDTO } from "../helman-api";
-import { fillTemplate, type LocalizeFunction } from "../localize/localize";
+import type { ControllableRuntimeDTO, InverterRuntimeDTO, ScheduleActionDTO, ScheduleActionKind, ScheduleControllableActionDTO, SchedulePayload, ScheduleSetBy, ScheduleSlotDTO } from "../helman-api";
+import { fillTemplate, getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import {
     addDaysToDayKey,
     formatScheduleTime,
@@ -77,8 +77,9 @@ export function inverterRuns(schedule: SchedulePayload, now: number): ScheduleRu
 
 /**
  * The remaining runs for any schedule lane, including empty stretches. A
- * change of author alone continues a run unless `byAuthor` asks for it to
- * start a new one, as a run that names its author must.
+ * change of author (who set it, and which optimizer) alone continues a run
+ * unless `byAuthor` asks for it to start a new one, as a run that names its
+ * author must.
  */
 export function laneRuns(schedule: SchedulePayload, controllableId: string, now: number, { byAuthor = false }: { byAuthor?: boolean } = {}): ScheduleRun<ScheduleControllableActionDTO>[] {
     const boundaries = resolveScheduleSlotBoundaries(schedule.slots.map((slot) => slot.id))
@@ -86,9 +87,9 @@ export function laneRuns(schedule: SchedulePayload, controllableId: string, now:
     const slotsById = new Map(schedule.slots.map((slot) => [slot.id, slot]));
     return mergeRuns<ScheduleControllableActionDTO>(boundaries, slotsById, controllableId, () => true,
         (left, right) => {
-            const { setBy: _left, ...leftAction } = left;
-            const { setBy: _right, ...rightAction } = right;
-            return (!byAuthor || left.setBy === right.setBy)
+            const { setBy: _left, optimizer: _leftOptimizer, ...leftAction } = left;
+            const { setBy: _right, optimizer: _rightOptimizer, ...rightAction } = right;
+            return (!byAuthor || (left.setBy === right.setBy && left.optimizer === right.optimizer))
                 && getScheduleControllableActionIdentityKey(leftAction as ScheduleControllableActionDTO)
                 === getScheduleControllableActionIdentityKey(rightAction as ScheduleControllableActionDTO);
         },
@@ -137,7 +138,7 @@ export function upcomingLaneChanges(runs: ScheduleRun<ScheduleControllableAction
         const action = candidate ? run.action : effectiveLaneAction(run.action, inverterLane);
         const effective = effectiveLaneKey(candidate ? { ...action, conditionMet: true } : action);
         const atRest = !candidate && (effective === "idle" || (isScheduleInverterAction(action) && action.kind === "normal"));
-        const key = `${candidate ? "candidate:" : ""}${effective}${atRest ? "" : `|${action.setBy ?? ""}`}`;
+        const key = `${candidate ? "candidate:" : ""}${effective}${atRest ? "" : `|${action.setBy ?? ""}|${action.optimizer ?? ""}`}`;
         if (run.startMs > now && key !== previous) changes.push({ startMs: run.startMs, endMs: run.endMs, action, candidate, atRest });
         previous = key;
     }
@@ -169,8 +170,23 @@ export function effectiveLaneAction(action: ScheduleControllableActionDTO, inver
 
 function effectiveLaneKey(action: ScheduleControllableActionDTO): string {
     if (isScheduleInverterAction(action) ? action.kind === "empty" : isScheduleApplianceActionEnabled(action) !== true) return "idle";
-    const { setBy: _author, conditionMet: _condition, ...effective } = action;
+    const { setBy: _author, optimizer: _optimizer, conditionMet: _condition, ...effective } = action;
     return getScheduleControllableActionIdentityKey(effective as ScheduleControllableActionDTO);
+}
+
+/** An optimizer kind by the name the Automations list gives it; `null` when it has none. */
+export function optimizerName(kind: string, localize: LocalizeFunction): string | null {
+    const key = `editor.values.${kind}`;
+    return (localize.has?.(key) ?? getLocalizeFunction().has(key)) ? localize(key) : null;
+}
+
+/**
+ * Who set a scheduled action: you, the optimizer that placed it by name, or
+ * Helman's schedule when the plan does not name one.
+ */
+export function scheduleReason(action: { setBy?: ScheduleSetBy; optimizer?: string }, localize: LocalizeFunction): string {
+    if (action.setBy === "user") return localize("node_detail.shared.you");
+    return (action.optimizer ? optimizerName(action.optimizer, localize) : null) ?? localize("node_detail.shared.helman_schedule");
 }
 
 /**

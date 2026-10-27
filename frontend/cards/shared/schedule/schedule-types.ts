@@ -5,7 +5,7 @@ import type {
     ScheduleSetBy as ScheduleSetByDTO,
 } from "../../helman-api";
 
-type WithoutSetBy<TValue> = TValue extends unknown ? Omit<TValue, "setBy"> : never;
+type WithoutSetBy<TValue> = TValue extends unknown ? Omit<TValue, "setBy" | "optimizer"> : never;
 
 export type ScheduleInverterAction = WithoutSetBy<ScheduleActionDTO>;
 export type ScheduleAction = ScheduleInverterAction;

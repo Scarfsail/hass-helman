@@ -203,7 +203,11 @@ class ExportPriceOptimizerTests(unittest.TestCase):
                 "slotMinutes": SCHEDULE_SLOT_MINUTES,
                 "slots": {
                     CURRENT_SLOT_ID: {
-                        "inverter": {"kind": "stop_export", "setBy": "automation"},
+                        "inverter": {
+                            "kind": "stop_export",
+                            "setBy": "automation",
+                            "optimizer": "export_price",
+                        },
                         "boiler": {"on": True, "setBy": "user"},
                     }
                 },
@@ -242,7 +246,11 @@ class ExportPriceOptimizerTests(unittest.TestCase):
                     # The negative price sits in the *next* slot, which is also
                     # the one with no expected export of its own.
                     NEXT_SLOT_ID: {
-                        "inverter": {"kind": "stop_export", "setBy": "automation"},
+                        "inverter": {
+                            "kind": "stop_export",
+                            "setBy": "automation",
+                            "optimizer": "export_price",
+                        },
                     }
                 },
             },
