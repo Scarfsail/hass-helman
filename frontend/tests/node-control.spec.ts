@@ -747,6 +747,26 @@ test.describe("Schedule lane icons in power card editor", () => {
             await expect.poll(() => page.evaluate(() => window.history.state)).toEqual({ dashboard: "energy" });
         });
 
+        test(`Edit blocks from device detail opened over day editor brings editor forward on that device from ${card}`, async ({ page }) => {
+            await page.evaluate(() => window.history.replaceState({ dashboard: "energy" }, ""));
+            await openDayEditor(page, card);
+            await clickLaneIcon(page, card, "boiler");
+            const detail = page.locator("node-detail-dialog");
+            await expect(detail.locator('[slot="headerTitle"]')).toHaveText("Boiler");
+            await scheduleButton(page).click();
+            await control(page).locator("[data-edit-blocks]").click();
+            await expect.poll(() => dayEditor(page, card)).toEqual({ open: true, selected: "boiler" });
+            await page.evaluate(({ card }) => {
+                const host = document.querySelector(card)!.shadowRoot!.querySelector("scheduling-day-editor-host") as any;
+                const editor = host.shadowRoot.querySelector("scheduling-entity-day-editor") as any;
+                editor.shadowRoot.querySelector("ha-dialog").close();
+            }, { card });
+            await expect.poll(() => dayEditor(page, card).then((editor) => editor.open)).toBe(false);
+            await detail.locator("ha-dialog").evaluate((dialog: any) => dialog.close());
+            await expect(detail).toHaveCount(0);
+            await expect.poll(() => page.evaluate(() => window.history.state)).toEqual({ dashboard: "energy" });
+        });
+
         test(`inverter lane opens the inverter detail dialog from ${card}`, async ({ page }) => {
             await openDayEditor(page, card);
             await clickLaneIcon(page, card, "inverter");

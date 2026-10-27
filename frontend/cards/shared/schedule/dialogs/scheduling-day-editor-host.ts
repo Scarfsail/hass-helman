@@ -13,7 +13,7 @@ import { dispatchWatchedEntities } from "../../hass-change";
 import { resolveLocale } from "../../resolve-locale";
 import { EMPTY_SCHEDULE_OWNER_SNAPSHOT, getSharedScheduleOwner, type SharedScheduleOwner } from "../schedule-owner";
 import "./scheduling-entity-day-editor";
-import type { EntityScheduleSaveDetail } from "./scheduling-entity-day-editor";
+import type { EntityScheduleSaveDetail, SchedulingEntityDayEditor } from "./scheduling-entity-day-editor";
 import {
     buildControllableEntityStatuses,
     type ControllableEntityStatus,
@@ -222,7 +222,31 @@ export class SchedulingDayEditorHost extends LitElement {
         if (this._normalized.slots.length === 0) {
             return;
         }
+        if (this._editorMounted) {
+            void this._reopenFor(target, dayKey);
+            return;
+        }
+        this._applyOpenFor(target, dayKey);
+    }
 
+    private async _reopenFor(target: EntityScheduleTarget | null, dayKey: string | null): Promise<void> {
+        const opening = ++this._editorOpening;
+        await this.shadowRoot
+            ?.querySelector<SchedulingEntityDayEditor>("scheduling-entity-day-editor")
+            ?.releaseHistory();
+        if (opening !== this._editorOpening) {
+            return;
+        }
+        this._editorOpen = false;
+        this._editorMounted = false;
+        await this.updateComplete;
+        if (opening !== this._editorOpening) {
+            return;
+        }
+        this._applyOpenFor(target, dayKey);
+    }
+
+    private _applyOpenFor(target: EntityScheduleTarget | null, dayKey: string | null = null): void {
         this._opened = true;
         void this._loadActualHistory();
         void this._loadForecast();

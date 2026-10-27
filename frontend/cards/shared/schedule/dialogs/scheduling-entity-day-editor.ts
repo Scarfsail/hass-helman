@@ -479,6 +479,10 @@ export class SchedulingEntityDayEditor extends LitElement {
     private _editSessionId = 0;
     private readonly _history = new DialogHistoryController(this, "__helmanEntityScheduleDialogId", { close: () => this._close() });
 
+    public releaseHistory(): Promise<void> {
+        return this._history.release();
+    }
+
     private _syncExplanationStore(): void {
         if (!this.hass) return;
         const store = getSharedHelmanStore(this.hass);
@@ -1867,7 +1871,9 @@ export class SchedulingEntityDayEditor extends LitElement {
         this.open = false;
     };
 
-    private _onClosed(): void {
+    private _onClosed(event?: Event): void {
+        event?.stopPropagation();
+        if (!this.isConnected) return;
         this._history.closed();
 
         this.dispatchEvent(new CustomEvent("closed", { bubbles: true, composed: true }));
