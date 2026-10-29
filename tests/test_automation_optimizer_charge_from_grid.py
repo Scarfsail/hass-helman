@@ -484,6 +484,69 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
         self.assertEqual(observation.limit, "cap")
         self.assertTrue(observation.bridge_written)
 
+    def test_real_simulation_floor_step_reaches_the_autumn_dst_ambiguous_hour(self) -> None:
+        # Europe/Prague falls back 03:00 CEST -> 02:00 CET on 2026-10-25.  The
+        # cheap band runs 01:00-02:30 CEST and the battery (2 % per slot) only
+        # sinks below the 31 % floor at 02:15 CEST, whose preceding slot lies
+        # in the ambiguous hour.  The simulator keys its buckets in local time,
+        # where that slot does not equal its UTC instant, so the lookup must
+        # be done in UTC.
+        prague = ZoneInfo("Europe/Prague")
+        now = datetime(2026, 10, 25, 0, 0, tzinfo=prague)
+        day = date(2026, 10, 25)
+        bands = (
+            ImportBand(
+                level="cheap",
+                start=datetime(2026, 10, 25, 1, 0, tzinfo=prague),
+                end=datetime(2026, 10, 25, 2, 30, tzinfo=prague),
+            ),
+            ImportBand(
+                level="expensive",
+                start=datetime(2026, 10, 25, 2, 30, tzinfo=prague),
+                end=datetime(2026, 10, 25, 5, 0, tzinfo=prague),
+            ),
+        )
+        start_utc = now.astimezone(timezone.utc)
+        series = [
+            {
+                "timestamp": (start_utc + timedelta(minutes=15 * index)).isoformat(
+                    timespec="seconds"
+                ),
+                "durationHours": 0.25,
+                "solarKwh": 0.0,
+                "baselineHouseKwh": 0.2,
+                "socPct": max(10.0, 50.0 - 2.0 * (index + 1)),
+            }
+            for index in range(48 * 4)
+        ]
+        prices = [
+            {
+                "timestamp": (start_utc + timedelta(minutes=30 * index)).isoformat(
+                    timespec="seconds"
+                ),
+                "value": 3.0,
+            }
+            for index in range(48 * 2)
+        ]
+        snapshot = _make_snapshot(
+            soc_series=series,
+            import_points=prices,
+            bands=bands,
+            day_contexts={day: replace(_day_context(bands), local_date=day)},
+            now=now,
+        )
+        snapshot = _with_real_battery(snapshot, soc=50.0, battery_max_soc=100.0)
+        config = _make_config(reserve_floor_soc=31)
+
+        result, _trace = run_optimizer_with_trace(
+            build_charge_from_grid_optimizer(config),
+            snapshot,
+            config,
+            reference_time=now,
+        )
+
+        self.assertTrue(_charge_slots(result))
+
     def _run_with_real_simulator(self, *, battery_max_soc: float):
         """Cheap 06-08, normal 08-12, expensive 12-14 on the real simulator.
 
@@ -986,6 +1049,7 @@ class ChargeFromGridCheapWindowFloorTests(unittest.TestCase):
 
         result, trace = self._run_overnight(soc=60.0, house=house, bands=bands)
 
+        print("DBG", result.slots and list(result.slots.items())[:3], [ (o) for o in trace.reserve_floor_observations])
         self.assertTrue(_charge_slots(result))
         self.assertEqual(set(_charge_slots(result).values()), {70})
         (observation,) = trace.reserve_floor_observations

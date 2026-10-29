@@ -584,7 +584,15 @@ class ChargeFromGridOptimizer:
         def simulate(
             actions: dict[datetime, ScheduleAction],
         ) -> Mapping[datetime, float]:
-            return simulator.simulate({}, action_overrides=actions).soc_by_bucket
+            # The simulator keys its buckets in local time, where an ambiguous
+            # autumn hour is not equal to its UTC instant; the lookups below
+            # are in UTC.
+            return {
+                dt_util.as_utc(key): soc
+                for key, soc in simulator.simulate(
+                    {}, action_overrides=actions
+                ).soc_by_bucket.items()
+            }
 
         def window_min(
             actions: dict[datetime, ScheduleAction],
@@ -645,7 +653,9 @@ class ChargeFromGridOptimizer:
             for index in range(start, len(writable)):
                 floor_charges.append(index)
                 if (
-                    simulate(compose([], floor_charges, floor_target))[keys[index]]
+                    simulate(compose([], floor_charges, floor_target))[
+                        dt_util.as_utc(keys[index])
+                    ]
                     >= floor_soc - 1e-6
                 ):
                     break
@@ -711,8 +721,9 @@ class ChargeFromGridOptimizer:
         capacity_short = best < floor_soc - 1e-6
         limit: str | None = None
         if capacity_short:
+            utc_keys = {dt_util.as_utc(key) for key in keys}
             peak_soc = max(
-                (soc for key, soc in simulate(maximal).items() if key in keys),
+                (soc for key, soc in simulate(maximal).items() if key in utc_keys),
                 default=None,
             )
             limit = (
