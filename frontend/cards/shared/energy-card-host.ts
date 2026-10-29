@@ -60,6 +60,7 @@ export class EnergyCardHost implements ReactiveController {
     private _readings: EnergyReadings | null = null;
     private _uiConfig: HelmanUiConfig | null = null;
     private _historyEngine?: HistoryEngine;
+    private _loadFailed = false;
     private _historyRevision = 0;
     private _watchedEntityIds: ReadonlySet<string> = new Set();
     private _watchSources: Map<string, Set<string>> = new Map();
@@ -125,6 +126,8 @@ export class EnergyCardHost implements ReactiveController {
     public get dialogRequest(): NodeDetailTarget | null { return this._dialogRequest; }
     /** Whether a load has succeeded; a later refresh keeps the card on what it has. */
     public get loaded(): boolean { return this._historyEngine !== undefined; }
+    /** Whether the last load failed before any load succeeded, with no retry pending. */
+    public get loadFailed(): boolean { return this._loadFailed; }
 
     /** Built from the stored readings; reading state here would assign it during render. */
     public get dialogParams(): NodeDetailParams | null {
@@ -244,6 +247,7 @@ export class EnergyCardHost implements ReactiveController {
             }
 
             this._historyEngine = engine;
+            this._loadFailed = false;
             this._adoptLatestHass();
             this._rebuildWatchedEntityIds();
 
@@ -266,6 +270,9 @@ export class EnergyCardHost implements ReactiveController {
             console.error("Helman: failed to load backend data", error);
             if (!obsolete() && freshTree && retryInitial && !this._historyEngine) {
                 void this.loadBackendData(true, false);
+            } else if (!obsolete() && !this._historyEngine) {
+                this._loadFailed = true;
+                this.host.requestUpdate();
             }
             return false;
         }

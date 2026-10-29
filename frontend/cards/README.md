@@ -64,3 +64,16 @@ But a timer is not a licence either, and [`shared/now-clock.ts`](shared/now-cloc
 
 Measurement lives next door in [`../perf/README.md`](../perf/README.md), which
 can count renders per `hass` update and is how the numbers above were obtained.
+
+---
+
+# Embedding the device detail
+
+Another dashboard's card can open a Helman device's detail for an entity instead of HA's more-info. The card bundle registers [`helman-entity-detail`](entity-detail/helman-entity-detail.ts) on every dashboard, and that element is the whole contract:
+
+- Tag: **`helman-entity-detail`**. Detection = `customElements.whenDefined("helman-entity-detail")`.
+- Static: `HelmanEntityDetail.entityIds(hass): Promise<ReadonlySet<string>>` — every entity id that opens a device detail (a config device's switch, power sensor, energy meter or climate entity). It is a one-shot read: call it once at load; a Helman config edit is picked up on the next page load. The promise rejects if Helman's backend is not ready (e.g. right after an HA restart), so a consumer may retry.
+- Instance: properties `hass` and `entityId`. Rendered into the consumer's tree, it opens that entity's device detail; when the dialog closes it fires a non-bubbling **`closed`** event and the consumer removes it.
+- If the entity no longer maps to a device (config changed since the lookup), it fires `hass-more-info` for the entity (bubbling, composed) and then `closed`. The same happens when Helman's data fails to load. If a config refresh removes the device while its detail is open, the dialog goes away and `closed` fires.
+
+Both the lookup and the open path match entities through [`shared/data/device-entities.ts`](shared/data/device-entities.ts); nothing else derives that mapping.
