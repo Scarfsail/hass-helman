@@ -1,4 +1,4 @@
-import { prepareNodeDetailPage, mountSimpleCard, liveFigures } from "./support/node-detail-harness";
+import { prepareNodeDetailPage, mountSimpleCard, liveFigures, onDashboard, expectShowMore } from "./support/node-detail-harness";
 import { cardTree, forecastPayload, scheduleSlots } from "./support/payload-builders";
 import type { ForecastPayload, ScheduleActionDTO, SchedulePayload, ScheduleSlotDTO } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
@@ -500,7 +500,36 @@ test("battery Forecast offers a retry when the forecast fails", async ({ page })
     await expect(section.locator("[data-forecast-failed]")).toBeVisible();
 });
 
+test("battery Forecast chart opens HA's history of the SoC", async ({ page }) => {
+    await onDashboard(page);
+    await mount(page);
+    await openDetail(page);
+    await openForecast(page);
+    await expectShowMore(page, forecastSection(page).locator("[data-show-more]"), ["sensor.soc"]);
+});
+
 // History & statistics, Technical details -------------------------------------
+
+test("battery History starts with a pointer that opens the Forecast chart", async ({ page }) => {
+    await mount(page);
+    await openDetail(page);
+    const history = content(page).locator("helman-detail-section[data-history]");
+    await history.locator("button").first().click();
+    const pointer = history.locator("[data-history-body] > :first-child");
+    await expect(pointer).toHaveAttribute("data-forecast-pointer", "");
+    await expect(forecastSection(page).locator("[data-forecast-body]")).toHaveCount(0);
+    await pointer.click();
+    await expect(forecastSection(page).locator("helman-day-line-chart[data-forecast-chart]")).toBeInViewport();
+});
+
+test("battery History has no Forecast pointer while the forecast cannot be loaded", async ({ page }) => {
+    await mount(page, { forecastFails: true });
+    await openDetail(page);
+    const history = content(page).locator("helman-detail-section[data-history]");
+    await history.locator("button").first().click();
+    await expect(history.locator("[data-row=charged]")).toHaveCount(1);
+    await expect(history.locator("[data-forecast-pointer]")).toHaveCount(0);
+});
 
 test("battery History header gives today's charge and discharge, collapsed; the body splits the charge and shows health", async ({ page }) => {
     await mount(page);

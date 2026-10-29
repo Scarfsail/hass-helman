@@ -7,6 +7,7 @@ import {
     type GridMoneySectionPayload,
     type GridDetailPayload,
     type GridForecastSlotDTO,
+    type GridPowerSectionPayload,
     type GridVoltageSectionPayload,
 } from "../helman-api";
 import { currencyFromPriceUnit } from "../helman-solar-inspector/money-model";
@@ -25,7 +26,7 @@ import "./detail-headline";
 import "./flow-gauge";
 import "./help-tip";
 import { forecastWhen, holdAtSlots, remainingShare, renderForecastChart, type ForecastChartContext } from "./node-detail-forecast";
-import { historyRow, historySummary, kwhText, sectionNotReady, subTitle } from "./node-detail-history";
+import { historyRow, historySummary, kwhText, renderShowMore, sectionNotReady, subTitle } from "./node-detail-history";
 import { modeStripWindow } from "../shared/mode-strip";
 import { scheduleReason } from "./node-detail-schedule";
 import { SLOT_MS } from "../shared/time/slot-time";
@@ -201,6 +202,13 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         fetch: () => this._readSection("voltage"),
         shown: () => this._offers("voltage"),
     });
+    /** The grid meter's power over the last 24 hours, for the History chart, once History & statistics is open. */
+    private readonly _power = this._section<GridPowerSectionPayload>("power", {
+        fetch: () => this._readSection("power"),
+        shown: () => this._historyOpen && this._offers("power"),
+        rolling: true,
+    });
+    private _powerChart?: { payload: GridPowerSectionPayload; series: DayLineSeries[] };
     private _voltageChart?: {
         payload: GridVoltageSectionPayload;
         series: DayLineSeries[];
@@ -336,18 +344,53 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
 
     // History & statistics -----------------------------------------------------
 
-    /** Today's bought and sold energy with its money, then today's voltage per phase. */
-    protected _renderHistory(_overview: GridDetailPayload) {
+    /** Today's bought and sold energy with its money, then the import and export power over the last 24 hours. */
+    protected _renderHistory(overview: GridDetailPayload) {
         const money = this._moneyFigures();
         const summary = historySummary(this._money, this.localize, money?.importKwh != null ? boldTemplate(this._h("grid_summary"), { kwh: kwhText(money.importKwh) }) : null);
         return this._historySection(summary, () => html`
             ${subTitle(this._h("today"))}
             ${this._renderMoney()}
-            ${this._offers("voltage") ? html`
-                ${subTitle(this._h("voltage_today"))}
-                ${this._renderVoltage()}
+            ${this._offers("power") ? html`
+                ${subTitle(this._h("last_24h"))}
+                ${this._renderPower(overview)}
             ` : nothing}
         `);
+    }
+
+    /**
+     * The grid meter's power as two lines: import, the payload's negative
+     * part flipped, and export, its positive part (Helman's convention).
+     */
+    private _renderPower(overview: GridDetailPayload) {
+        const notReady = sectionNotReady(this._power, this.localize);
+        if (notReady) return notReady;
+        const payload = this._power.payload!;
+        const day = payload.power;
+        const showMore = renderShowMore(overview.entities.power ? [overview.entities.power] : [], this.localize);
+        if (!day?.points.length) return html`<p class="note">${this._h("no_figures")}</p>${showMore}`;
+        if (this._powerChart?.payload !== payload) {
+            const line = (key: string, color: string, sign: 1 | -1): DayLineSeries => ({
+                key, label: this._h(key), color,
+                points: day.points.map((point) => ({ t: Date.parse(point.start), v: Math.max(0, sign * point.mean) })),
+            });
+            this._powerChart = { payload, series: [line("import", GRID_IMPORT_COLOR, -1), line("export", GRID_EXPORT_COLOR, 1)] };
+        }
+        return html`
+            <helman-day-line-chart
+                data-power-chart
+                .series=${this._powerChart.series}
+                .start=${Date.parse(payload.period.start)}
+                .end=${Date.parse(payload.period.end)}
+                .bucketMs=${day.bucketMinutes * 60_000}
+                .now=${Date.parse(payload.period.end)}
+                .nowLabel=${this.localize("node_detail.shared.now")}
+                .timeZone=${this._timeZone}
+                .locale=${this._locale}
+                .formatValue=${this._formatWatts}
+            ></helman-day-line-chart>
+            ${showMore}
+        `;
     }
 
     /** Bought and sold, each with its money, and the net: an estimate from the prices Helman knows. */
@@ -365,8 +408,8 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         </div>`;
     }
 
-    /** Today's voltage per phase against the nominal and the normal band, and its lowest and highest. */
-    private _renderVoltage() {
+    /** Today's voltage per phase against the nominal and the normal band, its lowest and highest, and Show more of the phases. */
+    private _renderVoltage(overview: GridDetailPayload) {
         const notReady = sectionNotReady(this._voltage, this.localize);
         if (notReady) return notReady;
         const payload = this._voltage.payload!;
@@ -406,12 +449,13 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
                 .formatValue=${this._formatVolts}
             ></helman-day-line-chart>
             <div class="rows">${historyRow(this._h("voltage_range"), `${Math.floor(low)}–${Math.ceil(high)} V`, "voltage-range")}</div>
+            ${renderShowMore(PHASES.map((phase) => overview.entities[`ac_voltage_l${phase}`]).filter((id): id is string => !!id), this.localize)}
         `;
     }
 
     // Technical details ---------------------------------------------------------
 
-    /** The export limit and cap now, whether the inverter runs on the grid, and each phase's current against the breaker. */
+    /** The export limit and cap now, whether the inverter runs on the grid, each phase's current against the breaker, and today's voltage per phase. */
     protected _renderTechnical(overview: GridDetailPayload) {
         const exportLimit = this._number(overview, "export_limit");
         const runMode = this._reading(overview, "run_mode");
@@ -428,6 +472,10 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
             ${this._hasPhaseTelemetry(overview, "grid_power") ? html`
                 ${subTitle(this.localize("node_detail.shared.technical.phase_currents"))}
                 <div class="rows">${this._phaseReadings(overview).map((reading) => this._row(`L${reading.phase}`, this._currentText(reading, limit), `current-l${reading.phase}`))}</div>
+            ` : nothing}
+            ${this._offers("voltage") ? html`
+                ${subTitle(this._h("voltage_today"))}
+                ${this._renderVoltage(overview)}
             ` : nothing}
         `;
     }
@@ -642,6 +690,8 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
     }
 
     private readonly _formatVolts = (value: number): string => this._volts(value);
+
+    private readonly _formatWatts = (value: number): string => formatPower(value).display;
 
     private _volts(value: number): string {
         return value.toFixed(1) + " V";

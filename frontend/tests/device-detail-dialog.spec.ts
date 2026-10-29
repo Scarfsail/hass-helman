@@ -4,6 +4,7 @@ import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
 import { installFixedClock } from "./support/fixed-clock";
 import { loadBundle } from "./support/card-page";
 import { treeNode, treePayload } from "./support/payload-builders";
+import { expectShowMore, onDashboard } from "./support/node-detail-harness";
 import type { TreeItemDTO } from "../cards/helman-api";
 
 /**
@@ -354,6 +355,18 @@ test("device History header gives the learned average while on, collapsed; the b
     await expect(tiles.nth(2)).toContainText("a typical run ≈ 3.4 kWh");
     await expect(tiles.nth(3)).toContainText("1.8 kW");
     await expect(tiles.nth(3)).toContainText("average while on");
+});
+
+test("device History's last 24 hours open HA's history of the same entities", async ({ page }) => {
+    await onDashboard(page);
+    await installFixedClock(page);
+    await mountCard(page, BOILER_STATS, true);
+    await openDevice(page, "Boiler");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
+    await section.locator("button").first().click();
+    await expect(section.locator(".history-graph-stub")).toHaveCount(1);
+    await expect(section.locator("[data-forecast-pointer]")).toHaveCount(0);
+    await expectShowMore(page, section.locator("[data-show-more]"), ["sensor.boiler_power", "switch.boiler"]);
 });
 
 test("device runs tile keeps the plain caption for stats learned before the daily run range", async ({ page }) => {

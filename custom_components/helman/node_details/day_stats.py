@@ -29,6 +29,8 @@ from typing import Any
 
 from homeassistant.util import dt as dt_util
 
+from ..power_polarity import is_power_inverted
+from ..power_reading import power_unit_factor
 from ..recorder_states import read_states
 from ..slot_grid import slot_starts
 
@@ -64,6 +66,17 @@ def day_window(local_day_start: datetime) -> tuple[datetime, datetime]:
     start = dt_util.start_of_local_day(local_day_start)
     end = dt_util.start_of_local_day(start + timedelta(days=1, hours=2))
     return dt_util.as_utc(start), dt_util.as_utc(end)
+
+
+def last_24h_window(now: datetime) -> tuple[datetime, datetime]:
+    """The rolling last 24 hours up to ``now``, as UTC bounds: HA more-info's window.
+
+    The start is floored to a bucket boundary, so recorded states fall into the
+    same five-minute buckets the statistics rows start on.
+    """
+    end = dt_util.as_utc(now)
+    start = end - timedelta(hours=24)
+    return start.replace(minute=start.minute - start.minute % 5, second=0, microsecond=0), end
 
 
 def _bucket_starts(start: datetime, stop: datetime) -> list[datetime]:
@@ -329,3 +342,69 @@ def _finite(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return number if math.isfinite(number) else None
+
+
+def node_power(stats: Mapping[str, Mapping[str, Any]], node: Mapping[str, Any], name: str) -> dict[str, Any]:
+    """The node's power meter from ``stats``: ``power`` in W, in Helman's sign, and its own ``unit``.
+
+    ``power`` is ``None`` without the meter or in a unit not known.
+    """
+    entity_id = node_entity(node, "power")
+    day = stats.get(entity_id) if entity_id else None
+    return {
+        "power": None if day is None else in_watts(day, inverted=is_power_inverted(node, name)),
+        "unit": None if day is None else day["unit"],
+    }
+
+
+def in_watts(day: Mapping[str, Any], *, inverted: bool = False) -> dict[str, Any] | None:
+    """A day of power in W, production positive; ``None`` in a unit not known.
+
+    A sensor without a unit is W, as the card reads it.
+
+    An inverted sensor reads production negative: its values are negated, and
+    its lowest reading becomes the highest production.
+    """
+    factor = power_unit_factor(day.get("unit"))
+    if factor is None:
+        return None
+    scale = -factor if inverted else factor
+
+    def value(raw: float | None) -> float | None:
+        return None if raw is None else raw * scale
+
+    low, high, low_at, high_at = ("min", "max", "minAt", "maxAt")
+    if inverted:
+        low, high, low_at, high_at = high, low, high_at, low_at
+    return {
+        **day,
+        "unit": "W",
+        "points": [
+            {
+                **point,
+                "mean": point["mean"] * scale,
+                "min": value(point[low]),
+                "max": value(point[high]),
+            }
+            for point in day.get("points", [])
+        ],
+        "mean": value(day.get("mean")),
+        "min": value(day.get(low)),
+        "minAt": day.get(low_at),
+        "max": value(day.get(high)),
+        "maxAt": day.get(high_at),
+    }
+
+
+def node_config(config: Mapping[str, Any], name: str) -> Mapping[str, Any]:
+    """``energy_nodes.<name>``, ``{}`` when absent or not a mapping."""
+    energy_nodes = config.get("energy_nodes") if isinstance(config, Mapping) else None
+    node = energy_nodes.get(name) if isinstance(energy_nodes, Mapping) else None
+    return node if isinstance(node, Mapping) else {}
+
+
+def node_entity(node: Mapping[str, Any], slot: str) -> str | None:
+    """The node's ``entities.<slot>``, ``None`` when unset."""
+    entities = node.get("entities")
+    entity_id = entities.get(slot) if isinstance(entities, Mapping) else None
+    return entity_id if isinstance(entity_id, str) and entity_id else None

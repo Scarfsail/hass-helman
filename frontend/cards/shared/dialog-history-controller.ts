@@ -42,13 +42,15 @@ export class DialogHistoryController implements ReactiveController {
         this._ignoreNextPopstate = false;
     }
 
-    closed(): void {
+    /** Whether it stepped Back off the dialog's entry: that `popstate` lands later. */
+    closed(): boolean {
         const consume = this.active && this._isCurrent(window.history.state);
         this._entryId = null;
         if (consume) {
             this._ignoreNextPopstate = true;
             window.history.back();
         }
+        return consume;
     }
 
     async release(): Promise<void> {

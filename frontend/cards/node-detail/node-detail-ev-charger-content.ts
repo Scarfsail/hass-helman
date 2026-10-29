@@ -298,11 +298,9 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
             return this._forecastSection(this._t("plan.projection_failed"), () => html`
                 <button class="link-button" @click=${() => this._projection.load()}>${this._t("retry")}</button>`);
         }
-        const selection = this._selection();
-        if (!projection || projection.status !== "ready" || selection.kind !== "selected") return nothing;
-        const completion = this._completion(selection, projection.payload);
-        if (completion.kind !== "estimate") return nothing;
-        const car = selection.car;
+        const estimate = this._estimate();
+        if (!estimate) return nothing;
+        const { car, completion } = estimate;
         const limit = this._percent(car.limit!);
         const reached = completion.reachMs !== null;
         const forecast = (key: string) => this.localize(`node_detail.shared.forecast.${key}`);
@@ -310,7 +308,16 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         const summary = reached
             ? html`${boldTemplate(forecast("ev_reaches"), { limit, time: forecastWhen(completion.reachMs!, context) })} <span class="ok">✓</span>`
             : boldTemplate(forecast("ev_short"), { kwh: `${formatKwh(completion.shortfallKwh)} kWh`, limit, time: completion.endMs === null ? "?" : forecastWhen(completion.endMs, context) });
-        return this._forecastSection(summary, () => this._renderForecastBody(car, completion as Extract<Completion, { kind: "estimate" }>));
+        return this._forecastSection(summary, () => this._renderForecastBody(car, completion));
+    }
+
+    /** The selected car and the plan's completion estimate for it, which the Forecast chart draws; `null` without one. */
+    private _estimate(): { car: Vehicle; completion: Extract<Completion, { kind: "estimate" }> } | null {
+        const projection = this._projection.state;
+        const selection = this._selection();
+        if (projection?.status !== "ready" || selection.kind !== "selected") return null;
+        const completion = this._completion(selection, projection.payload);
+        return completion.kind === "estimate" ? { car: selection.car, completion } : null;
     }
 
     private _renderForecastBody(car: Vehicle, completion: Extract<Completion, { kind: "estimate" }>) {
@@ -334,6 +341,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
                 ],
                 references: [{ value: car.limit!, label: fillTemplate(forecast("ev_limit"), { limit: this._percent(car.limit!) }) }],
                 formatValue: (value) => this._percent(value),
+                entities: [car.vehicle.telemetry.socEntityId],
             })}
             <div class="rows">
                 <div class="row" data-row="end-of-plan"><span class="label">${forecast("ev_end")}</span>
@@ -393,6 +401,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
             ? boldTemplate(this._h("ev_summary"), { kwh: kwhText(charger.kwh), pct: charger.kwh > 0 ? Math.round(charger.sources.solar / charger.kwh * 100) : 0 })
             : null);
         return this._historySection(summary, () => html`
+            ${this._estimate() ? this._forecastPointer() : nothing}
             ${subTitle(this._h("charged_today"))}
             ${this._renderToday()}
             ${this._chart.render(this.localize)}

@@ -1,4 +1,4 @@
-import { prepareNodeDetailPage, mountSimpleCard, treeNode, liveFigures } from "./support/node-detail-harness";
+import { prepareNodeDetailPage, mountSimpleCard, treeNode, liveFigures, onDashboard, expectShowMore } from "./support/node-detail-harness";
 import { energyFields, forecastPayload, scheduleSlots, treePayload } from "./support/payload-builders";
 import type { DevicePhase, ForecastPayload, ScheduleControllableActionsDTO, SchedulePayload, ScheduleSlotDTO, TreeItemDTO } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
@@ -53,6 +53,7 @@ type Variant = {
     houseRemainder?: string;
     /** The house forecast is 1.5 kWh in the 12:45 slot and 0.2 kWh in every later one. */
     lateSlot?: boolean;
+    forecastFails?: boolean;
 };
 
 declare global {
@@ -260,7 +261,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             },
         };
         window.__HouseHass = window.__configureNodeDetail({
-            states, tree, overviews: { house: overview, inverter: window.__inverterOverview({ maxAllowedExportPower: null }) }, sections: { house: { today, pattern } }, forecast, schedule,
+            states, tree, overviews: { house: overview, inverter: window.__inverterOverview({ maxAllowedExportPower: null }) }, sections: { house: { today, pattern } }, forecast: v.forecastFails ? "error" : forecast, schedule,
             hass: v.admin ? { user: { is_admin: true } } : {},
             // The boiler's run is projected at 0.5 kWh a slot.
             replies: { "helman/get_appliance_projections": { generatedAt: "2026-10-21T12:00:00+00:00", appliances: {
@@ -394,6 +395,15 @@ test("house Forecast busiest hour counts only what is left of the slot in progre
     await expect(section.locator("[data-row=busiest] .value")).toHaveText("13:00, ≈ 0.80 kWh");
 });
 
+test("house Forecast chart opens HA's history of the house meter", async ({ page }) => {
+    await onDashboard(page);
+    await mount(page);
+    await page.locator(".node-cell:has(simple-card-house)").click();
+    const section = content(page).locator("helman-detail-section[data-forecast]");
+    await section.locator("button").first().click();
+    await expectShowMore(page, section.locator("[data-show-more]"), ["sensor.house"]);
+});
+
 // History & statistics, Technical details -------------------------------------
 
 async function openHouse(page: Page): Promise<void> {
@@ -421,6 +431,28 @@ test("house History header compares today with the usual, collapsed; the body ha
     await expect(users.nth(0)).toContainText("EV");
     await expect(users.nth(1)).toContainText("Oven");
     await expect(section.locator("[data-row=rest] .value")).toHaveText("5.0 kWh");
+});
+
+test("house History starts with a pointer that opens the Forecast chart", async ({ page }) => {
+    await mount(page);
+    await openHouse(page);
+    const history = content(page).locator("helman-detail-section[data-history]");
+    await history.locator("button").first().click();
+    const pointer = history.locator("[data-history-body] > :first-child");
+    await expect(pointer).toHaveAttribute("data-forecast-pointer", "");
+    const forecast = content(page).locator("helman-detail-section[data-forecast]");
+    await expect(forecast.locator("[data-forecast-body]")).toHaveCount(0);
+    await pointer.click();
+    await expect(forecast.locator("helman-day-line-chart[data-forecast-chart]")).toBeInViewport();
+});
+
+test("house History has no Forecast pointer while the forecast cannot be loaded", async ({ page }) => {
+    await mount(page, { forecastFails: true });
+    await openHouse(page);
+    const history = content(page).locator("helman-detail-section[data-history]");
+    await history.locator("button").first().click();
+    await expect(history.locator("[data-bar=today]")).toHaveCount(1);
+    await expect(history.locator("[data-forecast-pointer]")).toHaveCount(0);
 });
 
 test("house Technical details shows the forecast's status and training, the usual range and the unmeasured energy to an admin", async ({ page }) => {

@@ -1,6 +1,6 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, type Locator, type Page } from "@playwright/test";
 import { installMockHass, type MockReplies, type MockRequest } from "./mock-hass";
-import { installFixedClock } from "./fixed-clock";
+import { FIXED_NOW_ISO, installFixedClock } from "./fixed-clock";
 import { HA_DIALOG_STUB } from "./ha-dialog-stub";
 import { CARD_BUNDLE } from "./card-page";
 import { cardTree } from "./payload-builders";
@@ -242,4 +242,47 @@ export async function liveFigures(page: Page, content: string, node: "solar" | "
                 .reduce((sum, item) => sum + item.powerW, 0)),
         };
     }, { content, node });
+}
+
+/** The dashboard a spec's card sits on: a real origin, so a Show more link can navigate within it. */
+const DASHBOARD_URL = "http://helman.test/lovelace/energy";
+
+/** Serve the page from the dashboard's URL; call before mounting, whose `setContent` keeps it. */
+export async function onDashboard(page: Page): Promise<void> {
+    await page.route("http://helman.test/**", (route) => route.fulfill({ contentType: "text/html", body: "<!doctype html><html><body></body></html>" }));
+    await page.goto(DASHBOARD_URL);
+}
+
+/**
+ * Click a Show more link of the open detail and pin what it does: the detail
+ * closes, HA's router is told the page is now HA's history of exactly
+ * `entities` from 24 hours before now, and Back returns to the dashboard. The
+ * page has to be on the dashboard (`onDashboard`).
+ */
+export async function expectShowMore(page: Page, link: Locator, entities: string[]): Promise<void> {
+    await page.locator("node-detail-dialog").evaluate((detail: any) => {
+        // HA's dialog closes on its footer's close button; the stub leaves that to the spec.
+        detail.shadowRoot.querySelector("[data-dialog='close']").addEventListener("click", () => detail.shadowRoot.querySelector("ha-dialog").close());
+        const log: string[] = (window as any).__historyLog = [];
+        window.addEventListener("popstate", () => log.push("popstate"));
+        window.addEventListener("location-changed", () => log.push(location.pathname + location.search));
+    });
+    await link.click();
+    await expect(page.locator("node-detail-dialog")).toHaveCount(0);
+    await expect.poll(() => page.evaluate(() => (window as any).__historyLog.length)).toBe(2);
+    const [back, changed] = await page.evaluate(() => (window as any).__historyLog as string[]);
+    // The dialog's own Back step lands first: navigating before it would have it undo the navigation.
+    expect(back).toBe("popstate");
+    const url = new URL(changed, DASHBOARD_URL);
+    expect(url.pathname).toBe("/history");
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+        entity_id: entities.join(","),
+        start_date: new Date(Date.parse(FIXED_NOW_ISO) - 86_400_000).toISOString(),
+    });
+    expect(await page.evaluate(() => location.pathname + location.search)).toBe(changed);
+    await page.evaluate(() => new Promise<void>((resolve) => {
+        window.addEventListener("popstate", () => resolve(), { once: true });
+        window.history.back();
+    }));
+    expect(await page.evaluate(() => location.href)).toBe(DASHBOARD_URL);
 }

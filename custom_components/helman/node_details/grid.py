@@ -5,9 +5,11 @@ profile's per-phase power and the inverter's phase voltages (telemetry), the
 grid's own today-energy meters (config), the limits and runtimes the off-grid
 answer shows. Money uses the existing inspector aggregate service.
 
-The one history section is ``voltage``: today's three phase voltages from
-:func:`.day_stats.async_day_stats`, plus the largest spread between phases.
-The voltages are the inverter's terminal readings, not the meter's.
+The history sections are ``money``, today's bought and sold energy from the
+inspector aggregate; ``voltage``, today's three phase voltages from
+:func:`.day_stats.async_day_stats` plus the largest spread between phases (the
+inverter's terminal readings, not the meter's); and ``power``, the grid
+meter's power over the last 24 hours.
 """
 
 from __future__ import annotations
@@ -22,7 +24,15 @@ from ..span_history_model import read_span_meters
 
 from ..vendors import INVERTER_TELEMETRY_KEY
 from .context import NodeDetailContext
-from .day_stats import BUCKET, async_day_stats, day_window
+from .day_stats import (
+    BUCKET,
+    async_day_stats,
+    day_window,
+    last_24h_window,
+    node_config,
+    node_entity,
+    node_power,
+)
 from .inverter import run_mode_condition
 
 PHASES = (1, 2, 3)
@@ -43,6 +53,7 @@ _TELEMETRY_KEYS = (
 
 #: The grid's own config meters the overview reads, by payload key.
 _CONFIG_ENTITIES = {
+    "power": "power",
     "today_import": "today_import",
     "today_export": "today_export",
 }
@@ -96,11 +107,11 @@ def build_grid_overview(
         ),
         "maxAllowedExportPower": grid.get("max_allowed_export_power"),
         "condition": run_mode_condition(hass, telemetry),
-        "sections": (
-            ["money", "voltage"]
-            if any(entities.get(f"ac_voltage_l{phase}") for phase in PHASES)
-            else ["money"]
-        ),
+        "sections": [
+            "money",
+            *(["voltage"] if any(entities.get(f"ac_voltage_l{phase}") for phase in PHASES) else []),
+            *(["power"] if entities["power"] else []),
+        ],
     }
 
 
@@ -112,10 +123,13 @@ def money_amount(money: Any, kwh: Any) -> float | None:
 async def async_grid_section(
     hass: Any, ctx: NodeDetailContext, section: str, now: datetime
 ) -> dict[str, Any]:
-    """Today's phase voltages, the grid's one history section.
+    """One of the grid's history sections.
 
-    ``phases`` holds each phase's day, ``None`` for a phase whose sensor the
-    profile does not resolve.
+    ``voltage``: ``phases`` holds each phase's day, ``None`` for a phase whose
+    sensor the profile does not resolve. ``power``: the grid meter over the last
+    24 hours in W, in Helman's convention whatever the sensor's polarity:
+    **positive is export, negative is import**; ``None`` without the meter or
+    in a unit not known.
     """
     if section == "money":
         local_now = dt_util.as_local(now)
@@ -132,6 +146,25 @@ async def async_grid_section(
             "exportKwh": row.get("gridExportKwh") if row else None,
             "importPricedKwh": row.get("moneyCostKwh") if row else None,
             "exportPricedKwh": row.get("moneyGainKwh") if row else None,
+        }
+    if section == "power":
+        grid = node_config(ctx.config, "grid")
+        entity_id = node_entity(grid, "power")
+        start, end = last_24h_window(now)
+        stats = (
+            await async_day_stats(hass, [entity_id], start=start, end=end, now=now)
+            if entity_id
+            else {}
+        )
+        return {
+            "node": "grid",
+            "section": section,
+            "asOf": dt_util.as_local(now).isoformat(),
+            "period": {
+                "start": dt_util.as_local(start).isoformat(),
+                "end": dt_util.as_local(end).isoformat(),
+            },
+            **node_power(stats, grid, "grid"),
         }
     telemetry = ctx.telemetry.get(INVERTER_TELEMETRY_KEY)
     entity_ids = {

@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
-import { CARD_BUNDLE } from "./support/card-page";
+import { CARD_BUNDLE, loadBundle } from "./support/card-page";
+import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
+import { onDashboard } from "./support/node-detail-harness";
 
 test.beforeEach(async ({ page }) => {
     await page.setContent("<div id='mount' style='width:320px'></div>");
@@ -81,4 +83,43 @@ test("the question, tile and flow components are gone and nothing imports them",
     const importers = [...sources(join(root, "cards")), ...sources(join(root, "tests"))]
         .filter((path) => /from\s+["'][^"']*\/node-(question|tile|flow)["']|import\s+["'][^"']*\/node-(question|tile|flow)["']/.test(readFileSync(path, "utf8")));
     expect(importers).toEqual([]);
+});
+
+test("a Show more closes the node detail and navigates only once the detail's own Back step has landed", async ({ page }) => {
+    await onDashboard(page);
+    await loadBundle(page, "node-detail-dialog");
+    await page.addScriptTag({ content: HA_DIALOG_STUB });
+    await page.evaluate(() => {
+        window.history.replaceState({ dashboard: "energy" }, "");
+        const detail = document.createElement("node-detail-dialog") as any;
+        detail.localize = (key: string) => key;
+        detail.hass = { ...window.__mockHass(), states: {}, config: { time_zone: "UTC" } };
+        detail.params = { nodeType: "house", item: { id: "house", children: [] } };
+        // Any chart's Show more raises the one event; its href is the chart's own.
+        detail._renderContent = () => {
+            const link = document.createElement("button");
+            link.dataset.showMore = "";
+            link.addEventListener("click", () => link.dispatchEvent(new CustomEvent("helman-show-history",
+                { detail: { href: "/history?entity_id=sensor.house" }, bubbles: true, composed: true })));
+            return link;
+        };
+        detail.open = true;
+        detail.addEventListener("closed", () => detail.remove());
+        document.body.append(detail);
+    });
+    await expect.poll(() => page.evaluate(() => window.history.state?.__helmanNodeDetailDialogId)).toBeTruthy();
+    await page.evaluate(() => {
+        const detail = document.querySelector("node-detail-dialog") as any;
+        detail.shadowRoot.querySelector("[data-dialog='close']").addEventListener("click", () => detail.shadowRoot.querySelector("ha-dialog").close());
+        const log: string[] = (window as any).__historyLog = [];
+        window.addEventListener("popstate", () => log.push("popstate"));
+        window.addEventListener("location-changed", () => log.push(location.pathname + location.search));
+    });
+    await page.locator("node-detail-dialog [data-show-more]").click();
+    await expect(page.locator("node-detail-dialog")).toHaveCount(0);
+    await expect.poll(() => page.evaluate(() => (window as any).__historyLog)).toEqual(["popstate", "/history?entity_id=sensor.house"]);
+    expect(await page.evaluate(() => location.pathname + location.search)).toBe("/history?entity_id=sensor.house");
+    await page.evaluate(() => window.history.back());
+    await expect.poll(() => page.evaluate(() => location.pathname)).toBe("/lovelace/energy");
+    expect(await page.evaluate(() => window.history.state)).toEqual({ dashboard: "energy" });
 });

@@ -1,4 +1,4 @@
-import { prepareNodeDetailPage, mountSimpleCard, liveFigures } from "./support/node-detail-harness";
+import { prepareNodeDetailPage, mountSimpleCard, liveFigures, onDashboard, expectShowMore } from "./support/node-detail-harness";
 import { cardTree, forecastPayload } from "./support/payload-builders";
 import type { ForecastPayload } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
@@ -90,7 +90,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             "sensor.solax_inverter_power_type": s(v.ratedPower ?? "unknown", "W"),
             "sensor.today_import": s("8.4", "kWh"), "sensor.today_export": s("12600", "Wh"),
         };
-        const entities: Record<string, string | null> = { today_import: "sensor.today_import", today_export: "sensor.today_export" };
+        const entities: Record<string, string | null> = { power: "sensor.grid", today_import: "sensor.today_import", today_export: "sensor.today_export" };
         if (profile) {
             for (const [key, [entityId, state, unit]] of Object.entries(telemetry)) {
                 entities[key] = entityId;
@@ -105,7 +105,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             phasePowerPolarity: profile ? "positive_is_export" : null,
             maxAllowedExportPower: 9900,
             condition: v.condition === "off_grid" ? { kind: "off_grid", runMode: "Off-Grid", entityId: "sensor.solax_run_mode" } : null,
-            sections: profile ? ["voltage"] : [],
+            sections: profile ? ["money", "voltage", "power"] : ["money", "power"],
         };
         const day = "2026-10-21";
         const phaseDay = (phase: number, base: number) => {
@@ -127,6 +127,22 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             period: { start: `${day}T00:00:00+00:00`, end: "2026-10-22T00:00:00+00:00" },
             phases: { "1": phaseDay(1, 236), "2": phaseDay(2, 240), "3": v.l3Missing ? null : phaseDay(3, 238) },
             spread: { phases: v.l3Missing ? [1, 2] : [1, 2, 3], max: 6.2, maxAt: `${day}T10:30:00+00:00`, coverage: 0.88 },
+        };
+        // The last 24 hours in Helman's convention: importing 1.5 kW through the night, exporting 2 kW around noon.
+        const powerDay = {
+            entityId: "sensor.grid", unit: "W", source: "statistics", extrema: "bucket_statistics", bucketMinutes: 5,
+            points: Array.from({ length: 288 }, (_, i) => {
+                const ms = Date.parse("2026-10-20T12:00:00Z") + i * 300_000;
+                const hour = new Date(ms).getUTCHours();
+                const mean = hour >= 9 && hour < 15 ? 2000 : hour >= 20 || hour < 6 ? -1500 : 0;
+                return { start: new Date(ms).toISOString().replace(".000Z", "+00:00"), mean, min: mean, max: mean, coverage: 1 };
+            }),
+            mean: null, min: -1500, minAt: null, max: 2000, maxAt: null, coverage: 1,
+        };
+        const power = {
+            node: "grid", section: "power", asOf: "2026-10-21T12:00:00+00:00",
+            period: { start: "2026-10-20T12:00:00+00:00", end: "2026-10-21T12:00:00+00:00" },
+            power: powerDay, unit: "W",
         };
         const money = {
             node: "grid", section: "money", asOf: "2026-10-21T12:00:00+00:00", unavailable: null,
@@ -161,7 +177,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
         };
         const inverter = window.__inverterOverview({ entities: v.ratedPower ? { rated_power: "sensor.solax_inverter_power_type" } : {} });
         window.__GridHass = window.__configureNodeDetail({
-            states, tree, overviews: { grid: overview, inverter }, sections: { grid: { voltage: v.sectionFails ? "error" : section, money } }, forecast,
+            states, tree, overviews: { grid: overview, inverter }, sections: { grid: { voltage: v.sectionFails ? "error" : section, money, power } }, forecast,
             hass: v.admin ? { user: { is_admin: true } } : {},
         });
         window.__GridRequests = window.__NodeDetailRequests;
@@ -385,7 +401,7 @@ async function openGrid(page: Page): Promise<void> {
     await expect(content(page).locator("[data-overview]")).toBeVisible();
 }
 
-test("grid History header gives today's bought energy, collapsed; the body has the money and today's voltage", async ({ page }) => {
+test("grid History header gives today's bought energy, collapsed; the body has the money and the last 24 hours' import and export", async ({ page }) => {
     await mount(page);
     await openGrid(page);
     const section = content(page).locator("helman-detail-section[data-history]");
@@ -397,10 +413,49 @@ test("grid History header gives today's bought energy, collapsed; the body has t
     await expect(section.locator("[data-row=sold] .value")).toHaveText(/^13 kWh · .*18/);
     await expect(section.locator("[data-row=net] .value")).toHaveText(/^−.*23/);
     expect(await section.locator("[data-row=net] helman-help-tip").evaluate((tip: any) => tip.explanation)).toBe("An estimate from the prices Helman knows, not your bill.");
+    await expect(section.locator(".section-title", { hasText: "Last 24 hours" })).toHaveCount(1);
+    const chart = section.locator("helman-day-line-chart[data-power-chart]");
+    await expect(chart.locator("path.line")).toHaveCount(2);
+    // Import is the payload's negative part, flipped; export its positive part.
+    expect(await chart.evaluate((el: any) => el.series.map((series: any) => [series.key, series.label, Math.max(...series.points.map((point: any) => point.v)), Math.min(...series.points.map((point: any) => point.v))])))
+        .toEqual([["import", "Import", 1500, 0], ["export", "Export", 2000, 0]]);
+    // The window ends at the read: the now marker sits at its end.
+    await expect(chart.locator("[data-now]")).toHaveCount(1);
+    // The voltage moved to Technical details.
+    await expect(section.locator("helman-day-line-chart[data-voltage-chart]")).toHaveCount(0);
+});
+
+test("grid History opens HA's history of the grid meter from its power chart", async ({ page }) => {
+    await onDashboard(page);
+    await mount(page);
+    await openGrid(page);
+    const section = content(page).locator("helman-detail-section[data-history]");
+    await section.locator("button").first().click();
+    await expect(section.locator("[data-forecast-pointer]")).toHaveCount(0);
+    await expectShowMore(page, section.locator("[data-show-more]"), ["sensor.grid"]);
+});
+
+test("grid Technical details charts today's voltage per phase and opens HA's history of the phases", async ({ page }) => {
+    await onDashboard(page);
+    await mount(page, { admin: true });
+    await openGrid(page);
+    const section = content(page).locator("helman-detail-section[data-technical]");
+    await section.locator("button").first().click();
     const chart = section.locator("helman-day-line-chart[data-voltage-chart]");
     await expect(chart.locator("path.line")).toHaveCount(3);
     await expect(chart.locator("line.reference")).toHaveCount(1);
     await expect(section.locator("[data-row=voltage-range] .value")).toHaveText("230–246 V");
+    await expectShowMore(page, section.locator("[data-show-more]"),
+        ["sensor.solax_inverter_voltage_l1", "sensor.solax_inverter_voltage_l2", "sensor.solax_inverter_voltage_l3"]);
+});
+
+test("grid Forecast price chart has no Show more", async ({ page }) => {
+    await mount(page);
+    await openGrid(page);
+    const section = content(page).locator("helman-detail-section[data-forecast]");
+    await section.locator("button").first().click();
+    await expect(section.locator("helman-day-line-chart")).toHaveCount(1);
+    await expect(section.locator("[data-show-more]")).toHaveCount(0);
 });
 
 test("grid Technical details shows the export limits, the grid state and the phase currents to an admin", async ({ page }) => {

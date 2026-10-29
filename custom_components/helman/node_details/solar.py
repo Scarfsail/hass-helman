@@ -12,8 +12,9 @@ Three history sections, each read only while its answer is open:
 
 * ``production``: today's solar power from :func:`.day_stats.async_day_stats`,
   for the peak and its time;
-* ``strings``: today's power of each string, and the energy each delivered,
-  integrated over the time it was known and over the period all were;
+* ``power``: the total solar power and each string's over the last 24 hours,
+  and the energy each string delivered today, integrated over the time it was
+  known and over the period all were;
 * ``destinations``: where today's solar went, from the device reports'
   ranking via :func:`solar_destinations`.
 
@@ -30,12 +31,19 @@ from typing import Any
 
 from homeassistant.util import dt as dt_util
 
-from ..power_polarity import is_power_inverted
-from ..power_reading import power_unit_factor
 from ..vendors import INVERTER_TELEMETRY_KEY
 from .battery import charge_origin_kwh, today_ranking_report
 from .context import NodeDetailContext
-from .day_stats import BUCKET, async_day_stats, day_window
+from .day_stats import (
+    BUCKET,
+    async_day_stats,
+    day_window,
+    in_watts,
+    last_24h_window,
+    node_config,
+    node_entity,
+    node_power,
+)
 from .grid import money_amount
 from .inverter import run_mode_condition
 
@@ -63,7 +71,7 @@ def build_solar_overview(
     ``profile`` is ``None`` for a Custom inverter: the telemetry keys are then
     absent from ``entities``. A telemetry key the profile has but the registry
     does not (disabled, missing) is present as ``None``. ``strings`` are the
-    strings whose power the profile resolves; the string question needs two.
+    strings whose power the profile resolves; the chart draws them with two.
     """
     config = ctx.config
     telemetry = ctx.telemetry.get(INVERTER_TELEMETRY_KEY)
@@ -85,8 +93,8 @@ def build_solar_overview(
 
     strings = [string for string in STRINGS if entities.get(f"pv_power_{string}")]
     sections = ["production"] if entities["power"] else []
-    if len(strings) >= 2:
-        sections.append("strings")
+    if entities["power"] or strings:
+        sections.append("power")
     sections.append("destinations")
     return {
         "node": "solar",
@@ -108,10 +116,10 @@ def build_solar_overview(
 async def async_solar_section(
     hass: Any, ctx: NodeDetailContext, section: str, now: datetime
 ) -> dict[str, Any]:
-    """One of the solar node's history sections, over today so far."""
+    """One of the solar node's history sections: ``power`` over the last 24 hours, the others over today so far."""
     config = ctx.config
     local_now = dt_util.as_local(now)
-    start, end = day_window(local_now)
+    start, end = last_24h_window(now) if section == "power" else day_window(local_now)
     payload: dict[str, Any] = {
         "node": "solar",
         "section": section,
@@ -123,81 +131,48 @@ async def async_solar_section(
     }
     if section == "destinations":
         return {**payload, **await _destinations(ctx, local_now)}
-    stop = min(end, dt_util.as_utc(now))
+    solar = node_config(config, "solar")
+    power_id = node_entity(solar, "power")
     if section == "production":
-        solar = node_config(config, "solar")
-        entity_id = node_entity(solar, "power")
         stats = (
-            await async_day_stats(hass, [entity_id], start=start, end=end, now=now)
-            if entity_id
+            await async_day_stats(hass, [power_id], start=start, end=end, now=now)
+            if power_id
             else {}
         )
-        day = stats.get(entity_id) if entity_id else None
-        return {
-            **payload,
-            "power": None
-            if day is None
-            else in_watts(day, inverted=is_power_inverted(solar, "solar")),
-            "unit": None if day is None else day["unit"],
-        }
+        return {**payload, **node_power(stats, solar, "solar")}
     telemetry = ctx.telemetry.get(INVERTER_TELEMETRY_KEY)
     entity_ids = {
         str(string): None if telemetry is None else telemetry.entities.get(f"pv_power_{string}")
         for string in STRINGS
     }
-    stats = await async_day_stats(hass, entity_ids.values(), start=start, end=end, now=now)
-    days = {
-        string: in_watts(stats[entity_id]) if entity_id and entity_id in stats else None
-        for string, entity_id in entity_ids.items()
-    }
+    stats = await async_day_stats(
+        hass, [power_id, *entity_ids.values()], start=start, end=end, now=now
+    )
+    # The energy stays today's: a second read over today so far.
+    day_start, day_end = day_window(local_now)
+    today = await async_day_stats(
+        hass, entity_ids.values(), start=day_start, end=day_end, now=now
+    )
+
+    def watts(days: Mapping[str, Mapping[str, Any]]) -> dict[str, Any]:
+        return {
+            string: in_watts(days[entity_id]) if entity_id and entity_id in days else None
+            for string, entity_id in entity_ids.items()
+        }
+
+    days = watts(stats)
     return {
         **payload,
+        **node_power(stats, solar, "solar"),
         "strings": {
             string: None
             if not entity_id or entity_id not in stats
             else {"entityId": entity_id, "unit": stats[entity_id]["unit"], "day": days[string]}
             for string, entity_id in entity_ids.items()
         },
-        "energy": string_energy(days, start=start, stop=stop),
-    }
-
-
-def in_watts(day: Mapping[str, Any], *, inverted: bool = False) -> dict[str, Any] | None:
-    """A day of power in W, production positive; ``None`` in a unit not known.
-
-    A sensor without a unit is W, as the card reads it.
-
-    An inverted sensor reads production negative: its values are negated, and
-    its lowest reading becomes the highest production.
-    """
-    factor = power_unit_factor(day.get("unit"))
-    if factor is None:
-        return None
-    scale = -factor if inverted else factor
-
-    def value(raw: float | None) -> float | None:
-        return None if raw is None else raw * scale
-
-    low, high, low_at, high_at = ("min", "max", "minAt", "maxAt")
-    if inverted:
-        low, high, low_at, high_at = high, low, high_at, low_at
-    return {
-        **day,
-        "unit": "W",
-        "points": [
-            {
-                **point,
-                "mean": point["mean"] * scale,
-                "min": value(point[low]),
-                "max": value(point[high]),
-            }
-            for point in day.get("points", [])
-        ],
-        "mean": value(day.get("mean")),
-        "min": value(day.get(low)),
-        "minAt": day.get(low_at),
-        "max": value(day.get(high)),
-        "maxAt": day.get(high_at),
+        "energy": string_energy(
+            watts(today), start=day_start, stop=min(day_end, dt_util.as_utc(now))
+        ),
     }
 
 
@@ -321,20 +296,6 @@ async def _destinations(ctx: NodeDetailContext, local_now: datetime) -> dict[str
         "destinations": solar_destinations(report),
         "charge": charge_origin_kwh(report["chargeOrigin"]),
     }
-
-
-def node_config(config: Mapping[str, Any], name: str) -> Mapping[str, Any]:
-    """``energy_nodes.<name>``, ``{}`` when absent or not a mapping."""
-    energy_nodes = config.get("energy_nodes") if isinstance(config, Mapping) else None
-    node = energy_nodes.get(name) if isinstance(energy_nodes, Mapping) else None
-    return node if isinstance(node, Mapping) else {}
-
-
-def node_entity(node: Mapping[str, Any], slot: str) -> str | None:
-    """The node's ``entities.<slot>``, ``None`` when unset."""
-    entities = node.get("entities")
-    entity_id = entities.get(slot) if isinstance(entities, Mapping) else None
-    return entity_id if isinstance(entity_id, str) and entity_id else None
 
 
 def _positive(value: Any) -> float | None:

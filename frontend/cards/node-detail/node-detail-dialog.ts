@@ -27,6 +27,7 @@ import "./node-control-rollup";
 import type { HelmanDeviceEditDialog } from "../shared/devices/helman-device-edit-dialog";
 import "../shared/devices/helman-device-edit-dialog";
 import { deviceControllableIds } from "./node-detail-utils";
+import { SHOW_HISTORY_EVENT } from "./node-detail-history";
 
 /**
  * A node's detail in Home Assistant's dialog. A node with controls has a
@@ -71,16 +72,19 @@ export class NodeDetailDialog extends LitElement {
     private _scheduleUnsubscribe?: () => void;
     private _sectionTarget: string | null = null;
     private _sectionRequest: NodeDetailSectionRequest | null = null;
+    /** HA's history page a Show more link asked for, opened once the dialog has closed. */
+    private _historyHref: string | null = null;
 
     connectedCallback(): void {
         super.connectedCallback();
         if (this.hass) this._watchSchedule();
     }
 
-    /** The detail's lane history bubbles within this shadow root, not out of it. */
+    /** The detail's lane history and Show more links bubble within this shadow root, not out of it. */
     protected firstUpdated(changed: Map<string, unknown>): void {
         super.firstUpdated(changed);
         this.renderRoot.addEventListener(LANE_HISTORY_EVENT, this._onLaneHistory as EventListener);
+        this.renderRoot.addEventListener(SHOW_HISTORY_EVENT, this._onShowHistory as EventListener);
     }
 
     disconnectedCallback(): void { super.disconnectedCallback(); this._scheduleUnsubscribe?.(); this._scheduleUnsubscribe = undefined; }
@@ -255,6 +259,13 @@ export class NodeDetailDialog extends LitElement {
         this._laneHistory = event.detail;
     };
 
+    /** A Show more link: close the detail, then open HA's history page. */
+    private _onShowHistory = (event: CustomEvent<{ href: string }>): void => {
+        event.stopPropagation();
+        this._historyHref = event.detail.href;
+        this._closeDialogElement();
+    };
+
     private _renderSettings() {
         if (!this._settingsOpen || this.params.nodeType !== "device" || !this.params.item.deviceKey) return nothing;
         return html`
@@ -351,8 +362,33 @@ export class NodeDetailDialog extends LitElement {
     private _onClosed(event?: Event): void {
         event?.stopPropagation();
         if (!this.isConnected) return;
-        this._history.closed();
+        const href = this._historyHref;
+        this._historyHref = null;
+        const steppingBack = this._history.closed();
+        // The Back step off the dialog's entry lands asynchronously: navigating
+        // before it would have that step undo the navigation. A step that never
+        // lands must not leave a later, unrelated Back to navigate.
+        if (href !== null) {
+            if (steppingBack) {
+                const go = () => {
+                    window.removeEventListener("popstate", go);
+                    window.clearTimeout(timer);
+                    navigate(href);
+                };
+                const timer = window.setTimeout(go, BACK_STEP_TIMEOUT_MS);
+                window.addEventListener("popstate", go);
+            } else navigate(href);
+        }
 
         this.dispatchEvent(new CustomEvent("closed", { bubbles: true, composed: true }));
     }
+}
+
+/** How long Show more waits for the dialog's Back step before navigating anyway. */
+const BACK_STEP_TIMEOUT_MS = 500;
+
+/** Open `href` in HA's frontend, as its own navigate does. */
+function navigate(href: string): void {
+    window.history.pushState(null, "", href);
+    window.dispatchEvent(new CustomEvent("location-changed"));
 }

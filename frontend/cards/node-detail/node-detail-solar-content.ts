@@ -5,10 +5,11 @@ import { customElement, property } from "lit/decorators.js";
 import { fillTemplate } from "../localize/localize";
 import {
     getEffectiveSolarForecastPoints,
+    type DayStatsDTO,
     type SolarDestinationsSectionPayload,
     type SolarDetailPayload,
+    type SolarPowerSectionPayload,
     type SolarProductionSectionPayload,
-    type SolarStringsSectionPayload,
 } from "../helman-api";
 import { NEUTRAL_LIGHT_COLOR } from "../color-utils";
 import { currencyFromPriceUnit } from "../helman-solar-inspector/money-model";
@@ -28,7 +29,7 @@ import "./detail-headline";
 import "./flow-gauge";
 import { boldTemplate } from "./detail-section";
 import { renderForecastChart } from "./node-detail-forecast";
-import { historyRow, kwhText, sectionNotReady, subTitle } from "./node-detail-history";
+import { historyRow, kwhText, renderShowMore, sectionNotReady, subTitle } from "./node-detail-history";
 import { modeStripWindow } from "../shared/mode-strip";
 
 /** How many calendar days the outlook shows, today first. */
@@ -238,10 +239,11 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
         fetch: () => this._readSection("production"),
         shown: () => this._offers("production") && this._forecastOpen,
     });
-    /** Today's strings, for the History chart, once History & statistics is open with two strings or more. */
-    private readonly _strings = this._section<SolarStringsSectionPayload>("strings", {
-        fetch: () => this._readSection("strings"),
-        shown: () => this._historyOpen && this._offers("strings") && this._overview.status === "ready" && this._overview.payload.strings.length >= 2,
+    /** The total and the strings' power over the last 24 hours, for the History chart, once History & statistics is open. */
+    private readonly _power = this._section<SolarPowerSectionPayload>("power", {
+        fetch: () => this._readSection("power"),
+        shown: () => this._historyOpen && this._offers("power"),
+        rolling: true,
     });
     /** Where today's solar went, once History & statistics is open. */
     private readonly _destinations = this._section<SolarDestinationsSectionPayload>("destinations", {
@@ -250,7 +252,7 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
     });
 
     private _modelCache?: { forecast: unknown; slot: number; model: ForecastModel | null };
-    private _stringsChart?: { payload: SolarStringsSectionPayload; series: DayLineSeries[] };
+    private _powerChart?: { payload: SolarPowerSectionPayload; series: DayLineSeries[] };
 
     protected _start(): void {
         super._start();
@@ -339,6 +341,7 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
                     { key: "actual", label: forecast("actual"), color: "var(--helman-solar)", points: actual, bucketMs: (this._production.payload?.power?.bucketMinutes ?? 5) * 60_000 },
                     { key: "forecast", label: forecast("forecast"), color: "var(--helman-solar)", points: planned, dashed: true },
                 ],
+                entities: overview.entities.power ? [overview.entities.power] : [],
                 references: rated !== null ? [{ value: rated / 1000, label: fillTemplate(this._t("limits.rating_short"), { power: formatPower(rated).display }) }] : [],
                 markers: peak && peak.wh > 0 ? [{ t: peak.start + SLOT_MS / 2, v: slotW(peak.wh) / 1000, color: "var(--helman-solar)" }] : [],
                 formatValue: (value) => formatPower(value * 1000).display,
@@ -371,17 +374,18 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
 
     // History & statistics -----------------------------------------------------
 
-    /** Today's production by the solar meter, where it went, the strings' day and the lifetime total. */
+    /** Today's production by the solar meter, where it went, the last 24 hours' power and the lifetime total. */
     protected _renderHistory(overview: SolarDetailPayload) {
         const today = readEnergyKWh(this.hass, overview.entities.today_energy);
         const summary = today === null ? this._h("no_figures") : boldTemplate(this._h("solar_summary"), { kwh: kwhText(today) });
         const lifetime = readEnergyKWh(this.hass, overview.entities.lifetime_energy);
         return this._historySection(summary, () => html`
+            ${this._model() ? this._forecastPointer() : nothing}
             ${subTitle(this._h("solar_went"))}
             ${this._renderDestinations()}
-            ${overview.strings.length >= 2 && overview.sections.includes("strings") ? html`
-                ${subTitle(this._h("strings_today"))}
-                ${this._renderStringsToday()}
+            ${overview.sections.includes("power") ? html`
+                ${subTitle(this._h("last_24h"))}
+                ${this._renderPower(overview)}
             ` : nothing}
             ${lifetime !== null ? html`<div class="rows">${historyRow(this._h("lifetime"), `${(lifetime / 1000).toFixed(1)} MWh`, "lifetime")}</div>` : nothing}
         `);
@@ -405,25 +409,29 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
         </div>`;
     }
 
-    private _renderStringsToday() {
-        const notReady = sectionNotReady(this._strings, this.localize);
+    /** The total solar power over the last 24 hours, with each string's beside it from two strings or without a total. */
+    private _renderPower(overview: SolarDetailPayload) {
+        const notReady = sectionNotReady(this._power, this.localize);
         if (notReady) return notReady;
-        const payload = this._strings.payload!;
-        const chart = this._stringsChartFor(payload);
-        if (!chart.series.length) return html`<p class="note">${this._h("no_figures")}</p>`;
+        const payload = this._power.payload!;
+        const chart = this._powerChartFor(payload);
+        const entities = [overview.entities.power, ...overview.strings.map((string) => overview.entities[`pv_power_${string}`])]
+            .filter((id): id is string => !!id);
+        if (!chart.series.length) return html`<p class="note">${this._h("no_figures")}</p>${renderShowMore(entities, this.localize)}`;
         return html`
             <helman-day-line-chart
-                data-strings-chart
+                data-power-chart
                 .series=${chart.series}
                 .start=${Date.parse(payload.period.start)}
                 .end=${Date.parse(payload.period.end)}
                 .bucketMs=${300_000}
-                .now=${Date.now()}
+                .now=${Date.parse(payload.period.end)}
                 .nowLabel=${this.localize("node_detail.shared.now")}
                 .timeZone=${this._timeZone}
                 .locale=${this._locale}
                 .formatValue=${this._formatWatts}
             ></helman-day-line-chart>
+            ${renderShowMore(entities, this.localize)}
         `;
     }
 
@@ -458,23 +466,29 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
         return watts !== null && watts > 0 ? watts : null;
     }
 
-    // Strings -----------------------------------------------------------------
+    // Power -------------------------------------------------------------------
 
-    /** The chart's inputs, kept while the payload is the same one. */
-    private _stringsChartFor(payload: SolarStringsSectionPayload): { series: DayLineSeries[] } {
-        if (this._stringsChart?.payload !== payload) {
-            const series = Object.entries(payload.strings).flatMap(([string, entry]) => {
-                const points = entry?.day?.points ?? [];
-                return points.length ? [{
-                    key: "pv" + string,
-                    label: fillTemplate(this._t("strings.string"), { n: string }),
-                    color: STRING_COLORS[string] ?? NEUTRAL_LIGHT_COLOR,
-                    points: points.map((point) => ({ t: Date.parse(point.start), v: point.mean, min: point.min, max: point.max })),
-                }] : [];
-            });
-            this._stringsChart = { payload, series };
+    /**
+     * The chart's inputs, kept while the payload is the same one: the total as
+     * the main line, and each string's own line once there are two, or
+     * whenever there is no total line to draw.
+     */
+    private _powerChartFor(payload: SolarPowerSectionPayload): { series: DayLineSeries[] } {
+        if (this._powerChart?.payload !== payload) {
+            const line = (key: string, label: string, color: string, day: DayStatsDTO | null | undefined): DayLineSeries[] => day?.points.length ? [{
+                key, label, color,
+                points: day.points.map((point) => ({ t: Date.parse(point.start), v: point.mean, min: point.min, max: point.max })),
+            }] : [];
+            const strings = Object.entries(payload.strings).filter(([, entry]) => entry !== null);
+            const total = line("total", this._h("total"), "var(--helman-solar)", payload.power);
+            const series = [
+                ...total,
+                ...(strings.length >= 2 || !total.length ? strings.flatMap(([string, entry]) =>
+                    line("pv" + string, fillTemplate(this._t("strings.string"), { n: string }), STRING_COLORS[string] ?? NEUTRAL_LIGHT_COLOR, entry!.day)) : []),
+            ];
+            this._powerChart = { payload, series };
         }
-        return this._stringsChart;
+        return this._powerChart;
     }
 
     // ── The forecast ────────────────────────────────────────────────────────

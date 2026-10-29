@@ -1,4 +1,4 @@
-import { prepareNodeDetailPage, mountSimpleCard, treeNode, liveFigures } from "./support/node-detail-harness";
+import { prepareNodeDetailPage, mountSimpleCard, treeNode, liveFigures, onDashboard, expectShowMore } from "./support/node-detail-harness";
 import { energyFields, scheduleSlots, treePayload } from "./support/payload-builders";
 import type { EvChargerUseMode, ScheduleControllableActionsDTO, SchedulePayload, ScheduleSlotDTO, TreeItemDTO } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
@@ -448,7 +448,35 @@ test("charger shows no Forecast without a projection for its car", async ({ page
     await expect(forecastSection(page)).toHaveCount(0);
 });
 
+test("charger Forecast chart opens HA's history of the car's SoC", async ({ page }) => {
+    await onDashboard(page);
+    await mount(page);
+    await openDevice(page, "Garage EV");
+    const section = forecastSection(page);
+    await section.locator("button").first().click();
+    await expectShowMore(page, section.locator("[data-show-more]"), ["sensor.kona_soc"]);
+});
+
 // History & statistics, Technical details -------------------------------------
+
+test("ev-charger History starts with a pointer that opens the Forecast chart", async ({ page }) => {
+    await mount(page);
+    await openDevice(page, "Garage EV");
+    const history = content(page).locator("helman-detail-section[data-history]");
+    await history.locator("button").first().click();
+    const pointer = history.locator("[data-history-body] > :first-child");
+    await expect(pointer).toHaveAttribute("data-forecast-pointer", "");
+    await pointer.click();
+    await expect(forecastSection(page).locator("helman-day-line-chart[data-forecast-chart]")).toBeInViewport();
+});
+
+test("ev-charger History has no Forecast pointer without a projection for its car", async ({ page }) => {
+    await mount(page, { projectionEmpty: true });
+    await openDevice(page, "Garage EV");
+    await content(page).locator("helman-detail-section[data-history] button").first().click();
+    await expect(content(page).locator("[data-share-bar]")).toHaveCount(1);
+    await expect(content(page).locator("[data-forecast-pointer]")).toHaveCount(0);
+});
 
 test("ev-charger History header gives today's charge and its solar share, collapsed; the body splits it by source and draws the last 24 hours", async ({ page }) => {
     await mount(page);

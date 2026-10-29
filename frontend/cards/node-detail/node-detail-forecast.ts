@@ -10,6 +10,7 @@ import { dayKey, todayAndTomorrow } from "./node-detail-schedule";
 import { hassLocale, timeZone } from "./section-resource";
 import "../shared/day-line-chart";
 import { renderSummarySection } from "./detail-section";
+import { renderShowMore } from "./node-detail-history";
 import "./help-tip";
 
 /**
@@ -55,9 +56,11 @@ export interface ForecastChart {
     markers?: DayLineMarker[];
     spans?: DayLineSpan[];
     step?: boolean;
+    /** The entities behind the actual series, for the Show more link; none without one. */
+    entities?: string[];
 }
 
-/** A forecast chart under its title and help, over today → tomorrow noon, with the now marker. */
+/** A forecast chart under its title and help, over today → tomorrow noon, with the now marker and a Show more link to its entities. */
 export function renderForecastChart(context: ForecastChartContext, chart: ForecastChart): TemplateResult {
     const { start, end } = modeStripWindow(context.now, context.timeZone);
     return html`
@@ -79,6 +82,7 @@ export function renderForecastChart(context: ForecastChartContext, chart: Foreca
             .locale=${context.locale}
             .formatValue=${chart.formatValue}
         ></helman-day-line-chart>
+        ${renderShowMore(chart.entities ?? [], context.localize)}
     `;
 }
 

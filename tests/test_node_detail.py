@@ -150,6 +150,8 @@ def overview(states, *, cfg=None, tele=None):
         ("inverter", None, "voltage", "unknown_section"),
         # The flow diagram, its only reader, is gone.
         ("battery", None, "flows", "unknown_section"),
+        # Renamed to ``power``, which charts the total with the strings.
+        ("solar", None, "strings", "unknown_section"),
     ],
 )
 def test_a_refused_request_is_an_error_with_its_code(node, device_id, section, code):
@@ -544,6 +546,13 @@ def test_statistics_rows_keep_their_own_extrema():
     assert summary["coverage"] == pytest.approx(1 / 3)
 
 
+def test_the_last_24_hours_start_on_a_bucket_boundary():
+    start, end = day_stats.last_24h_window(datetime(2026, 10, 10, 14, 7, 31, tzinfo=PRAGUE))
+
+    assert end == datetime(2026, 10, 10, 12, 7, 31, tzinfo=UTC)
+    assert start == datetime(2026, 10, 9, 12, 5, tzinfo=UTC)
+
+
 @pytest.mark.parametrize(
     ("day", "hours"),
     [(datetime(2026, 3, 29, 12, tzinfo=PRAGUE), 23), (datetime(2026, 10, 25, 12, tzinfo=PRAGUE), 25)],
@@ -671,11 +680,13 @@ GRID_TELEMETRY = {
     "main_breaker_limit": "number.solax_main_breaker_current_limit",
 }
 NOW = datetime(2026, 10, 10, 14, 0, tzinfo=PRAGUE)
+GRID_POWER = "sensor.grid_power"
 
 
 def grid_config(*, profile=True):
     cfg = config(profile=profile)
     cfg["energy_nodes"]["grid"]["entities"] = {
+        "power": GRID_POWER,
         "today_import": "sensor.today_import",
         "today_export": "sensor.today_export",
     }
@@ -722,12 +733,13 @@ def test_the_grid_overview_carries_its_mappings_and_reads_no_history():
     # A key the profile has but the registry lacks is a typed null.
     assert payload["entities"]["grid_frequency"] is None
     assert payload["entities"]["today_import"] == "sensor.today_import"
+    assert payload["entities"]["power"] == GRID_POWER
     # Inverter-only telemetry stays with the inverter detail.
     assert "inverter_temperature" not in payload["entities"]
     assert payload["phasePowerPolarity"] == "positive_is_export"
     assert payload["maxAllowedExportPower"] == 9900
     assert payload["condition"] == {"kind": "off_grid", "runMode": "Off-Grid", "entityId": RUN_MODE}
-    assert payload["sections"] == ["money", "voltage"]
+    assert payload["sections"] == ["money", "voltage", "power"]
 
 
 def test_a_custom_grid_has_no_telemetry_and_no_voltage_section():
@@ -736,10 +748,61 @@ def test_a_custom_grid_has_no_telemetry_and_no_voltage_section():
     assert payload["profile"] is None
     assert payload["phasePowerPolarity"] is None
     assert payload["entities"] == {
+        "power": GRID_POWER,
         "today_import": "sensor.today_import",
         "today_export": "sensor.today_export",
     }
-    assert payload["sections"] == ["money"]
+    assert payload["sections"] == ["money", "power"]
+
+
+def test_the_grid_offers_its_power_section_only_with_a_power_meter():
+    cfg = grid_config()
+    del cfg["energy_nodes"]["grid"]["entities"]["power"]
+
+    payload, _ = grid_detail(cfg=cfg)
+
+    assert payload["entities"]["power"] is None
+    assert payload["sections"] == ["money", "voltage"]
+
+
+@pytest.mark.parametrize(
+    ("polarity", "raw", "expected"),
+    [
+        # Helman's convention, the default: positive is export.
+        (None, [1.5, -2.0], [1500.0, -2000.0]),
+        # A positive-is-import sensor is flipped into it.
+        ("positive_is_import", [1.5, -2.0], [-1500.0, 2000.0]),
+    ],
+)
+def test_the_power_section_reads_the_last_24_hours_export_positive(polarity, raw, expected):
+    cfg = grid_config()
+    if polarity:
+        cfg["energy_nodes"]["grid"]["entities"]["power_polarity"] = polarity
+    stats = {GRID_POWER: power_day([(at(10), raw[0]), (at(11), raw[1])], unit="kW")}
+    windows = []
+
+    async def fake_day_stats(hass, entity_ids, *, start, end, now):
+        windows.append((list(entity_ids), start, end))
+        return stats
+
+    with patch(
+        "custom_components.helman.node_details.grid.async_day_stats",
+        side_effect=fake_day_stats,
+    ):
+        payload = asyncio.run(
+            async_get_node_detail(
+                fake_hass({}), cfg, node="grid", device_id=None, section="power", now=NOW
+            )
+        )
+
+    [(ids, start, end)] = windows
+    assert ids == [GRID_POWER]
+    assert (start, end) == (datetime(2026, 10, 9, 12, 0, tzinfo=UTC), datetime(2026, 10, 10, 12, 0, tzinfo=UTC))
+    assert payload["period"]["start"].startswith("2026-10-09T14:00:00")
+    assert payload["unit"] == "kW"
+    assert [point["mean"] for point in payload["power"]["points"]] == pytest.approx(expected)
+    # The extremes follow the sign: the largest export is the maximum.
+    assert payload["power"]["max"] == pytest.approx(max(expected))
 
 
 def test_the_grid_refuses_a_section_it_does_not_answer():
@@ -1246,6 +1309,8 @@ def solar_detail(*, cfg=None, tele=None, section=None, day_stats_result=None, st
 
     async def fake_day_stats(hass, entity_ids, *, start, end, now):
         calls.append(list(entity_ids))
+        if callable(day_stats_result):
+            return day_stats_result(start, end)
         return day_stats_result or {}
 
     async def device_report(name, query):
@@ -1326,14 +1391,23 @@ def test_the_solar_overview_carries_its_mappings_and_reads_no_history():
     assert payload["configuredMaxPowerW"] == 11600.0
     assert payload["maxAllowedExportPower"] == 9900
     assert payload["condition"] is None
-    assert payload["sections"] == ["production", "strings", "destinations"]
+    assert payload["sections"] == ["production", "power", "destinations"]
 
 
-def test_one_mapped_string_has_no_string_comparison():
+def test_one_mapped_string_still_offers_the_power_chart():
     payload, _, _ = solar_detail(tele=telemetry({**SOLAR_TELEMETRY, "pv_power_2": None}))
 
     assert payload["strings"] == [1]
-    assert "strings" not in payload["sections"]
+    assert payload["sections"] == ["production", "power", "destinations"]
+
+
+def test_the_power_chart_needs_the_meter_or_a_string():
+    cfg = solar_config(profile=False)
+    del cfg["energy_nodes"]["solar"]["entities"]["power"]
+
+    payload, _, _ = solar_detail(cfg=cfg, tele={})
+
+    assert payload["sections"] == ["destinations"]
 
 
 def test_a_custom_solar_node_has_no_telemetry_and_no_strings():
@@ -1342,7 +1416,7 @@ def test_a_custom_solar_node_has_no_telemetry_and_no_strings():
     assert payload["profile"] is None
     assert "pv_power_1" not in payload["entities"]
     assert payload["strings"] == []
-    assert payload["sections"] == ["production", "destinations"]
+    assert payload["sections"] == ["production", "power", "destinations"]
 
 
 @pytest.mark.parametrize("max_power", [0, -5, "abc", None, True, float("nan")])
@@ -1365,6 +1439,24 @@ def test_the_production_section_reports_the_peak_in_watts(unit):
     assert power["max"] == pytest.approx(9800.0)
     assert power["maxAt"] == at(12, 5)
     assert power["points"][0]["mean"] == pytest.approx(7500.0)
+
+
+def test_the_power_section_with_one_string_carries_the_total_and_that_string():
+    stats = {
+        "sensor.solar_power": power_day([(at(10), 2100.0)]),
+        PV_POWER[1]: power_day([(at(10), 2000.0)]),
+    }
+
+    payload, calls, _ = solar_detail(
+        tele=telemetry({**SOLAR_TELEMETRY, "pv_power_2": None}),
+        section="power",
+        day_stats_result=stats,
+    )
+
+    assert calls == [["sensor.solar_power", PV_POWER[1], None], [PV_POWER[1], None]]
+    assert payload["power"]["points"][0]["mean"] == pytest.approx(2100.0)
+    assert payload["strings"]["1"]["day"]["points"][0]["mean"] == pytest.approx(2000.0)
+    assert payload["strings"]["2"] is None
 
 
 def test_an_inverted_solar_sensor_peaks_at_its_lowest_reading():
@@ -1445,20 +1537,53 @@ def test_a_lone_string_compares_nothing_and_negative_power_is_zero():
     assert energy["common"] == {"strings": [1], "coverage": 0.0, "kwh": None}
 
 
-def test_the_strings_section_reads_each_string_in_watts():
+def test_the_power_section_reads_the_total_and_each_string_in_watts_over_the_last_24_hours():
     stats = {
+        "sensor.solar_power": power_day([(at(10), 3.5)], unit="kW"),
         PV_POWER[1]: power_day([(at(10), 2.0)], unit="kW"),
         PV_POWER[2]: power_day([(at(10), 1500.0)]),
     }
 
-    payload, calls, _ = solar_detail(section="strings", day_stats_result=stats)
+    payload, calls, _ = solar_detail(section="power", day_stats_result=stats)
 
-    assert calls == [[PV_POWER[1], PV_POWER[2]]]
+    assert calls == [["sensor.solar_power", PV_POWER[1], PV_POWER[2]], [PV_POWER[1], PV_POWER[2]]]
+    assert payload["period"]["start"].startswith("2026-10-09T14:00:00")
+    assert payload["period"]["end"].startswith("2026-10-10T14:00:00")
+    assert payload["unit"] == "kW"
+    assert payload["power"]["points"][0]["mean"] == pytest.approx(3500.0)
     assert payload["strings"]["1"]["unit"] == "kW"
     assert payload["strings"]["1"]["day"]["points"][0]["mean"] == pytest.approx(2000.0)
     assert payload["energy"]["common"]["kwh"] == {
         "1": pytest.approx(2000 * 300 / 3_600_000, abs=1e-3),
         "2": pytest.approx(1500 * 300 / 3_600_000, abs=1e-3),
+    }
+
+
+def test_the_power_section_keeps_the_string_energy_to_today():
+    last_24h = {
+        PV_POWER[1]: power_day([(at(10), 2000.0)]),
+        PV_POWER[2]: power_day([(at(10), 1500.0)]),
+    }
+    today = {
+        PV_POWER[1]: power_day([(at(11), 1000.0)]),
+        PV_POWER[2]: power_day([(at(11), 500.0)]),
+    }
+    windows = []
+
+    def by_window(start, end):
+        windows.append((start, end))
+        return today if start == datetime(2026, 10, 9, 22, 0, tzinfo=UTC) else last_24h
+
+    payload, _, _ = solar_detail(section="power", day_stats_result=by_window)
+
+    assert windows == [
+        (datetime(2026, 10, 9, 12, 0, tzinfo=UTC), datetime(2026, 10, 10, 12, 0, tzinfo=UTC)),
+        (datetime(2026, 10, 9, 22, 0, tzinfo=UTC), datetime(2026, 10, 10, 22, 0, tzinfo=UTC)),
+    ]
+    assert payload["strings"]["1"]["day"]["points"][0]["mean"] == pytest.approx(2000.0)
+    assert payload["energy"]["common"]["kwh"] == {
+        "1": pytest.approx(1000 * 300 / 3_600_000, abs=1e-3),
+        "2": pytest.approx(500 * 300 / 3_600_000, abs=1e-3),
     }
 
 
