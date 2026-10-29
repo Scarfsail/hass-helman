@@ -696,21 +696,24 @@ class ChargeFromGridOptimizer:
         maximal = compose(every, every, max_charge_soc)
         best = window_min(maximal)[1]
         # Pinned at the battery's min SoC even then, the clamp hides how deep
-        # the deficit runs.  When the maximal plan still spends fewer window
-        # slots at the clamp, the cheap energy cuts expensive import: the goal
-        # stays the floor, which no plan reaches, so the search below ends on
-        # the maximal plan.  A dip after solar has refilled the battery is
-        # clamped just as long either way and buys nothing.
-        def clamped(actions: dict[datetime, ScheduleAction]) -> int:
+        # the deficit runs.  When the maximal plan still imports less inside
+        # the window, the cheap energy cuts expensive import: the goal stays
+        # the floor, which no plan reaches, so the search below ends on the
+        # maximal plan.  A dip after solar has refilled the battery imports
+        # just as much either way and buys nothing.
+        def window_import(actions: dict[datetime, ScheduleAction]) -> float:
+            # Keyed in local time like the SoC buckets; compared in UTC.
             return sum(
-                1
-                for key, soc in simulate(actions).items()
+                kwh
+                for key, kwh in simulator.simulate(
+                    {}, action_overrides=actions
+                ).imported_kwh_by_bucket.items()
                 if boundary <= dt_util.as_utc(key) < window_end
-                and soc <= lower_target + 1e-6
             )
 
-        pinned = best <= lower_target + 1e-6 and clamped(maximal) < clamped(
-            planned_actions
+        pinned = (
+            best <= lower_target + 1e-6
+            and window_import(maximal) < window_import(planned_actions) - 1e-6
         )
         goal = floor_soc if pinned else min(floor_soc, best)
         # Short of the floor with the battery pinned at the cap inside the

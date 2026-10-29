@@ -467,7 +467,7 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
 
     def test_real_simulation_reports_cap_when_the_gap_needs_more(self) -> None:
         # Even charging to the 50 % cap leaves 18 % at 12:00, pinned at the
-        # 10 % min SoC inside the window, but for fewer slots than without the
+        # 10 % min SoC inside the window, but importing less there than without the
         # charge: the clamp hides the deficit, so every cheap slot charges to
         # the cap.  A higher battery `max_soc` would help, so the cap is the
         # limit.
@@ -546,6 +546,51 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
         )
 
         self.assertTrue(_charge_slots(result))
+
+    def test_real_simulation_charges_when_the_clamp_hides_less_import(self) -> None:
+        # A 10 kWh battery at 20 % (10 % min SoC, 20 % floor) has one cheap
+        # slot left, charging at 5 kW, before a slot drawing 2.5 kWh under a
+        # 10 kW discharge limit.  Both plans end that slot at the 10 % clamp,
+        # but charging cuts its import from 1.5 kWh to 0.25 kWh, so the cheap
+        # slot charges to the max SoC.
+        bands = (
+            ImportBand(level="cheap", start=_at(5), end=_at(5, 15)),
+            ImportBand(level="expensive", start=_at(5, 15), end=_at(5, 30)),
+        )
+        series = [
+            {
+                "timestamp": (
+                    REFERENCE_TIME + timedelta(minutes=15 * index)
+                ).isoformat(timespec="seconds"),
+                "durationHours": 0.25,
+                "solarKwh": 0.0,
+                "baselineHouseKwh": 2.5 if index == 1 else 0.0,
+                "socPct": 20.0 if index == 0 else 10.0,
+            }
+            for index in range(48 * 4)
+        ]
+        prices = _import_points({5: 2.0, 6: 6.0, 7: 4.0})
+        snapshot = _make_snapshot(soc_series=series, import_points=prices, bands=bands)
+        snapshot = _with_real_battery(snapshot, soc=20.0, battery_max_soc=100.0)
+        snapshot = replace(
+            snapshot,
+            context=replace(
+                snapshot.context,
+                battery=replace(
+                    snapshot.context.battery, max_discharge_power_w=10000.0
+                ),
+            ),
+        )
+        config = _make_config(reserve_floor_soc=20)
+
+        result, _trace = run_optimizer_with_trace(
+            build_charge_from_grid_optimizer(config),
+            snapshot,
+            config,
+            reference_time=REFERENCE_TIME,
+        )
+
+        self.assertEqual(_charge_slots(result), {_slot_id(5): 100})
 
     def _run_with_real_simulator(self, *, battery_max_soc: float):
         """Cheap 06-08, normal 08-12, expensive 12-14 on the real simulator.
