@@ -73,6 +73,8 @@ class Trajectory:
     imported_kwh_by_date: Mapping[date, float] = MappingProxyType({})
     #: SoC after each simulated bucket, keyed by the canonical slot start.
     soc_by_bucket: Mapping[datetime, float] = MappingProxyType({})
+    #: Grid import in each simulated bucket, keyed by the canonical slot start.
+    imported_kwh_by_bucket: Mapping[datetime, float] = MappingProxyType({})
 
 
 @dataclass(frozen=True)
@@ -157,6 +159,7 @@ class HorizonSimulator:
             end_energy_kwh_by_date=dict(prefix.end_energy_kwh_by_date),
             imported_kwh_by_date=dict(prefix.imported_kwh_by_date),
             soc_by_bucket=dict(prefix.soc_by_bucket),
+            imported_kwh_by_bucket=dict(prefix.imported_kwh_by_bucket),
         )
         for bucket in self._buckets[start:]:
             self._step(
@@ -175,6 +178,7 @@ class HorizonSimulator:
             end_energy_kwh_by_date={},
             imported_kwh_by_date={},
             soc_by_bucket={},
+            imported_kwh_by_bucket={},
         )
         self._energy_before.append(state.remaining_energy_kwh)
         self._prefix.append(state.to_trajectory())
@@ -216,6 +220,7 @@ class HorizonSimulator:
             + result.slot["importedFromGridKwh"]
         )
         state.soc_by_bucket[bucket.key] = soc_pct
+        state.imported_kwh_by_bucket[bucket.key] = result.slot["importedFromGridKwh"]
 
     def _first_touched_index(
         self, extra_demand_by_bucket: dict[datetime, float]
@@ -238,6 +243,7 @@ class _WalkState:
     end_energy_kwh_by_date: dict[date, float]
     imported_kwh_by_date: dict[date, float]
     soc_by_bucket: dict[datetime, float]
+    imported_kwh_by_bucket: dict[datetime, float]
 
     def to_trajectory(self) -> Trajectory:
         return Trajectory(
@@ -248,6 +254,9 @@ class _WalkState:
             ),
             imported_kwh_by_date=MappingProxyType(dict(self.imported_kwh_by_date)),
             soc_by_bucket=MappingProxyType(dict(self.soc_by_bucket)),
+            imported_kwh_by_bucket=MappingProxyType(
+                dict(self.imported_kwh_by_bucket)
+            ),
         )
 
 
