@@ -37,6 +37,8 @@ export class HelmanEntityDetail extends LitElement {
     private _openedFor?: string;
     /** Whether the detail this element opened is still up, so a refresh that drops it still fires `closed`. */
     private _detailOpen = false;
+    /** The device tree the last update saw: only a refresh assigns a new one. */
+    private _seenTree?: readonly unknown[];
 
     // 7. HA-specific setters
     public set hass(hass: HomeAssistant) {
@@ -46,7 +48,12 @@ export class HelmanEntityDetail extends LitElement {
     // 9. Lifecycle methods
     willUpdate(changedProperties: Map<string, any>): void {
         super.willUpdate(changedProperties);
-        if (this._detailOpen && !this._host.dialogRequest) {
+        // A refresh that drops the open device closes the detail. The detail
+        // briefly has no request while it hops to a schedule lane's device too,
+        // but that keeps the tree, so it is not a close.
+        const treeChanged = this._host.deviceTree !== this._seenTree;
+        this._seenTree = this._host.deviceTree;
+        if (this._detailOpen && !this._host.dialogRequest && treeChanged) {
             this._detailOpen = false;
             this.dispatchEvent(new CustomEvent("closed"));
         }

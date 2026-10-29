@@ -36,6 +36,7 @@ const TREE = treePayload({
                             displayName: "Heat pump",
                             powerSensorId: "sensor.heat_pump_share",
                             climateEntityId: "climate.heat_pump",
+                            controllableIds: ["heat_pump"],
                             isEstimated: true,
                         }),
                     ],
@@ -129,6 +130,23 @@ test("mounted with a device's switch it opens that device's detail, and closing 
     await dialog(page).evaluate((element: any) => element.close());
     await expect.poll(() => events(page)).toEqual(["closed"]);
     await expect(page.locator("helman-entity-detail node-detail-dialog")).toHaveCount(0);
+});
+
+test("a schedule lane's device icon swaps the open detail to that device without firing closed", async ({ page }) => {
+    await setup(page);
+    await mount(page, "switch.boiler");
+    await expect(dialog(page)).toHaveJSProperty("heading", "Boiler");
+
+    await page.locator("helman-entity-detail node-detail-dialog").evaluate((element) => {
+        element.dispatchEvent(new CustomEvent("show-controllable-detail", {
+            detail: { controllableId: "heat_pump", entityId: "climate.heat_pump" },
+            bubbles: true,
+            composed: true,
+        }));
+    });
+
+    await expect(dialog(page)).toHaveJSProperty("heading", "Heat pump");
+    expect(await events(page)).toEqual([]);
 });
 
 test("an entity that maps to no device gets more-info, then closed", async ({ page }) => {
