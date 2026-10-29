@@ -187,6 +187,40 @@ def _charge_slots(result: ScheduleDocument) -> dict[str, int]:
     }
 
 
+def _with_real_battery(
+    snapshot: OptimizationSnapshot, *, soc: float, battery_max_soc: float
+) -> OptimizationSnapshot:
+    """Give ``snapshot`` the live state and settings the real simulator needs.
+
+    A lossless 10 kWh battery with a 10 % min SoC, currently at ``soc``.
+    """
+    from custom_components.helman.battery_state import BatteryLiveState
+
+    return replace(
+        snapshot,
+        context=replace(
+            snapshot.context,
+            live=replace(
+                snapshot.context.live,
+                battery_live_state=BatteryLiveState(
+                    current_remaining_energy_kwh=soc / 10,
+                    current_soc=soc,
+                    min_soc=10.0,
+                    max_soc=battery_max_soc,
+                    nominal_capacity_kwh=10.0,
+                    min_energy_kwh=1.0,
+                    max_energy_kwh=10.0 * battery_max_soc / 100,
+                ),
+            ),
+            battery=replace(
+                snapshot.context.battery,
+                max_discharge_power_w=5000.0,
+                discharge_efficiency=1.0,
+            ),
+        ),
+    )
+
+
 # Cheap band 06:00-08:00, expensive band 08:00-10:00.
 _BANDS = (
     ImportBand(level="cheap", start=_at(6), end=_at(8)),
@@ -260,34 +294,6 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
             if inverter_action(slot_actions).set_by == "automation"
         }
         self.assertEqual(optimizers, {"charge_from_grid"})
-
-    def test_simulated_charge_rounds_fractional_target_up(self) -> None:
-        result = self._run_with_fake_simulator(
-            holds_needed=99,
-            charges_needed=3,
-            fractional_target=True,
-        )
-
-        # A target of 50.4% needs a 51% inverter target.  A 50% target can
-        # never cross the simulated boundary, regardless of how many slots are
-        # added.
-        self.assertEqual(set(_charge_slots(result).values()), {51})
-        self.assertEqual(len(_charge_slots(result)), 5)
-
-    def test_simulated_charge_stays_below_fractional_battery_cap(self) -> None:
-        result, trace = self._run_with_fake_simulator(
-            holds_needed=99,
-            charges_needed=3,
-            soc={0: 80.5, 6: 80.5, 7: 80.5, 9: 20, 10: 60},
-            battery_max_soc=90.5,
-            with_trace=True,
-        )
-
-        # The 90.5% bridge target would normally round up to 91%, but 90% is
-        # the highest integral inverter target valid under a 90.5% battery cap.
-        self.assertEqual(set(_charge_slots(result).values()), {90})
-        (observation,) = trace.reserve_floor_observations
-        self.assertEqual(observation.limit, "cap")
 
     def test_simulation_does_not_restore_inactive_document_action(self) -> None:
         inactive = ScheduleDocument(slots={
@@ -366,8 +372,13 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
             holds_needed=0, charges_needed=99, with_trace=True
         )
         self.assertEqual(result.slots, {})
-        gate = _gate(_slots_by_id(trace)[_slot_id(7, 45)], "charge_needed")
-        self.assertEqual(gate["state"], "false")
+        # The simulated window never dips below the floor: covered, as on the
+        # rail path, so there is no charge_needed gate to answer.
+        slot = _slots_by_id(trace)[_slot_id(7, 45)]
+        self.assertIsNone(_gate(slot, "charge_needed"))
+        self.assertEqual(_gate(slot, "window_soc_known")["state"], "true")
+        self.assertEqual(_node(slot, "reserve_floor_soc")["state"], "false")
+        self.assertEqual(_node(slot, "reserve_floor_soc")["actual"], 50.0)
 
     def test_partial_simulation_before_boundary_falls_back_to_rails(self) -> None:
         result = self._run_with_fake_simulator(
@@ -389,18 +400,21 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
             ImportBand(level="expensive", start=_at(8), end=_at(10)),
             ImportBand(level="expensive", start=_at(9), end=_at(11)),
         )
-        def boundary_soc(holds: int, charges: int, _overrides) -> float:
+        def boundary_soc(holds: int, charges: int, overrides) -> float:
             if charges >= 3:
-                return 60.0
-            return 50.0 if holds >= 4 else 0.0
+                return float(max(
+                    action.target_soc
+                    for action in overrides.values()
+                    if action.kind == "charge_to_target_soc"
+                ))
+            return 20.0 if holds >= 4 else 0.0
 
-        result, trace = self._run_with_fake_simulator(
+        result = self._run_with_fake_simulator(
             holds_needed=4,
             charges_needed=3,
             soc={0: 45, 6: 45, 7: 40, 8: 15, 10: 50, 11: 60},
             bands=bands,
             boundary_soc=boundary_soc,
-            with_trace=True,
         )
         kinds = {
             slot_id: inverter_action(actions).kind
@@ -410,8 +424,11 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
             [slot_id for slot_id, kind in kinds.items() if kind == "charge_to_target_soc"],
             [_slot_id(6, 45), _slot_id(7), _slot_id(7, 15), _slot_id(7, 30), _slot_id(7, 45)],
         )
-        self.assertEqual(set(_charge_slots(result).values()), {55})
-        # The explanation names the action the document actually carries.
+        self.assertEqual(set(_charge_slots(result).values()), {30})
+        self.assertEqual(
+            [slot_id for slot_id, kind in kinds.items() if kind == "stop_discharging"],
+            [_slot_id(6), _slot_id(6, 15), _slot_id(6, 30)],
+        )
 
     def test_legacy_target_reads_soc_entering_the_expensive_window(self) -> None:
         # The 08:00 point is the SoC *after* 08:00-08:30; the window is entered
@@ -426,34 +443,46 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
 
     def test_real_simulation_charges_across_a_normal_band_gap(self) -> None:
         # The battery enters the cheap band at 42 % and would sit at 10 % by
-        # 12:00; the window needs 30 % there.  Sixteen normal-band buckets
-        # drain 32 % after charging stops, so the inverter target must be 62 %.
-        # A 30 % target would charge the whole band and still enter at 10 %.
+        # 12:00; the window's lowest point (13:45) needs 30 %.  Sixteen normal
+        # and eight expensive buckets drain 48 % after charging stops, so the
+        # inverter target must be 78 %.  The 07:45 floor charge (entered at
+        # 28 %) is raised to it, not replaced.
         result, trace = self._run_with_real_simulator(battery_max_soc=100.0)
 
         self.assertEqual(
             _charge_slots(result),
-            {_slot_id(7, minute): 62 for minute in (0, 15, 30, 45)},
+            {_slot_id(hour, minute): 78 for hour, minute in (
+                (6, 45), (7, 0), (7, 15), (7, 30), (7, 45)
+            )},
         )
         slot = _slots_by_id(trace)[_slot_id(7, 45)]
-        self.assertEqual(_gate(slot, "charge_needed")["params"]["chargeTargetSoc"], 62)
-        self.assertEqual(
-            _gate(slot, "charge_needed")["params"]["projectedBoundarySoc"], 30.0
-        )
+        params = _gate(slot, "charge_needed")["params"]
+        self.assertEqual(params["chargeTargetSoc"], 78)
+        self.assertEqual(params["goalSoc"], 30)
+        self.assertEqual(params["projectedWindowMinSoc"], 30.0)
+        self.assertNotIn("projectedBoundarySoc", params)
         self.assertEqual(_gate(slot, "cheap_window_capacity")["state"], "true")
         (observation,) = trace.reserve_floor_observations
         self.assertIsNone(observation.limit)
 
     def test_real_simulation_reports_cap_when_the_gap_needs_more(self) -> None:
-        # Charging to the 50 % cap leaves 18 % at 12:00.  More slots cannot
-        # help; a higher battery `max_soc` would, so the cap is the limit.
+        # Even charging to the 50 % cap leaves 18 % at 12:00, pinned at the
+        # 10 % min SoC inside the window, but for fewer slots than without the
+        # charge: the clamp hides the deficit, so every cheap slot charges to
+        # the cap.  A higher battery `max_soc` would help, so the cap is the
+        # limit.
         result, trace = self._run_with_real_simulator(battery_max_soc=50.0)
 
         self.assertEqual(set(_charge_slots(result).values()), {50})
         slot = _slots_by_id(trace)[_slot_id(7, 45)]
+        params = _gate(slot, "charge_needed")["params"]
+        self.assertEqual(params["chargeTargetSoc"], 50)
+        self.assertEqual(params["goalSoc"], 30)
+        self.assertEqual(params["projectedWindowMinSoc"], 10.0)
         self.assertEqual(_gate(slot, "cheap_window_capacity")["state"], "false")
         (observation,) = trace.reserve_floor_observations
         self.assertEqual(observation.limit, "cap")
+        self.assertTrue(observation.bridge_written)
 
     def _run_with_real_simulator(self, *, battery_max_soc: float):
         """Cheap 06-08, normal 08-12, expensive 12-14 on the real simulator.
@@ -461,8 +490,6 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
         The house draws 0.2 kWh per 15 min (2 % of a lossless 10 kWh battery)
         with no solar, starting from 50 % at 05:00.
         """
-        from custom_components.helman.battery_state import BatteryLiveState
-
         bands = (
             ImportBand(level="cheap", start=_at(6), end=_at(8)),
             ImportBand(level="normal", start=_at(8), end=_at(12)),
@@ -484,29 +511,7 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
         snapshot = _make_snapshot(
             soc_series=series, import_points=prices, bands=bands
         )
-        snapshot = replace(
-            snapshot,
-            context=replace(
-                snapshot.context,
-                live=replace(
-                    snapshot.context.live,
-                    battery_live_state=BatteryLiveState(
-                        current_remaining_energy_kwh=5.0,
-                        current_soc=50.0,
-                        min_soc=10.0,
-                        max_soc=battery_max_soc,
-                        nominal_capacity_kwh=10.0,
-                        min_energy_kwh=1.0,
-                        max_energy_kwh=10.0 * battery_max_soc / 100,
-                    ),
-                ),
-                battery=replace(
-                    snapshot.context.battery,
-                    max_discharge_power_w=5000.0,
-                    discharge_efficiency=1.0,
-                ),
-            ),
-        )
+        snapshot = _with_real_battery(snapshot, soc=50.0, battery_max_soc=battery_max_soc)
         config = _make_config()
         return run_optimizer_with_trace(
             build_charge_from_grid_optimizer(config),
@@ -521,7 +526,6 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
         holds_needed: int,
         charges_needed: int,
         with_trace: bool = False,
-        fractional_target: bool = False,
         schedule_document: ScheduleDocument | None = None,
         soc: dict[int, float] | None = None,
         bands: tuple[ImportBand, ...] = _BANDS,
@@ -539,24 +543,28 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
                 ]
                 if boundary_soc is not None:
                     soc_pct = boundary_soc(holds, len(targets), action_overrides)
-                    return types.SimpleNamespace(
-                        soc_by_bucket={trajectory_end or _at(7, 45): soc_pct}
+                else:
+                    # A charged slot does not discharge either, so it counts
+                    # towards the holds; charges alone carry their target.
+                    soc_pct = max(
+                        50.0 if holds + len(targets) >= holds_needed else 0.0,
+                        max(targets, default=0) if len(targets) >= charges_needed else 0.0,
                     )
-                reached_by_hold = holds >= holds_needed
-                reached = reached_by_hold or len(targets) >= charges_needed
-                soc_pct = (
-                    50.0 if reached_by_hold else max(targets, default=0)
-                ) if reached else 0.0
-                return types.SimpleNamespace(
-                    soc_by_bucket={trajectory_end or _at(7, 45): soc_pct}
-                )
+                if trajectory_end is not None:
+                    return types.SimpleNamespace(soc_by_bucket={trajectory_end: soc_pct})
+                # The slot entering the boundary and every bucket of the
+                # expensive windows, all flat: the window minimum is ``soc_pct``.
+                return types.SimpleNamespace(soc_by_bucket={
+                    _at(7, 45) + timedelta(minutes=15 * index): soc_pct
+                    for index in range(14)
+                })
 
         # Points carry end-of-slot SoC, so the 07:xx values are what the
         # expensive window at 08:00 is entered with.
         soc_series = _soc_series(soc if soc is not None else {
             0: 45,
             6: 45,
-            7: 40.4 if fractional_target else 40,
+            7: 40,
             9: 20,
             10: 60,
         })
@@ -773,6 +781,280 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
             snapshot, _make_config()
         )
         self.assertEqual(snapshot.schedule.slots, before)
+
+
+def _tomorrow(hour: int, minute: int = 0) -> datetime:
+    return _at(hour, minute) + timedelta(days=1)
+
+
+def _id(at: datetime) -> str:
+    return at.isoformat(timespec="seconds")
+
+
+def _sunny(at: datetime) -> float:
+    """0.5 kWh per 15 min from 08:00 to 18:00 tomorrow."""
+    return 0.5 if at.date() > DAY and 8 <= at.hour < 18 else 0.0
+
+
+# Cheap tonight 22:00 - 06:00, expensive tomorrow 06:00 - 22:00.
+_OVERNIGHT_BANDS = (
+    ImportBand(level="cheap", start=_at(22), end=_tomorrow(6)),
+    ImportBand(level="expensive", start=_tomorrow(6), end=_tomorrow(22)),
+)
+
+
+class ChargeFromGridCheapWindowFloorTests(unittest.TestCase):
+    """#668 on the real simulator: floor 20 %, battery min SoC 10 %.
+
+    The house draws 0.1 kWh per 15 min (1 % of the lossless 10 kWh battery)
+    unless a test says otherwise; a charging slot takes 1.25 kWh (12.5 %).
+    """
+
+    def test_a_restores_the_floor_and_tops_up_for_the_pre_solar_morning(self) -> None:
+        # Entered at 15 %: charge back to 20 % at 22:00 and hold.  06:00-08:00
+        # drains 8 % before the sun comes up, so the band ends with a top-up
+        # to 28 % — the minimum lands on the floor at 07:45.
+        result, trace = self._run_overnight(soc=19.0, solar=_sunny)
+
+        self.assertEqual(
+            _charge_slots(result),
+            {
+                _id(_at(22)): 20,
+                _id(_tomorrow(5, 15)): 28,
+                _id(_tomorrow(5, 30)): 28,
+                _id(_tomorrow(5, 45)): 28,
+            },
+        )
+        self.assertEqual(
+            _holds(result), _ids_between(_at(22, 15), _tomorrow(5, 15))
+        )
+        slots = _slots_by_id(trace)
+        floor_gate = _gate(slots[_id(_at(22))], "cheap_window_floor")
+        self.assertEqual(floor_gate["state"], "true")
+        self.assertEqual(floor_gate["params"], {"floorSoc": 20, "entrySoc": 15.0})
+        params = _gate(slots[_id(_tomorrow(5, 45))], "charge_needed")["params"]
+        self.assertEqual(params["goalSoc"], 20)
+        self.assertEqual(params["projectedWindowMinSoc"], 20.0)
+        assert_trace_contract(self, trace)
+
+    def test_b_charges_the_floor_plus_the_whole_day_deficit(self) -> None:
+        # Entered at the 10 % min SoC, no sun tomorrow: 64 expensive buckets
+        # drain 64 %, so the band ends charged to 20 + 64 = 84 %.
+        result, trace = self._run_overnight(soc=14.0)
+
+        top_up = _ids_between(_tomorrow(4), _tomorrow(6))
+        self.assertEqual(
+            _charge_slots(result),
+            {_id(_at(22)): 20, **{slot_id: 84 for slot_id in top_up}},
+        )
+        (observation,) = trace.reserve_floor_observations
+        self.assertIsNone(observation.limit)
+        self.assertEqual(
+            _gate(_slots_by_id(trace)[top_up[-1]], "cheap_window_capacity")["state"],
+            "true",
+        )
+
+    def test_simulated_charge_stays_below_fractional_battery_cap(self) -> None:
+        # Row B short of the floor: 84 % would be needed, but 80 % is the
+        # highest integral inverter target under an 80.5 % battery cap.  The
+        # best minimum (16 %) is still placed, and the cap is the limit.
+        result, trace = self._run_overnight(soc=14.0, battery_max_soc=80.5)
+
+        charged = _charge_slots(result)
+        self.assertEqual(charged.pop(_id(_at(22))), 20)
+        self.assertEqual(set(charged.values()), {80})
+        slot = _slots_by_id(trace)[_id(_tomorrow(5, 45))]
+        self.assertEqual(_gate(slot, "cheap_window_capacity")["state"], "false")
+        self.assertEqual(
+            _gate(slot, "charge_needed")["params"]["projectedWindowMinSoc"], 16.0
+        )
+        (observation,) = trace.reserve_floor_observations
+        self.assertEqual(observation.limit, "cap")
+
+    def test_c_sizes_the_hold_on_the_window_minimum_not_the_pinned_rail(self) -> None:
+        # Entered at 92 %, no sun: the rail enters 06:00 at 60 % and pins at
+        # 10 % by 18:30, so `entry + dip` would be 70 %.  Keeping 20 % at
+        # 21:45 needs 84 % at 06:00: hold from midnight, no charge.
+        result, trace = self._run_overnight(soc=96.0)
+
+        self.assertEqual(_charge_slots(result), {})
+        self.assertEqual(_holds(result), _ids_between(_tomorrow(0), _tomorrow(6)))
+        params = _gate(_slots_by_id(trace)[_id(_tomorrow(5, 45))], "charge_needed")[
+            "params"
+        ]
+        self.assertEqual(params["projectedWindowMinSoc"], 20.0)
+        self.assertIsNone(params["chargeTargetSoc"])
+
+    def test_d_holds_earlier_to_cover_the_pre_solar_morning(self) -> None:
+        # Entered at 42 %, the battery would reach 10 % by 06:00.  `entry +
+        # dip` holds from 03:30 to enter at 20 %; the morning before the sun
+        # needs 28 %, so the hold starts at 01:30.  The floor step's charge at
+        # 03:45 (entered at 19 % before the hold was placed) is entered at
+        # 28 % and buys nothing.
+        result, trace = self._run_overnight(soc=46.0, solar=_sunny)
+
+        self.assertEqual(_charge_slots(result), {_id(_tomorrow(3, 45)): 20})
+        self.assertEqual(
+            _holds(result),
+            [
+                slot_id
+                for slot_id in _ids_between(_tomorrow(1, 30), _tomorrow(6))
+                if slot_id != _id(_tomorrow(3, 45))
+            ],
+        )
+        params = _gate(_slots_by_id(trace)[_id(_tomorrow(1, 30))], "charge_needed")[
+            "params"
+        ]
+        self.assertEqual(params["projectedWindowMinSoc"], 20.0)
+
+    def test_e_writes_nothing_for_a_dip_after_solar_filled_the_battery(self) -> None:
+        # The sun fills the battery by noon; a heavy evening pins it at 10 %
+        # anyway.  Nothing bought overnight survives the full battery.
+        def house(at: datetime) -> float:
+            return 0.3 if at.date() > DAY and 14 <= at.hour < 22 else 0.1
+
+        def solar(at: datetime) -> float:
+            return 1.35 if at.date() > DAY and 8 <= at.hour < 14 else 0.0
+
+        result, trace = self._run_overnight(soc=64.0, solar=solar, house=house)
+
+        self.assertEqual(result.slots, {})
+        (observation,) = trace.reserve_floor_observations
+        self.assertEqual(observation.limit, "cap")
+        self.assertFalse(observation.bridge_written)
+        gate = _gate(_slots_by_id(trace)[_id(_at(22))], "charge_needed")
+        self.assertEqual(gate["state"], "false")
+        self.assertEqual(gate["params"], {"goalSoc": 10.0, "projectedWindowMinSoc": 10.0})
+
+    def test_f_keeps_the_floor_even_when_the_expensive_window_is_covered(self) -> None:
+        # Entered at 15 %; a light night and early sun carry the window well
+        # above the floor, so the rail says covered.  The band is still
+        # brought back to 20 % and held — and nothing more is bought.
+        def house(at: datetime) -> float:
+            return 0.02 if _at(22) <= at < _tomorrow(6) else 0.1
+
+        def solar(at: datetime) -> float:
+            return 0.6 if _tomorrow(4) <= at < _tomorrow(18) else 0.0
+
+        result, trace = self._run_overnight(soc=17.0, solar=solar, house=house)
+
+        self.assertEqual(_charge_slots(result), {_id(_at(22)): 20})
+        self.assertEqual(_holds(result), _ids_between(_at(22, 15), _tomorrow(6)))
+        slot = _slots_by_id(trace)[_id(_at(22))]
+        self.assertEqual(_gate(slot, "cheap_window_floor")["state"], "true")
+        self.assertEqual(_node(slot, "reserve_floor_soc")["state"], "true")
+        (observation,) = trace.reserve_floor_observations
+        self.assertTrue(observation.bridge_written)
+        assert_trace_contract(self, trace)
+
+    def test_g_charges_the_first_horizon_slot_from_the_live_soc(self) -> None:
+        # The run starts inside the cheap band, at 15 %.
+        result, trace = self._run_overnight(soc=15.0, solar=_sunny, now=_at(23))
+
+        first = min(_charge_slots(result).items())
+        self.assertEqual(first, (_id(_at(23)), 20))
+        self.assertEqual(
+            _gate(_slots_by_id(trace)[_id(_at(23))], "cheap_window_floor")["params"],
+            {"floorSoc": 20, "entrySoc": 15.0},
+        )
+
+    def test_h_leaves_a_cheap_band_without_expensive_band_alone(self) -> None:
+        bands = (
+            ImportBand(level="cheap", start=_at(22), end=_tomorrow(6)),
+            ImportBand(level="normal", start=_tomorrow(6), end=_tomorrow(22)),
+        )
+        result, _trace = self._run_overnight(soc=19.0, bands=bands)
+
+        self.assertEqual(result.slots, {})
+
+    def test_horizon_ending_inside_the_window_falls_back_to_the_rail(self) -> None:
+        # The expensive band runs past the horizon's end (21:00 the day after
+        # tomorrow) and its only dip lies in that last, unsimulated hour.  The
+        # simulator cannot see it, so the rail sizes the bridge: 60 + 10.
+        last_hour = _tomorrow(21) + timedelta(days=1)
+        bands = (
+            ImportBand(level="cheap", start=_at(22), end=_tomorrow(6)),
+            ImportBand(
+                level="expensive",
+                start=_tomorrow(6),
+                end=last_hour + timedelta(hours=1),
+            ),
+        )
+
+        def house(at: datetime) -> float:
+            return 1.25 if last_hour <= at else 0.0
+
+        result, trace = self._run_overnight(soc=60.0, house=house, bands=bands)
+
+        self.assertTrue(_charge_slots(result))
+        self.assertEqual(set(_charge_slots(result).values()), {70})
+        (observation,) = trace.reserve_floor_observations
+        self.assertTrue(observation.bridge_written)
+
+    def _run_overnight(
+        self,
+        *,
+        soc: float,
+        solar=lambda _at: 0.0,
+        house=lambda _at: 0.1,
+        now: datetime = _at(21),
+        battery_max_soc: float = 100.0,
+        bands: tuple[ImportBand, ...] = _OVERNIGHT_BANDS,
+    ):
+        """The overnight bands on the real simulator, starting at ``soc``.
+
+        ``solar`` and ``house`` give kWh per 15-min bucket.  The rail is the
+        same walk without any action, clamped to the battery's SoC range.
+        """
+        series = []
+        energy = soc / 10
+        for index in range(49 * 4):
+            at = now + timedelta(minutes=15 * index)
+            flow = solar(at) - house(at)
+            energy = min(
+                10.0 * battery_max_soc / 100,
+                max(1.0, energy + max(-1.25, min(1.25, flow))),
+            )
+            series.append({
+                "timestamp": _id(at),
+                "durationHours": 0.25,
+                "solarKwh": solar(at),
+                "baselineHouseKwh": house(at),
+                "socPct": energy * 10,
+            })
+        snapshot = _with_real_battery(
+            _make_snapshot(
+                soc_series=series,
+                import_points=_import_points({}),
+                bands=bands,
+                now=now,
+            ),
+            soc=soc,
+            battery_max_soc=battery_max_soc,
+        )
+        config = _make_config(reserve_floor_soc=20)
+        return run_optimizer_with_trace(
+            build_charge_from_grid_optimizer(config),
+            snapshot,
+            config,
+            reference_time=now,
+        )
+
+
+def _holds(result: ScheduleDocument) -> list[str]:
+    return sorted(
+        slot_id
+        for slot_id, actions in result.slots.items()
+        if inverter_action(actions).kind == "stop_discharging"
+    )
+
+
+def _ids_between(start: datetime, end: datetime) -> list[str]:
+    ids = []
+    while start < end:
+        ids.append(_id(start))
+        start += timedelta(minutes=15)
+    return ids
 
 
 class ChargeFromGridTraceContractTests(unittest.TestCase):

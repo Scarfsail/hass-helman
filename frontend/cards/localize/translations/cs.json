@@ -1046,12 +1046,14 @@
         "cheapest_rank": "Pořadí podle ceny",
         "cheap_window_capacity": "Kapacita levného okna",
         "charge_needed": "Potřeba nabít",
+        "cheap_window_floor": "Rezerva v levném okně",
         "window_soc_known": "Známé SoC v okně",
         "stop_export_supported": "Podpora zastavení exportu",
         "blocked_user_owned": "Slot bez ručního plánu"
       },
       "condition_detail": {
         "blocked_user_owned": "Automatizace zapisuje jen do slotů, které si nenastavil uživatel. Splněno = slot není obsazen uživatelským plánem, je volný pro automatizaci; nesplněno = slot vlastní uživatel a automatizace do něj nezapíše.",
+        "cheap_window_floor": "Rezerva SoC platí i v levném okně před drahým pásmem: od prvního slotu, do kterého baterie vstupuje pod rezervou, se dobije zpět na ni a po zbytek levného okna se drží (zastavené vybíjení).",
         "slot_available": "Slot, se kterým optimalizátor vůbec může počítat — sloty nastavené uživatelem se vyřazují ještě před výběrem, takže se do nich neplánuje.",
         "daily_minimum_remaining": "Kolik hodin denního minima je za tímto slotem: co spotřebič dnes už odběhl podle měřené historie plus to, co má plán naplánováno před tímto slotem. Samotné rozhodnutí padlo jednou pro celý den — brána říká, že den ještě nějaké hodiny dlužil, a podle toho se vybral počet slotů.",
         "cheapest_rank": "Kolikátý nejlevnější je tento slot mezi sloty, o kterých se pro tento den rozhodovalo. Tohle je to per-slot číslo, které říká, proč se plánuje zrovna tenhle slot. U držení nabíjení je to obráceně: splněno = slot v žebříčku neuspěl, levnější sloty už potřebu pokryjí a přebytek se tady vyplatí spíš prodat.",
