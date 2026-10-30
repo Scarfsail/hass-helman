@@ -774,7 +774,7 @@ def test_the_grid_offers_its_power_section_only_with_a_power_meter():
         ("positive_is_import", [1.5, -2.0], [-1500.0, 2000.0]),
     ],
 )
-def test_the_power_section_reads_the_last_24_hours_export_positive(polarity, raw, expected):
+def test_the_power_section_reads_today_export_positive(polarity, raw, expected):
     cfg = grid_config()
     if polarity:
         cfg["energy_nodes"]["grid"]["entities"]["power_polarity"] = polarity
@@ -797,8 +797,9 @@ def test_the_power_section_reads_the_last_24_hours_export_positive(polarity, raw
 
     [(ids, start, end)] = windows
     assert ids == [GRID_POWER]
-    assert (start, end) == (datetime(2026, 10, 9, 12, 0, tzinfo=UTC), datetime(2026, 10, 10, 12, 0, tzinfo=UTC))
-    assert payload["period"]["start"].startswith("2026-10-09T14:00:00")
+    # Today's local day, as solar's production reads it.
+    assert (start, end) == (datetime(2026, 10, 9, 22, 0, tzinfo=UTC), datetime(2026, 10, 10, 22, 0, tzinfo=UTC))
+    assert payload["period"]["start"].startswith("2026-10-10T00:00:00")
     assert payload["unit"] == "kW"
     assert [point["mean"] for point in payload["power"]["points"]] == pytest.approx(expected)
     # The extremes follow the sign: the largest export is the maximum.

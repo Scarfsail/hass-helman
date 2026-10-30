@@ -5,11 +5,11 @@ profile's per-phase power and the inverter's phase voltages (telemetry), the
 grid's own today-energy meters (config), the limits and runtimes the off-grid
 answer shows. Money uses the existing inspector aggregate service.
 
-The history sections are ``money``, today's bought and sold energy from the
+The sections are ``money``, today's bought and sold energy from the
 inspector aggregate; ``voltage``, today's three phase voltages from
 :func:`.day_stats.async_day_stats` plus the largest spread between phases (the
 inverter's terminal readings, not the meter's); and ``power``, the grid
-meter's power over the last 24 hours.
+meter's power today, which feeds the Forecast chart's actual lines.
 """
 
 from __future__ import annotations
@@ -28,7 +28,6 @@ from .day_stats import (
     BUCKET,
     async_day_stats,
     day_window,
-    last_24h_window,
     node_config,
     node_entity,
     node_power,
@@ -126,8 +125,8 @@ async def async_grid_section(
     """One of the grid's history sections.
 
     ``voltage``: ``phases`` holds each phase's day, ``None`` for a phase whose
-    sensor the profile does not resolve. ``power``: the grid meter over the last
-    24 hours in W, in Helman's convention whatever the sensor's polarity:
+    sensor the profile does not resolve. ``power``: the grid meter over today
+    in W, in Helman's convention whatever the sensor's polarity:
     **positive is export, negative is import**; ``None`` without the meter or
     in a unit not known.
     """
@@ -150,7 +149,7 @@ async def async_grid_section(
     if section == "power":
         grid = node_config(ctx.config, "grid")
         entity_id = node_entity(grid, "power")
-        start, end = last_24h_window(now)
+        start, end = day_window(dt_util.as_local(now))
         stats = (
             await async_day_stats(hass, [entity_id], start=start, end=end, now=now)
             if entity_id

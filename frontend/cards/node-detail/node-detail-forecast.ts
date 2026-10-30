@@ -113,9 +113,9 @@ export function holdAtSlots(readings: readonly DayLinePoint[], start: number, en
     return points;
 }
 
-/** A slot's energy, kWh, as its average power, kW. */
-export function slotKw(kwh: number): number {
-    return kwh / (SLOT_MS / HOUR_MS);
+/** A slot's energy, kWh, as its average power, kW: over a standard slot unless the backend gives its `hours`. */
+export function slotKw(kwh: number, hours: number = SLOT_MS / HOUR_MS): number {
+    return kwh / hours;
 }
 
 /**

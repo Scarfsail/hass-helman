@@ -960,7 +960,7 @@ export interface GridDetailPayload {
 }
 
 /**
- * The grid meter's power over the last 24 hours, W, in Helman's convention
+ * The grid meter's power today, W, in Helman's convention
  * whatever the sensor's polarity: **positive is export, negative is import**.
  * `power` is `null` without the meter or in a unit not known; `unit` is its own.
  */
