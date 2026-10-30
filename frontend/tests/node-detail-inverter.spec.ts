@@ -1,4 +1,4 @@
-import { prepareNodeDetailPage, mountSimpleCard } from "./support/node-detail-harness";
+import { prepareNodeDetailPage, mountSimpleCard, onDashboard, expectShowMore } from "./support/node-detail-harness";
 import { cardTree, scheduleSlots } from "./support/payload-builders";
 import type { ScheduleActionDTO, SchedulePayload, ScheduleSlotDTO } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
@@ -409,6 +409,16 @@ test("inverter History header gives today's temperature range, collapsed; the bo
     await expect(section.locator("[data-row=export-limit] .value")).toHaveText("up to 9.9 kW");
     await expect(section.locator("[data-row=solar-input] .value")).toHaveText("not limited");
     await expect(section.locator("[data-row=soc-range] .value")).toHaveText("10–100 %");
+});
+
+test("inverter History's temperature chart opens HA's history of the temperature", async ({ page }) => {
+    await onDashboard(page);
+    await mount(page);
+    await page.locator(".inverter-cell").click();
+    const section = content(page).locator("helman-detail-section[data-history]");
+    await section.locator("button").first().click();
+    await expect(section.locator("[data-forecast-pointer]")).toHaveCount(0);
+    await expectShowMore(page, section.locator("[data-show-more]"), ["sensor.solax_inverter_temperature"]);
 });
 
 test("inverter Technical details shows the registers, the executor and the configuration to an admin", async ({ page }) => {

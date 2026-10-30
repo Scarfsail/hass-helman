@@ -313,16 +313,16 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
     // Forecast ----------------------------------------------------------------
 
     /** What the house will still use today, the forecast to tomorrow noon and the planned appliance runs. */
-    protected _renderForecast() {
+    protected _renderForecast(overview: HouseDetailPayload) {
         const pending = this._forecastPending();
         if (pending !== null) return pending;
         const rest = this._restOfDayKwh();
         if (rest === null) return nothing;
         return this._forecastSection(boldTemplate(this.localize("node_detail.shared.forecast.house_summary"), { kwh: `≈ ${formatKwh(rest)} kWh` }),
-            () => this._renderForecastBody(rest));
+            () => this._renderForecastBody(overview, rest));
     }
 
-    private _renderForecastBody(rest: number) {
+    private _renderForecastBody(overview: HouseDetailPayload, rest: number) {
         const forecast = this._forecast!.house_consumption;
         const context = this._chartContext;
         const text = (key: string) => this.localize(`node_detail.shared.forecast.${key}`);
@@ -354,6 +354,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
                 ],
                 spans: runs.map((run) => ({ start: run.startMs, end: run.endMs ?? end, color: RUN_COLOR })),
                 formatValue: (value) => formatPower(value * 1000).display,
+                entities: overview.entities.power ? [overview.entities.power] : [],
             })}
             ${runs.length ? html`<p class="note"><span style="color: ${RUN_COLOR}">▬</span> ${text("house_run_legend")}</p>` : nothing}
             <div class="rows">
@@ -383,6 +384,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
             : usual === null ? boldTemplate(this._h("house_summary_today"), { kwh: kwhText(today) })
             : boldTemplate(this._h("house_summary"), { kwh: kwhText(today), usual: formatKwh(usual) }));
         return this._historySection(summary, () => html`
+            ${this._restOfDayKwh() !== null ? this._forecastPointer() : nothing}
             ${overview.sections.includes("pattern") ? this._renderPattern() : nothing}
             ${this._renderToday()}
         `);

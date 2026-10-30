@@ -8,9 +8,28 @@ import { renderSummarySection } from "./detail-section";
 /**
  * What every node's History & statistics and Technical details sections
  * share: the sections around their bodies, the "today by source" share bar,
- * a statistics tile, a section's loading or failed state, and HA's own
- * history graph for "the last 24 hours".
+ * a statistics tile, a section's loading or failed state, HA's own
+ * history graph for "the last 24 hours", and the "Show more" link from a
+ * chart to HA's history page.
  */
+
+const DAY_MS = 86_400_000;
+
+/** A "Show more" link asks the detail's dialog to open HA's history page at `detail.href`. */
+export const SHOW_HISTORY_EVENT = "helman-show-history";
+
+/** HA's history page with `entityIds` and the last 24 hours preselected, as HA's more-info links it. */
+export function historyHref(entityIds: readonly string[], now = Date.now()): string {
+    const query = new URLSearchParams({ entity_id: entityIds.join(","), start_date: new Date(now - DAY_MS).toISOString() });
+    return `/history?${query}`;
+}
+
+/** A "Show more" link to HA's history of `entityIds` over the last 24 hours; none without an entity. */
+export function renderShowMore(entityIds: readonly string[], localize: LocalizeFunction): TemplateResult | typeof nothing {
+    if (!entityIds.length) return nothing;
+    return html`<button class="link-button" data-show-more @click=${(event: Event) => event.currentTarget!.dispatchEvent(
+        new CustomEvent(SHOW_HISTORY_EVENT, { detail: { href: historyHref(entityIds) }, bubbles: true, composed: true }))}>${localize("node_detail.shared.history.show_more")}</button>`;
+}
 
 /** The History & statistics section; its body is rendered only while it is open. */
 export function renderHistorySection(
@@ -148,9 +167,9 @@ export class HistoryGraphResource extends SectionResource<HistoryGraphCard> {
         if (chart && chart.hass !== hass) chart.hass = hass;
     }
 
-    /** "Last 24 hours" and the graph, or its loading or failure; none without one to draw. */
+    /** "Last 24 hours" and the graph with its Show more, or its loading or failure; none without one to draw. */
     render(localize: LocalizeFunction): TemplateResult | typeof nothing {
         if (!this.available()) return nothing;
-        return html`${subTitle(localize("node_detail.shared.history.last_24h"))}${sectionNotReady(this, localize) ?? this.payload}`;
+        return html`${subTitle(localize("node_detail.shared.history.last_24h"))}${sectionNotReady(this, localize) ?? html`${this.payload}${renderShowMore(this._entities(), localize)}`}`;
     }
 }

@@ -945,7 +945,7 @@ export interface InverterModesSectionPayload {
 /**
  * The grid detail's overview. `entities` carries the profile's grid telemetry
  * (absent for a Custom inverter, `null` where the registry lacks one) and the
- * grid's own today meters. `phasePowerPolarity` says which way the
+ * grid's own `power` and today meters. `phasePowerPolarity` says which way the
  * `grid_power_l*` readings are positive.
  */
 export interface GridDetailPayload {
@@ -957,6 +957,20 @@ export interface GridDetailPayload {
     maxAllowedExportPower: number | null;
     condition: { kind: "off_grid" | "fault"; runMode: string; entityId: string } | null;
     sections: string[];
+}
+
+/**
+ * The grid meter's power today, W, in Helman's convention
+ * whatever the sensor's polarity: **positive is export, negative is import**.
+ * `power` is `null` without the meter or in a unit not known; `unit` is its own.
+ */
+export interface GridPowerSectionPayload {
+    node: "grid";
+    section: "power";
+    asOf: string;
+    period: { start: string; end: string };
+    power: DayStatsDTO | null;
+    unit: string | null;
 }
 
 /**
@@ -1072,15 +1086,19 @@ export interface SolarProductionSectionPayload {
 }
 
 /**
- * Today's string powers (W) and energies. A string's `kwh` integrates its
+ * The last 24 hours of solar power (W): the solar meter's total, production
+ * positive (`null` without the meter or in a unit not known, `unit` its own),
+ * and each string's, with their energies. A string's `kwh` integrates its
  * known time only; `common` compares the strings over the buckets all of them
  * know, so their shares compare like with like.
  */
-export interface SolarStringsSectionPayload {
+export interface SolarPowerSectionPayload {
     node: "solar";
-    section: "strings";
+    section: "power";
     asOf: string;
     period: { start: string; end: string };
+    power: DayStatsDTO | null;
+    unit: string | null;
     strings: Record<string, { entityId: string; unit: string | null; day: DayStatsDTO | null } | null>;
     energy: {
         strings: Record<string, { kwh: number | null; coverage: number }>;

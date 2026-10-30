@@ -57,7 +57,7 @@ NODE_DETAILS: dict[str, NodeDetail] = {
     "grid": NodeDetail(
         overview=build_grid_overview,
         section=async_grid_section,
-        sections=frozenset({"voltage", "money"}),
+        sections=frozenset({"voltage", "money", "power"}),
     ),
     "battery": NodeDetail(
         overview=build_battery_overview,
@@ -67,7 +67,7 @@ NODE_DETAILS: dict[str, NodeDetail] = {
     "solar": NodeDetail(
         overview=build_solar_overview,
         section=async_solar_section,
-        sections=frozenset({"production", "strings", "destinations"}),
+        sections=frozenset({"production", "power", "destinations"}),
     ),
     "house": NodeDetail(
         overview=build_house_overview,

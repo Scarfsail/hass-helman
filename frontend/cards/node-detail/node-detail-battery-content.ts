@@ -259,6 +259,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
                     { ...soc.lowest, color: LOWEST_COLOR },
                 ],
                 formatValue: (value) => this._percent(value),
+                entities: overview.entities.soc ? [overview.entities.soc] : [],
             })}
             <div class="rows">
                 <div class="row" data-row="full"><span class="label"><span style="color: ${FULL_COLOR}">●</span> ${fillTemplate(this.localize("node_detail.shared.forecast.battery_full_row"), { ceiling: this._percent(soc.ceiling) })}</span>
@@ -322,6 +323,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
             discharged: discharged === null ? "—" : `−${formatKwh(discharged)} kWh`,
         });
         return this._historySection(summary, () => html`
+            ${this._socForecast(Date.now(), this._number(overview, "soc")) ? this._forecastPointer() : nothing}
             ${subTitle(this._h("today"))}
             <div class="rows" data-charge>
                 ${historyRow(this._h("charged"), charged === null ? "—" : kwhText(charged), "charged")}

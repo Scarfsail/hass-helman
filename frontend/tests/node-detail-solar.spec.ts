@@ -1,4 +1,4 @@
-import { prepareNodeDetailPage, mountSimpleCard, liveFigures } from "./support/node-detail-harness";
+import { prepareNodeDetailPage, mountSimpleCard, liveFigures, onDashboard, expectShowMore } from "./support/node-detail-harness";
 import { cardTree, forecastPayload, scheduleSlots } from "./support/payload-builders";
 import type { ForecastPayload, ForecastStatus, ScheduleActionDTO, SchedulePayload, ScheduleSlotDTO } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
@@ -61,6 +61,8 @@ type Variant = {
     gridImporting?: boolean;
     /** The profile maps one string only. */
     singleString?: boolean;
+    /** The power section has no total meter reading, only the strings. */
+    noTotal?: boolean;
     /** The production section's sensor is in a unit that is not power. */
     productionUnit?: boolean;
     /** The house and battery meters' states, W. */
@@ -157,7 +159,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             configuredMaxPowerW: 11600,
             maxAllowedExportPower: 9900,
             condition: v.offGrid ? { kind: "off_grid", runMode: "Off-Grid", entityId: "sensor.solax_run_mode" } : null,
-            sections: profile && !v.singleString ? ["production", "strings", "destinations"] : ["production", "destinations"],
+            sections: ["production", "power", "destinations"],
         };
         const day = (bucketsW: Array<[string, number]>) => ({
             entityId: "sensor.x", unit: "W", source: "statistics", extrema: "bucket_statistics", bucketMinutes: 5,
@@ -180,20 +182,22 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             unit: v.productionUnit ? "MJ" : "W",
             power: v.productionUnit ? null : day(recorded),
         };
-        // Five-minute means along the morning's curve, the second string smaller.
+        // Five-minute means along yesterday afternoon's and this morning's curve, the second string smaller.
         const curve = (peak: number): Array<[string, number]> => {
             const rows: Array<[string, number]> = [];
-            for (let ms = Date.parse("2026-10-21T06:00:00Z"); ms < Date.parse("2026-10-21T12:00:00Z"); ms += 300_000) {
-                const hour = (ms - Date.parse("2026-10-21T00:00:00Z")) / 3_600_000;
-                rows.push([new Date(ms).toISOString().replace(".000Z", "+00:00"), Math.round(peak * Math.sin(Math.PI * (hour - 6) / 12))]);
+            for (let ms = Date.parse("2026-10-20T12:00:00Z"); ms < Date.parse("2026-10-21T12:00:00Z"); ms += 300_000) {
+                const hour = ((ms - Date.parse("2026-10-21T00:00:00Z")) / 3_600_000 + 24) % 24;
+                rows.push([new Date(ms).toISOString().replace(".000Z", "+00:00"), Math.max(0, Math.round(peak * Math.sin(Math.PI * (hour - 6) / 12)))]);
             }
             return rows;
         };
-        const strings = {
-            node: "solar", section: "strings", asOf: "2026-10-21T12:00:00+00:00", period,
+        const power = {
+            node: "solar", section: "power", asOf: "2026-10-21T12:00:00+00:00",
+            period: { start: "2026-10-20T12:00:00+00:00", end: "2026-10-21T12:00:00+00:00" },
+            power: v.noTotal ? null : day(curve(5900)), unit: v.noTotal ? null : "W",
             strings: {
                 "1": { entityId: "sensor.solax_pv_power_1", unit: "W", day: day(curve(3500)) },
-                "2": { entityId: "sensor.solax_pv_power_2", unit: "W", day: day(curve(2400)) },
+                "2": v.singleString ? null : { entityId: "sensor.solax_pv_power_2", unit: "W", day: day(curve(2400)) },
             },
             energy: {
                 strings: { "1": { kwh: 10.9, coverage: 0.98 }, "2": { kwh: 7.1, coverage: 0.95 } },
@@ -223,7 +227,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             destinations: v.destinations === "unavailable" ? null : destinationsDTO,
             charge: v.destinations === "unavailable" ? null : charge,
         };
-        const sections: Record<string, unknown> = { production, strings, destinations };
+        const sections: Record<string, unknown> = { production, power, destinations };
         const slots: ScheduleSlotDTO[] = [];
         const start = Date.parse("2026-10-21T11:45:00Z");
         for (let i = 0; i < 36 * 4; i += 1) {
@@ -349,14 +353,14 @@ async function openSolar(page: Page): Promise<void> {
     await expect(content(page).locator("[data-overview]")).toBeVisible();
 }
 
-test("solar History header gives today's production, collapsed; the body has where it went, the strings and the lifetime total", async ({ page }) => {
+test("solar History header gives today's production, collapsed; the body has where it went, the last 24 hours' power and the lifetime total", async ({ page }) => {
     await mount(page);
     await openSolar(page);
     const section = content(page).locator("helman-detail-section[data-history]");
     await expect(section.locator("[slot=summary]")).toHaveText("18 kWh produced today");
     await expect(section.locator("[slot=summary] b")).toHaveText("18 kWh");
     await expect(section.locator("[data-history-body]")).toHaveCount(0);
-    expect(await page.evaluate(() => window.__SolarRequests.some((r) => r.section === "destinations" || r.section === "strings"))).toBe(false);
+    expect(await page.evaluate(() => window.__SolarRequests.some((r) => r.section === "destinations" || r.section === "power"))).toBe(false);
     await section.locator("button").first().click();
     await expect(section.locator("[data-row=used_house] .value")).toHaveText("6.5 kWh");
     await expect(section.locator("[data-row=stored_battery] .value")).toHaveText("4.2 kWh");
@@ -365,8 +369,61 @@ test("solar History header gives today's production, collapsed; the body has whe
     // Where it went adds up to the production the header gives.
     const parts = await section.locator("[data-destinations] .value").allTextContents();
     expect(parts.reduce((sum, text) => sum + parseFloat(text), 0)).toBeCloseTo(18, 5);
-    await expect(section.locator("helman-day-line-chart[data-strings-chart] path.line")).toHaveCount(2);
+    // The total and each string, over the last 24 hours.
+    await expect(section.locator(".section-title", { hasText: "Last 24 hours" })).toHaveCount(1);
+    const chart = section.locator("helman-day-line-chart[data-power-chart]");
+    await expect(chart.locator("path.line")).toHaveCount(3);
+    expect(await chart.evaluate((el: any) => ({ series: el.series.map((series: any) => [series.key, series.color]), start: el.start, end: el.end, now: el.now }))).toEqual({
+        series: [["total", "var(--helman-solar)"], ["pv1", "#fb8c00"], ["pv2", "#3949ab"]],
+        start: Date.parse("2026-10-20T12:00:00Z"), end: Date.parse("2026-10-21T12:00:00Z"),
+        // The window ends at the read: the now marker sits at its end.
+        now: Date.parse("2026-10-21T12:00:00Z"),
+    });
+    await expect(chart.locator("[data-now]")).toHaveCount(1);
     await expect(section.locator("[data-row=lifetime] .value")).toHaveText("51.7 MWh");
+});
+
+test("solar History opens HA's history of the total and the strings from its chart", async ({ page }) => {
+    await onDashboard(page);
+    await mount(page);
+    await openSolar(page);
+    const section = content(page).locator("helman-detail-section[data-history]");
+    await section.locator("button").first().click();
+    await expect(section.locator("helman-day-line-chart[data-power-chart]")).toHaveCount(1);
+    await expectShowMore(page, section.locator("[data-show-more]"), ["sensor.solar", "sensor.solax_pv_power_1", "sensor.solax_pv_power_2"]);
+});
+
+test("solar History points to the Forecast chart, and the pointer opens and scrolls to it", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 500 });
+    await mount(page);
+    await openSolar(page);
+    const history = content(page).locator("helman-detail-section[data-history]");
+    await history.locator("button").first().click();
+    const pointer = history.locator("[data-forecast-pointer]");
+    await expect(pointer).toHaveText("Today's actual vs forecast chart is in Forecast");
+    const forecast = content(page).locator("helman-detail-section[data-forecast]");
+    await expect(forecast.locator("[data-forecast-body]")).toHaveCount(0);
+    await pointer.click();
+    await expect(forecast.locator("helman-day-line-chart[data-forecast-chart]")).toBeVisible();
+    await expect(forecast.locator("helman-day-line-chart[data-forecast-chart]")).toBeInViewport();
+});
+
+test("solar History has no Forecast pointer while the forecast cannot be loaded", async ({ page }) => {
+    await mount(page, { forecastFails: true });
+    await openSolar(page);
+    const history = content(page).locator("helman-detail-section[data-history]");
+    await history.locator("button").first().click();
+    await expect(history.locator("[data-row=lifetime]")).toHaveCount(1);
+    await expect(history.locator("[data-forecast-pointer]")).toHaveCount(0);
+});
+
+test("solar Forecast chart opens HA's history of the solar meter", async ({ page }) => {
+    await onDashboard(page);
+    await mount(page);
+    await openSolar(page);
+    const forecast = content(page).locator("helman-detail-section[data-forecast]");
+    await forecast.locator("button").first().click();
+    await expectShowMore(page, forecast.locator("[data-show-more]"), ["sensor.solar"]);
 });
 
 test("solar History sells kWh only when none of the export was priced", async ({ page }) => {
@@ -385,13 +442,25 @@ test("solar History sells kWh only without an export price, even when nothing wa
     await expect(section.locator("[data-row=sold_grid] .value")).toHaveText(`${formatKwh(0)} kWh`);
 });
 
-test("solar History leaves out the strings chart with one string", async ({ page }) => {
+test("solar History charts the total alone with one string", async ({ page }) => {
     await mount(page, { singleString: true });
     await openSolar(page);
     const section = content(page).locator("helman-detail-section[data-history]");
     await section.locator("button").first().click();
     await expect(section.locator("[data-row=lifetime]")).toHaveCount(1);
-    await expect(section.locator("helman-day-line-chart[data-strings-chart]")).toHaveCount(0);
+    const chart = section.locator("helman-day-line-chart[data-power-chart]");
+    await expect(chart.locator("path.line")).toHaveCount(1);
+    expect(await chart.evaluate((el: any) => el.series.map((series: any) => series.key))).toEqual(["total"]);
+});
+
+test("solar History charts the one string without a total meter", async ({ page }) => {
+    await mount(page, { singleString: true, noTotal: true });
+    await openSolar(page);
+    const section = content(page).locator("helman-detail-section[data-history]");
+    await section.locator("button").first().click();
+    const chart = section.locator("helman-day-line-chart[data-power-chart]");
+    await expect(chart.locator("path.line")).toHaveCount(1);
+    expect(await chart.evaluate((el: any) => el.series.map((series: any) => series.key))).toEqual(["pv1"]);
 });
 
 test("solar Technical details compares the raw and corrected forecast for an admin", async ({ page }) => {

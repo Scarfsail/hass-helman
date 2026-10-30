@@ -144,9 +144,9 @@ export interface ScheduleExplanationPayload {
 }
 
 export type NodeDetailPayload = Api.InverterDetailPayload | Api.InverterTemperatureSectionPayload
-    | Api.InverterModesSectionPayload | Api.GridDetailPayload | Api.GridVoltageSectionPayload | Api.GridMoneySectionPayload
+    | Api.InverterModesSectionPayload | Api.GridDetailPayload | Api.GridVoltageSectionPayload | Api.GridMoneySectionPayload | Api.GridPowerSectionPayload
     | Api.BatteryDetailPayload | Api.BatteryChargeSectionPayload
-    | Api.SolarDetailPayload | Api.SolarProductionSectionPayload | Api.SolarStringsSectionPayload
+    | Api.SolarDetailPayload | Api.SolarProductionSectionPayload | Api.SolarPowerSectionPayload
     | Api.SolarDestinationsSectionPayload | Api.HouseDetailPayload | Api.HouseTodaySectionPayload
     | Api.HousePatternSectionPayload | Api.HouseRankingSectionPayload | Api.EvChargerDetailPayload | Api.EvChargerSegmentSectionPayload
     | Api.EvChargerTodaySectionPayload;

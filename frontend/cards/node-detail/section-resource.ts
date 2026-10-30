@@ -23,9 +23,15 @@ export interface SectionOptions<T> {
     shown: () => boolean;
     /**
      * Whether figures requested at `requestedAt` need a re-read while shown,
-     * or with `null` whether a failed read does; {@link staleToday} by default.
+     * or with `null` whether a failed read does; {@link staleToday} by default,
+     * or for a `rolling` section older than {@link TODAY_REFRESH_MS}.
      */
     staleness?(payload: T | null, requestedAt: number): boolean;
+    /**
+     * The period is a rolling window that ends at the read, not today: it is
+     * never "another day", so a refresh keeps its figures on screen.
+     */
+    rolling?: boolean;
     /** `false`: a failed read replaces the figures shown, which may be out of date, with its error. */
     keepOnError?: boolean;
     /** Called as each read is sent, to stamp what it was read under. */
@@ -85,7 +91,7 @@ export class SectionResource<T> {
 
     async load(): Promise<void> {
         const request = ++this._request;
-        if (this.state?.status !== "ready" || otherDay(this.state.payload, this.requestedAt, timeZone(this._host.hass))) {
+        if (this.state?.status !== "ready" || (!this._options.rolling && otherDay(this.state.payload, this.requestedAt, timeZone(this._host.hass)))) {
             this._set({ status: "loading" });
         }
         this.requestedAt = Date.now();
@@ -118,7 +124,9 @@ export class SectionResource<T> {
             const payload = this.state.status === "ready" ? this.state.payload : null;
             const stale = this._options.staleness
                 ? this._options.staleness(payload, this.requestedAt)
-                : staleToday(payload, this.requestedAt, this._host.hass);
+                : this._options.rolling
+                    ? Date.now() - this.requestedAt > TODAY_REFRESH_MS
+                    : staleToday(payload, this.requestedAt, this._host.hass);
             if (stale) void this.load();
         }
     }

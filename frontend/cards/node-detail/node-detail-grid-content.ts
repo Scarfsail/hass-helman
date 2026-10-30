@@ -7,6 +7,7 @@ import {
     type GridMoneySectionPayload,
     type GridDetailPayload,
     type GridForecastSlotDTO,
+    type GridPowerSectionPayload,
     type GridVoltageSectionPayload,
 } from "../helman-api";
 import { currencyFromPriceUnit } from "../helman-solar-inspector/money-model";
@@ -24,8 +25,8 @@ import "../helman-simple/simple-card-grid";
 import "./detail-headline";
 import "./flow-gauge";
 import "./help-tip";
-import { forecastWhen, holdAtSlots, remainingShare, renderForecastChart, type ForecastChartContext } from "./node-detail-forecast";
-import { historyRow, historySummary, kwhText, sectionNotReady, subTitle } from "./node-detail-history";
+import { forecastWhen, holdAtSlots, remainingShare, renderForecastChart, slotKw, type ForecastChartContext } from "./node-detail-forecast";
+import { historyRow, historySummary, kwhText, renderShowMore, sectionNotReady, subTitle } from "./node-detail-history";
 import { modeStripWindow } from "../shared/mode-strip";
 import { scheduleReason } from "./node-detail-schedule";
 import { SLOT_MS } from "../shared/time/slot-time";
@@ -69,8 +70,9 @@ interface MoneyFigures {
  *
  * Live readings come from `hass` and the live flow from the card; the backend
  * overview supplies the entity ids. Today's voltages are read on opening, for
- * the picture's ranges and the History chart; today's money on opening too,
- * for the History header; the rates and the plan come from the forecast.
+ * the picture's ranges and the Technical details chart; today's money on
+ * opening too, for the History header; today's power once Forecast is open,
+ * for its actual lines; the rates and the plan come from the forecast.
  */
 @customElement("node-detail-grid-content")
 export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPayload> {
@@ -201,6 +203,11 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         fetch: () => this._readSection("voltage"),
         shown: () => this._offers("voltage"),
     });
+    /** Today's grid meter power, for the Forecast chart, while the section is open and the overview offers it. */
+    private readonly _power = this._section<GridPowerSectionPayload>("power", {
+        fetch: () => this._readSection("power"),
+        shown: () => this._offers("power") && this._forecastOpen,
+    });
     private _voltageChart?: {
         payload: GridVoltageSectionPayload;
         series: DayLineSeries[];
@@ -256,8 +263,8 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
 
     // Forecast ----------------------------------------------------------------
 
-    /** The buy price to tomorrow noon, its cheapest and dearest stretch, and the grid use the plan expects. */
-    protected _renderForecast() {
+    /** Import and export, actual against planned, the buy price to tomorrow noon, its cheapest and dearest stretch, and the grid use the plan expects. */
+    protected _renderForecast(overview: GridDetailPayload) {
         const pending = this._forecastPending();
         if (pending !== null) return pending;
         const grid = this._forecast!.grid;
@@ -269,31 +276,67 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         const last = points[points.length - 1];
         const until = last ? last.t + (points.length > 1 ? last.t - points[points.length - 2].t : SLOT_MS) : from;
         const prices = holdAtSlots(points, from, Math.min(until, end) - SLOT_MS);
-        if (!prices.length) return nothing;
-        const cheapest = extremeStretch(prices, (a, b) => a < b);
-        const dearest = extremeStretch(prices, (a, b) => a > b);
+        const power = this._offers("power");
+        if (!prices.length && !power) return nothing;
+        const cheapest = prices.length ? extremeStretch(prices, (a, b) => a < b) : null;
+        const dearest = prices.length ? extremeStretch(prices, (a, b) => a > b) : null;
         const text = (key: string) => this.localize(`node_detail.shared.forecast.${key}`);
         const stretch = (run: Stretch) => ({ range: forecastWhen(run.start, context, run.end), price: this._price(run.value, grid.importPriceUnit) });
-        const summary = boldTemplate(text("grid_summary"), stretch(cheapest));
+        const runs = this._plannedGridRuns(context, end);
+        const imported = runs.filter((run) => run.direction === "import").reduce((sum, run) => sum + run.kwh, 0);
+        const summary = cheapest ? boldTemplate(text("grid_summary"), stretch(cheapest))
+            : imported > 0 ? boldTemplate(text("grid_power_summary"), { kwh: `≈ ${formatKwh(imported)} kWh` })
+            : text("grid_power_chart");
         return this._forecastSection(summary, () => html`
-            ${renderForecastChart(context, {
-                title: text("grid_chart"),
-                help: text("grid_help"),
-                series: [{ key: "buy", label: text("grid_buy"), color: "var(--primary-text-color)", points: prices }],
-                spans: [{ start: cheapest.start, end: cheapest.end, color: CHEAPEST_COLOR }],
-                step: true,
-                formatValue: (value) => this._price(value, grid.importPriceUnit),
-            })}
-            <div class="rows">
-                <div class="row" data-row="dearest"><span class="label">${text("grid_dearest")}</span><span class="value">${fillTemplate(text("grid_stretch"), stretch(dearest))}</span></div>
-                <div class="row" data-row="cheapest"><span class="label"><span style="color: ${CHEAPEST_COLOR}">▬</span> ${text("grid_cheapest")}</span><span class="value">${fillTemplate(text("grid_stretch"), stretch(cheapest))}</span></div>
-            </div>
-            ${this._renderPlannedGridUse(context, end)}
+            ${power ? this._renderPowerChart(overview, context, end) : nothing}
+            ${cheapest && dearest ? html`
+                ${renderForecastChart(context, {
+                    title: text("grid_chart"),
+                    help: text("grid_help"),
+                    series: [{ key: "buy", label: text("grid_buy"), color: "var(--primary-text-color)", points: prices }],
+                    spans: [{ start: cheapest.start, end: cheapest.end, color: CHEAPEST_COLOR }],
+                    step: true,
+                    formatValue: (value) => this._price(value, grid.importPriceUnit),
+                })}
+                <div class="rows">
+                    <div class="row" data-row="dearest"><span class="label">${text("grid_dearest")}</span><span class="value">${fillTemplate(text("grid_stretch"), stretch(dearest))}</span></div>
+                    <div class="row" data-row="cheapest"><span class="label"><span style="color: ${CHEAPEST_COLOR}">▬</span> ${text("grid_cheapest")}</span><span class="value">${fillTemplate(text("grid_stretch"), stretch(cheapest))}</span></div>
+                </div>
+            ` : nothing}
+            ${this._renderPlannedGridUse(context, runs)}
         `);
     }
 
-    /** The plan's grid import and export to tomorrow noon, one row per stretch of one direction. */
-    private _renderPlannedGridUse(context: ForecastChartContext, end: number) {
+    /**
+     * Import and export today → tomorrow noon: the meter's actual power solid,
+     * import its negative part flipped and export its positive part (Helman's
+     * convention), and the plan's slot energy dashed as each slot's average.
+     */
+    private _renderPowerChart(overview: GridDetailPayload, context: ForecastChartContext, end: number) {
+        const text = (key: string) => this.localize(`node_detail.shared.forecast.${key}`);
+        const day = this._power.payload?.power;
+        const bucketMs = (day?.bucketMinutes ?? 5) * 60_000;
+        const actual = (sign: 1 | -1) => (day?.points ?? []).map((point) => ({ t: Date.parse(point.start), v: Math.max(0, sign * point.mean) / 1000 }));
+        const planned = (kwh: (slot: GridForecastSlotDTO) => number) => this._forecast!.grid.series
+            .filter((slot) => slot.durationHours > 0)
+            .map((slot) => ({ t: Date.parse(slot.timestamp) + slot.durationHours * 3_600_000 / 2, v: slotKw(Math.max(0, kwh(slot)), slot.durationHours) }))
+            .filter((point) => point.t <= end);
+        return renderForecastChart(context, {
+            title: text("grid_power_chart"),
+            help: text("grid_power_help"),
+            series: [
+                { key: "import", label: text("grid_import_actual"), color: GRID_IMPORT_COLOR, points: actual(-1), bucketMs },
+                { key: "import-forecast", label: text("grid_import_forecast"), color: GRID_IMPORT_COLOR, dashed: true, points: planned((slot) => slot.importedFromGridKwh) },
+                { key: "export", label: text("grid_export_actual"), color: GRID_EXPORT_COLOR, points: actual(1), bucketMs },
+                { key: "export-forecast", label: text("grid_export_forecast"), color: GRID_EXPORT_COLOR, dashed: true, points: planned((slot) => slot.exportedToGridKwh) },
+            ],
+            formatValue: (value) => formatPower(value * 1000).display,
+            entities: overview.entities.power ? [overview.entities.power] : [],
+        });
+    }
+
+    /** The plan's grid import and export still ahead to tomorrow noon, one run per stretch of one direction. */
+    private _plannedGridRuns(context: ForecastChartContext, end: number) {
         const text = (key: string) => this.localize(`node_detail.shared.forecast.${key}`);
         const runs: Array<{ start: number; end: number; direction: "import" | "export"; reason: string | null; kwh: number }> = [];
         for (const slot of this._forecast!.grid.series) {
@@ -313,6 +356,11 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
                 runs.push({ start, end: slotEnd, direction, reason, kwh });
             }
         }
+        return runs;
+    }
+
+    private _renderPlannedGridUse(context: ForecastChartContext, runs: ReturnType<NodeDetailGridContent["_plannedGridRuns"]>) {
+        const text = (key: string) => this.localize(`node_detail.shared.forecast.${key}`);
         if (!runs.length) return nothing;
         return html`
             <div class="section-title">${text("grid_planned")}</div>
@@ -336,17 +384,14 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
 
     // History & statistics -----------------------------------------------------
 
-    /** Today's bought and sold energy with its money, then today's voltage per phase. */
-    protected _renderHistory(_overview: GridDetailPayload) {
+    /** Today's bought and sold energy with its money; today's import and export power is charted in Forecast. */
+    protected _renderHistory() {
         const money = this._moneyFigures();
         const summary = historySummary(this._money, this.localize, money?.importKwh != null ? boldTemplate(this._h("grid_summary"), { kwh: kwhText(money.importKwh) }) : null);
         return this._historySection(summary, () => html`
+            ${this._forecast && this._offers("power") ? this._forecastPointer() : nothing}
             ${subTitle(this._h("today"))}
             ${this._renderMoney()}
-            ${this._offers("voltage") ? html`
-                ${subTitle(this._h("voltage_today"))}
-                ${this._renderVoltage()}
-            ` : nothing}
         `);
     }
 
@@ -365,8 +410,8 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         </div>`;
     }
 
-    /** Today's voltage per phase against the nominal and the normal band, and its lowest and highest. */
-    private _renderVoltage() {
+    /** Today's voltage per phase against the nominal and the normal band, its lowest and highest, and Show more of the phases. */
+    private _renderVoltage(overview: GridDetailPayload) {
         const notReady = sectionNotReady(this._voltage, this.localize);
         if (notReady) return notReady;
         const payload = this._voltage.payload!;
@@ -406,12 +451,13 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
                 .formatValue=${this._formatVolts}
             ></helman-day-line-chart>
             <div class="rows">${historyRow(this._h("voltage_range"), `${Math.floor(low)}–${Math.ceil(high)} V`, "voltage-range")}</div>
+            ${renderShowMore(PHASES.map((phase) => overview.entities[`ac_voltage_l${phase}`]).filter((id): id is string => !!id), this.localize)}
         `;
     }
 
     // Technical details ---------------------------------------------------------
 
-    /** The export limit and cap now, whether the inverter runs on the grid, and each phase's current against the breaker. */
+    /** The export limit and cap now, whether the inverter runs on the grid, each phase's current against the breaker, and today's voltage per phase. */
     protected _renderTechnical(overview: GridDetailPayload) {
         const exportLimit = this._number(overview, "export_limit");
         const runMode = this._reading(overview, "run_mode");
@@ -428,6 +474,10 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
             ${this._hasPhaseTelemetry(overview, "grid_power") ? html`
                 ${subTitle(this.localize("node_detail.shared.technical.phase_currents"))}
                 <div class="rows">${this._phaseReadings(overview).map((reading) => this._row(`L${reading.phase}`, this._currentText(reading, limit), `current-l${reading.phase}`))}</div>
+            ` : nothing}
+            ${this._offers("voltage") ? html`
+                ${subTitle(this._h("voltage_today"))}
+                ${this._renderVoltage(overview)}
             ` : nothing}
         `;
     }

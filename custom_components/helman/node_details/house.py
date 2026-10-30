@@ -42,9 +42,9 @@ from ..power_polarity import is_power_inverted
 from ..vendors import INVERTER_TELEMETRY_KEY
 from .battery import TIME_SENSORS, helman_sensor_ids, today_ranking_report
 from .context import NodeDetailContext
-from .day_stats import async_day_stats, day_window
+from .day_stats import async_day_stats, day_window, in_watts, node_config, node_entity
 from .inverter import run_mode_condition
-from .solar import in_watts, node_config, node_entity, solar_destinations
+from .solar import solar_destinations
 
 PHASES = (1, 2, 3)
 

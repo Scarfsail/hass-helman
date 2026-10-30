@@ -308,6 +308,21 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview> extend
     }
 
     /**
+     * A note that today's actual-vs-forecast chart is in Forecast, for a
+     * History body to start with while that chart draws: a click opens the
+     * Forecast section and scrolls to it.
+     */
+    protected _forecastPointer(): TemplateResult {
+        return html`<button class="link-button" data-forecast-pointer @click=${() => void this._showForecast()}>${this._h("forecast_pointer")}</button>`;
+    }
+
+    private async _showForecast(): Promise<void> {
+        this._forecastOpen = true;
+        await this.updateComplete;
+        this.renderRoot.querySelector("helman-detail-section[data-forecast]")?.scrollIntoView({ block: "start", behavior: "smooth" });
+    }
+
+    /**
      * The forecast-based Forecast section: `null` while the forecast loads,
      * the failure with its retry when none could be loaded, else `ready`.
      */

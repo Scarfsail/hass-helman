@@ -37,7 +37,7 @@ import { LaneOwnershipController } from "./lane-ownership";
 import { DialogHistoryController } from "../shared/dialog-history-controller";
 import type { ControlOverrideDialog } from "./control-override-dialog";
 import { boldTemplate } from "./detail-section";
-import { historyRow, historySummary, sectionNotReady, subTitle } from "./node-detail-history";
+import { historyRow, historySummary, renderShowMore, sectionNotReady, subTitle } from "./node-detail-history";
 import "./detail-headline";
 import "./help-tip";
 import "./control-override-dialog";
@@ -471,6 +471,7 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
                 .locale=${this._locale}
                 .formatValue=${format}
             ></helman-day-line-chart>
+            ${renderShowMore([stats.entityId], this.localize)}
         `;
     }
 
