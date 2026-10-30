@@ -334,16 +334,24 @@ class ConsumptionForecastBuilder:
                     }
                 )
 
+            measured_total = {
+                "timestamp": slot_start.isoformat(),
+                "total": {"value": round(max(0.0, house_total), 4)},
+            }
             if skip_hour:
+                # Total demand is measured independently of its decomposition.
+                # An unavailable sub-meter must not erase that observation.
+                actual_history.append(measured_total)
                 continue
 
             non_deferrable = house_total - deferrable_sum
             if non_deferrable < NEGATIVE_RESIDUAL_THRESHOLD:
+                actual_history.append(measured_total)
                 continue
 
             actual_history.append(
                 {
-                    "timestamp": slot_start.isoformat(),
+                    **measured_total,
                     "nonDeferrable": {
                         "value": round(max(0.0, non_deferrable), 4),
                     },

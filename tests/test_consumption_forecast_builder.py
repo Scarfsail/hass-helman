@@ -159,6 +159,38 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
+    async def test_actual_total_survives_missing_consumer_without_inventing_split(self):
+        module, _, builder = self._make_builder()
+        slot = datetime(2026, 3, 20, 20, 0, tzinfo=TZ)
+        for succeeded in (True, False):
+            with self.subTest(query_succeeded=succeeded):
+                consumer = module._ConsumerSlotHistoryData(
+                    entity_id="sensor.washer_energy", label="Washer",
+                    values_by_slot={}, query_succeeded=succeeded,
+                )
+                history = builder._build_slot_actual_history(
+                    house_by_slot={dt_util.as_utc(slot): 0.321},
+                    consumers=[consumer], completed_slots=[slot, slot + timedelta(minutes=15)],
+                )
+                self.assertEqual(history, [{"timestamp": slot.isoformat(), "total": {"value": 0.321}}])
+                self.assertEqual(builder._build_slot_actual_history(
+                    house_by_slot={}, consumers=[consumer], completed_slots=[slot],
+                ), [])
+
+    async def test_actual_total_does_not_replace_known_decomposition(self):
+        module, _, builder = self._make_builder()
+        slot = datetime(2026, 3, 20, 20, 0, tzinfo=TZ)
+        history = builder._build_slot_actual_history(
+            house_by_slot={dt_util.as_utc(slot): 0.8},
+            consumers=[module._ConsumerSlotHistoryData(
+                entity_id="sensor.washer_energy", label="Washer",
+                values_by_slot={dt_util.as_utc(slot): 0.3}, query_succeeded=True,
+            )], completed_slots=[slot],
+        )
+        self.assertEqual(history[0]["total"], {"value": 0.8})
+        self.assertEqual(history[0]["nonDeferrable"], {"value": 0.5})
+        self.assertEqual(history[0]["deferrableConsumers"][0]["value"], 0.3)
+
     @staticmethod
     def _flat_profile(consumption_module, *, consumers: bool = True):
         """A fitted profile whose 168 bands are all the same, so the assertions

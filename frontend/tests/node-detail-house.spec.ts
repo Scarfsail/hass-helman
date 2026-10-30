@@ -22,6 +22,7 @@ import { test, expect, type Page } from "@playwright/test";
 
 type Variant = {
     recordedForecast?: boolean;
+    missingConsumerActual?: boolean;
     profile?: boolean;
     /** The house power sensor's state, W. */
     power?: string;
@@ -256,7 +257,10 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 ...forecastDefaults.house_consumption,
                 status: "available", generatedAt: "2026-10-21T12:00:00+00:00", unit: "kWh",
                 trainingWindowDays: 56, historyDaysAvailable: 42, requiredHistoryDays: 14, model: "hour_of_week",
-                actualHistory: v.recordedForecast ? [{ timestamp: "2026-10-21T11:30:00Z", nonDeferrable: { value: 0.2 },
+                actualHistory: v.missingConsumerActual ? [
+                    { timestamp: "2026-10-21T11:15:00Z", total: { value: 0.35 } },
+                    { timestamp: "2026-10-21T11:30:00Z", total: { value: 0.45 } },
+                ] : v.recordedForecast ? [{ timestamp: "2026-10-21T11:30:00Z", nonDeferrable: { value: 0.2 },
                     deferrableConsumers: [{ entityId: "sensor.boiler_energy", label: "Boiler", value: 0.4 }, { entityId: "sensor.boiler_energy", label: "Boiler", value: 0.4 }] }] : [],
                 forecastHistory: v.recordedForecast ? [
                     { timestamp: "2026-10-21T11:45:00Z", value: 0.5 },
@@ -500,4 +504,19 @@ test("house compares recorded predictions with measured total demand once", asyn
     expect(new Set(predicted.map((point: any) => point.t)).size).toBe(predicted.length);
     expect(lines.find((line: any) => line.key === "actual").points[0].v).toBeCloseTo(2.4);
     await expect(section.locator("[slot=summary]")).toHaveText("≈ 12 kWh more today");
+});
+
+
+test("house shows measured total when a consumer meter cannot supply the split", async ({ page }) => {
+    await mount(page, { missingConsumerActual: true });
+    await openHouse(page);
+    const section = content(page).locator("helman-detail-section[data-forecast]");
+    await section.locator("button").first().click();
+    const lines = await section.locator("helman-day-line-chart").evaluate((chart: any) => chart.series);
+    const actual = lines.find((line: any) => line.key === "actual").points;
+    expect(actual).toEqual([
+        { t: Date.parse("2026-10-21T11:22:30Z"), v: 1.4 },
+        { t: Date.parse("2026-10-21T11:37:30Z"), v: 1.8 },
+    ]);
+    await expect(section.locator("helman-day-line-chart svg")).toBeVisible();
 });

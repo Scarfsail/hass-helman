@@ -462,8 +462,11 @@ export interface HouseConsumptionActualConsumerHourDTO {
 
 export interface HouseConsumptionActualHourDTO {
     timestamp: string;
-    nonDeferrable: HouseConsumptionActualValueDTO;
-    deferrableConsumers: HouseConsumptionActualConsumerHourDTO[];
+    /** Measured whole-house energy, independent of sub-meter availability. */
+    total?: HouseConsumptionActualValueDTO;
+    /** Present only when the measured decomposition is complete. */
+    nonDeferrable?: HouseConsumptionActualValueDTO;
+    deferrableConsumers?: HouseConsumptionActualConsumerHourDTO[];
 }
 
 export interface HouseConsumptionForecastDTO {

@@ -335,10 +335,12 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         for (const slot of slots) comparison.set(slot.start, slot.kwh);
         const predicted = [...comparison].sort(([a], [b]) => a - b)
             .map(([start, kwh]) => ({ t: start + SLOT_MS / 2, v: kw(kwh) }));
-        const actual = forecast.actualHistory.map((slot) => ({
-            t: Date.parse(slot.timestamp) + SLOT_MS / 2,
-            v: kw(slot.nonDeferrable.value + [...new Map(slot.deferrableConsumers.map((consumer) => [consumer.entityId, consumer.value])).values()].reduce((sum, value) => sum + value, 0)),
-        }));
+        const actual = forecast.actualHistory.flatMap((slot) => {
+            const total = slot.total?.value ?? (slot.nonDeferrable && slot.deferrableConsumers
+                ? slot.nonDeferrable.value + [...new Map(slot.deferrableConsumers.map((consumer) => [consumer.entityId, consumer.value])).values()].reduce((sum, value) => sum + value, 0)
+                : undefined);
+            return total === undefined ? [] : [{ t: Date.parse(slot.timestamp) + SLOT_MS / 2, v: kw(total) }];
+        });
         // The busiest local hour of the rest of today, by its forecast energy.
         const today = dayKey(context.now, context.timeZone);
         const hours = new Map<number, number>();
