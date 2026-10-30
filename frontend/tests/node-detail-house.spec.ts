@@ -21,6 +21,7 @@ import { test, expect, type Page } from "@playwright/test";
 
 
 type Variant = {
+    recordedForecast?: boolean;
     profile?: boolean;
     /** The house power sensor's state, W. */
     power?: string;
@@ -245,7 +246,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
         const houseSlot = (ms: number, kwh: number) => ({
             timestamp: new Date(ms).toISOString().replace(".000Z", "+00:00"),
             nonDeferrable: { value: kwh, lower: kwh * 0.6, upper: kwh * 1.5 },
-            deferrableConsumers: [],
+            deferrableConsumers: v.recordedForecast ? [{ entityId: "sensor.boiler_energy", label: "Boiler", value: 4, lower: 2, upper: 6 }] : [],
         });
         const now = Date.parse(v.lateSlot ? "2026-10-21T12:45:00Z" : "2026-10-21T12:00:00Z");
         const forecast: ForecastPayload = {
@@ -255,7 +256,14 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 ...forecastDefaults.house_consumption,
                 status: "available", generatedAt: "2026-10-21T12:00:00+00:00", unit: "kWh",
                 trainingWindowDays: 56, historyDaysAvailable: 42, requiredHistoryDays: 14, model: "hour_of_week",
-                actualHistory: [],
+                actualHistory: v.recordedForecast ? [{ timestamp: "2026-10-21T11:30:00Z", nonDeferrable: { value: 0.2 },
+                    deferrableConsumers: [{ entityId: "sensor.boiler_energy", label: "Boiler", value: 0.4 }, { entityId: "sensor.boiler_energy", label: "Boiler", value: 0.4 }] }] : [],
+                forecastHistory: v.recordedForecast ? [
+                    { timestamp: "2026-10-21T11:45:00Z", value: 0.5 },
+                    { timestamp: "2026-10-21T11:30:00Z", value: 0.7 },
+                    { timestamp: "2026-10-21T11:30:00Z", value: 0.7 },
+                    { timestamp: "2026-10-21T12:00:00Z", value: 99 },
+                ] : [],
                 currentSlot: houseSlot(now, v.lateSlot ? 1.5 : 0.3),
                 series: Array.from({ length: 140 }, (_, i) => houseSlot(now + (i + 1) * 900_000, v.lateSlot ? 0.2 : 0.25)),
             },
@@ -474,4 +482,22 @@ test("house Technical details is not rendered for a non-admin", async ({ page })
     await openHouse(page);
     await expect(content(page).locator("helman-detail-section[data-history]")).toHaveCount(1);
     await expect(content(page).locator("helman-detail-section[data-technical]")).toHaveCount(0);
+});
+
+
+test("house compares recorded predictions with measured total demand once", async ({ page }) => {
+    await mount(page, { recordedForecast: true });
+    await openHouse(page);
+    const section = content(page).locator("helman-detail-section[data-forecast]");
+    await section.locator("button").first().click();
+    const lines = await section.locator("helman-day-line-chart").evaluate((chart: any) => chart.series);
+    const predicted = lines.find((line: any) => line.key === "forecast").points;
+    expect(predicted.slice(0, 3)).toEqual([
+        { t: Date.parse("2026-10-21T11:37:30Z"), v: 2.8 },
+        { t: Date.parse("2026-10-21T11:52:30Z"), v: 2 },
+        { t: Date.parse("2026-10-21T12:07:30Z"), v: 1.2 },
+    ]);
+    expect(new Set(predicted.map((point: any) => point.t)).size).toBe(predicted.length);
+    expect(lines.find((line: any) => line.key === "actual").points[0].v).toBeCloseTo(2.4);
+    await expect(section.locator("[slot=summary]")).toHaveText("≈ 12 kWh more today");
 });

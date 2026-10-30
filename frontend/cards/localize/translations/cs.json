@@ -172,7 +172,7 @@
         "solar_days": "Další dny",
         "house_summary": "ještě {kwh} dnes",
         "house_chart": "Spotřeba · dnes → zítra v poledne",
-        "house_help": "Naučeno z posledních {n} dní spotřeby vašeho domu pro tento den v týdnu a hodinu, plus už naplánované běhy spotřebičů.",
+        "house_help": "Celková spotřeba domu včetně spotřebičů. Předpověď vychází z posledních {n} dní pro tento den v týdnu a hodinu a z plánovaných běhů spotřebičů; zaznamenané předpovědi lze porovnat se skutečnou spotřebou.",
         "house_run_legend": "plánovaný běh spotřebiče",
         "house_rest": "Zbytek dneška",
         "house_busiest": "Nejvytíženější hodina",

@@ -339,3 +339,7 @@ class BatteryForecastResponseTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_battery_response_defaults_recorded_history_to_empty():
+    assert battery_forecast_response.build_battery_forecast_response({"status": "unavailable"}, forecast_days=1)["forecastHistory"] == []

@@ -272,7 +272,7 @@
         "solar_days": "Next days",
         "house_summary": "{kwh} more today",
         "house_chart": "Use · today → tomorrow noon",
-        "house_help": "Learned from the last {n} days of your house's use for this weekday and hour, plus the appliance runs already planned.",
+        "house_help": "Total house demand, including appliances. Forecast learned from the last {n} days for this weekday and hour, plus planned appliance runs; elapsed predictions are recorded alongside measured use.",
         "house_run_legend": "planned appliance run",
         "house_rest": "Rest of today",
         "house_busiest": "Busiest hour",

@@ -173,3 +173,7 @@ class HouseForecastResponseTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_house_response_defaults_recorded_history_to_empty():
+    assert house_forecast_response.build_house_forecast_response({"status": "unavailable"}, forecast_days=1)["forecastHistory"] == []

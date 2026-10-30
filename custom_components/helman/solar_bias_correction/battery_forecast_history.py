@@ -5,6 +5,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
 
 from ..recorder_states import numeric_timeline, read_states
 from ..slot_grid import SLOT_MINUTES, day_slots
@@ -115,14 +116,37 @@ async def load_battery_forecast_points_for_day(
     return (soc_points, *wh_point_lists)
 
 
+async def load_battery_soc_forecast_points_for_day(
+    hass: HomeAssistant, target_date: date, timezone: ZoneInfo,
+    *,
+    until: datetime | None = None,
+) -> list[dict[str, Any]]:
+    """Read recorded end-of-slot SoC predictions without losing slot instants."""
+    start = datetime.combine(target_date, time.min, tzinfo=timezone)
+    states = await read_states(
+        hass, [BATTERY_SOC_FORECAST_CURRENT_ENTITY], start, until or start + timedelta(days=1),
+        include_start_state=True, no_attributes=True,
+    )
+    return [
+        {"timestamp": instant.astimezone(timezone).isoformat(), "value": value}
+        for instant, value in _hold_forward(
+            states.get(BATTERY_SOC_FORECAST_CURRENT_ENTITY), start, wall_clock=False, until=until,
+        ).items()
+    ]
+
+
 def _hold_forward(
-    states: list[Any] | None, day_start_local: datetime
+    states: list[Any] | None,
+    day_start_local: datetime,
+    *,
+    wall_clock: bool = True,
+    until: datetime | None = None,
 ) -> dict[datetime, float]:
     """Sample one entity's states onto the day's slots.
 
-    Keyed by the slot's local ``datetime``; the SoC caller renders that as
-    ``"HH:MM"`` and the Wh callers as an ISO timestamp. A slot before the
-    entity's first reading is absent rather than zero, exactly as
+    The inspector uses local wall-clock keys for its legacy ``HH:MM`` API.
+    The public SoC history uses UTC keys to preserve repeated-hour instants.
+    A slot before the entity's first reading is absent rather than zero, exactly as
     :func:`load_house_forecast_points_for_day` leaves it.
 
     The slot-resolution rule -- first row *inside* the slot, not the last one
@@ -134,7 +158,11 @@ def _hold_forward(
     if not timeline:
         return {}
 
-    slot_starts = day_slots(day_start_local.date(), tzinfo=day_start_local.tzinfo, wall_clock=True)
+    slot_starts = day_slots(day_start_local.date(), tzinfo=day_start_local.tzinfo, wall_clock=wall_clock)
+    if not wall_clock:
+        timeline = sorted((dt_util.as_utc(instant), value) for instant, value in timeline)
+        slot_starts = [dt_util.as_utc(instant) for instant in slot_starts
+                       if until is None or dt_util.as_utc(instant) < dt_util.as_utc(until)]
 
     return resolve_forecast_slot_values(
         timeline, slot_starts, slot_minutes=SLOT_MINUTES

@@ -476,6 +476,8 @@ export interface HouseConsumptionForecastDTO {
     requiredHistoryDays: number;
     model: string | null;
     actualHistory: HouseConsumptionActualHourDTO[];
+    /** Recorded predictions for completed slots, in kWh per slot. */
+    forecastHistory: ForecastPointDTO[];
     currentSlot?: HouseConsumptionForecastHourDTO;
     series: HouseConsumptionForecastHourDTO[];
 }
@@ -522,6 +524,8 @@ export interface BatteryCapacityForecastDTO {
     partialReason: string | null;
     coverageUntil: string | null;
     actualHistory: BatteryCapacityActualHourDTO[];
+    /** Recorded end-of-slot SoC percent, timestamped at slot start. */
+    forecastHistory: ForecastPointDTO[];
     series: BatteryCapacityForecastHourDTO[];
 }
 

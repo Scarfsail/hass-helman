@@ -20,6 +20,8 @@ import { test, expect, type Page } from "@playwright/test";
  */
 
 type Variant = {
+    recordedForecast?: boolean;
+    missingLastForecast?: boolean;
     profile?: boolean;
     /** The battery meter's state, W, positive charging. */
     power?: string;
@@ -188,6 +190,11 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 chargeEfficiency: 0.95, dischargeEfficiency: 0.95, maxChargePowerW: 5000, maxDischargePowerW: 6000,
                 partialReason: null, coverageUntil: null,
                 actualHistory: [{ timestamp: `${day}T11:30:00+00:00`, startSocPct: 70, socPct: 69 }, { timestamp: `${day}T11:45:00+00:00`, startSocPct: 69, socPct: 67 }],
+                forecastHistory: v.recordedForecast ? [
+                    { timestamp: `${day}T10:00:00Z`, value: 100 },
+                    { timestamp: `${day}T11:30:00Z`, value: 2 },
+                    ...(v.missingLastForecast ? [] : [{ timestamp: `${day}T11:45:00Z`, value: 30 }]),
+                ] : [],
                 series: v.socPath
                     ? v.socPath.map((slot, index) => forecastSlot(new Date(Date.parse(`${day}T12:00:00Z`) + index * 900_000).toISOString(), slot.soc, slot.min, slot.max))
                     : [forecastSlot(`${day}T12:00:00+00:00`, 66), forecastSlot(`${day}T12:15:00+00:00`, 64)],
@@ -587,4 +594,42 @@ test("battery Technical details is not rendered for a non-admin", async ({ page 
     await openDetail(page);
     await expect(content(page).locator("helman-detail-section[data-history]")).toHaveCount(1);
     await expect(content(page).locator("helman-detail-section[data-technical]")).toHaveCount(0);
+});
+
+
+test("battery retains elapsed predictions and its live anchor without historical extrema changing summaries", async ({ page }) => {
+    await mount(page, { recordedForecast: true, socPath: [{ soc: 60 }, { soc: 50 }, { soc: 55 }] });
+    await openDetail(page);
+    const section = forecastSection(page);
+    await expect(section.locator("[slot=summary]")).toHaveText("Lowest 50 % at 12:30");
+    await openForecast(page);
+    const lines = await section.locator("helman-day-line-chart").evaluate((chart: any) => chart.series);
+    const history = lines.find((line: any) => line.key === "forecast-history").points;
+    const planned = lines.find((line: any) => line.key === "planned").points;
+    expect(history).toEqual([
+        { t: Date.parse("2026-10-21T10:15:00Z"), v: 100 },
+        { t: Date.parse("2026-10-21T11:45:00Z"), v: 2 },
+        { t: Date.parse("2026-10-21T12:00:00Z"), v: 30 },
+    ]);
+    expect(planned[0]).toEqual({ t: Date.parse("2026-10-21T12:00:00Z"), v: 67 });
+    expect(planned.filter((point: any) => point.t === Date.parse("2026-10-21T12:15:00Z"))).toEqual([{ t: Date.parse("2026-10-21T12:15:00Z"), v: 60 }]);
+    await expect(section.locator("[data-row=full] .value")).toHaveText("Not within the forecast");
+    await expect(section.locator("[data-row=floor] .value")).toHaveText("Not within the forecast");
+});
+
+
+test("battery keeps a missing completed prediction separate from the live projection", async ({ page }) => {
+    await mount(page, { recordedForecast: true, missingLastForecast: true });
+    await page.clock.setFixedTime(new Date("2026-10-21T12:05:00Z"));
+    await openDetail(page);
+    await openForecast(page);
+    const chart = forecastSection(page).locator("helman-day-line-chart");
+    const lines = await chart.evaluate((chart: any) => chart.series);
+    const history = lines.find((line: any) => line.key === "forecast-history");
+    const planned = lines.find((line: any) => line.key === "planned");
+    expect(history.points.at(-1)).toEqual({ t: Date.parse("2026-10-21T11:45:00Z"), v: 2 });
+    expect(planned.points[0]).toEqual({ t: Date.parse("2026-10-21T12:05:00Z"), v: 67 });
+    expect(planned.points.every((point: any) => point.t >= Date.parse("2026-10-21T12:05:00Z"))).toBe(true);
+    await expect(chart.locator("path[data-series=forecast-history]")).toHaveCount(1);
+    await expect(chart.locator("path[data-series=planned]")).toHaveCount(1);
 });
