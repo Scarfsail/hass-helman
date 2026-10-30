@@ -501,7 +501,8 @@ test("grid Technical details shows the export limits, the grid state and the pha
     await openGrid(page);
     const section = content(page).locator("helman-detail-section[data-technical]");
     await section.locator("button").first().click();
-    await expect(section.locator("[data-row=export-limit]")).toHaveCount(1);
+    await expect(section.locator("[data-row=export-limit]")).toHaveCount(0);
+    await expect(section.locator('[data-entities] [data-entity="number.solax_export_control_user_limit"]')).toHaveCount(1);
     await expect(section.locator("[data-row=export-cap]")).toHaveCount(1);
     await expect(section.locator("[data-row=grid-state] .value")).toContainText("Normal Mode");
     await expect(section.locator("[data-row^=current-l]")).toHaveCount(3);

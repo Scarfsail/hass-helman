@@ -12,7 +12,7 @@ import { getSharedHelmanStore } from "../shared/data/store";
 import { SectionResource, TODAY_REFRESH_MS, hassLocale, timeZone, type SectionOptions, type SectionState } from "./section-resource";
 import { ScheduleController, type PlanSpan } from "./schedule-controller";
 import { formatScheduleTime } from "../shared/schedule/model/schedule-time";
-import { entityName, openMoreInfo, readingNumber, readingText } from "./node-detail-readings";
+import { entityName, readingNumber, readingText, renderEntityList } from "./node-detail-readings";
 import { dispatchWatchedEntities } from "../shared/hass-change";
 
 import { IDLE_W } from "./live-flows";
@@ -279,7 +279,10 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview> extend
             ${overview ? this._renderForecast(overview) : nothing}
             ${overview ? this._renderHistory(overview) : nothing}
             ${overview ? renderTechnicalSection(this.hass, this.localize, this._technicalOpen, (open) => { this._technicalOpen = open; },
-                () => this._renderTechnical(overview)) : nothing}
+                () => html`
+                    ${this._renderTechnical(overview)}
+                    ${renderEntityList(this.hass, this.localize, this, Object.values(overview.entities))}
+                `) : nothing}
         `;
     }
 
@@ -372,30 +375,15 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview> extend
     // ── Rows and readings ───────────────────────────────────────────────────
 
     /**
-     * A labelled value. With `entityId` the value is that entity's reading,
-     * and a button that opens its more-info; a calculated figure has none and
-     * stays plain.
+     * A labelled value.
      */
-    protected _row(label: string, value: string, key?: string, scope?: string, entityId?: string | null) {
+    protected _row(label: unknown, value: unknown, key?: string, scope?: string) {
         return html`
             <div class="row" data-row=${key ?? nothing}>
                 <span class="label">${label}${scope ? html`<br><span class="note">${scope}</span>` : nothing}</span>
-                ${entityId ? html`
-                    <button class="value reading" data-entity=${entityId} title=${this._name(entityId)} @click=${() => this._moreInfo(entityId)}>${value}</button>
-                ` : html`<span class="value">${value}</span>`}
+                <span class="value">${value}</span>
             </div>
         `;
-    }
-
-    /** A technical row, hidden when its reading is unavailable; its value opens the entity's more-info. */
-    protected _optionalRow(overview: O, key: string, labelKey: string) {
-        const value = this._reading(overview, key);
-        return value === null ? nothing : this._row(this._t(labelKey), value, key, undefined, overview.entities[key]);
-    }
-
-    /** HA's own more-info dialog for `entityId`, as the card's device rows open it. */
-    protected _moreInfo(entityId: string): void {
-        openMoreInfo(this, entityId);
     }
 
     /** A reading as shown: its state and unit, `null` when missing or unavailable. */

@@ -526,15 +526,6 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
                 ${this._row(this._t("why.last_command"), [commanded ? this._modeLabel(commanded) : this._commandedRaw(overview) ?? this._t("unavailable"),
                     overview.agreement.reason !== "no_profile" ? this._agreementText(overview) : null].filter(Boolean).join(" · "), "last-command")}
             </div>
-            ${subTitle(t("configuration"))}
-            <div class="rows">
-                ${this._optionalRow(overview, "use_mode", "why.use_mode")}
-                ${this._optionalRow(overview, "manual_mode", "why.manual_mode")}
-                ${this._optionalRow(overview, "remote_control", "why.remote_control")}
-                ${this._optionalRow(overview, "remote_control_mode", "why.remote_control_mode")}
-                ${this._optionalRow(overview, "link_success_rate", "trust.link_rate")}
-                ${this._optionalRow(overview, "link_quarantined_registers", "trust.quarantined")}
-            </div>
         `;
     }
 

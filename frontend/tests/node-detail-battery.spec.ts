@@ -561,17 +561,25 @@ test("battery History header gives today's charge and discharge, collapsed; the 
     await expect(tiles.nth(2)).toContainText("cell gap; fine below 50");
 });
 
-test("battery Technical details shows the slot, the executor and the BMS readings to an admin", async ({ page }) => {
+test("battery Technical details shows the slot, the executor and the entities list to an admin", async ({ page }) => {
     await mount(page, { admin: true });
     await openDetail(page);
     const section = content(page).locator("helman-detail-section[data-technical]");
     await expect(section.locator("[slot=summary]")).toHaveCount(0);
     await section.locator("button").first().click();
     await expect(section.locator("[data-row=executor] .value")).toContainText("Applied");
-    for (const key of ["bms_charge_max_current", "bms_discharge_max_current", "battery_voltage", "battery_current", "bms_connect_state", "cell_voltage_high", "cell_voltage_low"]) {
-        await expect(section.locator(`[data-row=${key}]`)).toHaveCount(1);
+    for (const id of [
+        "sensor.solax_battery_voltage_charge",
+        "sensor.solax_battery_current_charge",
+        "sensor.solax_bms_charge_max_current",
+        "sensor.solax_bms_discharge_max_current",
+        "sensor.solax_bms_connect_state",
+        "sensor.solax_cell_voltage_high",
+        "sensor.solax_cell_voltage_low",
+    ]) {
+        await expect(section.locator(`[data-entities] [data-entity="${id}"]`)).toHaveCount(1);
     }
-    await expect(section.locator("[data-row=battery_temperature], [data-row=battery_type]")).toHaveCount(0);
+    await expect(section.locator("[data-row=bms_charge_max_current], [data-row=battery_voltage]")).toHaveCount(0);
 });
 
 test("battery Technical details is not rendered for a non-admin", async ({ page }) => {

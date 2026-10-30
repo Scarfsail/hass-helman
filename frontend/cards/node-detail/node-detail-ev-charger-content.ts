@@ -459,14 +459,11 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
                 ${this._plan.schedule ? this._row(this._t("plan.execution"), this._t(this._plan.schedule.executionEnabled ? "plan.execution_on_value" : "plan.execution_off_value"), "execution") : nothing}
                 ${this._row(t("executor"), runtime ? runtimeText(runtime, this.localize) : t("no_runtime"), "runtime")}
                 ${this._row(t("window_settings"), settings, "window")}
-                ${this._optionalRow(overview, "charge_mode", "plan.charge_mode")}
                 ${this._row(this._t("plan.generated"), projection ? this._time(Date.parse(projection.generatedAt)) : "—", "generated")}
             </div>
             ${subTitle(t("link"))}
             <div class="rows">
                 ${this._row(this._t("trust.fault"), fault ?? (this._faultKnown(overview) ? this._t("trust.no_fault") : this._t("unavailable")), "fault")}
-                ${this._optionalRow(overview, "network_status", "trust.network")}
-                ${this._optionalRow(overview, "link_success_rate", "trust.link")}
             </div>
             ${subTitle(this._t("trust.comparison"))}
             <div class="rows">

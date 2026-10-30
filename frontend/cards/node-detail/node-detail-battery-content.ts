@@ -388,24 +388,14 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
 
     // Technical details ---------------------------------------------------------
 
-    /** The slot in progress and what the executor did, the BMS's current limits, the pack's readings and its cells. */
-    protected _renderTechnical(overview: BatteryDetailPayload) {
+    /** The slot in progress and what the executor did. */
+    protected _renderTechnical(_overview: BatteryDetailPayload) {
         const now = Date.now();
         const runtime = runtimeFor<InverterRuntimeDTO>(this._plan.schedule, INVERTER_CONTROLLABLE_ID, now);
         return html`
             <div class="rows">
                 ${renderCurrentSlot(currentRun(this._plan.runs, now), runtime, this.localize, (label, value) => this._row(label, value))}
                 ${this._row(this.localize("node_detail.shared.technical.executor"), runtime ? runtimeText(runtime, this.localize) : this.localize("node_detail.shared.technical.no_runtime"), "executor")}
-            </div>
-            ${subTitle(this.localize("node_detail.shared.technical.readings"))}
-            <div class="rows">
-                ${this._optionalRow(overview, "bms_charge_max_current", "limits.bms_charge_current")}
-                ${this._optionalRow(overview, "bms_discharge_max_current", "limits.bms_discharge_current")}
-                ${this._optionalRow(overview, "battery_voltage", "limits.voltage")}
-                ${this._optionalRow(overview, "battery_current", "limits.current")}
-                ${this._optionalRow(overview, "bms_connect_state", "limits.bms_connect")}
-                ${this._optionalRow(overview, "cell_voltage_high", "diagnostics.cell_high")}
-                ${this._optionalRow(overview, "cell_voltage_low", "diagnostics.cell_low")}
             </div>
         `;
     }

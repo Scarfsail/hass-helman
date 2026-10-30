@@ -286,8 +286,8 @@
         "title": "Technické podrobnosti",
         "executor": "Vykonavatel v tomto slotu",
         "no_runtime": "Pro tento slot bez záznamu",
-        "readings": "Hodnoty teď",
-        "configuration": "Nastavení střídače",
+        "entities": "Entity",
+        "unavailable": "nedostupné",
         "phase_currents": "Proud po fázích",
         "solar_raw": "Surová předpověď dnes",
         "solar_corrected": "Korigovaná předpověď dnes",
@@ -302,9 +302,7 @@
         "unmeasured_today": "Neměřená energie dnes",
         "window_settings": "Aktuální okno: režim · eco stupeň",
         "no_window": "Teď žádné okno",
-        "link": "Spojení a poruchy",
-        "switch_entity": "Vypínač",
-        "power_entity": "Senzor výkonu"
+        "link": "Spojení a poruchy"
       }
     },
     "control": {
@@ -395,16 +393,7 @@
       "limits": {
         "source_bms": "hranice BMS",
         "source_inverter": "nastavení proudu ve střídači",
-        "source_planning": "plánovací limit",
-        "voltage": "Napětí baterie",
-        "current": "Proud baterie",
-        "bms_charge_current": "Limit nabíjecího proudu BMS",
-        "bms_discharge_current": "Limit vybíjecího proudu BMS",
-        "bms_connect": "Připojení BMS"
-      },
-      "diagnostics": {
-        "cell_high": "Nejvyšší napětí článku",
-        "cell_low": "Nejnižší napětí článku"
+        "source_planning": "plánovací limit"
       }
     },
     "solar": {
@@ -462,8 +451,6 @@
         "state_on_grid": "Na síti ({state})",
         "state_unknown": "neznámé: provozní režim nedostupný",
         "state": "Stav sítě teď",
-        "export_limit": "Limit dodávky",
-        "scope_inverter": "registr střídače, platí na síti",
         "export_cap": "Strop dodávky, který Helman obnovuje",
         "scope_helman": "konfigurace Helmanu"
       },
@@ -544,11 +531,7 @@
         "actual": "Čte",
         "match_yes": "odpovídá",
         "match_no": "liší se",
-        "match_unknown": "nečitelné",
-        "use_mode": "Režim použití",
-        "manual_mode": "Ruční režim",
-        "remote_control": "Dálkové řízení",
-        "remote_control_mode": "Režim dálkového řízení"
+        "match_unknown": "nečitelné"
       },
       "agreement": {
         "match": "Odpovídá poslednímu příkazu",
@@ -584,10 +567,6 @@
         "runtime_reason": "Důvod běhu",
         "reason_not_provided": "důvod neuveden",
         "optimizer_note": "Plán nezaznamenává, proč optimalizátor tuto akci zvolil."
-      },
-      "trust": {
-        "link_rate": "Úspěšná čtení",
-        "quarantined": "Registry v karanténě"
       },
       "chain": {
         "plan": "Plán",
@@ -632,7 +611,6 @@
         "execution": "Provádění plánu",
         "execution_on_value": "zapnuto",
         "execution_off_value": "vypnuto",
-        "charge_mode": "Aktivní režim nabíječky",
         "generated": "Projekce spočítána v"
       },
       "waiting": {
@@ -651,8 +629,6 @@
         "fault": "Porucha",
         "no_fault": "žádná hlášená",
         "code": "kód {code}",
-        "network": "Síť",
-        "link": "Úspěšnost komunikace",
         "comparison": "Celkový výkon proti fázím",
         "total": "Celkový výkon",
         "phase_sum": "Součet fází",

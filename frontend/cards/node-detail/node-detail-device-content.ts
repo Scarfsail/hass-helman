@@ -9,7 +9,7 @@ import { convertToKWh, isSupportedEnergyUnit } from "../helman/energy-unit-conve
 import { readPowerW } from "../shared/power-reading";
 import { dispatchWatchedEntities } from "../shared/hass-change";
 import type { DeviceDetailParams } from "./node-detail-types";
-import { deviceControllableIds, deviceDirectControls } from "./node-detail-utils";
+import { deviceControllableIds, deviceDirectControls, deviceEntities } from "./node-detail-utils";
 import { estimatedConsumerMix } from "./live-flows";
 import { SectionResource } from "./section-resource";
 import type { ApplianceProjectionsPayload, ApplianceRuntimeDTO, DeviceStats, DeviceStatsSpread } from "../helman-api";
@@ -34,7 +34,7 @@ import "./detail-headline";
 import "./flow-gauge";
 import "./switch-tile";
 import "./who-decides";
-import { openMoreInfo } from "./node-detail-readings";
+import { openMoreInfo, renderEntityList } from "./node-detail-readings";
 import { nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 
 function powerEntity(item: TreeItem): string | undefined {
@@ -113,7 +113,7 @@ export class NodeDetailDeviceContent extends LitElement {
         this._planStarted = false;
     }
     protected updated(changed: PropertyValues<this>): void {
-        if (changed.has("params")) dispatchWatchedEntities(this, "node-detail:device-climate", [deviceDirectControls(this.params.item)?.climateEntityId]);
+        if (changed.has("params")) dispatchWatchedEntities(this, "node-detail", deviceEntities(this.params.item));
     }
     render() {
         const item = this.params.item;
@@ -195,17 +195,19 @@ export class NodeDetailDeviceContent extends LitElement {
     /** The executor's outcome for each of its lanes in the slot in progress, and the entities it is read and switched through. */
     private _renderTechnical(ids: readonly string[]) {
         const item = this.params.item;
-        const direct = deviceDirectControls(item);
         const t = (key: string) => this.localize(`node_detail.shared.technical.${key}`);
         const now = Date.now();
-        return html`<div class="rows">
-            ${ids.map((id) => {
-                const runtime = runtimeFor<ApplianceRuntimeDTO>(this._plan.schedule, id, now);
-                return historyRow(ids.length > 1 ? `${t("executor")} · ${id}` : t("executor"), runtime ? runtimeText(runtime, this.localize) : t("no_runtime"), `runtime-${id}`);
-            })}
-            ${historyRow(t("switch_entity"), direct?.switchEntityId ?? item.switchEntityId ?? "—", "switch")}
-            ${historyRow(t("power_entity"), item.powerSensorId ?? "—", "power-sensor")}
-        </div>`;
+        return html`
+            ${ids.length ? html`
+                <div class="rows">
+                    ${ids.map((id) => {
+                        const runtime = runtimeFor<ApplianceRuntimeDTO>(this._plan.schedule, id, now);
+                        return historyRow(ids.length > 1 ? `${t("executor")} · ${id}` : t("executor"), runtime ? runtimeText(runtime, this.localize) : t("no_runtime"), `runtime-${id}`);
+                    })}
+                </div>
+            ` : nothing}
+            ${renderEntityList(this.hass, this.localize, this, deviceEntities(item))}
+        `;
     }
 
     /**

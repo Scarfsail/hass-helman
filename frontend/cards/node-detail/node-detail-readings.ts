@@ -1,8 +1,15 @@
+import { html, nothing, type TemplateResult } from "lit";
 import { isReadableState, applyValueType, powerUnitFactor, readPowerW } from "../shared/power-reading";
 import type { HomeAssistant } from "../../types/ha";
+import type { LocalizeFunction } from "../localize/localize";
 import { convertToKWh, isSupportedEnergyUnit } from "../helman/energy-unit-converter";
 import type { TreeItem } from "../shared/data/tree-item";
 import type { InverterDetailPayload } from "../helman-api";
+
+/** A sub-title inside a section body. */
+export function subTitle(text: string): TemplateResult {
+    return html`<div class="section-title">${text}</div>`;
+}
 
 /**
  * A reading as a node detail shows it: its state and unit, `null` when the
@@ -32,6 +39,46 @@ export function openMoreInfo(element: EventTarget, entityId: string): void {
         composed: true,
         detail: { entityId },
     }));
+}
+
+/**
+ * All entities a node detail reads, as a uniform list with friendly names and live values.
+ * Deduplicated, skipping empty/null entity ids, opening HA's more-info on click.
+ */
+export function renderEntityList(
+    hass: HomeAssistant,
+    localize: LocalizeFunction,
+    host: EventTarget,
+    entityIds: Iterable<string | null | undefined>,
+): TemplateResult | typeof nothing {
+    const ids: string[] = [];
+    const seen = new Set<string>();
+    for (const id of entityIds) {
+        if (id && !seen.has(id)) {
+            seen.add(id);
+            ids.push(id);
+        }
+    }
+    if (!ids.length) return nothing;
+    return html`
+        ${subTitle(localize("node_detail.shared.technical.entities"))}
+        <div class="rows" data-entities>
+            ${ids.map((id) => {
+                const name = entityName(hass, id);
+                const value = readingText(
+                    hass,
+                    id,
+                    (on) => localize(on ? "node_detail.shared.device_state_on" : "node_detail.shared.device_state_off"),
+                ) ?? localize("node_detail.shared.technical.unavailable");
+                return html`
+                    <div class="row" data-row=${id}>
+                        <span class="label">${name}</span>
+                        <button class="value reading" data-entity=${id} title=${name} @click=${() => openMoreInfo(host, id)}>${value}</button>
+                    </div>
+                `;
+            })}
+        </div>
+    `;
 }
 
 /** A reading as a number, `null` when missing or not numeric. */
