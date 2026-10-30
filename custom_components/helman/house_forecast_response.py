@@ -17,6 +17,7 @@ _DROP_FIELDS = {
     "currentSlot",
     "series",
     "actualHistory",
+    "forecastHistory",
 }
 
 
@@ -27,6 +28,7 @@ def build_house_forecast_response(
 ) -> dict[str, Any]:
     response = envelope(snapshot, drop=_DROP_FIELDS)
     response["actualHistory"] = []
+    response["forecastHistory"] = []
     response["series"] = []
 
     if snapshot.get("status") != "available":

@@ -20,6 +20,7 @@ _DROP_FIELDS = {
     "baselineSeries",
     "series",
     "actualHistory",
+    "forecastHistory",
 }
 
 
@@ -30,6 +31,7 @@ def build_battery_forecast_response(
 ) -> dict[str, Any]:
     response = envelope(snapshot, drop=_DROP_FIELDS)
     response["actualHistory"] = []
+    response["forecastHistory"] = []
     response["series"] = []
 
     if snapshot.get("status") not in {"available", "partial"}:

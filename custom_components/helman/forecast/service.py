@@ -88,6 +88,12 @@ from ..scheduling.schedule import (
     strip_candidate_actions,
 )
 from ..scheduling.schedule_service import ScheduleService
+from ..solar_bias_correction.battery_forecast_history import (
+    load_battery_soc_forecast_points_for_day,
+)
+from ..solar_bias_correction.house_forecast_history import (
+    load_house_forecast_points_for_day,
+)
 from ..slot_grid import SLOT, SLOT_MINUTES, get_local_current_slot_start
 from ..solar_bias_correction.response import build_bias_correction_payload
 from ..solar_bias_correction.service import SolarBiasCorrectionService
@@ -818,6 +824,32 @@ class ForecastService:
             canonical_battery_forecast,
             forecast_days=forecast_days,
         )
+        current_slot = get_local_current_slot_start(request_now)
+        timezone = ZoneInfo(str(self._hass.config.time_zone))
+        local_now = request_now.astimezone(timezone)
+        day_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+        for channel, loader, scale in (
+            ("house_consumption", lambda: load_house_forecast_points_for_day(
+                self._hass, local_now.date(), until=current_slot,
+            ), 0.001),
+            ("battery_capacity", lambda: load_battery_soc_forecast_points_for_day(
+                self._hass, local_now.date(), timezone,
+                until=current_slot,
+            ), 1),
+        ):
+            try:
+                points = await loader()
+                history = {}
+                for point in points:
+                    instant = dt_util.as_utc(datetime.fromisoformat(point["timestamp"]))
+                    if dt_util.as_utc(day_start) <= instant < dt_util.as_utc(current_slot):
+                        history[instant] = {
+                            "timestamp": point["timestamp"],
+                            "value": point.get("wh", point.get("value")) * scale,
+                        }
+                result[channel]["forecastHistory"] = [history[instant] for instant in sorted(history)]
+            except Exception:
+                _LOGGER.exception("Failed to read recorded %s forecast history", channel)
         return result
 
     def _absorb_grid_import_price(self, grid_price_snapshot: Any) -> None:

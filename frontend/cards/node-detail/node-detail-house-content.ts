@@ -331,7 +331,16 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         const slots = [forecast.currentSlot, ...forecast.series].filter((slot) => slot !== undefined)
             .map((slot) => ({ start: Date.parse(slot!.timestamp), kwh: slot!.nonDeferrable.value }))
             .filter((slot) => slot.start < end);
-        const actual = forecast.actualHistory.map((slot) => ({ t: Date.parse(slot.timestamp) + SLOT_MS / 2, v: kw(slot.nonDeferrable.value) }));
+        const comparison = new Map((forecast.forecastHistory ?? []).map((slot) => [Date.parse(slot.timestamp), slot.value]));
+        for (const slot of slots) comparison.set(slot.start, slot.kwh);
+        const predicted = [...comparison].sort(([a], [b]) => a - b)
+            .map(([start, kwh]) => ({ t: start + SLOT_MS / 2, v: kw(kwh) }));
+        const actual = forecast.actualHistory.flatMap((slot) => {
+            const total = slot.total?.value ?? (slot.nonDeferrable && slot.deferrableConsumers
+                ? slot.nonDeferrable.value + [...new Map(slot.deferrableConsumers.map((consumer) => [consumer.entityId, consumer.value])).values()].reduce((sum, value) => sum + value, 0)
+                : undefined);
+            return total === undefined ? [] : [{ t: Date.parse(slot.timestamp) + SLOT_MS / 2, v: kw(total) }];
+        });
         // The busiest local hour of the rest of today, by its forecast energy.
         const today = dayKey(context.now, context.timeZone);
         const hours = new Map<number, number>();
@@ -350,7 +359,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
                 series: [
                     { key: "actual", label: text("actual"), color: "var(--helman-house)", points: actual },
                     { key: "forecast", label: text("forecast"), color: "var(--helman-house)", dashed: true,
-                        points: slots.map((slot) => ({ t: slot.start + SLOT_MS / 2, v: kw(slot.kwh) })) },
+                        points: predicted },
                 ],
                 spans: runs.map((run) => ({ start: run.startMs, end: run.endMs ?? end, color: RUN_COLOR })),
                 formatValue: (value) => formatPower(value * 1000).display,

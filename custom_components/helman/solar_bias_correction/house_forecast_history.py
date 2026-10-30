@@ -5,6 +5,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from homeassistant.core import HomeAssistant
+from homeassistant.util import dt as dt_util
 
 from ..recorder_states import numeric_timeline, read_states
 from ..slot_grid import SLOT_MINUTES, day_slots
@@ -18,6 +19,8 @@ _SLOT_FRACTION_OF_HOUR = SLOT_MINUTES / 60  # 0.25
 async def load_house_forecast_points_for_day(
     hass: HomeAssistant,
     target_date: date,
+    *,
+    until: datetime | None = None,
 ) -> list[dict[str, Any]]:
     """Return per-15min house forecast slot points for target_date.
 
@@ -38,7 +41,7 @@ async def load_house_forecast_points_for_day(
         hass,
         [HOUSE_FORECAST_CURRENT_ENTITY],
         day_start_local,
-        day_end_local,
+        until or day_end_local,
         include_start_state=True,
         no_attributes=True,
     )
@@ -52,10 +55,12 @@ async def load_house_forecast_points_for_day(
     if not timeline:
         return []
 
-    slot_starts = day_slots(target_date, tzinfo=local_tz, wall_clock=True)
+    slot_starts = [dt_util.as_utc(slot) for slot in day_slots(target_date, tzinfo=local_tz)
+                   if until is None or dt_util.as_utc(slot) < dt_util.as_utc(until)]
+    timeline = sorted((dt_util.as_utc(instant), value) for instant, value in timeline)
 
     return [
-        {"timestamp": slot_start.isoformat(), "wh": value_w * _SLOT_FRACTION_OF_HOUR}
+        {"timestamp": slot_start.astimezone(local_tz).isoformat(), "wh": value_w * _SLOT_FRACTION_OF_HOUR}
         for slot_start, value_w in resolve_forecast_slot_values(
             timeline, slot_starts, slot_minutes=SLOT_MINUTES
         ).items()

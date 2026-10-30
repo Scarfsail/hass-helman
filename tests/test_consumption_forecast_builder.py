@@ -159,6 +159,20 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
+    async def test_actual_total_does_not_replace_known_decomposition(self):
+        module, _, builder = self._make_builder()
+        slot = datetime(2026, 3, 20, 20, 0, tzinfo=TZ)
+        history = builder._build_slot_actual_history(
+            house_by_slot={dt_util.as_utc(slot): 0.8},
+            consumers=[module._ConsumerSlotHistoryData(
+                entity_id="sensor.washer_energy", label="Washer",
+                values_by_slot={dt_util.as_utc(slot): 0.3},
+            )], completed_slots=[slot],
+        )
+        self.assertEqual(history[0]["total"], {"value": 0.8})
+        self.assertEqual(history[0]["nonDeferrable"], {"value": 0.5})
+        self.assertEqual(history[0]["deferrableConsumers"][0]["value"], 0.3)
+
     @staticmethod
     def _flat_profile(consumption_module, *, consumers: bool = True):
         """A fitted profile whose 168 bands are all the same, so the assertions
@@ -396,6 +410,7 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
             actual,
             [{
                 "timestamp": slot.isoformat(),
+                "total": {"value": 2.5},
                 "nonDeferrable": {"value": 1.75},
                 "deferrableConsumers": [
                     {"entityId": "sensor.washer", "label": "Washer", "value": 0.75},
@@ -433,6 +448,7 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(len(actual), 2)
+        self.assertEqual([entry["total"]["value"] for entry in actual], [1.25, 2.5])
         self.assertEqual(
             [entry["timestamp"] for entry in actual],
             [slot.isoformat() for slot in slots],
@@ -446,7 +462,7 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("Failed to query slot history", logs.output[0])
 
-    def test_actual_history_drops_materially_negative_residual(self) -> None:
+    def test_actual_history_retains_total_without_materially_negative_residual(self) -> None:
         consumption_module, _, builder = self._make_builder()
         slot = datetime(2026, 3, 20, 10, 0, tzinfo=TZ)
         timestamp_key = dt_util.as_utc(slot)
@@ -461,7 +477,7 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
             completed_slots=[slot],
         )
 
-        self.assertEqual(actual, [])
+        self.assertEqual(actual, [{"timestamp": slot.isoformat(), "total": {"value": 1.0}}])
 
     def test_actual_history_skips_slot_without_house_value(self) -> None:
         consumption_module, _, builder = self._make_builder()

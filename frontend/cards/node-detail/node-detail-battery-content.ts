@@ -246,6 +246,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
                 help: this.localize("node_detail.shared.forecast.battery_help"),
                 series: [
                     { key: "actual", label: this.localize("node_detail.shared.forecast.actual"), color: "var(--helman-battery)", points: soc.actual },
+                    ...(soc.history.length ? [{ key: "forecast-history", label: this.localize("node_detail.shared.forecast.forecast"), color: "var(--helman-battery)", points: soc.history, dashed: true }] : []),
                     { key: "planned", label: this.localize("node_detail.shared.forecast.planned"), color: "var(--helman-battery)", points: soc.planned, dashed: true },
                 ],
                 references: [
@@ -280,7 +281,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
      * live reading, the forecast's own only when that is unavailable.
      */
     private _socForecast(now: number, liveSoc: number | null): {
-        actual: DayLinePoint[]; planned: DayLinePoint[]; floor: number; ceiling: number;
+        actual: DayLinePoint[]; history: DayLinePoint[]; planned: DayLinePoint[]; floor: number; ceiling: number;
         full: DayLinePoint | null; floorAt: number | null; lowest: DayLinePoint;
     } | null {
         const battery = this._forecast?.battery_capacity;
@@ -307,7 +308,10 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
         const empty = atFloor(current.v) ? current : ahead.find((point) => point.slot.hitMinSoc || atFloor(point.v)) ?? null;
         const lowest = ahead.reduce((low, point) => point.v < low.v ? point : low, current);
         return {
-            actual, planned: planned.map(({ t, v }) => ({ t, v })), floor, ceiling,
+            actual,
+            // Keep recorded predictions separate so the live anchor cannot join across missing history.
+            history: (battery.forecastHistory ?? []).map((slot) => ({ t: Date.parse(slot.timestamp) + SLOT_MS, v: slot.value })),
+            planned: planned.map(({ t, v }) => ({ t, v })), floor, ceiling,
             full: full && { t: full.t, v: full.v }, floorAt: empty?.t ?? null, lowest: { t: lowest.t, v: lowest.v },
         };
     }
