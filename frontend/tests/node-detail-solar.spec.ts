@@ -473,6 +473,9 @@ test("solar Technical details compares the raw and corrected forecast for an adm
     await expect(section.locator("[data-row=bias-days] .value")).toHaveText("21");
     await expect(section.locator("[data-row=raw] .value")).toContainText("kWh");
     await expect(section.locator("[data-row=corrected] .value")).toContainText("kWh");
+    await expect(section.locator("[data-entities]")).toHaveCount(1);
+    await expect(section.locator('[data-entities] [data-entity="sensor.solar"]')).toHaveCount(1);
+    await expect(section.locator('[data-entities] [data-entity="sensor.solar_today"]')).toHaveCount(1);
 });
 
 test("solar Technical details is not rendered for a non-admin", async ({ page }) => {

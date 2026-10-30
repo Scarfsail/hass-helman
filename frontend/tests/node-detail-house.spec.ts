@@ -464,6 +464,9 @@ test("house Technical details shows the forecast's status and training, the usua
     await expect(section.locator("[data-row=learned-from] .value")).toContainText("42");
     await expect(section.locator("[data-row=usual-range] .value")).toHaveText("0.18–0.45 kWh");
     await expect(section.locator("[data-row=unmeasured] .value")).toHaveText("3.5 kWh");
+    await expect(section.locator("[data-entities]")).toHaveCount(1);
+    await expect(section.locator('[data-entities] [data-entity="sensor.house"]')).toHaveCount(1);
+    await expect(section.locator('[data-entities] [data-entity="sensor.helman_house_consumption_power"]')).toHaveCount(1);
 });
 
 test("house Technical details is not rendered for a non-admin", async ({ page }) => {

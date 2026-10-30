@@ -551,10 +551,12 @@ test("ev-charger Technical details shows execution, the window, the projection, 
     await expect(section.locator("[data-row=execution]")).toHaveCount(1);
     await expect(section.locator("[data-row=runtime]")).toHaveCount(1);
     await expect(section.locator("[data-row=window] .value")).toHaveText("Fast · 6A");
-    await expect(section.locator("[data-row=charge_mode] .value")).toContainText("Fast");
+    await expect(section.locator('[data-entities] [data-entity="sensor.ev_charge_mode"]')).toContainText("Fast");
+    await expect(section.locator("[data-row=charge_mode]")).toHaveCount(0);
     await expect(section.locator("[data-row=generated]")).toHaveCount(1);
     await expect(section.locator("[data-row=fault]")).toHaveCount(1);
-    await expect(section.locator("[data-row=network_status]")).toHaveCount(1);
+    await expect(section.locator('[data-entities] [data-entity="sensor.ev_network"]')).toHaveCount(1);
+    await expect(section.locator("[data-row=network_status]")).toHaveCount(0);
     await expect(section.locator("[data-row=total], [data-incomparable]")).not.toHaveCount(0);
 });
 

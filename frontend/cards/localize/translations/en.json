@@ -386,8 +386,8 @@
         "title": "Technical details",
         "executor": "Executor in this slot",
         "no_runtime": "No record for this slot",
-        "readings": "Readings now",
-        "configuration": "Inverter configuration",
+        "entities": "Entities",
+        "unavailable": "unavailable",
         "phase_currents": "Current per phase",
         "solar_raw": "Raw forecast today",
         "solar_corrected": "Bias-corrected forecast today",
@@ -402,9 +402,7 @@
         "unmeasured_today": "Unmeasured energy today",
         "window_settings": "Current window: use mode · eco gear",
         "no_window": "No window now",
-        "link": "Link and faults",
-        "switch_entity": "Switch",
-        "power_entity": "Power sensor"
+        "link": "Link and faults"
       }
     },
     "control": {
@@ -520,11 +518,7 @@
         "actual": "Reads",
         "match_yes": "matches",
         "match_no": "differs",
-        "match_unknown": "unreadable",
-        "use_mode": "Use mode",
-        "manual_mode": "Manual mode",
-        "remote_control": "Remote control",
-        "remote_control_mode": "Remote control mode"
+        "match_unknown": "unreadable"
       },
       "agreement": {
         "match": "Matches the last command",
@@ -560,10 +554,6 @@
         "runtime_reason": "Runtime reason",
         "reason_not_provided": "reason not provided",
         "optimizer_note": "The schedule does not record why an optimizer chose this action."
-      },
-      "trust": {
-        "link_rate": "Successful reads",
-        "quarantined": "Quarantined registers"
       },
       "chain": {
         "plan": "Plan",
@@ -624,8 +614,6 @@
         "state_on_grid": "On grid ({state})",
         "state_unknown": "unknown: run mode unavailable",
         "state": "Grid state now",
-        "export_limit": "Export limit",
-        "scope_inverter": "inverter register, applies on grid",
         "export_cap": "Export cap Helman restores",
         "scope_helman": "Helman config"
       },
@@ -657,16 +645,7 @@
       "limits": {
         "source_bms": "BMS ceiling",
         "source_inverter": "inverter current setting",
-        "source_planning": "planning limit",
-        "voltage": "Battery voltage",
-        "current": "Battery current",
-        "bms_charge_current": "BMS charge current limit",
-        "bms_discharge_current": "BMS discharge current limit",
-        "bms_connect": "BMS connection"
-      },
-      "diagnostics": {
-        "cell_high": "Highest cell voltage",
-        "cell_low": "Lowest cell voltage"
+        "source_planning": "planning limit"
       }
     },
     "solar": {
@@ -731,7 +710,6 @@
         "execution": "Schedule execution",
         "execution_on_value": "on",
         "execution_off_value": "off",
-        "charge_mode": "Charger's active mode",
         "generated": "Projection computed at"
       },
       "waiting": {
@@ -750,8 +728,6 @@
         "fault": "Fault",
         "no_fault": "none reported",
         "code": "code {code}",
-        "network": "Network",
-        "link": "Link success rate",
         "comparison": "Total power against its phases",
         "total": "Total power",
         "phase_sum": "Sum of phases",

@@ -421,7 +421,7 @@ test("inverter History's temperature chart opens HA's history of the temperature
     await expectShowMore(page, section.locator("[data-show-more]"), ["sensor.solax_inverter_temperature"]);
 });
 
-test("inverter Technical details shows the registers, the executor and the configuration to an admin", async ({ page }) => {
+test("inverter Technical details shows the registers, the executor and the entities list to an admin", async ({ page }) => {
     await mount(page, { admin: true });
     await page.locator(".inverter-cell").click();
     const section = content(page).locator("helman-detail-section[data-technical]");
@@ -429,10 +429,17 @@ test("inverter Technical details shows the registers, the executor and the confi
     await expect(section.locator("[data-registers] tbody tr")).toHaveCount(2);
     await expect(section.locator("[data-row=executor] .value")).toContainText("Applied");
     await expect(section.locator("[data-row=last-command] .value")).toContainText("Normal");
-    for (const key of ["use_mode", "manual_mode", "remote_control", "remote_control_mode", "link_success_rate", "link_quarantined_registers"]) {
-        await expect(section.locator(`[data-row=${key}]`)).toHaveCount(1);
+    for (const id of [
+        "select.solax_charger_use_mode",
+        "select.solax_manual_mode_select",
+        "select.solax_remotecontrol_power_control",
+        "select.solax_remotecontrol_power_control_mode",
+        "sensor.solax_inverter_communication_success_rate",
+        "sensor.solax_inverter_communication_quarantined_registers",
+    ]) {
+        await expect(section.locator(`[data-entities] [data-entity="${id}"]`)).toHaveCount(1);
     }
-    await expect(section.locator("[data-row=firmware], [data-row=phase_balance]")).toHaveCount(0);
+    await expect(section.locator("[data-row=use_mode], [data-row=manual_mode], [data-row=link_success_rate]")).toHaveCount(0);
 });
 
 test("inverter Technical details is not rendered for a non-admin", async ({ page }) => {

@@ -457,9 +457,8 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
 
     // Technical details ---------------------------------------------------------
 
-    /** The export limit and cap now, whether the inverter runs on the grid, each phase's current against the breaker, and today's voltage per phase. */
+    /** The export cap now, whether the inverter runs on the grid, each phase's current against the breaker, and today's voltage per phase. */
     protected _renderTechnical(overview: GridDetailPayload) {
-        const exportLimit = this._number(overview, "export_limit");
         const runMode = this._reading(overview, "run_mode");
         const state = overview.condition
             ? fillTemplate(this._t(`outage.state_${overview.condition.kind}`), { state: overview.condition.runMode })
@@ -467,7 +466,6 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
         const limit = this._number(overview, "main_breaker_limit");
         return html`
             <div class="rows">
-                ${exportLimit !== null ? this._row(this._t("outage.export_limit"), formatPower(exportLimit).display, "export-limit", this._t("outage.scope_inverter"), overview.entities.export_limit) : nothing}
                 ${overview.maxAllowedExportPower !== null ? this._row(this._t("outage.export_cap"), formatPower(overview.maxAllowedExportPower).display, "export-cap", this._t("outage.scope_helman")) : nothing}
                 ${this._row(this._t("outage.state"), state, "grid-state")}
             </div>

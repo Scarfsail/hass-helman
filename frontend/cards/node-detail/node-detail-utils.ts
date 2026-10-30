@@ -40,3 +40,11 @@ export const deviceDirectControls = (item: TreeItem): { switchEntityId: string |
     const switchId = switchEntityId !== climateEntityId ? switchEntityId : null;
     return switchId || climateEntityId ? { switchEntityId: switchId, climateEntityId } : null;
 };
+
+/** The entities a device detail lists: switch, climate, power sensor and energy meter. */
+export const deviceEntities = (item: TreeItem): Array<string | null | undefined> => [
+    deviceDirectControls(item)?.switchEntityId ?? item.switchEntityId,
+    item.climateEntityId,
+    item.powerSensorId,
+    item.energyEntityId,
+];

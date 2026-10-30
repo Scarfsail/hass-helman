@@ -4,6 +4,9 @@ import type { LocalizeFunction } from "../localize/localize";
 import { formatKwh } from "../shared/format";
 import { SectionResource, type SectionHost } from "./section-resource";
 import { renderSummarySection } from "./detail-section";
+import { subTitle } from "./node-detail-readings";
+
+export { subTitle };
 
 /**
  * What every node's History & statistics and Technical details sections
@@ -71,11 +74,6 @@ export function renderTechnicalSection(
             ${open ? html`<div class="content" data-technical-body>${body()}</div>` : nothing}
         </helman-detail-section>
     `;
-}
-
-/** A sub-title inside a section body. */
-export function subTitle(text: string): TemplateResult {
-    return html`<div class="section-title">${text}</div>`;
 }
 
 /** A labelled value row; `indent` for a part of the row above it. */

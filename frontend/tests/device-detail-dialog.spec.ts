@@ -143,11 +143,11 @@ async function mountCard(
                 states: {
                     "sensor.solar": state("0"),
                     "sensor.house": state("2000"),
-                    "sensor.boiler_power": state("1200", { unit_of_measurement: "W" }),
-                    "sensor.boiler_energy": state("10", { unit_of_measurement: energyUnit }),
+                    "sensor.boiler_power": state("1200", { unit_of_measurement: "W", friendly_name: "Boiler Power" }),
+                    "sensor.boiler_energy": state("10", { unit_of_measurement: energyUnit, friendly_name: "Boiler Energy" }),
                     "sensor.pump_share": state("300"),
                     "sensor.house_unmeasured": state("500"),
-                    "switch.boiler": { entity_id: "switch.boiler", state: "on", attributes: {} },
+                    "switch.boiler": { entity_id: "switch.boiler", state: "on", attributes: { friendly_name: "Boiler Switch" } },
                 },
                 callWS: window.__mockHass({
                     "helman/get_device_tree": async (msg: any) => {
@@ -173,6 +173,7 @@ async function mountCard(
             };
             const card = document.createElement("helman-card") as any;
             await card.setConfig({ type: "custom:helman-card" });
+            (window as any).__hass = hass;
             card.hass = hass;
             document.body.appendChild(card);
         },
@@ -387,9 +388,67 @@ test("device Technical details lists its entities for an admin, and is absent fo
     const section = page.locator("node-detail-device-content helman-detail-section[data-technical]");
     await expect(section.locator("[slot=summary]")).toHaveCount(0);
     await section.locator("button").first().click();
-    await expect(section.locator("[data-row=switch] .value")).toHaveText("switch.boiler");
-    await expect(section.locator("[data-row=power-sensor] .value")).toHaveText("sensor.boiler_power");
+    await expect(section.locator('[data-entities] [data-row="switch.boiler"] .label')).toHaveText("Boiler Switch");
+    await expect(section.locator('[data-entities] [data-row="switch.boiler"] .value')).toHaveText("on");
+    await expect(section.locator('[data-entities] [data-row="sensor.boiler_power"] .label')).toHaveText("Boiler Power");
+    await expect(section.locator('[data-entities] [data-row="sensor.boiler_power"] .value')).toHaveText("1200 W");
+    await expect(section.locator('[data-entities] [data-row="sensor.boiler_energy"] .label')).toHaveText("Boiler Energy");
+    await expect(section.locator('[data-entities] [data-row="sensor.boiler_energy"] .value')).toHaveText("10 kWh");
     await expect(section.locator("[data-row^=runtime-]")).toHaveCount(1);
+});
+
+test("clicking an entity reading in Technical details opens Home Assistant's more-info dialog", async ({ page }) => {
+    await mountCard(page, {}, true, "kWh", TODAY_KWH, {}, "2026-10-21T12:00:00+00:00", true);
+    await openDevice(page, "Boiler");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-technical]");
+    await section.locator("button").first().click();
+    await section.locator('[data-entities] [data-entity="sensor.boiler_power"]').click();
+    expect(await page.evaluate(() => (window as any).__moreInfo)).toContain("sensor.boiler_power");
+});
+
+test("an unavailable entity in Technical details is still listed with the unavailable text", async ({ page }) => {
+    await mountCard(page, {}, true, "kWh", TODAY_KWH, {}, "2026-10-21T12:00:00+00:00", true);
+    await openDevice(page, "Boiler");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-technical]");
+    await section.locator("button").first().click();
+    await expect(section.locator('[data-entities] [data-row="sensor.boiler_power"] .value')).toHaveText("1200 W");
+    await page.evaluate(() => {
+        const card = document.querySelector("helman-card") as any;
+        const hass = (window as any).__hass;
+        const nextHass = {
+            ...hass,
+            states: {
+                ...hass.states,
+                "sensor.boiler_power": { state: "unavailable", attributes: { friendly_name: "Boiler Power", unit_of_measurement: "W" } },
+            },
+        };
+        (window as any).__hass = nextHass;
+        card.hass = nextHass;
+    });
+    await expect(section.locator('[data-entities] [data-row="sensor.boiler_power"] .label')).toHaveText("Boiler Power");
+    await expect(section.locator('[data-entities] [data-row="sensor.boiler_power"] .value')).toHaveText("unavailable");
+});
+
+test("a state change in Home Assistant updates the entity reading live while the dialog is open", async ({ page }) => {
+    await mountCard(page, {}, true, "kWh", TODAY_KWH, {}, "2026-10-21T12:00:00+00:00", true);
+    await openDevice(page, "Boiler");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-technical]");
+    await section.locator("button").first().click();
+    await expect(section.locator('[data-entities] [data-row="sensor.boiler_power"] .value')).toHaveText("1200 W");
+    await page.evaluate(() => {
+        const card = document.querySelector("helman-card") as any;
+        const hass = (window as any).__hass;
+        const nextHass = {
+            ...hass,
+            states: {
+                ...hass.states,
+                "sensor.boiler_power": { state: "1850", attributes: { friendly_name: "Boiler Power", unit_of_measurement: "W" } },
+            },
+        };
+        (window as any).__hass = nextHass;
+        card.hass = nextHass;
+    });
+    await expect(section.locator('[data-entities] [data-row="sensor.boiler_power"] .value')).toHaveText("1850 W");
 });
 
 test("device Technical details is not rendered for a non-admin", async ({ page }) => {
