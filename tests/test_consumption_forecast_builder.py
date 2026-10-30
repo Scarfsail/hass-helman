@@ -159,24 +159,6 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
-    async def test_actual_total_survives_missing_consumer_without_inventing_split(self):
-        module, _, builder = self._make_builder()
-        slot = datetime(2026, 3, 20, 20, 0, tzinfo=TZ)
-        for succeeded in (True, False):
-            with self.subTest(query_succeeded=succeeded):
-                consumer = module._ConsumerSlotHistoryData(
-                    entity_id="sensor.washer_energy", label="Washer",
-                    values_by_slot={}, query_succeeded=succeeded,
-                )
-                history = builder._build_slot_actual_history(
-                    house_by_slot={dt_util.as_utc(slot): 0.321},
-                    consumers=[consumer], completed_slots=[slot, slot + timedelta(minutes=15)],
-                )
-                self.assertEqual(history, [{"timestamp": slot.isoformat(), "total": {"value": 0.321}}])
-                self.assertEqual(builder._build_slot_actual_history(
-                    house_by_slot={}, consumers=[consumer], completed_slots=[slot],
-                ), [])
-
     async def test_actual_total_does_not_replace_known_decomposition(self):
         module, _, builder = self._make_builder()
         slot = datetime(2026, 3, 20, 20, 0, tzinfo=TZ)
@@ -184,7 +166,7 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
             house_by_slot={dt_util.as_utc(slot): 0.8},
             consumers=[module._ConsumerSlotHistoryData(
                 entity_id="sensor.washer_energy", label="Washer",
-                values_by_slot={dt_util.as_utc(slot): 0.3}, query_succeeded=True,
+                values_by_slot={dt_util.as_utc(slot): 0.3},
             )], completed_slots=[slot],
         )
         self.assertEqual(history[0]["total"], {"value": 0.8})
@@ -407,6 +389,112 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(payload["trainedAt"], "2026-03-20T03:00:00+01:00")
         self.assertEqual(payload["lastOutcome"], "profile_trained")
+
+    def test_actual_history_keeps_slot_with_missing_consumer_value(self) -> None:
+        consumption_module, _, builder = self._make_builder()
+        slot = datetime(2026, 3, 20, 10, 0, tzinfo=TZ)
+        timestamp_key = dt_util.as_utc(slot)
+
+        actual = builder._build_slot_actual_history(
+            house_by_slot={timestamp_key: 2.5},
+            consumers=[
+                consumption_module._ConsumerSlotHistoryData(
+                    "sensor.washer", "Washer", {timestamp_key: 0.75}
+                ),
+                consumption_module._ConsumerSlotHistoryData("sensor.pool", "Pool", {}),
+            ],
+            completed_slots=[slot],
+        )
+
+        self.assertEqual(
+            actual,
+            [{
+                "timestamp": slot.isoformat(),
+                "total": {"value": 2.5},
+                "nonDeferrable": {"value": 1.75},
+                "deferrableConsumers": [
+                    {"entityId": "sensor.washer", "label": "Washer", "value": 0.75},
+                    {"entityId": "sensor.pool", "label": "Pool", "value": 0.0},
+                ],
+            }],
+        )
+
+    async def test_actual_history_keeps_every_house_slot_after_consumer_query_failure(
+        self,
+    ) -> None:
+        consumption_module, _, builder = self._make_builder()
+        slots = [datetime(2026, 3, 20, hour, 0, tzinfo=TZ) for hour in (10, 11)]
+        house_by_slot = {
+            dt_util.as_utc(slot): value for slot, value in zip(slots, (1.25, 2.5))
+        }
+
+        with (
+            patch.object(
+                builder,
+                "_query_slot_history",
+                AsyncMock(side_effect=[house_by_slot, RuntimeError("meter offline")]),
+            ),
+            patch.object(
+                consumption_module,
+                "get_today_completed_local_slots",
+                return_value=slots,
+            ),
+            self.assertLogs(consumption_module.__name__, level="WARNING") as logs,
+        ):
+            actual = await builder._build_actual_history(
+                total_energy_entity_id="sensor.house_total",
+                consumers_config=[{"energy_entity_id": "sensor.pool", "label": "Pool"}],
+                reference_time=REFERENCE_TIME,
+            )
+
+        self.assertEqual(len(actual), 2)
+        self.assertEqual([entry["total"]["value"] for entry in actual], [1.25, 2.5])
+        self.assertEqual(
+            [entry["timestamp"] for entry in actual],
+            [slot.isoformat() for slot in slots],
+        )
+        self.assertEqual(
+            [entry["nonDeferrable"]["value"] for entry in actual], [1.25, 2.5]
+        )
+        self.assertEqual(
+            [entry["deferrableConsumers"] for entry in actual],
+            [[{"entityId": "sensor.pool", "label": "Pool", "value": 0.0}]] * 2,
+        )
+        self.assertIn("Failed to query slot history", logs.output[0])
+
+    def test_actual_history_retains_total_without_materially_negative_residual(self) -> None:
+        consumption_module, _, builder = self._make_builder()
+        slot = datetime(2026, 3, 20, 10, 0, tzinfo=TZ)
+        timestamp_key = dt_util.as_utc(slot)
+
+        actual = builder._build_slot_actual_history(
+            house_by_slot={timestamp_key: 1.0},
+            consumers=[
+                consumption_module._ConsumerSlotHistoryData(
+                    "sensor.washer", "Washer", {timestamp_key: 1.1}
+                )
+            ],
+            completed_slots=[slot],
+        )
+
+        self.assertEqual(actual, [{"timestamp": slot.isoformat(), "total": {"value": 1.0}}])
+
+    def test_actual_history_skips_slot_without_house_value(self) -> None:
+        consumption_module, _, builder = self._make_builder()
+        missing_slot = datetime(2026, 3, 20, 10, 0, tzinfo=TZ)
+        present_slot = datetime(2026, 3, 20, 10, 15, tzinfo=TZ)
+
+        actual = builder._build_slot_actual_history(
+            house_by_slot={dt_util.as_utc(present_slot): 1.0},
+            consumers=[
+                consumption_module._ConsumerSlotHistoryData("sensor.pool", "Pool", {})
+            ],
+            completed_slots=[missing_slot, present_slot],
+        )
+
+        self.assertEqual(len(actual), 1)
+        self.assertEqual(actual[0]["timestamp"], present_slot.isoformat())
+        self.assertEqual(actual[0]["nonDeferrable"]["value"], 1.0)
 
     def test_assemble_one_day_series_is_canonical_quarter_hour(self) -> None:
         payload = self._assemble_payload(

@@ -94,7 +94,6 @@ class _ConsumerSlotHistoryData:
     entity_id: str
     label: str
     values_by_slot: dict[datetime, float]
-    query_succeeded: bool
 
 
 class ConsumptionForecastBuilder:
@@ -313,18 +312,10 @@ class ConsumptionForecastBuilder:
 
             deferrable_consumers: list[dict[str, Any]] = []
             deferrable_sum = 0.0
-            skip_hour = False
             for consumer in consumers:
-                if not consumer.query_succeeded:
-                    skip_hour = True
-                    break
-
-                value = consumer.values_by_slot.get(timestamp_key)
-                if value is None:
-                    skip_hour = True
-                    break
-
-                normalized_value = max(0.0, value)
+                normalized_value = max(
+                    0.0, consumer.values_by_slot.get(timestamp_key, 0.0)
+                )
                 deferrable_sum += normalized_value
                 deferrable_consumers.append(
                     {
@@ -338,14 +329,10 @@ class ConsumptionForecastBuilder:
                 "timestamp": slot_start.isoformat(),
                 "total": {"value": round(max(0.0, house_total), 4)},
             }
-            if skip_hour:
-                # Total demand is measured independently of its decomposition.
-                # An unavailable sub-meter must not erase that observation.
-                actual_history.append(measured_total)
-                continue
 
             non_deferrable = house_total - deferrable_sum
             if non_deferrable < NEGATIVE_RESIDUAL_THRESHOLD:
+                # Keep measured demand even when the decomposition is invalid.
                 actual_history.append(measured_total)
                 continue
 
@@ -414,7 +401,6 @@ class ConsumptionForecastBuilder:
                         entity_id=entity_id,
                         label=consumer["label"],
                         values_by_slot={},
-                        query_succeeded=False,
                     )
                 )
                 continue
@@ -424,7 +410,6 @@ class ConsumptionForecastBuilder:
                     entity_id=entity_id,
                     label=consumer["label"],
                     values_by_slot=values_by_slot,
-                    query_succeeded=True,
                 )
             )
 
