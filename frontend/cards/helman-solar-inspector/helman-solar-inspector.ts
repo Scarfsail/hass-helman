@@ -36,7 +36,7 @@ import type {
 } from "./helman-solar-span-pills";
 import "../shared/forecast-health-banner";
 import { buildForecastHealthItems } from "../shared/forecast-health-banner";
-import { fetchDayAggregates, type ForecastPayload } from "../helman-api";
+import { fetchDayAggregates, type ForecastPayload, type TreePayload } from "../helman-api";
 import {
   buildHistoryDaysFromAggregates,
   resolveFirstWeekdayIndex,
@@ -58,7 +58,13 @@ import { currencyFromPriceUnit } from "./money-model";
 import "../helman/tree-item-list";
 import "../node-detail/node-detail-dialog";
 import type { NodeDetailDialog } from "../node-detail/node-detail-dialog";
-import type { NodeDetailParams } from "../node-detail/node-detail-types";
+import {
+  NODE_DETAIL_REQUEST_EVENT,
+  type NodeDetailParams,
+  type NodeDetailRequestDetail,
+  type NodeDetailSection,
+  type NodeDetailTarget,
+} from "../node-detail/node-detail-types";
 import { TreeItem } from "../shared/data/tree-item";
 import type { ShowControllableDetailDetail } from "../shared/schedule/components/scheduling-entity-day-band";
 import { getSharedHelmanStore } from "../shared/data/store";
@@ -66,6 +72,7 @@ import { hydrateDeviceTree } from "../shared/data/tree-item-hydrator";
 import { readEnergyReadings, resolveEnergyNodes } from "../node-detail/node-detail-readings";
 import { buildNodeDetailContext, buildNodeDetailParams } from "../node-detail/node-detail-params-builder";
 import { deviceForControllable } from "../node-detail/node-control-rollup";
+import { HistoryEngine } from "../shared/data/history-engine";
 import { findTrainingSlot, resolveSelectedTrainingDate } from "./solar-inspector-model.js";
 import { minutesToSlot, snapSlotToGrid } from "./slot-aggregation.js";
 import {
@@ -255,6 +262,8 @@ export class HelmanSolarInspector extends LitElement {
    * or a lane icon in the schedule strip).
    */
   @state() private _nodeDetail: NodeDetailParams | null = null;
+  /** Counts detail opens, so a slower earlier one never overrides a later one. */
+  private _nodeDetailRequest = 0;
   @state() private _payload: InspectorPayload | null = null;
   /**
    * The composition panels' group nodes, kept across renders so their
@@ -806,6 +815,7 @@ export class HelmanSolarInspector extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
+    this.addEventListener(NODE_DETAIL_REQUEST_EVENT, this._handleNodeDetailRequest);
     // The wall clock owns a timer, because `hass` churn is not a clock. The card
     // above filters `hass` down to the entities this subtree actually reads, so
     // advancing "now" from the setter would freeze the now-marker on every chart
@@ -823,6 +833,7 @@ export class HelmanSolarInspector extends LitElement {
 
   disconnectedCallback() {
     super.disconnectedCallback();
+    this.removeEventListener(NODE_DETAIL_REQUEST_EVENT, this._handleNodeDetailRequest);
     this._stopNowClock?.();
     this._stopNowClock = undefined;
     this._disconnectChartResizeObserver();
@@ -1131,7 +1142,14 @@ export class HelmanSolarInspector extends LitElement {
 
   private _handleShowDeviceDetail = (event: CustomEvent<{ item: TreeItem }>): void => {
     event.stopPropagation();
-    this._nodeDetail = { nodeType: "device", item: event.detail.item };
+    void this._openNodeDetail(event.detail.item);
+  };
+
+  /** A detail asked for another node: the open dialog swaps to it in place. */
+  private _handleNodeDetailRequest = (event: Event): void => {
+    event.stopPropagation();
+    const { target, section } = (event as CustomEvent<NodeDetailRequestDetail>).detail;
+    void this._openNodeDetail(target, { section, fromDialog: true });
   };
 
   private _handleShowControllableDetail = async (event: CustomEvent<ShowControllableDetailDetail>): Promise<void> => {
@@ -1140,32 +1158,15 @@ export class HelmanSolarInspector extends LitElement {
     if (this.hass) {
       try {
         const payload = await getSharedHelmanStore(this.hass).getDeviceTree();
-        const tree = hydrateDeviceTree(payload, this._localize);
-        const energyNodes = resolveEnergyNodes(tree);
-        const target = deviceForControllable(energyNodes.houseNode, controllableId);
+        const { houseNode } = resolveEnergyNodes(hydrateDeviceTree(payload, this._localize));
+        const target = deviceForControllable(houseNode, controllableId);
         if (target !== null) {
-          let params: NodeDetailParams;
-          if (target instanceof TreeItem) {
-            params = { nodeType: "device", item: target };
-          } else {
-            const readings = readEnergyReadings(this.hass, energyNodes);
-            const context = buildNodeDetailContext(readings, {
-              houseNode: energyNodes.houseNode,
-              gridPowerEntityId:
-                energyNodes.gridProducerNode?.powerSensorId ??
-                energyNodes.gridConsumerNode?.powerSensorId ??
-                null,
-              historyBuckets: payload.uiConfig.history_buckets,
-              historyBucketDuration: payload.uiConfig.history_bucket_duration,
-            });
-            params = buildNodeDetailParams(context, "inverter");
-          }
           if (this._nodeDetail !== null) {
             await this.shadowRoot?.querySelector<NodeDetailDialog>("node-detail-dialog")?.releaseHistory();
             this._nodeDetail = null;
             await this.updateComplete;
           }
-          this._nodeDetail = params;
+          await this._openNodeDetail(target, { payload });
           return;
         }
       } catch {
@@ -1178,6 +1179,47 @@ export class HelmanSolarInspector extends LitElement {
       detail: { entityId },
     }));
   };
+
+  /**
+   * Opens a node's detail as the power cards do: from the live house tree,
+   * through the shared params builder, built once at open time. A device from
+   * a past slot's breakdown is found in that tree as it is, else by its one
+   * controllable, else by its energy meter -- the breakdown keys `deviceKey`
+   * its own way -- and stays the breakdown's own item when it is not there, or
+   * when the tree does not load. Only the latest request opens, and one from
+   * inside the dialog only while the dialog is still open.
+   */
+  private async _openNodeDetail(
+    target: NodeDetailTarget,
+    options: { section?: NodeDetailSection; fromDialog?: boolean; payload?: TreePayload } = {},
+  ): Promise<void> {
+    if (!this.hass) return;
+    const request = ++this._nodeDetailRequest;
+    const payload = options.payload ?? await getSharedHelmanStore(this.hass).getDeviceTree().catch(() => null);
+    if (request !== this._nodeDetailRequest || (options.fromDialog && this._nodeDetail === null)) return;
+    if (!payload && typeof target === "string") return;
+    const energyNodes = resolveEnergyNodes(payload ? hydrateDeviceTree(payload, this._localize) : []);
+    const { houseNode } = energyNodes;
+    let item = target;
+    if (typeof target !== "string") {
+      const items = HistoryEngine.walkTree(houseNode?.children ?? []);
+      const ids = target.controllableIds ?? [];
+      item = items.find((live) => live.id === target.id && live.isSource === target.isSource)
+        ?? (ids.length === 1 ? items.find((live) => live.controllableIds?.length === 1 && live.controllableIds[0] === ids[0]) : undefined)
+        ?? (target.energyEntityId ? items.find((live) => live.energyEntityId === target.energyEntityId) : undefined)
+        ?? target;
+    }
+    const context = buildNodeDetailContext(readEnergyReadings(this.hass, energyNodes), {
+      houseNode,
+      gridPowerEntityId:
+        energyNodes.gridProducerNode?.powerSensorId ??
+        energyNodes.gridConsumerNode?.powerSensorId ??
+        null,
+      historyBuckets: payload?.uiConfig.history_buckets ?? 0,
+      historyBucketDuration: payload?.uiConfig.history_bucket_duration ?? 0,
+    });
+    this._nodeDetail = buildNodeDetailParams(context, item, options.section ? { section: options.section } : undefined);
+  }
 
   private _renderNavigation() {
     // Computed in `willUpdate`; nothing is derived or assigned here.

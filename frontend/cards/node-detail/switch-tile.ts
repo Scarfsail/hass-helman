@@ -1,14 +1,17 @@
-import { LitElement, css, html, type PropertyValues } from "lit";
+import { LitElement, css, html, unsafeCSS, type PropertyValues } from "lit";
 import { customElement, property } from "lit/decorators.js";
 import type { HomeAssistant } from "../../types/ha";
 import { loadHaEntityToggle } from "../shared/load-ha-elements";
 import { dispatchWatchedEntities } from "../shared/hass-change";
 import { openMoreInfo } from "./node-detail-readings";
 
+/** The colour a switched-on device is shown in: HA's own switch-on colour. */
+export const SWITCH_ON_COLOR = unsafeCSS("var(--state-switch-on-color, var(--amber-color, #ffc107))");
+
 @customElement("helman-switch-tile")
 export class HelmanSwitchTile extends LitElement {
     static styles = css`
-        button { --tile-on: var(--state-switch-on-color, var(--amber-color, #ffc107));
+        button { --tile-on: ${SWITCH_ON_COLOR};
             box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
             width: 64px; height: 64px; border: 1.5px solid var(--divider-color); border-radius: 14px; background: var(--secondary-background-color);
             color: var(--secondary-text-color); font: inherit; font-size: 12px; font-weight: var(--ha-font-weight-medium, 500);
