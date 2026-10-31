@@ -251,7 +251,7 @@ test("the add-device pickers offer energy sensors and, under a parent, every con
     // The breaker's child button comes first; the top-level one after every card.
     await panel.locator(".add-device").first().dispatchEvent("click");
     expect(await addPicker()).toEqual({
-        includeDomains: ["sensor", ...SWITCH_CONTROL_DOMAINS, "climate"],
+        includeDomains: ["sensor", ...SWITCH_CONTROL_DOMAINS, "cover", "climate"],
         admits: ADMITS.energy,
     });
 

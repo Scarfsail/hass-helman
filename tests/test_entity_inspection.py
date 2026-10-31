@@ -940,6 +940,7 @@ class TestHistoryGovernedEntities(_HistoryTestCase):
     def test_deep_device_activity_controls_keep_history(self):
         for control, entity_id in [
             ("switch", "switch.plug"),
+            ("cover", "cover.garage"),
             ("climate", "climate.room"),
             ("charge", "switch.ev_charge"),
         ]:

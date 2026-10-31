@@ -465,3 +465,28 @@ test("a profile issue opens a device's Identity, where the picker is", async ({ 
     });
     await expect.poll(() => openSections(panel(page), "heater")).toEqual(["Identity"]);
 });
+
+test("changing control type between switch and cover removes the incompatible field", async ({ page }) => {
+    await mountEditor(page, [HEATER]);
+    await panel(page)
+        .locator('details.device-card[data-device-id="heater"]')
+        .evaluate((details) => ((details as HTMLDetailsElement).open = true));
+    await panel(page)
+        .locator('details.device-card[data-device-id="heater"] details.section-card')
+        .evaluateAll((sections) => {
+            for (const s of sections) {
+                if (s.textContent?.includes("Controls")) (s as HTMLDetailsElement).open = true;
+            }
+        });
+    const controlTypeSelect = panel(page).locator('details.device-card[data-device-id="heater"] select.device-control-type');
+    await expect(controlTypeSelect).toHaveValue("switch");
+    expect(await page.evaluate(() => window.__sectionsEditorConfig().devices.consumers[0].controls.switch)).toBeDefined();
+
+    await controlTypeSelect.selectOption("cover");
+    await expect.poll(() => page.evaluate(() => window.__sectionsEditorConfig().devices.consumers[0].controls.switch)).toBeUndefined();
+    expect(await page.evaluate(() => window.__sectionsEditorConfig().devices.consumers[0].controls.cover)).toBeDefined();
+
+    await controlTypeSelect.selectOption("switch");
+    await expect.poll(() => page.evaluate(() => window.__sectionsEditorConfig().devices.consumers[0].controls.cover)).toBeUndefined();
+    expect(await page.evaluate(() => window.__sectionsEditorConfig().devices.consumers[0].controls.switch)).toBeDefined();
+});

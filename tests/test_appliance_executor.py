@@ -765,6 +765,56 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime.outcome, "success")
         self.assertEqual(hass.services.calls, [])
 
+    async def test_generic_fan_is_switched_through_the_fan_domain(self) -> None:
+        appliance = replace(
+            _build_generic_appliance(), switch_entity_id="fan.ventilation"
+        )
+        hass = FakeHass({"fan.ventilation": FakeState("off")})
+        executor = ApplianceExecutor(_actuator(hass), GenericApplianceDriver())
+
+        runtime, memory = await executor.async_execute(
+            appliance=appliance,
+            action={"on": True},
+            last_scheduled_action=None,
+            memory=None,
+            active_slot_id=CURRENT_SLOT_ID,
+            reference_time=REFERENCE_TIME,
+        )
+        self.assertEqual(runtime.outcome, "success")
+
+        hass.states._states["fan.ventilation"].state = "on"
+        runtime, memory = await executor.async_execute(
+            appliance=appliance,
+            action={"on": False},
+            last_scheduled_action=None,
+            memory=memory,
+            active_slot_id=CURRENT_SLOT_ID,
+            reference_time=REFERENCE_TIME,
+        )
+        self.assertEqual(runtime.outcome, "success")
+        self.assertEqual(
+            [call[:2] for call in hass.services.calls],
+            [("fan", "turn_on"), ("fan", "turn_off")],
+        )
+
+    async def test_generic_fan_on_counts_as_already_on(self) -> None:
+        appliance = replace(
+            _build_generic_appliance(), switch_entity_id="fan.ventilation"
+        )
+        hass = FakeHass({"fan.ventilation": FakeState("on")})
+        executor = ApplianceExecutor(_actuator(hass), GenericApplianceDriver())
+
+        runtime, _memory = await executor.async_execute(
+            appliance=appliance,
+            action={"on": True},
+            last_scheduled_action=None,
+            memory=None,
+            active_slot_id=CURRENT_SLOT_ID,
+            reference_time=REFERENCE_TIME,
+        )
+        self.assertEqual(runtime.outcome, "success")
+        self.assertEqual(hass.services.calls, [])
+
     async def test_generic_missing_action_after_previous_on_clears_runtime_after_stop(
         self,
     ) -> None:

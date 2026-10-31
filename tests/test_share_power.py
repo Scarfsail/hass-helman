@@ -277,12 +277,33 @@ class SharePowerTests(unittest.TestCase):
 class RunningPredicateTests(unittest.TestCase):
     """The live split and the history split agree on what "running" is."""
 
-    VALUES = ("on", "off", "heat", "cool", "auto", "dry", "fan_only", "HEAT", " on ",
-              "unavailable", "unknown", None)
+    VALUES = (
+        "on",
+        "off",
+        "heat",
+        "cool",
+        "auto",
+        "dry",
+        "fan_only",
+        "HEAT",
+        " on ",
+        "opening",
+        "closing",
+        "open",
+        "closed",
+        "OPENING",
+        "unavailable",
+        "unknown",
+        None,
+    )
 
     def test_the_live_predicate_is_the_one_training_uses(self) -> None:
         start = datetime(2026, 9, 26, tzinfo=timezone.utc)
-        for activity, entity_id in (("switch", "switch.plug"), ("climate", "climate.ac")):
+        for activity, entity_id in (
+            ("switch", "switch.plug"),
+            ("climate", "climate.ac"),
+            ("cover", "cover.garage"),
+        ):
             member = appliance_energy_module.SharedMeterMember.for_signal(
                 "device", entity_id, activity
             )

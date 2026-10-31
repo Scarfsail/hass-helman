@@ -286,7 +286,7 @@ def effective_meter(device: Device, parent: Device | None) -> str | None:
 
 
 def running_signal(device: Device) -> tuple[str, str] | None:
-    """``(entity id, "switch" | "climate")`` telling when this device runs.
+    """``(entity id, "switch" | "climate" | "cover")`` telling when this device runs.
 
     A meterless child's share of its parent's meter follows this entity. An EV
     charger's ``charge`` control is a switch, so it runs while that is on.
@@ -295,7 +295,7 @@ def running_signal(device: Device) -> tuple[str, str] | None:
     controls = device.get("controls")
     if not isinstance(controls, Mapping):
         return None
-    keys = ["switch", CONTROLLABLE_KIND_CLIMATE]
+    keys = ["switch", CONTROLLABLE_KIND_CLIMATE, "cover"]
     if peek_controllable_kind(device) == CONTROLLABLE_KIND_EV_CHARGER:
         keys.insert(1, "charge")
     for key in keys:
@@ -309,12 +309,14 @@ def running_signal(device: Device) -> tuple[str, str] | None:
 
 
 #: The running activity each running-signal control reports: ``switch`` and an
-#: EV charger's ``charge`` are switches, ``climate`` is a climate entity. The
-#: one definition — :attr:`.spec.ControllableSpec.running_control` reads it too.
+#: EV charger's ``charge`` are switches, ``climate`` is a climate entity, and
+#: ``cover`` is a cover. The one definition —
+#: :attr:`.spec.ControllableSpec.running_control` reads it too.
 RUNNING_ACTIVITY_BY_CONTROL: dict[str, str] = {
     "switch": "switch",
     "charge": "switch",
     CONTROLLABLE_KIND_CLIMATE: CONTROLLABLE_KIND_CLIMATE,
+    "cover": "cover",
 }
 
 
@@ -335,18 +337,30 @@ SWITCH_ACTIVE_STATES: tuple[str, ...] = (
 #: The domains a ``controls.switch`` entity may use: a light's on/off state
 #: means exactly what a switch's does, and a media player supports turn_on,
 #: turn_off and toggle with any non-off state counting as on.
-SWITCH_CONTROL_DOMAINS: tuple[str, ...] = ("switch", "light", "media_player")
+SWITCH_CONTROL_DOMAINS: tuple[str, ...] = (
+    "switch",
+    "light",
+    "media_player",
+    "fan",
+)
 CLIMATE_ACTIVE_STATES: tuple[str, ...] = ("heat", "cool")
+COVER_ACTIVE_STATES: tuple[str, ...] = ("opening", "closing")
 
 
 def running_active_states(activity: str) -> tuple[str, ...]:
-    """The active states of a :func:`running_signal`'s ``"switch" | "climate"``.
+    """The active states of a :func:`running_signal`'s activity.
 
     With :func:`is_active_state`, the one definition of "running" for a
     meterless child: the shared-meter history split and the live share power
     both ask it, so the trained and the live split cannot disagree.
     """
-    return SWITCH_ACTIVE_STATES if activity == "switch" else CLIMATE_ACTIVE_STATES
+    if activity == "switch":
+        return SWITCH_ACTIVE_STATES
+    if activity == CONTROLLABLE_KIND_CLIMATE:
+        return CLIMATE_ACTIVE_STATES
+    if activity == "cover":
+        return COVER_ACTIVE_STATES
+    return ()
 
 
 def is_active_state(value: Any, active_states: Collection[str]) -> bool:

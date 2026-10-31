@@ -463,6 +463,18 @@
         "execution_off": "Execution is off: the override is saved in the schedule, but Helman does not change the hardware."
       }
     },
+    "cover": {
+      "status_title": "Cover status",
+      "open": "Open",
+      "close": "Close",
+      "stop": "Stop",
+      "state_open": "open",
+      "state_closed": "closed",
+      "state_opening": "opening",
+      "state_closing": "closing",
+      "state_unknown": "unknown",
+      "state_unavailable": "unavailable"
+    },
     "forecast_failed": "The forecast could not be loaded.",
     "device": {
       "edit": {

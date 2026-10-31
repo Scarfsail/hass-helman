@@ -358,9 +358,9 @@ export function seedDeviceProjection(draft: JsonObject, path: PathSegment[]): vo
 }
 
 function suggestionPath(path: PathSegment[], field: keyof DeviceSuggestions): PathSegment[] {
-    return field === "switch"
-        ? [...path, "controls", "switch", "entity_id"]
-        : [...path, "consumption", `${field}_entity_id`];
+    if (field === "switch") return [...path, "controls", "switch", "entity_id"];
+    if (field === "cover") return [...path, "controls", "cover", "entity_id"];
+    return [...path, "consumption", `${field}_entity_id`];
 }
 
 /**
@@ -907,10 +907,20 @@ export class HelmanDeviceEditor extends LitElement implements HardwareProfileHos
                 deviceChildren(current.parent).some((child) => child.id !== id && !ownMeter(child)) &&
                 !getValueAtPath(draft, suggestionPath(current.path, "power")) &&
                 suggestions.power.length !== 1;
-            const fills = (["energy", "power", "switch"] as const).flatMap((field) => {
+            const isCover =
+                deviceKind(current.device) === "generic" &&
+                !!getValueAtPath(draft, [...current.path, "controls", "cover"]);
+            const controlField: "switch" | "cover" = isCover ? "cover" : "switch";
+            const candidateFields: (keyof DeviceSuggestions)[] = [
+                "energy",
+                "power",
+                controlField,
+            ];
+            const fills = candidateFields.flatMap((field) => {
                 const fieldPath = suggestionPath(current.path, field);
                 if (
-                    (field === "switch" && deviceKind(current.device) !== "generic") ||
+                    (field === "switch" && (deviceKind(current.device) !== "generic" || isCover)) ||
+                    (field === "cover" && (deviceKind(current.device) !== "generic" || !isCover)) ||
                     (field === "energy" && energyNeedsPower) ||
                     getValueAtPath(draft, fieldPath) ||
                     suggestions[field].length !== 1
@@ -932,6 +942,14 @@ export class HelmanDeviceEditor extends LitElement implements HardwareProfileHos
     private _renderSuggestions(device: JsonObject, path: PathSegment[]): TemplateResult {
         const suggestions =
             this._suggestions?.draft === this.config ? this._suggestions.value : undefined;
+        const isCover =
+            deviceKind(device) === "generic" &&
+            !!this.getValue([...path, "controls", "cover"]);
+        const fields: (keyof DeviceSuggestions)[] = [
+            "energy",
+            "power",
+            isCover ? "cover" : "switch",
+        ];
         return html`<div class="device-suggestions">
             <button
                 class="add-button apply-suggestions"
@@ -945,8 +963,9 @@ export class HelmanDeviceEditor extends LitElement implements HardwareProfileHos
                 ? html`<div class="message error">${this._suggestionError}</div>`
                 : nothing}
             ${suggestions
-                ? (["energy", "power", "switch"] as const).map((field) => {
-                      if (field === "switch" && deviceKind(device) !== "generic") return nothing;
+                ? fields.map((field) => {
+                      if (field === "switch" && (deviceKind(device) !== "generic" || isCover)) return nothing;
+                      if (field === "cover" && (deviceKind(device) !== "generic" || !isCover)) return nothing;
                       const fieldPath = suggestionPath(path, field);
                       if (this.getValue(fieldPath) || suggestions[field].length === 0) return nothing;
                       return html`<div class="field">
@@ -1355,11 +1374,44 @@ export class HelmanDeviceEditor extends LitElement implements HardwareProfileHos
                 ${renderRequiredNumberField(this, [...path, "limits", "max_charging_power_kw"], "editor.fields.max_charging_power_kw", undefined, "any", "editor.help.ev_max_charging_power_kw")}
             `;
         }
-        return this._renderEntityGroup(
-            anchor("switch"),
-            "editor.fields.switch_entity",
-            { includeDomains: [...SWITCH_CONTROL_DOMAINS], entityFilter: this._scopeFilter(scope, anchor("switch")), helpKey: "editor.help.appliance_switch_entity", required },
-        );
+        const isCover = !!this.getValue([...controlsPath, "cover"]);
+        return html`
+            <div class="field">
+                <label>${this.t("editor.fields.control_type")}</label>
+                <select
+                    class="device-control-type"
+                    @change=${(event: Event) =>
+                        this._mutate(path, (draft) => {
+                            const nextType = (event.currentTarget as HTMLSelectElement).value;
+                            if (nextType === "cover") {
+                                unsetValueAtPath(draft, [...controlsPath, "switch"]);
+                                setValueAtPath(draft, [...controlsPath, "cover"], {});
+                            } else {
+                                unsetValueAtPath(draft, [...controlsPath, "cover"]);
+                                setValueAtPath(draft, [...controlsPath, "switch"], {});
+                            }
+                        })}
+                >
+                    <option value="switch" ?selected=${!isCover}>
+                        ${this.t("editor.values.control_type_switch")}
+                    </option>
+                    <option value="cover" ?selected=${isCover}>
+                        ${this.t("editor.values.control_type_cover")}
+                    </option>
+                </select>
+            </div>
+            ${isCover
+                ? this._renderEntityGroup(
+                    anchor("cover"),
+                    "editor.fields.cover_entity",
+                    { includeDomains: ["cover"], entityFilter: this._scopeFilter(scope, anchor("cover")), helpKey: "editor.help.appliance_cover_entity", required },
+                )
+                : this._renderEntityGroup(
+                    anchor("switch"),
+                    "editor.fields.switch_entity",
+                    { includeDomains: [...SWITCH_CONTROL_DOMAINS], entityFilter: this._scopeFilter(scope, anchor("switch")), helpKey: "editor.help.appliance_switch_entity", required },
+                )}
+        `;
     }
 
     /**

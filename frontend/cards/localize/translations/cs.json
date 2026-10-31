@@ -363,6 +363,18 @@
         "execution_off": "Vykonávání je vypnuté: zásah se uloží do rozvrhu, ale Helman hardware nezmění."
       }
     },
+    "cover": {
+      "status_title": "Stav žaluzie/vrat",
+      "open": "Otevřít",
+      "close": "Zavřít",
+      "stop": "Zastavit",
+      "state_open": "otevřeno",
+      "state_closed": "zavřeno",
+      "state_opening": "otevírání",
+      "state_closing": "zavírání",
+      "state_unknown": "neznámý",
+      "state_unavailable": "nedostupný"
+    },
     "forecast_failed": "Předpověď se nepodařilo načíst.",
     "close": "Zavřít",
     "title": {

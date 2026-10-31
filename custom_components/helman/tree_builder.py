@@ -205,6 +205,9 @@ class TreeItemDTO:
     # The climate entity a device configures as ``controls.climate``, which
     # the card's Control tab opens more-info for; ``None`` for every other item.
     climate_entity_id: str | None = None
+    # The cover entity a device configures as ``controls.cover``; ``None`` for
+    # every other item.
+    cover_entity_id: str | None = None
     # The device's meter, for a metered house child; ``None`` for every other
     # item. The item ``id`` happens to be the same entity (it keeps the
     # unmeasured sensor ids stable), but readers of the meter read it here.
@@ -265,6 +268,7 @@ class TreeItemDTO:
             "ownControllableIds": self.own_controllable_ids,
             **({"applianceKind": self.appliance_kind} if self.appliance_kind is not None else {}),
             "climateEntityId": self.climate_entity_id,
+            "coverEntityId": self.cover_entity_id,
             "energyEntityId": self.energy_entity_id,
             "isEstimated": self.is_estimated,
             "phase": self.phase,
@@ -516,6 +520,7 @@ class HelmanTreeBuilder:
                 power_sensor_id=power_sensor_id,
                 switch_entity_id=_control_entity(device, ("switch", "charge")),
                 climate_entity_id=_control_entity(device, (CONTROLLABLE_KIND_CLIMATE,)),
+                cover_entity_id=_control_entity(device, ("cover",)),
                 is_source=False,
                 is_unmeasured=False,
                 is_virtual=False,
@@ -577,9 +582,13 @@ class HelmanTreeBuilder:
             ),
             power_sensor_id=share_power_entity_id(device_id),
             # The running signal is the control the row offers: a switch, or
-            # the climate entity of an air conditioner.
-            switch_entity_id=running_signal(device)[0],
+            # the climate entity of an air conditioner. Never put a cover in
+            # switch_entity_id.
+            switch_entity_id=_control_entity(
+                device, ("switch", "charge", CONTROLLABLE_KIND_CLIMATE)
+            ),
             climate_entity_id=_control_entity(device, (CONTROLLABLE_KIND_CLIMATE,)),
+            cover_entity_id=_control_entity(device, ("cover",)),
             is_source=False,
             is_unmeasured=False,
             is_virtual=False,

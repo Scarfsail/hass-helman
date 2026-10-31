@@ -95,6 +95,7 @@ def test_without_registry_device_there_is_no_inference():
                 "energy": [],
                 "power": [],
                 "switch": [],
+                "cover": [],
             }
 
 
@@ -222,3 +223,64 @@ def test_a_light_is_offered_as_a_switch():
             NS(states=NS(get=lambda entity_id: None)), ["sensor.hall_energy"], {}
         )
     assert [c["entityId"] for c in result["switch"]] == ["light.hall"]
+
+
+def test_a_fan_is_offered_as_a_switch():
+    energy = entry("sensor.fan_energy", "energy")
+    fan = entry("fan.ventilation")
+    with (
+        patch(
+            "custom_components.helman.controllables.suggestions.er.async_get",
+            return_value=NS(async_get=lambda entity_id: energy),
+        ),
+        patch(
+            "custom_components.helman.controllables.suggestions.er.async_entries_for_device",
+            return_value=[energy, fan],
+        ),
+        patch(
+            "custom_components.helman.controllables.suggestions.lr.async_get",
+            return_value=NS(),
+        ),
+        patch(
+            "custom_components.helman.controllables.suggestions.dr.async_get",
+            return_value=NS(async_get=lambda id: None),
+        ),
+    ):
+        result = suggest_entities(
+            NS(states=NS(get=lambda entity_id: None)), ["sensor.fan_energy"], {}
+        )
+    assert [c["entityId"] for c in result["switch"]] == ["fan.ventilation"]
+
+
+def test_a_cover_is_offered_as_a_cover_with_name_match():
+    energy = entry("sensor.awning_energy", "energy")
+    cover = entry("cover.awning")
+    states = {"cover.awning": NS(attributes={"friendly_name": "Awning"})}
+    devices = NS(async_get=lambda id: NS(name="Awning", name_by_user=None))
+    with (
+        patch(
+            "custom_components.helman.controllables.suggestions.er.async_get",
+            return_value=NS(async_get=lambda entity_id: energy),
+        ),
+        patch(
+            "custom_components.helman.controllables.suggestions.er.async_entries_for_device",
+            return_value=[energy, cover],
+        ),
+        patch(
+            "custom_components.helman.controllables.suggestions.lr.async_get",
+            return_value=NS(),
+        ),
+        patch(
+            "custom_components.helman.controllables.suggestions.dr.async_get",
+            return_value=devices,
+        ),
+    ):
+        result = suggest_entities(
+            NS(states=NS(get=states.get)), ["sensor.awning_energy"], {}
+        )
+    assert [c["entityId"] for c in result["cover"]] == ["cover.awning"]
+    assert result["cover"][0]["name"] == "Awning"
+    assert result["cover"][0]["reasons"] == [
+        {"code": "same_device"},
+        {"code": "name_match"},
+    ]

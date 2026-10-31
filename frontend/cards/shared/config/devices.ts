@@ -268,7 +268,7 @@ export const SWITCH_ACTIVE_STATES = [
  * turn_off and toggle with any non-off state counting as on. Mirrors
  * `SWITCH_CONTROL_DOMAINS` in `custom_components/helman/controllables/config.py`.
  */
-export const SWITCH_CONTROL_DOMAINS = ["switch", "light", "media_player"];
+export const SWITCH_CONTROL_DOMAINS = ["switch", "light", "media_player", "fan"];
 
 /** Whether a switch control's state counts as on. */
 export function isSwitchOn(state: string | undefined): boolean {
@@ -276,10 +276,10 @@ export function isSwitchOn(state: string | undefined): boolean {
   return (SWITCH_ACTIVE_STATES as readonly string[]).includes(state.trim().toLowerCase());
 }
 
-/** Whether `controls` names an entity the device is switched by. */
+/** Whether `controls` names an entity the device is switched or controlled by. */
 export function hasSwitch(device: JsonObject): boolean {
   const controls = asJsonObject(device.controls) ?? {};
-  return ["switch", "charge", "climate"].some((key) => {
+  return ["switch", "charge", "climate", "cover"].some((key) => {
     const entityId = asJsonObject(controls[key])?.entity_id;
     return typeof entityId === "string" && entityId.trim().length > 0;
   });
