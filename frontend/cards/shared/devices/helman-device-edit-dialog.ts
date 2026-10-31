@@ -7,12 +7,8 @@ import { showToast } from "../fire-event";
 import { defineOnce } from "../define-once";
 import { loadHaForm, loadHaSortable } from "../load-ha-elements";
 import { DataChangedController } from "../data/data-changed";
-import {
-    cloneJson,
-    setValueAtPath,
-    unsetValueAtPath,
-} from "../config/config-document";
-import { findDeviceByKey, pruneUnassignablePhases } from "../config/devices";
+import { cloneJson } from "../config/config-document";
+import { findDeviceByKey, iterDevices, pruneUnassignablePhases } from "../config/devices";
 import { EntityInspectionController } from "../config/entity-inspection-controller";
 import { formatError, stringValue } from "../config/form-fields";
 import { configFormStyles } from "../config/form-styles";
@@ -20,15 +16,16 @@ import { resolvedDraft } from "../config/resolved-draft";
 import { ConfigSession } from "../config/config-session";
 import type {
     JsonObject,
+    PathSegment,
     ValidationReport,
 } from "../config/types";
 import {
     deviceEditorStyles,
     deviceIdentityTargets,
-    type DeviceConfigChangedDetail,
 } from "./helman-device-editor";
 import { hardwareProfileStyles, VendorsController } from "./hardware-profile";
 import "./helman-device-editor";
+import { DeviceListController, renderDeviceChildren } from "./device-list";
 
 const KEY_PREFIX = "node_detail.device.edit";
 
@@ -83,6 +80,34 @@ export class HelmanDeviceEditDialog extends LitElement {
                 flex-direction: column;
                 gap: 12px;
                 min-width: min(760px, 80vw);
+            }
+
+            /* Nested cards must be allowed to shrink inside the dialog. */
+            .appliance-body,
+            .list-stack {
+                grid-template-columns: minmax(0, 1fr);
+            }
+
+            .field-grid {
+                grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+            }
+
+            @media (max-width: 600px) {
+                .appliance-summary-row {
+                    flex-wrap: wrap;
+                }
+
+                .appliance-summary-left {
+                    flex: 1 0 100%;
+                }
+
+                .device-badges {
+                    margin-left: 0;
+                }
+
+                .list-actions {
+                    margin-left: auto;
+                }
             }
 
             .placeholder {
@@ -153,7 +178,11 @@ export class HelmanDeviceEditDialog extends LitElement {
         // The card's name and icon placeholders are the backend's answer too.
         extraTargets: () => {
             const path = this._devicePath();
-            return path ? deviceIdentityTargets(path) : [];
+            return path && this._view.kind === "ready"
+                ? iterDevices(this._view.config)
+                    .filter((entry) => path.every((segment, index) => entry.path[index] === segment))
+                    .flatMap((entry) => deviceIdentityTargets(entry.path))
+                : [];
         },
         mutate: (mutator) => this._applyToDraft(mutator),
     });
@@ -162,6 +191,20 @@ export class HelmanDeviceEditDialog extends LitElement {
     private _vendors = new VendorsController(this, {
         hass: () => this.hass,
         config: () => (this._view.kind === "ready" ? this._view.config : null),
+    });
+
+    private _list = new DeviceListController(this, {
+        config: () => this._view.kind === "ready" ? this._view.config : null,
+        savedConfig: () => this._saved,
+        resolvedConfig: () => this._view.kind === "ready" ? resolvedDraft(this._view.config, this._vendors.vendors) : null,
+        hass: () => this.hass,
+        vendors: () => this._vendors.vendors,
+        validation: () => this._validation,
+        inspections: () => this._inspections.results,
+        t: (key, values) => this._translate(key, values),
+        narrow: () => window.matchMedia("(max-width: 600px)").matches,
+        mutate: (mutator) => this._applyToDraft(mutator),
+        reportError: (text) => { this._message = text ? { kind: "error", text } : null; },
     });
 
     constructor() {
@@ -220,7 +263,7 @@ export class HelmanDeviceEditDialog extends LitElement {
                         ? html`
                               <ha-button
                                   slot="primaryAction"
-                                  .disabled=${this._stale || this._saving}
+                                  .disabled=${this._stale || this._saving || this._list.hasYamlErrors()}
                                   @click=${this._handleSave}
                               >
                                   ${this._translate(
@@ -265,6 +308,7 @@ export class HelmanDeviceEditDialog extends LitElement {
                         .savedConfig=${this._saved}
                         .path=${entry.path}
                         .parent=${entry.parent}
+                        .narrow=${this._list.source.narrow()}
                         .expanded=${true}
                         ?inert=${this._saving}
                         .hass=${this.hass}
@@ -272,6 +316,7 @@ export class HelmanDeviceEditDialog extends LitElement {
                         .validation=${this._validation}
                         .vendors=${this._vendors.vendors}
                         .inspections=${this._inspections.results}
+                        .renderChildren=${(device: JsonObject, path: PathSegment[]) => renderDeviceChildren(this._list, device, path)}
                         @device-config-changed=${this._handleConfigChanged}
                     ></helman-device-editor>
                 `;
@@ -292,6 +337,7 @@ export class HelmanDeviceEditDialog extends LitElement {
             return;
         }
         this._translate = getLocalizeFunction(hass, this.localize);
+        this._list.resetDeviceModes();
         this._view = { kind: "loading" };
         this._dirty = false;
         this._stale = false;
@@ -324,7 +370,7 @@ export class HelmanDeviceEditDialog extends LitElement {
     /** Every edit, from the card or a revert, lands on the one draft here. */
     private _applyToDraft(mutator: (draft: JsonObject) => void): void {
         const view = this._view;
-        if (view.kind !== "ready") {
+        if (view.kind !== "ready" || this._saving) {
             return;
         }
         const draft = cloneJson(view.config);
@@ -339,11 +385,7 @@ export class HelmanDeviceEditDialog extends LitElement {
     /** Frozen while saving: the save has already taken its snapshot of the draft. */
     private _handleConfigChanged = (event: Event): void => {
         if (this._saving) return;
-        const { path, value } = (event as CustomEvent<DeviceConfigChangedDetail>).detail;
-        this._applyToDraft((draft) => {
-            if (value === undefined) unsetValueAtPath(draft, path);
-            else setValueAtPath(draft, path, value);
-        });
+        this._list.handleDeviceConfigChanged(event);
     };
 
     /**
@@ -353,7 +395,7 @@ export class HelmanDeviceEditDialog extends LitElement {
      */
     private _handleSave = async (): Promise<void> => {
         const view = this._view;
-        if (view.kind !== "ready" || !this.hass || this._saving) {
+        if (view.kind !== "ready" || !this.hass || this._saving || this._list.hasYamlErrors()) {
             return;
         }
         this._saving = true;

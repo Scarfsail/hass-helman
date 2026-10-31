@@ -379,7 +379,7 @@ export class HelmanConfigEditorPanel
 
   /** Resolves once no mounted device card, nested ones included, has an update pending. */
   private async _deviceCardsRendered(): Promise<void> {
-    await this._devicesTab.deviceCardsRendered();
+    await this._devicesTab.list.deviceCardsRendered();
   }
 
   /**
@@ -901,7 +901,7 @@ export class HelmanConfigEditorPanel
         scopeId === TAB_SCOPE_IDS.devices ||
         scopeId === SECTION_SCOPE_IDS.devices.consumers
       ) {
-        this._devicesTab.resetDeviceModes();
+        this._devicesTab.list.resetDeviceModes();
       }
       this._scopeYamlValues = {
         ...this._scopeYamlValues,
@@ -923,9 +923,7 @@ export class HelmanConfigEditorPanel
       Object.values(this._scopeYamlErrors).some(
         (error) => typeof error === "string" && error.length > 0,
       ) ||
-      Object.values(this._devicesTab.deviceYamlErrors).some(
-        (error) => typeof error === "string" && error.length > 0,
-      )
+      this._devicesTab.list.hasYamlErrors()
     );
   }
 
@@ -942,7 +940,7 @@ export class HelmanConfigEditorPanel
     this._scopeModes = {};
     this._scopeYamlValues = {};
     this._scopeYamlErrors = {};
-    this._devicesTab.resetDeviceModes();
+    this._devicesTab.list.resetDeviceModes();
   }
 
   public _omitScopeIds<T>(
@@ -1231,7 +1229,7 @@ export class HelmanConfigEditorPanel
         if (canonicalJson(this._config) === draftAtSave) {
           this._config = cloneJson(outcome.doc);
           this._scopeYamlValues = {};
-          this._devicesTab.deviceYamlValues = {};
+          this._devicesTab.list.deviceYamlValues = {};
         }
         this._staleConfigNotice = false;
         const normalized = this._config

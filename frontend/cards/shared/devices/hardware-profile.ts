@@ -454,7 +454,7 @@ function renderBinding(
  * be added is the path it will get.
  */
 export function freeCandidates(
-    host: FormFieldHost,
+    host: Pick<FormFieldHost, "getValue">,
     profile: VendorProfileInfo,
     path: PathSegment[],
 ): NonNullable<VendorProfileInfo["candidates"]> {

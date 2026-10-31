@@ -1,10 +1,17 @@
+import {
+  DeviceListController,
+  GROUPING_CHEVRON_PATH,
+  preventSummaryToggle,
+  renderDeviceList,
+  renderAddDevice,
+} from "../../cards/shared/devices/device-list";
 import { html, nothing, type ReactiveController, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { keyed } from "lit/directives/keyed.js";
 import { mdiDragVertical } from "@mdi/js";
 import { LatestRequest } from "../../cards/shared/data/latest-request";
 import { callHelman } from "../../cards/shared/data/helman-commands";
-import { SECTION_SCOPE_IDS, type EditorMode } from "../config-editor-scopes";
+import { SECTION_SCOPE_IDS } from "../config-editor-scopes";
 import {
   formatError,
   renderOptionalTextField,
@@ -17,14 +24,6 @@ import {
   renderSortableList,
 } from "../../cards/shared/config/sortable-list";
 import {
-  parseItemYaml,
-  renderItemModeToggle,
-  renderItemYamlEditor,
-  type YamlEditorValueChangedDetail,
-} from "../../cards/shared/config/item-yaml";
-import { loadHaYamlEditor } from "../load-ha-elements";
-import { entityGroupKey } from "../../cards/shared/config/entity-group";
-import {
   appendListItem,
   asJsonArray,
   asJsonObject,
@@ -32,118 +31,48 @@ import {
   getValueAtPath,
   removeListItem,
   setValueAtPath,
-  unsetValueAtPath,
 } from "../../cards/shared/config/config-document";
 import {
   assignGroup,
   assignPhase,
-  canHaveChildren,
   consumerGroups,
   consumerPhases,
   DEVICE_FILTERS,
   DEVICE_PHASES,
   isDevicePhase,
   deviceChildren,
-  deviceIdFor,
-  deviceKind,
-  nameSlug,
-  CONTROLLABLE_ID_INVERTER,
   isSchedulable,
   iterDevices,
-  meterlessChildren,
-  ownMeter,
   renameGroupReferences,
   slugId,
   stripGroupReferences,
-  SWITCH_CONTROL_DOMAINS,
-  uniqueDeviceId,
   type DeviceFilter,
   type GroupedDeviceEntry,
 } from "../../cards/shared/config/devices";
 import {
-  freeCandidates,
-  candidateLabel,
-} from "../../cards/shared/devices/hardware-profile";
-import {
-  SEEDED_PROJECTION,
-  EDITABLE_DEVICE_KINDS,
   deviceIdentityTargets,
-  deviceIssues,
   deviceName,
-  renderDeviceIssues,
-  seedDeviceProjection,
-  type DeviceConfigChangedDetail,
-  type HelmanDeviceEditor,
 } from "../../cards/shared/devices/helman-device-editor";
-import { SENSOR_KIND_FILTERS } from "../../cards/shared/config/sensor-kind";
 import type { EnergyImportPreview } from "../../cards/helman-api";
 import type {
   JsonObject,
-  JsonValue,
   PathSegment,
-  VendorProfileInfo,
 } from "../../cards/shared/config/types";
 import type { HelmanConfigEditorPanel } from "../helman-config-editor";
-
-/** The chevron of a collapsible card, as the device cards draw it. */
-const GROUPING_CHEVRON_PATH = "M8.59,16.58L13.17,12L8.59,7.41L10,6L16,12L10,18L8.59,16.58Z";
 
 /** A group's device chips move between lists but never sort within one. */
 const MEMBER_SORTABLE_OPTIONS = { sort: false };
 
-/** Keeps a click on a summary's action row from toggling the card, padding and gaps included. */
-export const preventSummaryToggle = (event: Event): void => {
-  event.preventDefault();
-  event.stopPropagation();
-};
-
 const stopEvent = (event: Event): void => event.stopPropagation();
-
-/** Which device sits at which path; changes only when an edit moves devices. */
-export function devicePathSignature(config: JsonObject | null): string {
-  return iterDevices(config)
-    .map(({ device, path }) => `${entityGroupKey(path)}=${stringValue(device.id)}`)
-    .join("|");
-}
 
 /**
  * Controller for the Devices tab.
  *
- * Exposes inspection targets to the panel (`extraTargets`), owns per-device YAML modes,
- * filter state, energy import preview, add-device picker state, and groupings / phase board mutations.
+ * Exposes inspection targets to the panel (`extraTargets`) and owns filter state,
+ * energy import preview, and groupings / phase board mutations. Device lists
+ * and their YAML modes are shared with the device edit dialog.
  */
 export class DevicesTabController implements ReactiveController {
-  /** Per-device Visual / YAML state, keyed by the device's path key. */
-  private _deviceModes: Partial<Record<string, EditorMode>> = {};
-  get deviceModes(): Partial<Record<string, EditorMode>> {
-    return this._deviceModes;
-  }
-  set deviceModes(value: Partial<Record<string, EditorMode>>) {
-    if (this._deviceModes === value) return;
-    this._deviceModes = value;
-    this.host.requestUpdate();
-  }
-
-  private _deviceYamlValues: Partial<Record<string, JsonValue>> = {};
-  get deviceYamlValues(): Partial<Record<string, JsonValue>> {
-    return this._deviceYamlValues;
-  }
-  set deviceYamlValues(value: Partial<Record<string, JsonValue>>) {
-    if (this._deviceYamlValues === value) return;
-    this._deviceYamlValues = value;
-    this.host.requestUpdate();
-  }
-
-  private _deviceYamlErrors: Partial<Record<string, string>> = {};
-  get deviceYamlErrors(): Partial<Record<string, string>> {
-    return this._deviceYamlErrors;
-  }
-  set deviceYamlErrors(value: Partial<Record<string, string>>) {
-    if (this._deviceYamlErrors === value) return;
-    this._deviceYamlErrors = value;
-    this.host.requestUpdate();
-  }
-
   /** Which devices the Devices tab lists; the rest stay rendered but hidden. */
   private _deviceFilter: DeviceFilter = "all";
   get deviceFilter(): DeviceFilter {
@@ -187,41 +116,27 @@ export class DevicesTabController implements ReactiveController {
 
   public readonly energyImportRequest = new LatestRequest<object>();
 
-  /** The path key of the device list whose "Add device" picker is open. */
-  private _addDeviceTarget: string | null = null;
-  get addDeviceTarget(): string | null {
-    return this._addDeviceTarget;
-  }
-  set addDeviceTarget(value: string | null) {
-    if (this._addDeviceTarget === value) return;
-    this._addDeviceTarget = value;
-    this.host.requestUpdate();
-  }
-
-  /** The hardware profile picked in the open "Add device" picker; "" is Custom. */
-  private _addDeviceProfile = "";
-  get addDeviceProfile(): string {
-    return this._addDeviceProfile;
-  }
-  set addDeviceProfile(value: string) {
-    if (this._addDeviceProfile === value) return;
-    this._addDeviceProfile = value;
-    this.host.requestUpdate();
-  }
-
-  /** The device a profile add just created, whose card opens on it. */
-  private _addedDeviceId: string | null = null;
-  get addedDeviceId(): string | null {
-    return this._addedDeviceId;
-  }
-  set addedDeviceId(value: string | null) {
-    if (this._addedDeviceId === value) return;
-    this._addedDeviceId = value;
-    this.host.requestUpdate();
-  }
+  readonly list: DeviceListController;
 
   constructor(public readonly host: HelmanConfigEditorPanel) {
     this.host.addController(this);
+    this.list = new DeviceListController(host, {
+      config: () => host.config,
+      savedConfig: () => host.savedConfig,
+      resolvedConfig: () => host.resolvedConfig(),
+      hass: () => host.hass,
+      vendors: () => host.vendors,
+      validation: () => host.validation,
+      inspections: () => host.inspections.results,
+      t: (key, values) => host._t(key, values),
+      narrow: () => host.narrow ?? false,
+      mutate: (mutator) => host._applyMutation(mutator),
+      reportError: (text) => host.setMessage(text ? { kind: "error", text } : null),
+      deviceVisible: (device) => this.deviceMatchesFilter(device),
+      energyEstimate: (device, path) => host.trainingTab.deviceEnergyEstimate(
+        asJsonObject(getValueAtPath(host.resolvedConfig() ?? {}, path)) ?? device,
+      ),
+    });
   }
 
   hostConnected(): void {}
@@ -232,198 +147,12 @@ export class DevicesTabController implements ReactiveController {
     return iterDevices(this.host.config).flatMap(({ path }) => deviceIdentityTargets(path));
   }
 
-  /** Resolves once no mounted device card, nested ones included, has an update pending. */
-  async deviceCardsRendered(): Promise<void> {
-    for (;;) {
-      const pending = [
-        ...this.host.renderRoot.querySelectorAll<HelmanDeviceEditor>("helman-device-editor"),
-      ].filter((editor) => editor.isUpdatePending);
-      if (pending.length === 0) return;
-      await Promise.all(pending.map((editor) => editor.updateComplete));
-    }
-  }
-
-  getDeviceMode(path: PathSegment[]): EditorMode {
-    return this.deviceModes[entityGroupKey(path)] ?? "visual";
-  }
-
-  async enterDeviceYamlMode(path: PathSegment[]): Promise<void> {
-    if (this.getDeviceMode(path) === "yaml") return;
-    const key = entityGroupKey(path);
-    try {
-      await loadHaYamlEditor();
-      if (!this.host.config) return;
-      const value = this.host._getValue(path) as JsonValue;
-      this.deviceModes = { ...this.deviceModes, [key]: "yaml" };
-      this.deviceYamlValues = { ...this.deviceYamlValues, [key]: value };
-      const nextErrors = { ...this.deviceYamlErrors };
-      delete nextErrors[key];
-      this.deviceYamlErrors = nextErrors;
-      this.host.setMessage(null);
-      this.host.requestUpdate();
-    } catch (error) {
-      this.host.setMessage({
-        kind: "error",
-        text: formatError(error, this.host._t("editor.messages.load_ha_yaml_editor_failed")),
-      });
-    }
-  }
-
-  exitDeviceYamlMode(path: PathSegment[]): void {
-    const key = entityGroupKey(path);
-    if (this.getDeviceMode(path) !== "yaml" || this.deviceYamlErrors[key]) return;
-    const nextModes = { ...this.deviceModes };
-    delete nextModes[key];
-    const nextValues = { ...this.deviceYamlValues };
-    delete nextValues[key];
-    const nextErrors = { ...this.deviceYamlErrors };
-    delete nextErrors[key];
-    this.deviceModes = nextModes;
-    this.deviceYamlValues = nextValues;
-    this.deviceYamlErrors = nextErrors;
-    this.host.requestUpdate();
-  }
-
-  moveDevice(listPath: PathSegment[], fromIndex: number, toIndex: number): void {
-    this.resetDeviceModes();
-    this.host._moveListItem(listPath, fromIndex, toIndex);
-  }
-
-  removeDevice(path: PathSegment[]): void {
-    this.resetDeviceModes();
-    this.host._removeListItem(path.slice(0, -1), path[path.length - 1] as number);
-  }
-
-  resetDeviceModes(): void {
-    this.addDeviceTarget = null;
-    this.deviceModes = {};
-    this.deviceYamlValues = {};
-    this.deviceYamlErrors = {};
-    this.host.requestUpdate();
-  }
-
-  clearDescendantDeviceModes(path: PathSegment[]): void {
-    const prefix = `${entityGroupKey(path)}.`;
-    const keep = <T>(values: Partial<Record<string, T>>): Partial<Record<string, T>> =>
-      Object.fromEntries(Object.entries(values).filter(([key]) => !key.startsWith(prefix)));
-    this.deviceModes = keep(this.deviceModes);
-    this.deviceYamlValues = keep(this.deviceYamlValues);
-    this.deviceYamlErrors = keep(this.deviceYamlErrors);
-    if (this.addDeviceTarget?.startsWith(prefix)) this.addDeviceTarget = null;
-    this.host.requestUpdate();
-  }
-
-  handleDeviceYamlChanged(
-    path: PathSegment[],
-    detail: YamlEditorValueChangedDetail,
-  ): void {
-    const key = entityGroupKey(path);
-    const parsed = parseItemYaml(detail);
-    if (!parsed.ok) {
-      this.deviceYamlErrors = {
-        ...this.deviceYamlErrors,
-        [key]: detail.errorMsg ?? this.host._t(parsed.errorKey),
-      };
-      this.host.requestUpdate();
-      return;
-    }
-    try {
-      this.host._applyMutation((draft) => {
-        setValueAtPath(draft, path, cloneJson(parsed.value));
-      });
-      this.clearDescendantDeviceModes(path);
-      this.deviceYamlValues = { ...this.deviceYamlValues, [key]: parsed.value };
-      const nextErrors = { ...this.deviceYamlErrors };
-      delete nextErrors[key];
-      this.deviceYamlErrors = nextErrors;
-      this.host.requestUpdate();
-    } catch (error) {
-      this.deviceYamlErrors = {
-        ...this.deviceYamlErrors,
-        [key]: formatError(error, this.host._t("editor.yaml.errors.apply_failed")),
-      };
-      this.host.requestUpdate();
-    }
-  }
-
-  handleDeviceConfigChanged = (event: Event): void => {
-    const { path, value } = (event as CustomEvent<DeviceConfigChangedDetail>).detail;
-    const before = devicePathSignature(this.host.config);
-    this.host._applyMutation((draft) => {
-      if (value === undefined) unsetValueAtPath(draft, path);
-      else setValueAtPath(draft, path, value);
-    });
-    if (devicePathSignature(this.host.config) !== before) this.resetDeviceModes();
-  };
-
   deviceMatchesFilter(device: JsonObject): boolean {
     if (this.deviceFilter === "all") return true;
     return (
       isSchedulable(device) === (this.deviceFilter === "schedulable") ||
       deviceChildren(device).some((child) => this.deviceMatchesFilter(child))
     );
-  }
-
-  deviceIds(): string[] {
-    return iterDevices(this.host.config)
-      .map(({ device }) => stringValue(device.id).trim())
-      .filter((value) => value.length > 0);
-  }
-
-  addProfileDevice(
-    path: PathSegment[],
-    profile: VendorProfileInfo,
-    candidate: NonNullable<VendorProfileInfo["candidates"]>[number],
-  ): void {
-    const id = uniqueDeviceId(nameSlug(candidate.name) || profile.deviceKind, [
-      CONTROLLABLE_ID_INVERTER,
-      ...this.deviceIds(),
-    ]);
-    this.addDeviceTarget = null;
-    this.addedDeviceId = id;
-    this.host._applyMutation((draft) => {
-      appendListItem(draft, path.slice(0, -1), {
-        id,
-        name: candidate.name,
-        kind: profile.deviceKind,
-        profile: { id: profile.id, device_id: candidate.deviceId },
-      });
-      seedDeviceProjection(draft, path);
-    });
-  }
-
-  addDevice(listPath: PathSegment[], parent: JsonObject | null, rawEntityId: string): void {
-    const entityId = rawEntityId.trim();
-    if (!entityId) return;
-    const domain = entityId.split(".")[0];
-    if (parent !== null && domain === "cover" && meterlessChildren(parent).some((sibling) => isSchedulable(sibling))) {
-      return;
-    }
-    const meterlessIds = parent !== null && domain !== "sensor"
-      ? iterDevices(this.host.resolvedConfig())
-          .filter((entry) => entry.parent !== null && !ownMeter(entry.device))
-          .map((entry) => stringValue(entry.device.id))
-      : [];
-    const id = deviceIdFor(entityId, [CONTROLLABLE_ID_INVERTER, ...this.deviceIds()], meterlessIds);
-    let device: JsonObject;
-    if (domain === "sensor" || parent === null) {
-      device = { id, consumption: { energy_entity_id: entityId } };
-    } else {
-      device =
-        domain === "climate"
-          ? { id, kind: "climate", controls: { climate: { entity_id: entityId } } }
-          : domain === "cover"
-            ? { id, controls: { cover: { entity_id: entityId } } }
-            : { id, controls: { switch: { entity_id: entityId } } };
-      if (domain !== "cover" && meterlessChildren(parent).some((sibling) => isSchedulable(sibling))) {
-        device.schedulable = true;
-        device.consumption = { projection: { ...SEEDED_PROJECTION } };
-      }
-    }
-    this.addDeviceTarget = null;
-    this.host._applyMutation((draft) => {
-      appendListItem(draft, listPath, device);
-    });
   }
 
   async previewEnergyImport(): Promise<void> {
@@ -521,7 +250,7 @@ export class DevicesTabController implements ReactiveController {
       input.value = oldId;
       return null;
     }
-    this.resetDeviceModes();
+    this.list.resetDeviceModes();
     this.host._omitScopeIdsFromYaml([SECTION_SCOPE_IDS.devices.consumers]);
     this.host._applyMutation((draft) => {
       setValueAtPath(draft, [...listPath, index, "id"], newId);
@@ -539,283 +268,6 @@ export class DevicesTabController implements ReactiveController {
       stripGroupReferences(draft, groupingId, groupId);
     });
   }
-}
-
-export function renderDeviceModeToggle(
-  host: HelmanConfigEditorPanel,
-  controller: DevicesTabController,
-  path: PathSegment[],
-): TemplateResult {
-  return renderItemModeToggle(host, controller.getDeviceMode(path), (mode) => {
-    if (mode === "yaml") {
-      void controller.enterDeviceYamlMode(path);
-    } else {
-      controller.exitDeviceYamlMode(path);
-    }
-  });
-}
-
-export function renderDeviceYamlEditor(
-  host: HelmanConfigEditorPanel,
-  controller: DevicesTabController,
-  path: PathSegment[],
-): TemplateResult {
-  const key = entityGroupKey(path);
-  return renderItemYamlEditor(host, {
-    id: `device-${key.replaceAll(".", "-")}`,
-    value: (controller.deviceYamlValues[key] ?? host._getValue(path)) as JsonValue,
-    error: controller.deviceYamlErrors[key],
-    onChange: (detail) => controller.handleDeviceYamlChanged(path, detail),
-  });
-}
-
-export function renderDeviceListActions(
-  host: HelmanConfigEditorPanel,
-  controller: DevicesTabController,
-  path: PathSegment[],
-): TemplateResult {
-  return html`
-    <div class="list-actions" @click=${preventSummaryToggle}>
-      ${renderDragHandle(host)}
-      ${renderDeviceModeToggle(host, controller, path)}
-      ${renderRemoveButton(host, {
-        onRemove: () => controller.removeDevice(path),
-      })}
-    </div>
-  `;
-}
-
-export function renderUnsupportedDevice(
-  host: HelmanConfigEditorPanel,
-  controller: DevicesTabController,
-  device: JsonObject,
-  path: PathSegment[],
-): TemplateResult {
-  const subtitle = host._t("editor.dynamic.unsupported_appliance_kind", {
-    kind: stringValue(device.kind) || host._t("editor.values.unknown"),
-  });
-  return html`
-    <details class="list-card device-card" ?hidden=${!controller.deviceMatchesFilter(device)}>
-      <summary>
-        <div class="appliance-summary-row">
-          <div class="appliance-summary-left">
-            ${renderDragHandle(host)}
-            ${renderSvgIcon(GROUPING_CHEVRON_PATH, "appliance-chevron")}
-            <div class="card-title">
-              <strong>${deviceName(host, host.inspections.results, device, path)}</strong>
-              <span class="card-subtitle">${subtitle}</span>
-            </div>
-          </div>
-          <div class="list-actions" @click=${preventSummaryToggle}>
-            ${renderRemoveButton(host, {
-              onRemove: () => controller.removeDevice(path),
-            })}
-          </div>
-        </div>
-      </summary>
-      <div class="appliance-body">
-        ${renderDeviceIssues(host.validation, deviceIssues(host.validation, path))}
-        <pre class="raw-preview">${JSON.stringify(device, null, 2)}</pre>
-      </div>
-    </details>
-  `;
-}
-
-export function renderDeviceChildren(
-  host: HelmanConfigEditorPanel,
-  controller: DevicesTabController,
-  device: JsonObject,
-  path: PathSegment[],
-): TemplateResult | typeof nothing {
-  const hasChildren = (asJsonArray(device.children) ?? []).length > 0;
-  const canParent = canHaveChildren(device);
-  if (!hasChildren && !canParent) return nothing;
-  return html`
-    ${hasChildren ? renderDeviceList(host, controller, [...path, "children"], device) : nothing}
-    ${canParent ? renderAddDevice(host, controller, [...path, "children"], device) : nothing}
-  `;
-}
-
-export function renderDeviceCard(
-  host: HelmanConfigEditorPanel,
-  controller: DevicesTabController,
-  device: JsonObject,
-  path: PathSegment[],
-  parent: JsonObject | null,
-): TemplateResult {
-  return html`
-    <helman-device-editor
-      ?hidden=${!controller.deviceMatchesFilter(device)}
-      .config=${host.config}
-      .savedConfig=${host.savedConfig}
-      .path=${path}
-      .parent=${parent}
-      .hass=${host.hass}
-      .narrow=${host.narrow ?? false}
-      .localize=${(key: string, values?: Record<string, string | number>) => host._t(key, values)}
-      .validation=${host.validation}
-      .inspections=${host.inspections.results}
-      .vendors=${host.vendors}
-      .expanded=${controller.addedDeviceId !== null && device.id === controller.addedDeviceId}
-      .energyEstimate=${host.trainingTab.deviceEnergyEstimate(
-        asJsonObject(getValueAtPath(host.resolvedConfig() ?? {}, path)) ?? device,
-      )}
-      .listActions=${(devicePath: PathSegment[]) => renderDeviceListActions(host, controller, devicePath)}
-      .renderChildren=${(child: JsonObject, childPath: PathSegment[]) =>
-        renderDeviceChildren(host, controller, child, childPath)}
-      .renderYaml=${(devicePath: PathSegment[]) =>
-        controller.getDeviceMode(devicePath) === "yaml" ? renderDeviceYamlEditor(host, controller, devicePath) : null}
-      @device-config-changed=${controller.handleDeviceConfigChanged}
-    ></helman-device-editor>
-  `;
-}
-
-export function renderDeviceItem(
-  host: HelmanConfigEditorPanel,
-  controller: DevicesTabController,
-  device: JsonObject,
-  path: PathSegment[],
-  parent: JsonObject | null,
-): TemplateResult {
-  const kind = deviceKind(device);
-  if (!(EDITABLE_DEVICE_KINDS as readonly string[]).includes(kind)) {
-    return renderUnsupportedDevice(host, controller, device, path);
-  }
-  return renderDeviceCard(host, controller, device, path, parent);
-}
-
-export function renderDeviceList(
-  host: HelmanConfigEditorPanel,
-  controller: DevicesTabController,
-  listPath: PathSegment[],
-  parent: JsonObject | null,
-): TemplateResult {
-  return renderSortableList({
-    items: asJsonArray(host._getValue(listPath)) ?? [],
-    containerClass: "list-stack",
-    renderItem: (value, index) =>
-      renderDeviceItem(host, controller, asJsonObject(value) ?? {}, [...listPath, index], parent),
-    onMove: (oldIndex, newIndex) => controller.moveDevice(listPath, oldIndex, newIndex),
-  });
-}
-
-export function renderAddProfileDevice(
-  host: HelmanConfigEditorPanel,
-  controller: DevicesTabController,
-  listPath: PathSegment[],
-  profile: VendorProfileInfo,
-): TemplateResult {
-  const newPath = [...listPath, (asJsonArray(host._getValue(listPath)) ?? []).length];
-  const candidates = freeCandidates(host, profile, newPath);
-  if (candidates.length === 0) {
-    return html`
-      <div class="vendor-provided-entity unresolved" data-field="vendor-no-devices">
-        ${host._t("editor.dynamic.vendor_no_devices", { profile: profile.label })}
-      </div>
-    `;
-  }
-  return html`
-    <label>${host._t("editor.fields.add_device_vendor_device")}</label>
-    <select
-      data-field="add-device-vendor-device"
-      @change=${(event: Event) => {
-        const candidate = candidates.find(
-          (option) => option.deviceId === (event.currentTarget as HTMLSelectElement).value,
-        );
-        if (candidate) controller.addProfileDevice(newPath, profile, candidate);
-      }}
-    >
-      <option value="" selected></option>
-      ${candidates.map(
-        (candidate) =>
-          html`<option value=${candidate.deviceId}>${candidateLabel(candidate)}</option>`,
-      )}
-    </select>
-    <div class="helper">${host._t("editor.helpers.add_device_profile")}</div>
-  `;
-}
-
-export function renderAddDevice(
-  host: HelmanConfigEditorPanel,
-  controller: DevicesTabController,
-  listPath: PathSegment[],
-  parent: JsonObject | null,
-  sibling: TemplateResult | typeof nothing = nothing,
-): TemplateResult {
-  const key = entityGroupKey(listPath);
-  const child = parent !== null;
-  if (controller.addDeviceTarget !== key) {
-    return html`
-      <div class="section-footer inline-actions">
-        <button
-          type="button"
-          class="add-button primary add-device"
-          @click=${() => {
-            controller.addDeviceTarget = key;
-            controller.addDeviceProfile = "";
-            controller.addedDeviceId = null;
-            host.requestUpdate();
-          }}
-        >
-          ${host._t(child ? "editor.actions.add_child_device" : "editor.actions.add_device")}
-        </button>
-        ${sibling}
-      </div>
-    `;
-  }
-  const profiles = (host.vendors?.profiles ?? []).filter(
-    (option: VendorProfileInfo) =>
-      option.binding === "device" && (EDITABLE_DEVICE_KINDS as readonly string[]).includes(option.deviceKind),
-  );
-  const profile = profiles.find((option: VendorProfileInfo) => option.id === controller.addDeviceProfile);
-  return html`
-    <div class="field add-device-picker">
-      <label>${host._t("editor.fields.add_device_profile")}</label>
-      <select
-        data-field="add-device-profile"
-        @change=${(event: Event) => {
-          controller.addDeviceProfile = (event.currentTarget as HTMLSelectElement).value;
-          host.requestUpdate();
-        }}
-      >
-        <option value="" ?selected=${!profile}>${host._t("editor.values.profile_custom")}</option>
-        ${profiles.map(
-          (option: VendorProfileInfo) => html`<option value=${option.id} ?selected=${option === profile}>${option.label}</option>`,
-        )}
-      </select>
-      ${profile ? renderAddProfileDevice(host, controller, listPath, profile) : html`
-        <label>
-          ${host._t(child ? "editor.fields.add_child_device_entity" : "editor.fields.add_device_entity")}
-        </label>
-        <ha-entity-picker
-          .hass=${host.hass}
-          .includeDomains=${child
-            ? parent !== null && meterlessChildren(parent).some((sibling) => isSchedulable(sibling))
-              ? ["sensor", ...SWITCH_CONTROL_DOMAINS, "climate"]
-              : ["sensor", ...SWITCH_CONTROL_DOMAINS, "cover", "climate"]
-            : ["sensor"]}
-          .entityFilter=${SENSOR_KIND_FILTERS.energy}
-          @value-changed=${(event: CustomEvent<{ value?: string }>) =>
-            controller.addDevice(listPath, parent, event.detail?.value ?? "")}
-        ></ha-entity-picker>
-        <div class="helper">
-          ${host._t(child ? "editor.helpers.add_child_device" : "editor.helpers.add_device")}
-        </div>
-      `}
-      <div class="section-footer">
-        <button
-          type="button"
-          class="add-button"
-          @click=${() => {
-            controller.addDeviceTarget = null;
-            host.requestUpdate();
-          }}
-        >
-          ${host._t("editor.actions.cancel")}
-        </button>
-      </div>
-    </div>
-  `;
 }
 
 export function renderEnergyImport(
@@ -855,7 +307,7 @@ export function renderEnergyImport(
           !hasChanges
         )
           return;
-        controller.resetDeviceModes();
+        controller.list.resetDeviceModes();
         host._applyMutation((draft) => {
           draft.devices = { ...(asJsonObject(draft.devices) ?? {}), consumers: cloneJson(preview.devices) };
         });
@@ -1233,11 +685,10 @@ export function renderDevicesTab(
       html`
         <p class="inline-note">${host._t("editor.notes.devices")}</p>
         ${consumers.length > 0
-          ? html`${renderDeviceFilter(host, controller)}${renderDeviceList(host, controller, ["devices", "consumers"], null)}`
+          ? html`${renderDeviceFilter(host, controller)}${renderDeviceList(controller.list, ["devices", "consumers"], null)}`
           : html`<div class="message info devices-empty">${host._t("editor.empty.no_devices")}</div>`}
         ${renderAddDevice(
-          host,
-          controller,
+          controller.list,
           ["devices", "consumers"],
           null,
           html`<button

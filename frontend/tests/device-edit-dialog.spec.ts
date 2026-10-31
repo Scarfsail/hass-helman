@@ -74,6 +74,9 @@ async function mountDetail(page: Page, options: MountOptions = {}): Promise<void
     } = options;
     await loadBundle(page, "node-detail-dialog");
     await page.addScriptTag({ content: HA_DIALOG_STUB });
+    await page.evaluate(() => {
+        if (!customElements.get("ha-yaml-editor")) customElements.define("ha-yaml-editor", class extends HTMLElement {});
+    });
     await page.addScriptTag({ content: `
         customElements.define("ha-dialog-footer", class extends HTMLElement {
             constructor() {
@@ -116,7 +119,9 @@ async function mountDetail(page: Page, options: MountOptions = {}): Promise<void
                                     entityId: null,
                                     status: "ok",
                                     facts: [],
-                                    placeholder: target.key.endsWith(".name") ? "Resolved boiler" : undefined,
+                                    placeholder: target.key.endsWith(".name")
+                                        ? target.key.includes("children") ? "Resolved pump" : "Resolved boiler"
+                                        : undefined,
                                 },
                                 saved: null,
                             })),
@@ -161,7 +166,7 @@ function cardIds(page: Page) {
 /** Open one of the form's sections, which all start collapsed. */
 async function openSection(page: Page, label: string): Promise<void> {
     await dialog(page)
-        .locator("details.section-card", {
+        .locator("details.device-card").first().locator(":scope > .appliance-body > details.section-card", {
             has: page.locator(":scope > summary .section-summary-label", { hasText: label }),
         })
         .evaluate((details) => ((details as HTMLDetailsElement).open = true));
@@ -197,10 +202,10 @@ test.describe("editing a device from its detail", () => {
         expect(settingsBox!.x - footerBox!.x).toBeLessThan(2);
         expect(footerBox!.x + footerBox!.width - closeBox!.x - closeBox!.width).toBeLessThan(2);
         await openEdit(page);
-        await expect.poll(() => cardIds(page)).toEqual(["boiler"]);
-        // Open, and alone: no children list, no drag, no remove.
-        await expect(dialog(page).locator("details.device-card")).toHaveAttribute("open", "");
-        await expect(dialog(page).locator(".list-actions")).toHaveCount(0);
+        await expect.poll(() => cardIds(page)).toEqual(["boiler", "pump"]);
+        // The root stays open with no list controls; child sections start collapsed.
+        await expect(dialog(page).locator("details.device-card").first()).toHaveAttribute("open", "");
+        await expect(dialog(page).locator("details.device-card").first().locator(":scope > summary .list-actions")).toHaveCount(0);
     });
 
     test("Settings opens the form of a meterless device named by its id", async ({ page }) => {
@@ -266,8 +271,8 @@ test.describe("editing a device from its detail", () => {
         await mountDetail(page, { config: grouped });
         await openEdit(page);
         // The Groups and phase section starts collapsed.
-        await dialog(page).locator("summary", { hasText: /^\s*Groups and phase\s*$/ }).click();
-        await dialog(page).locator("select.device-group[data-grouping-id=breakers]").selectOption("garage");
+        await openSection(page, "Groups and phase");
+        await dialog(page).locator("select.device-group[data-grouping-id=breakers]").first().selectOption("garage");
         await dialog(page).getByText("Save and reload").click();
 
         await expect.poll(async () =>
@@ -284,7 +289,7 @@ test.describe("editing a device from its detail", () => {
         await openEdit(page);
         // Beside group membership, with no grouping configured at all.
         await openSection(page, "Groups and phase");
-        await dialog(page).locator("select.device-phase").selectOption("3ph");
+        await dialog(page).locator("select.device-phase").first().selectOption("3ph");
         await dialog(page).getByText("Save and reload").click();
 
         await expect.poll(async () =>
@@ -299,7 +304,7 @@ test.describe("editing a device from its detail", () => {
     test("Cancel closes the edit dialog and leaves the detail open", async ({ page }) => {
         await mountDetail(page);
         await openEdit(page);
-        await expect.poll(() => cardIds(page)).toEqual(["boiler"]);
+        await expect.poll(() => cardIds(page)).toEqual(["boiler", "pump"]);
         await dialog(page).getByText("Cancel").click();
         await expect(dialog(page)).toHaveCount(0);
         await expect(editButton(page)).toHaveCount(1);
@@ -320,7 +325,7 @@ test.describe("editing a device from its detail", () => {
         await page.evaluate(() => window.history.back());
         await expect(dialog(page)).toHaveCount(1);
         // The form is frozen too: the save already took its snapshot of the draft.
-        await expect(dialog(page).locator("helman-device-editor")).toHaveAttribute("inert", "");
+        await expect(dialog(page).locator("helman-device-editor").first()).toHaveAttribute("inert", "");
     });
 
     test("Back with a dirty draft asks first, and closes only the edit dialog", async ({ page }) => {
@@ -384,7 +389,7 @@ test.describe("editing a device from its detail", () => {
         await mountDetail(page);
         await openEdit(page);
         await expect(nameInput(page)).toHaveAttribute("placeholder", "Resolved boiler");
-        await expect(dialog(page).locator("details.device-card .card-title strong"))
+        await expect(dialog(page).locator("details.device-card .card-title strong").first())
             .toHaveText("Resolved boiler");
         // The mounted groups ride the same poll as the name and icon.
         const inspected = async () => (await calls(page))
@@ -480,3 +485,158 @@ for (const external of [false, true]) {
         expect((await calls(page)).filter((call) => call.type === "helman/get_config")).toHaveLength(1);
     });
 }
+
+/** A card's own controls, excluding controls on any nested cards. */
+function deviceCard(page: Page, id: string) {
+    return dialog(page).locator('details.device-card[data-device-id="' + id + '"]');
+}
+
+async function openChildren(page: Page, id = "boiler") {
+    const card = deviceCard(page, id);
+    await card.locator(":scope > .appliance-body > details.section-card").filter({
+        has: page.locator(":scope > summary .section-summary-label", { hasText: "Children" }),
+    }).locator(":scope > summary").click();
+}
+
+async function saveConfig(page: Page) {
+    await dialog(page).getByText("Save and reload", { exact: true }).click();
+    await expect.poll(async () => (await calls(page)).filter((call) => call.type === "helman/save_config").length).toBe(1);
+    return (await calls(page)).find((call) => call.type === "helman/save_config")!.config;
+}
+
+test.describe("sub-devices in the device edit dialog", () => {
+    test("children have shared list controls and inspection placeholders; editing saves just the child field", async ({ page }) => {
+        await mountDetail(page);
+        await openEdit(page);
+        await openChildren(page);
+        await expect.poll(() => cardIds(page)).toEqual(["boiler", "pump"]);
+        const root = deviceCard(page, "boiler");
+        await expect(root.locator(":scope > summary .list-actions")).toHaveCount(0);
+        const child = deviceCard(page, "pump");
+        await expect(child.locator(":scope > summary .list-actions .sortable-handle")).toHaveCount(1);
+        await expect(child.locator(":scope > summary .mode-toggle button", { hasText: "YAML" })).toHaveCount(1);
+        await expect(child.locator(":scope > summary button[title=Remove]")).toHaveCount(1);
+        await child.locator(":scope > summary").click();
+        await child.locator("summary .section-summary-label", { hasText: "Identity" }).click();
+        const input = child.locator(".field-grid .field input").first();
+        await expect(input).toHaveAttribute("placeholder", "Resolved pump");
+        await input.fill("Circulation pump");
+        await input.dispatchEvent("change");
+        expect(await saveConfig(page)).toEqual({
+            ...CONFIG,
+            devices: { consumers: [{ ...BOILER, children: [{ ...BOILER.children[0], name: "Circulation pump" }] }] },
+        });
+    });
+
+    test("an entity picker appends a child", async ({ page }) => {
+        await mountDetail(page);
+        await openEdit(page);
+        await openChildren(page);
+        await dialog(page).getByRole("button", { name: "Add child device", exact: true }).click();
+        await dialog(page).locator(".add-device-picker ha-entity-picker").evaluate((picker) => {
+            picker.dispatchEvent(new CustomEvent("value-changed", {
+                detail: { value: "switch.fan" }, bubbles: true, composed: true,
+            }));
+        });
+        expect(await saveConfig(page)).toEqual({
+            ...CONFIG,
+            devices: { consumers: [{ ...BOILER, children: [...BOILER.children, { id: "fan", controls: { switch: { entity_id: "switch.fan" } } }] }] },
+        });
+    });
+
+    test("Remove drops a child and preserves the opened parent", async ({ page }) => {
+        await mountDetail(page);
+        await openEdit(page);
+        await openChildren(page);
+        page.once("dialog", (confirmation) => confirmation.accept());
+        await deviceCard(page, "pump").locator(":scope > summary button[title=Remove]").click();
+        await expect.poll(() => cardIds(page)).toEqual(["boiler"]);
+        const { children, ...withoutChildren } = BOILER;
+        expect(await saveConfig(page)).toEqual({ ...CONFIG, devices: { consumers: [withoutChildren] } });
+    });
+
+    test("reordering child cards persists their new order", async ({ page }) => {
+        const fan = { id: "fan", controls: { switch: { entity_id: "switch.fan" } } };
+        const parent = { ...BOILER, children: [...BOILER.children, fan] };
+        const config = { ...CONFIG, devices: { consumers: [parent] } };
+        await mountDetail(page, { config });
+        await openEdit(page);
+        await openChildren(page);
+        await dialog(page).locator("ha-sortable:has(> .list-stack)").evaluate((sortable) => {
+            sortable.dispatchEvent(new CustomEvent("item-moved", {
+                detail: { oldIndex: 0, newIndex: 1 }, bubbles: true, composed: true,
+            }));
+        });
+        await expect.poll(() => cardIds(page)).toEqual(["boiler", "fan", "pump"]);
+        expect(await saveConfig(page)).toEqual({ ...config, devices: { consumers: [{ ...parent, children: [fan, ...BOILER.children] }] } });
+    });
+
+    test("child YAML edits persist and invalid YAML blocks Save", async ({ page }) => {
+        await mountDetail(page);
+        await openEdit(page);
+        await openChildren(page);
+        await deviceCard(page, "pump").locator(":scope > summary .mode-toggle button", { hasText: "YAML" }).click();
+        const yaml = dialog(page).locator("ha-yaml-editor");
+        expect(await yaml.evaluate((editor) => (editor as any).defaultValue)).toEqual(BOILER.children[0]);
+        await yaml.evaluate((editor) => editor.dispatchEvent(new CustomEvent("value-changed", {
+            detail: { isValid: false, errorMsg: "Broken child YAML" }, bubbles: true, composed: true,
+        })));
+        await expect.poll(() => dialog(page).getByText("Save and reload", { exact: true }).evaluate((button) => (button as any).disabled)).toBe(true);
+        // The handler guards programmatic saves too.
+        await dialog(page).getByText("Save and reload", { exact: true }).dispatchEvent("click");
+        expect((await calls(page)).filter((call) => call.type === "helman/save_config")).toHaveLength(0);
+        await yaml.evaluate((editor, value) => editor.dispatchEvent(new CustomEvent("value-changed", {
+            detail: { value, isValid: true }, bubbles: true, composed: true,
+        })), { ...BOILER.children[0], name: "YAML pump" });
+        await expect.poll(() => dialog(page).getByText("Save and reload", { exact: true }).evaluate((button) => (button as any).disabled)).toBe(false);
+        expect(await saveConfig(page)).toEqual({
+            ...CONFIG,
+            devices: { consumers: [{ ...BOILER, children: [{ ...BOILER.children[0], name: "YAML pump" }] }] },
+        });
+    });
+});
+
+
+test("a grandchild resolves its name and can be edited in place", async ({ page }) => {
+    const grandchild = { id: "fan", controls: { switch: { entity_id: "switch.fan" } } };
+    const child = { id: "room", consumption: { energy_entity_id: "sensor.room_energy" }, children: [grandchild] };
+    const parent = { ...BOILER, children: [child] };
+    const config = { ...CONFIG, devices: { consumers: [parent] } };
+    await mountDetail(page, { config });
+    await openEdit(page);
+    await openChildren(page);
+    await deviceCard(page, "room").locator(":scope > summary").click();
+    await openChildren(page, "room");
+    await deviceCard(page, "fan").locator(":scope > summary").click();
+    await deviceCard(page, "fan").locator("summary .section-summary-label", { hasText: "Identity" }).click();
+    const input = deviceCard(page, "fan").locator(".field-grid .field input").first();
+    await expect(input).toHaveAttribute("placeholder", "Resolved pump");
+    await input.fill("Desk fan");
+    await input.dispatchEvent("change");
+    expect(await saveConfig(page)).toEqual({
+        ...config,
+        devices: { consumers: [{ ...parent, children: [{ ...child, children: [{ ...grandchild, name: "Desk fan" }] }] }] },
+    });
+});
+
+test("a hardware-profile child binds its candidate through the shared picker", async ({ page }) => {
+    const profile = {
+        id: "solax_ev_charger", label: "SolaX EV charger", deviceKind: "ev_charger", binding: "device",
+        ownedConfigPaths: [], ownedDevicePaths: [],
+        candidates: [{ deviceId: "garage-charger", name: "Garage charger", entryTitle: "SolaX" }],
+    };
+    await mountDetail(page, { vendors: { profiles: [profile], devices: {} } });
+    await openEdit(page);
+    await openChildren(page);
+    await dialog(page).getByRole("button", { name: "Add child device", exact: true }).click();
+    await dialog(page).locator('select[data-field="add-device-profile"]').selectOption(profile.id);
+    await dialog(page).locator('select[data-field="add-device-vendor-device"]').selectOption("garage-charger");
+    const saved = await saveConfig(page);
+    expect(saved).toEqual({
+        ...CONFIG,
+        devices: { consumers: [{ ...BOILER, children: [...BOILER.children, {
+            id: "garage_charger", name: "Garage charger", kind: "ev_charger",
+            profile: { id: profile.id, device_id: "garage-charger" },
+        }] }] },
+    });
+});

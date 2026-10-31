@@ -422,7 +422,7 @@ export const deviceEditorStyles = css`
 
 /**
  * One device's card, as an element: the config panel's Devices tab is a tree
- * of these, and the device edit dialog mounts exactly one.
+ * of these, and the device edit dialog mounts the opened device and its children.
  *
  * The same move `helman-optimizer-editor` made for automations. The form used
  * to be private methods of the config panel, which the card bundle cannot
@@ -442,9 +442,9 @@ export const deviceEditorStyles = css`
  * Like the optimizer editor, it edits a clone and reports it, and it owns no
  * part of the document outside what it is editing. The summary's drag handle,
  * YAML toggle and remove (`listActions`), the children list (`renderChildren`)
- * and the YAML editor that replaces the form (`renderYaml`) are the host's:
- * they are list- and document-level state the panel already keeps, and the
- * dialog passes none of them.
+ * and the YAML editor that replaces the form (`renderYaml`) are the host's.
+ * Both surfaces share their list state; the dialog omits list actions and YAML
+ * on the opened device itself.
  */
 export class HelmanDeviceEditor extends LitElement implements HardwareProfileHost {
     /** The whole config document. Not mutated -- edits are reported, not applied. */

@@ -40,7 +40,7 @@ import type { OptimizerConfigChangedDetail } from "../../cards/shared/optimizer/
 import "../../cards/shared/optimizer/helman-optimizer-editor";
 import { SECTION_SCOPE_IDS } from "../config-editor-scopes";
 import type { HelmanConfigEditorPanel } from "../helman-config-editor";
-import { preventSummaryToggle } from "./devices";
+import { preventSummaryToggle } from "../../cards/shared/devices/device-list";
 
 /** The two config buckets `automation` splits its optimizers into (#271, P1). */
 export type OptimizerBucket = OptimizerConfigBucket;
