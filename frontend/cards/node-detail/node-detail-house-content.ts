@@ -1,10 +1,9 @@
 import { formatKwh, formatPower } from "../shared/format";
 import { SLOT_MS } from "../shared/time/slot-time";
 import { css, html, nothing } from "lit";
-import { customElement, property, state } from "lit/decorators.js";
+import { customElement, property } from "lit/decorators.js";
 import { fillTemplate } from "../localize/localize";
 import {
-    type DevicePhase,
     type HouseDetailPayload,
     type HouseLoadDTO,
     type HousePatternSectionPayload,
@@ -17,15 +16,14 @@ import type { TreeItem } from "../shared/data/tree-item";
 import { INVERTER_CONTROLLABLE_ID, isScheduleApplianceActionEnabled } from "../shared/schedule/schedule-types";
 import { getScheduleLocalTimeParts } from "../shared/schedule/model/schedule-time";
 import { IDLE_W, NodeDetailContentBase } from "./node-detail-base";
-import { readingNumber } from "./node-detail-readings";
-import { powerUnitFactor, readPowerW } from "../shared/power-reading";
+import { readPowerW } from "../shared/power-reading";
 import { dayKey, laneRuns, withinTodayTomorrow } from "./node-detail-schedule";
 import { nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { HouseDetailParams } from "./node-detail-types";
-import { NODE_DETAIL_REQUEST_EVENT } from "./node-detail-types";
 import "../helman-simple/simple-card-house";
 import "./detail-headline";
 import "./flow-gauge";
+import { subdeviceEntities } from "./subdevice-list";
 import { boldTemplate } from "./detail-section";
 import { forecastWhen, projectedKwh, projectedSlots, remainingShare, renderForecastChart } from "./node-detail-forecast";
 import { historyRow, historySummary, kwhText, sectionNotReady, subTitle } from "./node-detail-history";
@@ -33,7 +31,7 @@ import { modeStripWindow } from "../shared/mode-strip";
 import type { ApplianceProjectionsPayload } from "../helman-api";
 import { getSharedHelmanStore } from "../shared/data/store";
 
-/** The consumers the Overview and the History list by name; the rest is "everything else". */
+/** The consumers the History lists by name; the rest is "everything else". */
 const TOP_CONSUMERS = 3;
 
 /** A planned appliance run on the Forecast chart. */
@@ -41,78 +39,6 @@ const RUN_COLOR = "color-mix(in srgb, var(--helman-house) 60%, var(--primary-tex
 
 /** Today against the usual within this share reads "about as usual". */
 const AS_USUAL = 0.05;
-
-/** One load of the house tree, counted once, as the phase estimate sees it. */
-export interface PhaseLoad {
-    item?: TreeItem;
-    label: string;
-    /** A metered parent's own share: its remainder. */
-    own: boolean;
-    /** Its own phase, or the single phase of the device it sits under. */
-    phase: DevicePhase | null;
-    /** The device whose phase it is on, when not its own. */
-    inheritedFrom: string | null;
-    /** W now; `null` without a reading. */
-    watts: number | null;
-}
-
-export interface PhaseEstimate {
-    loads: PhaseLoad[];
-    /** Loads without a phase, and the house's own unmeasured remainder. */
-    unassignedW: number;
-    /** The house's own remainder, W: what no device meter explains. */
-    houseRemainderW: number | null;
-    /** Whether any load is on a phase at all. */
-    anyMapped: boolean;
-}
-
-/**
- * Each phase's load, estimated from the devices the user mapped to phases.
- *
- * Every load is counted once, the way the card's tree accounts for it: a
- * device with children is its children plus its own remainder, never its
- * meter beside them. A load's own phase counts only where it is the user's
- * choice, as in `phaseAssignableDevices`: at the top level or behind a
- * three-phase device. Anywhere else it is on its parent's phase, a stale own
- * one notwithstanding. Behind a three-phase device a load without its own
- * phase could be on any, so it stays unassigned. A load without a reading
- * is unknown, never 0 W, and is in no total.
- */
-export function estimatePhaseLoads(house: TreeItem | null, read: (entityId: string | null) => number | null): PhaseEstimate {
-    const loads: PhaseLoad[] = [];
-    let houseRemainderW: number | null = null;
-
-    // `phaseFrom` is the device whose own phase the parent's is, so a load
-    // inheriting through a device without one names where the phase is set.
-    const walk = (item: TreeItem, parentPhase: DevicePhase | null, phaseFrom: string | null, assignable: boolean): void => {
-        const own = assignable ? item.phase ?? null : null;
-        const inherited = own === null && parentPhase !== null && parentPhase !== "3ph";
-        const phase = own ?? (inherited ? parentPhase : null);
-        const inheritedFrom = inherited ? phaseFrom : null;
-        const add = (watts: number | null, isOwn: boolean) =>
-            loads.push({ item, label: item.name, own: isOwn, phase, inheritedFrom, watts });
-        if (!item.children.length) {
-            add(read(item.powerSensorId), false);
-            return;
-        }
-        const remainder = item.children.find((child) => child.isUnmeasured);
-        for (const child of item.children) if (!child.isUnmeasured) walk(child, phase, inherited ? phaseFrom : item.name, own === "3ph");
-        // Without a power sensor the parent has no remainder: its own share is unknown.
-        add(remainder ? read(remainder.powerSensorId) : null, true);
-    };
-
-    for (const child of house?.children ?? []) {
-        if (child.isUnmeasured) houseRemainderW = read(child.powerSensorId);
-        else walk(child, null, null, true);
-    }
-
-    let unassignedW = houseRemainderW ?? 0;
-    for (const load of loads) {
-        if (load.watts === null) continue;
-        if (load.phase === null) unassignedW += load.watts;
-    }
-    return { loads, unassignedW, houseRemainderW, anyMapped: loads.some((load) => load.phase !== null) };
-}
 
 /** An appliance's planned run: consecutive slots with the same running action. */
 interface PlannedRun {
@@ -131,11 +57,11 @@ interface PlannedRun {
  *
  * The Overview opens on the power headline (the house filled with its main
  * source's colour), then the gauge of where the power comes from and the
- * biggest users now, each with its kW and share, the rest folded into
+ * house's subdevices, each with its kW and share, the rest folded into
  * everything else. The card's house tree is the route to each device.
  *
- * Live readings come from `hass` and the live split from the card; Now's
- * consumers are the card's house tree, each load counted once. The backend
+ * Live readings come from `hass` and the live split from the card; the
+ * subdevices are the house tree's direct children. The backend
  * overview supplies the entity ids. Today against a usual weekday (the
  * `pattern` section) is read on opening, for the History header; today's
  * report figures (the `today` section) once History & statistics or
@@ -150,40 +76,11 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         .compare-bar { height: 18px; border-radius: 4px; background: var(--helman-house); }
         .compare-bar.usual { background: var(--divider-color); }
         .compare-text { flex: none; white-space: nowrap; }
-        .user-list { display: flex; flex-direction: column; gap: 4px; }
-        .user-row {
-            box-sizing: border-box;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            width: 100%;
-            min-height: 44px;
-            padding: 0 12px;
-            border: 0;
-            border-radius: 8px;
-            color: var(--primary-text-color);
-            font: inherit;
-            font-size: 14px;
-            text-align: start;
-            background: linear-gradient(to right,
-                color-mix(in srgb, var(--helman-house) 35%, var(--secondary-background-color)) var(--share),
-                var(--secondary-background-color) var(--share));
-        }
-        button.user-row { cursor: pointer; }
-        button.user-row:hover { filter: brightness(1.08); }
-        button.user-row:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
-        .user-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .user-row.muted .user-name { color: var(--secondary-text-color); }
-        .user-amount { flex: none; font-variant-numeric: tabular-nums; white-space: nowrap; }
-        .user-amount .percent { color: var(--secondary-text-color); }
-        .user-chevron { flex: none; width: 16px; --mdc-icon-size: 16px; color: var(--secondary-text-color); }
-        .show-less { align-self: flex-start; }
     `];
 
     protected readonly _node = "house" as const;
 
     @property({ attribute: false }) public params!: HouseDetailParams;
-    @state() private _allUsers = false;
 
     /**
      * The appliances' planned runs from now through tomorrow: consecutive
@@ -225,16 +122,10 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         shown: () => this._offers("pattern"),
     });
 
-    /** The overview's entities, and every load the phase estimate reads. */
+    /** The overview's entities, and every subdevice the list reads. */
     protected *_watchedEntities(payload: HouseDetailPayload): Iterable<string | null | undefined> {
         yield* Object.values(payload.entities);
-        const walk = function* (items: TreeItem[]): Iterable<string | null> {
-            for (const item of items) {
-                yield item.powerSensorId;
-                yield* walk(item.children);
-            }
-        };
-        yield* walk(this.params.houseNode?.children ?? []);
+        yield* subdeviceEntities(this.params.houseNode);
     }
 
     /** The rest of today's forecast moves at each slot boundary; the next planned load at each run, which the base follows. */
@@ -251,18 +142,8 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
     // ── Rendering ───────────────────────────────────────────────────────────
 
     protected _renderOverview(overview: HouseDetailPayload) {
-        const phases = this._phaseEstimate();
         const power = this._powerNow();
         const flows = this.params.flows;
-        const loads = phases.loads.filter((load) => load.watts !== null && load.watts > 0).sort((a, b) => b.watts! - a.watts!);
-        const visible = this._allUsers ? loads : loads.slice(0, TOP_CONSUMERS);
-        // What no meter explains is the headline less the loads, from the same
-        // states: the rows then add up to the house. The backend's remainder
-        // sensor is a median over several seconds and never adds up to it.
-        const hasUnmeasured = power !== null;
-        const unmeasuredW = power === null ? 0 : Math.max(0, power - loads.reduce((sum, load) => sum + (load.watts ?? 0), 0));
-        const otherW = loads.slice(TOP_CONSUMERS).reduce((sum, load) => sum + (load.watts ?? 0), unmeasuredW);
-        const otherCount = Math.max(0, loads.length - TOP_CONSUMERS) + (hasUnmeasured ? 1 : 0);
         return html`
             <div class="content" data-overview>
                 ${this._renderException(overview)}
@@ -277,13 +158,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
                         { node: "battery", powerW: flows.batteryToHouse },
                         { node: "grid", powerW: flows.gridToHouse },
                     ] : []}></helman-flow-gauge>
-                <div class="section-title">${this.localize("node_detail.shared.house_biggest")}</div>
-                <div class="user-list">
-                    ${visible.map((load) => this._userRow(load, power))}
-                    ${this._allUsers && hasUnmeasured ? this._userRow({ label: this.localize("node_detail.shared.not_measured"), own: false, phase: null, inheritedFrom: null, watts: unmeasuredW }, power, false) : nothing}
-                    ${otherCount > 0 && !this._allUsers ? this._userRow({ label: fillTemplate(this.localize("node_detail.shared.everything_else"), { count: otherCount }), own: false, phase: null, inheritedFrom: null, watts: otherW }, power, true, () => { this._allUsers = true; }, true) : nothing}
-                </div>
-                ${otherCount > 0 && this._allUsers ? html`<button type="button" class="link-button show-less" @click=${() => { this._allUsers = false; }}>${this.localize("node_detail.shared.show_less")}</button>` : nothing}
+                <helman-subdevice-list .hass=${this.hass} .localize=${this.localize} .parent=${this.params.houseNode} .powerW=${power}></helman-subdevice-list>
             </div>
         `;
     }
@@ -294,19 +169,6 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         const parts = [["solar", flow.solarToHouse], ["battery", flow.batteryToHouse], ["grid", flow.gridToHouse]] as const;
         const source = parts.reduce((best, item) => item[1] > best[1] ? item : best, parts[0]);
         return `var(--helman-${source[0]})`;
-    }
-
-    private _userRow(load: PhaseLoad, house: number | null, clickable = true, onClick?: () => void, expanded = false) {
-        const pct = house && load.watts ? Math.round(load.watts / house * 100) : 0;
-        const item = clickable ? load.item ?? null : null;
-        const inner = html`<span class="user-name">${load.label}</span><span class="user-amount">${formatPower(load.watts ?? 0).display} <span class="percent">${pct} %</span></span>${item || onClick
-            ? html`<ha-icon class="user-chevron" icon=${expanded ? "mdi:chevron-down" : "mdi:chevron-right"}></ha-icon>` : html`<span class="user-chevron"></span>`}`;
-        const style = `--share: ${Math.max(0, Math.min(100, pct))}%`;
-        // Everything else and Not measured are no device: their names read muted.
-        const rowClass = clickable && !onClick ? "user-row" : "user-row muted";
-        return item || onClick ? html`<button type="button" class=${rowClass} style=${style}
-            @click=${onClick ?? (() => this.dispatchEvent(new CustomEvent(NODE_DETAIL_REQUEST_EVENT, { detail: { target: item }, bubbles: true, composed: true })))}>${inner}</button>`
-            : html`<div class=${rowClass} style=${style}>${inner}</div>`;
     }
 
 
@@ -510,22 +372,6 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
         };
         walk(this.params.houseNode?.children ?? []);
         return names;
-    }
-
-    // Phases ------------------------------------------------------------------
-
-    private _phaseEstimate(): PhaseEstimate {
-        return estimatePhaseLoads(this.params.houseNode, (entityId) => {
-            const watts = this._watts(entityId);
-            return watts === null ? null : Math.max(0, watts);
-        });
-    }
-
-    /** A power reading in W through its unit, `null` without one. */
-    private _watts(entityId: string | null | undefined): number | null {
-        const value = readingNumber(this.hass, entityId);
-        const factor = powerUnitFactor(this.hass, entityId);
-        return value === null || factor === null ? null : value * factor;
     }
 
     // ── Readings and formatting ─────────────────────────────────────────────
