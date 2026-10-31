@@ -257,4 +257,17 @@ test("the add-device pickers offer energy sensors and, under a parent, every con
 
     await panel.locator(".add-device").last().dispatchEvent("click");
     expect(await addPicker()).toEqual({ includeDomains: ["sensor"], admits: ADMITS.energy });
+
+    // Under a parent with a schedulable meterless child, covers are excluded.
+    await page.evaluate(() => {
+        const editor = document.querySelector("helman-config-editor-panel") as any;
+        editor._applyMutation((draft: any) => {
+            draft.devices.consumers[0].children[0].schedulable = true;
+        });
+    });
+    await panel.locator(".add-device").first().dispatchEvent("click");
+    expect(await addPicker()).toEqual({
+        includeDomains: ["sensor", ...SWITCH_CONTROL_DOMAINS, "climate"],
+        admits: ADMITS.energy,
+    });
 });

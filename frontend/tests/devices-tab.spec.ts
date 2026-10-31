@@ -495,13 +495,20 @@ test("adding a device takes one entity and generates its id", async ({ page }) =
         consumption: { projection: { strategy: "fixed", hourly_energy_kwh: 1 } },
     });
 
-    // A cover child under a parent with schedulable siblings gets a cover control
-    // without switch controls and never inherits schedulability or projection.
+    // A cover child under a parent with schedulable siblings is not appended:
+    // covers cannot be schedulable and meterless siblings cannot mix schedulable and passive.
+    const breakerChildrenCount = (await config(page))[0].children.length;
     await addDevice(page, ".add-device", "cover.garage");
-    await expect.poll(async () => (await config(page))[0].children.at(-1)).toEqual({
-        id: "garage",
-        controls: { cover: { entity_id: "cover.garage" } },
-    });
+    expect((await config(page))[0].children.length).toBe(breakerChildrenCount);
+
+    // Under a parent without schedulable meterless siblings, adding a cover child succeeds.
+    await addDevice(page, 'details.device-card[data-device-id="washer_energy"] .add-device', "cover.garage");
+    await expect
+        .poll(async () => (await config(page)).find((device: Device) => device.id === "washer_energy")?.children?.at(-1))
+        .toEqual({
+            id: "garage",
+            controls: { cover: { entity_id: "cover.garage" } },
+        });
 });
 
 /** The texts of an open "Add device" picker's select. */
