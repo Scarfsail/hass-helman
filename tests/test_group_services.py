@@ -370,6 +370,38 @@ class GroupServicesTests(unittest.TestCase):
             [call[2]["entity_id"] for call in self.services.calls], NIGHT
         )
 
+    def test_group_entities_includes_cover_but_group_action_skips_cover(self) -> None:
+        self.storage.config = {
+            "devices": {
+                "groupings": [{"id": "power", "groups": [{"id": "away"}]}],
+                "consumers": [
+                    {
+                        "id": "gate",
+                        "groups": {"power": "away"},
+                        "controls": {"cover": {"entity_id": "cover.gate"}},
+                    },
+                    {
+                        "id": "light",
+                        "groups": {"power": "away"},
+                        "controls": {"switch": {"entity_id": "light.porch"}},
+                    },
+                ],
+            }
+        }
+        res = self._call("get_group_entities", grouping="power", group="away")
+        self.assertEqual(res, {"entity_ids": ["cover.gate", "light.porch"], "skipped": []})
+
+        with patch.object(group_services.asyncio, "sleep", AsyncMock()):
+            self._call("group_action", grouping="power", group="away", action="turn_off")
+        self.assertEqual(
+            [call[:2] for call in self.services.calls],
+            [("light", "turn_off")],
+        )
+        self.assertEqual(
+            [call[2]["entity_id"] for call in self.services.calls],
+            ["light.porch"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

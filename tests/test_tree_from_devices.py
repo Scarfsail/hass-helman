@@ -666,5 +666,79 @@ class ConflictTests(unittest.TestCase):
         self.assertEqual(pool["children"], [])
 
 
+class CoverAndFanTreeTests(unittest.TestCase):
+    def test_metered_cover_has_cover_entity_id_and_no_switch_entity_id(self) -> None:
+        config = {
+            "energy_nodes": {"house": {"entities": {"power": "sensor.house_power"}}},
+            "devices": {
+                "consumers": [
+                    {
+                        "id": "gate",
+                        "controls": {"cover": {"entity_id": "cover.gate"}},
+                        "consumption": {
+                            "energy_entity_id": "sensor.gate_energy",
+                            "power_entity_id": "sensor.gate_power",
+                        },
+                    }
+                ]
+            },
+        }
+        tree = _build(config)
+        house = _house(tree)
+        gate_node = next(n for n in house["children"] if n["id"] == "sensor.gate_energy")
+        self.assertEqual(gate_node["coverEntityId"], "cover.gate")
+        self.assertIsNone(gate_node["switchEntityId"])
+
+    def test_meterless_cover_child_has_cover_entity_id_and_no_switch_entity_id(self) -> None:
+        config = {
+            "energy_nodes": {"house": {"entities": {"power": "sensor.house_power"}}},
+            "devices": {
+                "consumers": [
+                    {
+                        "id": "parent_circuit",
+                        "consumption": {
+                            "energy_entity_id": "sensor.circuit_energy",
+                            "power_entity_id": "sensor.circuit_power",
+                        },
+                        "children": [
+                            {
+                                "id": "awning",
+                                "controls": {"cover": {"entity_id": "cover.awning"}},
+                            }
+                        ],
+                    }
+                ]
+            },
+        }
+        tree = _build(config)
+        house = _house(tree)
+        parent_node = next(n for n in house["children"] if n["id"] == "sensor.circuit_energy")
+        awning_node = next(n for n in parent_node["children"] if n["id"] == "awning")
+        self.assertEqual(awning_node["coverEntityId"], "cover.awning")
+        self.assertIsNone(awning_node["switchEntityId"])
+
+    def test_fan_device_has_switch_entity_id_and_no_cover_entity_id(self) -> None:
+        config = {
+            "energy_nodes": {"house": {"entities": {"power": "sensor.house_power"}}},
+            "devices": {
+                "consumers": [
+                    {
+                        "id": "ventilation",
+                        "controls": {"switch": {"entity_id": "fan.ventilation"}},
+                        "consumption": {
+                            "energy_entity_id": "sensor.fan_energy",
+                            "power_entity_id": "sensor.fan_power",
+                        },
+                    }
+                ]
+            },
+        }
+        tree = _build(config)
+        house = _house(tree)
+        fan_node = next(n for n in house["children"] if n["id"] == "sensor.fan_energy")
+        self.assertEqual(fan_node["switchEntityId"], "fan.ventilation")
+        self.assertIsNone(fan_node["coverEntityId"])
+
+
 if __name__ == "__main__":
     unittest.main()

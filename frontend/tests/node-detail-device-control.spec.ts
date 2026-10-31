@@ -69,6 +69,11 @@ const TREE = treePayload({
             device("Lamp", { switchEntityId: "switch.lamp" }),
             device("Living Light", { switchEntityId: "light.living_room" }),
             device("Living TV", { switchEntityId: "media_player.tv" }),
+            device("Bath Fan", { switchEntityId: "fan.bathroom" }),
+            device("Garage Gate", { coverEntityId: "cover.garage_gate" }),
+            device("Awning", { coverEntityId: "cover.awning" }),
+            device("Broken Cover", { coverEntityId: "cover.broken" }),
+            device("Partial Cover", { coverEntityId: "cover.partial" }),
             device("Bedroom AC", { climateEntityId: "climate.bedroom" }),
             device("Heater", { switchEntityId: "switch.heater_breaker", climateEntityId: "climate.heater" }),
             // A meterless air conditioner: its running signal is its climate entity.
@@ -144,6 +149,11 @@ async function mount(page: Page, schedule: SchedulePayload = plan()): Promise<vo
             "switch.lamp": s("on", undefined, { friendly_name: "Lamp switch", icon: "mdi:lightbulb" }),
             "light.living_room": s("off", undefined, { friendly_name: "Living room light" }),
             "media_player.tv": s("playing", undefined, { friendly_name: "Living room TV" }),
+            "fan.bathroom": s("off", undefined, { friendly_name: "Bathroom fan" }),
+            "cover.garage_gate": s("closed", undefined, { friendly_name: "Garage gate", supported_features: 11 }),
+            "cover.awning": s("unknown", undefined, { friendly_name: "Awning", supported_features: 11 }),
+            "cover.broken": s("unavailable", undefined, { friendly_name: "Broken cover", supported_features: 11 }),
+            "cover.partial": s("open", undefined, { friendly_name: "Partial cover", supported_features: 1 }),
             "climate.bedroom": s("cool", undefined, { friendly_name: "Bedroom thermostat" }),
             "switch.heater_breaker": s("off", undefined, { friendly_name: "Heater breaker" }),
             "climate.heater": s("heat", undefined, { friendly_name: "Heater thermostat" }),
@@ -447,5 +457,119 @@ test.describe("direct control tiles", () => {
         })).toBe(true);
         await page.locator("node-detail-device-content button.climate-control").click();
         expect(await page.evaluate(() => window.__moreInfo)).toEqual(["climate.heater"]);
+    });
+
+    test("fan control uses the fan domain for both toggle directions", async ({ page }) => {
+        await mount(page);
+        await openDevice(page, "Bath Fan");
+        const tile = switchTile(page).locator("button");
+        await expect(tile).toHaveAttribute("aria-pressed", "false");
+        await tile.click();
+        await expect.poll(() => page.evaluate(() => window.__NodeDetailRequests.filter((r) => r.type === "call_service"))).toEqual([
+            { type: "call_service", domain: "fan", service: "turn_on", service_data: { entity_id: "fan.bathroom" } },
+        ]);
+        await page.evaluate(() => {
+            const card = document.querySelector("helman-card") as any;
+            card.hass = { ...window.__NodeDetailHass, states: {
+                ...window.__NodeDetailHass.states,
+                "fan.bathroom": { ...window.__NodeDetailHass.states["fan.bathroom"], state: "on" },
+            } };
+        });
+        await expect(tile).toHaveAttribute("aria-pressed", "true");
+        await tile.click();
+        await expect.poll(() => page.evaluate(() => window.__NodeDetailRequests.filter((r) => r.type === "call_service").map((r) => [r.domain, r.service]))).toEqual([
+            ["fan", "turn_on"], ["fan", "turn_off"],
+        ]);
+    });
+
+    test("cover control displays status, feature-gated buttons, and invokes cover services", async ({ page }) => {
+        await mount(page);
+        await openDevice(page, "Garage Gate");
+        const control = page.locator("helman-cover-control");
+        await expect(control.locator("[data-cover-state]")).toHaveAttribute("data-cover-state", "closed");
+        await expect(control.locator("button[data-action]")).toHaveCount(3);
+
+        await control.locator("button[data-action='open']").click();
+        await control.locator("button[data-action='stop']").click();
+        await control.locator("button[data-action='close']").click();
+
+        await expect.poll(() => page.evaluate(() => window.__NodeDetailRequests.filter((r) => r.type === "call_service"))).toEqual([
+            { type: "call_service", domain: "cover", service: "open_cover", service_data: { entity_id: "cover.garage_gate" } },
+            { type: "call_service", domain: "cover", service: "stop_cover", service_data: { entity_id: "cover.garage_gate" } },
+            { type: "call_service", domain: "cover", service: "close_cover", service_data: { entity_id: "cover.garage_gate" } },
+        ]);
+    });
+
+    test("cover control gates buttons by supported_features", async ({ page }) => {
+        await mount(page);
+        await openDevice(page, "Partial Cover");
+        const control = page.locator("helman-cover-control");
+        await expect(control.locator("button[data-action='open']")).toHaveCount(1);
+        await expect(control.locator("button[data-action='stop']")).toHaveCount(0);
+        await expect(control.locator("button[data-action='close']")).toHaveCount(0);
+    });
+
+    test("unknown cover state is visibly unknown but permits supported commands", async ({ page }) => {
+        await mount(page);
+        await openDevice(page, "Awning");
+        const control = page.locator("helman-cover-control");
+        await expect(control.locator("[data-cover-state]")).toHaveAttribute("data-cover-state", "unknown");
+        const openBtn = control.locator("button[data-action='open']");
+        await expect(openBtn).toBeEnabled();
+        await openBtn.click();
+        await expect.poll(() => page.evaluate(() => window.__NodeDetailRequests.filter((r) => r.type === "call_service" && r.service === "open_cover").length)).toBe(1);
+    });
+
+    test("unavailable cover cannot be commanded", async ({ page }) => {
+        await mount(page);
+        await openDevice(page, "Broken Cover");
+        const control = page.locator("helman-cover-control");
+        await expect(control.locator("[data-cover-state]")).toHaveAttribute("data-cover-state", "unavailable");
+        await expect(control.locator("button[data-action='open']")).toBeDisabled();
+        await expect(control.locator("button[data-action='stop']")).toBeDisabled();
+        await expect(control.locator("button[data-action='close']")).toBeDisabled();
+    });
+
+    test("cover state updates reach the open detail", async ({ page }) => {
+        await mount(page);
+        await openDevice(page, "Garage Gate");
+        const control = page.locator("helman-cover-control");
+        await expect(control.locator("[data-cover-state]")).toHaveAttribute("data-cover-state", "closed");
+        await page.evaluate(() => {
+            const card = document.querySelector("helman-card") as any;
+            card.hass = { ...window.__NodeDetailHass, states: {
+                ...window.__NodeDetailHass.states,
+                "cover.garage_gate": { ...window.__NodeDetailHass.states["cover.garage_gate"], state: "opening" },
+            } };
+        });
+        await expect(control.locator("[data-cover-state]")).toHaveAttribute("data-cover-state", "opening");
+        await page.evaluate(() => {
+            const card = document.querySelector("helman-card") as any;
+            card.hass = { ...window.__NodeDetailHass, states: {
+                ...window.__NodeDetailHass.states,
+                "cover.garage_gate": { ...window.__NodeDetailHass.states["cover.garage_gate"], state: "open" },
+            } };
+        });
+        await expect(control.locator("[data-cover-state]")).toHaveAttribute("data-cover-state", "open");
+    });
+
+    test("cover service failure displays an error message", async ({ page }) => {
+        await mount(page);
+        await openDevice(page, "Garage Gate");
+        const control = page.locator("helman-cover-control");
+        await page.evaluate(() => {
+            const hass = window.__NodeDetailHass;
+            const orig = hass.callWS;
+            hass.callWS = (req: any) => {
+                if (req.type === "call_service" && req.domain === "cover") {
+                    return Promise.reject(new Error("Cover jammed"));
+                }
+                return orig(req);
+            };
+            const card = document.querySelector("helman-card") as any;
+            if (card) card.hass = { ...hass };
+        });
+        await control.locator("button[data-action='open']").click();
+        await expect(control.locator("[data-error]")).toContainText("Cover jammed");
     });
 });

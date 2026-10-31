@@ -35,7 +35,7 @@ def suggest_entities(
         None,
     )
     result: dict[str, list[dict[str, Any]]] = {
-        field: [] for field in ("energy", "power", "switch")
+        field: [] for field in ("energy", "power", "switch", "cover")
     }
     if anchor is None:
         return result
@@ -57,6 +57,8 @@ def suggest_entities(
         field = (
             "switch"
             if entry.domain in SWITCH_CONTROL_DOMAINS
+            else "cover"
+            if entry.domain == "cover"
             else device_class
             if entry.domain == "sensor" and device_class in ("energy", "power")
             else None
@@ -66,17 +68,24 @@ def suggest_entities(
         # Reasons are codes (with a value where one applies); the editor words them.
         reasons: list[dict[str, str]] = [{"code": "same_device"}]
         score = 1
-        if field != "switch":
+        if field in ("energy", "power"):
             reasons.append({"code": f"device_class_{field}"})
             score += 2
-        label_key = "power_switch_label" if field == "switch" else "power_sensor_label"
-        wanted = section.get(label_key)
-        if wanted and any(
-            (label := labels.async_get_label(label_id)) and label.name == wanted
-            for label_id in entry.labels
-        ):
-            reasons.append({"code": "label", "value": wanted})
-            score += 4
+        label_key = (
+            "power_switch_label"
+            if field == "switch"
+            else "power_sensor_label"
+            if field in ("energy", "power")
+            else None
+        )
+        if label_key:
+            wanted = section.get(label_key)
+            if wanted and any(
+                (label := labels.async_get_label(label_id)) and label.name == wanted
+                for label_id in entry.labels
+            ):
+                reasons.append({"code": "label", "value": wanted})
+                score += 4
         # Without a state (during setup) the registry gives the name: an
         # entity named after its device carries no name of its own, and its
         # display name is the device's.
@@ -87,7 +96,7 @@ def suggest_entities(
             or (entry.has_entity_name and device_display_name)
             or entry.entity_id
         )
-        if field == "switch" and device_name and name.casefold() == device_name:
+        if field in ("switch", "cover") and device_name and name.casefold() == device_name:
             reasons.append({"code": "name_match"})
             score += 3
         result[field].append(

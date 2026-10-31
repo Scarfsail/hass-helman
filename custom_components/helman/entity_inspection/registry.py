@@ -130,6 +130,7 @@ EVALUATORS: dict[str, Evaluator] = {
     # device prefixes are normalized before matching, at any tree depth. An EV
     # charger's charge switch is its running signal on a shared meter.
     "devices.consumers.*.controls.switch.entity_id": history_aware(evaluate_entity_value),
+    "devices.consumers.*.controls.cover.entity_id": history_aware(evaluate_entity_value),
     "devices.consumers.*.controls.climate.entity_id": history_aware(evaluate_entity_value),
     "devices.consumers.*.controls.charge.entity_id": history_aware(evaluate_entity_value),
     "energy_nodes.solar.forecast.total_energy_entity_id": history_evaluator(),

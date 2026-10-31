@@ -91,6 +91,8 @@ export interface TreeItemDTO extends TreeItemDTOBase, EnergyNodeFields {
     applianceKind?: string | null;
     /** The climate entity a device configures, whose more-info its Control tab opens; null for every other node. */
     climateEntityId: string | null;
+    /** The cover entity a device configures as controls.cover; null for every other node. */
+    coverEntityId: string | null;
     /** A house child's meter; null for every other node. */
     energyEntityId: string | null;
     /** A meterless child's share of its parent's power — an estimate, shown with `≈`. */
@@ -1344,7 +1346,7 @@ export interface DeviceEntityCandidate {
   rank: number;
 }
 export type DeviceSuggestions = Record<
-  "energy" | "power" | "switch",
+  "energy" | "power" | "switch" | "cover",
   DeviceEntityCandidate[]
 >;
 export interface EnergyImportPreview {

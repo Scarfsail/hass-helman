@@ -72,6 +72,7 @@ export function treeNode(overrides: Partial<TreeItemDTO> = {}): TreeItemDTO {
         deferrable: false,
         controllableIds: [],
         climateEntityId: null,
+        coverEntityId: null,
         energyEntityId: null,
         isEstimated: false,
         phase: null,

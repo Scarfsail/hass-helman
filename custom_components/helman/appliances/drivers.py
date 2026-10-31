@@ -47,7 +47,7 @@ class SwitchEntityController:
         domain, separator, object_id = entity_id.partition(".")
         if not separator or not object_id or domain not in SWITCH_CONTROL_DOMAINS:
             raise ScheduleExecutionUnavailableError(
-                f"{description} must use the switch, light or media_player domain"
+                f"{description} must use the switch, light, media_player or fan domain"
             )
         self.entity_id = entity_id
         self._domain = domain

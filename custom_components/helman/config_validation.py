@@ -33,6 +33,7 @@ from .controllables.config import (
     read_schedulable_ids,
     running_signal,
     share_sensor_slug,
+    SWITCH_CONTROL_DOMAINS,
 )
 from .controllables.spec import (
     CONTROLLABLE_KIND_INVERTER,
@@ -1198,6 +1199,49 @@ def _validate_controllables_config(
 
         _validate_device_children(raw_device, path=path, report=report)
 
+        has_cover = False
+        controls = raw_device.get("controls")
+        if isinstance(controls, Mapping):
+            switch_ctrl = controls.get("switch")
+            cover_ctrl = controls.get("cover")
+            if switch_ctrl is not None and cover_ctrl is not None:
+                report.add_error(
+                    section=section,
+                    path=f"{path}.controls",
+                    code="conflicting_controls",
+                    message=(
+                        f"{path}.controls cannot configure both switch and cover; "
+                        "choose one"
+                    ),
+                )
+            if isinstance(cover_ctrl, Mapping):
+                has_cover = True
+                _validate_optional_entity_id(
+                    report,
+                    section,
+                    f"{path}.controls.cover.entity_id",
+                    cover_ctrl.get("entity_id"),
+                    allowed_domains=("cover",),
+                )
+                if is_schedulable(raw_device):
+                    report.add_error(
+                        section=section,
+                        path=f"{path}.schedulable",
+                        code="cover_not_schedulable",
+                        message=(
+                            f"{path} uses a cover control, which cannot be scheduled; "
+                            "set schedulable to false or omit it"
+                        ),
+                    )
+            if not is_schedulable(raw_device) and isinstance(switch_ctrl, Mapping):
+                _validate_optional_entity_id(
+                    report,
+                    section,
+                    f"{path}.controls.switch.entity_id",
+                    switch_ctrl.get("entity_id"),
+                    allowed_domains=SWITCH_CONTROL_DOMAINS,
+                )
+
         if parent is not None and own_meter(raw_device) is None:
             if running_signal(raw_device) is None:
                 report.add_error(
@@ -1206,11 +1250,11 @@ def _validate_controllables_config(
                     code="running_signal_required",
                     message=(
                         f"{path} draws from its parent's meter, so it needs a "
-                        "switch/light/media_player, climate or EV charge control to tell when it runs"
+                        "switch/light/media_player/fan, climate, cover or EV charge control to tell when it runs"
                     ),
                 )
 
-        if not is_schedulable(raw_device):
+        if has_cover or not is_schedulable(raw_device):
             continue
         try:
             read_device_appliance(raw_device, parent, path=path)

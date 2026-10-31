@@ -68,6 +68,14 @@ export class HelmanTreeItemIcon extends LitElement {
             `;
         }
 
+        if (device.coverEntityId) {
+            return html`
+                <div class="switchIconPlaceholder node-icon" @click=${this._onCoverIconClick}>
+                    <ha-icon .icon=${device.icon || "mdi:window-shutter"}></ha-icon>
+                </div>
+            `;
+        }
+
         // Check for the 4 known animated node types
         const animated = this._renderAnimatedNode();
         if (animated !== nothing) return animated;
@@ -81,6 +89,15 @@ export class HelmanTreeItemIcon extends LitElement {
     // Private helpers
     private _onSwitchBadgeMoreInfo(e: CustomEvent): void {
         if (!this.device.deviceKey) return;
+        e.stopPropagation();
+        this.dispatchEvent(showDeviceDetailEvent(this.device));
+    }
+
+    private _onCoverIconClick(e: Event): void {
+        if (!this.device.deviceKey) {
+            this._fireToggleChildren();
+            return;
+        }
         e.stopPropagation();
         this.dispatchEvent(showDeviceDetailEvent(this.device));
     }

@@ -45,6 +45,8 @@ export class TreeItem {
     public applianceKind?: string | null;
     // The climate entity the device configures, for its Control tab's more-info.
     public climateEntityId: string | null = null;
+    // The cover entity the device configures, for its Control tab's cover control.
+    public coverEntityId: string | null = null;
     // The device's own energy meter, for the detail dialog's energy tiles.
     public energyEntityId?: string;
     // What locates this box's device in the config: its meter, or its

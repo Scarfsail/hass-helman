@@ -1763,6 +1763,99 @@ class DeviceTreeValidationTests(unittest.TestCase):
         generic = {"id": "x", "controls": {"charge": {"entity_id": "switch.x"}}}
         self.assertIsNone(running_signal(generic))
 
+    def test_a_fans_switch_control_is_its_running_signal(self) -> None:
+        breaker = _ac_breaker()
+        breaker["children"].append(
+            {"id": "fan", "controls": {"switch": {"entity_id": "fan.ventilation"}}}
+        )
+        for child in breaker["children"]:
+            child["schedulable"] = False
+
+        errors, _ = self._codes(breaker)
+
+        self.assertNotIn(
+            ("devices.consumers[0].children[4].controls", "running_signal_required"), errors
+        )
+        self.assertEqual(running_signal(breaker["children"][4]), ("fan.ventilation", "switch"))
+
+    def test_a_covers_control_is_its_running_signal(self) -> None:
+        breaker = _ac_breaker()
+        breaker["children"].append(
+            {"id": "awning", "controls": {"cover": {"entity_id": "cover.awning"}}}
+        )
+        for child in breaker["children"]:
+            child["schedulable"] = False
+
+        errors, _ = self._codes(breaker)
+
+        self.assertNotIn(
+            ("devices.consumers[0].children[4].controls", "running_signal_required"), errors
+        )
+        self.assertEqual(running_signal(breaker["children"][4]), ("cover.awning", "cover"))
+
+    def test_schedulable_cover_is_rejected(self) -> None:
+        cover_dev = {
+            "id": "gate",
+            "schedulable": True,
+            "controls": {"cover": {"entity_id": "cover.gate"}},
+        }
+        errors, _ = self._codes(cover_dev)
+        self.assertIn(("devices.consumers[0].schedulable", "cover_not_schedulable"), errors)
+
+    def test_conflicting_switch_and_cover_controls_are_rejected(self) -> None:
+        device = {
+            "id": "conflict",
+            "schedulable": False,
+            "controls": {
+                "switch": {"entity_id": "switch.light"},
+                "cover": {"entity_id": "cover.gate"},
+            },
+        }
+        errors, _ = self._codes(device)
+        self.assertIn(("devices.consumers[0].controls", "conflicting_controls"), errors)
+
+    def test_passive_device_with_wrong_switch_domain_is_rejected(self) -> None:
+        device = {
+            "id": "bad_switch",
+            "schedulable": False,
+            "controls": {"switch": {"entity_id": "cover.gate"}},
+        }
+        errors, _ = self._codes(device)
+        self.assertIn(("devices.consumers[0].controls.switch.entity_id", "invalid_domain"), errors)
+
+    def test_passive_device_with_wrong_cover_domain_is_rejected(self) -> None:
+        device = {
+            "id": "bad_cover",
+            "schedulable": False,
+            "controls": {"cover": {"entity_id": "switch.gate"}},
+        }
+        errors, _ = self._codes(device)
+        self.assertIn(("devices.consumers[0].controls.cover.entity_id", "invalid_domain"), errors)
+
+    def test_passive_device_with_malformed_entity_id_is_rejected(self) -> None:
+        for key, entity_id in [("cover", "cover."), ("switch", "switch.")]:
+            with self.subTest(key=key):
+                device = {
+                    "id": f"bad_{key}",
+                    "schedulable": False,
+                    "controls": {key: {"entity_id": entity_id}},
+                }
+                errors, _ = self._codes(device)
+                self.assertIn(
+                    (f"devices.consumers[0].controls.{key}.entity_id", "invalid_entity_id"),
+                    errors,
+                )
+
+    def test_passive_generic_cover_device_is_valid(self) -> None:
+        device = {
+            "id": "valid_cover",
+            "schedulable": False,
+            "controls": {"cover": {"entity_id": "cover.gate"}},
+            "consumption": {"energy_entity_id": "sensor.gate_energy"},
+        }
+        errors, warnings = self._codes(device)
+        self.assertEqual(errors, set())
+
     def test_mixed_schedulable_and_passive_meterless_siblings_are_rejected(
         self,
     ) -> None:

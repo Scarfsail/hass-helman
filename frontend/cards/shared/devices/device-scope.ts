@@ -39,7 +39,7 @@ export function suggestionAnchors(device: JsonObject): string[] {
     const anchors = [
         ownMeter(device),
         stringValue(asJsonObject(device.consumption)?.power_entity_id).trim(),
-        ...["switch", "charge", "climate"].map((key) => entity(controls[key])),
+        ...["switch", "charge", "climate", "cover"].map((key) => entity(controls[key])),
     ].filter(Boolean);
     return [...new Set(anchors)];
 }

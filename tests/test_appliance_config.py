@@ -13,7 +13,10 @@ from custom_components.helman.appliances.generic_appliance import (
 from custom_components.helman.appliances.generic_schedule import (
     generic_action_from_state,
 )
-from custom_components.helman.controllables.config import running_active_states
+from custom_components.helman.controllables.config import (
+    is_active_state,
+    running_active_states,
+)
 
 
 def _valid_config() -> dict:
@@ -301,6 +304,29 @@ class ApplianceConfigTests(unittest.TestCase):
         tv["controls"]["switch"]["entity_id"] = "media_player.tv"
         appliance = read_generic_appliance(tv, path="devices.consumers.0")
         self.assertEqual(appliance.switch_entity_id, "media_player.tv")
+
+    def test_generic_switch_control_accepts_a_fan(self) -> None:
+        fan = copy.deepcopy(_generic_appliance())
+        fan["controls"]["switch"]["entity_id"] = "fan.ventilation"
+
+        registry = build_appliances_runtime_registry({"devices": {"consumers": [fan]}})
+
+        (appliance,) = registry.appliances
+        self.assertEqual(appliance.switch_entity_id, "fan.ventilation")
+
+    def test_read_generic_appliance_accepts_fan(self) -> None:
+        fan = copy.deepcopy(_generic_appliance())
+        fan["controls"]["switch"]["entity_id"] = "fan.ventilation"
+        appliance = read_generic_appliance(fan, path="devices.consumers.0")
+        self.assertEqual(appliance.switch_entity_id, "fan.ventilation")
+
+    def test_running_active_states_cover_maps_to_opening_closing(self) -> None:
+        states = running_active_states("cover")
+        self.assertEqual(states, ("opening", "closing"))
+        self.assertTrue(is_active_state("opening", states))
+        self.assertTrue(is_active_state("closing", states))
+        self.assertFalse(is_active_state("open", states))
+        self.assertFalse(is_active_state("closed", states))
 
     def test_generic_action_from_state_maps_active_and_resting_states(self) -> None:
         self.assertEqual(generic_action_from_state(None, "playing"), {"on": True})

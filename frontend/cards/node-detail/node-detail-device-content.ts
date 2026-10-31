@@ -34,6 +34,7 @@ import { modeStripWindow } from "../shared/mode-strip";
 import "./detail-headline";
 import "./flow-gauge";
 import "./switch-tile";
+import "./cover-control";
 import "./who-decides";
 import { openMoreInfo, renderEntityList } from "./node-detail-readings";
 import { nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
@@ -119,13 +120,17 @@ export class NodeDetailDeviceContent extends LitElement {
     render() {
         const item = this.params.item;
         const direct = deviceDirectControls(item);
+        const coverId = direct?.coverEntityId ?? null;
         const controlId = direct?.switchEntityId ?? direct?.climateEntityId ?? null;
-        const state = controlId ? this.hass.states[controlId]?.state : null;
+        const coverState = coverId ? this.hass.states[coverId]?.state : null;
+        const switchState = controlId ? this.hass.states[controlId]?.state : null;
         const powerId = powerEntity(item);
         const power = readPowerW(this.hass, powerId);
         const ids = deviceControllableIds(item);
-        const stateLabel = isSwitchOn(state ?? undefined) ? this.localize("node_detail.shared.device_state_on")
-            : state === "off" ? this.localize("node_detail.shared.device_state_off") : state ?? "—";
+        const stateLabel = coverId
+            ? (coverState ? (this.localize(`node_detail.cover.state_${coverState}`) || coverState) : "—")
+            : isSwitchOn(switchState ?? undefined) ? this.localize("node_detail.shared.device_state_on")
+            : switchState === "off" ? this.localize("node_detail.shared.device_state_off") : switchState ?? "—";
         const today = this._energy.payload;
         const caption = [stateLabel];
         if (today !== undefined && today !== null) caption.push(fillTemplate(this.localize("node_detail.shared.device_today"), { kwh: today.toFixed(2) }));
@@ -134,8 +139,9 @@ export class NodeDetailDeviceContent extends LitElement {
                 ${controlId ? html`<helman-switch-tile slot="icon" .hass=${this.hass} .localize=${this.localize}
                     .entityId=${controlId} .kind=${direct?.switchEntityId ? "switch" : "climate"}
                     .fallbackIcon=${item.icon || (direct?.climateEntityId ? "mdi:air-conditioner" : "mdi:power-plug")}></helman-switch-tile>`
-                    : html`<span slot="icon" class="icon"><ha-icon .icon=${item.icon || "mdi:power-plug"}></ha-icon></span>`}
+                    : html`<span slot="icon" class="icon"><ha-icon .icon=${item.icon || (coverId ? "mdi:window-shutter" : "mdi:power-plug")}></ha-icon></span>`}
             </helman-detail-headline>
+            ${coverId ? html`<helman-cover-control .hass=${this.hass} .localize=${this.localize} .entityId=${coverId}></helman-cover-control>` : nothing}
             ${direct?.switchEntityId && direct.climateEntityId ? html`<button class="climate-control" type="button"
                 @click=${() => openMoreInfo(this, direct.climateEntityId!)}>${this.localize("node_detail.shared.climate_controls")}</button>` : nothing}
             <helman-flow-gauge direction="from" .items=${estimatedConsumerMix(this.params.flows, power)} .estimated=${true} .localize=${this.localize}></helman-flow-gauge>
@@ -150,7 +156,12 @@ export class NodeDetailDeviceContent extends LitElement {
     /** The power sensor and the switch, which HA's history graph draws. */
     private _chartEntities(): string[] {
         const item = this.params.item;
-        return [powerEntity(item), deviceDirectControls(item)?.switchEntityId ?? item.switchEntityId].filter((id): id is string => !!id);
+        const direct = deviceDirectControls(item);
+        return [
+            powerEntity(item),
+            direct?.switchEntityId ?? item.switchEntityId,
+            direct?.coverEntityId,
+        ].filter((id): id is string => !!id);
     }
 
     /**

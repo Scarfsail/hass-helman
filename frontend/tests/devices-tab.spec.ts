@@ -494,6 +494,21 @@ test("adding a device takes one entity and generates its id", async ({ page }) =
         schedulable: true,
         consumption: { projection: { strategy: "fixed", hourly_energy_kwh: 1 } },
     });
+
+    // A cover child under a parent with schedulable siblings is not appended:
+    // covers cannot be schedulable and meterless siblings cannot mix schedulable and passive.
+    const breakerChildrenCount = (await config(page))[0].children.length;
+    await addDevice(page, ".add-device", "cover.garage");
+    expect((await config(page))[0].children.length).toBe(breakerChildrenCount);
+
+    // Under a parent without schedulable meterless siblings, adding a cover child succeeds.
+    await addDevice(page, 'details.device-card[data-device-id="washer_energy"] .add-device', "cover.garage");
+    await expect
+        .poll(async () => (await config(page)).find((device: Device) => device.id === "washer_energy")?.children?.at(-1))
+        .toEqual({
+            id: "garage",
+            controls: { cover: { entity_id: "cover.garage" } },
+        });
 });
 
 /** The texts of an open "Add device" picker's select. */
@@ -1771,4 +1786,28 @@ test("suggestions preserve a climate child's control and shared meter", async ({
     await page.locator('details[data-device-id="klima_obyvak"] .apply-suggestions').click();
     await expect.poll(async () => (await config(page))[0].children[0].controls).toEqual({ climate: { entity_id: "climate.klima_obyvak" } });
     expect((await config(page))[0].children[0].consumption.energy_entity_id).toBeUndefined();
+});
+
+test("suggestions on a cover device only fill cover control, never conflicting with switch", async ({ page }) => {
+    const COVER_DEV = {
+        id: "awning",
+        name: "Awning",
+        consumption: { energy_entity_id: "sensor.awning_energy" },
+        controls: { cover: {} },
+    };
+    await mountEditor(page, [COVER_DEV]);
+    await openTab(page, "Devices");
+    await page.evaluate(() => {
+        window.__card("awning")!.open = true;
+    });
+    await deviceResponse(page, "helman/suggest_device_entities", {
+        energy: [candidate("sensor.awning_energy")],
+        power: [candidate("sensor.awning_power")],
+        switch: [candidate("switch.awning_unused")],
+        cover: [candidate("cover.awning_gate")],
+    });
+    await page.locator('details[data-device-id="awning"] .apply-suggestions').click();
+    await expect.poll(async () => (await config(page))[0].controls).toEqual({ cover: { entity_id: "cover.awning_gate" } });
+    expect((await config(page))[0].controls.switch).toBeUndefined();
+    expect((await config(page))[0].consumption.power_entity_id).toBe("sensor.awning_power");
 });

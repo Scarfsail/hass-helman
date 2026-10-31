@@ -80,8 +80,8 @@ def _resolve_group(
     entity_ids, skipped = group_member_entities(config, grouping_id, group_id)
     for device_id in skipped:
         _LOGGER.warning(
-            "Device '%s' is in helman group %s/%s but has no switch, charge or "
-            "climate control; it is skipped",
+            "Device '%s' is in helman group %s/%s but has no switch, charge, "
+            "climate or cover control; it is skipped",
             device_id,
             grouping_id,
             group_id,
@@ -164,10 +164,18 @@ async def async_register_group_services(hass: HomeAssistant) -> None:
         action = call.data["action"]
         delay_seconds = call.data["delay_ms"] / 1000
         failed: list[str] = []
-        for index, entity_id in enumerate(entity_ids):
-            if index and delay_seconds:
-                await asyncio.sleep(delay_seconds)
+        called_any = False
+        for entity_id in entity_ids:
             domain = entity_id.split(".", 1)[0]
+            if domain == "cover":
+                _LOGGER.info(
+                    "helman.group_action: skipping cover entity %s; covers do not take power actions",
+                    entity_id,
+                )
+                continue
+            if called_any and delay_seconds:
+                await asyncio.sleep(delay_seconds)
+            called_any = True
             try:
                 await actuator.async_call(
                     domain, action, {"entity_id": entity_id}, context=call.context

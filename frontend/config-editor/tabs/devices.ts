@@ -396,6 +396,9 @@ export class DevicesTabController implements ReactiveController {
     const entityId = rawEntityId.trim();
     if (!entityId) return;
     const domain = entityId.split(".")[0];
+    if (parent !== null && domain === "cover" && meterlessChildren(parent).some((sibling) => isSchedulable(sibling))) {
+      return;
+    }
     const meterlessIds = parent !== null && domain !== "sensor"
       ? iterDevices(this.host.resolvedConfig())
           .filter((entry) => entry.parent !== null && !ownMeter(entry.device))
@@ -409,8 +412,10 @@ export class DevicesTabController implements ReactiveController {
       device =
         domain === "climate"
           ? { id, kind: "climate", controls: { climate: { entity_id: entityId } } }
-          : { id, controls: { switch: { entity_id: entityId } } };
-      if (meterlessChildren(parent).some((sibling) => isSchedulable(sibling))) {
+          : domain === "cover"
+            ? { id, controls: { cover: { entity_id: entityId } } }
+            : { id, controls: { switch: { entity_id: entityId } } };
+      if (domain !== "cover" && meterlessChildren(parent).some((sibling) => isSchedulable(sibling))) {
         device.schedulable = true;
         device.consumption = { projection: { ...SEEDED_PROJECTION } };
       }
@@ -784,7 +789,11 @@ export function renderAddDevice(
         </label>
         <ha-entity-picker
           .hass=${host.hass}
-          .includeDomains=${child ? ["sensor", ...SWITCH_CONTROL_DOMAINS, "climate"] : ["sensor"]}
+          .includeDomains=${child
+            ? parent !== null && meterlessChildren(parent).some((sibling) => isSchedulable(sibling))
+              ? ["sensor", ...SWITCH_CONTROL_DOMAINS, "climate"]
+              : ["sensor", ...SWITCH_CONTROL_DOMAINS, "cover", "climate"]
+            : ["sensor"]}
           .entityFilter=${SENSOR_KIND_FILTERS.energy}
           @value-changed=${(event: CustomEvent<{ value?: string }>) =>
             controller.addDevice(listPath, parent, event.detail?.value ?? "")}

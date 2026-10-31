@@ -35,16 +35,17 @@ export const deviceControllableIds = (item: TreeItem): string[] => {
 };
 
 /** HA controls on a device. A meterless AC names its climate entity as its switch signal. */
-export const deviceDirectControls = (item: TreeItem): { switchEntityId: string | null; climateEntityId: string | null } | null => {
-    const { switchEntityId, climateEntityId } = item;
+export const deviceDirectControls = (item: TreeItem): { switchEntityId: string | null; climateEntityId: string | null; coverEntityId: string | null } | null => {
+    const { switchEntityId, climateEntityId, coverEntityId } = item;
     const switchId = switchEntityId !== climateEntityId ? switchEntityId : null;
-    return switchId || climateEntityId ? { switchEntityId: switchId, climateEntityId } : null;
+    return switchId || climateEntityId || coverEntityId ? { switchEntityId: switchId, climateEntityId, coverEntityId: coverEntityId ?? null } : null;
 };
 
-/** The entities a device detail lists: switch, climate, power sensor and energy meter. */
+/** The entities a device detail lists: switch, climate, cover, power sensor and energy meter. */
 export const deviceEntities = (item: TreeItem): Array<string | null | undefined> => [
     deviceDirectControls(item)?.switchEntityId ?? item.switchEntityId,
     item.climateEntityId,
+    item.coverEntityId,
     item.powerSensorId,
     item.energyEntityId,
 ];
