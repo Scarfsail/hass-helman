@@ -26,11 +26,19 @@ class HelmanTestHaDialog extends HTMLElement {
         super();
         this._open = false;
     }
-    connectedCallback() { this._sync(); }
+    connectedCallback() {
+        this._sync();
+        this.addEventListener("click", (e) => {
+            if (e.target && typeof e.target.closest === "function" && e.target.closest("[data-dialog='close']")) {
+                this.close();
+            }
+        });
+    }
     attributeChangedCallback() { this._open = this.hasAttribute("open"); this._sync(); }
     get open() { return this._open; }
     set open(value) { this._open = !!value; this._sync(); }
     close() {
+        if (!this._open) return;
         this._open = false;
         this._sync();
         this.dispatchEvent(new CustomEvent("closed", { bubbles: true, composed: true }));

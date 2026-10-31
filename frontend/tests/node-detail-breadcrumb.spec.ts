@@ -34,7 +34,7 @@ const TREE = treePayload({
                 icon: "mdi:flash", switchEntityId: "switch.panel",
                 children: [device("Kitchen circuit breaker", {
                     icon: "mdi:fuse", switchEntityId: "switch.kitchen",
-                    children: [device("Kettle", { icon: "mdi:kettle" })],
+                    children: [device("Kettle", { icon: "mdi:kettle", controllableIds: ["kettle"] })],
                 }), device("Garage", { icon: "mdi:garage", switchEntityId: "switch.garage", children: [device("Heater", { icon: "mdi:radiator" })] })],
             }),
             device("Pumps", {
@@ -155,10 +155,9 @@ test("a device's switch tile starts below the strip, never over it", async ({ pa
     expect(tile!.y).toBeGreaterThanOrEqual(strip!.y + strip!.height);
 });
 
-test("a segment opens its node's detail in the same dialog", async ({ page }) => {
+test("a segment opens its node's detail in the same dialog and Back walks the trail", async ({ page }) => {
     await mount(page);
     await openDevice(page, "Kettle", ["Main distribution panel", "Kitchen circuit breaker"]);
-    const historyLength = await page.evaluate(() => window.history.length);
     await segments(page).nth(2).click();
     await expect(page.locator("node-detail-dialog [slot=headerTitle]")).toHaveText("Kitchen circuit breaker");
     await expect(segments(page).locator(".label")).toHaveText(["House", "Main distribution panel"]);
@@ -166,7 +165,83 @@ test("a segment opens its node's detail in the same dialog", async ({ page }) =>
     await expect(page.locator("node-detail-dialog [slot=headerTitle]")).toHaveText("House");
     await expect(page.locator("node-detail-dialog helman-node-breadcrumb")).toHaveCount(0);
     await expect(page.locator("node-detail-dialog")).toHaveCount(1);
-    expect(await page.evaluate(() => window.history.length)).toBe(historyLength);
+
+    await page.evaluate(() => window.history.back());
+    await expect(page.locator("node-detail-dialog [slot=headerTitle]")).toHaveText("Kitchen circuit breaker");
+
+    await page.evaluate(() => window.history.back());
+    await expect(page.locator("node-detail-dialog [slot=headerTitle]")).toHaveText("Kettle");
+
+    await page.evaluate(() => window.history.back());
+    await expect(page.locator("node-detail-dialog")).toHaveCount(0);
+    expect(await page.evaluate(() => window.history.state?.__helmanNodeDetailDialogId)).toBeFalsy();
+});
+
+test("the close button after two jumps restores the pre-dialog state in one step", async ({ page }) => {
+    await mount(page);
+    await openDevice(page, "Kettle", ["Main distribution panel", "Kitchen circuit breaker"]);
+    await segments(page).nth(2).click();
+    await expect(page.locator("node-detail-dialog [slot=headerTitle]")).toHaveText("Kitchen circuit breaker");
+    await segments(page).first().click();
+    await expect(page.locator("node-detail-dialog [slot=headerTitle]")).toHaveText("House");
+
+    await page.locator("node-detail-dialog [data-dialog='close']").click();
+    await expect(page.locator("node-detail-dialog")).toHaveCount(0);
+    await expect.poll(() => page.evaluate(() => window.history.state?.__helmanNodeDetailDialogId)).toBeFalsy();
+
+    await page.evaluate(() => window.history.back());
+    await expect(page.locator("node-detail-dialog")).toHaveCount(0);
+});
+
+test("a returned-to node opens on its Overview with Schedule collapsed", async ({ page }) => {
+    await mount(page);
+    await openDevice(page, "Kettle", ["Main distribution panel", "Kitchen circuit breaker"]);
+    const schedule = page.locator("node-detail-dialog helman-detail-section[data-schedule]");
+    await expect(schedule).toBeVisible();
+    await schedule.locator("button").first().click();
+    await expect(schedule).toHaveAttribute("expanded", "");
+
+    await segments(page).nth(2).click();
+    await expect(page.locator("node-detail-dialog [slot=headerTitle]")).toHaveText("Kitchen circuit breaker");
+
+    await page.evaluate(() => window.history.back());
+    await expect(page.locator("node-detail-dialog [slot=headerTitle]")).toHaveText("Kettle");
+    await expect(page.locator("node-detail-dialog helman-detail-section[data-schedule]")).not.toHaveAttribute("expanded", "");
+});
+
+test("a Forward after a Back keeps the dialog on the returned-to node", async ({ page }) => {
+    await mount(page);
+    await openDevice(page, "Kettle", ["Main distribution panel", "Kitchen circuit breaker"]);
+    await segments(page).nth(2).click();
+    await expect(page.locator("node-detail-dialog [slot=headerTitle]")).toHaveText("Kitchen circuit breaker");
+    await segments(page).first().click();
+    await expect(page.locator("node-detail-dialog [slot=headerTitle]")).toHaveText("House");
+
+    await page.evaluate(() => window.history.back());
+    await expect(page.locator("node-detail-dialog [slot=headerTitle]")).toHaveText("Kitchen circuit breaker");
+
+    await page.evaluate(() => window.history.forward());
+    await expect(page.locator("node-detail-dialog [slot=headerTitle]")).toHaveText("Kitchen circuit breaker");
+});
+
+test("closing more-info leaves the node detail open on the same node", async ({ page }) => {
+    await mount(page);
+    await openDevice(page, "Kettle", ["Main distribution panel", "Kitchen circuit breaker"]);
+    await page.evaluate(() => {
+        window.history.replaceState({ ...window.history.state, opensDialog: true }, "");
+        window.history.pushState({ dialog: "ha-more-info-dialog" }, "");
+    });
+    await page.evaluate(() => window.history.back());
+    await expect(page.locator("node-detail-dialog [slot=headerTitle]")).toHaveText("Kettle");
+
+    await page.evaluate(() => {
+        const btn = document.querySelector("node-detail-dialog")?.shadowRoot?.querySelector("button");
+        btn?.dispatchEvent(new CustomEvent("closed", { bubbles: true, composed: true }));
+    });
+    await expect(page.locator("node-detail-dialog [slot=headerTitle]")).toHaveText("Kettle");
+
+    await page.evaluate(() => window.history.back());
+    await expect(page.locator("node-detail-dialog")).toHaveCount(0);
 });
 
 test("at phone width only the labels truncate, every icon stays whole", async ({ page }) => {

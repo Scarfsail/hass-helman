@@ -5,7 +5,15 @@ import { repeat } from "lit/directives/repeat.js";
 import { nothing, TemplateResult } from "lit-html";
 import type { HomeAssistant } from "../../types/ha";
 import type { LocalizeFunction } from "../localize/localize";
-import { LANE_HISTORY_EVENT, NO_LANE_HISTORY, type LaneHistory, type NodeDetailParams, type NodeDetailSectionRequest } from "./node-detail-types";
+import {
+    LANE_HISTORY_EVENT,
+    NO_LANE_HISTORY,
+    NODE_DETAIL_REQUEST_EVENT,
+    type LaneHistory,
+    type NodeDetailParams,
+    type NodeDetailSectionRequest,
+    type NodeDetailTarget,
+} from "./node-detail-types";
 import type { TreeItem } from "../shared/data/tree-item";
 import { INVERTER_CONTROLLABLE_ID } from "../shared/schedule/schedule-types";
 import { getSharedScheduleOwner } from "../shared/schedule/schedule-owner";
@@ -33,7 +41,7 @@ import { SHOW_HISTORY_EVENT } from "./node-detail-history";
 /**
  * A node's detail in Home Assistant's dialog. A node with controls has a
  * collapsible Schedule section; requests can open that section immediately.
- * Another node swaps in place, inside the one history entry the dialog holds.
+ * Jumping to another node steps through history with browser Back.
  */
 @customElement("node-detail-dialog")
 export class NodeDetailDialog extends LitElement {
@@ -52,6 +60,15 @@ export class NodeDetailDialog extends LitElement {
             this.shadowRoot?.querySelector<HelmanDeviceEditDialog>("helman-device-edit-dialog")?.requestClose();
             return true;
         },
+        onReturn: (i) => {
+            this._trail.length = i + 1;
+            this._returningFromKey = this.params ? this._targetKey() : null;
+            this.dispatchEvent(new CustomEvent(NODE_DETAIL_REQUEST_EVENT, {
+                detail: { target: this._trail[i] },
+                bubbles: true,
+                composed: true,
+            }));
+        },
         close: () => this._closeDialogElement(),
     });
 
@@ -62,8 +79,13 @@ export class NodeDetailDialog extends LitElement {
     @property({ type: Boolean }) public open = false;
 
     public releaseHistory(): Promise<void> {
+        this._trail = [];
+        this._returningFromKey = null;
         return this._history.release();
     }
+
+    private _trail: NodeDetailTarget[] = [];
+    private _returningFromKey: string | null = null;
 
     @state() private _settingsOpen = false;
     @state() private _scheduleExpanded = false;
@@ -119,12 +141,39 @@ export class NodeDetailDialog extends LitElement {
 
     updated(changedProperties: Map<string, unknown>): void {
         super.updated(changedProperties);
-        if (!this.open || !this.params || this._history.active) {
+        if (!this.open || !this.params) {
             return;
         }
 
-        if (changedProperties.has("open") || changedProperties.has("params")) {
-            this._history.push();
+        const target = this._target();
+        const key = this._targetKey(target);
+
+        if (!this._history.active) {
+            if (changedProperties.has("open") || changedProperties.has("params")) {
+                this._history.push();
+                this._trail = [target];
+                this._returningFromKey = null;
+            }
+            return;
+        }
+
+        const lastTarget = this._trail[this._trail.length - 1];
+        const lastKey = lastTarget !== undefined ? this._targetKey(lastTarget) : null;
+
+        if (this._returningFromKey !== null) {
+            if (key === lastKey) {
+                this._returningFromKey = null;
+                return;
+            }
+            if (key === this._returningFromKey) {
+                return;
+            }
+            this._returningFromKey = null;
+        }
+
+        if (key !== lastKey) {
+            this._history.advance();
+            this._trail.push(target);
         }
     }
 
@@ -171,9 +220,13 @@ export class NodeDetailDialog extends LitElement {
         return this.localize(`node_detail.title.${this.params.nodeType}`);
     }
 
+    private _target(): NodeDetailTarget {
+        return this.params.nodeType === "device" ? this.params.item : this.params.nodeType;
+    }
+
     /** The params are rebuilt on every card render: the node is its type, and a device its item. */
-    private _targetKey(): string {
-        return this.params.nodeType === "device" ? `device:${this.params.item.id}` : this.params.nodeType;
+    private _targetKey(target: NodeDetailTarget = this._target()): string {
+        return typeof target === "string" ? target : `device:${target.id}`;
     }
 
     /**
@@ -365,7 +418,10 @@ export class NodeDetailDialog extends LitElement {
 
     private _onClosed(event?: Event): void {
         event?.stopPropagation();
+        if (event && event.target !== event.currentTarget) return;
         if (!this.isConnected) return;
+        this._trail = [];
+        this._returningFromKey = null;
         const href = this._historyHref;
         this._historyHref = null;
         const steppingBack = this._history.closed();

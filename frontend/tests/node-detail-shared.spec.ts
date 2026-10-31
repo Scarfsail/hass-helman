@@ -123,3 +123,123 @@ test("a Show more closes the node detail and navigates only once the detail's ow
     await expect.poll(() => page.evaluate(() => location.pathname)).toBe("/lovelace/energy");
     expect(await page.evaluate(() => window.history.state)).toEqual({ dashboard: "energy" });
 });
+
+test("a Show more after node jumps unwinds every dialog history entry in one step and navigates", async ({ page }) => {
+    await onDashboard(page);
+    await loadBundle(page, "node-detail-dialog");
+    await page.addScriptTag({ content: HA_DIALOG_STUB });
+    await page.evaluate(() => {
+        window.history.replaceState({ dashboard: "energy" }, "");
+        const detail = document.createElement("node-detail-dialog") as any;
+        detail.localize = (key: string) => key;
+        detail.hass = { ...window.__mockHass(), states: {}, config: { time_zone: "UTC" } };
+        detail.params = { nodeType: "house", item: { id: "house", children: [] } };
+        detail._renderContent = () => {
+            const link = document.createElement("button");
+            link.dataset.showMore = "";
+            link.addEventListener("click", () => link.dispatchEvent(new CustomEvent("helman-show-history",
+                { detail: { href: "/history?entity_id=" + (detail.params.nodeType === "device" ? detail.params.item.id : detail.params.nodeType) }, bubbles: true, composed: true })));
+            return link;
+        };
+        detail.open = true;
+        detail.addEventListener("closed", () => detail.remove());
+        document.body.append(detail);
+    });
+    await expect.poll(() => page.evaluate(() => window.history.state?.__helmanNodeDetailDialogId)).toBeTruthy();
+    const firstId = await page.evaluate(() => window.history.state?.__helmanNodeDetailDialogId);
+
+    // Jump to another node inside the dialog
+    await page.evaluate(() => {
+        const detail = document.querySelector("node-detail-dialog") as any;
+        detail.params = { nodeType: "device", item: { id: "kettle", children: [] } };
+    });
+    await expect.poll(() => page.evaluate(() => window.history.state?.__helmanNodeDetailDialogId)).toBeGreaterThan(firstId);
+
+    await page.evaluate(() => {
+        const detail = document.querySelector("node-detail-dialog") as any;
+        detail.shadowRoot.querySelector("[data-dialog='close']").addEventListener("click", () => detail.shadowRoot.querySelector("ha-dialog").close());
+        const log: string[] = (window as any).__historyLog = [];
+        window.addEventListener("popstate", () => log.push("popstate"));
+        window.addEventListener("location-changed", () => log.push(location.pathname + location.search));
+    });
+
+    await page.locator("node-detail-dialog [data-show-more]").click();
+    await expect(page.locator("node-detail-dialog")).toHaveCount(0);
+    // Unwinds both entries in a single popstate, then navigates to the show-more href
+    await expect.poll(() => page.evaluate(() => (window as any).__historyLog)).toEqual(["popstate", "/history?entity_id=kettle"]);
+    expect(await page.evaluate(() => location.pathname + location.search)).toBe("/history?entity_id=kettle");
+    await page.evaluate(() => window.history.back());
+    await expect.poll(() => page.evaluate(() => location.pathname)).toBe("/lovelace/energy");
+    expect(await page.evaluate(() => window.history.state)).toEqual({ dashboard: "energy" });
+});
+
+test("when an async return is superseded, the new node advances history and subsequent Back steps cleanly", async ({ page }) => {
+    await onDashboard(page);
+    await loadBundle(page, "node-detail-dialog");
+    await page.addScriptTag({ content: HA_DIALOG_STUB });
+    await page.evaluate(() => {
+        window.history.replaceState({ dashboard: "energy" }, "");
+        const detail = document.createElement("node-detail-dialog") as any;
+        detail.localize = (key: string) => key;
+        detail.hass = { ...window.__mockHass(), states: {}, config: { time_zone: "UTC" } };
+        detail._renderContent = () => document.createElement("div");
+        detail.params = { nodeType: "house", item: { id: "house", displayName: "House", children: [] } };
+        detail.open = true;
+        detail.addEventListener("closed", () => detail.remove());
+        document.body.append(detail);
+    });
+    await expect.poll(() => page.evaluate(() => window.history.state?.__helmanNodeDetailDialogId)).toBeTruthy();
+    const firstId = await page.evaluate(() => window.history.state?.__helmanNodeDetailDialogId);
+
+    // Jump to another node (kettle) inside the dialog
+    await page.evaluate(() => {
+        const detail = document.querySelector("node-detail-dialog") as any;
+        detail.params = { nodeType: "device", item: { id: "kettle", displayName: "Kettle", children: [] } };
+    });
+    await expect.poll(() => page.evaluate(() => window.history.state?.__helmanNodeDetailDialogId)).toBeGreaterThan(firstId);
+    const secondId = await page.evaluate(() => window.history.state?.__helmanNodeDetailDialogId);
+
+    // Host receives Back and starts an async return request for house
+    await page.evaluate(() => {
+        const detail = document.querySelector("node-detail-dialog") as any;
+        detail.shadowRoot.querySelector("[data-dialog='close']").addEventListener("click", () => detail.shadowRoot.querySelector("ha-dialog").close());
+        (window as any).__requestedTargets = [];
+        detail.addEventListener("helman-node-detail-request", (e: CustomEvent) => {
+            (window as any).__requestedTargets.push(e.detail.target);
+        });
+        window.history.back();
+    });
+    await expect.poll(() => page.evaluate(() => (window as any).__requestedTargets)).toEqual(["house"]);
+
+    // Stale re-render of old node (kettle) while return is in flight (e.g. live hass update)
+    await page.evaluate(() => {
+        const detail = document.querySelector("node-detail-dialog") as any;
+        detail.hass = { ...detail.hass };
+    });
+
+    // Superseded by a newer navigation to node X (solar)
+    await page.evaluate(() => {
+        const detail = document.querySelector("node-detail-dialog") as any;
+        detail.params = { nodeType: "solar" };
+    });
+    // Node X advances the trail and pushes a new history entry rather than being stuck
+    await expect.poll(() => page.evaluate(() => window.history.state?.__helmanNodeDetailDialogId)).toBeGreaterThan(secondId);
+    await expect(page.locator("node-detail-dialog [slot=headerTitle]")).toHaveText("node_detail.title.solar");
+
+    // Subsequent history.back() returns to house cleanly
+    await page.evaluate(() => {
+        const detail = document.querySelector("node-detail-dialog") as any;
+        detail.addEventListener("helman-node-detail-request", (e: CustomEvent) => {
+            if (e.detail.target === "house") {
+                detail.params = { nodeType: "house", item: { id: "house", displayName: "House", children: [] } };
+            }
+        });
+        window.history.back();
+    });
+    await expect(page.locator("node-detail-dialog [slot=headerTitle]")).toHaveText("node_detail.title.house");
+
+    // Stepping back once more closes the dialog
+    await page.evaluate(() => window.history.back());
+    await expect(page.locator("node-detail-dialog")).toHaveCount(0);
+    expect(await page.evaluate(() => window.history.state)).toEqual({ dashboard: "energy" });
+});
