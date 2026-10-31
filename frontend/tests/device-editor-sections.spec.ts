@@ -345,7 +345,7 @@ test("a broken child opens its parent's Children section", async ({ page }) => {
     expect(await openSections(panel(page), "klima_obyvak")).toEqual([]);
 });
 
-test("the device edit dialog shows every section collapsed, and no Children", async ({ page }) => {
+test("the device edit dialog shows every root section collapsed, including Children", async ({ page }) => {
     const config = configDoc({
 
         devices: { consumers: [BREAKER] },
@@ -380,12 +380,13 @@ test("the device edit dialog shows every section collapsed, and no Children", as
 
     await page.locator("node-detail-dialog ha-button[data-settings]").click();
     const dialog = page.locator("helman-device-edit-dialog");
-    await expect(dialog.locator("details.device-card")).toHaveAttribute("open", "");
+    await expect(dialog.locator('details.device-card[data-device-id="breaker"]')).toHaveAttribute("open", "");
     await expect.poll(() => sections(dialog, "breaker")).toEqual([
         { label: "Identity", open: false, chips: ["Generic"] },
         { label: "Groups and phase", open: false, chips: [] },
         { label: "Measurements", open: false, chips: ["Energy", "Power"] },
         { label: "Controls", open: false, chips: [] },
+        { label: "Children", open: false, chips: ["2"] },
     ]);
 });
 
