@@ -48,12 +48,12 @@ test("an idle gauge pill mutes its content but opens a fully opaque popup", asyn
         document.getElementById("mount")!.append(gauge);
     });
     const gauge = page.locator("helman-flow-gauge");
-    const solar = gauge.locator("button").first();
-    await expect(solar).not.toHaveAttribute("data-active");
-    await expect(solar.locator("ha-icon")).toHaveCSS("opacity", "0.4");
-    await expect(solar.locator(".figure")).toHaveCSS("opacity", "0.4");
-    await solar.hover();
-    const popup = solar.locator(".popup");
+    const house = gauge.locator("button").first();
+    await expect(house).not.toHaveAttribute("data-active");
+    await expect(house.locator("ha-icon")).toHaveCSS("opacity", "0.4");
+    await expect(house.locator(".figure")).toHaveCSS("opacity", "0.4");
+    await house.hover();
+    const popup = house.locator(".popup");
     await expect(popup).toBeVisible();
     const opacity = await popup.evaluate((el) => {
         let product = 1;

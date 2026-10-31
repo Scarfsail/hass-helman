@@ -270,7 +270,7 @@ test("grid gauge adds up to the headline where the house meter disagrees with th
     const c = content(page);
     await expect(c.locator("helman-detail-headline [data-headline]")).toHaveText("← 1.1 kW");
     const gauge = c.locator("helman-flow-gauge");
-    await expect(gauge.locator(".figure")).toHaveText(["0 W", "1.0 kW 91 %", "100 W 9 %"]);
+    await expect(gauge.locator(".figure")).toHaveText(["100 W 9 %", "1.0 kW 91 %", "0 W"]);
     expect(await liveFigures(page, "node-detail-grid-content", "grid")).toMatchObject({ card: 1100, gauge: 1100 });
 });
 

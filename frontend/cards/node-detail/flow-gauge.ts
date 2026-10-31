@@ -12,8 +12,8 @@ export interface FlowGaugeItem { node: "solar" | "battery" | "grid" | "house"; p
 export const FLOW_GAUGE_COUNTERPARTS: Record<FlowGaugeItem["node"], readonly FlowGaugeItem["node"][]> = {
     house: ["solar", "battery", "grid"],
     solar: ["house", "battery", "grid"],
-    battery: ["solar", "grid", "house"],
-    grid: ["solar", "battery", "house"],
+    battery: ["house", "solar", "grid"],
+    grid: ["house", "battery", "solar"],
 };
 
 @customElement("helman-flow-gauge")
