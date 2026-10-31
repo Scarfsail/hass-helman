@@ -34,6 +34,10 @@ export const deviceControllableIds = (item: TreeItem): string[] => {
     return [...new Set([...controllableIds, ...ownControllableIds])];
 };
 
+/** A device's power sensor: none when its configured power sensor is its energy meter. */
+export const powerEntity = (item: TreeItem): string | undefined =>
+    item.powerSensorId && item.powerSensorId !== item.energyEntityId ? item.powerSensorId : undefined;
+
 /** HA controls on a device. A meterless AC names its climate entity as its switch signal. */
 export const deviceDirectControls = (item: TreeItem): { switchEntityId: string | null; climateEntityId: string | null; coverEntityId: string | null } | null => {
     const { switchEntityId, climateEntityId, coverEntityId } = item;

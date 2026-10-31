@@ -9,7 +9,7 @@ import { convertToKWh, isSupportedEnergyUnit } from "../helman/energy-unit-conve
 import { readPowerW } from "../shared/power-reading";
 import { dispatchWatchedEntities } from "../shared/hass-change";
 import type { DeviceDetailParams } from "./node-detail-types";
-import { deviceControllableIds, deviceDirectControls, deviceEntities } from "./node-detail-utils";
+import { deviceControllableIds, deviceDirectControls, deviceEntities, powerEntity } from "./node-detail-utils";
 import { estimatedConsumerMix } from "./live-flows";
 import { isSwitchOn } from "../shared/config/devices";
 import { SectionResource } from "./section-resource";
@@ -36,12 +36,9 @@ import "./flow-gauge";
 import "./switch-tile";
 import "./cover-control";
 import "./who-decides";
+import { subdeviceEntities } from "./subdevice-list";
 import { openMoreInfo, renderEntityList } from "./node-detail-readings";
 import { nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
-
-function powerEntity(item: TreeItem): string | undefined {
-    return item.powerSensorId && item.powerSensorId !== item.energyEntityId ? item.powerSensorId : undefined;
-}
 
 @customElement("node-detail-device-content")
 export class NodeDetailDeviceContent extends LitElement {
@@ -115,7 +112,7 @@ export class NodeDetailDeviceContent extends LitElement {
         this._planStarted = false;
     }
     protected updated(changed: PropertyValues<this>): void {
-        if (changed.has("params")) dispatchWatchedEntities(this, "node-detail", deviceEntities(this.params.item));
+        if (changed.has("params")) dispatchWatchedEntities(this, "node-detail", [...deviceEntities(this.params.item), ...subdeviceEntities(this.params.item)]);
     }
     render() {
         const item = this.params.item;
@@ -146,6 +143,7 @@ export class NodeDetailDeviceContent extends LitElement {
                 @click=${() => openMoreInfo(this, direct.climateEntityId!)}>${this.localize("node_detail.shared.climate_controls")}</button>` : nothing}
             <helman-flow-gauge direction="from" .items=${estimatedConsumerMix(this.params.flows, power)} .estimated=${true} .localize=${this.localize}></helman-flow-gauge>
             ${ids.length ? html`<helman-who-decides .hass=${this.hass} .localize=${this.localize} .controllableId=${ids[0]}></helman-who-decides>` : nothing}
+            <helman-subdevice-list .hass=${this.hass} .localize=${this.localize} .parent=${item} .powerW=${power}></helman-subdevice-list>
         </div></div>
         <slot name="schedule"></slot>
         ${this._renderForecast(ids)}

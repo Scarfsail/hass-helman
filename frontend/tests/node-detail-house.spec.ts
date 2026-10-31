@@ -11,12 +11,10 @@ import { test, expect, type Page } from "@playwright/test";
  * sections), the device report, the schedule and the forecast, at the fixed
  * clock (Wednesday 12:00 UTC). What is pinned is the pictured overview (the
  * Now/Today flow around the house filled with its source mix, the three
- * largest consumers and everything else, the tiles), the shared disclosure
- * contract and the house answers' honesty: no device tree in the dialog, each
- * load counted once in the phase estimate and the top consumers, a three-phase
- * load in thirds and unmapped load unassigned, the measured phases against what
- * their devices explain, no diagnosis from the overnight minimum, and no
- * full-day comparison against a partial today.
+ * largest subdevices and everything else, the tiles), the shared disclosure
+ * contract and the house answers' honesty: no device tree in the dialog, the
+ * subdevices adding up to the headline, no diagnosis from the overnight
+ * minimum, and no full-day comparison against a partial today.
  */
 
 
@@ -295,7 +293,7 @@ test("house Overview shows the P1 detail layout", async ({ page }) => {
     await expect(c.locator("[data-overview]")).toBeVisible();
     await expect(c.locator("helman-detail-headline")).toBeVisible();
     await expect(c.locator("helman-flow-gauge")).toHaveCount(1);
-    await expect(c).toContainText("biggest users");
+    await expect(c).toContainText("Subdevices");
 });
 
 test("house headline, gauge and power card agree where the grid meter disagrees with the balance", async ({ page }) => {
@@ -324,34 +322,36 @@ test("house Overview shows the off-grid warning", async ({ page }) => {
     await expect(overview).toContainText("off-grid operation");
 });
 
-test("house expands biggest users and opens the selected device", async ({ page }) => {
+test("house expands its subdevices and opens the selected device", async ({ page }) => {
     await mount(page);
     await page.locator(".node-cell:has(simple-card-house)").click();
     const c = content(page);
-    await expect(c.locator("button.user-row")).toHaveCount(4);
-    await expect(c.getByRole("button", { name: /Everything else/ })).toContainText("1.8 kW 23 %");
+    // Its direct children, the top three by power: the nested oven and pump are behind the kitchen and the breaker.
+    await expect(c.locator("button.user-row .user-name")).toHaveText(["Heat pump", "EV", "Kitchen", /Everything else · 4 more/]);
+    await expect(c.getByRole("button", { name: /Everything else/ })).toContainText("1.3 kW 17 %");
     expect(await c.locator("button.user-row").first().evaluate((row) => ({
         border: getComputedStyle(row).borderTopWidth,
         radius: getComputedStyle(row).borderTopLeftRadius,
         height: row.getBoundingClientRect().height,
-    }))).toEqual({ border: "0px", radius: "8px", height: 44 });
+    }))).toEqual({ border: "0px", radius: "8px", height: 32 });
     await c.getByRole("button", { name: /Everything else/ }).click();
     await expect(c).toContainText("Not measured");
     await c.getByRole("button", { name: /Heat pump/ }).click();
     await expect(page.locator("node-detail-device-content")).toBeVisible();
 });
 
-test("house biggest users add up to the headline, whatever the remainder sensor reads", async ({ page }) => {
-    // 7.5 kW of loads in 7.8 kW of house leave 300 W no meter explains; the sensor's median still reads 90 W.
+test("house subdevices add up to the headline, whatever the remainder sensor reads", async ({ page }) => {
+    // 7.5 kW of direct children in 7.8 kW of house leave 300 W no meter explains; the sensor's median still reads 90 W.
     await mount(page, { houseRemainder: "90" });
     await page.locator(".node-cell:has(simple-card-house)").click();
     const c = content(page);
-    const rows = () => c.locator(".user-row .user-amount").evaluateAll((amounts) => amounts.map((amount) => {
-        const [, value, unit, pct] = amount.textContent!.replace(/\s+/g, " ").match(/([\d.]+) (k?W) (\d+) %/)!;
-        return { watts: Number(value) * (unit === "kW" ? 1000 : 1), pct: Number(pct) };
+    // The boiler without a reading reads "—" and adds nothing.
+    const rows = () => c.locator(".user-row .user-amount").evaluateAll((amounts) => amounts.flatMap((amount) => {
+        const match = amount.textContent!.replace(/\s+/g, " ").match(/([\d.]+) (k?W) (\d+) %/);
+        return match ? [{ watts: Number(match[1]) * (match[2] === "kW" ? 1000 : 1), pct: Number(match[3]) }] : [];
     }));
     const total = (list: Array<{ watts: number; pct: number }>) => list.reduce((sum, row) => ({ watts: sum.watts + row.watts, pct: sum.pct + row.pct }), { watts: 0, pct: 0 });
-    await expect(c.getByRole("button", { name: /Everything else/ })).toContainText("1.8 kW 23 %");
+    await expect(c.getByRole("button", { name: /Everything else/ })).toContainText("1.3 kW 17 %");
     expect(total(await rows())).toEqual({ watts: 7800, pct: 100 });
     await c.getByRole("button", { name: /Everything else/ }).click();
     await expect(c.locator(".user-row", { hasText: "Not measured" })).toContainText("300 W 4 %");
