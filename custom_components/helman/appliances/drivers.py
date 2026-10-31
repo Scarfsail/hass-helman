@@ -16,7 +16,7 @@ from typing import Any, Protocol
 
 from homeassistant.util import dt as dt_util
 
-from ..controllables.config import SWITCH_CONTROL_DOMAINS
+from ..controllables.config import SWITCH_CONTROL_DOMAINS, is_switch_on
 from ..controllables.controllers import SelectEntityController
 from ..scheduling.actuation import ScheduleActuator
 from ..scheduling.runtime_status import (
@@ -47,7 +47,7 @@ class SwitchEntityController:
         domain, separator, object_id = entity_id.partition(".")
         if not separator or not object_id or domain not in SWITCH_CONTROL_DOMAINS:
             raise ScheduleExecutionUnavailableError(
-                f"{description} must use the switch or light domain"
+                f"{description} must use the switch, light or media_player domain"
             )
         self.entity_id = entity_id
         self._domain = domain
@@ -73,7 +73,7 @@ class SwitchEntityController:
 
     @staticmethod
     def is_on(state: Any) -> bool:
-        return getattr(state, "state", None) == "on"
+        return is_switch_on(getattr(state, "state", None))
 
     async def async_turn_on(self, actuator: ScheduleActuator) -> None:
         try:

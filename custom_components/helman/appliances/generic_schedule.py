@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, TypedDict
 
+from ..controllables.config import is_switch_on
 from .ev_schedule import ApplianceScheduleNormalizationMode
 from .generic_appliance import GenericApplianceRuntime
 
@@ -41,4 +42,4 @@ def is_generic_action_running(action: Mapping[str, Any]) -> bool:
 
 def generic_action_from_state(runtime: Any, state: str) -> dict[str, Any]:
     """Observed switch activity, without inventing unrecorded settings."""
-    return {"on": state == "on"}
+    return {"on": is_switch_on(state)}

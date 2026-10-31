@@ -712,6 +712,59 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
             [("light", "turn_on"), ("light", "turn_off")],
         )
 
+    async def test_generic_media_player_is_switched_through_the_media_player_domain(
+        self,
+    ) -> None:
+        appliance = replace(
+            _build_generic_appliance(), switch_entity_id="media_player.tv"
+        )
+        hass = FakeHass({"media_player.tv": FakeState("off")})
+        executor = ApplianceExecutor(_actuator(hass), GenericApplianceDriver())
+
+        runtime, memory = await executor.async_execute(
+            appliance=appliance,
+            action={"on": True},
+            last_scheduled_action=None,
+            memory=None,
+            active_slot_id=CURRENT_SLOT_ID,
+            reference_time=REFERENCE_TIME,
+        )
+        self.assertEqual(runtime.outcome, "success")
+
+        hass.states._states["media_player.tv"].state = "playing"
+        runtime, memory = await executor.async_execute(
+            appliance=appliance,
+            action={"on": False},
+            last_scheduled_action=None,
+            memory=memory,
+            active_slot_id=CURRENT_SLOT_ID,
+            reference_time=REFERENCE_TIME,
+        )
+
+        self.assertEqual(runtime.outcome, "success")
+        self.assertEqual(
+            [call[:2] for call in hass.services.calls],
+            [("media_player", "turn_on"), ("media_player", "turn_off")],
+        )
+
+    async def test_generic_media_player_playing_counts_as_already_on(self) -> None:
+        appliance = replace(
+            _build_generic_appliance(), switch_entity_id="media_player.tv"
+        )
+        hass = FakeHass({"media_player.tv": FakeState("playing")})
+        executor = ApplianceExecutor(_actuator(hass), GenericApplianceDriver())
+
+        runtime, _memory = await executor.async_execute(
+            appliance=appliance,
+            action={"on": True},
+            last_scheduled_action=None,
+            memory=None,
+            active_slot_id=CURRENT_SLOT_ID,
+            reference_time=REFERENCE_TIME,
+        )
+        self.assertEqual(runtime.outcome, "success")
+        self.assertEqual(hass.services.calls, [])
+
     async def test_generic_missing_action_after_previous_on_clears_runtime_after_stop(
         self,
     ) -> None:

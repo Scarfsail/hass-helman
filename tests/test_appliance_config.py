@@ -7,6 +7,13 @@ import unittest
 
 
 from custom_components.helman.appliances.config import build_appliances_runtime_registry
+from custom_components.helman.appliances.generic_appliance import (
+    read_generic_appliance,
+)
+from custom_components.helman.appliances.generic_schedule import (
+    generic_action_from_state,
+)
+from custom_components.helman.controllables.config import running_active_states
 
 
 def _valid_config() -> dict:
@@ -279,6 +286,30 @@ class ApplianceConfigTests(unittest.TestCase):
 
         (appliance,) = registry.appliances
         self.assertEqual(appliance.switch_entity_id, "light.hall")
+
+    def test_generic_switch_control_accepts_a_media_player(self) -> None:
+        tv = copy.deepcopy(_generic_appliance())
+        tv["controls"]["switch"]["entity_id"] = "media_player.tv"
+
+        registry = build_appliances_runtime_registry({"devices": {"consumers": [tv]}})
+
+        (appliance,) = registry.appliances
+        self.assertEqual(appliance.switch_entity_id, "media_player.tv")
+
+    def test_read_generic_appliance_accepts_media_player(self) -> None:
+        tv = copy.deepcopy(_generic_appliance())
+        tv["controls"]["switch"]["entity_id"] = "media_player.tv"
+        appliance = read_generic_appliance(tv, path="devices.consumers.0")
+        self.assertEqual(appliance.switch_entity_id, "media_player.tv")
+
+    def test_generic_action_from_state_maps_active_and_resting_states(self) -> None:
+        self.assertEqual(generic_action_from_state(None, "playing"), {"on": True})
+        self.assertEqual(generic_action_from_state(None, "standby"), {"on": True})
+        self.assertEqual(generic_action_from_state(None, "off"), {"on": False})
+        self.assertEqual(generic_action_from_state(None, "unavailable"), {"on": False})
+
+    def test_running_active_states_switch_contains_playing(self) -> None:
+        self.assertIn("playing", running_active_states("switch"))
 
     def test_generic_switch_control_rejects_other_domains(self) -> None:
         sensor = copy.deepcopy(_generic_appliance())

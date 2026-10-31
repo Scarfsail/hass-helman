@@ -6,6 +6,7 @@ import type { TreeItem } from "../shared/data/tree-item";
 import { fireEvent } from "../shared/fire-event";
 import { dispatchWatchedEntities } from "../shared/hass-change";
 import { loadHaEntityToggle } from "../shared/load-ha-elements";
+import { isSwitchOn } from "../shared/config/devices";
 import { SWITCH_ON_COLOR } from "./switch-tile";
 import { NODE_DETAIL_REQUEST_EVENT, type NodeDetailRequestDetail, type NodeDetailTarget } from "./node-detail-types";
 
@@ -71,7 +72,7 @@ export class HelmanNodeBreadcrumb extends LitElement {
         if (!state) return this._segment(item, label, icon);
         return this._segment(item, label,
             customElements.get("ha-state-icon") ? html`<ha-state-icon class="icon" .hass=${this.hass} .stateObj=${state}></ha-state-icon>` : icon,
-            state.state === "on" || state.state === "off" ? state.state : undefined);
+            isSwitchOn(state.state) ? "on" : state.state === "off" ? "off" : undefined);
     }
 
     private _segment(target: NodeDetailTarget, label: string, icon: unknown, tone?: "on" | "off") {

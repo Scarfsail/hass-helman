@@ -7,6 +7,7 @@ import {
     isScheduleEvChargerAction,
     isScheduleGenericApplianceAction,
 } from "../schedule-types";
+import { isSwitchOn } from "../../config/devices";
 
 export type ApplianceOption = {
     mode: string;
@@ -65,7 +66,7 @@ export const APPLIANCE_KIND_UI: Record<ScheduleApplianceMetadata["kind"], KindUi
             ? (action.on ? "on" : "off") : "none",
         action: (mode) => ({ action: mode === "none" ? null : { on: mode === "on" }, valid: true }),
         stateFromAction: (action) => isScheduleGenericApplianceAction(action) && action.on ? "on" : "off",
-        actionFromState: (state) => ({ on: state === "on" }),
+        actionFromState: (state) => ({ on: isSwitchOn(state) }),
         presentation: (action, icon, localize) => ({
             icon,
             label: localize(isScheduleGenericApplianceAction(action) && action.on

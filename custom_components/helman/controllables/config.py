@@ -318,13 +318,24 @@ RUNNING_ACTIVITY_BY_CONTROL: dict[str, str] = {
 }
 
 
-#: What "running" means for each running signal: a switch is on, a climate
-#: entity is heating or cooling. Named once so a shared meter's members are
-#: judged exactly as a lone appliance of the same kind would be.
-SWITCH_ACTIVE_STATES: tuple[str, ...] = ("on",)
+#: What "running" means for each running signal: a switch or light is on, a
+#: media player is in any state other than "off" / "unavailable" (spelling out
+#: Home Assistant's closed MediaPlayerState set, with standby counting as on
+#: by decision), and a climate entity is heating or cooling. Named once so a
+#: shared meter's members are judged exactly as a lone appliance of the same
+#: kind would be.
+SWITCH_ACTIVE_STATES: tuple[str, ...] = (
+    "on",
+    "idle",
+    "playing",
+    "paused",
+    "buffering",
+    "standby",
+)
 #: The domains a ``controls.switch`` entity may use: a light's on/off state
-#: means exactly what a switch's does.
-SWITCH_CONTROL_DOMAINS: tuple[str, ...] = ("switch", "light")
+#: means exactly what a switch's does, and a media player supports turn_on,
+#: turn_off and toggle with any non-off state counting as on.
+SWITCH_CONTROL_DOMAINS: tuple[str, ...] = ("switch", "light", "media_player")
 CLIMATE_ACTIVE_STATES: tuple[str, ...] = ("heat", "cool")
 
 
@@ -341,6 +352,11 @@ def running_active_states(activity: str) -> tuple[str, ...]:
 def is_active_state(value: Any, active_states: Collection[str]) -> bool:
     """Whether a state value is one of ``active_states`` (lower-case)."""
     return isinstance(value, str) and value.strip().lower() in active_states
+
+
+def is_switch_on(state: Any) -> bool:
+    """Whether a switch control's state counts as on."""
+    return is_active_state(state, SWITCH_ACTIVE_STATES)
 
 
 def read_controllable_kinds_by_id(
