@@ -1,4 +1,5 @@
 import type { TreeItem } from "../shared/data/tree-item";
+import { deviceAncestors } from "./node-detail-utils";
 import { liveFlows, type LiveFlows } from "./live-flows";
 import type { NodeDetailParams, NodeDetailSectionRequest, NodeDetailTarget } from "./node-detail-types";
 import type { EnergyReadings } from "./node-detail-readings";
@@ -66,7 +67,9 @@ export function buildNodeDetailParams(
     // others: without the solar, battery or house reading it is not known, never a zero.
     const known = context.solarPowerReading !== null && context.batteryPowerReading !== null && context.houseReadable;
     const flow = { flows: known ? context.flows : null, flowScaleW: context.flowScaleW, sectionRequest };
-    if (typeof request !== "string") return { ...flow, nodeType: "device", item: request };
+    if (typeof request !== "string") {
+        return { ...flow, nodeType: "device", item: request, ancestors: deviceAncestors(context.houseNode, request) };
+    }
     switch (request) {
         case "battery":
             return {

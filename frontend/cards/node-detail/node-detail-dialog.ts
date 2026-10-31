@@ -24,6 +24,7 @@ import "./node-detail-ev-charger-content";
 import "./node-detail-device-content";
 import "./node-control";
 import "./node-control-rollup";
+import "./node-breadcrumb";
 import type { HelmanDeviceEditDialog } from "../shared/devices/helman-device-edit-dialog";
 import "../shared/devices/helman-device-edit-dialog";
 import { deviceControllableIds } from "./node-detail-utils";
@@ -142,6 +143,9 @@ export class NodeDetailDialog extends LitElement {
                 <span id="node-detail-dialog-title" slot="headerTitle" class="header-title">
                     ${title}
                 </span>
+                ${this.params.nodeType === "device" ? html`
+                    <helman-node-breadcrumb .hass=${this.hass} .localize=${this.localize} .ancestors=${this.params.ancestors}></helman-node-breadcrumb>
+                ` : nothing}
                 ${this._renderBody()}
                 <ha-dialog-footer slot="footer">
                     ${this.params.nodeType === "device" && this.params.item.deviceKey && this.hass.user?.is_admin === true ? html`

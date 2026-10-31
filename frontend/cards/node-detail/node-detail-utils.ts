@@ -48,3 +48,20 @@ export const deviceEntities = (item: TreeItem): Array<string | null | undefined>
     item.powerSensorId,
     item.energyEntityId,
 ];
+
+/**
+ * The config devices above a device in the house tree, top down: no house, not
+ * the device itself. Matched as a refreshed tree remaps an open device, by id
+ * and side; `[]` when the device is not in the tree.
+ */
+export const deviceAncestors = (houseNode: TreeItem | null, item: TreeItem): TreeItem[] => {
+    const search = (items: readonly TreeItem[], path: TreeItem[]): TreeItem[] | null => {
+        for (const child of items) {
+            if (child.id === item.id && child.isSource === item.isSource) return path;
+            const found = search(child.children, child.deviceKey ? [...path, child] : path);
+            if (found) return found;
+        }
+        return null;
+    };
+    return houseNode ? search(houseNode.children, []) ?? [] : [];
+};

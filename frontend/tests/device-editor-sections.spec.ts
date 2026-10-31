@@ -372,6 +372,7 @@ test("the device edit dialog shows every section collapsed, and no Children", as
             nodeType: "device",
             item: { id: "breaker", name: "AC breaker", displayName: "AC breaker", deviceKey: "sensor.breaker_energy",
                 deviceKeyIsMeter: true, children: [] },
+            ancestors: [],
         };
         content.open = true;
         document.body.appendChild(content);

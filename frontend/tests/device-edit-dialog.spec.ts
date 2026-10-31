@@ -130,6 +130,7 @@ async function mountDetail(page: Page, options: MountOptions = {}): Promise<void
                 nodeType: "device",
                 item: { id: key, name: "Boiler", displayName: "Boiler", deviceKey: key,
                     deviceKeyIsMeter: key.startsWith("sensor."), children: [] },
+                ancestors: [],
             };
             content.open = true;
             document.body.appendChild(content);

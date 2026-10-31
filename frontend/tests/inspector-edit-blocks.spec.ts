@@ -11,14 +11,18 @@ import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
  * Schedule section asks the card around it for the editor; the inspector
  * answers by opening that editor on the device's lane, over the detail, and
  * closing it returns to the still-open detail.
+ *
+ * The detail is built from the live house tree, as the power card builds it,
+ * so it carries the same breadcrumb and swaps in place on its requests.
  */
 
-async function mountInspector(page: Page): Promise<void> {
+/** The house's devices, in place of the default Panel with its Boiler. */
+async function mountInspector(page: Page, houseChildren?: unknown[]): Promise<void> {
     await page.goto("about:blank");
     await loadBundle(page, "helman-solar-inspector-card");
     await installFakeHass(page, { pillDays: 2 });
     await page.addScriptTag({ content: HA_DIALOG_STUB });
-    await page.evaluate(() => {
+    await page.evaluate((houseChildren) => {
         const w = window as any;
         const hass = w.__fakeHass;
         const dayStart = Date.parse(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`);
@@ -29,6 +33,7 @@ async function mountInspector(page: Page): Promise<void> {
         });
         hass.states = {
             "switch.boiler": { entity_id: "switch.boiler", state: "off", attributes: { friendly_name: "Boiler" }, last_changed: new Date().toISOString() },
+            "switch.panel": { entity_id: "switch.panel", state: "on", attributes: { friendly_name: "Panel" }, last_changed: new Date().toISOString() },
         };
         const replies: Record<string, unknown> = {
             "helman/get_schedule": { executionEnabled: true, slotMinutes: 15, slots },
@@ -43,11 +48,15 @@ async function mountInspector(page: Page): Promise<void> {
                 sources: [],
                 consumers: [{
                     id: "house", displayName: "House", powerSensorId: "sensor.house",
-                    children: [{
-                        id: "boiler", displayName: "Boiler", powerSensorId: "sensor.boiler",
-                        switchEntityId: "switch.boiler", controllableIds: ["boiler"], ownControllableIds: ["boiler"],
-                        deviceKey: "sensor.boiler_energy", energyEntityId: "sensor.boiler_energy",
-                        children: [],
+                    children: houseChildren ?? [{
+                        id: "panel", displayName: "Panel", powerSensorId: "sensor.panel",
+                        switchEntityId: "switch.panel", energyEntityId: "sensor.panel_energy",
+                        children: [{
+                            id: "boiler", displayName: "Boiler", powerSensorId: "sensor.boiler",
+                            switchEntityId: "switch.boiler", controllableIds: ["boiler"], ownControllableIds: ["boiler"],
+                            deviceKey: "sensor.boiler_energy", energyEntityId: "sensor.boiler_energy",
+                            children: [],
+                        }],
                     }],
                 }],
                 consumptionTotalSensorId: null,
@@ -62,7 +71,7 @@ async function mountInspector(page: Page): Promise<void> {
         card.setConfig({ type: "custom:helman-solar-inspector-card" });
         card.hass = hass;
         document.body.appendChild(card);
-    });
+    }, houseChildren);
     await page.waitForFunction(() => (window as any).__pendingInspector() === 1);
     await page.evaluate(() => (window as any).__releaseInspector());
     await page.waitForFunction(() => !!(window as any).__inspector()?.shadowRoot?.querySelector(".body scheduling-day-editor-host"));
@@ -98,6 +107,55 @@ test("Edit blocks opens the inspector's day editor over the device detail on its
     });
     await expect.poll(() => dayEditor(page).then((editor) => editor.open)).toBe(false);
     await expect(detail.locator("helman-node-control")).toBeVisible();
+});
+
+test("a breakdown device's detail shows its breadcrumb and a segment swaps the dialog in place", async ({ page }) => {
+    await mountInspector(page);
+    await page.evaluate(() => {
+        const body = (window as any).__inspector().shadowRoot.querySelector(".body");
+        const item = {
+            id: "sensor.boiler_energy", name: "Boiler", displayName: "Boiler", children: [], valueType: "default",
+            isSource: false, isUnmeasured: false, powerValue: 0, powerHistory: [0], historyBuckets: 1,
+            switchEntityId: "switch.boiler", controllableIds: ["boiler"], energyEntityId: "sensor.boiler_energy",
+        };
+        body.firstElementChild.dispatchEvent(new CustomEvent("show-device-detail", { detail: { item }, bubbles: true, composed: true }));
+    });
+    const detail = page.locator("helman-solar-inspector node-detail-dialog");
+    const segments = detail.locator("helman-node-breadcrumb button");
+    await expect(detail.locator('[slot="headerTitle"]')).toHaveText("Boiler");
+    await expect(segments.locator(".label")).toHaveText(["House", "Panel"]);
+    await expect(segments.nth(1)).toHaveAttribute("aria-label", "Panel, on");
+    await segments.nth(1).click();
+    await expect(detail.locator('[slot="headerTitle"]')).toHaveText("Panel");
+    await expect(segments.locator(".label")).toHaveText(["House"]);
+    await segments.first().click();
+    await expect(detail.locator('[slot="headerTitle"]')).toHaveText("House");
+    await expect(detail).toHaveCount(1);
+});
+
+test("a breakdown device under a shared meter opens its own detail, not the meter's", async ({ page }) => {
+    // The meter stands for both devices' lanes; neither device has a meter of its own.
+    const child = (id: string, name: string) => ({
+        id, displayName: name, powerSensorId: `sensor.${id}`, switchEntityId: `switch.${id}`,
+        controllableIds: [id], ownControllableIds: [id], children: [],
+    });
+    await mountInspector(page, [{
+        id: "meter", displayName: "Shared meter", powerSensorId: "sensor.meter", deviceKey: "sensor.meter_energy",
+        energyEntityId: "sensor.meter_energy", ownControllableIds: ["heater", "fan"],
+        children: [child("heater", "Heater"), child("fan", "Fan")],
+    }]);
+    await page.evaluate(() => {
+        const body = (window as any).__inspector().shadowRoot.querySelector(".body");
+        const item = {
+            id: "breakdown:heater", name: "Heater", displayName: "Heater", children: [], valueType: "default",
+            isSource: false, isUnmeasured: false, powerValue: 0, powerHistory: [0], historyBuckets: 1,
+            controllableIds: ["heater"], energyEntityId: "sensor.meter_energy",
+        };
+        body.firstElementChild.dispatchEvent(new CustomEvent("show-device-detail", { detail: { item }, bubbles: true, composed: true }));
+    });
+    const detail = page.locator("helman-solar-inspector node-detail-dialog");
+    await expect(detail.locator('[slot="headerTitle"]')).toHaveText("Heater");
+    await expect(detail.locator("helman-node-breadcrumb button .label")).toHaveText(["House", "Shared meter"]);
 });
 
 test("lane icon in the inspector's schedule strip opens the device detail dialog", async ({ page }) => {
