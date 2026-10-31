@@ -4,6 +4,7 @@ import type { HomeAssistant } from "../../types/ha";
 import { loadHaEntityToggle } from "../shared/load-ha-elements";
 import { dispatchWatchedEntities } from "../shared/hass-change";
 import { openMoreInfo } from "./node-detail-readings";
+import { isSwitchOn } from "../shared/config/devices";
 
 /** The colour a switched-on device is shown in: HA's own switch-on colour. */
 export const SWITCH_ON_COLOR = unsafeCSS("var(--state-switch-on-color, var(--amber-color, #ffc107))");
@@ -43,12 +44,13 @@ export class HelmanSwitchTile extends LitElement {
         if (this._held) { this._held = false; return; }
         if (this.kind === "climate") { openMoreInfo(this, this.entityId); return; }
         const state = this.hass.states[this.entityId]?.state;
-        if (state !== "on" && state !== "off") return;
-        void this.hass.callWS({ type: "call_service", domain: this.entityId.split(".", 1)[0], service: state === "on" ? "turn_off" : "turn_on", service_data: { entity_id: this.entityId } });
+        const on = isSwitchOn(state);
+        if (!on && state !== "off") return;
+        void this.hass.callWS({ type: "call_service", domain: this.entityId.split(".", 1)[0], service: on ? "turn_off" : "turn_on", service_data: { entity_id: this.entityId } });
     }
     render() {
         const state = this.hass?.states[this.entityId];
-        const on = state?.state === "on";
+        const on = isSwitchOn(state?.state);
         const label = this.kind === "climate" ? (state?.state ?? "—") : this.localize(`node_detail.control.${on ? "on" : "off"}`);
         return html`<button type="button" class=${on ? "on" : ""} aria-pressed=${this.kind === "switch" ? String(on) : "false"}
             @pointerdown=${this._down} @pointerup=${this._up} @pointercancel=${this._up}

@@ -247,10 +247,34 @@ export function canHaveChildren(device: JsonObject): boolean {
 }
 
 /**
- * The domains a `controls.switch` entity may use. Mirrors
+ * What counts as "on" for each switch-control entity: a switch or light is on,
+ * a media player is in any state other than "off" / "unavailable" (spelling
+ * out Home Assistant's closed MediaPlayerState set, with standby counting as on
+ * by decision). Mirrors `SWITCH_ACTIVE_STATES` in
+ * `custom_components/helman/controllables/config.py`.
+ */
+export const SWITCH_ACTIVE_STATES = [
+  "on",
+  "idle",
+  "playing",
+  "paused",
+  "buffering",
+  "standby",
+] as const;
+
+/**
+ * The domains a `controls.switch` entity may use: a light's on/off state
+ * means exactly what a switch's does, and a media player supports turn_on,
+ * turn_off and toggle with any non-off state counting as on. Mirrors
  * `SWITCH_CONTROL_DOMAINS` in `custom_components/helman/controllables/config.py`.
  */
-export const SWITCH_CONTROL_DOMAINS = ["switch", "light"];
+export const SWITCH_CONTROL_DOMAINS = ["switch", "light", "media_player"];
+
+/** Whether a switch control's state counts as on. */
+export function isSwitchOn(state: string | undefined): boolean {
+  if (!state) return false;
+  return (SWITCH_ACTIVE_STATES as readonly string[]).includes(state.trim().toLowerCase());
+}
 
 /** Whether `controls` names an entity the device is switched by. */
 export function hasSwitch(device: JsonObject): boolean {

@@ -15,6 +15,9 @@ forecast_module = importlib.import_module("custom_components.helman.forecast.ser
 input_bundle_module = importlib.import_module("custom_components.helman.automation.input_bundle")
 config_module = importlib.import_module("custom_components.helman.appliances.config")
 automation_config_module = importlib.import_module("custom_components.helman.automation.config")
+controllables_config_module = importlib.import_module(
+    "custom_components.helman.controllables.config"
+)
 assembly = importlib.import_module("custom_components.helman.forecast.assembly")
 
 
@@ -638,6 +641,7 @@ class ApplianceRuntimeHistoryResolutionTests(unittest.IsolatedAsyncioTestCase):
                 return {request.key: {"answered": request.lookback_days} for request in requests}
 
         result = await self._resolve(_Reader())
+        SWITCH_ACTIVE_STATES = controllables_config_module.SWITCH_ACTIVE_STATES
 
         # One call, not one per appliance, and the unreferenced appliance is
         # not in it at all.
@@ -645,8 +649,8 @@ class ApplianceRuntimeHistoryResolutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             [(r.key, r.entity_id, r.active_states, r.lookback_days) for r in seen[0]],
             [
-                ("pool-filtration", "switch.pool", ("on",), 5),
-                ("dishwasher", "switch.dishwasher", ("on",), 1),
+                ("pool-filtration", "switch.pool", SWITCH_ACTIVE_STATES, 5),
+                ("dishwasher", "switch.dishwasher", SWITCH_ACTIVE_STATES, 1),
             ],
         )
         self.assertEqual(

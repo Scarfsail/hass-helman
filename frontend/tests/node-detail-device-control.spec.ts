@@ -68,6 +68,7 @@ const TREE = treePayload({
             device("Legacy", { controllableIds: ["legacy"], ownControllableIds: ["legacy"], applianceKind: "generic" }),
             device("Lamp", { switchEntityId: "switch.lamp" }),
             device("Living Light", { switchEntityId: "light.living_room" }),
+            device("Living TV", { switchEntityId: "media_player.tv" }),
             device("Bedroom AC", { climateEntityId: "climate.bedroom" }),
             device("Heater", { switchEntityId: "switch.heater_breaker", climateEntityId: "climate.heater" }),
             // A meterless air conditioner: its running signal is its climate entity.
@@ -142,6 +143,7 @@ async function mount(page: Page, schedule: SchedulePayload = plan()): Promise<vo
             "switch.boiler": s("off", undefined, { icon: "mdi:radiator" }), "climate.klima": s("off", undefined, { friendly_name: "Klima thermostat" }), "switch.pumps_breaker": s("on"), "switch.pump-a": s("off"), "switch.pump-b": s("off"),
             "switch.lamp": s("on", undefined, { friendly_name: "Lamp switch", icon: "mdi:lightbulb" }),
             "light.living_room": s("off", undefined, { friendly_name: "Living room light" }),
+            "media_player.tv": s("playing", undefined, { friendly_name: "Living room TV" }),
             "climate.bedroom": s("cool", undefined, { friendly_name: "Bedroom thermostat" }),
             "switch.heater_breaker": s("off", undefined, { friendly_name: "Heater breaker" }),
             "climate.heater": s("heat", undefined, { friendly_name: "Heater thermostat" }),
@@ -396,6 +398,17 @@ test.describe("direct control tiles", () => {
         await tile.click();
         await expect.poll(() => page.evaluate(() => window.__NodeDetailRequests.filter((r) => r.type === "call_service").map((r) => [r.domain, r.service]))).toEqual([
             ["light", "turn_on"], ["light", "turn_off"],
+        ]);
+    });
+
+    test("media_player control in playing state renders as on and clicking calls turn_off", async ({ page }) => {
+        await mount(page);
+        await openDevice(page, "Living TV");
+        const tile = switchTile(page).locator("button");
+        await expect(tile).toHaveAttribute("aria-pressed", "true");
+        await tile.click();
+        await expect.poll(() => page.evaluate(() => window.__NodeDetailRequests.filter((r) => r.type === "call_service"))).toEqual([
+            { type: "call_service", domain: "media_player", service: "turn_off", service_data: { entity_id: "media_player.tv" } },
         ]);
     });
 

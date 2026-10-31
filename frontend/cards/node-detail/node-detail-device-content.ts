@@ -11,6 +11,7 @@ import { dispatchWatchedEntities } from "../shared/hass-change";
 import type { DeviceDetailParams } from "./node-detail-types";
 import { deviceControllableIds, deviceDirectControls, deviceEntities } from "./node-detail-utils";
 import { estimatedConsumerMix } from "./live-flows";
+import { isSwitchOn } from "../shared/config/devices";
 import { SectionResource } from "./section-resource";
 import type { ApplianceProjectionsPayload, ApplianceRuntimeDTO, DeviceStats, DeviceStatsSpread } from "../helman-api";
 import { callHelman } from "../shared/data/helman-commands";
@@ -123,7 +124,7 @@ export class NodeDetailDeviceContent extends LitElement {
         const powerId = powerEntity(item);
         const power = readPowerW(this.hass, powerId);
         const ids = deviceControllableIds(item);
-        const stateLabel = state === "on" ? this.localize("node_detail.shared.device_state_on")
+        const stateLabel = isSwitchOn(state ?? undefined) ? this.localize("node_detail.shared.device_state_on")
             : state === "off" ? this.localize("node_detail.shared.device_state_off") : state ?? "—";
         const today = this._energy.payload;
         const caption = [stateLabel];
