@@ -278,7 +278,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
                         .entityId=${direct.switchEntityId} fallbackIcon="mdi:car-electric"></helman-switch-tile>`
                         : html`<ha-icon slot="icon" icon="mdi:car-electric"></ha-icon>`}
                 </helman-detail-headline>
-                <helman-flow-gauge direction="from" .items=${estimatedConsumerMix(this.params.flows, power)} .estimated=${true} .localize=${this.localize}></helman-flow-gauge>
+                <helman-flow-gauge of="house" direction="from" .items=${estimatedConsumerMix(this.params.flows, power)} .estimated=${true} .localize=${this.localize}></helman-flow-gauge>
                 <helman-who-decides .hass=${this.hass} .localize=${this.localize} .controllableId=${this.deviceId}></helman-who-decides>
                 ${this._renderCarTile(overview, selection)}
             </div>

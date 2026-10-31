@@ -141,7 +141,7 @@ export class NodeDetailDeviceContent extends LitElement {
             ${coverId ? html`<helman-cover-control .hass=${this.hass} .localize=${this.localize} .entityId=${coverId}></helman-cover-control>` : nothing}
             ${direct?.switchEntityId && direct.climateEntityId ? html`<button class="climate-control" type="button"
                 @click=${() => openMoreInfo(this, direct.climateEntityId!)}>${this.localize("node_detail.shared.climate_controls")}</button>` : nothing}
-            <helman-flow-gauge direction="from" .items=${estimatedConsumerMix(this.params.flows, power)} .estimated=${true} .localize=${this.localize}></helman-flow-gauge>
+            <helman-flow-gauge of="house" direction="from" .items=${estimatedConsumerMix(this.params.flows, power)} .estimated=${true} .localize=${this.localize}></helman-flow-gauge>
             ${ids.length ? html`<helman-who-decides .hass=${this.hass} .localize=${this.localize} .controllableId=${ids[0]}></helman-who-decides>` : nothing}
             <helman-subdevice-list .hass=${this.hass} .localize=${this.localize} .parent=${item} .powerW=${power}></helman-subdevice-list>
         </div></div>

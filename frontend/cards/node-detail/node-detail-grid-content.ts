@@ -241,7 +241,7 @@ export class NodeDetailGridContent extends NodeDetailContentBase<GridDetailPaylo
                     .caption=${[power === null ? this.localize("node_detail.grid.unavailable") : this.localize(`node_detail.shared.grid_${idle ? "idle" : importing ? "importing" : "exporting"}`)]}>
                     <simple-card-grid slot="icon" .compact=${true} .power=${power ?? 0}></simple-card-grid>
                 </helman-detail-headline>
-                <helman-flow-gauge .direction=${idle || power === null ? "flow" : importing ? "to" : "from"} .localize=${this.localize}
+                <helman-flow-gauge of="grid" .direction=${idle || power === null ? "flow" : importing ? "to" : "from"} .localize=${this.localize}
                     .items=${gridMix(flows, power)}></helman-flow-gauge>
                 ${grid && (buy !== null || sell !== null) ? html`<div class="tile" data-price>
                     <div class="row"><span class="label">${this.localize("node_detail.shared.grid_price_now")}</span>

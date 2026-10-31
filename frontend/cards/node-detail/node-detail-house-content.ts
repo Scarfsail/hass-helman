@@ -152,7 +152,7 @@ export class NodeDetailHouseContent extends NodeDetailContentBase<HouseDetailPay
                     <simple-card-house slot="icon" .compact=${true} .power=${power ?? 0}
                         .sourceColor=${this._houseSourceColor()}></simple-card-house>
                 </helman-detail-headline>
-                <helman-flow-gauge direction="from" .localize=${this.localize}
+                <helman-flow-gauge of="house" direction="from" .localize=${this.localize}
                     .items=${flows && power !== null && power > IDLE_W ? [
                         { node: "solar", powerW: flows.solarToHouse },
                         { node: "battery", powerW: flows.batteryToHouse },

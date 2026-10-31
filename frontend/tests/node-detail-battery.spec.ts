@@ -393,6 +393,14 @@ test("battery compact icon marks the usable range and gauge segments open destin
     await expect(icon).toContainText("15");
     await expect(icon).toContainText("90");
     await content(page).locator("helman-flow-gauge button").first().click();
+    await expect(page.locator("node-detail-house-content")).toHaveCount(1);
+});
+
+test("battery gauge: an active segment opens its destination details", async ({ page }) => {
+    await mount(page);
+    await openDetail(page);
+    // The default mount discharges, so the solar pill is idle and only a destination pill is active.
+    await content(page).locator("helman-flow-gauge button[data-active]").click();
     await expect(page.locator("node-detail-house-content, node-detail-grid-content")).toHaveCount(1);
 });
 
