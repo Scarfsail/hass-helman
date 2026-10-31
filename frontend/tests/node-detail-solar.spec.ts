@@ -303,7 +303,7 @@ test("solar names its inverter rating, shows both strings, and routes a destinat
     await expect(c.locator("helman-detail-headline")).toContainText("42% of the 10.0 kW inverter rating");
     await expect(c.locator("[data-string]")).toHaveCount(2);
     await c.locator('helman-flow-gauge button').first().click();
-    await expect(page.locator("node-detail-house-content, node-detail-battery-content, node-detail-grid-content")).toHaveCount(1);
+    await expect(page.locator("node-detail-house-content")).toHaveCount(1);
 });
 
 test("solar headline opens its meter in Home Assistant", async ({ page }) => {

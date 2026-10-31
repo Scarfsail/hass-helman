@@ -270,19 +270,20 @@ test("grid gauge adds up to the headline where the house meter disagrees with th
     const c = content(page);
     await expect(c.locator("helman-detail-headline [data-headline]")).toHaveText("← 1.1 kW");
     const gauge = c.locator("helman-flow-gauge");
-    await expect(gauge.locator(".figure")).toHaveText(["100 W 9 %", "1.0 kW 91 %"]);
+    await expect(gauge.locator(".figure")).toHaveText(["0 W", "1.0 kW 91 %", "100 W 9 %"]);
     expect(await liveFigures(page, "node-detail-grid-content", "grid")).toMatchObject({ card: 1100, gauge: 1100 });
 });
 
-test("grid gauge shows an empty placeholder under a direction-neutral title while the headline is idle", async ({ page }) => {
+test("grid gauge mutes all three pills under a direction-neutral title while the headline is idle", async ({ page }) => {
     await mount(page, { grid: "0", solar: "0", house: "83", battery: "0" });
     await page.locator(".node-cell:has(simple-card-grid)").click();
     const c = content(page);
     await expect(c.locator("helman-detail-headline")).toContainText("not exchanging with the grid now");
     const gauge = c.locator("helman-flow-gauge");
     await expect(gauge.locator(".title")).toContainText("Flow · now");
-    await expect(gauge.locator("[data-idle]")).toHaveText("Nothing flowing now");
-    await expect(gauge.locator("button")).toHaveCount(0);
+    await expect(gauge.locator("button")).toHaveCount(3);
+    await expect(gauge.locator("button[data-active]")).toHaveCount(0);
+    for (const figure of await gauge.locator("button .figure").all()) await expect(figure).toHaveCSS("opacity", "0.4");
     expect(await liveFigures(page, "node-detail-grid-content", "grid")).toMatchObject({ card: 0, gauge: 0 });
 });
 
@@ -291,7 +292,7 @@ test("grid gauge keeps its place and height when the grid switches from idle to 
     await page.locator(".node-cell:has(simple-card-grid)").click();
     const c = content(page);
     const gauge = c.locator("helman-flow-gauge");
-    await expect(gauge.locator("[data-idle]")).toBeVisible();
+    await expect(gauge.locator("button")).toHaveCount(3);
     const idle = await gauge.boundingBox();
     await page.evaluate(() => {
         const card = document.querySelector("helman-simple-card") as any;
@@ -300,7 +301,8 @@ test("grid gauge keeps its place and height when the grid switches from idle to 
         window.__NodeDetailHass = { ...hass, states };
         card.hass = window.__NodeDetailHass;
     });
-    await expect(gauge.locator("button")).not.toHaveCount(0);
+    await expect(gauge.locator("button[data-active]")).not.toHaveCount(0);
+    await expect(gauge.locator("button")).toHaveCount(3);
     await expect(gauge.locator(".title")).toContainText("Going to · now");
     const importing = await gauge.boundingBox();
     expect(importing).toEqual(idle);
@@ -322,7 +324,11 @@ test("grid Overview says unavailable, not a direction, when the grid power senso
     await expect(headline).toContainText("unavailable");
     await expect(headline).not.toContainText(/exporting|importing/i);
     await expect(headline).not.toContainText(/[←→]/);
-    await expect(content(page).locator("helman-flow-gauge [data-idle]")).toHaveText("Nothing flowing now");
+    const gauge = content(page).locator("helman-flow-gauge");
+    await expect(gauge.locator(".title")).toContainText("Flow · now");
+    await expect(gauge.locator("button")).toHaveCount(3);
+    await expect(gauge.locator("button[data-active]")).toHaveCount(0);
+    for (const figure of await gauge.locator("button .figure").all()) await expect(figure).toHaveCSS("opacity", "0.4");
 });
 
 // Forecast -------------------------------------------------------------------

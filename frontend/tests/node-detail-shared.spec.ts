@@ -9,25 +9,95 @@ test.beforeEach(async ({ page }) => {
     await page.waitForFunction(() => !!customElements.get("helman-flow-gauge"));
 });
 
-test("a single 0.8 kW gauge segment fills the bar and opens its node", async ({ page }) => {
+test("the gauge shows three equal pills in a fixed order, filling the active one and muting the idle ones", async ({ page }) => {
     await page.evaluate(() => {
         (window as any).__target = null;
         const gauge = document.createElement("helman-flow-gauge") as any;
+        gauge.of = "house";
         gauge.items = [{ node: "solar", powerW: 800 }];
         gauge.localize = (key: string) => key;
         gauge.addEventListener("helman-node-detail-request", (event: Event) => { (window as any).__target = (event as CustomEvent).detail.target; });
         document.getElementById("mount")!.append(gauge);
     });
     const gauge = page.locator("helman-flow-gauge");
-    const widths = await gauge.evaluate((el) => {
-        const bar = el.shadowRoot!.querySelector(".bar")!.getBoundingClientRect();
-        const segment = el.shadowRoot!.querySelector("button")!.getBoundingClientRect();
-        return { bar: bar.width, segment: segment.width };
+    const buttons = gauge.locator("button");
+    await expect(buttons).toHaveCount(3);
+    const pills = await gauge.evaluate((el) => Array.from(el.shadowRoot!.querySelectorAll("button")).map((button) => ({
+        icon: button.querySelector("ha-icon")!.getAttribute("icon"),
+        width: button.getBoundingClientRect().width,
+        fill: parseFloat(getComputedStyle(button, "::before").width) / button.getBoundingClientRect().width,
+        opacity: getComputedStyle(button.querySelector(".figure")!).opacity,
+    })));
+    expect(pills.map((pill) => pill.icon)).toEqual(["mdi:white-balance-sunny", "mdi:battery", "mdi:transmission-tower"]);
+    expect(pills[1].width).toBeCloseTo(pills[0].width, 0);
+    expect(pills[2].width).toBeCloseTo(pills[0].width, 0);
+    expect(pills[0].fill).toBeCloseTo(1, 2);
+    expect(pills.map((pill) => pill.opacity)).toEqual(["1", "0.4", "0.4"]);
+    await expect(gauge.locator(".figure")).toHaveText(["800 W 100 %", "0 W", "0 W"]);
+    await expect(gauge.locator(".percent")).toHaveText(["100 %"]);
+    await buttons.nth(2).click();
+    expect(await page.evaluate(() => (window as any).__target)).toBe("grid");
+});
+
+test("an idle gauge pill mutes its content but opens a fully opaque popup", async ({ page }) => {
+    await page.evaluate(() => {
+        const gauge = document.createElement("helman-flow-gauge") as any;
+        gauge.of = "grid";
+        gauge.items = [];
+        gauge.localize = (key: string) => key;
+        document.getElementById("mount")!.append(gauge);
     });
-    expect(widths.segment).toBeCloseTo(widths.bar, 0);
-    await expect(gauge.locator(".percent")).toHaveText("100 %");
-    await gauge.locator("button").click();
-    expect(await page.evaluate(() => (window as any).__target)).toBe("solar");
+    const gauge = page.locator("helman-flow-gauge");
+    const solar = gauge.locator("button").first();
+    await expect(solar).not.toHaveAttribute("data-active");
+    await expect(solar.locator("ha-icon")).toHaveCSS("opacity", "0.4");
+    await expect(solar.locator(".figure")).toHaveCSS("opacity", "0.4");
+    await solar.hover();
+    const popup = solar.locator(".popup");
+    await expect(popup).toBeVisible();
+    const opacity = await popup.evaluate((el) => {
+        let product = 1;
+        for (let node: Element | null = el; node; node = node.parentElement ?? ((node.getRootNode() as ShadowRoot).host ?? null)) product *= parseFloat(getComputedStyle(node).opacity);
+        return product;
+    });
+    expect(opacity).toBe(1);
+});
+
+test("a gauge pill too narrow for power and share drops the share and keeps the power whole", async ({ page }) => {
+    await page.evaluate(() => {
+        const gauge = document.createElement("helman-flow-gauge") as any;
+        gauge.of = "grid";
+        gauge.items = [{ node: "battery", powerW: 1000 }, { node: "house", powerW: 100 }];
+        gauge.localize = (key: string) => key;
+        document.getElementById("mount")!.append(gauge);
+    });
+    const gauge = page.locator("helman-flow-gauge");
+    const pill = gauge.locator("button").nth(1);
+    const clipped = () => pill.locator(".figure").evaluate((el) => el.scrollWidth > el.clientWidth);
+    await page.evaluate(() => { document.getElementById("mount")!.style.width = "310px"; });
+    await expect(pill.locator(".percent")).toBeHidden();
+    await expect(pill.locator(".figure")).toHaveText("1.0 kW 91 %");
+    expect(await clipped()).toBe(false);
+    await page.evaluate(() => { document.getElementById("mount")!.style.width = "360px"; });
+    await expect(pill.locator(".percent")).toBeVisible();
+    expect(await clipped()).toBe(false);
+});
+
+test("an active gauge pill pulses its glow, and holds it still under reduced motion", async ({ page }) => {
+    await page.evaluate(() => {
+        const gauge = document.createElement("helman-flow-gauge") as any;
+        gauge.of = "house";
+        gauge.items = [{ node: "solar", powerW: 800 }];
+        gauge.localize = (key: string) => key;
+        document.getElementById("mount")!.append(gauge);
+    });
+    const animations = () => page.locator("helman-flow-gauge").evaluate((el) => Array.from(el.shadowRoot!.querySelectorAll("button"))
+        .map((button) => button.getAnimations().filter((animation) => animation.playState === "running").length));
+    await expect.poll(animations).toEqual([1, 0, 0]);
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await expect.poll(animations).toEqual([0, 0, 0]);
+    const glow = await page.locator("helman-flow-gauge").evaluate((el) => getComputedStyle(el.shadowRoot!.querySelector("button")!).boxShadow);
+    expect(glow).not.toBe("none");
 });
 
 test("help tips close on Escape and opening another tip", async ({ page }) => {
@@ -242,4 +312,21 @@ test("when an async return is superseded, the new node advances history and subs
     await page.evaluate(() => window.history.back());
     await expect(page.locator("node-detail-dialog")).toHaveCount(0);
     expect(await page.evaluate(() => window.history.state)).toEqual({ dashboard: "energy" });
+});
+
+test("a pill that shows a watt never reads 0 % or an empty fill", async ({ page }) => {
+    await page.evaluate(() => {
+        const gauge = document.createElement("helman-flow-gauge") as any;
+        gauge.of = "house";
+        gauge.items = [{ node: "solar", powerW: 4980 }, { node: "grid", powerW: 15 }];
+        gauge.localize = (key: string) => key;
+        document.getElementById("mount")!.append(gauge);
+    });
+    const gauge = page.locator("helman-flow-gauge");
+    await expect(gauge.locator("button").nth(2).locator(".figure")).toHaveText("15 W 1 %");
+    const fill = await gauge.evaluate((el) => {
+        const button = el.shadowRoot!.querySelectorAll("button")[2];
+        return parseFloat(getComputedStyle(button, "::before").width);
+    });
+    expect(fill).toBeGreaterThan(0);
 });

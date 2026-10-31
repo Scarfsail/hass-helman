@@ -188,7 +188,7 @@ export class NodeDetailBatteryContent extends NodeDetailContentBase<BatteryDetai
                 ${estimate?.kind === "time" ? html`
                     <p class="estimate" data-estimate>${estimate.text} <span class="muted">${this.localize("node_detail.shared.battery_recent_rate")}</span><helman-help-tip .explanation=${this.localize("node_detail.shared.battery_rate_help")}></helman-help-tip></p>
                 ` : nothing}
-                <helman-flow-gauge .direction=${direction === "charge" ? "from" : direction === "discharge" ? "to" : "flow"} .localize=${this.localize}
+                <helman-flow-gauge of="battery" .direction=${direction === "charge" ? "from" : direction === "discharge" ? "to" : "flow"} .localize=${this.localize}
                     .items=${flow ? direction === "charge" ? [
                         { node: "solar", powerW: flow.solarToBattery }, { node: "grid", powerW: flow.gridToBattery },
                     ] : direction === "discharge" ? [

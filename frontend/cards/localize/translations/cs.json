@@ -33,8 +33,7 @@
         "to": "Kam odchází",
         "tap": "Klepnutím otevřete detail uzlu {node}",
         "estimate_help": "Odhad: aktuální podíl slunce, baterie a sítě v domě přiřazený tomuto zařízení. Zdroje jednotlivých zařízení se neměří.",
-        "flow": "Tok",
-        "idle": "Teď nic neteče"
+        "flow": "Tok"
       },
       "schedule": {
         "next": "Dále: {action} v {time}",

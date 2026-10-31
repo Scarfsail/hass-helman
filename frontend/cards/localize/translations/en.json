@@ -133,8 +133,7 @@
         "to": "Going to",
         "tap": "Tap to open the {node} detail",
         "estimate_help": "Estimated: the house's current mix of solar, battery and grid, applied to this device. Devices are not metered per source.",
-        "flow": "Flow",
-        "idle": "Nothing flowing now"
+        "flow": "Flow"
       },
       "schedule": {
         "next": "Next: {action} at {time}",
