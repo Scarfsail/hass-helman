@@ -71,8 +71,8 @@ def _load_entity_translation_keys() -> set[str]:
     asyncio.run(sensor_module.async_setup_entry(hass, entry, added_entities.extend))
     # The coordinator adds the unmeasured and share sensors through the factories.
     factories = coordinator.set_entity_factory.call_args.args[1]
-    added_entities.append(factories["unmeasured"]("house", "sensor.house_power"))
-    added_entities.append(
+    added_entities.extend(factories["unmeasured"]("house", "sensor.house_power"))
+    added_entities.extend(
         factories["share"]("klima-obyvak", "sensor.helman_share_power_klima_obyvak", "Klima")
     )
 

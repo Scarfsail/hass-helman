@@ -417,6 +417,17 @@ def _meter_coverage(
     return {hour: elapsed.get(hour, 0.0) for hour in kwh}
 
 
+def share_hour_kwh(row: Any) -> float | None:
+    """A share sensor's hourly statistics row as kWh: its ``mean`` W held for the hour.
+
+    ``None`` for a row without a usable ``mean``, which is a gap, not 0 kWh.
+    """
+    mean = row.get("mean") if isinstance(row, Mapping) else None
+    if not isinstance(mean, (int, float)) or not math.isfinite(mean):
+        return None
+    return max(0.0, float(mean)) / 1000.0
+
+
 def _estimated_energy(
     rows: dict[datetime, dict[str, Any]],
     elapsed: dict[datetime, float],
@@ -431,11 +442,11 @@ def _estimated_energy(
     kwh: dict[datetime, float] = {}
     coverage: dict[datetime, float] = {}
     for hour, row in rows.items():
-        mean = row.get("mean") if isinstance(row, Mapping) else None
-        if not isinstance(mean, (int, float)) or not math.isfinite(mean):
+        hour_kwh = share_hour_kwh(row)
+        if hour_kwh is None:
             continue
         share = elapsed.get(hour, 0.0)
-        kwh[hour] = max(0.0, float(mean)) / 1000.0 * share
+        kwh[hour] = hour_kwh * share
         coverage[hour] = share
     return kwh, coverage
 

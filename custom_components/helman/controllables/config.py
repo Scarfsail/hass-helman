@@ -662,6 +662,16 @@ def share_sensor_slug(device_id: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", device_id.lower()).strip("_")
 
 
+def share_power_entity_id(device_id: str) -> str:
+    """The Helman sensor publishing a meterless child's share of its parent's power."""
+    return f"sensor.helman_share_power_{share_sensor_slug(device_id)}"
+
+
+def share_energy_entity_id(device_id: str) -> str:
+    """The Helman sensor accumulating a meterless child's share power into energy."""
+    return f"sensor.helman_share_energy_{share_sensor_slug(device_id)}"
+
+
 def clean_name(name: str, pattern: str | None) -> str:
     """``name`` with ``devices.name_cleaner_regex`` removed; unchanged on a bad pattern."""
     if pattern:

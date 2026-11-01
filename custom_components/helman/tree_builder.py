@@ -32,18 +32,13 @@ from .controllables.config import (
     read_groupings,
     read_name_cleaner_regex,
     read_shared_meters,
-    share_sensor_slug,
+    share_power_entity_id,
     resolve_device_icon,
     resolve_device_name,
     running_signal,
 )
 from .controllables.kinds import CONTROLLABLE_KIND_CLIMATE
 from .power_polarity import consumer_value_type, power_sign, source_value_type
-
-
-def share_power_entity_id(device_id: str) -> str:
-    """The Helman sensor publishing a meterless child's share of its parent's power."""
-    return f"sensor.helman_share_power_{share_sensor_slug(device_id)}"
 
 
 _DEFAULT_MAX_POWER_W = {

@@ -636,3 +636,239 @@ class TestAsyncWalkBackward(unittest.IsolatedAsyncioTestCase):
             log_name="test",
             pause_seconds=0,
         )
+
+
+class TestShareEnergyBackfill(unittest.IsolatedAsyncioTestCase):
+    """A share-energy sensor's starting total, and the one-time import of its hours."""
+
+    SOURCE = "sensor.helman_share_power_klima"
+    TARGET = "sensor.helman_share_energy_klima"
+    STORE_KEY = "entry_share_energy_klima"
+    BOUNDARY = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
+
+    def setUp(self) -> None:
+        from homeassistant.components.recorder.db_schema import StatisticsShortTerm
+        from homeassistant.core import State
+
+        from custom_components.helman import share_energy_backfill
+
+        self.backfill = share_energy_backfill
+        self.short_term = StatisticsShortTerm
+        self.make_state = lambda value: State(self.TARGET, value)
+        self.stored: dict[str, Any] = {}
+        stored = self.stored
+
+        class _FakeStore:
+            def __init__(self, hass, version, key):
+                self.key = key
+
+            async def async_load(self):
+                return stored.get(self.key)
+
+            async def async_save(self, doc):
+                stored[self.key] = dict(doc)
+
+        def hour(offset: int) -> float:
+            return (self.BOUNDARY + timedelta(hours=offset)).timestamp()
+
+        # 500 W, then a gap, 1,000 W, a row without a mean, and 2,000 W; the
+        # boundary hour itself belongs to the compiler.
+        self.source_rows = [
+            {"start": hour(-5), "mean": 500.0},
+            {"start": hour(-3), "mean": 1000.0},
+            {"start": hour(-2), "mean": None},
+            {"start": hour(-1), "mean": 2000.0},
+            {"start": hour(0), "mean": 9999.0},
+        ]
+        ready = asyncio.Event()
+        ready.set()
+        # One parent mock, so the order of the recorder calls can be checked.
+        self.calls = Mock(block_till_done=AsyncMock())
+        self.recorder = SimpleNamespace(
+            async_recorder_ready=ready,
+            async_add_executor_job=AsyncMock(side_effect=lambda fn, *args: fn(*args)),
+            async_block_till_done=self.calls.block_till_done,
+            async_import_statistics=self.calls.import_short_term,
+        )
+        self.recorded_states: list = []
+        self.probe = AsyncMock(return_value=self.BOUNDARY)
+        for patcher in (
+            patch("homeassistant.helpers.storage.Store", _FakeStore),
+            patch.object(self.backfill, "probe_first_compiled_hour", self.probe),
+            patch.object(
+                self.backfill,
+                "state_changes_during_period",
+                side_effect=lambda *_a, **_k: {self.TARGET: self.recorded_states},
+            ),
+            patch.object(
+                self.backfill.span_mod, "get_instance", return_value=self.recorder
+            ),
+            patch.object(
+                self.backfill.span_mod,
+                "statistics_during_period",
+                side_effect=self._source_query,
+            ),
+            patch.object(
+                self.backfill.span_mod, "async_forget_imported_statistics", AsyncMock()
+            ),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _source_query(self, *_args):
+        self.calls.source_query()
+        return {self.SOURCE: self.source_rows}
+
+    async def _run(self, import_fn, *, restored: float | None = None) -> float | None:
+        return await self.backfill.async_initial_share_energy_total(
+            SimpleNamespace(),
+            restored=restored,
+            source_entity_id=self.SOURCE,
+            target_entity_id=self.TARGET,
+            store_key=self.STORE_KEY,
+            import_fn=import_fn,
+        )
+
+    def _at(self, offset: int) -> datetime:
+        return self.BOUNDARY + timedelta(hours=offset)
+
+    async def test_hourly_means_become_kwh_and_missing_hours_stay_gaps(self) -> None:
+        import_fn = Mock()
+
+        await self._run(import_fn)
+
+        _hass, meta, rows = import_fn.call_args.args
+        self.assertEqual([row["start"] for row in rows], [self._at(-5), self._at(-3), self._at(-1)])
+        self.assertEqual([row["state"] for row in rows], [0.5, 1.5, 3.5])
+        self.assertEqual(meta["statistic_id"], self.TARGET)
+        self.assertIs(meta["has_sum"], True)
+        self.assertEqual(meta["mean_type"], StatisticMeanType.NONE)
+        self.assertEqual(meta["unit_of_measurement"], "kWh")
+        self.assertEqual(meta["unit_class"], "energy")
+        self.assertEqual(meta["source"], "recorder")
+
+    async def test_seam_climbs_state_and_sum_to_the_first_published_total(self) -> None:
+        import_fn = Mock()
+
+        total = await self._run(import_fn)
+
+        rows = import_fn.call_args.args[2]
+        self.assertEqual(total, 3.5)
+        # The first hour's change is its own kWh, the sum before it being 0.
+        self.assertEqual(rows[0]["sum"], 0.5)
+        self.assertEqual(rows[-1]["state"], total)
+        self.assertEqual(rows[-1]["sum"], total)
+        self.assertTrue(all(row["start"] < self.BOUNDARY for row in rows))
+
+    async def test_the_compiler_is_seeded_with_the_total_before_it_is_returned(self) -> None:
+        import_fn = Mock()
+
+        await self._run(import_fn)
+
+        meta = import_fn.call_args.args[1]
+        self.calls.import_short_term.assert_called_once_with(
+            meta,
+            [StatisticData(start=self.BOUNDARY, state=3.5, sum=3.5)],
+            self.short_term,
+        )
+        # Committed before the total is returned for the sensor to publish.
+        names = [call[0] for call in self.calls.mock_calls]
+        self.assertEqual(names[-2:], ["import_short_term", "block_till_done"])
+        (document,) = self.stored.values()
+        self.assertEqual(document["total"], 3.5)
+
+    async def test_the_seed_waits_out_the_first_owned_hours_first_period(self) -> None:
+        self.probe.return_value = self.BOUNDARY
+        sleep = AsyncMock()
+        with (
+            patch.object(
+                self.backfill.dt_util,
+                "utcnow",
+                return_value=self.BOUNDARY + timedelta(minutes=2),
+            ),
+            patch.object(self.backfill.asyncio, "sleep", sleep),
+        ):
+            await self._run(Mock())
+
+        sleep.assert_awaited_once_with(180.0)
+
+    async def test_the_source_is_read_after_the_recorder_caught_up(self) -> None:
+        await self._run(Mock())
+
+        names = [call[0] for call in self.calls.mock_calls]
+        self.assertEqual(names[:2], ["block_till_done", "source_query"])
+
+    async def test_runs_once_and_returns_the_recorded_total(self) -> None:
+        first_import = Mock()
+        await self._run(first_import)
+        second_import = Mock()
+
+        total = await self._run(second_import)
+
+        self.assertEqual(total, 3.5)
+        second_import.assert_not_called()
+        self.probe.assert_awaited_once()
+        self.assertEqual(
+            list(self.stored), [f"helman.share_energy_backfill.{self.STORE_KEY}"]
+        )
+
+    async def test_an_interrupted_run_resumes_from_the_recorded_boundary(self) -> None:
+        total = await self._run(Mock(side_effect=RuntimeError("recorder gone")))
+        self.assertIsNone(total)
+        (document,) = self.stored.values()
+        self.assertIsNone(document["total"])
+
+        # The imported rows would now make the probe answer an older hour.
+        self.probe.return_value = self._at(-5)
+        import_fn = Mock()
+        total = await self._run(import_fn)
+
+        self.assertEqual(total, 3.5)
+        self.assertEqual(len(import_fn.call_args.args[2]), 3)
+        self.probe.assert_awaited_once()
+        (document,) = self.stored.values()
+        self.assertEqual(document["total"], 3.5)
+
+    async def test_a_failed_probe_fails_the_attempt_without_recording_a_boundary(
+        self,
+    ) -> None:
+        self.probe.side_effect = RuntimeError("recorder gone")
+        import_fn = Mock()
+
+        total = await self._run(import_fn)
+
+        self.assertIsNone(total)
+        self.assertEqual(self.stored, {})
+        import_fn.assert_not_called()
+
+    async def test_no_history_starts_the_sensor_at_zero_without_importing(self) -> None:
+        self.source_rows.clear()
+        import_fn = Mock()
+
+        total = await self._run(import_fn)
+
+        self.assertEqual(total, 0.0)
+        import_fn.assert_not_called()
+
+    async def test_a_known_total_continues_from_the_higher_of_restored_and_recorded(
+        self,
+    ) -> None:
+        # The restore file lags the recorder after an unclean shutdown; a
+        # removal sits on top of the last recorded total.
+        self.recorded_states[:] = [self.make_state(""), self.make_state("4.5")]
+        import_fn = Mock()
+
+        self.assertEqual(await self._run(import_fn, restored=4.25), 4.5)
+        self.assertEqual(await self._run(import_fn, restored=5.0), 5.0)
+        self.recorded_states.clear()
+        self.assertEqual(await self._run(import_fn, restored=4.25), 4.25)
+
+        import_fn.assert_not_called()
+        self.probe.assert_not_called()
+
+    async def test_a_recorded_total_alone_needs_no_backfill(self) -> None:
+        # A lost restore file, with a stale back-fill total in the store.
+        await self._run(Mock())
+        self.recorded_states[:] = [self.make_state("9.0")]
+
+        self.assertEqual(await self._run(Mock()), 9.0)
