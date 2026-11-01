@@ -11,6 +11,9 @@ import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
  * to, plus its own value, so a value never locks its own picker. A per-device
  * switch lifts the filter. Nothing about it is saved.
  *
+ * Helman's own entities (platform `helman`) neither anchor a device nor are
+ * offered as its entities, though they sit on its HA device (#699).
+ *
  * The filter is read off each rendered `ha-entity-picker` and run here on
  * fixture states, as `sensor-kind-pickers.spec.ts` does.
  */
@@ -51,11 +54,21 @@ const CONFIG = configDoc({
                 },
                 consumption: { energy_entity_id: "sensor.ev_energy" },
             },
+            {
+                // Helman's own charging switch, on a Helman fallback device,
+                // and a meter with no HA device: nothing to scope by.
+                kind: "ev_charger",
+                schedulable: true,
+                id: "ev2",
+                limits: { max_charging_power_kw: 11 },
+                controls: { charge: { entity_id: "switch.helman_ev_charging_ev2" } },
+                consumption: { energy_entity_id: "sensor.helper_energy_3" },
+            },
         ],
     },
 });
 
-const ENTITIES: Record<string, { device_id: string | null }> = {
+const ENTITIES: Record<string, { device_id: string | null; platform?: string }> = {
     "sensor.a_energy": { device_id: "dev_a" },
     "sensor.a_power": { device_id: "dev_a" },
     "switch.a": { device_id: "dev_a" },
@@ -69,6 +82,9 @@ const ENTITIES: Record<string, { device_id: string | null }> = {
     "sensor.ev_energy": { device_id: "dev_ev" },
     "switch.ev_charge": { device_id: "dev_ev" },
     "select.ev_mode": { device_id: "dev_other" },
+    // Helman's share sensor on the breaker's own HA device.
+    "sensor.helman_share_energy_breaker": { device_id: "dev_a", platform: "helman" },
+    "switch.helman_ev_charging_ev2": { device_id: "dev_helman_ev2", platform: "helman" },
 };
 
 const DEVICES = {
@@ -79,6 +95,7 @@ const DEVICES = {
     dev_e: { name: "Plug E", name_by_user: null },
     dev_ev: { name: "Wallbox", name_by_user: null },
     dev_other: { name: "EVCC", name_by_user: null },
+    dev_helman_ev2: { name: "Helman ev2", name_by_user: null },
 };
 
 const FIXTURES = [
@@ -95,6 +112,8 @@ const FIXTURES = [
     { entity_id: "sensor.ev_energy", attributes: { device_class: "energy" } },
     { entity_id: "switch.ev_charge", attributes: {} },
     { entity_id: "select.ev_mode", attributes: {} },
+    { entity_id: "sensor.helman_share_energy_breaker", attributes: { device_class: "energy" } },
+    { entity_id: "switch.helman_ev_charging_ev2", attributes: {} },
 ];
 
 const ALL = FIXTURES.map((state) => state.entity_id);
@@ -203,6 +222,7 @@ test("a device's anchor pickers offer only its HA device's entities and their ow
         split: null,
         unregistered: null,
         ev: "Wallbox",
+        ev2: null,
     });
 
     const offered = await pickers(page);
@@ -233,6 +253,9 @@ test("a device's anchor pickers offer only its HA device's entities and their ow
     // The EV charger's charge switch is narrowed; its use-mode select is not.
     expect(offered["devices.consumers.4.controls.charge.entity_id"]).toEqual(["sensor.ev_energy", "switch.ev_charge"]);
     expect(offered["devices.consumers.4.controls.use_mode.entity_id"]).toEqual(ALL);
+    // Helman's own switch on its fallback device anchors nothing.
+    expect(offered["devices.consumers.5.consumption.energy_entity_id"]).toEqual(ENERGY_ONLY);
+    expect(offered["devices.consumers.5.controls.charge.entity_id"]).toEqual(ALL);
 
     // The add-child picker is not narrowed either.
     const panel = page.locator("helman-config-editor-panel");

@@ -21,7 +21,7 @@ export type LocalizeFunc = (
 
 export interface HomeAssistant {
   states: HassEntities;
-  entities: Record<string, { device_id?: string }>;
+  entities: Record<string, { device_id?: string; platform?: string }>;
   devices: Record<string, { name: string | null; name_by_user: string | null }>;
   connection: Connection;
   config: HassConfig;
