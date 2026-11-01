@@ -244,6 +244,37 @@ class TestInspectorHouseBatteryPayload(unittest.IsolatedAsyncioTestCase):
         total = slot["unmeasuredWh"] + sum(a["wh"] for a in slot["appliances"])
         self.assertEqual(total, payload["series"]["houseActual"][0]["valueWh"])
 
+    async def test_house_actual_breakdown_subtracts_schedulable_child_from_parent(self):
+        payload = await _inspector_payload(
+            house_device_consumers_provider=lambda: [
+                {
+                    "energy_entity_id": "sensor.circuit",
+                    "label": "Circuit",
+                    "metered_children": ["sensor.dishwasher"],
+                },
+                {
+                    "energy_entity_id": "sensor.dishwasher",
+                    "label": "Dishwasher",
+                    "deferrable": True,
+                },
+            ],
+            _consumer_slot_by_entity={
+                "sensor.circuit": {"00:00": 130.0},
+                "sensor.dishwasher": {"00:00": 100.0},
+            },
+        )
+
+        slot = payload["series"]["houseActualBreakdown"][0]
+        self.assertEqual(
+            {item["entityId"]: item["wh"] for item in slot["appliances"]},
+            {"sensor.circuit": 30.0, "sensor.dishwasher": 100.0},
+        )
+        self.assertEqual(slot["unmeasuredWh"], 50.0)
+        self.assertEqual(
+            slot["unmeasuredWh"] + sum(item["wh"] for item in slot["appliances"]),
+            payload["series"]["houseActual"][0]["valueWh"],
+        )
+
     async def test_house_actual_breakdown_uses_tree_names_controls_and_attribution(self):
         # The tree descriptor is the only source of names, controls and grouping.
         async def _devices():

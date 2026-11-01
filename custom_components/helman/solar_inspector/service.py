@@ -1635,7 +1635,14 @@ class SolarInspector:
             meters.grid_export,
             meters.battery_charge,
             meters.battery_discharge,
-            *(consumer["energy_entity_id"] for consumer in consumers),
+            *(
+                entity_id
+                for consumer in consumers
+                for entity_id in (
+                    consumer["energy_entity_id"],
+                    *consumer["metered_children"],
+                )
+            ),
         ]
         return [entity_id for entity_id in candidates if entity_id]
 
@@ -1707,7 +1714,11 @@ class SolarInspector:
                 return [], []
             slot_maps = [
                 self._consumer_slot_map(
-                    slot_energy_by_entity.get(consumer["energy_entity_id"]) or {},
+                    self._consumer_own_energy(
+                        consumer,
+                        slot_energy_by_entity,
+                        slot=SLOT,
+                    ),
                     target_date,
                 )
                 for consumer in consumers
