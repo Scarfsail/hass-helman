@@ -613,6 +613,21 @@ def resolve_device_name(
     name = device.get("name")
     if isinstance(name, str) and name.strip():
         return name.strip()
+    for entity_id in device_source_entity_ids(device):
+        friendly = friendly_name(entity_id)
+        if friendly:
+            cleaned = clean_name(friendly, cleaner_regex)
+            if cleaned:
+                return cleaned
+    return peek_controllable_id(device) or ""
+
+
+def device_source_entity_ids(device: Device) -> list[str]:
+    """The entities a device is read through, in the order its name is looked up.
+
+    ``power_entity_id``, ``energy_entity_id``, then each control entity, stripped,
+    the unset ones left out.
+    """
     consumption = device.get("consumption")
     consumption = consumption if isinstance(consumption, Mapping) else {}
     candidates = [
@@ -620,15 +635,11 @@ def resolve_device_name(
         consumption.get("energy_entity_id"),
         *_control_entity_ids(device),
     ]
-    for entity_id in candidates:
-        if not isinstance(entity_id, str) or not entity_id.strip():
-            continue
-        friendly = friendly_name(entity_id.strip())
-        if friendly:
-            cleaned = clean_name(friendly, cleaner_regex)
-            if cleaned:
-                return cleaned
-    return peek_controllable_id(device) or ""
+    return [
+        entity_id.strip()
+        for entity_id in candidates
+        if isinstance(entity_id, str) and entity_id.strip()
+    ]
 
 
 def resolve_device_icon(

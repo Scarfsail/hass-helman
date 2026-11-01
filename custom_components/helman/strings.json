@@ -101,6 +101,24 @@
       },
       "grid_export_price": {
         "name": "Grid export price"
+      },
+      "unmeasured_power": {
+        "name": "Unmeasured power"
+      },
+      "share_power": {
+        "name": "Share power"
+      },
+      "share_energy": {
+        "name": "Share energy"
+      },
+      "unmeasured_power_named": {
+        "name": "{name} unmeasured power"
+      },
+      "share_power_named": {
+        "name": "{name} share power"
+      },
+      "share_energy_named": {
+        "name": "{name} share energy"
       }
     },
     "select": {
@@ -114,6 +132,14 @@
           "discharge_to_target_soc": "Force discharge",
           "stop_export": "Stop export"
         }
+      }
+    },
+    "switch": {
+      "ev_charging": {
+        "name": "EV charging"
+      },
+      "ev_charging_named": {
+        "name": "{name} EV charging"
       }
     }
   },

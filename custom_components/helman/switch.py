@@ -23,7 +23,12 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event
 
 from .const import EV_CHARGING_UNIQUE_ID_PREFIX
-from .entity import helman_device_info, remove_stale_entities
+from .entity import (
+    ConsumerDeviceBinding,
+    consumer_device_binding,
+    foreign_device_consumer_counts,
+    remove_stale_entities,
+)
 from .scheduling.actuation import async_write_vendor_entity
 from .vendors import (
     VendorDevice,
@@ -51,16 +56,28 @@ async def async_setup_entry(
             unique_id.startswith(EV_CHARGING_UNIQUE_ID_PREFIX) and unique_id not in kept
         ),
     )
+    counts = foreign_device_consumer_counts(hass, entry, coordinator.config)
     async_add_entities(
         [
-            HelmanEvChargingSwitch(entry, device_id, vendor_device)
+            HelmanEvChargingSwitch(
+                device_id,
+                vendor_device,
+                binding=consumer_device_binding(
+                    hass,
+                    entry,
+                    coordinator.config,
+                    device_id=device_id,
+                    device=vendor_device.device,
+                    counts=counts,
+                ),
+            )
             for device_id, vendor_device in charging_devices
         ]
     )
 
 
 class HelmanEvChargingSwitch(SwitchEntity):
-    """Whether the charger charges, named after the device it drives.
+    """Whether the charger charges, on the device it drives.
 
     On while the profile's state entity is in its on state, and unavailable
     while that entity is. A command write is repeated when the command select
@@ -69,16 +86,18 @@ class HelmanEvChargingSwitch(SwitchEntity):
 
     _attr_has_entity_name = True
     _attr_should_poll = False
+    _attr_translation_key = "ev_charging"
 
     def __init__(
-        self, entry: ConfigEntry, device_id: str, vendor_device: VendorDevice
+        self,
+        device_id: str,
+        vendor_device: VendorDevice,
+        *,
+        binding: ConsumerDeviceBinding,
     ) -> None:
-        # On the one shared Helman device, as every Helman entity is.
-        self._attr_device_info = helman_device_info(entry)
+        binding.apply(self)
         self.entity_id = ev_charging_entity_id(device_id)
         self._attr_unique_id = ev_charging_unique_id(device_id)
-        name = vendor_device.device.get("name")
-        self._attr_name = name if isinstance(name, str) and name else device_id
         self._vendor_device = vendor_device
         self._entity_ids: dict[tuple[str, str], str | None] = {}
         self._untrack_state: Callable[[], None] | None = None

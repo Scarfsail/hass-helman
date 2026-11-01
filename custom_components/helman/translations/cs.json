@@ -101,6 +101,24 @@
       },
       "grid_export_price": {
         "name": "Prodejní cena elektřiny"
+      },
+      "unmeasured_power": {
+        "name": "Neměřený výkon"
+      },
+      "share_power": {
+        "name": "Podíl výkonu"
+      },
+      "share_energy": {
+        "name": "Podíl energie"
+      },
+      "unmeasured_power_named": {
+        "name": "{name} neměřený výkon"
+      },
+      "share_power_named": {
+        "name": "{name} podíl výkonu"
+      },
+      "share_energy_named": {
+        "name": "{name} podíl energie"
       }
     },
     "select": {
@@ -114,6 +132,14 @@
           "discharge_to_target_soc": "Nucené vybíjení",
           "stop_export": "Zákaz exportu"
         }
+      }
+    },
+    "switch": {
+      "ev_charging": {
+        "name": "Nabíjení EV"
+      },
+      "ev_charging_named": {
+        "name": "{name} nabíjení EV"
       }
     }
   },

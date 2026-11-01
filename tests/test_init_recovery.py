@@ -91,6 +91,8 @@ class InitRecoveryTests(unittest.IsolatedAsyncioTestCase):
         async def nothing(_hass):
             return None
 
+        self.stale_device_cleanups: list = []
+
         replacements = {
             "HelmanStorage": _FakeStorage,
             "HelmanCoordinator": _FakeCoordinator,
@@ -100,6 +102,9 @@ class InitRecoveryTests(unittest.IsolatedAsyncioTestCase):
             "async_update_group_service_schemas": update_schemas,
             "async_register_frontend": nothing,
             "async_unregister_frontend": nothing,
+            "remove_stale_devices": lambda hass, entry: self.stale_device_cleanups.append(
+                entry.entry_id
+            ),
         }
         for name, replacement in replacements.items():
             self.enterContext(patch.object(self.helman_init, name, replacement))
@@ -127,6 +132,8 @@ class InitRecoveryTests(unittest.IsolatedAsyncioTestCase):
             [data for event, data in hass.bus.fired if event == EVENT_DATA_CHANGED],
             [{"kind": DATA_CHANGED_KIND_CONFIG, "revision": config_revision({})}],
         )
+        # Once the platforms have put every entity on its device.
+        self.assertEqual(self.stale_device_cleanups, ["entry-1"])
 
     async def test_setup_entry_failure_keeps_storage_available_for_recovery(self) -> None:
         hass = FakeHass()
@@ -155,6 +162,7 @@ class InitRecoveryTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(hasattr(entry, "runtime_data"))
         self.assertEqual(self.coordinator_mod.HelmanCoordinator.unload_calls, 1)
+        self.assertEqual(self.stale_device_cleanups, [])
 
     async def test_async_unload_entry_keeps_storage_after_runtime_unload(self) -> None:
         hass = FakeHass()

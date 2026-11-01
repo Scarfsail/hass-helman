@@ -20,7 +20,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
 from .const import INVERTER_MODE_ENTITY_ID, INVERTER_MODE_UNIQUE_ID
-from .entity import helman_device_info, remove_stale_entities
+from .entity import node_device_info, remove_stale_entities
 from .scheduling.schedule import INVERTER_ACTION_KINDS
 from .scheduling.actuation import async_write_vendor_entity
 from .vendors import VendorProfile, find_mode_vendor, resolve_unique_ids
@@ -71,8 +71,7 @@ class HelmanInverterModeSelect(SelectEntity, RestoreEntity):
         profile: VendorProfile,
         vendor_entry: Any | None,
     ) -> None:
-        # On the one shared Helman device, as every Helman sensor is.
-        self._attr_device_info = helman_device_info(entry)
+        self._attr_device_info = node_device_info(entry, "inverter")
         self.entity_id = INVERTER_MODE_ENTITY_ID
         self._attr_unique_id = INVERTER_MODE_UNIQUE_ID
         self._attr_options = list(INVERTER_ACTION_KINDS)
