@@ -585,8 +585,8 @@ def _validate_house_config(raw_house: object, report: ValidationReport) -> None:
             code="retired_config_key",
             message=(
                 "'deferrable_consumers' is no longer a config key; a device's "
-                "meter is carved out of the house baseline when the device is "
-                "'schedulable', or when all its meterless children are"
+                "energy is carved out of the house baseline when the device is "
+                "'schedulable'"
             ),
         )
 
@@ -1457,8 +1457,6 @@ def _validate_device_children(
       leaf and its parent always owns a meter.
     * A schedulable device is a leaf: its projection would count its children
       again, and its training would read their energy.
-    * Meterless siblings are all schedulable or all passive — a mix would drop
-      the passive share from the forecast or count the schedulable ones twice.
     * The live split needs power: a parent with meterless children, and each of
       its metered children, names ``consumption.power_entity_id``.
     """
@@ -1502,16 +1500,6 @@ def _validate_device_children(
     meterless = [child for child in children if own_meter(child) is None]
     if not meterless:
         return
-    if len({is_schedulable(child) for child in meterless}) > 1:
-        report.add_error(
-            section=section,
-            path=f"{path}.children",
-            code="mixed_meterless_children",
-            message=(
-                f"the children of {path} without a meter of their own must be "
-                "all schedulable or all passive"
-            ),
-        )
     for power_path, device in [
         (path, raw_device),
         *(

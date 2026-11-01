@@ -66,14 +66,14 @@ const TREE = treePayload({
         ...energyNode("house", null),
         childrenFullWidth: true,
         children: [
-            device("Boiler", { controllableIds: ["boiler"], ownControllableIds: ["boiler"], applianceKind: "generic", switchEntityId: "switch.boiler" }),
+            device("Boiler", { controllableIds: ["boiler"], applianceKind: "generic", switchEntityId: "switch.boiler" }),
             // A breaker carved for two meterless pumps: both lanes are its meter's, and each pump's own row repeats its lane.
             device("Pumps", {
-                deferrable: true, ownDeferrable: true, ownControllableIds: ["pump-a", "pump-b"], switchEntityId: "switch.pumps_breaker",
+                deferrable: true, controllableIds: ["pump-a", "pump-b"], switchEntityId: "switch.pumps_breaker",
                 children: [share("pump-a", "Pump A"), share("pump-b", "Pump B")],
             }),
             // Configured, but its meter and its switch report nothing.
-            device("Garage", { controllableIds: ["garage"], ownControllableIds: ["garage"], applianceKind: "generic" }),
+            device("Garage", { controllableIds: ["garage"], applianceKind: "generic" }),
             device("Lamp", { switchEntityId: "switch.lamp" }),
         ],
     }],

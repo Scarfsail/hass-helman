@@ -84,9 +84,6 @@ export interface TreeItemDTO extends TreeItemDTOBase, EnergyNodeFields {
      * configured controllable, and for a controllable that declares no id.
      */
     controllableIds: string[];
-    /** Historical own-load attribution; independent of the live aggregate tint. */
-    ownDeferrable?: boolean;
-    ownControllableIds?: string[];
     /** Configured kind only when this node identifies one schedulable controllable. */
     applianceKind?: string | null;
     /** The climate entity a device configures, whose more-info its Control tab opens; null for every other node. */

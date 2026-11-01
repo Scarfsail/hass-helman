@@ -735,6 +735,19 @@ class TestHistoryGovernedEntities(_HistoryTestCase):
     measured without being judged.
     """
 
+    def test_share_energy_wildcard_reads_child_sensor_and_house_minimum(self):
+        entity_id = "sensor.helman_share_energy_dishwasher"
+        hass = _ProbingHass({entity_id: _State("1.0", unit="kWh")})
+        config = {"training": {"house_consumption": {"min_history_days": 12}}}
+
+        _, inspection = self.inspect_twice(
+            hass, config, ("helman", "share_energy", "dishwasher")
+        )
+
+        self.assertEqual(inspection["entityId"], entity_id)
+        self.assertEqual(_fact(inspection, "history")["params"]["required"], 12)
+        self.assertEqual(self.probe.calls, [entity_id])
+
     def _controllable_config(self, entity: str) -> dict:
         return {
             "devices": {"consumers": [
@@ -903,8 +916,7 @@ class TestHistoryGovernedEntities(_HistoryTestCase):
             inspection["dependsOn"],
         )
 
-    def test_a_metered_child_of_a_carved_meter_is_judged(self):
-        # The trainer reads it to subtract from its parent's own energy.
+    def test_a_passive_metered_child_is_not_judged(self):
         hass = _ProbingHass({"sensor.plug_energy": _State("3.4", unit="kWh")})
         config = {
             "devices": {"consumers": [
@@ -921,9 +933,7 @@ class TestHistoryGovernedEntities(_HistoryTestCase):
             hass, config, ("devices", "consumers", 0, "children", 0, "consumption", "energy_entity_id")
         )
         fact = _fact(inspection, "history")
-        self.assertEqual(
-            fact["params"]["required"], HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS
-        )
+        self.assertNotIn("required", fact["params"])
 
 
     def test_a_deep_device_meter_keeps_history_and_its_house_requirement(self):

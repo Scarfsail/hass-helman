@@ -20,11 +20,10 @@ import {
 } from "../../cards/shared/config/form-fields";
 import { configDefaultValue } from "../../cards/shared/config/config-defaults";
 import { entityGroupKey, type EntityFact } from "../../cards/shared/config/entity-group";
-import { asJsonArray, asJsonObject } from "../../cards/shared/config/config-document";
+import { asJsonObject } from "../../cards/shared/config/config-document";
 import {
   deviceEnergyEntity,
   deviceKind,
-  isCarvedMeterOwner,
   isSchedulable,
   iterDevices,
   ownMeter,
@@ -89,7 +88,7 @@ export interface ApplianceEnergyDepthDevice {
   parent: JsonObject | null;
   learns: boolean;
   lookbackDays: number;
-  /** Its (effective) meter, sub-meters, power sensor and activity entity. */
+  /** Its energy entity, power sensor and activity entity. */
   entities: TrainingDepthRow[];
 }
 
@@ -277,10 +276,7 @@ export class TrainingTabController implements ReactiveController {
         roleKey: "editor.training_depth.role_house_meter",
       },
       ...iterDevices(this.resolvedConfig()).flatMap(({ device, parent, path }, index): TrainingDepthRow[] => {
-        const read =
-          isCarvedMeterOwner(device) ||
-          (parent !== null && isCarvedMeterOwner(parent) && ownMeter(device) !== "");
-        if (!read) return [];
+        if (!isSchedulable(device)) return [];
         const name =
           stringValue(device.name) ||
           stringValue(device.id) ||
@@ -288,8 +284,11 @@ export class TrainingTabController implements ReactiveController {
         return [
           {
             label: name,
-            path: [...path, "consumption", "energy_entity_id"],
+            path: ownMeter(device)
+              ? [...path, "consumption", "energy_entity_id"]
+              : ["helman", "share_energy", stringValue(device.id)],
             roleKey: "editor.training_depth.role_controllable",
+            ownEntity: !ownMeter(device),
           },
         ];
       }),
@@ -344,20 +343,10 @@ export class TrainingTabController implements ReactiveController {
           `${this.host._t("editor.training_depth.controllable_fallback_name")} ${index + 1}`,
         path,
         parent: drawsFromParent ? parent : null,
-        hasMeter: Boolean(drawsFromParent ? parent && ownMeter(parent) : ownMeter(device)),
-        meterPath: [
-          ...(drawsFromParent ? path.slice(0, -2) : path),
-          "consumption",
-          "energy_entity_id",
-        ],
-        submeterPaths: drawsFromParent
-          ? (asJsonArray(parent?.children) ?? []).flatMap((sibling, siblingIndex) => {
-              const siblingDevice = asJsonObject(sibling);
-              return siblingDevice && ownMeter(siblingDevice)
-                ? [[...path.slice(0, -1), siblingIndex, "consumption", "energy_entity_id"]]
-                : [];
-            })
-          : [],
+        hasMeter: Boolean(drawsFromParent ? stringValue(device.id) : ownMeter(device)),
+        meterPath: drawsFromParent
+          ? ["helman", "share_energy", stringValue(device.id)]
+          : [...path, "consumption", "energy_entity_id"],
         device,
         powerPath:
           !drawsFromParent && stringValue(consumption.power_entity_id)
@@ -371,23 +360,14 @@ export class TrainingTabController implements ReactiveController {
         lookback: typeof lookback === "number" ? lookback : 30,
       };
     });
-    const sharedLookback = (parent: JsonObject | null): number | null => {
-      if (!parent) return null;
-      const learners = items.filter((item) => item.parent === parent && item.learns);
-      if (learners.length === 0) return null;
-      return Math.max(...learners.map((member) => member.lookback));
-    };
     return items.flatMap((item): ApplianceEnergyDepthDevice[] => {
       if (!item.hasMeter || (item.parent && (!item.id || !item.activity))) return [];
-      const days = item.parent
-        ? (sharedLookback(item.parent) ?? 30)
-        : item.learns
-          ? item.lookback
-          : 30;
-      const entity = (label: string, path: PathSegment[]): TrainingDepthRow => ({
+      const days = item.learns ? item.lookback : 30;
+      const entity = (label: string, path: PathSegment[], ownEntity = false): TrainingDepthRow => ({
         label: this.host._t(`editor.training_depth.appliance_entity_${label}`),
         path,
         requiredDays: days,
+        ownEntity,
       });
       const activity = item.activity
         ? [entity(item.activity, [...item.path, "controls", item.activity, "entity_id"])]
@@ -402,8 +382,7 @@ export class TrainingTabController implements ReactiveController {
           learns: item.learns,
           lookbackDays: days,
           entities: [
-            entity("meter", item.meterPath),
-            ...item.submeterPaths.map((submeterPath) => entity("submeter", submeterPath)),
+            entity("meter", item.meterPath, item.parent !== null),
             ...(item.powerPath ? [entity("power", item.powerPath)] : []),
             ...activity,
           ],

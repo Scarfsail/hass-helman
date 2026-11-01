@@ -134,7 +134,7 @@ def history_evaluator(
 
 
 def fixed_entity_history_evaluator(
-    entity_id: str,
+    entity_id: str | Callable[[InspectionRequest], str],
     required_days_path: tuple[str, ...] | None = None,
     default_required_days: int | None = None,
 ) -> Evaluator:
@@ -143,7 +143,7 @@ def fixed_entity_history_evaluator(
     Every other key here names a *config path* and resolves the entity from the
     draft document, which is what keeps "which entity, judged against which
     setting" on this side of the websocket. An entity Helman owns has no
-    config path to resolve — its id is a constant — but the question the row
+    config path to resolve — its id is fixed or derived from a wildcard — but the question the row
     answers is the same one, so it is answered here rather than by teaching the
     editor to ask about entities directly.
 
@@ -158,7 +158,8 @@ def fixed_entity_history_evaluator(
         consulted: tuple[tuple[tuple[Any, ...], Any], ...] = ()
         if required_days_path is not None:
             consulted = ((tuple(required_days_path), required),)
-        reading = read_numeric_state(request.hass, entity_id)
+        resolved_entity_id = entity_id(request) if callable(entity_id) else entity_id
+        reading = read_numeric_state(request.hass, resolved_entity_id)
         facts: list[Fact] = []
         if reading.problem is not None:
             facts.append(reading.problem)
@@ -166,11 +167,11 @@ def fixed_entity_history_evaluator(
             value_fact = reading.value_fact()
             if value_fact is not None:
                 facts.append(value_fact)
-        fact = _history_fact_if_worth_probing(request.hass, entity_id, required)
+        fact = _history_fact_if_worth_probing(request.hass, resolved_entity_id, required)
         if fact is not None:
             facts.append(fact)
         return Inspection(
-            entity_id=entity_id,
+            entity_id=resolved_entity_id,
             status="ok" if reading.problem is None else "unavailable",
             facts=tuple(facts),
             consulted=consulted,

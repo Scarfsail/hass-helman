@@ -635,7 +635,6 @@ class CarvedMeterReaderTests(unittest.TestCase):
                     "energy_entity_id": "sensor.pool_energy",
                     "label": "Pool pump",
                     "ids": ["pool"],
-                    "metered_children": [],
                 }
             ],
         )
@@ -645,19 +644,16 @@ class CarvedMeterReaderTests(unittest.TestCase):
 
         self.assertEqual(read_carved_meters(config), [])
 
-    def test_a_parent_of_schedulable_meterless_children_is_carved_for_them(
+    def test_schedulable_meterless_children_are_carved_individually(
         self,
     ) -> None:
-        """The live AC breaker: one row, labelled by the meter, naming all four."""
+        """The passive breaker stays in the baseline; each AC has its own carve."""
         self.assertEqual(
             read_carved_meters({"devices": {"consumers": [_ac_breaker()]}}),
             [
-                {
-                    "energy_entity_id": "sensor.jistic_klimatizace_energy",
-                    "label": "sensor.jistic_klimatizace_energy",
-                    "ids": ["ac-1", "ac-2", "ac-3", "ac-4"],
-                    "metered_children": [],
-                }
+                {"energy_entity_id": f"sensor.helman_share_energy_ac_{i}",
+                 "label": f"sensor.helman_share_energy_ac_{i}", "ids": [f"ac-{i}"]}
+                for i in range(1, 5)
             ],
         )
 
@@ -671,27 +667,40 @@ class CarvedMeterReaderTests(unittest.TestCase):
         self.assertEqual(read_carved_meters({"devices": {"consumers": [breaker]}}), [])
 
     def test_nested_meters_are_carved_once_each(self) -> None:
-        """The study: the plug is carved on its own; the breaker only if its
-        meterless children are all schedulable — here the lamp is passive."""
+        """Each schedulable leaf is carved by its own energy entity."""
         self.assertEqual(
             [
-                (meter["energy_entity_id"], meter["ids"], meter["metered_children"])
+                (meter["energy_entity_id"], meter["ids"])
                 for meter in read_carved_meters({"devices": {"consumers": [_study()]}})
             ],
-            [("sensor.plug_energy", ["plug"], [])],
+            [("sensor.plug_energy", ["plug"])],
         )
 
         study = _study()
         study["children"][1]["schedulable"] = True
         self.assertEqual(
             [
-                (meter["energy_entity_id"], meter["ids"], meter["metered_children"])
+                (meter["energy_entity_id"], meter["ids"])
                 for meter in read_carved_meters({"devices": {"consumers": [study]}})
             ],
             [
-                ("sensor.study_energy", ["lamp"], ["sensor.plug_energy"]),
-                ("sensor.plug_energy", ["plug"], []),
+                ("sensor.plug_energy", ["plug"]),
+                ("sensor.helman_share_energy_lamp", ["lamp"]),
             ],
+        )
+
+    def test_sibling_schedulability_changes_only_its_carve(self) -> None:
+        breaker = _ac_breaker()
+        config = {"devices": {"consumers": [breaker]}}
+        before_split = read_shared_meters(config)
+        before = read_carved_meters(config)
+
+        breaker["children"][0]["schedulable"] = False
+
+        self.assertEqual(read_shared_meters(config), before_split)
+        self.assertEqual(
+            [row["energy_entity_id"] for row in read_carved_meters(config)],
+            [row["energy_entity_id"] for row in before[1:]],
         )
 
     def test_the_inverter_is_never_carved(self) -> None:

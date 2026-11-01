@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, Literal
@@ -28,7 +28,6 @@ from .controllables.config import (
     is_estimated,
     is_schedulable,
     iter_devices,
-    own_meter,
     peek_controllable_id,
     peek_controllable_kind,
     read_carved_meters,
@@ -183,20 +182,10 @@ class TreeItemDTO:
     children: list["TreeItemDTO"] = field(default_factory=list)
     ratio_sensor_id: str | None = None
     source_type: str | None = None
-    # A house item whose load is carved out of the house baseline, so the card
-    # can mark the load the optimizer is free to move in time: a carved meter's
-    # device, its meterless children, or — when the carved meter also has
-    # metered children — its remainder instead of its device, since only the
-    # meter's own energy is carved. Sources and virtual groups are never
-    # deferrable.
+    # A schedulable device whose energy is carved from the house baseline.
     deferrable: bool = False
-    # The schedulable device this item is, so the card can look its schedule
-    # up: a schedulable meter owner's id, or a meterless child's own. Empty for
-    # every other item.
+    # The schedulable device id used to look up its schedule.
     controllable_ids: list[str] = field(default_factory=list)
-    # Historical own-load attribution, independent of live remainder availability.
-    own_deferrable: bool = False
-    own_controllable_ids: list[str] = field(default_factory=list)
     appliance_kind: str | None = None
     # The climate entity a device configures as ``controls.climate``, which
     # the card's Control tab opens more-info for; ``None`` for every other item.
@@ -264,8 +253,6 @@ class TreeItemDTO:
             "sourceType": self.source_type,
             "deferrable": self.deferrable,
             "controllableIds": self.controllable_ids,
-            "ownDeferrable": self.own_deferrable,
-            "ownControllableIds": self.own_controllable_ids,
             **({"applianceKind": self.appliance_kind} if self.appliance_kind is not None else {}),
             "climateEntityId": self.climate_entity_id,
             "coverEntityId": self.cover_entity_id,
@@ -343,11 +330,6 @@ class HelmanTreeBuilder:
             house_config.get("entities", {}).get("power") or include_house_without_power
         ):
             house_children = self._build_house_children(groupings)
-            own_carved = {
-                carve["energy_entity_id"]
-                for carve in read_carved_meters(self._config)
-                if carve["metered_children"]
-            }
             house_node = TreeItemDTO(
                 id="house",
                 display_name="",
@@ -368,7 +350,7 @@ class HelmanTreeBuilder:
                 children=house_children,
                 **energy_node_fields("house", house_config),
             )
-            self._add_unmeasured_items(house_node, own_carved)
+            self._add_unmeasured_items(house_node)
             consumers.append(house_node)
 
         if battery_config and battery_config.get("entities", {}).get("power"):
@@ -510,21 +492,8 @@ class HelmanTreeBuilder:
             if energy_entity_id is None:
                 continue
             schedulable = is_schedulable(device)
-            if estimated:
-                # The carve covers the parent meter's own energy, which its
-                # meterless children split; a child is a leaf, so its own load
-                # is all of it.
-                deferrable = own_deferrable = own_meter(parent) in carved
-                controllable_ids = [device_id] if schedulable else []
-                own_controllable_ids = list(controllable_ids)
-            else:
-                carve = carved.get(energy_entity_id)
-                own_deferrable = carve is not None
-                # A carved meter with metered children carves only its own
-                # energy, which its remainder shows, not this aggregate.
-                deferrable = own_deferrable and not carve["metered_children"]
-                own_controllable_ids = list(carve["ids"]) if own_deferrable else []
-                controllable_ids = list(own_controllable_ids) if schedulable else []
+            deferrable = energy_entity_id in carved
+            controllable_ids = [device_id] if schedulable and device_id else []
 
             item = TreeItemDTO(
                 id=energy_entity_id,
@@ -558,8 +527,6 @@ class HelmanTreeBuilder:
                     peek_controllable_kind(device) if len(controllable_ids) == 1 else None
                 ),
                 energy_entity_id=energy_entity_id,
-                own_deferrable=own_deferrable,
-                own_controllable_ids=own_controllable_ids,
                 is_estimated=estimated,
                 device_id=device_id,
             )
@@ -573,19 +540,12 @@ class HelmanTreeBuilder:
         state = self._hass.states.get(entity_id)
         return state.attributes.get("icon") if state else None
 
-    def _add_unmeasured_items(
-        self,
-        item: TreeItemDTO,
-        own_carved: Collection[str] = frozenset(),
-    ) -> None:
+    def _add_unmeasured_items(self, item: TreeItemDTO) -> None:
         """Add a remainder under every measured item with children.
 
         A remainder's ``display_name`` is empty: the card names every one with
         its own localized label.
 
-        ``own_carved`` are the carved meters with metered children: only their
-        own energy is carved, and their remainder is where it shows, so it is
-        the remainder the card marks deferrable.
         """
         if not item.children:
             return
@@ -614,11 +574,10 @@ class HelmanTreeBuilder:
                 hide_children=False,
                 hide_children_indicator=False,
                 sort_children_by_power=False,
-                deferrable=item.energy_entity_id in own_carved,
             )
             item.children.append(unmeasured)
         for child in item.children:
-            self._add_unmeasured_items(child, own_carved)
+            self._add_unmeasured_items(child)
 
 
 def _control_entity(device: Device, control_keys: tuple[str, ...]) -> str | None:

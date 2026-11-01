@@ -5,12 +5,14 @@ import unittest
 
 from _fakes import (
     _valid_config, _inverter_controllable, _generic_appliance,
-    _climate_appliance, _ac_breaker, _study_breaker,
+    _climate_appliance, _ac_breaker, _study_breaker, DummyStore,
 )
 
 
 from custom_components.helman.config_validation import validate_config_document
 from custom_components.helman.controllables.config import running_signal
+from custom_components.helman.const import CONFIG_DOCUMENT_VERSION
+from custom_components.helman.storage import HelmanStorage
 
 
 class ConfigValidationTests(unittest.TestCase):
@@ -1866,7 +1868,7 @@ class DeviceTreeValidationTests(unittest.TestCase):
         errors, warnings = self._codes(device)
         self.assertEqual(errors, set())
 
-    def test_mixed_schedulable_and_passive_meterless_siblings_are_rejected(
+    def test_mixed_schedulable_and_passive_meterless_siblings_are_valid(
         self,
     ) -> None:
         breaker = _ac_breaker()
@@ -1874,7 +1876,32 @@ class DeviceTreeValidationTests(unittest.TestCase):
 
         errors, _ = self._codes(breaker)
 
-        self.assertIn(("devices.consumers[0].children", "mixed_meterless_children"), errors)
+        self.assertEqual(errors, set())
+
+    def test_mixed_meterless_siblings_save_and_reload(self) -> None:
+        import asyncio
+
+        config = _valid_config()
+        config["config_version"] = CONFIG_DOCUMENT_VERSION
+        breaker = _ac_breaker()
+        breaker["children"][0]["schedulable"] = False
+        config["devices"]["consumers"] = [breaker]
+        self.assertTrue(validate_config_document(config).valid)
+
+        store = DummyStore()
+        storage = HelmanStorage.__new__(HelmanStorage)
+        storage._store = store
+        asyncio.run(storage.async_save(config))
+
+        reloaded = HelmanStorage.__new__(HelmanStorage)
+        reloaded._store = store
+        reloaded._snapshot_store = DummyStore()
+        reloaded._schedule_store = DummyStore()
+        asyncio.run(reloaded.async_load())
+        children = reloaded.config["devices"]["consumers"][0]["children"]
+        self.assertFalse(children[0]["schedulable"])
+        self.assertTrue(all(child["schedulable"] for child in children[1:]))
+        self.assertTrue(validate_config_document(reloaded.config).valid)
 
     def test_a_parent_of_meterless_children_needs_a_power_sensor(self) -> None:
         breaker = _ac_breaker()

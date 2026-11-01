@@ -58,15 +58,15 @@ const TREE = treePayload({
     consumers: [treeNode({
         id: "house", displayName: "House", powerSensorId: "sensor.house", childrenFullWidth: true,
         children: [
-            device("Boiler", { icon: "mdi:water-boiler", controllableIds: ["boiler"], ownControllableIds: ["boiler"], applianceKind: "generic", switchEntityId: "switch.boiler" }),
-            device("Klima", { controllableIds: ["klima"], ownControllableIds: ["klima"], applianceKind: "climate", climateEntityId: "climate.klima" }),
+            device("Boiler", { icon: "mdi:water-boiler", controllableIds: ["boiler"], applianceKind: "generic", switchEntityId: "switch.boiler" }),
+            device("Klima", { controllableIds: ["klima"], applianceKind: "climate", climateEntityId: "climate.klima" }),
             // A breaker Helman does not schedule, carved for its two schedulable
             // meterless pumps: the lanes are its meter's own, not its.
             device("Pumps", {
-                deferrable: true, ownDeferrable: true, ownControllableIds: ["pump-a", "pump-b"], switchEntityId: "switch.pumps_breaker",
+                deferrable: true, controllableIds: ["pump-a", "pump-b"], switchEntityId: "switch.pumps_breaker",
                 children: [share("pump-a", "Pump A"), share("pump-b", "Pump B")],
             }),
-            device("Legacy", { controllableIds: ["legacy"], ownControllableIds: ["legacy"], applianceKind: "generic" }),
+            device("Legacy", { controllableIds: ["legacy"], applianceKind: "generic" }),
             device("Lamp", { switchEntityId: "switch.lamp" }),
             device("Living Light", { switchEntityId: "light.living_room" }),
             device("Living TV", { switchEntityId: "media_player.tv" }),

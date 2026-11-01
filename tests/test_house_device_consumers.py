@@ -160,11 +160,11 @@ class TestHouseDeviceConsumers(unittest.TestCase):
         )
 
     def test_carved_own_load_keeps_passive_child_in_base_group(self):
-        tree = _tree([_node("sensor.parent", ownDeferrable=True,
-                            ownControllableIds=["washer", "dryer"],
+        tree = _tree([_node("sensor.parent", deferrable=True,
+                            controllableIds=["washer", "dryer"],
                             children=[_node("sensor.passive", children=[
-                                _node("sensor.nested", ownDeferrable=True,
-                                      ownControllableIds=["heater"])
+                                _node("sensor.nested", deferrable=True,
+                                      controllableIds=["heater"])
                             ])])])
         rows = extract(tree)
         self.assertEqual([row["deferrable"] for row in rows], [True, False, True])
@@ -180,10 +180,9 @@ class TestHouseDeviceConsumers(unittest.TestCase):
     def test_a_meterless_child_is_a_disjoint_row_that_conserves_its_parent(self):
         # The kitchen circuit read 1.3 kWh; its dishwasher's share sensor 1 kWh.
         share = "sensor.helman_share_energy_dishwasher"
-        tree = _tree([_node("sensor.kitchen", ownDeferrable=True,
-                            ownControllableIds=["dishwasher"], children=[
-                                _node(share, isEstimated=True, ownDeferrable=True,
-                                      ownControllableIds=["dishwasher"]),
+        tree = _tree([_node("sensor.kitchen", children=[
+                                _node(share, isEstimated=True, deferrable=True,
+                                      controllableIds=["dishwasher"]),
                             ])])
         rows = extract(tree)
         self.assertEqual([row["energy_entity_id"] for row in rows], ["sensor.kitchen", share])
@@ -208,12 +207,11 @@ class TestHouseDeviceConsumers(unittest.TestCase):
         self.assertAlmostEqual(sum(own.values()), 1.3)
 
     def test_each_meterless_child_claims_its_id_from_its_carved_parent(self):
-        tree = _tree([_node("sensor.breaker", ownDeferrable=True,
-                            ownControllableIds=["ac_1", "ac_2"], children=[
+        tree = _tree([_node("sensor.breaker", children=[
                                 _node("sensor.helman_share_energy_ac_1", isEstimated=True,
-                                      ownDeferrable=True, ownControllableIds=["ac_1"]),
+                                      deferrable=True, controllableIds=["ac_1"]),
                                 _node("sensor.helman_share_energy_ac_2", isEstimated=True,
-                                      ownDeferrable=True, ownControllableIds=["ac_2"]),
+                                      deferrable=True, controllableIds=["ac_2"]),
                             ])])
         self.assertEqual([row["ids"] for row in extract(tree)], [[], ["ac_1"], ["ac_2"]])
 
@@ -245,8 +243,8 @@ class TestHouseDeviceConsumers(unittest.TestCase):
                             children=[
                                 _node(
                                     "sensor.washer_energy",
-                                    ownDeferrable=True,
-                                    children=[_node("sensor.inner_energy", ownDeferrable=True)],
+                                    deferrable=True,
+                                    children=[_node("sensor.inner_energy", deferrable=True)],
                                 )
                             ],
                         ),

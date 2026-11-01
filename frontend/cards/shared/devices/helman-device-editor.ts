@@ -1229,21 +1229,16 @@ export class HelmanDeviceEditor extends LitElement implements HardwareProfileHos
     /**
      * The one flag a device carries: may Helman plan and run it.
      *
-     * A meterless child's siblings are all schedulable or all passive, so on one
-     * of them the toggle sets the whole set. A device with children cannot be
+     * A device with children cannot be
      * schedulable (a schedulable device is a leaf), so there it is disabled --
      * unless it is on, which only a hand edit can do, and then it may be turned off.
      */
     private _renderSchedulableField(device: JsonObject, parent: JsonObject | null): TemplateResult {
         const checked = isSchedulable(device);
         const hasChildren = deviceChildren(device).length > 0;
-        const meterless = parent !== null && !ownMeter(device);
-        const siblings = meterless && parent ? meterlessChildren(parent).length : 0;
         const note = hasChildren
             ? this.t("editor.helpers.schedulable_has_children")
-            : siblings > 1
-              ? this.t("editor.helpers.schedulable_siblings", { count: siblings })
-              : "";
+            : "";
         return html`
             <div class="field toggle-field schedulable-field">
                 <div class="field-label-row">
@@ -1252,10 +1247,7 @@ export class HelmanDeviceEditor extends LitElement implements HardwareProfileHos
                             .checked=${checked}
                             ?disabled=${hasChildren && !checked}
                             @change=${(event: Event) =>
-                                this._setSchedulable(
-                                    meterless,
-                                    (event.currentTarget as HTMLElement & { checked: boolean }).checked,
-                                )}
+                                this._setSchedulable((event.currentTarget as HTMLElement & { checked: boolean }).checked)}
                         ></ha-switch>
                     </ha-formfield>
                     ${renderHelpIcon(this, "editor.fields.schedulable", "editor.help.schedulable")}
@@ -1314,24 +1306,14 @@ export class HelmanDeviceEditor extends LitElement implements HardwareProfileHos
         `;
     }
 
-    private _setSchedulable(meterless: boolean, value: boolean): void {
+    private _setSchedulable(value: boolean): void {
         const path = this.path;
-        const listPath = path.slice(0, -1);
-        const resolved = resolvedDraft(this.config, this.vendors);
-        const targets = meterless
-            ? (asJsonArray(resolved && getValueAtPath(resolved, listPath)) ?? []).flatMap((sibling, index) => {
-                  const object = asJsonObject(sibling);
-                  return object && !ownMeter(object) ? [[...listPath, index]] : [];
-              })
-            : [path];
-        this._mutate(meterless ? listPath : path, (draft) => {
-            for (const target of targets) {
-                if (value) {
-                    setValueAtPath(draft, [...target, "schedulable"], true);
-                    seedDeviceProjection(draft, target);
-                } else {
-                    unsetValueAtPath(draft, [...target, "schedulable"]);
-                }
+        this._mutate(path, (draft) => {
+            if (value) {
+                setValueAtPath(draft, [...path, "schedulable"], true);
+                seedDeviceProjection(draft, path);
+            } else {
+                unsetValueAtPath(draft, [...path, "schedulable"]);
             }
         });
     }
@@ -1472,8 +1454,8 @@ export class HelmanDeviceEditor extends LitElement implements HardwareProfileHos
     }
 
     /**
-     * A schedulable device's demand projection. Whether its meter is carved out
-     * of the house baseline is not a setting here: it follows `schedulable`.
+     * A schedulable device's demand projection. Its energy is carved from
+     * the house baseline when `schedulable` is set.
      */
     private _renderProjectionSection(kind: string): TemplateResult {
         const path = this.path;
