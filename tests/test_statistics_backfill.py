@@ -715,7 +715,8 @@ class TestShareEnergyBackfill(unittest.IsolatedAsyncioTestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    def _source_query(self, *_args):
+    def _source_query(self, *args):
+        self.source_query_units = args[5]
         self.calls.source_query()
         return {self.SOURCE: self.source_rows}
 
@@ -746,6 +747,11 @@ class TestShareEnergyBackfill(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(meta["unit_of_measurement"], "kWh")
         self.assertEqual(meta["unit_class"], "energy")
         self.assertEqual(meta["source"], "recorder")
+
+    async def test_the_source_means_are_requested_in_watts(self) -> None:
+        await self._run(Mock())
+
+        self.assertEqual(self.source_query_units, {"power": "W"})
 
     async def test_seam_climbs_state_and_sum_to_the_first_published_total(self) -> None:
         import_fn = Mock()

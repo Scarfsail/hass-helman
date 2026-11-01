@@ -44,7 +44,7 @@ from homeassistant.components.recorder.db_schema import StatisticsShortTerm
 from homeassistant.components.recorder.history import state_changes_during_period
 from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
 from homeassistant.components.recorder.statistics import async_import_statistics
-from homeassistant.const import UnitOfEnergy
+from homeassistant.const import UnitOfEnergy, UnitOfPower
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
@@ -259,7 +259,7 @@ async def _hourly_kwh(
             before,
             {source_entity_id},
             "hour",
-            None,
+            {"power": UnitOfPower.WATT},
             {"mean"},
         )
         return rows.get(source_entity_id) or []
