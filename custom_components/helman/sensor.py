@@ -21,7 +21,12 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .battery_state import read_battery_entities
 from .controllables.config import share_energy_entity_id, share_power_entity_id
-from .entity import helman_device_info
+from .entity import (
+    ConsumerDeviceBinding,
+    consumer_device_binding,
+    foreign_device_consumer_counts,
+    node_device_info,
+)
 from .share_energy_backfill import async_initial_share_energy_total
 from .tree_builder import unmeasured_power_entity_id
 
@@ -49,17 +54,23 @@ _HYSTERESIS_MAX_GAP_S: float = 30.0
 class _HelmanDeviceEntity(SensorEntity):
     """Base for every Helman sensor.
 
-    Puts the entity on the one shared ``Helman`` device and names it through
-    ``has_entity_name`` + ``translation_key`` (or, for the unmeasured sensors,
-    a resolved ``_attr_name``) so nothing falls back to a device-class name
-    and nothing bakes ``"Helman "`` into its own friendly name -- the device
-    supplies that prefix instead.
+    Puts the entity on its ``_device_node``'s ``Helman <Node>`` device, or on
+    the consumer device ``binding`` names, and names it through
+    ``has_entity_name`` + ``translation_key`` so nothing falls back to a
+    device-class name and nothing bakes a device name into its own friendly
+    name -- the device supplies that prefix instead.
     """
 
     _attr_has_entity_name = True
+    _device_node: str = "house"
 
-    def __init__(self, entry: ConfigEntry) -> None:
-        self._attr_device_info = helman_device_info(entry)
+    def __init__(
+        self, entry: ConfigEntry, *, binding: ConsumerDeviceBinding | None = None
+    ) -> None:
+        if binding is None:
+            self._attr_device_info = node_device_info(entry, self._device_node)
+        else:
+            binding.apply(self)
         self._entry_id = entry.entry_id
 
     def _async_subscribe(self, signal: str, target: Callable[..., None]) -> None:
@@ -126,17 +137,39 @@ async def async_setup_entry(
     ]
 
     # The unmeasured and share sensors follow the device tree, so the
-    # coordinator adds them now and again on every tree rebuild.
+    # coordinator adds them now and again on every tree rebuild. Their
+    # bindings share one consumer count per tree build, not one per entity.
+    counts_by_tree: dict[str, Any] = {}
+
+    def binding(**consumer: Any) -> ConsumerDeviceBinding:
+        if counts_by_tree.get("tree") is not coordinator.tree_index:
+            counts_by_tree.update(
+                tree=coordinator.tree_index,
+                counts=foreign_device_consumer_counts(hass, entry, coordinator.config),
+            )
+        return consumer_device_binding(
+            hass, entry, coordinator.config, counts=counts_by_tree["counts"], **consumer
+        )
+
     coordinator.set_entity_factory(
         async_add_entities,
         {
             "unmeasured": lambda node_id, parent_id: [
-                HelmanUnmeasuredPowerSensor(entry, hass, node_id, parent_id)
+                HelmanUnmeasuredPowerSensor(
+                    entry,
+                    node_id,
+                    parent_id,
+                    binding=None
+                    if node_id == "house"
+                    else binding(meter_entity_id=node_id),
+                )
             ],
-            "share": lambda node_id, entity_id, name: [
-                HelmanSharePowerSensor(entry, node_id, entity_id, name),
-                HelmanShareEnergySensor(entry, node_id, name),
-            ],
+            "share": lambda node_id, entity_id, name: _share_sensors(
+                entry,
+                node_id,
+                entity_id,
+                binding(device_id=node_id, fallback_name=name),
+            ),
         },
     )
 
@@ -180,11 +213,22 @@ async def async_setup_entry(
     )
 
 
+def _share_sensors(
+    entry: ConfigEntry, device_id: str, entity_id: str, binding: ConsumerDeviceBinding
+) -> list[SensorEntity]:
+    """A meterless child's share power and share energy, on its device."""
+    return [
+        HelmanSharePowerSensor(entry, device_id, entity_id, binding=binding),
+        HelmanShareEnergySensor(entry, device_id, binding=binding),
+    ]
+
+
 class HelmanBatteryTimeSensor(_HelmanLiveSensor):
     _attr_should_poll = False
     _attr_device_class = SensorDeviceClass.DURATION
     _attr_native_unit_of_measurement = UnitOfTime.MINUTES
     _unrecorded_attributes = frozenset({"target_time", "target_soc"})
+    _device_node = "battery"
 
     def __init__(
         self,
@@ -253,8 +297,10 @@ class _HelmanDerivedPowerSensor(_HelmanLiveSensor):
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = "W"
 
-    def __init__(self, entry: ConfigEntry) -> None:
-        super().__init__(entry)
+    def __init__(
+        self, entry: ConfigEntry, *, binding: ConsumerDeviceBinding | None = None
+    ) -> None:
+        super().__init__(entry, binding=binding)
         self._value: float | None = None
         self._unavailable = False
         self._emitted = False
@@ -294,34 +340,27 @@ class _HelmanDerivedPowerSensor(_HelmanLiveSensor):
 
 
 class HelmanUnmeasuredPowerSensor(_HelmanDerivedPowerSensor):
-    """The one entity a static ``translation_key`` cannot name.
+    """A metered node's power its children's meters do not account for.
 
-    Its name describes another entity's contents -- the source that this
-    unmeasured remainder was computed from -- so it is resolved once here,
-    from that source's own friendly name, rather than expressed as a static
-    string in ``strings.json``. ``has_entity_name`` still applies, so the
-    device continues to supply the ``Helman`` prefix.
+    The house's sits on the house node device; a consumer's on the consumer's
+    device (``binding``), which supplies the name of what it is measured off.
     """
+
+    _attr_translation_key = "unmeasured_power"
 
     def __init__(
         self,
         entry: ConfigEntry,
-        hass: HomeAssistant,
         node_id: str,
         parent_sensor_id: str | None,
+        *,
+        binding: ConsumerDeviceBinding | None = None,
     ) -> None:
-        super().__init__(entry)
+        super().__init__(entry, binding=binding)
         self._parent_sensor_id = parent_sensor_id
         slug = node_id.removeprefix("sensor.")
         self.entity_id = self._live_key = unmeasured_power_entity_id(node_id)
         self._attr_unique_id = f"{entry.entry_id}_unmeasured_power_{slug}"
-        parent_state = hass.states.get(parent_sensor_id) if parent_sensor_id else None
-        parent_name = (
-            parent_state.attributes.get("friendly_name") if parent_state is not None else None
-        )
-        if not parent_name:
-            parent_name = node_id.replace("_", " ").title()
-        self._attr_name = f"Unmeasured — {parent_name}"
 
     @property
     def available(self) -> bool:
@@ -342,21 +381,23 @@ class HelmanSharePowerSensor(_HelmanDerivedPowerSensor):
 
     The parent's own power split among its running meterless children, in the
     ratio of their learned power and capped by the parent's tolerance, while
-    this one runs, else 0 W. Named after the device, whose name the tree
-    has already resolved.
+    this one runs, else 0 W. On the child's device (``binding``), which
+    supplies its name.
     """
+
+    _attr_translation_key = "share_power"
 
     def __init__(
         self,
         entry: ConfigEntry,
         device_id: str,
         entity_id: str,
-        device_name: str,
+        *,
+        binding: ConsumerDeviceBinding | None = None,
     ) -> None:
-        super().__init__(entry)
+        super().__init__(entry, binding=binding)
         self.entity_id = self._live_key = entity_id
         self._attr_unique_id = self.unique_id_for(entry, device_id)
-        self._attr_name = f"Share — {device_name}"
 
     @staticmethod
     def unique_id_for(entry: ConfigEntry, device_id: str) -> str:
@@ -386,16 +427,22 @@ class HelmanShareEnergySensor(_HelmanLiveSensor, RestoreSensor):
     _attr_device_class = SensorDeviceClass.ENERGY
     _attr_state_class = SensorStateClass.TOTAL_INCREASING
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    _attr_translation_key = "share_energy"
 
-    def __init__(self, entry: ConfigEntry, device_id: str, device_name: str) -> None:
-        super().__init__(entry)
+    def __init__(
+        self,
+        entry: ConfigEntry,
+        device_id: str,
+        *,
+        binding: ConsumerDeviceBinding | None = None,
+    ) -> None:
+        super().__init__(entry, binding=binding)
         self.entity_id = self._live_key = share_energy_entity_id(device_id)
         self._share_power_unique_id = HelmanSharePowerSensor.unique_id_for(
             entry, device_id
         )
         self._default_source_entity_id = share_power_entity_id(device_id)
         self._attr_unique_id = f"{entry.entry_id}_share_energy_{device_id}"
-        self._attr_name = f"Share energy — {device_name}"
         self._total: float | None = None
 
     @property
@@ -511,6 +558,7 @@ class HelmanSourceRatioSensor(_HelmanLiveSensor):
     _attr_native_unit_of_measurement = "%"
 
     def __init__(self, entry: ConfigEntry, source_type: str) -> None:
+        self._device_node = source_type
         super().__init__(entry)
         self._attr_unique_id = f"{entry.entry_id}_{source_type}_source_ratio"
         self._attr_translation_key = f"{source_type}_source_ratio"
@@ -531,6 +579,7 @@ class HelmanSolarForecastEnergySensor(_HelmanPublishedSensor):
     _attr_should_poll = False
     _attr_device_class = SensorDeviceClass.ENERGY
     _attr_native_unit_of_measurement = "kWh"
+    _device_node = "solar"
 
     def __init__(
         self,
@@ -560,6 +609,7 @@ class HelmanSolarForecastRemainingSensor(_HelmanPublishedSensor):
     _attr_should_poll = False
     _attr_device_class = SensorDeviceClass.ENERGY
     _attr_native_unit_of_measurement = "kWh"
+    _device_node = "solar"
 
     def __init__(self, coordinator, entry: ConfigEntry) -> None:
         super().__init__(entry)
@@ -663,6 +713,7 @@ class _HelmanSolarForecastCurrentSensorBase(_HelmanPublishedSensor):
     _attr_force_update = True
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = "Wh"
+    _device_node = "solar"
 
     def __init__(self, coordinator, entry: ConfigEntry, key: str) -> None:
         super().__init__(entry)
@@ -763,6 +814,7 @@ class _HelmanBatteryForecastCurrentSensorBase(_HelmanPublishedSensor):
 
     #: The key this sensor reads out of the coordinator accessor's map.
     _snapshot_key: str
+    _device_node = "battery"
 
     def __init__(self, coordinator, entry: ConfigEntry, entity_key: str) -> None:
         super().__init__(entry)
@@ -832,6 +884,7 @@ class HelmanGridNetForecastCurrentSensor(
 
     _attr_native_unit_of_measurement = "Wh"
     _snapshot_key = "gridNetWh"
+    _device_node = "grid"
 
     def __init__(self, coordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator, entry, "grid_net_forecast_current")
@@ -846,6 +899,7 @@ class HelmanGridImportForecastCurrentSensor(
 
     _attr_native_unit_of_measurement = "Wh"
     _snapshot_key = "gridImportWh"
+    _device_node = "grid"
 
     def __init__(self, coordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator, entry, "grid_import_forecast_current")
@@ -859,6 +913,7 @@ class HelmanGridExportForecastCurrentSensor(
 
     _attr_native_unit_of_measurement = "Wh"
     _snapshot_key = "gridExportWh"
+    _device_node = "grid"
 
     def __init__(self, coordinator, entry: ConfigEntry) -> None:
         super().__init__(coordinator, entry, "grid_export_forecast_current")
@@ -883,6 +938,7 @@ class HelmanGridImportPriceSensor(_HelmanPublishedSensor):
 
     _attr_should_poll = False
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _device_node = "grid"
 
     def __init__(self, coordinator, entry: ConfigEntry) -> None:
         super().__init__(entry)
@@ -935,6 +991,7 @@ class HelmanGridExportPriceSensor(_HelmanPublishedSensor):
 
     _attr_should_poll = False
     _attr_state_class = SensorStateClass.MEASUREMENT
+    _device_node = "grid"
 
     def __init__(self, coordinator, entry: ConfigEntry) -> None:
         super().__init__(entry)

@@ -12,6 +12,7 @@ from homeassistant.helpers import (
     label_registry as lr,
 )
 
+from ..const import DOMAIN
 from .config import SWITCH_CONTROL_DOMAINS, read_devices_section
 
 
@@ -31,6 +32,7 @@ def suggest_entities(
             for entity_id in anchor_entity_ids
             if (entry := registry.async_get(entity_id.strip())) is not None
             and entry.device_id is not None
+            and getattr(entry, "platform", None) != DOMAIN
         ),
         None,
     )
@@ -45,7 +47,8 @@ def suggest_entities(
     device_display_name = (device.name_by_user or device.name or "") if device else ""
     device_name = device_display_name.casefold()
     for entry in er.async_entries_for_device(registry, anchor.device_id):
-        if entry.disabled_by is not None:
+        # Helman's own entities linked onto the device are not raw candidates.
+        if entry.disabled_by is not None or getattr(entry, "platform", None) == DOMAIN:
             continue
         state = hass.states.get(entry.entity_id)
         attrs = state.attributes if state else {}

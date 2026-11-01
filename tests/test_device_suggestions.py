@@ -284,3 +284,52 @@ def test_a_cover_is_offered_as_a_cover_with_name_match():
         {"code": "same_device"},
         {"code": "name_match"},
     ]
+
+
+def test_helman_s_own_entities_on_a_shared_device_are_not_candidates():
+    # Helman links its share and EV charging entities onto the real device;
+    # they are neither an anchor nor a raw meter or switch to offer.
+    def helman(entity_id, device_class=None, device_id="shelly"):
+        return NS(**vars(entry(entity_id, device_class, device_id=device_id)), platform="helman")
+
+    share = helman("sensor.helman_share_power_pump", "power", device_id="pump")
+    peers = [
+        helman("sensor.helman_share_energy_pump", "energy"),
+        helman("switch.helman_ev_charging_garage_ev"),
+        entry("sensor.shelly_power", "power", device_id="shelly"),
+        entry("switch.shelly", device_id="shelly"),
+    ]
+    by_id = {e.entity_id: e for e in (share, *peers)}
+    seen_devices = []
+
+    def entries_for_device(registry, device_id):
+        seen_devices.append(device_id)
+        return peers
+
+    with (
+        patch(
+            "custom_components.helman.controllables.suggestions.er.async_get",
+            return_value=NS(async_get=by_id.get),
+        ),
+        patch(
+            "custom_components.helman.controllables.suggestions.er.async_entries_for_device",
+            side_effect=entries_for_device,
+        ),
+        patch(
+            "custom_components.helman.controllables.suggestions.lr.async_get",
+            return_value=NS(),
+        ),
+        patch(
+            "custom_components.helman.controllables.suggestions.dr.async_get",
+            return_value=NS(async_get=lambda device_id: None),
+        ),
+    ):
+        result = suggest_entities(
+            NS(states=NS(get=lambda entity_id: None)),
+            ["sensor.helman_share_power_pump", "switch.shelly"],
+            {},
+        )
+    assert seen_devices == ["shelly"]
+    assert [c["entityId"] for c in result["power"]] == ["sensor.shelly_power"]
+    assert result["energy"] == []
+    assert [c["entityId"] for c in result["switch"]] == ["switch.shelly"]

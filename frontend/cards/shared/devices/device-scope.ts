@@ -7,10 +7,23 @@ import type { JsonObject } from "../config/types";
 type EntityRegistry = HomeAssistant["entities"];
 
 /**
+ * The HA device of an entity that may scope pickers, or `undefined`.
+ *
+ * Helman's own entities (share sensors, the EV charging switch) sit on the
+ * consumer's hardware device or on a Helman fallback device, but they are
+ * Helman's output, never a hardware meter or control: like the backend
+ * suggestions, they neither anchor a device nor count as its candidates.
+ */
+function hardwareDevice(entities: EntityRegistry | undefined, entityId: string): string | undefined {
+    const entry = entities?.[entityId];
+    return entry?.platform === "helman" ? undefined : entry?.device_id;
+}
+
+/**
  * The one HA device a helman device's entities belong to, or `null`.
  *
  * Entities with no HA device -- helpers, utility meters, entities without a
- * unique id -- are ignored, as the backend suggestions ignore them. Entities
+ * unique id -- and Helman's own entities are ignored, as the backend suggestions ignore them. Entities
  * under two or more HA devices, or none under any, resolve to nothing.
  */
 export function sharedHaDevice(
@@ -18,7 +31,7 @@ export function sharedHaDevice(
     entityIds: readonly string[],
 ): string | null {
     const devices = new Set(
-        entityIds.map((id) => hass?.entities?.[id]?.device_id).filter((id): id is string => !!id),
+        entityIds.map((id) => hardwareDevice(hass?.entities, id)).filter((id): id is string => !!id),
     );
     return devices.size === 1 ? [...devices][0] : null;
 }
@@ -73,7 +86,7 @@ export function haDeviceEntityFilter(
     if (!filter) {
         filter = (stateObj) =>
             stateObj.entity_id === currentValue ||
-            entities[stateObj.entity_id]?.device_id === deviceId;
+            hardwareDevice(entities, stateObj.entity_id) === deviceId;
         byKey.set(key, filter);
     }
     return filter;

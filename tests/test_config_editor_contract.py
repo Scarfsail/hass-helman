@@ -601,6 +601,7 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
             patch.object(helman_init, "async_update_group_service_schemas"),
             patch.object(helman_init, "async_register_frontend", new=AsyncMock()),
             patch.object(helman_init, "async_register_panel", new=AsyncMock()),
+            patch.object(helman_init, "remove_stale_devices"),
         ):
             await _save_config_handler(
                 hass,

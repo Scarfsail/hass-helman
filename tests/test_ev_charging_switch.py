@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from custom_components.helman import switch as switch_module
+from custom_components.helman.entity import consumer_device_binding
 from custom_components.helman.switch import HelmanEvChargingSwitch
 from custom_components.helman.vendors import PROFILES, VendorDevice
 
@@ -68,7 +69,14 @@ def build(states):
         services=NS(async_call=AsyncMock(side_effect=async_call)),
         bus=NS(async_listen=Mock(return_value=Mock())),
     )
-    entity = HelmanEvChargingSwitch(NS(entry_id="helman-entry"), "garage-ev", vendor_device())
+    device = vendor_device()
+    entity = HelmanEvChargingSwitch(
+        "garage-ev",
+        device,
+        binding=consumer_device_binding(
+            hass, NS(entry_id="helman-entry"), {}, device=device.device
+        ),
+    )
     entity.hass = hass
     entity.async_write_ha_state = Mock()
     entity.async_on_remove = Mock()
@@ -87,7 +95,8 @@ def test_identity():
 
     assert entity.unique_id == "helman_ev_charging_garage-ev"
     assert entity.entity_id == "switch.helman_ev_charging_garage_ev"
-    assert entity.name == "Garage EV"
+    assert entity.translation_key == "ev_charging"
+    assert entity.device_info["name"] == "Garage EV"
 
 
 @pytest.mark.parametrize(

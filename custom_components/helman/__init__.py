@@ -13,6 +13,7 @@ from .const import (
     SENSOR_UNIQUE_ID_MIGRATIONS_V3,
     UNMEASURED_POWER_UNIQUE_ID_SUFFIX,
 )
+from .entity import remove_stale_devices
 from .frontend import async_register_frontend, async_unregister_frontend
 from .group_services import (
     async_register_group_services,
@@ -205,6 +206,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await coordinator.async_unload()
         del entry.runtime_data
         raise
+    # Retires the old shared ``Helman`` device and the consumer devices a
+    # config change left without entities.
+    remove_stale_devices(hass, entry)
     if hass.is_running:
         hass.bus.async_fire(EVENT_DATA_CHANGED, {"kind": DATA_CHANGED_KIND_CONFIG, "revision": config_revision(stor.config)})
     return True

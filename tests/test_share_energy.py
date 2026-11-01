@@ -102,9 +102,7 @@ class ShareEnergySensorTests(unittest.IsolatedAsyncioTestCase):
         self.hass = FakeHass()
         self.entry = FakeConfigEntry()
         if sensor is None:
-            sensor = sensor_module.HelmanShareEnergySensor(
-                self.entry, "klima-bartik", "Bartík"
-            )
+            sensor = sensor_module.HelmanShareEnergySensor(self.entry, "klima-bartik")
         sensor.hass = self.hass
         sensor.async_write_ha_state = Mock()
         last = None if restored is None else SensorExtraStoredData(restored, "kWh")
@@ -144,7 +142,7 @@ class ShareEnergySensorTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(sensor.entity_id, ENERGY)
         self.assertEqual(sensor.unique_id, "helman-entry_share_energy_klima-bartik")
-        self.assertEqual(sensor.name, "Share energy — Bartík")
+        self.assertEqual(sensor.translation_key, "share_energy")
         self.assertEqual(sensor.state_class, "total_increasing")
         self.assertEqual(sensor.device_class, "energy")
         self.assertEqual(sensor.native_unit_of_measurement, "kWh")
@@ -258,8 +256,8 @@ class ShareEntityLifecycleTests(unittest.TestCase):
         entry = FakeConfigEntry()
         coordinator._dynamic_sensor_factories = {
             "share": lambda node_id, entity_id, name: [
-                sensor_module.HelmanSharePowerSensor(entry, node_id, entity_id, name),
-                sensor_module.HelmanShareEnergySensor(entry, node_id, name),
+                sensor_module.HelmanSharePowerSensor(entry, node_id, entity_id),
+                sensor_module.HelmanShareEnergySensor(entry, node_id),
             ]
         }
         coordinator._tree_index = SimpleNamespace(
@@ -269,8 +267,13 @@ class ShareEntityLifecycleTests(unittest.TestCase):
             },
         )
         registry = Mock()
-        with patch(
-            "custom_components.helman.coordinator.er.async_get", return_value=registry
+        with (
+            patch(
+                "custom_components.helman.coordinator.er.async_get", return_value=registry
+            ),
+            patch(
+                "custom_components.helman.coordinator.remove_stale_devices"
+            ) as remove_stale_devices,
         ):
             coordinator._sync_derived_sensors()
             self.assertEqual(
@@ -279,12 +282,15 @@ class ShareEntityLifecycleTests(unittest.TestCase):
             )
 
             coordinator._tree_index = SimpleNamespace(qualifying_nodes={}, share_devices={})
+            remove_stale_devices.assert_not_called()
             coordinator._sync_derived_sensors()
 
         self.assertEqual(
             [c.args[0] for c in registry.async_remove.call_args_list],
             ["sensor.helman_share_power_klima_bartik", ENERGY],
         )
+        # The device they sat on goes with them.
+        remove_stale_devices.assert_called_once_with(coordinator._hass, coordinator._entry)
 
 
 if __name__ == "__main__":

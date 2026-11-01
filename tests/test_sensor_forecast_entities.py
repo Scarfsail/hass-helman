@@ -155,7 +155,7 @@ class ForecastSensorEntityTests(unittest.IsolatedAsyncioTestCase):
         )
         share = await self._added(
             sensor_module.HelmanSharePowerSensor(
-                entry, "klima", "sensor.helman_share_power_klima", "Klima"
+                entry, "klima", "sensor.helman_share_power_klima"
             )
         )
         # A rename in the registry does not detach a sensor from its value.

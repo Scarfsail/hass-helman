@@ -78,7 +78,7 @@ from .device_reports.dataset import (
     find_house_node,
 )
 from .device_reports.reports import ReportQuery, build_report
-from .entity import remove_stale_entities
+from .entity import remove_stale_devices, remove_stale_entities
 from .forecast.assembly import (
     build_automation_snapshot,
 )
@@ -663,13 +663,17 @@ class HelmanCoordinator:
 
         # Remove stale entities from HA and entity registry
         ent_reg = er.async_get(self._hass)
-        for node_id in existing_ids - new_ids:
+        stale_ids = existing_ids - new_ids
+        for node_id in stale_ids:
             for sensor in sensors.pop(node_id):
                 entity_id = sensor.entity_id
                 if entity_id:
                     # Track the removal so _on_registry_updated skips the rebuild loop
                     self._removing_entity_ids.add(entity_id)
                     ent_reg.async_remove(entity_id)
+        if stale_ids:
+            # A removed consumer's Helman device goes with its last entity.
+            remove_stale_devices(self._hass, self._entry)
 
         # Add new entities to HA
         to_add = new_ids - existing_ids
