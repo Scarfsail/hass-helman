@@ -26,7 +26,6 @@ from .consumption_forecast_profiles import (
 )
 from .consumption_forecast_statistics import ForecastBand
 from .controllables.config import read_carved_meters
-from .shared_meter_fit import own_energy_changes
 from .slot_grid import (
     SLOT,
     SLOT_MINUTES,
@@ -381,16 +380,7 @@ class ConsumptionForecastBuilder:
         for consumer in consumers_config:
             entity_id = consumer["energy_entity_id"]
             try:
-                # The carved meter's own energy: its sub-meters' slots are
-                # subtracted, so nested meters never leave the baseline twice.
-                values_by_slot = own_energy_changes(
-                    await _slot_history(entity_id),
-                    [
-                        await _slot_history(child_entity_id)
-                        for child_entity_id in consumer.get("metered_children", ())
-                    ],
-                    slot=SLOT,
-                )
+                values_by_slot = await _slot_history(entity_id)
             except Exception:
                 _LOGGER.warning(
                     "Failed to query slot history for deferrable consumer %s, using empty",
@@ -546,19 +536,11 @@ class ConsumptionForecastBuilder:
             "training_window_days": training_window_days,
             "min_history_days": min_history_days,
             "model": HOUSE_FORECAST_MODEL_ID,
-            # A meter's sub-meters change what its own energy is, so a
-            # hierarchy change retrains. Present only when there are any, so a
-            # meter without sub-meters fingerprints as it always did.
             "deferrable_consumers": sorted(
                 [
                     {
                         "energy_entity_id": consumer["energy_entity_id"],
                         "label": consumer["label"],
-                        **(
-                            {"metered_children": sorted(consumer["metered_children"])}
-                            if consumer.get("metered_children")
-                            else {}
-                        ),
                     }
                     for consumer in consumers_config
                 ],

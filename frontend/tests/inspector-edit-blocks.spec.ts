@@ -53,7 +53,7 @@ async function mountInspector(page: Page, houseChildren?: unknown[]): Promise<vo
                         switchEntityId: "switch.panel", energyEntityId: "sensor.panel_energy",
                         children: [{
                             id: "boiler", displayName: "Boiler", powerSensorId: "sensor.boiler",
-                            switchEntityId: "switch.boiler", controllableIds: ["boiler"], ownControllableIds: ["boiler"],
+                            switchEntityId: "switch.boiler", controllableIds: ["boiler"],
                             deviceKey: "sensor.boiler_energy", energyEntityId: "sensor.boiler_energy",
                             children: [],
                         }],
@@ -93,7 +93,7 @@ test("Edit blocks opens the inspector's day editor over the device detail on its
         const item = {
             id: "sensor.boiler_energy", name: "Boiler", displayName: "Boiler", children: [], valueType: "default",
             isSource: false, isUnmeasured: false, powerValue: 0, powerHistory: [0], historyBuckets: 1,
-            switchEntityId: "switch.boiler", controllableIds: ["boiler"], ownControllableIds: ["boiler"], applianceKind: "generic",
+            switchEntityId: "switch.boiler", controllableIds: ["boiler"], applianceKind: "generic",
         };
         body.firstElementChild.dispatchEvent(new CustomEvent("show-device-detail", { detail: { item }, bubbles: true, composed: true }));
     });
@@ -137,11 +137,11 @@ test("a breakdown device under a shared meter opens its own detail, not the mete
     // The meter stands for both devices' lanes; neither device has a meter of its own.
     const child = (id: string, name: string) => ({
         id, displayName: name, powerSensorId: `sensor.${id}`, switchEntityId: `switch.${id}`,
-        controllableIds: [id], ownControllableIds: [id], children: [],
+        controllableIds: [id], children: [],
     });
     await mountInspector(page, [{
         id: "meter", displayName: "Shared meter", powerSensorId: "sensor.meter", deviceKey: "sensor.meter_energy",
-        energyEntityId: "sensor.meter_energy", ownControllableIds: ["heater", "fan"],
+        energyEntityId: "sensor.meter_energy", controllableIds: ["heater", "fan"],
         children: [child("heater", "Heater"), child("fan", "Fan")],
     }]);
     await page.evaluate(() => {
@@ -194,7 +194,7 @@ test("remounting device detail from day editor over existing detail preserves hi
         const item = {
             id: "sensor.boiler_energy", name: "Boiler", displayName: "Boiler", children: [], valueType: "default",
             isSource: false, isUnmeasured: false, powerValue: 0, powerHistory: [0], historyBuckets: 1,
-            switchEntityId: "switch.boiler", controllableIds: ["boiler"], ownControllableIds: ["boiler"], applianceKind: "generic",
+            switchEntityId: "switch.boiler", controllableIds: ["boiler"], applianceKind: "generic",
         };
         body.firstElementChild.dispatchEvent(new CustomEvent("show-device-detail", { detail: { item }, bubbles: true, composed: true }));
     });

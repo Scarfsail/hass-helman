@@ -1635,11 +1635,13 @@ class SolarInspector:
             meters.grid_export,
             meters.battery_charge,
             meters.battery_discharge,
-            *(consumer["energy_entity_id"] for consumer in consumers),
             *(
-                child
+                entity_id
                 for consumer in consumers
-                for child in consumer["metered_children"]
+                for entity_id in (
+                    consumer["energy_entity_id"],
+                    *consumer["metered_children"],
+                )
             ),
         ]
         return [entity_id for entity_id in candidates if entity_id]
@@ -1657,32 +1659,6 @@ class SolarInspector:
         return _slot_energy_points(
             {slot: kwh * 1000.0 for slot, kwh in by_slot.items()},
             target_date,
-        )
-
-    @staticmethod
-    def _consumer_own_energy(
-        consumer: dict,
-        energy_by_entity: dict[str, dict[datetime, float]],
-        *,
-        slot: timedelta,
-    ) -> dict[datetime, float]:
-        """A consumer's own energy per slot: its meter minus its metered children.
-
-        The forecast and the house trainer subtract a carved meter's own energy,
-        so the breakdown does too — otherwise a sub-meter that is a row of its
-        own would be taken out of the house twice.
-        """
-        # Imported here: the recorder module needs Home Assistant's recorder,
-        # which this module's import-time tests stub out.
-        from ..shared_meter_fit import own_energy_changes
-
-        return own_energy_changes(
-            energy_by_entity.get(consumer["energy_entity_id"]) or {},
-            [
-                energy_by_entity.get(child) or {}
-                for child in consumer["metered_children"]
-            ],
-            slot=slot,
         )
 
     def _house_scheduled_consumers(self) -> list[dict]:
@@ -1739,7 +1715,9 @@ class SolarInspector:
             slot_maps = [
                 self._consumer_slot_map(
                     self._consumer_own_energy(
-                        consumer, slot_energy_by_entity, slot=SLOT
+                        consumer,
+                        slot_energy_by_entity,
+                        slot=SLOT,
                     ),
                     target_date,
                 )

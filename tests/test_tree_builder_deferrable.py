@@ -118,17 +118,14 @@ class TestHouseChildDeferrability(unittest.TestCase):
         history = asyncio.run(builder.build(include_house_without_power=True)).tree
         parent = history["consumers"][0]["children"][0]
         self.assertFalse(parent["deferrable"])
-        self.assertTrue(parent["ownDeferrable"])
-        self.assertEqual(parent["ownControllableIds"], [f"ac-{i}" for i in range(4)])
         self.assertFalse(any(node["isUnmeasured"] for node in parent["children"]))
-        self.assertFalse(parent["children"][0]["ownDeferrable"])
         from custom_components.helman.house_device_consumers import extract_house_device_consumers
         rows = extract_house_device_consumers(history)
         shares = [f"sensor.helman_share_energy_ac_{i}" for i in range(4)]
         self.assertEqual([(row["energy_entity_id"], row["deferrable"]) for row in rows],
-                         [("sensor.jistic_klimatizace_energy", True), ("sensor.heater_energy", False)]
+                         [("sensor.jistic_klimatizace_energy", False)]
                          + [(share, True) for share in shares])
-        self.assertEqual(rows[0]["metered_children"], ["sensor.heater_energy", *shares])
+        self.assertEqual(rows[0]["metered_children"], shares)
 
     def test_all_schedulable_shared_meter_and_mixed_meter_use_canonical_own_attribution(self):
         from custom_components.helman.house_device_consumers import extract_house_device_consumers
@@ -140,12 +137,11 @@ class TestHouseChildDeferrability(unittest.TestCase):
             rows = extract_house_device_consumers({"consumers": [
                 {"id": "house", "children": list(children.values())}
             ]})
-            # A carved meter splits its meterless children off as rows of
-            # their own, as it would metered ones; a passive one keeps them.
-            self.assertEqual(len(rows), 1 if passive else 5)
-            self.assertEqual(rows[0]["deferrable"], not passive)
+            self.assertEqual(len(rows), 5 if not passive else 4)
+            self.assertFalse(rows[0]["deferrable"])
             self.assertEqual(rows[0]["ids"], [])
-            self.assertEqual([row["ids"] for row in rows[1:]], [] if passive else [[f"ac-{i}"] for i in range(4)])
+            self.assertEqual([row["ids"] for row in rows[1:]],
+                             [[f"ac-{i}"] for i in range(4) if not passive or i != 0])
 
     def test_only_the_children_that_are_deferrable_controllables_are_marked(self):
         nodes = _house_children(
@@ -172,7 +168,7 @@ class TestHouseChildDeferrability(unittest.TestCase):
         nodes = _house_children([kitchen])
         kitchen = nodes["sensor.kitchen_energy"]
         # The remainder is synthesised without consulting the roster at all.
-        HelmanTreeBuilder(_Hass(), {})._add_unmeasured_items(kitchen, "Unmeasured")
+        HelmanTreeBuilder(_Hass(), {})._add_unmeasured_items(kitchen)
 
         payload = kitchen.to_dict()
         self.assertFalse(payload["deferrable"])
@@ -213,7 +209,7 @@ class TestHouseChildControllableId(unittest.TestCase):
         meter = "sensor.jistic_klimatizace_energy"
         breaker = _house_children([_breaker()])[meter].to_dict()
 
-        self.assertTrue(breaker["deferrable"])
+        self.assertFalse(breaker["deferrable"])
         self.assertEqual(breaker["controllableIds"], [])
         self.assertEqual(
             [(c["id"], c["controllableIds"], c["deferrable"]) for c in breaker["children"]],
@@ -237,25 +233,25 @@ class TestHouseChildControllableId(unittest.TestCase):
 
 
 class TestCarveOutTintFollowsOwnEnergy(unittest.TestCase):
-    """A carved meter carves its own energy; the tint goes where that shows."""
+    """Only schedulable leaves carry the carve tint."""
 
     METER = "sensor.jistic_klimatizace_energy"
     REMAINDER = "sensor_jistic_klimatizace_energy_unmeasured"
 
-    def test_with_a_metered_child_the_remainder_is_marked_not_the_aggregate(self):
+    def test_with_a_metered_child_the_remainder_is_passive(self):
         breaker = _built_house_children([_breaker(metered_child=True)])[self.METER]
         children = {c["id"]: c for c in breaker["children"]}
 
         self.assertFalse(breaker["deferrable"])
-        self.assertTrue(children[self.REMAINDER]["deferrable"])
+        self.assertFalse(children[self.REMAINDER]["deferrable"])
         # The sub-metered heater is not schedulable demand.
         self.assertFalse(children["sensor.heater_energy"]["deferrable"])
 
-    def test_without_metered_children_the_parent_keeps_the_mark(self):
+    def test_without_metered_children_the_parent_stays_passive(self):
         breaker = _built_house_children([_breaker()])[self.METER]
         children = {c["id"]: c for c in breaker["children"]}
 
-        self.assertTrue(breaker["deferrable"])
+        self.assertFalse(breaker["deferrable"])
         self.assertFalse(children[self.REMAINDER]["deferrable"])
 
 

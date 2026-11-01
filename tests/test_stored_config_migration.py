@@ -367,14 +367,22 @@ def _live_v19() -> dict:
     }
 
 
-#: What the v19 readers derived from the live shape: the carved meters in
+#: What the current reader derives from the migrated live shape: the carved devices in
 #: order, each with its label and the controllables behind it.
 _V19_CARVED = [
     ("sensor.ev_charge_added_total", "EV", ["garage-ev"]),
     ("sensor.jistic_bazen_filtrace_energy", "Filtration", ["pool-filtration"]),
     ("sensor.jistic_bazen_tepelne_cerpadlo_energy", "Pool heat pump", ["climate-pool"]),
     ("sensor.bazen_primotop_tc_energy", "Pool heater", ["appliance-heater-pool"]),
-    (_AC_METER, _AC_METER, ["klima-obyvak", "klima-bartik", "klima-adelka", "klima-loznice"]),
+    *(
+        (f"sensor.helman_share_energy_{ac_id.replace('-', '_')}", label, [ac_id])
+        for ac_id, label in (
+            ("klima-obyvak", "AC living room"),
+            ("klima-bartik", "AC Bartik"),
+            ("klima-adelka", "AC Adelka"),
+            ("klima-loznice", "AC bedroom"),
+        )
+    ),
 ]
 
 
@@ -484,7 +492,6 @@ class LiveShapedMigrationTests(unittest.TestCase):
             [(c["energy_entity_id"], c["label"], c["ids"]) for c in carved],
             _V19_CARVED,
         )
-        self.assertTrue(all(c["metered_children"] == [] for c in carved))
         # Same fingerprint, so the stored house profile is adopted, not refit.
         self.assertEqual(
             _house_fingerprint(carved),

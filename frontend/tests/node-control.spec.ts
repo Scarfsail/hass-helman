@@ -683,7 +683,7 @@ test.describe("Schedule lane icons in power card editor", () => {
                 children: [
                     treeNode({
                         id: "boiler", displayName: "Boiler", powerSensorId: "sensor.boiler",
-                        switchEntityId: "switch.boiler", controllableIds: ["boiler"], ownControllableIds: ["boiler"],
+                        switchEntityId: "switch.boiler", controllableIds: ["boiler"],
                         energyEntityId: "sensor.boiler_energy",
                     }),
                 ],

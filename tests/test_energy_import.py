@@ -140,6 +140,8 @@ class EnergyImportTests(unittest.TestCase):
         self.assertEqual(
             [c["id"] for c in result.devices[0]["children"]], ["ac", "plug_energy"]
         )
+        self.assertNotIn("schedulable", result.devices[0]["children"][1])
+        self.assertEqual(result.conflicts, [])
 
     def test_a_powerless_row_beside_meterless_children_is_a_conflict(self) -> None:
         # The live split needs every metered sibling's power, and the parent's

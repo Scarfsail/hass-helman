@@ -274,6 +274,8 @@ class TreeFromDevicesTests(unittest.TestCase):
         # a remainder shows the breaker's standby.
         breaker = expected[AC_BREAKER]
         self.assertEqual(breaker["children"], {})
+        # The passive breaker no longer inherits its children's schedulability.
+        breaker["deferrable"] = False
         breaker["controllableIds"] = []
         breaker["children"] = {
             **{

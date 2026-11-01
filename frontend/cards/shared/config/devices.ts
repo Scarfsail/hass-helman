@@ -227,18 +227,6 @@ export function meterlessChildren(device: JsonObject): JsonObject[] {
 }
 
 /**
- * Whether this device's meter is carved out of the house baseline — the rule
- * `read_carved_meters` applies: it is schedulable, or it has meterless children
- * and every one of them is schedulable.
- */
-export function isCarvedMeterOwner(device: JsonObject): boolean {
-  if (!ownMeter(device)) return false;
-  if (isSchedulable(device)) return true;
-  const meterless = meterlessChildren(device);
-  return meterless.length > 0 && meterless.every(isSchedulable);
-}
-
-/**
  * Whether a device may hold children: it owns a meter and is not schedulable
  * (a schedulable device is a leaf). What the parent picker offers.
  */

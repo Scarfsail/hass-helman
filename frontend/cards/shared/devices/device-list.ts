@@ -36,16 +36,13 @@ import {
   deviceKind,
   nameSlug,
   CONTROLLABLE_ID_INVERTER,
-  isSchedulable,
   iterDevices,
-  meterlessChildren,
   ownMeter,
   SWITCH_CONTROL_DOMAINS,
   uniqueDeviceId,
 } from "../config/devices";
 import { freeCandidates, candidateLabel } from "./hardware-profile";
 import {
-  SEEDED_PROJECTION,
   EDITABLE_DEVICE_KINDS,
   deviceIssues,
   deviceName,
@@ -332,9 +329,6 @@ export class DeviceListController implements ReactiveController {
     const entityId = rawEntityId.trim();
     if (!entityId) return;
     const domain = entityId.split(".")[0];
-    if (parent !== null && domain === "cover" && meterlessChildren(parent).some((sibling) => isSchedulable(sibling))) {
-      return;
-    }
     const meterlessIds = parent !== null && domain !== "sensor"
       ? iterDevices(this.source.resolvedConfig())
           .filter((entry) => entry.parent !== null && !ownMeter(entry.device))
@@ -351,10 +345,6 @@ export class DeviceListController implements ReactiveController {
           : domain === "cover"
             ? { id, controls: { cover: { entity_id: entityId } } }
             : { id, controls: { switch: { entity_id: entityId } } };
-      if (domain !== "cover" && meterlessChildren(parent).some((sibling) => isSchedulable(sibling))) {
-        device.schedulable = true;
-        device.consumption = { projection: { ...SEEDED_PROJECTION } };
-      }
     }
     this.addDeviceTarget = null;
     this.source.mutate((draft) => {
@@ -599,11 +589,7 @@ export function renderAddDevice(
         </label>
         <ha-entity-picker
           .hass=${controller.hass}
-          .includeDomains=${child
-            ? parent !== null && meterlessChildren(parent).some((sibling) => isSchedulable(sibling))
-              ? ["sensor", ...SWITCH_CONTROL_DOMAINS, "climate"]
-              : ["sensor", ...SWITCH_CONTROL_DOMAINS, "cover", "climate"]
-            : ["sensor"]}
+          .includeDomains=${child ? ["sensor", ...SWITCH_CONTROL_DOMAINS, "cover", "climate"] : ["sensor"]}
           .entityFilter=${SENSOR_KIND_FILTERS.energy}
           @value-changed=${(event: CustomEvent<{ value?: string }>) =>
             controller.addDevice(listPath, parent, event.detail?.value ?? "")}

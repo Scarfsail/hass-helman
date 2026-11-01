@@ -456,11 +456,8 @@ def read_schedulable_consumers(
     The forecast's itemisation is keyed by device id, so this is keyed by id
     too, and a device that declares none is skipped: nothing can be scheduled
     against it. ``energy_entity_id`` is :func:`device_energy_entity`, and
-    ``deferrable`` says whether the device's load is carved out of the house
-    baseline — the same answer :func:`read_carved_meters` gives, on both sides
-    of now: its own meter is carved, or, for a meterless child, its parent's.
+    Every schedulable device is a carved leaf.
     """
-    carved = {meter["energy_entity_id"] for meter in read_carved_meters(config)}
     shared_ids = shared_member_ids(config)
     consumers: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -473,13 +470,12 @@ def read_schedulable_consumers(
         if is_estimated(device, parent) and controllable_id not in shared_ids:
             continue
         seen.add(controllable_id)
-        carve_meter = own_meter(parent if is_estimated(device, parent) else device)
         consumers.append(
             {
                 "id": controllable_id,
                 "label": _device_label(device, controllable_id),
                 "energy_entity_id": device_energy_entity(device, parent),
-                "deferrable": carve_meter in carved,
+                "deferrable": True,
             }
         )
     return consumers
@@ -488,50 +484,25 @@ def read_schedulable_consumers(
 def read_carved_meters(
     config: Mapping[str, Any] | None,
 ) -> list[dict[str, Any]]:
-    """``[{energy_entity_id, label, ids, metered_children}]`` — meters carved out of house load.
-
-    The house forecast is the baseline plus schedulable demand, so a meter's
-    *own* energy — its reading minus its metered children's — is carved out of
-    the baseline exactly when all demand behind it is schedulable:
-
-    * the owner is schedulable (then it is a leaf, and its own energy is its
-      meter), or
-    * it has meterless children and every one of them is schedulable.
-
-    ``metered_children`` are the meters of the owner's direct children that
-    have their own, which is what own energy subtracts; nested meters therefore
-    never subtract twice. ``ids`` are the devices whose demand the meter stands
-    for: the owner's id when it is schedulable, else its meterless children's —
-    a schedule keyed by exactly those ids resolves to this meter.
-
-    ``label`` is the owner's configured name, else the meter's entity id.
-    """
+    """``[{energy_entity_id, label, ids}]`` — schedulable leaves carved from house load."""
     carved: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for device, _parent in iter_devices(config):
-        meter = own_meter(device)
-        if meter is None or meter in seen:
+    shared_ids = shared_member_ids(config)
+    for device, parent in iter_devices(config):
+        if not is_schedulable(device):
             continue
-        children = device_children(device)
-        meterless = [child for child in children if own_meter(child) is None]
-        if is_schedulable(device):
-            owner_id = peek_controllable_id(device)
-            ids = [owner_id] if owner_id is not None else []
-        elif meterless and all(is_schedulable(child) for child in meterless):
-            ids = [
-                child_id
-                for child in meterless
-                if (child_id := peek_controllable_id(child)) is not None
-            ]
-        else:
+        device_id = peek_controllable_id(device)
+        if is_estimated(device, parent) and device_id not in shared_ids:
+            continue
+        meter = device_energy_entity(device, parent)
+        if meter is None or meter in seen:
             continue
         seen.add(meter)
         carved.append(
             {
                 "energy_entity_id": meter,
                 "label": _device_label(device, meter),
-                "ids": ids,
-                "metered_children": _metered_children(children),
+                "ids": [device_id] if device_id is not None else [],
             }
         )
     return carved

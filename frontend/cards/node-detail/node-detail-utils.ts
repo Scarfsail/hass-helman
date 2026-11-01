@@ -26,12 +26,10 @@ export const readKWh = (
 };
 
 /**
- * The lanes a device's Schedule tab drives, once each in tree order: its own,
- * and those its meter stands for, as a meter shared by several controllables.
+ * The lanes a device's Schedule tab drives, once each in tree order.
  */
 export const deviceControllableIds = (item: TreeItem): string[] => {
-    const { controllableIds = [], ownControllableIds = [] } = item;
-    return [...new Set([...controllableIds, ...ownControllableIds])];
+    return item.controllableIds ?? [];
 };
 
 /** A device's power sensor: none when its configured power sensor is its energy meter. */
