@@ -97,6 +97,7 @@ class ShareEnergySensorTests(unittest.IsolatedAsyncioTestCase):
         restored: float | None,
         start: list | None = None,
         sensor=None,
+        registry=None,
     ):
         self.hass = FakeHass()
         self.entry = FakeConfigEntry()
@@ -111,6 +112,13 @@ class ShareEnergySensorTests(unittest.IsolatedAsyncioTestCase):
         self.start = AsyncMock(side_effect=start or [restored])
         with (
             patch.object(RestoreEntity, "async_added_to_hass", AsyncMock()),
+            # By default the share-power sensor is not registered.
+            patch.object(
+                sensor_module.er,
+                "async_get",
+                return_value=registry
+                or Mock(async_get_entity_id=Mock(return_value=None)),
+            ),
             patch.object(
                 sensor_module.HelmanShareEnergySensor,
                 "async_get_last_sensor_data",
@@ -174,6 +182,18 @@ class ShareEnergySensorTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(sensor.native_value, 4.5)
         sensor.async_write_ha_state.assert_called_once()
+
+    async def test_the_source_is_resolved_through_the_registry(self) -> None:
+        registry = Mock()
+        registry.async_get_entity_id.return_value = "sensor.renamed_share"
+        await self._added(restored=1.0, registry=registry)
+
+        registry.async_get_entity_id.assert_called_once_with(
+            "sensor", "helman", "helman-entry_share_power_klima-bartik"
+        )
+        self.assertEqual(
+            self.start.await_args.kwargs["source_entity_id"], "sensor.renamed_share"
+        )
 
     async def test_the_unrounded_total_is_restored(self) -> None:
         sensor = await self._added(restored=1.0)

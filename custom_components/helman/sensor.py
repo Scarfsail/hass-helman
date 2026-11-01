@@ -15,6 +15,7 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfEnergy, UnitOfTime
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -28,6 +29,7 @@ from .const import (
     BATTERY_TIME_TO_EMPTY_ENTITY_ID,
     BATTERY_TIME_TO_FULL_ENTITY_ID,
     CONSUMPTION_TOTAL_ENTITY_ID,
+    DOMAIN,
     GRID_EXPORT_PRICE_ENTITY_ID,
     GRID_IMPORT_PRICE_ENTITY_ID,
     HOUSE_CONSUMPTION_ENTITY_ID,
@@ -353,8 +355,12 @@ class HelmanSharePowerSensor(_HelmanDerivedPowerSensor):
     ) -> None:
         super().__init__(entry)
         self.entity_id = self._live_key = entity_id
-        self._attr_unique_id = f"{entry.entry_id}_share_power_{device_id}"
+        self._attr_unique_id = self.unique_id_for(entry, device_id)
         self._attr_name = f"Share — {device_name}"
+
+    @staticmethod
+    def unique_id_for(entry: ConfigEntry, device_id: str) -> str:
+        return f"{entry.entry_id}_share_power_{device_id}"
 
 
 class HelmanShareEnergySensor(_HelmanLiveSensor, RestoreSensor):
@@ -384,7 +390,10 @@ class HelmanShareEnergySensor(_HelmanLiveSensor, RestoreSensor):
     def __init__(self, entry: ConfigEntry, device_id: str, device_name: str) -> None:
         super().__init__(entry)
         self.entity_id = self._live_key = share_energy_entity_id(device_id)
-        self._source_entity_id = share_power_entity_id(device_id)
+        self._share_power_unique_id = HelmanSharePowerSensor.unique_id_for(
+            entry, device_id
+        )
+        self._default_source_entity_id = share_power_entity_id(device_id)
         self._attr_unique_id = f"{entry.entry_id}_share_energy_{device_id}"
         self._attr_name = f"Share energy — {device_name}"
         self._total: float | None = None
@@ -420,12 +429,21 @@ class HelmanShareEnergySensor(_HelmanLiveSensor, RestoreSensor):
         )
         self.async_on_remove(task.cancel)
 
+    def _source_entity_id(self) -> str:
+        """The share-power sensor's entity id: renamed, its statistics follow."""
+        return (
+            er.async_get(self.hass).async_get_entity_id(
+                "sensor", DOMAIN, self._share_power_unique_id
+            )
+            or self._default_source_entity_id
+        )
+
     async def _async_start(self, restored: float | None) -> None:
         while (
             total := await async_initial_share_energy_total(
                 self.hass,
                 restored=restored,
-                source_entity_id=self._source_entity_id,
+                source_entity_id=self._source_entity_id(),
                 target_entity_id=self.entity_id,
                 store_key=self.unique_id,
             )

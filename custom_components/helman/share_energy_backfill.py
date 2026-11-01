@@ -44,8 +44,11 @@ from homeassistant.components.recorder.db_schema import StatisticsShortTerm
 from homeassistant.components.recorder.history import state_changes_during_period
 from homeassistant.components.recorder.models import StatisticData, StatisticMetaData
 from homeassistant.components.recorder.statistics import async_import_statistics
+from homeassistant.const import UnitOfEnergy
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.util import dt as dt_util
+from homeassistant.util.unit_conversion import EnergyConverter
 
 from . import recorder_statistics_span as span_mod
 from .const import DOMAIN
@@ -138,20 +141,28 @@ async def async_initial_share_energy_total(
 
 
 def _last_recorded_total(hass: HomeAssistant, entity_id: str) -> float | None:
-    """The entity's newest numeric state in the recorder, if any."""
+    """The entity's newest numeric state in the recorder, in kWh, if any.
+
+    Home Assistant records the state in the unit the user selected for the
+    sensor, so it is converted back to the kWh the sensor accumulates in.
+    """
     states = state_changes_during_period(
         hass,
         dt_util.utcnow() - _MAX_SPAN,
         entity_id=entity_id,
-        no_attributes=True,
+        no_attributes=False,
         descending=True,
         limit=_RECORDED_STATES,
         include_start_time_state=False,
     ).get(entity_id.lower(), [])
     for state in states:
         try:
-            return float(state.state)
-        except ValueError:
+            return EnergyConverter.convert(
+                float(state.state),
+                state.attributes.get("unit_of_measurement", UnitOfEnergy.KILO_WATT_HOUR),
+                UnitOfEnergy.KILO_WATT_HOUR,
+            )
+        except (ValueError, HomeAssistantError):
             continue
     return None
 

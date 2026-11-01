@@ -654,7 +654,7 @@ class TestShareEnergyBackfill(unittest.IsolatedAsyncioTestCase):
 
         self.backfill = share_energy_backfill
         self.short_term = StatisticsShortTerm
-        self.make_state = lambda value: State(self.TARGET, value)
+        self.make_state = lambda value, **attrs: State(self.TARGET, value, attrs)
         self.stored: dict[str, Any] = {}
         stored = self.stored
 
@@ -865,6 +865,15 @@ class TestShareEnergyBackfill(unittest.IsolatedAsyncioTestCase):
 
         import_fn.assert_not_called()
         self.probe.assert_not_called()
+
+    async def test_a_recorded_total_is_converted_from_the_selected_unit(self) -> None:
+        # Home Assistant records the state in the unit the user selected.
+        self.recorded_states[:] = [
+            self.make_state("5", unit_of_measurement="bananas"),
+            self.make_state("2000", unit_of_measurement="Wh"),
+        ]
+
+        self.assertEqual(await self._run(Mock(), restored=2.0), 2.0)
 
     async def test_a_recorded_total_alone_needs_no_backfill(self) -> None:
         # A lost restore file, with a stale back-fill total in the store.
