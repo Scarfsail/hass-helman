@@ -46,7 +46,8 @@ TREE = {
                     "children": [],
                 },
                 {
-                    "id": "klima",
+                    "id": "sensor.helman_share_energy_klima",
+                    "deviceId": "klima",
                     "powerSensorId": "sensor.helman_share_power_klima",
                     "isEstimated": True,
                     "displayName": "Klima",

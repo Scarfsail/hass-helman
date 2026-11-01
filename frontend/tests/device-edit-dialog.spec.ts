@@ -133,8 +133,7 @@ async function mountDetail(page: Page, options: MountOptions = {}): Promise<void
             };
             content.params = {
                 nodeType: "device",
-                item: { id: key, name: "Boiler", displayName: "Boiler", deviceKey: key,
-                    deviceKeyIsMeter: key.startsWith("sensor."), children: [] },
+                item: { id: key, name: "Boiler", displayName: "Boiler", deviceKey: key, children: [] },
                 ancestors: [],
             };
             content.open = true;
@@ -208,8 +207,8 @@ test.describe("editing a device from its detail", () => {
         await expect(dialog(page).locator("details.device-card").first().locator(":scope > summary .list-actions")).toHaveCount(0);
     });
 
-    test("Settings opens the form of a meterless device named by its id", async ({ page }) => {
-        await mountDetail(page, { deviceKey: "pump" });
+    test("Settings opens the form of a meterless device named by its share-energy sensor", async ({ page }) => {
+        await mountDetail(page, { deviceKey: "sensor.helman_share_energy_pump" });
         await openEdit(page);
         await expect.poll(() => cardIds(page)).toEqual(["pump"]);
     });

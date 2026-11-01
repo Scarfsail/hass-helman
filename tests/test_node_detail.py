@@ -2517,9 +2517,9 @@ def test_todays_attribution_is_the_chargers_ranking_node_over_the_local_day():
     assert payload["unavailable"] is None
 
 
-def test_a_meterless_charger_is_found_by_its_id_in_the_ranking():
+def test_a_meterless_charger_is_found_by_its_share_energy_sensor_in_the_ranking():
     report = ev_ranking()
-    report["nodes"][1]["id"] = "garage-ev"
+    report["nodes"][1]["id"] = "sensor.helman_share_energy_garage_ev"
     payload, _ = ev_detail(section="today", report=report, cfg=ev_config(meter=False))
 
     assert payload["charger"]["kwh"] == 6.4

@@ -288,6 +288,19 @@ export function hasSwitch(device: JsonObject): boolean {
 /** Lower-case, every other run of characters `_`, trimmed -- as `share_sensor_slug` does. */
 const slug = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
 
+/**
+ * The entity a device's energy is read from: its own meter, else -- a child
+ * drawing from its parent's -- the share-energy sensor Helman publishes for it.
+ * Mirrors `device_energy_entity`; `""` for a top-level device without a meter
+ * or a meterless child without an id.
+ */
+export function deviceEnergyEntity(device: JsonObject, parent: JsonObject | null): string {
+  const meter = ownMeter(device);
+  if (meter || !parent) return meter;
+  const id = typeof device.id === "string" ? device.id.trim() : "";
+  return id ? `sensor.helman_share_energy_${slug(id)}` : "";
+}
+
 /** `name` folded to ASCII, then {@link slug}ged; empty when nothing is left. */
 export const nameSlug = (name: string) => slug(name.normalize("NFKD").replace(/[^\x00-\x7f]/g, ""));
 
@@ -376,17 +389,18 @@ export function uniqueDeviceId(
 }
 
 /**
- * The device a card row names, by the key the device tree carries for it:
- * its `id`, or its own meter. Ids and meters are each unique on their own
- * (`duplicate_meter` in `config_validation.py`) but not across each other,
- * so the caller says which one the key is. `null` when nothing matches.
+ * The device a key names: its `id`, or its energy entity -- the key the device
+ * tree carries for a card row ({@link deviceEnergyEntity}). Ids and energy
+ * entities are each unique on their own (`duplicate_meter` in
+ * `config_validation.py`) but not across each other, so the caller says which
+ * one the key is. `null` when nothing matches.
  */
 export function findDeviceByKey(
   config: JsonObject | null | undefined,
   key: string,
-  by: "id" | "meter",
+  by: "id" | "energy",
 ): DeviceEntry | null {
   return (
-    iterDevices(config).find((entry) => (by === "id" ? entry.device.id : ownMeter(entry.device)) === key) ?? null
+    iterDevices(config).find((entry) => (by === "id" ? entry.device.id : deviceEnergyEntity(entry.device, entry.parent)) === key) ?? null
   );
 }

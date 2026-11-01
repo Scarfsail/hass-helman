@@ -373,7 +373,7 @@ test.describe("deferrable house consumers on the power card", () => {
                     childrenCollapsed: false,
                     children: [
                         {
-                            id: "ac-living-room",
+                            id: "sensor.helman_share_energy_ac_living_room",
                             name: "AC living room",
                             isEstimated: true,
                             powerSensorId: "sensor.helman_share_power_ac_living_room",
@@ -400,6 +400,27 @@ test.describe("deferrable house consumers on the power card", () => {
             expect(value).toBe("≈ —");
         });
     }
+
+    test("a metered device whose power sensor is unavailable reads as unknown, unmarked", async ({ page }) => {
+        await page.evaluate(() => {
+            (window.__fakeHass as any).states = { "sensor.fridge_power": { state: "unavailable", attributes: {} } };
+        });
+        await mountRows(page, [
+            { id: "sensor.fridge_energy", name: "Fridge", powerSensorId: "sensor.fridge_power", powerValue: 0 },
+        ]);
+
+        const value = await page.evaluate(async () => {
+            const el = document.querySelector("helman-tree-item-list") as any;
+            await el.updateComplete;
+            const row = el.shadowRoot.querySelector("helman-tree-item") as any;
+            await row.updateComplete;
+            const display = row.shadowRoot.querySelector("helman-tree-item-power-display") as any;
+            await display.updateComplete;
+            return (display.shadowRoot.querySelector(".powerValue")?.textContent ?? "").replace(/\s+/g, " ").trim();
+        });
+
+        expect(value).toBe("—");
+    });
 });
 
 declare global {

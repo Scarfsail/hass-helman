@@ -22,6 +22,7 @@ import { configDefaultValue } from "../../cards/shared/config/config-defaults";
 import { entityGroupKey, type EntityFact } from "../../cards/shared/config/entity-group";
 import { asJsonArray, asJsonObject } from "../../cards/shared/config/config-document";
 import {
+  deviceEnergyEntity,
   deviceKind,
   isCarvedMeterOwner,
   isSchedulable,
@@ -84,6 +85,8 @@ export interface ApplianceEnergyDepthDevice {
   id: string;
   name: string;
   device: JsonObject;
+  /** The device it draws from, for a meterless child; else `null`. */
+  parent: JsonObject | null;
   learns: boolean;
   lookbackDays: number;
   /** Its (effective) meter, sub-meters, power sensor and activity entity. */
@@ -395,6 +398,7 @@ export class TrainingTabController implements ReactiveController {
           id: item.id,
           name: item.name,
           device: item.device,
+          parent: item.parent,
           learns: item.learns,
           lookbackDays: days,
           entities: [
@@ -408,10 +412,10 @@ export class TrainingTabController implements ReactiveController {
     });
   }
 
-  deviceEnergyEstimate(device: JsonObject): DeviceEnergyInput {
+  deviceEnergyEstimate(device: JsonObject, parent: JsonObject | null): DeviceEnergyInput {
     const job = this.trainingJob("appliance_energy");
     const id = stringValue(device.id);
-    const recordKey = this.deviceKey(device);
+    const recordKey = this.deviceKey(device, parent);
     const projection = asJsonObject(asJsonObject(device.consumption)?.projection);
     const hourly = projection?.hourly_energy_kwh;
     const projects = isSchedulable(device) && deviceKind(device) !== "ev_charger";
@@ -458,25 +462,18 @@ export class TrainingTabController implements ReactiveController {
     return resolvedDraft(this.host.config, this.host.vendors);
   }
 
-  deviceKey(device: JsonObject): string {
-    return ownMeter(device) || stringValue(device.id);
+  /** Where a device's record and tree row are keyed: its energy entity. */
+  deviceKey(device: JsonObject, parent: JsonObject | null): string {
+    return deviceEnergyEntity(device, parent);
   }
 
-  deviceTreeKey(device: JsonObject): string {
-    return `${ownMeter(device) ? "meter" : "id"}:${this.deviceKey(device)}`;
-  }
-
-  treeItemKey(item: TreeItem): string {
-    return `${item.deviceKeyIsMeter ? "meter" : "id"}:${item.deviceKey}`;
-  }
-
-  savedDeviceUnchanged(device: JsonObject): boolean {
-    const key = this.deviceTreeKey(device);
+  savedDeviceUnchanged(device: JsonObject, parent: JsonObject | null): boolean {
+    const key = this.deviceKey(device, parent);
     const id = stringValue(device.id);
     const name = stringValue(device.name);
     return iterDevices(resolvedDraft(this.host.savedConfig, this.host.vendors)).some(
-      ({ device: saved }) =>
-        this.deviceTreeKey(saved) === key &&
+      ({ device: saved, parent: savedParent }) =>
+        this.deviceKey(saved, savedParent) === key &&
         stringValue(saved.id) === id &&
         stringValue(saved.name) === name,
     );
@@ -494,7 +491,7 @@ export class TrainingTabController implements ReactiveController {
       if (!this.deviceTreeRequest.isCurrent(request)) return;
       const items = new Map<string, TreeItem>();
       const walk = (item: TreeItem): void => {
-        if (item.deviceKey) items.set(this.treeItemKey(item), item);
+        if (item.deviceKey) items.set(item.deviceKey, item);
         item.children.forEach(walk);
       };
       for (const dto of [...payload.sources, ...payload.consumers]) {
@@ -502,7 +499,7 @@ export class TrainingTabController implements ReactiveController {
       }
       this.deviceTreeItems = items;
       if (this.deviceDetail) {
-        this.deviceDetail = items.get(this.treeItemKey(this.deviceDetail)) ?? null;
+        this.deviceDetail = items.get(this.deviceDetail.deviceKey ?? "") ?? null;
       }
     } catch (error) {
       console.error("Helman: failed to load the device tree", error);
@@ -768,8 +765,8 @@ export function renderApplianceEnergyRow(
   const known = depths.every((depth) => typeof depth === "number");
   const short = device.entities.some((row) => controller.isTrainingDepthRowShort(row));
   const label = html`<div class="training-depth-label">${device.name}</div>`;
-  const item = controller.savedDeviceUnchanged(device.device)
-    ? controller.deviceTreeItems?.get(controller.deviceTreeKey(device.device))
+  const item = controller.savedDeviceUnchanged(device.device, device.parent)
+    ? controller.deviceTreeItems?.get(controller.deviceKey(device.device, device.parent))
     : undefined;
   return html`
     <tr class=${short ? "training-depth-warn" : ""}>
@@ -791,7 +788,7 @@ export function renderApplianceEnergyRow(
       <td class="training-depth-role">
         ${renderDeviceEnergyValue(
           (key) => host._t(`device_energy.${key}`),
-          controller.deviceEnergyEstimate(device.device),
+          controller.deviceEnergyEstimate(device.device, device.parent),
         )}
       </td>
       <td class="training-depth-number">

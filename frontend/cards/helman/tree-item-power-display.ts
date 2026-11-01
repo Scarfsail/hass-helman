@@ -14,8 +14,8 @@ export class HelmanTreeItemPowerDisplay extends LitElement {
     @property({ type: String }) public valueKind: ValueKind = "power";
     /** The figure is an estimate (a share of a parent's meter), so it reads `≈`. */
     @property({ type: Boolean }) public estimated = false;
-    /** The estimate cannot be made (an input to its parent's own power is
-     *  unavailable): show that, not a misleading `≈0 W`. */
+    /** The power sensor reads no number -- for an estimate, an input to its
+     *  parent's own power is unavailable: show that, not a misleading `0 W`. */
     @property({ type: Boolean }) public unavailable = false;
 
     private _showMoreInfo(entityId: string) {
@@ -73,7 +73,7 @@ export class HelmanTreeItemPowerDisplay extends LitElement {
 
         if (this.unavailable) {
             return html`<div class="powerDisplay ${this.powerSensorId ? 'has-sensor' : ''}" @click=${onPowerClick}>
-                            <div class="powerValue unavailable">≈ —</div>
+                            <div class="powerValue unavailable">${this.estimated ? "≈ " : ""}—</div>
                         </div>`;
         }
 

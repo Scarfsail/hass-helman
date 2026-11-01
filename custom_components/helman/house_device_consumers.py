@@ -31,8 +31,9 @@ def extract_house_device_consumers(tree: Any) -> list[dict[str, Any]]:
 
     Passive descendants remain inside their nearest included ancestor. A carved
     meter exposes its own load separately from its metered children, and a nested
-    carved meter is subtracted from its nearest included ancestor exactly once.
-    Estimated share and synthetic live remainder nodes never own history.
+    carved meter is subtracted from its nearest included ancestor exactly once. A
+    meterless child reads its share-energy sensor like any metered child; the
+    synthetic live remainder nodes never own history.
 
     Only relationships and metadata are resolved here. Missing readings, excess
     child energy and slot alignment belong to the inspector's own-energy reader,
@@ -51,7 +52,7 @@ def extract_house_device_consumers(tree: Any) -> list[dict[str, Any]]:
     def visit(node: Any, ancestor: dict | None, split_children: bool) -> None:
         if not isinstance(node, dict):
             return
-        if any(node.get(flag) for flag in _SKIPPED_NODE_FLAGS) or node.get("isEstimated"):
+        if any(node.get(flag) for flag in _SKIPPED_NODE_FLAGS):
             return
         meter = node.get("energyEntityId")
         own_deferrable = bool(node.get("ownDeferrable"))
@@ -73,6 +74,11 @@ def extract_house_device_consumers(tree: Any) -> list[dict[str, Any]]:
                 }
                 if ancestor is not None:
                     ancestor["metered_children"].append(meter)
+                    # A controllable is claimed by exactly one row: a carved
+                    # parent's meterless children each claim their own id.
+                    ancestor["ids"] = [
+                        claimed for claimed in ancestor["ids"] if claimed not in row["ids"]
+                    ]
                 result.append(row)
                 ancestor = row
                 split_children = own_deferrable

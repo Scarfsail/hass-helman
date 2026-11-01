@@ -17,8 +17,7 @@ export function hydrateItem(dto: TreeItemDTO, historyBuckets: number, localize: 
     item.climateEntityId = dto.climateEntityId;
     item.coverEntityId = dto.coverEntityId;
     item.energyEntityId = dto.energyEntityId ?? undefined;
-    item.deviceKey = dto.energyEntityId ?? (dto.isEstimated ? dto.id : undefined);
-    item.deviceKeyIsMeter = !!dto.energyEntityId;
+    item.deviceKey = dto.energyEntityId ?? undefined;
     item.valueType = dto.valueType;
     item.power = dto.power;
     item.maxPowerW = dto.maxPowerW;

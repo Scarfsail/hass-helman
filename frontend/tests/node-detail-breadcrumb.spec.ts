@@ -39,7 +39,7 @@ const TREE = treePayload({
             }),
             device("Pumps", {
                 icon: "mdi:pump",
-                children: [treeNode({ id: "pump", displayName: "Pump", isEstimated: true, powerSensorId: "sensor.pump_share" })],
+                children: [treeNode({ id: "sensor.helman_share_energy_pump", displayName: "Pump", isEstimated: true, energyEntityId: "sensor.helman_share_energy_pump", powerSensorId: "sensor.helman_share_power_pump" })],
             }),
             device("Lamp", { switchEntityId: "switch.lamp" }),
         ],

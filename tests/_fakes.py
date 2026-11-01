@@ -542,6 +542,50 @@ def _study_breaker(*, plug_power: bool = True) -> dict:
 
 
 
+#: The kitchen: a metered circuit whose own load is 1.3 kW for one hour, and a
+#: meterless dishwasher behind it, learned at 1 kW and running that whole hour,
+#: under a 0 % tolerance -- so the dishwasher is handed exactly 1 kWh and
+#: 0.3 kWh stays on the circuit's remainder. The tree, the device report and the
+#: device-stats record must all agree on that split.
+KITCHEN_ENERGY = "sensor.kitchen_energy"
+KITCHEN_POWER = "sensor.kitchen_power"
+DISHWASHER_SWITCH = "switch.dishwasher"
+DISHWASHER_ENERGY = "sensor.helman_share_energy_dishwasher"
+DISHWASHER_POWER = "sensor.helman_share_power_dishwasher"
+KITCHEN_OWN_KW = 1.3
+DISHWASHER_WEIGHTS = {"dishwasher": 1.0}
+DISHWASHER_KWH = 1.0
+KITCHEN_REMAINDER_KWH = 0.3
+
+
+def kitchen_config() -> dict:
+    """The kitchen circuit and its meterless dishwasher, under the house."""
+    return {
+        "visualization": {"history_buckets": 60, "history_bucket_duration": 1},
+        "energy_nodes": {"house": {"entities": {"power": "sensor.house_power"}}},
+        "devices": {
+            "consumers": [
+                {
+                    "id": "kitchen",
+                    "name": "Kitchen",
+                    "consumption": {
+                        "energy_entity_id": KITCHEN_ENERGY,
+                        "power_entity_id": KITCHEN_POWER,
+                        "children_tolerance_percent": 0,
+                    },
+                    "children": [
+                        {
+                            "id": "dishwasher",
+                            "name": "Dishwasher",
+                            "controls": {"switch": {"entity_id": DISHWASHER_SWITCH}},
+                        }
+                    ],
+                }
+            ]
+        },
+    }
+
+
 REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
 CURRENT_SLOT_ID = "2026-03-20T21:00:00+01:00"
 

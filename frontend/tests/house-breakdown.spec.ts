@@ -325,7 +325,7 @@ async function breakdownBoxes(
     page: Page,
     /** Which composition panel: 0 is the actual one, 1 the forecast beside it. */
     panel = 0,
-): Promise<Array<{ label: string; power: string; share: string; hasSensor: boolean; switchEntityId: string | null; tag: string; tint: string; scheduleBadge: string | null }>> {
+): Promise<Array<{ label: string; power: string; share: string; hasSensor: boolean; switchEntityId: string | null; deviceKey: string | null; tag: string; tint: string; scheduleBadge: string | null }>> {
     // The consumers live one level down, inside the two groups the panel files
     // them under, and a collapsed group renders no children at all.
     await expandBreakdownGroups(page, panel);
@@ -360,6 +360,7 @@ async function breakdownBoxes(
                 share: (display?.shadowRoot?.querySelector(".powerValue + div")?.textContent ?? "").trim(),
                 hasSensor: !!display?.shadowRoot?.querySelector(".powerDisplay.has-sensor"),
                 switchEntityId: badge ? badge.entityId : null,
+                deviceKey: device.device?.deviceKey ?? null,
                 // The scheduling badge, by the controllable it asks about — the
                 // marker that replaced the "deferrable" word in `tag`.
                 scheduleBadge: (content
@@ -731,6 +732,9 @@ test.describe("solar inspector house composition", () => {
             unmeasuredWh: 100,
         });
         await selectNoonSlot(page);
+
+        expect((await breakdownBoxes(page)).find((box) => box.label === "Dishwasher")?.deviceKey)
+            .toBe("sensor.dishwasher");
 
         await expandBreakdownGroups(page);
         await page.evaluate(() => {

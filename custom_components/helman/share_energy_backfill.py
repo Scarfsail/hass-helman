@@ -7,11 +7,10 @@ restore file nor one saved up to 15 minutes before an unclean shutdown can make
 it step backward. Only a sensor with neither is new, and back-fills.
 
 The back-fill writes the hours before the sensor existed into its long-term
-statistics, from the share-power sensor's hourly ``mean`` W held for the hour --
-the figure device reports already read
-(:func:`~.device_reports.dataset.share_hour_kwh`), so a report does not change
-when it later reads the energy sensor instead. An hour without a ``mean`` is a
-gap, never 0 kWh.
+statistics, from the share-power sensor's hourly ``mean`` W held for the hour
+(:func:`share_hour_kwh`) -- the figure device reports read before they read the
+energy sensor, so a past report does not change. An hour without a ``mean`` is
+a gap, never 0 kWh.
 
 **The seam.** Only hours strictly before the first hour the compiler owns are
 imported, and both their ``state`` and ``sum`` climb from the first hour's kWh
@@ -36,7 +35,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+import math
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -52,7 +52,6 @@ from homeassistant.util.unit_conversion import EnergyConverter
 
 from . import recorder_statistics_span as span_mod
 from .const import DOMAIN
-from .device_reports.dataset import share_hour_kwh
 from .statistics_backfill import (
     _MAX_SPAN,
     VersionedBackfillStore,
@@ -63,6 +62,17 @@ from .statistics_backfill import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+def share_hour_kwh(row: Any) -> float | None:
+    """A share sensor's hourly statistics row as kWh: its ``mean`` W held for the hour.
+
+    ``None`` for a row without a usable ``mean``, which is a gap, not 0 kWh.
+    """
+    mean = row.get("mean") if isinstance(row, Mapping) else None
+    if not isinstance(mean, (int, float)) or not math.isfinite(mean):
+        return None
+    return max(0.0, float(mean)) / 1000.0
+
 
 #: How many of the newest recorded states are searched for a number: a removal
 #: or an ``unavailable`` can sit on top of the last total.

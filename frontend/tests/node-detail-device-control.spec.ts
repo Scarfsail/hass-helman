@@ -48,7 +48,8 @@ const device = (name: string, overrides: Partial<TreeItemDTO>) => {
 
 /** A meterless child's row: its share of its parent's meter, as the tree builder emits it for a schedulable one. */
 const share = (id: string, name: string) => treeNode({
-    id, displayName: name, isEstimated: true, powerSensorId: `sensor.helman_share_power_${id.replace(/-/g, "_")}`,
+    id: `sensor.helman_share_energy_${id.replace(/-/g, "_")}`, energyEntityId: `sensor.helman_share_energy_${id.replace(/-/g, "_")}`,
+    displayName: name, isEstimated: true, powerSensorId: `sensor.helman_share_power_${id.replace(/-/g, "_")}`,
     switchEntityId: `switch.${id}`, controllableIds: [id], applianceKind: "generic", deferrable: true,
 });
 
@@ -77,7 +78,7 @@ const TREE = treePayload({
             device("Bedroom AC", { climateEntityId: "climate.bedroom" }),
             device("Heater", { switchEntityId: "switch.heater_breaker", climateEntityId: "climate.heater" }),
             // A meterless air conditioner: its running signal is its climate entity.
-            treeNode({ id: "office-ac", displayName: "Office AC", isEstimated: true, switchEntityId: "climate.office", climateEntityId: "climate.office" }),
+            treeNode({ id: "sensor.helman_share_energy_office_ac", energyEntityId: "sensor.helman_share_energy_office_ac", displayName: "Office AC", isEstimated: true, switchEntityId: "climate.office", climateEntityId: "climate.office" }),
             device("Meter", {}),
         ],
     })],
