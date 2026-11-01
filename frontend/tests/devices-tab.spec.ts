@@ -475,15 +475,12 @@ test("adding a device takes one entity and generates its id", async ({ page }) =
     await addDevice(page, ".add-device", "sensor.study", -1);
     await expect.poll(async () => (await config(page)).at(-1)?.id).toBe("study_2");
 
-    // Under a parent, a climate entity makes a child on the parent's meter,
-    // as schedulable as the siblings already there.
+    // A new child starts passive, independent of its siblings.
     await addDevice(page, ".add-device", "climate.kuchyn");
     await expect.poll(async () => (await config(page))[0].children.at(-1)).toEqual({
         id: "kuchyn",
         kind: "climate",
         controls: { climate: { entity_id: "climate.kuchyn" } },
-        schedulable: true,
-        consumption: { projection: { strategy: "fixed", hourly_energy_kwh: 1 } },
     });
 
     // A light is switched like a switch: it becomes the child's switch control.
@@ -491,22 +488,19 @@ test("adding a device takes one entity and generates its id", async ({ page }) =
     await expect.poll(async () => (await config(page))[0].children.at(-1)).toEqual({
         id: "hall",
         controls: { switch: { entity_id: "light.hall" } },
-        schedulable: true,
-        consumption: { projection: { strategy: "fixed", hourly_energy_kwh: 1 } },
     });
 
-    // A cover child under a parent with schedulable siblings is not appended:
-    // covers cannot be schedulable and meterless siblings cannot mix schedulable and passive.
+    // A passive cover may sit beside a schedulable child.
     const breakerChildrenCount = (await config(page))[0].children.length;
     await addDevice(page, ".add-device", "cover.garage");
-    expect((await config(page))[0].children.length).toBe(breakerChildrenCount);
+    expect((await config(page))[0].children.length).toBe(breakerChildrenCount + 1);
 
     // Under a parent without schedulable meterless siblings, adding a cover child succeeds.
     await addDevice(page, 'details.device-card[data-device-id="washer_energy"] .add-device', "cover.garage");
     await expect
         .poll(async () => (await config(page)).find((device: Device) => device.id === "washer_energy")?.children?.at(-1))
         .toEqual({
-            id: "garage",
+            id: "garage_2",
             controls: { cover: { entity_id: "cover.garage" } },
         });
 });
@@ -756,23 +750,23 @@ test("schedulable toggles one metered device at a time", async ({ page }) => {
     expect(devices[1].children[1]).not.toHaveProperty("schedulable");
 });
 
-test("schedulable flips the whole meterless sibling set together", async ({ page }) => {
+test("schedulable toggles one meterless child at a time", async ({ page }) => {
     await mountEditor(page);
     await openTab(page, "Devices");
-
-    expect(
-        await page.evaluate(() => window.__own("klima_obyvak", ".schedulable-note")[0]?.textContent?.trim()),
-    ).toContain("all 2 devices");
 
     await setSchedulable(page, "klima_obyvak", false);
     await expect
         .poll(async () => (await config(page))[0].children.map((child: Device) => child.schedulable))
-        .toEqual([undefined, undefined]);
+        .toEqual([undefined, true]);
 
-    await setSchedulable(page, "klima_loznice", true);
+    await setSchedulable(page, "klima_loznice", false);
     await expect
         .poll(async () => (await config(page))[0].children.map((child: Device) => child.schedulable))
-        .toEqual([true, true]);
+        .toEqual([undefined, undefined]);
+    await setSchedulable(page, "klima_obyvak", true);
+    await expect
+        .poll(async () => (await config(page))[0].children.map((child: Device) => child.schedulable))
+        .toEqual([true, undefined]);
 });
 
 test("schedulable is disabled with a reason on a device with children", async ({ page }) => {

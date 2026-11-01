@@ -133,9 +133,13 @@ export class DevicesTabController implements ReactiveController {
       mutate: (mutator) => host._applyMutation(mutator),
       reportError: (text) => host.setMessage(text ? { kind: "error", text } : null),
       deviceVisible: (device) => this.deviceMatchesFilter(device),
-      energyEstimate: (device, path) => host.trainingTab.deviceEnergyEstimate(
-        asJsonObject(getValueAtPath(host.resolvedConfig() ?? {}, path)) ?? device,
-      ),
+      energyEstimate: (device, path) => {
+        const config = host.resolvedConfig() ?? {};
+        return host.trainingTab.deviceEnergyEstimate(
+          asJsonObject(getValueAtPath(config, path)) ?? device,
+          path.length > 3 ? asJsonObject(getValueAtPath(config, path.slice(0, -2))) ?? null : null,
+        );
+      },
     });
   }
 

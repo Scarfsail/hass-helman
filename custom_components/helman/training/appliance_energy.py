@@ -13,16 +13,20 @@ from homeassistant.util import dt as dt_util
 from .. import shared_meter_fit as recorder
 from ..const import DEFAULT_HISTORY_LOOKBACK_DAYS
 from ..controllables.config import (
+    device_energy_entity,
+    device_power_entity,
+    is_estimated,
     iter_devices,
-    own_meter,
     peek_controllable_id,
     read_shared_meters,
     running_active_states,
     running_signal,
+    share_energy_entity_id,
+    shared_member_ids,
 )
 from ..recorder_slot_energy import _states_within
 from ..storage import TrainingArtifactsStore
-from .device_stats import local_midnights, member_record, metered_record
+from .device_stats import local_midnights, metered_record
 
 if TYPE_CHECKING:
     from ..appliances.climate_appliance import ClimateApplianceRuntime
@@ -74,12 +78,9 @@ class DeviceSubject:
     never by which appliance list it happens to be on.
     """
 
-    #: The card's ``deviceKey``: the meter for a metered device, the device id
-    #: for a meterless child.
+    #: The card's ``deviceKey``: its energy entity, which its record is read
+    #: from -- see ``device_energy_entity``.
     device_key: str
-    #: Its own meter, or for a meterless child the meter it shares.
-    meter: str
-    meterless: bool = False
     controllable_id: str | None = None
     power_entity_id: str | None = None
     power_value_type: str = "default"
@@ -126,11 +127,12 @@ class ApplianceEnergyTrainingRequest:
         weights is refitted once rather than staying even until the nightly
         run.
         """
-        parts = [
+        # Records were keyed by a meterless child's id before every device read
+        # its own energy entity; the version retrains them once.
+        parts = ["v2"]
+        parts.extend(
             "|".join((
                 subject.device_key,
-                subject.meter,
-                "meterless" if subject.meterless else "",
                 subject.controllable_id or "",
                 subject.power_entity_id or "",
                 subject.power_value_type,
@@ -139,7 +141,7 @@ class ApplianceEnergyTrainingRequest:
                 "history_average" if subject.history_average else "",
             ))
             for subject in sorted(self.subjects, key=lambda item: item.device_key)
-        ]
+        )
         parts.extend(
             "shared|"
             + energy_entity_id
@@ -170,16 +172,18 @@ def read_appliance_energy_training_request(
 
     One subject per device with its own meter, and per meterless child its
     parent's meter is split among, schedulable or not; the inverter is no
-    consumer. A subject is keyed by the card's ``deviceKey``: its meter, or
-    a meterless child's id. Whether it is ``history_average`` -- and so its
+    consumer. Every subject reads its ``device_energy_entity`` and
+    ``device_power_entity`` and is keyed by the former, the card's
+    ``deviceKey``. Whether it is ``history_average`` -- and so its
     lookback -- comes from its appliance runtime in ``appliances``, the
     reader the forecast uses; a device that is not one learns over the
     default window.
 
-    Shared meters come from the device tree too: a meter owner's meterless
-    children split its own energy, and each runs by its own switch or
-    climate entity — a ``fixed`` or passive child included, since it still
-    runs and so still divides the meter.
+    Shared meters come from the device tree too, for the weights the live
+    split learns: a meter owner's meterless children split its own energy,
+    and each runs by its own switch or climate entity — a ``fixed`` or
+    passive child included, since it still runs and so still divides the
+    meter.
     """
     shared = read_shared_meters(config)
     learners = {
@@ -187,38 +191,20 @@ def read_appliance_energy_training_request(
         for appliance in appliances
         if appliance.projection.uses_history_average
     }
+    shared_ids = shared_member_ids(config)
     subjects: dict[str, DeviceSubject] = {}
     for device, parent in iter_devices(config):
         controllable_id = peek_controllable_id(device)
-        meter = own_meter(device)
-        if meter is not None:
-            key, meterless = meter, False
-        else:
-            parent_meter = own_meter(parent) if parent is not None else None
-            members = shared.get(parent_meter, {}).get("members", ())
-            if controllable_id not in {member[0] for member in members}:
-                continue
-            key, meter, meterless = controllable_id, parent_meter, True
-        if key in subjects:
+        if is_estimated(device, parent) and controllable_id not in shared_ids:
+            continue
+        key = device_energy_entity(device, parent)
+        if key is None or key in subjects:
             continue
         learner = learners.get(controllable_id)
-        consumption = device.get("consumption")
-        power = (
-            consumption.get("power_entity_id")
-            if isinstance(consumption, Mapping)
-            else None
-        )
         subjects[key] = DeviceSubject(
             device_key=key,
-            meter=meter,
-            meterless=meterless,
             controllable_id=controllable_id,
-            # A meterless child's usage is its share of the meter.
-            power_entity_id=(
-                power.strip()
-                if not meterless and isinstance(power, str) and power.strip()
-                else None
-            ),
+            power_entity_id=device_power_entity(device, parent),
             # What the tree builder gives every device's node.
             power_value_type="default",
             running_signal=running_signal(device),
@@ -262,14 +248,13 @@ class ApplianceEnergyTrainingJob:
     the house consumption fit, for exactly the reasons #24 moved that one.
 
     A meter with devices drawing from it (a parent's meterless children) is
-    fitted once for all of them, minus any sub-meters behind it: its history
-    teaches each member's power, and its own energy is split among whichever
-    were running in the ratio of those — see
-    :func:`..shared_meter_fit._estimate_shared_meter_hourly_energy_kwh`.
-    Every shared meter is fitted, because the live share sensors split by the
-    same weights; they are stored flat, by member id, under
-    ``shared_meter_weights``. A device with its own meter is the same
-    estimator with itself as the only member.
+    fitted once for all of them, minus any sub-meters behind it, to learn
+    each member's power -- see
+    :func:`..shared_meter_fit._estimate_shared_meter_hourly_energy_kwh`. The
+    live share sensors split by those weights, stored flat, by member id,
+    under ``shared_meter_weights``. Every device's record, a meterless
+    child's included, is read from its own energy entity: for a meterless
+    child that is its share-energy sensor.
 
     Never raises for a resolve failure: it records the outcome itself, and the
     failure record is what keeps the previous estimates alive.
@@ -348,21 +333,17 @@ class ApplianceEnergyTrainingJob:
                     (
                         subject.lookback_days
                         for subject in request.subjects
-                        if subject.meterless
-                        and subject.meter == meter
-                        and subject.history_average
+                        if subject.history_average
+                        and subject.controllable_id
+                        in {member.controllable_id for member in shared.members}
                     ),
                     default=DEFAULT_HISTORY_LOOKBACK_DAYS,
                 )
             )
-            for meter in request.shared_meters
+            for meter, shared in request.shared_meters.items()
         }
         starts = {
-            subject.device_key: (
-                meter_starts[subject.meter]
-                if subject.meterless
-                else window_start(subject.lookback_days)
-            )
+            subject.device_key: window_start(subject.lookback_days)
             for subject in request.subjects
         }
         histories = _Histories(window_end)
@@ -372,11 +353,10 @@ class ApplianceEnergyTrainingJob:
         failed_appliances: dict[str, str] = {}
         #: Member id -> learned kW, for every shared meter's members.
         weights: dict[str, float | None] = {}
-        fits: dict[str, recorder.SharedMeterFit] = {}
         for meter, shared in request.shared_meters.items():
             start = meter_starts[meter]
             try:
-                fits[meter] = recorder._estimate_shared_meter_hourly_energy_kwh(
+                fit = recorder._estimate_shared_meter_hourly_energy_kwh(
                     {
                         member.controllable_id: (
                             histories.states(member.entity_id, start),
@@ -413,7 +393,7 @@ class ApplianceEnergyTrainingJob:
                     (member.controllable_id for member in shared.members),
                 )
                 continue
-            weights.update(fits[meter].weights)
+            weights.update(fit.weights)
 
         #: Device key -> its usage record.
         devices: dict[str, dict[str, Any]] = {}
@@ -422,37 +402,7 @@ class ApplianceEnergyTrainingJob:
         for subject in request.subjects:
             start = starts[subject.device_key]
             try:
-                if subject.meterless:
-                    if subject.meter not in fits:
-                        # Its meter's failure is already recorded above.
-                        _carry_over(devices, previous_devices, (subject.device_key,))
-                        continue
-                    fit = fits[subject.meter]
-                    meter_states = histories.states(subject.meter, start)
-                    # A meter with no rows is no evidence the child idled:
-                    # without this, every day would be recorded as a zero day.
-                    # Nor is a signal with no rows yet: the record starts where
-                    # both its meter's and its signal's history do.
-                    signal_states = histories.states(subject.running_signal[0], start)
-                    record = (
-                        member_record(
-                            window_start=max(
-                                _covered_start(meter_states, start),
-                                _covered_start(signal_states, start),
-                            ),
-                            window_end=window_end,
-                            local_tz=local_tz,
-                            member_energy=fit.member_energy[subject.device_key],
-                            observed=_observed(signal_states, start, window_end),
-                            on_kwh_per_hour=fit.estimates[subject.device_key],
-                        )
-                        if meter_states and signal_states
-                        else None
-                    )
-                else:
-                    record = _metered_record(
-                        subject, histories, start, window_end, local_tz
-                    )
+                record = _metered_record(subject, histories, start, window_end, local_tz)
             except Exception as err:
                 # One device's bad entity must not cost every other device its
                 # record, so this is swallowed per device. It keeps its
@@ -462,7 +412,7 @@ class ApplianceEnergyTrainingJob:
                     "Error learning the energy use of device %r", subject.device_key
                 )
                 failed_appliances[_failure_key(subject)] = _failure_reason(err)
-                _carry_over(devices, previous_devices, (subject.device_key,))
+                _carry_over_record(devices, previous_devices, subject)
                 continue
 
             if record is not None:
@@ -471,7 +421,7 @@ class ApplianceEnergyTrainingJob:
             else:
                 # History that answered nothing is no evidence the previous
                 # record became wrong -- but the run is not healthy either.
-                _carry_over(devices, previous_devices, (subject.device_key,))
+                _carry_over_record(devices, previous_devices, subject)
                 if not subject.history_average:
                     failed_appliances[subject.device_key] = "no usable history"
             if subject.history_average:
@@ -586,10 +536,8 @@ def _reads(
         reads[entity_id] = (min(earliest, start), is_meter or meter)
 
     for subject in request.subjects:
-        if subject.meterless:
-            continue
         start = starts[subject.device_key]
-        need(subject.meter, start, meter=True)
+        need(subject.device_key, start, meter=True)
         need(subject.power_entity_id, start)
         if subject.running_signal is not None:
             need(subject.running_signal[0], start)
@@ -610,14 +558,14 @@ def _metered_record(
     window_end: datetime,
     local_tz: tzinfo,
 ) -> dict[str, Any] | None:
-    """A device with its own meter: its total energy, children included.
+    """A device's record from its energy entity: its total energy, children included.
 
     Its daily energy is the meter's change at local midnights, and its
     ``on_kwh_per_hour`` the shared estimator with itself as the only member --
     exactly the lone-device figure its forecast always used.
     """
-    meter_states = histories.states(subject.meter, window_start)
-    unit = histories.unit(subject.meter)
+    meter_states = histories.states(subject.device_key, window_start)
+    unit = histories.unit(subject.device_key)
     observations = recorder._parse_energy_observations(meter_states, default_unit=unit)
     midnights = local_midnights(window_start, window_end, local_tz)
     daily = recorder.own_energy_observations(
@@ -706,6 +654,26 @@ def _carry_over(
     the records alike: a read that could not run does not make them wrong.
     """
     target.update((key, previous[key]) for key in keys if key in previous)
+
+
+def _carry_over_record(
+    target: dict[str, Any], previous: Mapping[str, Any], subject: DeviceSubject
+) -> None:
+    """:func:`_carry_over` for one device's record.
+
+    A meterless child's record was keyed by its id before it read its
+    share-energy sensor; that one is carried over under the new key until the
+    sensor's own history answers.
+    """
+    key = subject.device_key
+    if (
+        key not in previous
+        and subject.controllable_id is not None
+        and key == share_energy_entity_id(subject.controllable_id)
+    ):
+        key = subject.controllable_id
+    if key in previous:
+        target[subject.device_key] = previous[key]
 
 
 def _failure_key(subject: DeviceSubject) -> str:

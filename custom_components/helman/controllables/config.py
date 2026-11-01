@@ -273,16 +273,39 @@ def own_meter(device: Device) -> str | None:
     return entity_id.strip()
 
 
-def effective_meter(device: Device, parent: Device | None) -> str | None:
-    """The meter this device's energy is read from.
+def is_estimated(device: Device, parent: Device | None) -> bool:
+    """Whether this device is a child without its own meter.
 
-    Its own meter, else its parent's: a meterless child draws from the meter it
-    sits behind, and that is where its runtimes and training read.
+    Its energy and power are Helman's estimate of its share of its parent's
+    meter, not a reading: the card marks it ``≈``.
     """
-    meter = own_meter(device)
-    if meter is not None or parent is None:
-        return meter
-    return own_meter(parent)
+    return parent is not None and own_meter(device) is None
+
+
+def device_energy_entity(device: Device, parent: Device | None) -> str | None:
+    """The entity this device's energy is read from.
+
+    Its own meter, else -- for a child without one -- the share-energy sensor
+    Helman publishes for it. ``None`` for a meterless child without an id.
+    """
+    if not is_estimated(device, parent):
+        return own_meter(device)
+    device_id = peek_controllable_id(device)
+    return share_energy_entity_id(device_id) if device_id is not None else None
+
+
+def device_power_entity(device: Device, parent: Device | None) -> str | None:
+    """The entity this device's power is read from.
+
+    Its configured ``consumption.power_entity_id``, else -- for a child without
+    its own meter -- the share-power sensor Helman publishes for it.
+    """
+    if not is_estimated(device, parent):
+        consumption = device.get("consumption")
+        power = consumption.get("power_entity_id") if isinstance(consumption, Mapping) else None
+        return power.strip() if isinstance(power, str) and power.strip() else None
+    device_id = peek_controllable_id(device)
+    return share_power_entity_id(device_id) if device_id is not None else None
 
 
 def running_signal(device: Device) -> tuple[str, str] | None:
@@ -432,12 +455,10 @@ def read_schedulable_consumers(
 
     The forecast's itemisation is keyed by device id, so this is keyed by id
     too, and a device that declares none is skipped: nothing can be scheduled
-    against it. ``energy_entity_id`` is the device's effective meter, so a
-    meterless child names the meter it draws from, and ``deferrable`` says
-    whether that meter is carved out of the house baseline — the same answer
-    :func:`read_carved_meters` gives, on both sides of now.
+    against it. ``energy_entity_id`` is :func:`device_energy_entity`, and
+    Every schedulable device is a carved leaf.
     """
-    carved = {meter["energy_entity_id"] for meter in read_carved_meters(config)}
+    shared_ids = shared_member_ids(config)
     consumers: list[dict[str, Any]] = []
     seen: set[str] = set()
     for device, parent in iter_devices(config):
@@ -446,14 +467,15 @@ def read_schedulable_consumers(
         controllable_id = peek_controllable_id(device)
         if controllable_id is None or controllable_id in seen:
             continue
+        if is_estimated(device, parent) and controllable_id not in shared_ids:
+            continue
         seen.add(controllable_id)
-        meter = effective_meter(device, parent)
         consumers.append(
             {
                 "id": controllable_id,
                 "label": _device_label(device, controllable_id),
-                "energy_entity_id": meter,
-                "deferrable": meter in carved,
+                "energy_entity_id": device_energy_entity(device, parent),
+                "deferrable": True,
             }
         )
     return consumers
@@ -462,50 +484,25 @@ def read_schedulable_consumers(
 def read_carved_meters(
     config: Mapping[str, Any] | None,
 ) -> list[dict[str, Any]]:
-    """``[{energy_entity_id, label, ids, metered_children}]`` — meters carved out of house load.
-
-    The house forecast is the baseline plus schedulable demand, so a meter's
-    *own* energy — its reading minus its metered children's — is carved out of
-    the baseline exactly when all demand behind it is schedulable:
-
-    * the owner is schedulable (then it is a leaf, and its own energy is its
-      meter), or
-    * it has meterless children and every one of them is schedulable.
-
-    ``metered_children`` are the meters of the owner's direct children that
-    have their own, which is what own energy subtracts; nested meters therefore
-    never subtract twice. ``ids`` are the devices whose demand the meter stands
-    for: the owner's id when it is schedulable, else its meterless children's —
-    a schedule keyed by exactly those ids resolves to this meter.
-
-    ``label`` is the owner's configured name, else the meter's entity id.
-    """
+    """``[{energy_entity_id, label, ids}]`` — schedulable leaves carved from house load."""
     carved: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for device, _parent in iter_devices(config):
-        meter = own_meter(device)
-        if meter is None or meter in seen:
+    shared_ids = shared_member_ids(config)
+    for device, parent in iter_devices(config):
+        if not is_schedulable(device):
             continue
-        children = device_children(device)
-        meterless = [child for child in children if own_meter(child) is None]
-        if is_schedulable(device):
-            owner_id = peek_controllable_id(device)
-            ids = [owner_id] if owner_id is not None else []
-        elif meterless and all(is_schedulable(child) for child in meterless):
-            ids = [
-                child_id
-                for child in meterless
-                if (child_id := peek_controllable_id(child)) is not None
-            ]
-        else:
+        device_id = peek_controllable_id(device)
+        if is_estimated(device, parent) and device_id not in shared_ids:
+            continue
+        meter = device_energy_entity(device, parent)
+        if meter is None or meter in seen:
             continue
         seen.add(meter)
         carved.append(
             {
                 "energy_entity_id": meter,
                 "label": _device_label(device, meter),
-                "ids": ids,
-                "metered_children": _metered_children(children),
+                "ids": [device_id] if device_id is not None else [],
             }
         )
     return carved
@@ -551,6 +548,19 @@ def read_shared_meters(
                 "tolerance": _children_tolerance(device),
             }
     return shared
+
+
+def shared_member_ids(config: Mapping[str, Any] | None) -> set[str]:
+    """The ids of every meterless child :func:`read_shared_meters` splits a meter among.
+
+    Exactly the children the coordinator publishes share sensors for, so the
+    only ones whose :func:`device_energy_entity` names a published entity.
+    """
+    return {
+        member[0]
+        for shared in read_shared_meters(config).values()
+        for member in shared["members"]
+    }
 
 
 def _children_tolerance(device: Device) -> float | None:
@@ -660,6 +670,20 @@ def share_sensor_slug(device_id: str) -> str:
     rejects, since they would publish into one entity.
     """
     return re.sub(r"[^a-z0-9]+", "_", device_id.lower()).strip("_")
+
+
+def share_power_entity_id(device_id: str) -> str:
+    """The Helman sensor publishing a meterless child's share of its parent's power."""
+    return f"sensor.helman_share_power_{share_sensor_slug(device_id)}"
+
+
+#: Every share-energy sensor's entity id starts with this.
+SHARE_ENERGY_ENTITY_PREFIX = "sensor.helman_share_energy_"
+
+
+def share_energy_entity_id(device_id: str) -> str:
+    """The Helman sensor accumulating a meterless child's share power into energy."""
+    return f"{SHARE_ENERGY_ENTITY_PREFIX}{share_sensor_slug(device_id)}"
 
 
 def clean_name(name: str, pattern: str | None) -> str:

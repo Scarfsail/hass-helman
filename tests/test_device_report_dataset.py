@@ -19,6 +19,14 @@ from zoneinfo import ZoneInfo
 model = importlib.import_module("custom_components.helman.span_history_model")
 dataset_mod = importlib.import_module("custom_components.helman.device_reports.dataset")
 reports_mod = importlib.import_module("custom_components.helman.device_reports.reports")
+from tests._fakes import (  # noqa: E402
+    DISHWASHER_ENERGY,
+    DISHWASHER_KWH,
+    DISHWASHER_POWER,
+    KITCHEN_ENERGY,
+    KITCHEN_OWN_KW,
+    KITCHEN_REMAINDER_KWH,
+)
 
 PRAGUE = ZoneInfo("Europe/Prague")
 START = datetime(2026, 9, 1, tzinfo=PRAGUE)
@@ -46,7 +54,6 @@ _ROLE = {
 WASHER = "sensor.washer_energy"
 FRIDGE = "sensor.fridge_energy"
 BREAKER = "sensor.breaker_energy"
-SHARE = "sensor.helman_share_power_heater"
 
 
 def hour(index: int) -> datetime:
@@ -75,16 +82,12 @@ def metered(meter: str, *children, label: str | None = None) -> dict:
     }
 
 
-def estimated(device_id: str, share_sensor: str) -> dict:
+def estimated(share_energy: str, share_power: str) -> dict:
+    """A meterless child, keyed by and read from its share-energy sensor."""
     return {
-        "id": device_id,
-        "displayName": device_id,
-        "icon": None,
-        "energyEntityId": None,
-        "powerSensorId": share_sensor,
+        **metered(share_energy),
+        "powerSensorId": share_power,
         "isEstimated": True,
-        "isUnmeasured": False,
-        "children": [],
     }
 
 
@@ -345,23 +348,20 @@ class TestNodes(DatasetTestCase):
             self.node(dataset, "sensor_breaker_energy_unmeasured").total_kwh, 0.5
         )
 
-    def test_an_estimated_child_reads_its_mean_and_scales_the_hour_in_progress(self):
-        now = START + timedelta(hours=1, minutes=15)
+    def test_the_kitchen_dishwasher_reads_its_share_energy_like_a_meter(self):
         dataset = self.build(
-            tree(metered(BREAKER, estimated("heater", SHARE))),
+            tree(metered(KITCHEN_ENERGY, estimated(DISHWASHER_ENERGY, DISHWASHER_POWER))),
             history(
-                {0: {"H": 2}, 1: {"H": 1}},
-                devices={BREAKER: {0: 1.0, 1: 0.5}},
-                rows={SHARE: {0: {"mean": 500.0}, 1: {"mean": 400.0}}},
+                {0: {"H": 2}},
+                devices={KITCHEN_ENERGY: {0: KITCHEN_OWN_KW}, DISHWASHER_ENERGY: {0: DISHWASHER_KWH}},
             ),
-            now=now,
         )
-        heater = self.node(dataset, "heater")
-        self.assertTrue(heater.estimated)
-        self.assertAlmostEqual(heater.kwh[hour(0)], 0.5)
-        self.assertAlmostEqual(heater.kwh[hour(1)], 0.1)
-        self.assertAlmostEqual(heater.coverage[hour(1)], 0.25)
-        self.assertAlmostEqual(dataset.elapsed_hours, 1.25)
+        dishwasher = self.node(dataset, DISHWASHER_ENERGY)
+        self.assertTrue(dishwasher.estimated)
+        self.assertAlmostEqual(dishwasher.kwh[hour(0)], DISHWASHER_KWH)
+        self.assertEqual(dishwasher.coverage[hour(0)], 1.0)
+        remainder = self.node(dataset, "sensor_kitchen_energy_unmeasured")
+        self.assertAlmostEqual(remainder.kwh[hour(0)], KITCHEN_REMAINDER_KWH)
 
     def test_coverage_and_first_hour_for_a_late_meter_and_a_gap(self):
         late = {index: 0.1 for index in range(12, 24)}

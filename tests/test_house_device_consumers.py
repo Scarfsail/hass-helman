@@ -9,10 +9,14 @@ from __future__ import annotations
 
 import importlib
 import unittest
+from datetime import datetime, timedelta, timezone
+
+from custom_components.helman.shared_meter_fit import own_energy_changes
 
 
 module = importlib.import_module("custom_components.helman.house_device_consumers")
 extract = module.extract_house_device_consumers
+START = datetime(2026, 11, 1, 10, tzinfo=timezone.utc)
 
 
 def _tree(children):
@@ -156,11 +160,11 @@ class TestHouseDeviceConsumers(unittest.TestCase):
         )
 
     def test_carved_own_load_keeps_passive_child_in_base_group(self):
-        tree = _tree([_node("sensor.parent", ownDeferrable=True,
-                            ownControllableIds=["washer", "dryer"],
+        tree = _tree([_node("sensor.parent", deferrable=True,
+                            controllableIds=["washer", "dryer"],
                             children=[_node("sensor.passive", children=[
-                                _node("sensor.nested", ownDeferrable=True,
-                                      ownControllableIds=["heater"])
+                                _node("sensor.nested", deferrable=True,
+                                      controllableIds=["heater"])
                             ])])])
         rows = extract(tree)
         self.assertEqual([row["deferrable"] for row in rows], [True, False, True])
@@ -169,20 +173,56 @@ class TestHouseDeviceConsumers(unittest.TestCase):
         self.assertEqual(rows[0]["ids"], ["washer", "dryer"])
         self.assertIsNone(rows[0]["power_entity_id"])
 
-    def test_estimated_shares_and_duplicate_meters_are_not_measured_twice(self):
-        tree = _tree([_node("sensor.shared", ownDeferrable=True,
-                            ownControllableIds=["ac1", "ac2"], children=[
-                                _node("sensor.estimated", isEstimated=True, deferrable=True),
-                            ]), _node("sensor.shared")])
+    def test_duplicate_meters_are_not_measured_twice(self):
+        tree = _tree([_node("sensor.shared"), _node("sensor.shared")])
         self.assertEqual([row["energy_entity_id"] for row in extract(tree)], ["sensor.shared"])
 
-    def test_schedulable_ids_alone_do_not_carve_a_mixed_shared_meter(self):
-        tree = _tree([_node("sensor.mixed", controllableIds=["ac"], children=[
-            _node("share", energyEntityId=None, isEstimated=True, controllableIds=["ac"])
+    def test_a_meterless_child_is_a_disjoint_row_that_conserves_its_parent(self):
+        # The kitchen circuit read 1.3 kWh; its dishwasher's share sensor 1 kWh.
+        share = "sensor.helman_share_energy_dishwasher"
+        tree = _tree([_node("sensor.kitchen", children=[
+                                _node(share, isEstimated=True, deferrable=True,
+                                      controllableIds=["dishwasher"]),
+                            ])])
+        rows = extract(tree)
+        self.assertEqual([row["energy_entity_id"] for row in rows], ["sensor.kitchen", share])
+        self.assertEqual(rows[0]["metered_children"], [share])
+        # The dishwasher is claimed by its own row only, not the circuit's too.
+        self.assertEqual(rows[0]["ids"], [])
+        self.assertEqual(rows[1]["ids"], ["dishwasher"])
+
+        slot = timedelta(hours=1)
+        energy = {"sensor.kitchen": {START: 1.3}, share: {START: 1.0}}
+        own = {
+            row["energy_entity_id"]: own_energy_changes(
+                energy[row["energy_entity_id"]],
+                [energy[child] for child in row["metered_children"]],
+                slot=slot,
+            )[START]
+            for row in rows
+        }
+        # Parent remainder plus child is the parent's meter, counted once.
+        self.assertAlmostEqual(own["sensor.kitchen"], 0.3)
+        self.assertAlmostEqual(own[share], 1.0)
+        self.assertAlmostEqual(sum(own.values()), 1.3)
+
+    def test_each_meterless_child_claims_its_id_from_its_carved_parent(self):
+        tree = _tree([_node("sensor.breaker", children=[
+                                _node("sensor.helman_share_energy_ac_1", isEstimated=True,
+                                      deferrable=True, controllableIds=["ac_1"]),
+                                _node("sensor.helman_share_energy_ac_2", isEstimated=True,
+                                      deferrable=True, controllableIds=["ac_2"]),
+                            ])])
+        self.assertEqual([row["ids"] for row in extract(tree)], [[], ["ac_1"], ["ac_2"]])
+
+    def test_a_meterless_child_of_a_passive_meter_stays_in_its_row(self):
+        tree = _tree([_node("sensor.mixed", children=[
+            _node("sensor.helman_share_energy_ac", isEstimated=True, controllableIds=["ac"])
         ])])
         (row,) = extract(tree)
         self.assertFalse(row["deferrable"])
         self.assertEqual(row["ids"], [])
+        self.assertEqual(row["metered_children"], [])
 
     def test_malformed_trees_yield_nothing(self):
         for tree in (None, {}, {"consumers": None}, {"consumers": []}, "nonsense"):
@@ -203,8 +243,8 @@ class TestHouseDeviceConsumers(unittest.TestCase):
                             children=[
                                 _node(
                                     "sensor.washer_energy",
-                                    ownDeferrable=True,
-                                    children=[_node("sensor.inner_energy", ownDeferrable=True)],
+                                    deferrable=True,
+                                    children=[_node("sensor.inner_energy", deferrable=True)],
                                 )
                             ],
                         ),

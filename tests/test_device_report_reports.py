@@ -290,16 +290,17 @@ class TestPayloadCasing(unittest.TestCase):
                 self.assertEqual(payload["asOf"], AFTER.isoformat())
 
 
-SHARE = "sensor.lamp_share"
+SHARE = "sensor.helman_share_energy_lamp"
 
 
-def estimated(node_id: str, share_sensor: str) -> dict:
+def estimated(share_energy: str) -> dict:
+    """A meterless child, keyed by and read from its share-energy sensor."""
     return {
-        "id": node_id,
-        "displayName": node_id.title(),
+        "id": share_energy,
+        "displayName": "Lamp",
         "icon": None,
-        "energyEntityId": None,
-        "powerSensorId": share_sensor,
+        "energyEntityId": share_energy,
+        "powerSensorId": "sensor.helman_share_power_lamp",
         "isEstimated": True,
         "isUnmeasured": False,
         "children": [],
@@ -365,18 +366,17 @@ class TestDailyProfile(unittest.TestCase):
         end = datetime(2026, 10, 1, tzinfo=PRAGUE)
         hours = local_hours(start, end)
         observed = [key for key in hours if key >= datetime(2026, 9, 24, tzinfo=PRAGUE)]
-        tree = {"consumers": [{**TREE["consumers"][0], "children": [estimated("lamp", SHARE)]}]}
+        tree = {"consumers": [{**TREE["consumers"][0], "children": [estimated(SHARE)]}]}
         payload = self.daily_profile(
             span(
-                {HOUSE: dict.fromkeys(hours, 1.0)},
+                {HOUSE: dict.fromkeys(hours, 1.0), SHARE: dict.fromkeys(observed, 0.6)},
                 start=start,
                 end=end,
-                rows={SHARE: {key: {"mean": 600.0} for key in observed}},
             ),
             tree=tree,
             now=datetime(2026, 10, 5, tzinfo=PRAGUE),
         )
-        lamp = self.row(payload, "lamp")
+        lamp = self.row(payload, SHARE)
         # 600 W for the 7 days it has data for, not a quarter of it over 30.
         self.assertEqual(lamp["watts"], [600.0] * 24)
         self.assertAlmostEqual(lamp["coverage"], 7 / 30, places=4)

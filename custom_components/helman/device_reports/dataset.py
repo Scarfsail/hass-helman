@@ -24,7 +24,6 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone, tzinfo
-import math
 from typing import Any
 
 from ..span_history_model import RATE_RECORDED, RATE_TARIFF, SpanHistory, period_hours
@@ -53,7 +52,8 @@ def find_house_node(tree: Any) -> dict[str, Any] | None:
 def dataset_statistic_ids(tree: Any) -> list[str]:
     """Every statistic id the house subtree reads, beyond the six meters.
 
-    A metered node's meter and a meterless child's share sensor. External
+    Each node's energy entity -- a meterless child's is its share-energy
+    sensor. External
     statistic ids (``source:stat``) are kept: long-term statistics hold them,
     which is all a span read asks of an id.
     """
@@ -76,9 +76,8 @@ def dataset_statistic_ids(tree: Any) -> list[str]:
 
 
 def _statistic_id(node: Mapping[str, Any]) -> str | None:
-    """What a tree node is read from: its meter, or for an estimate its share sensor."""
-    key = "powerSensorId" if node.get("isEstimated") else "energyEntityId"
-    value = node.get(key)
+    """What a tree node is read from: its energy entity."""
+    value = node.get("energyEntityId")
     return value if isinstance(value, str) and value else None
 
 
@@ -267,7 +266,6 @@ def build_device_dataset(
         estimated=False,
         history=history,
         elapsed=elapsed,
-        now=now,
     )
 
     mix, flows = _hourly_mix(history, hours)
@@ -312,7 +310,6 @@ def _add_node(
     estimated: bool,
     history: SpanHistory,
     elapsed: dict[datetime, float],
-    now: datetime,
 ) -> DatasetNode:
     """Append ``tree_node`` and its subtree, pre-order, remainder last."""
     node = DatasetNode(
@@ -338,13 +335,8 @@ def _add_node(
         statistic_id = _statistic_id(child)
         if statistic_id is None:
             continue
-        if child.get("isEstimated"):
-            child_kwh, child_coverage = _estimated_energy(
-                history.rows_for(statistic_id), elapsed, now
-            )
-        else:
-            child_kwh = dict(history.energy_for(statistic_id))
-            child_coverage = _meter_coverage(child_kwh, elapsed)
+        child_kwh = dict(history.energy_for(statistic_id))
+        child_coverage = _meter_coverage(child_kwh, elapsed)
         children.append(
             _add_node(
                 nodes,
@@ -356,7 +348,6 @@ def _add_node(
                 estimated=bool(child.get("isEstimated")),
                 history=history,
                 elapsed=elapsed,
-                now=now,
             )
         )
     node.children = [child.id for child in children]
@@ -415,29 +406,6 @@ def _meter_coverage(
 ) -> dict[datetime, float]:
     """A meter covers each hour it has a statistics value for."""
     return {hour: elapsed.get(hour, 0.0) for hour in kwh}
-
-
-def _estimated_energy(
-    rows: dict[datetime, dict[str, Any]],
-    elapsed: dict[datetime, float],
-    now: datetime,
-) -> tuple[dict[datetime, float], dict[datetime, float]]:
-    """A share sensor's hourly ``mean`` W, read as Wh.
-
-    The hour in progress counts only its elapsed part: the tail folds the
-    five-minute means of the minutes so far into a plain average, so taking it
-    for a whole hour would overstate the hour.
-    """
-    kwh: dict[datetime, float] = {}
-    coverage: dict[datetime, float] = {}
-    for hour, row in rows.items():
-        mean = row.get("mean") if isinstance(row, Mapping) else None
-        if not isinstance(mean, (int, float)) or not math.isfinite(mean):
-            continue
-        share = elapsed.get(hour, 0.0)
-        kwh[hour] = max(0.0, float(mean)) / 1000.0 * share
-        coverage[hour] = share
-    return kwh, coverage
 
 
 # --- The hourly source mix ------------------------------------------------------

@@ -345,13 +345,10 @@ function breakdownNode(
   // cannot stand in for it: it is a meter, not the key assignments are stored
   // under, and a scheduled appliance may have no meter at all.
   node.controllableIds = controllableIds;
-  // The device this box is, for its detail dialog: the same identity
-  // applianceKey keys the box by, minus the label fallback, so a scheduled
-  // appliance with neither a single controllable nor a meter, and the
-  // unmeasured remainder, open nothing.
+  // The detail and edit dialogs resolve devices by their energy entity. The
+  // controllable ids above remain the schedule keys, never dialog keys.
   node.energyEntityId = entityId ?? undefined;
-  node.deviceKey = controllableIds.length === 1 ? controllableIds[0] : entityId ?? undefined;
-  node.deviceKeyIsMeter = controllableIds.length !== 1 && !!entityId;
+  node.deviceKey = entityId ?? undefined;
   // Energy throughout — the selection's total on the box, each sample's own on
   // the bars — so the figures are the Wh the breakdown actually reports and no
   // unit conversion sits between the data and what is drawn.

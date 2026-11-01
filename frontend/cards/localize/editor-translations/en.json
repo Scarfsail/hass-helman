@@ -374,7 +374,6 @@
       "ha_device": "The Home Assistant device this device's meters and controls belong to. Its meter, power and control pickers offer only that device's entities.",
       "schedulable": "Helman may plan and run it; it can be an optimizer target; its consumption then leaves the baseline forecast.",
       "schedulable_has_children": "A device with children cannot be schedulable; make its children schedulable instead.",
-      "schedulable_siblings": "Applies to all {count} devices drawing from the parent's meter: they are either all schedulable or all passive.",
       "consumption_power_entity": "Instantaneous power sensor (W). A device whose children draw from its meter needs one to split its live power among them.",
       "children_distribute_all": "On: the running children share all of this device's own power, in the ratio of their learned power. Off: each is capped at its learned power plus the tolerance below, and the rest shows as unmeasured.",
       "consumption_energy_entity_child": "Optional for a child: leave empty to draw from the parent's meter.",

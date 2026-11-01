@@ -42,7 +42,9 @@ from custom_components.helman.automation.spec import (  # noqa: E402
     OPTIMIZER_SPECS,
 )
 from custom_components.helman.controllables.config import (  # noqa: E402
-    effective_meter,
+    device_energy_entity,
+    device_power_entity,
+    is_estimated,
     find_inverter_device,
     iter_devices,
     peek_controllable_id,
@@ -567,13 +569,20 @@ class DeviceTreeReaderTests(unittest.TestCase):
                 self.assertEqual(read_schedulable_consumers(config), [])
                 self.assertEqual(read_shared_meters(config), {})
 
-    def test_the_effective_meter_falls_back_to_the_parents(self) -> None:
+    def test_a_meterless_child_reads_its_share_sensors(self) -> None:
         study = _study()
+        study["consumption"]["power_entity_id"] = "sensor.study_power"
         plug, lamp = study["children"]
+        plug["consumption"]["power_entity_id"] = "sensor.plug_power"
 
-        self.assertEqual(effective_meter(plug, study), "sensor.plug_energy")
-        self.assertEqual(effective_meter(lamp, study), "sensor.study_energy")
-        self.assertIsNone(effective_meter(_device("x"), None))
+        self.assertEqual(device_energy_entity(study, None), "sensor.study_energy")
+        self.assertEqual(device_power_entity(study, None), "sensor.study_power")
+        self.assertEqual(device_energy_entity(plug, study), "sensor.plug_energy")
+        self.assertEqual(device_power_entity(plug, study), "sensor.plug_power")
+        self.assertEqual(device_energy_entity(lamp, study), "sensor.helman_share_energy_lamp")
+        self.assertEqual(device_power_entity(lamp, study), "sensor.helman_share_power_lamp")
+        self.assertEqual([is_estimated(d, p) for d, p in ((study, None), (plug, study), (lamp, study))], [False, False, True])
+        self.assertIsNone(device_energy_entity(_device("x"), None))
 
     def test_children_are_indexed_by_id_with_the_default_kind(self) -> None:
         self.assertEqual(
@@ -626,7 +635,6 @@ class CarvedMeterReaderTests(unittest.TestCase):
                     "energy_entity_id": "sensor.pool_energy",
                     "label": "Pool pump",
                     "ids": ["pool"],
-                    "metered_children": [],
                 }
             ],
         )
@@ -636,19 +644,16 @@ class CarvedMeterReaderTests(unittest.TestCase):
 
         self.assertEqual(read_carved_meters(config), [])
 
-    def test_a_parent_of_schedulable_meterless_children_is_carved_for_them(
+    def test_schedulable_meterless_children_are_carved_individually(
         self,
     ) -> None:
-        """The live AC breaker: one row, labelled by the meter, naming all four."""
+        """The passive breaker stays in the baseline; each AC has its own carve."""
         self.assertEqual(
             read_carved_meters({"devices": {"consumers": [_ac_breaker()]}}),
             [
-                {
-                    "energy_entity_id": "sensor.jistic_klimatizace_energy",
-                    "label": "sensor.jistic_klimatizace_energy",
-                    "ids": ["ac-1", "ac-2", "ac-3", "ac-4"],
-                    "metered_children": [],
-                }
+                {"energy_entity_id": f"sensor.helman_share_energy_ac_{i}",
+                 "label": f"sensor.helman_share_energy_ac_{i}", "ids": [f"ac-{i}"]}
+                for i in range(1, 5)
             ],
         )
 
@@ -662,27 +667,40 @@ class CarvedMeterReaderTests(unittest.TestCase):
         self.assertEqual(read_carved_meters({"devices": {"consumers": [breaker]}}), [])
 
     def test_nested_meters_are_carved_once_each(self) -> None:
-        """The study: the plug is carved on its own; the breaker only if its
-        meterless children are all schedulable — here the lamp is passive."""
+        """Each schedulable leaf is carved by its own energy entity."""
         self.assertEqual(
             [
-                (meter["energy_entity_id"], meter["ids"], meter["metered_children"])
+                (meter["energy_entity_id"], meter["ids"])
                 for meter in read_carved_meters({"devices": {"consumers": [_study()]}})
             ],
-            [("sensor.plug_energy", ["plug"], [])],
+            [("sensor.plug_energy", ["plug"])],
         )
 
         study = _study()
         study["children"][1]["schedulable"] = True
         self.assertEqual(
             [
-                (meter["energy_entity_id"], meter["ids"], meter["metered_children"])
+                (meter["energy_entity_id"], meter["ids"])
                 for meter in read_carved_meters({"devices": {"consumers": [study]}})
             ],
             [
-                ("sensor.study_energy", ["lamp"], ["sensor.plug_energy"]),
-                ("sensor.plug_energy", ["plug"], []),
+                ("sensor.plug_energy", ["plug"]),
+                ("sensor.helman_share_energy_lamp", ["lamp"]),
             ],
+        )
+
+    def test_sibling_schedulability_changes_only_its_carve(self) -> None:
+        breaker = _ac_breaker()
+        config = {"devices": {"consumers": [breaker]}}
+        before_split = read_shared_meters(config)
+        before = read_carved_meters(config)
+
+        breaker["children"][0]["schedulable"] = False
+
+        self.assertEqual(read_shared_meters(config), before_split)
+        self.assertEqual(
+            [row["energy_entity_id"] for row in read_carved_meters(config)],
+            [row["energy_entity_id"] for row in before[1:]],
         )
 
     def test_the_inverter_is_never_carved(self) -> None:
@@ -755,7 +773,7 @@ class SchedulableConsumerReaderTests(unittest.TestCase):
             ["ac-1", "ac-2", "ac-3", "ac-4", "plug"],
         )
 
-    def test_a_meterless_child_names_its_effective_meter_and_carve_out(self) -> None:
+    def test_a_meterless_child_names_its_share_sensor_and_its_parents_carve_out(self) -> None:
         consumers = read_schedulable_consumers({"devices": {"consumers": [_ac_breaker()]}})
 
         self.assertEqual(
@@ -763,10 +781,18 @@ class SchedulableConsumerReaderTests(unittest.TestCase):
             {
                 "id": "ac-1",
                 "label": "ac-1",
-                "energy_entity_id": "sensor.jistic_klimatizace_energy",
+                "energy_entity_id": "sensor.helman_share_energy_ac_1",
                 "deferrable": True,
             },
         )
+
+    def test_a_child_without_a_running_signal_has_no_scheduled_sensor(self) -> None:
+        breaker = _ac_breaker()
+        breaker["children"].append(_device("silent", schedulable=True, kind="future_kind"))
+
+        consumers = read_schedulable_consumers({"devices": {"consumers": [breaker]}})
+
+        self.assertNotIn("silent", [consumer["id"] for consumer in consumers])
 
     def test_the_inverter_is_never_a_scheduled_consumer(self) -> None:
         config = {"energy_nodes": {"inverter": {"controls": {}}}}

@@ -32,8 +32,6 @@ interface FakeNode {
     name: string;
     deferrable?: boolean;
     controllableIds?: string[];
-    ownDeferrable?: boolean;
-    ownControllableIds?: string[];
     groupBadgeTexts?: string[];
     isEstimated?: boolean;
     isUnmeasured?: boolean;
@@ -261,19 +259,18 @@ test.describe("deferrable house consumers on the power card", () => {
         expect(rows[0].badgeColor).toBe(MIXED_COLOR);
     });
 
-    test("historical own attribution does not tint an aggregate carved parent", async ({ page }) => {
+    test("a passive aggregate and remainder stay untinted", async ({ page }) => {
         await mountRows(page, [
             {
-                id: "sensor.carved_parent", name: "Carved parent", deferrable: false,
-                ownDeferrable: true, ownControllableIds: ["dishwasher", "boiler"],
+                id: "sensor.carved_parent", name: "Passive parent", deferrable: false,
                 children: [
                     { id: "sensor.passive_child", name: "Passive child", deferrable: false },
-                    { id: "parent_unmeasured", name: "Unmeasured", isUnmeasured: true, deferrable: true },
+                    { id: "parent_unmeasured", name: "Unmeasured", isUnmeasured: true, deferrable: false },
                 ],
             },
         ]);
         const rows = await readRows(page);
-        expect(rows[0].label).toBe("Carved parent");
+        expect(rows[0].label).toBe("Passive parent");
         expect(rows[0].tint).toBe("");
     });
 
@@ -373,7 +370,7 @@ test.describe("deferrable house consumers on the power card", () => {
                     childrenCollapsed: false,
                     children: [
                         {
-                            id: "ac-living-room",
+                            id: "sensor.helman_share_energy_ac_living_room",
                             name: "AC living room",
                             isEstimated: true,
                             powerSensorId: "sensor.helman_share_power_ac_living_room",
@@ -400,6 +397,27 @@ test.describe("deferrable house consumers on the power card", () => {
             expect(value).toBe("≈ —");
         });
     }
+
+    test("a metered device whose power sensor is unavailable reads as unknown, unmarked", async ({ page }) => {
+        await page.evaluate(() => {
+            (window.__fakeHass as any).states = { "sensor.fridge_power": { state: "unavailable", attributes: {} } };
+        });
+        await mountRows(page, [
+            { id: "sensor.fridge_energy", name: "Fridge", powerSensorId: "sensor.fridge_power", powerValue: 0 },
+        ]);
+
+        const value = await page.evaluate(async () => {
+            const el = document.querySelector("helman-tree-item-list") as any;
+            await el.updateComplete;
+            const row = el.shadowRoot.querySelector("helman-tree-item") as any;
+            await row.updateComplete;
+            const display = row.shadowRoot.querySelector("helman-tree-item-power-display") as any;
+            await display.updateComplete;
+            return (display.shadowRoot.querySelector(".powerValue")?.textContent ?? "").replace(/\s+/g, " ").trim();
+        });
+
+        expect(value).toBe("—");
+    });
 });
 
 declare global {

@@ -48,7 +48,8 @@ const device = (name: string, overrides: Partial<TreeItemDTO>) => {
 
 /** A meterless child's row: its share of its parent's meter, as the tree builder emits it for a schedulable one. */
 const share = (id: string, name: string) => treeNode({
-    id, displayName: name, isEstimated: true, powerSensorId: `sensor.helman_share_power_${id.replace(/-/g, "_")}`,
+    id: `sensor.helman_share_energy_${id.replace(/-/g, "_")}`, energyEntityId: `sensor.helman_share_energy_${id.replace(/-/g, "_")}`,
+    displayName: name, isEstimated: true, powerSensorId: `sensor.helman_share_power_${id.replace(/-/g, "_")}`,
     switchEntityId: `switch.${id}`, controllableIds: [id], applianceKind: "generic", deferrable: true,
 });
 
@@ -57,15 +58,15 @@ const TREE = treePayload({
     consumers: [treeNode({
         id: "house", displayName: "House", powerSensorId: "sensor.house", childrenFullWidth: true,
         children: [
-            device("Boiler", { icon: "mdi:water-boiler", controllableIds: ["boiler"], ownControllableIds: ["boiler"], applianceKind: "generic", switchEntityId: "switch.boiler" }),
-            device("Klima", { controllableIds: ["klima"], ownControllableIds: ["klima"], applianceKind: "climate", climateEntityId: "climate.klima" }),
+            device("Boiler", { icon: "mdi:water-boiler", controllableIds: ["boiler"], applianceKind: "generic", switchEntityId: "switch.boiler" }),
+            device("Klima", { controllableIds: ["klima"], applianceKind: "climate", climateEntityId: "climate.klima" }),
             // A breaker Helman does not schedule, carved for its two schedulable
             // meterless pumps: the lanes are its meter's own, not its.
             device("Pumps", {
-                deferrable: true, ownDeferrable: true, ownControllableIds: ["pump-a", "pump-b"], switchEntityId: "switch.pumps_breaker",
+                deferrable: true, controllableIds: ["pump-a", "pump-b"], switchEntityId: "switch.pumps_breaker",
                 children: [share("pump-a", "Pump A"), share("pump-b", "Pump B")],
             }),
-            device("Legacy", { controllableIds: ["legacy"], ownControllableIds: ["legacy"], applianceKind: "generic" }),
+            device("Legacy", { controllableIds: ["legacy"], applianceKind: "generic" }),
             device("Lamp", { switchEntityId: "switch.lamp" }),
             device("Living Light", { switchEntityId: "light.living_room" }),
             device("Living TV", { switchEntityId: "media_player.tv" }),
@@ -77,7 +78,7 @@ const TREE = treePayload({
             device("Bedroom AC", { climateEntityId: "climate.bedroom" }),
             device("Heater", { switchEntityId: "switch.heater_breaker", climateEntityId: "climate.heater" }),
             // A meterless air conditioner: its running signal is its climate entity.
-            treeNode({ id: "office-ac", displayName: "Office AC", isEstimated: true, switchEntityId: "climate.office", climateEntityId: "climate.office" }),
+            treeNode({ id: "sensor.helman_share_energy_office_ac", energyEntityId: "sensor.helman_share_energy_office_ac", displayName: "Office AC", isEstimated: true, switchEntityId: "climate.office", climateEntityId: "climate.office" }),
             device("Meter", {}),
         ],
     })],

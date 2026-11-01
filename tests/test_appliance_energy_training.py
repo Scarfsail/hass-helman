@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import importlib
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
@@ -16,12 +16,28 @@ appliance_energy_module = importlib.import_module(
 recorder_module = importlib.import_module(
     "custom_components.helman.shared_meter_fit"
 )
+from custom_components.helman.controllables.config import (  # noqa: E402
+    share_energy_entity_id,
+    share_power_entity_id,
+)
+from tests._fakes import (  # noqa: E402
+    DISHWASHER_ENERGY,
+    DISHWASHER_KWH,
+    DISHWASHER_POWER,
+    DISHWASHER_SWITCH,
+    KITCHEN_ENERGY,
+    KITCHEN_OWN_KW,
+    KITCHEN_POWER,
+    KITCHEN_REMAINDER_KWH,
+    kitchen_config,
+)
 
 ApplianceEnergyTrainingJob = appliance_energy_module.ApplianceEnergyTrainingJob
 ApplianceEnergyTrainingRequest = appliance_energy_module.ApplianceEnergyTrainingRequest
 DeviceSubject = appliance_energy_module.DeviceSubject
 SharedMeterMember = appliance_energy_module.SharedMeterMember
 SharedMeter = appliance_energy_module.SharedMeter
+read_request = appliance_energy_module.read_appliance_energy_training_request
 
 #: The zone ``conftest`` pins Home Assistant to, where the days are counted.
 TZ = ZoneInfo("Europe/Prague")
@@ -42,7 +58,6 @@ def _metered(
     """A device with its own meter, keyed by it."""
     return DeviceSubject(
         device_key=key,
-        meter=key,
         controllable_id=controllable_id,
         power_entity_id=power,
         running_signal=(switch, "switch") if switch is not None else None,
@@ -51,19 +66,23 @@ def _metered(
     )
 
 
+def _share(device_id: str) -> str:
+    """A meterless child's share-energy sensor."""
+    return share_energy_entity_id(device_id)
+
+
 def _child(
     device_id: str,
-    meter: str = _SHARED_METER,
     *,
     history_average: bool = False,
     lookback_days: int = 1,
+    power: bool = False,
 ):
-    """A meterless child of ``meter``, keyed by its id, run by its switch."""
+    """A meterless child, keyed by its share-energy sensor, run by its switch."""
     return DeviceSubject(
-        device_key=device_id,
-        meter=meter,
-        meterless=True,
+        device_key=_share(device_id),
         controllable_id=device_id,
+        power_entity_id=share_power_entity_id(device_id) if power else None,
         running_signal=(f"switch.{device_id}", "switch"),
         lookback_days=lookback_days,
         history_average=history_average,
@@ -73,7 +92,9 @@ def _child(
 def _shared(*children, metered_children=(), tolerance=None):
     return SharedMeter(
         tuple(
-            SharedMeterMember.for_signal(child.device_key, f"switch.{child.device_key}", "switch")
+            SharedMeterMember.for_signal(
+                child.controllable_id, f"switch.{child.controllable_id}", "switch"
+            )
             for child in children
         ),
         tuple(metered_children),
@@ -199,21 +220,27 @@ class ApplianceEnergyTrainingJobTests(unittest.IsolatedAsyncioTestCase):
     async def test_a_shared_meter_is_split_among_the_members_running(self) -> None:
         """Both run for the first hour, only A for the second.
 
-        A alone draws 1 kW and both 1.5 kW, so B learns 0.5 kW and the shared
-        hour is split 2:1. A learns (1 + 1) / 2 h and B 0.5 / 1 h.
+        A alone draws 1 kW and both 1.5 kW, so B learns 0.5 kW: the weights the
+        live split hands the shared hour out 2:1 by. Each one's figures come
+        from its share sensors, which accumulated exactly that split: A
+        learns (1 + 1) / 2 h and B 0.5 / 1 h.
         """
         store = _FakeStore()
         self._install(
             _FakeRecorder(
                 {
-                    "switch.ac-a": _switch(("on", 10), ("off", 12)),
-                    "switch.ac-b": _switch(("on", 10), ("off", 11)),
+                    "switch.ac-a": _switch(("off", 0), ("on", 10), ("off", 12)),
+                    "switch.ac-b": _switch(("off", 0), ("on", 10), ("off", 11)),
                     _SHARED_METER: _meter_readings((0.0, 10), (1.5, 11), (2.5, 12)),
+                    _share("ac-a"): _meter_readings((0.0, 10), (1.0, 11), (2.0, 12)),
+                    _share("ac-b"): _meter_readings((0.0, 10), (0.5, 11), (0.5, 12)),
+                    share_power_entity_id("ac-a"): _power((0, 0), (1000, 10), (0, 12)),
+                    share_power_entity_id("ac-b"): _power((0, 0), (500, 10), (0, 11)),
                 }
             )
         )
-        a = _child("ac-a", history_average=True)
-        b = _child("ac-b", history_average=True)
+        a = _child("ac-a", history_average=True, power=True)
+        b = _child("ac-b", history_average=True, power=True)
         job = self._make_job(store, [a, b], shared_meters={_SHARED_METER: _shared(a, b)})
 
         outcome = await job.async_train()
@@ -223,8 +250,42 @@ class ApplianceEnergyTrainingJobTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             store.section["shared_meter_weights"], {"ac-a": 1.0, "ac-b": 0.5}
         )
-        self.assertEqual(store.section["devices"]["ac-a"]["running_kw"], 1.0)
-        self.assertEqual(store.section["devices"]["ac-b"]["running_kw"], 0.5)
+        self.assertEqual(store.section["devices"][_share("ac-a")]["running_kw"], 1.0)
+        self.assertEqual(store.section["devices"][_share("ac-b")]["running_kw"], 0.5)
+
+    async def test_the_kitchen_dishwasher_learns_its_share_and_the_circuit_its_total(
+        self,
+    ) -> None:
+        """The dishwasher's record is its 1 kWh, the circuit's its 1.3 kWh total,
+        so 0.3 kWh is what the dishwasher leaves of it."""
+        store = _FakeStore()
+        self._install(
+            _FakeRecorder(
+                {
+                    KITCHEN_ENERGY: _meter_readings((0.0, 0), (0.0, 10), (KITCHEN_OWN_KW, 11), (KITCHEN_OWN_KW, 23)),
+                    KITCHEN_POWER: _power((0, 0), (KITCHEN_OWN_KW * 1000, 10), (0, 11)),
+                    DISHWASHER_SWITCH: _switch(("off", 0), ("on", 10), ("off", 11)),
+                    DISHWASHER_ENERGY: _meter_readings((0.0, 0), (0.0, 10), (DISHWASHER_KWH, 11), (DISHWASHER_KWH, 23)),
+                    DISHWASHER_POWER: _power((0, 0), (DISHWASHER_KWH * 1000, 10), (0, 11)),
+                }
+            )
+        )
+        request = read_request(kitchen_config(), [])
+        self.assertEqual(
+            [(subject.device_key, subject.power_entity_id) for subject in request.subjects],
+            [(KITCHEN_ENERGY, KITCHEN_POWER), (DISHWASHER_ENERGY, DISHWASHER_POWER)],
+        )
+        job = ApplianceEnergyTrainingJob(SimpleNamespace(), store, read_request=lambda: request)
+
+        await job.async_train()
+
+        devices = store.section["devices"]
+        dishwasher = devices[DISHWASHER_ENERGY]["daily_kwh"]["mean"]
+        self.assertEqual(dishwasher, DISHWASHER_KWH)
+        self.assertEqual(devices[DISHWASHER_ENERGY]["running_kw"], DISHWASHER_KWH)
+        self.assertAlmostEqual(
+            devices[KITCHEN_ENERGY]["daily_kwh"]["mean"] - dishwasher, KITCHEN_REMAINDER_KWH
+        )
 
     async def test_a_non_schedulable_metered_device_and_a_passive_child_get_records(
         self,
@@ -242,11 +303,14 @@ class ApplianceEnergyTrainingJobTests(unittest.IsolatedAsyncioTestCase):
                     "sensor.fridge_power": _power((0, 0), (100, 10), (0, 12)),
                     "switch.pump": _switch(("off", 0), ("on", 10), ("off", 11)),
                     _SHARED_METER: _meter_readings((0.0, 0), (0.0, 10), (0.4, 11), (0.4, 23)),
+                    _share("pump"): _meter_readings((0.0, 0), (0.0, 10), (0.4, 11), (0.4, 23)),
+                    share_power_entity_id("pump"): _power((0, 0), (400, 10), (0, 11)),
                 }
             )
         )
         fridge = _metered("sensor.fridge_energy", power="sensor.fridge_power")
-        pump = _child("pump")
+        # Not a learner, so the default window, as the request gives it.
+        pump = _child("pump", power=True, lookback_days=30)
         job = self._make_job(
             store, [fridge, pump], shared_meters={_SHARED_METER: _shared(pump)}
         )
@@ -260,7 +324,7 @@ class ApplianceEnergyTrainingJobTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fridge_record["daily_kwh"]["mean"], 2.0)
         self.assertEqual(fridge_record["running_kw"], 0.1)
         self.assertNotIn("on_kwh_per_hour", fridge_record)
-        pump_record = store.section["devices"]["pump"]
+        pump_record = store.section["devices"][_share("pump")]
         self.assertEqual(pump_record["running_kw"], 0.4)
         self.assertEqual(pump_record["on_kwh_per_hour"], 0.4)
 
@@ -304,6 +368,7 @@ class ApplianceEnergyTrainingJobTests(unittest.IsolatedAsyncioTestCase):
                     "switch.boiler": _switch(("off", 0), ("on", 10), ("off", 12)),
                     "switch.pump": _switch(("off", 0)),
                     _SHARED_METER: _meter_readings((0.0, 0), (0.0, 10), (4.0, 12), (4.0, 23)),
+                    _share("pump"): _meter_readings((0.0, 0), (0.0, 23)),
                 }
             )
         )
@@ -323,18 +388,15 @@ class ApplianceEnergyTrainingJobTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(store.section["data"], {"boiler": 2.0})
         self.assertEqual(store.section["failed_appliances"], {})
 
-    async def test_a_childs_days_begin_where_its_meters_history_does(self) -> None:
-        """The recorder has purged all but the last day of a 30-day window.
-
-        The purged days are unknown, not zero: the pump's typical day is the
-        one day its meter still covers.
-        """
+    async def test_a_childs_record_is_read_from_its_share_energy_sensor(self) -> None:
+        """Not from its parent's meter: the 0.4 kWh its share sensor accumulated."""
         store = _FakeStore()
         self._install(
             _FakeRecorder(
                 {
                     "switch.pump": _switch(("off", 0), ("on", 10), ("off", 11)),
-                    _SHARED_METER: _meter_readings((0.0, 0), (0.0, 10), (0.4, 11), (0.4, 23)),
+                    _SHARED_METER: _meter_readings((0.0, 0), (0.0, 10), (5.0, 11), (5.0, 23)),
+                    _share("pump"): _meter_readings((0.0, 0), (0.0, 10), (0.4, 11), (0.4, 23)),
                 }
             )
         )
@@ -344,36 +406,9 @@ class ApplianceEnergyTrainingJobTests(unittest.IsolatedAsyncioTestCase):
         await job.async_train()
 
         self.assertEqual(
-            store.section["devices"]["pump"]["daily_kwh"],
+            store.section["devices"][_share("pump")]["daily_kwh"],
             {"mean": 0.4, "median": 0.4, "min": 0.4, "max": 0.4, "days": 1},
         )
-
-    async def test_a_childs_days_begin_where_its_signal_history_does(self) -> None:
-        """The meter goes back a day further than the pump's switch: that
-        earlier day says nothing about the pump, so it is no zero day."""
-        store = _FakeStore()
-        earlier = SimpleNamespace(
-            state="0.0",
-            attributes={"unit_of_measurement": "kWh"},
-            last_updated=_at(0) - timedelta(days=1),
-        )
-        self._install(
-            _FakeRecorder(
-                {
-                    "switch.pump": _switch(("off", 0), ("on", 10), ("off", 11)),
-                    _SHARED_METER: [
-                        earlier,
-                        *_meter_readings((0.0, 0), (0.0, 10), (0.4, 11), (0.4, 23)),
-                    ],
-                }
-            )
-        )
-        pump = _child("pump")
-        job = self._make_job(store, [pump], shared_meters={_SHARED_METER: _shared(pump)})
-
-        await job.async_train()
-
-        self.assertEqual(store.section["devices"]["pump"]["daily_kwh"]["days"], 1)
 
     async def test_a_metered_devices_runs_begin_where_its_signal_does(self) -> None:
         """Power goes back to midnight, the switch only to 06:00: the 18 h
@@ -403,7 +438,7 @@ class ApplianceEnergyTrainingJobTests(unittest.IsolatedAsyncioTestCase):
         nothing new, and keeps what it learned before."""
         store = _FakeStore()
         previous = {"daily_kwh": {"mean": 0.4, "median": 0.4, "min": 0.4, "max": 0.4, "days": 1}}
-        store.section = {"data": {}, "fingerprint": "old", "devices": {"pump": previous}}
+        store.section = {"data": {}, "fingerprint": "old", "devices": {_share("pump"): previous}}
         self._install(
             _FakeRecorder({"switch.pump": _switch(("off", 0), ("on", 10), ("off", 11))})
         )
@@ -413,7 +448,24 @@ class ApplianceEnergyTrainingJobTests(unittest.IsolatedAsyncioTestCase):
         outcome = await job.async_train()
 
         self.assertEqual(outcome, "no_history")
-        self.assertEqual(store.section["devices"], {"pump": previous})
+        self.assertEqual(store.section["devices"], {_share("pump"): previous})
+
+    async def test_a_meterless_child_keeps_its_record_stored_under_its_id(self) -> None:
+        """Before it read its share-energy sensor a meterless child's record
+        was keyed by its id: until the sensor's history answers, that record is
+        carried over under the new key."""
+        store = _FakeStore()
+        previous = {"daily_kwh": {"mean": 0.4, "median": 0.4, "min": 0.4, "max": 0.4, "days": 1}}
+        store.section = {"data": {}, "fingerprint": "old", "devices": {"pump": previous}}
+        self._install(
+            _FakeRecorder({"switch.pump": _switch(("off", 0), ("on", 10), ("off", 11))})
+        )
+        pump = _child("pump")
+        job = self._make_job(store, [pump], shared_meters={_SHARED_METER: _shared(pump)})
+
+        await job.async_train()
+
+        self.assertEqual(store.section["devices"], {_share("pump"): previous})
 
     async def test_a_metered_device_without_history_keeps_its_record(self) -> None:
         store = _FakeStore()
@@ -505,6 +557,7 @@ class ApplianceEnergyTrainingJobTests(unittest.IsolatedAsyncioTestCase):
                     "sensor.heater_power",
                     "switch.heater",
                     "switch.pump",
+                    _share("pump"),
                 ]
             ),
         )
@@ -595,6 +648,8 @@ class ApplianceEnergyTrainingJobTests(unittest.IsolatedAsyncioTestCase):
                     "switch.ac-a": _switch(("on", 10), ("off", 11)),
                     "switch.ac-fixed": _switch(("on", 10), ("off", 11)),
                     _SHARED_METER: _meter_readings((0.0, 10), (1.0, 11), (2.0, 12)),
+                    _share("ac-a"): _meter_readings((0.0, 10), (0.5, 11), (0.5, 12)),
+                    _share("ac-fixed"): _meter_readings((0.0, 10), (0.5, 11), (0.5, 12)),
                 }
             )
         )
@@ -607,16 +662,22 @@ class ApplianceEnergyTrainingJobTests(unittest.IsolatedAsyncioTestCase):
         await job.async_train()
 
         self.assertEqual(store.section["data"], {"ac-a": 0.5})
-        self.assertIn("ac-fixed", store.section["devices"])
+        self.assertIn(_share("ac-fixed"), store.section["devices"])
 
     async def test_a_failed_shared_read_fails_every_member_under_its_key(self) -> None:
-        """Passive members too: the run must not look healthy on stale weights."""
+        """Passive members too: the run must not look healthy on stale weights.
+
+        Their records and estimates are their own sensors', which still read.
+        """
         store = _FakeStore()
         self._install(
             _FakeRecorder(
                 {
                     "switch.dishwasher": _switch(("off", 0), ("on", 10), ("off", 11)),
                     "sensor.dishwasher_energy": _meter_readings((0.0, 0), (0.0, 10), (0.8, 11), (0.8, 23)),
+                    "switch.ac-a": _switch(("off", 0), ("on", 10), ("off", 11)),
+                    _share("ac-a"): _meter_readings((0.0, 0), (0.0, 10), (0.6, 11), (0.6, 23)),
+                    _share("pump"): _meter_readings((0.0, 0), (0.0, 23)),
                 },
                 error_ids=(_SHARED_METER,),
             )
@@ -639,7 +700,7 @@ class ApplianceEnergyTrainingJobTests(unittest.IsolatedAsyncioTestCase):
             outcome = await job.async_train()
 
         self.assertEqual(outcome, "estimates_trained")
-        self.assertEqual(store.section["data"], {"dishwasher": 0.8})
+        self.assertEqual(store.section["data"], {"dishwasher": 0.8, "ac-a": 0.6})
         self.assertTrue(any("ac-a, pump" in line for line in logs.output))
         self.assertEqual(
             store.section["failed_appliances"],
@@ -719,7 +780,7 @@ class ApplianceEnergyTrainingJobTests(unittest.IsolatedAsyncioTestCase):
             "data": {},
             "fingerprint": "old",
             "shared_meter_weights": {"ac-a": 1.2, "ac-b": None, "gone": 3.0},
-            "devices": {"ac-a": {"running_kw": 1.2}},
+            "devices": {_share("ac-a"): {"running_kw": 1.2}},
         }
         self._install(_FakeRecorder({}, error_ids=(_SHARED_METER,)))
         a, b = _child("ac-a"), _child("ac-b")
@@ -731,7 +792,7 @@ class ApplianceEnergyTrainingJobTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             store.section["shared_meter_weights"], {"ac-a": 1.2, "ac-b": None}
         )
-        self.assertEqual(store.section["devices"], {"ac-a": {"running_kw": 1.2}})
+        self.assertEqual(store.section["devices"], {_share("ac-a"): {"running_kw": 1.2}})
 
     async def test_no_subjects_records_not_configured_without_reading(self) -> None:
         """Nothing to learn, and nothing read.

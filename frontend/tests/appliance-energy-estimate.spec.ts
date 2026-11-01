@@ -130,9 +130,10 @@ const TRAINING_STATUS = {
                     daily_kwh: { mean: 36, median: 30, min: 0, max: 80, days: 29 },
                     on_kwh_per_hour: 4,
                 },
-                // A meterless child, by its id: its runs are its on-intervals,
-                // so its power while active equals its average while on.
-                lamp: {
+                // A meterless child, by its share-energy sensor: its runs are
+                // its on-intervals, so its power while active equals its
+                // average while on.
+                "sensor.helman_share_energy_lamp": {
                     daily_kwh: { mean: 0.2, median: 0.2, min: 0, max: 0.5, days: 29 },
                     running_kw: 0.05,
                     on_kwh_per_hour: 0.05,
@@ -161,7 +162,21 @@ async function mountEditor(page: Page): Promise<void> {
                     },
                     "helman/training/status": async (request: any) => {
                         return JSON.parse(JSON.stringify(trainingStatus));
-                    }
+                    },
+                    "helman/inspect_entities": async (request: any) => ({
+                        results: (request.targets ?? []).map((target: any) => ({
+                            key: target.key,
+                            draft: target.key === "helman.share_energy.lamp"
+                                ? {
+                                    entityId: "sensor.helman_share_energy_lamp",
+                                    status: "ok",
+                                    facts: [],
+                                    dependsOn: [],
+                                }
+                                : { entityId: null, status: "unsupported", facts: [] },
+                            saved: null,
+                        })),
+                    }),
                 }).callWS,
             };
             document.body.appendChild(element);
@@ -296,11 +311,10 @@ test("every other device shows what it learned, on the same scale", async ({ pag
     // A device the job never trains has no row to stay untrained in.
     await expect(learnedCell(page, "Lights")).toHaveCount(0);
 
-    // The lamp reads its parent's meter and its own switch, over 30 days.
+    // The lamp reads its own estimated energy sensor over its own lookback.
     const lamp = learnedCell(page, "Lamp").locator("xpath=..");
     await expect(lamp.locator("td").nth(2)).toHaveText("30 d");
-    await expect(lamp.locator("td").nth(0)).toContainText("sensor.breaker_energy");
-    await expect(lamp.locator("td").nth(0)).toContainText("switch.lamp");
+    await expect(lamp.locator("td").nth(0)).toContainText("sensor.helman_share_energy_lamp");
 });
 
 test("every row's hover lists the same measures in the same order", async ({ page }) => {

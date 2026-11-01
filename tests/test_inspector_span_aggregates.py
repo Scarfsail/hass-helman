@@ -653,7 +653,7 @@ class TestHouseBreakdown(unittest.IsolatedAsyncioTestCase):
         tree = {"consumers": [{"id": "house", "children": [{
             "energyEntityId": FRIDGE_METER, "displayName": "Circuit",
             "children": [{"energyEntityId": WASHER_METER, "displayName": "Washer",
-                          "ownDeferrable": True, "ownControllableIds": ["washer"],
+                          "deferrable": True, "controllableIds": ["washer"],
                           "switchEntityId": "switch.washer"}],
         }]}]}
 

@@ -274,11 +274,13 @@ class TreeFromDevicesTests(unittest.TestCase):
         # a remainder shows the breaker's standby.
         breaker = expected[AC_BREAKER]
         self.assertEqual(breaker["children"], {})
+        # The passive breaker no longer inherits its children's schedulability.
+        breaker["deferrable"] = False
         breaker["controllableIds"] = []
         breaker["children"] = {
             **{
-                f"klima-{room}": {
-                    "id": f"klima-{room}",
+                f"sensor.helman_share_energy_klima_{room}": {
+                    "id": f"sensor.helman_share_energy_klima_{room}",
                     "displayName": f"klima-{room}",
                     "powerSensorId": f"sensor.helman_share_power_klima_{room}",
                     "switchEntityId": f"climate.{room}",
@@ -309,7 +311,7 @@ class TreeFromDevicesTests(unittest.TestCase):
             },
         }
         # A meterless child's group comes from its running signal's HA device.
-        obyvak = breaker["children"]["klima-obyvak"]
+        obyvak = breaker["children"]["sensor.helman_share_energy_klima_obyvak"]
         obyvak["groups"] = NIGHT_GROUP
         obyvak["groupBadgeTexts"] = ["⏻😴"]
         # A remainder carries no name of its own: the card names every one.
@@ -317,7 +319,7 @@ class TreeFromDevicesTests(unittest.TestCase):
 
         self.assertEqual(_slim(self.house["children"]), expected)
 
-    def test_every_metered_row_names_its_meter(self) -> None:
+    def test_every_device_row_is_keyed_by_its_energy_entity(self) -> None:
         def walk(nodes):
             for node in nodes:
                 yield node
@@ -325,7 +327,7 @@ class TreeFromDevicesTests(unittest.TestCase):
 
         for node in walk(self.house["children"]):
             with self.subTest(node=node["id"]):
-                if node["isUnmeasured"] or node["isEstimated"]:
+                if node["isUnmeasured"]:
                     self.assertIsNone(node["energyEntityId"])
                 else:
                     self.assertEqual(node["energyEntityId"], node["id"])
@@ -342,6 +344,9 @@ class TreeFromDevicesTests(unittest.TestCase):
                     if not node["isUnmeasured"]
                 ]
                 + [ENERGY_ONLY_METER]
+                # The AC breaker is carved, so its meterless children are rows
+                # of their own, read from their share-energy sensors.
+                + [f"sensor.helman_share_energy_klima_{room}" for room in AC_ROOMS]
             ),
         )
 
@@ -373,7 +378,7 @@ class SharedMeterRowsTests(unittest.TestCase):
             ],
             [
                 (
-                    f"klima-{room}",
+                    f"sensor.helman_share_energy_klima_{room}",
                     f"sensor.helman_share_power_klima_{room}",
                     f"climate.{room}",
                     [f"klima-{room}"],
@@ -554,7 +559,7 @@ class DevicePhaseTests(unittest.TestCase):
 
         self.assertIsNone(house["phase"])
         self.assertEqual(rows["sensor.breaker_energy"], "3ph")
-        self.assertEqual(rows["ac"], "L2")
+        self.assertEqual(rows["sensor.helman_share_energy_ac"], "L2")
         # Not inherited here: the house detail decides what a child is on.
         self.assertIsNone(rows["sensor.oven_energy"])
         self.assertIsNone(rows["sensor_breaker_energy_unmeasured"])
@@ -713,7 +718,7 @@ class CoverAndFanTreeTests(unittest.TestCase):
         tree = _build(config)
         house = _house(tree)
         parent_node = next(n for n in house["children"] if n["id"] == "sensor.circuit_energy")
-        awning_node = next(n for n in parent_node["children"] if n["id"] == "awning")
+        awning_node = next(n for n in parent_node["children"] if n["id"] == "sensor.helman_share_energy_awning")
         self.assertEqual(awning_node["coverEntityId"], "cover.awning")
         self.assertIsNone(awning_node["switchEntityId"])
 

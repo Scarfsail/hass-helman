@@ -33,6 +33,7 @@ appliance_energy = importlib.import_module(
 HOUSE = "sensor.house_energy"
 STUDY = "sensor.study_energy"
 PLUG = "sensor.plug_energy"
+LAMP = "sensor.helman_share_energy_lamp"
 
 
 def _at(hour: int, minute: int = 0) -> datetime:
@@ -192,6 +193,7 @@ class HouseBaselineOwnEnergyTests(unittest.TestCase):
         HOUSE: [{"start": _at(10).timestamp(), "change": 3.0}],
         STUDY: [{"start": _at(10).timestamp(), "change": 1.0}],
         PLUG: [{"start": _at(10).timestamp(), "change": 0.6}],
+        LAMP: [{"start": _at(10).timestamp(), "change": 0.4}],
     }
 
     def _fit(self, config: dict):
@@ -200,7 +202,7 @@ class HouseBaselineOwnEnergyTests(unittest.TestCase):
             profiles.ConsumerHistoryData(
                 entity_id=consumer["energy_entity_id"],
                 label=consumer["label"],
-                values_by_ts=house_training._own_values_by_ts(self._ROWS, consumer),
+                values_by_ts=profiles.rows_to_dict(self._ROWS[consumer["energy_entity_id"]]),
                 query_succeeded=True,
             )
             for consumer in consumers
@@ -220,20 +222,60 @@ class HouseBaselineOwnEnergyTests(unittest.TestCase):
         self.assertEqual(set(profile.consumers), {PLUG})
         self.assertAlmostEqual(profile.non_deferrable[slot].value, 2.4)
 
-    def test_a_carved_breaker_subtracts_its_own_energy_not_its_meter(self) -> None:
+    def test_a_schedulable_lamp_carves_only_its_share(self) -> None:
         profile, slot = self._fit(_study(lamp_schedulable=True))
 
-        # The plug once, the breaker's own 0.4 once: 3 - 0.6 - 0.4.
+        # The plug and lamp each leave the baseline once.
         self.assertAlmostEqual(profile.non_deferrable[slot].value, 2.0)
-        self.assertAlmostEqual(profile.consumers[STUDY][slot].value, 0.4)
+        self.assertAlmostEqual(profile.consumers[LAMP][slot].value, 0.4)
         self.assertAlmostEqual(profile.consumers[PLUG][slot].value, 0.6)
+
+    def test_kitchen_running_and_idle_hours_keep_passive_load_in_baseline(self) -> None:
+        share = "sensor.helman_share_energy_dishwasher"
+        kitchen = {"devices": {"consumers": [{
+            "id": "kitchen", "consumption": {"energy_entity_id": "sensor.kitchen"},
+            "children": [
+                {"id": "dishwasher", "schedulable": True,
+                 "controls": {"switch": {"entity_id": "switch.dishwasher"}}},
+                {"id": "fridge", "schedulable": False,
+                 "controls": {"switch": {"entity_id": "switch.fridge"}}},
+            ],
+        }]}}
+        self.assertEqual(
+            [row["energy_entity_id"] for row in devices.read_carved_meters(kitchen)],
+            [share],
+        )
+        rows = [
+            {"start": _at(10).timestamp(), "change": 1.3},
+            {"start": _at(11).timestamp(), "change": 0.3},
+        ]
+        child_rows = [
+            {"start": _at(10).timestamp(), "change": 1.0},
+            {"start": _at(11).timestamp(), "change": 0.0},
+        ]
+        profile = profiles.fit_house_profile(
+            rows,
+            [profiles.ConsumerHistoryData(
+                entity_id=share, label="dishwasher",
+                values_by_ts=profiles.rows_to_dict(child_rows), query_succeeded=True,
+            )],
+            today_local=_at(10).date(),
+        )
+        for hour, expected_carve in ((10, 1.0), (11, 0.0)):
+            local = profiles.dt_util.as_local(_at(hour))
+            slot = profiles.HourOfWeekWinsorizedMeanProfile.slot_index(
+                local.weekday(), local.hour
+            )
+            self.assertAlmostEqual(profile.non_deferrable[slot].value, 0.3)
+            self.assertAlmostEqual(profile.consumers[share][slot].value, expected_carve)
 
 
 class ForecastActualsOwnEnergyTests(unittest.IsolatedAsyncioTestCase):
-    async def test_a_carved_meters_actuals_are_its_own_energy(self) -> None:
+    async def test_carved_actuals_read_each_leaf(self) -> None:
         slots = {
             STUDY: {_at(10): 1.0, _at(10, 15): 0.5},
             PLUG: {_at(10): 0.6, _at(10, 15): 0.5},
+            LAMP: {_at(10): 0.4, _at(10, 15): 0.0},
         }
 
         class _SlotHistory:
@@ -252,8 +294,7 @@ class ForecastActualsOwnEnergyTests(unittest.IsolatedAsyncioTestCase):
         )
 
         by_entity = {history.entity_id: history.values_by_slot for history in histories}
-        self.assertAlmostEqual(by_entity[STUDY][_at(10)], 0.4)
-        self.assertAlmostEqual(by_entity[STUDY][_at(10, 15)], 0.0)
+        self.assertEqual(by_entity[LAMP], slots[LAMP])
         self.assertEqual(by_entity[PLUG], slots[PLUG])
 
 
@@ -293,6 +334,37 @@ class TopologyFingerprintTests(unittest.TestCase):
         self.assertNotEqual(
             self._appliance_fingerprint(flat), self._appliance_fingerprint(nested)
         )
+
+    def test_parent_carve_becomes_stale_but_metered_leaf_keeps_fingerprint(self) -> None:
+        config = _study(lamp_schedulable=True)
+        current = self._house_fingerprint(config)
+        old_parent = forecast_builder.ConsumptionForecastBuilder._build_config_fingerprint(
+            total_energy_entity_id=HOUSE,
+            training_window_days=56,
+            min_history_days=14,
+            consumers_config=[
+                {"energy_entity_id": STUDY, "label": STUDY, "ids": ["lamp"],
+                 "metered_children": [PLUG]},
+                {"energy_entity_id": PLUG, "label": PLUG, "ids": ["plug"],
+                 "metered_children": []},
+            ],
+        )
+        self.assertNotEqual(current, old_parent)
+
+        metered = {"devices": {"consumers": [
+            {"id": "plug", "schedulable": True,
+             "consumption": {"energy_entity_id": PLUG}}
+        ]}}
+        historical = forecast_builder.ConsumptionForecastBuilder._build_config_fingerprint(
+            total_energy_entity_id=HOUSE,
+            training_window_days=56,
+            min_history_days=14,
+            consumers_config=[
+                {"energy_entity_id": PLUG, "label": PLUG, "ids": ["plug"],
+                 "metered_children": []}
+            ],
+        )
+        self.assertEqual(self._house_fingerprint(metered), historical)
 
 
 if __name__ == "__main__":

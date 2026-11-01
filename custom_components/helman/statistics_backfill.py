@@ -45,16 +45,18 @@ _CHUNK_PAUSE_SECONDS = 1.0
 _STORAGE_VERSION = 1
 
 
-class BackfillCursorStore:
-    """Where a backward statistics walk got to, across restarts.
+def parse_utc(raw: Any) -> datetime | None:
+    """A stored ISO timestamp as UTC, or ``None`` when absent or unreadable."""
+    if not isinstance(raw, str):
+        return None
+    try:
+        return dt_util.as_utc(datetime.fromisoformat(raw))
+    except ValueError:
+        return None
 
-    Persisted payload shape (v1)::
 
-        {"version": 1, "source": "sensor.x", "oldest_hour": "...", "done": bool}
-
-    ``source`` is what the cursor was walked from, ensuring a finished walk
-    does not latch across a change of source entity.
-    """
+class VersionedBackfillStore:
+    """One back-fill's persisted document, dropped when its version differs."""
 
     def __init__(self, hass: HomeAssistant, key: str) -> None:
         self._store = storage.Store(hass, _STORAGE_VERSION, key)
@@ -66,6 +68,22 @@ class BackfillCursorStore:
             self._document = {}
             return
         self._document = stored
+
+    async def _async_save(self, document: dict[str, Any]) -> None:
+        self._document = {"version": _STORAGE_VERSION, **document}
+        await self._store.async_save(self._document)
+
+
+class BackfillCursorStore(VersionedBackfillStore):
+    """Where a backward statistics walk got to, across restarts.
+
+    Persisted payload shape (v1)::
+
+        {"version": 1, "source": "sensor.x", "oldest_hour": "...", "done": bool}
+
+    ``source`` is what the cursor was walked from, ensuring a finished walk
+    does not latch across a change of source entity.
+    """
 
     def done_for(self, source_entity_id: str) -> bool:
         if self._document.get("source") != source_entity_id:
@@ -79,24 +97,18 @@ class BackfillCursorStore:
 
     @property
     def oldest_hour(self) -> datetime | None:
-        raw = self._document.get("oldest_hour")
-        if not isinstance(raw, str):
-            return None
-        try:
-            return dt_util.as_utc(datetime.fromisoformat(raw))
-        except ValueError:
-            return None
+        return parse_utc(self._document.get("oldest_hour"))
 
     async def async_record(
         self, *, source_entity_id: str, oldest_hour: datetime | None, done: bool
     ) -> None:
-        self._document = {
-            "version": _STORAGE_VERSION,
-            "source": source_entity_id,
-            "oldest_hour": oldest_hour.isoformat() if oldest_hour is not None else None,
-            "done": done,
-        }
-        await self._store.async_save(self._document)
+        await self._async_save(
+            {
+                "source": source_entity_id,
+                "oldest_hour": oldest_hour.isoformat() if oldest_hour is not None else None,
+                "done": done,
+            }
+        )
 
 
 async def first_compiled_hour(
@@ -110,74 +122,81 @@ async def first_compiled_hour(
     Narrowed in three bounded steps (month -> day -> hour) from (now - _MAX_SPAN)
     to now, clamped to the current hour, and falling back to the current hour on error.
     """
-    now = dt_util.as_utc(dt_util.now())
-    current_hour = now.replace(minute=0, second=0, microsecond=0)
     try:
-        recorder = span_mod.get_instance(hass)
-
-        def _query() -> datetime | None:
-            # Step 1: Probe month
-            months = span_mod.statistics_during_period(
-                hass,
-                now - _MAX_SPAN,
-                now,
-                {target_entity_id},
-                "month",
-                None,
-                {"mean"},
-            )
-            month_rows = months.get(target_entity_id) or []
-            if not month_rows:
-                return None
-            oldest_month_ts = min(r["start"] for r in month_rows if "start" in r)
-            oldest_month_dt = dt_util.utc_from_timestamp(oldest_month_ts)
-
-            # Step 2: Probe day within that month
-            day_start = oldest_month_dt
-            day_end = min(oldest_month_dt + timedelta(days=33), now)
-            days = span_mod.statistics_during_period(
-                hass,
-                day_start,
-                day_end,
-                {target_entity_id},
-                "day",
-                None,
-                {"mean"},
-            )
-            day_rows = days.get(target_entity_id) or []
-            if not day_rows:
-                return oldest_month_dt
-            oldest_day_ts = min(r["start"] for r in day_rows if "start" in r)
-            oldest_day_dt = dt_util.utc_from_timestamp(oldest_day_ts)
-
-            # Step 3: Probe hour within that day
-            hour_start = oldest_day_dt
-            hour_end = min(oldest_day_dt + timedelta(days=2), now)
-            hours = span_mod.statistics_during_period(
-                hass,
-                hour_start,
-                hour_end,
-                {target_entity_id},
-                "hour",
-                None,
-                {"mean"},
-            )
-            hour_rows = hours.get(target_entity_id) or []
-            if not hour_rows:
-                return oldest_day_dt
-            oldest_hour_ts = min(r["start"] for r in hour_rows if "start" in r)
-            return dt_util.utc_from_timestamp(oldest_hour_ts)
-
-        oldest = await recorder.async_add_executor_job(_query)
-        if oldest is None:
-            return current_hour
-        return min(oldest, current_hour)
+        return await probe_first_compiled_hour(hass, target_entity_id)
     except Exception:
         _LOGGER.exception(
             "Failed to read existing statistics for %s; back-filling from the current hour",
             target_entity_id,
         )
+        return dt_util.as_utc(dt_util.now()).replace(minute=0, second=0, microsecond=0)
+
+
+async def probe_first_compiled_hour(
+    hass: HomeAssistant, target_entity_id: str
+) -> datetime:
+    """:func:`first_compiled_hour`, raising when the probe fails."""
+    now = dt_util.as_utc(dt_util.now())
+    current_hour = now.replace(minute=0, second=0, microsecond=0)
+    recorder = span_mod.get_instance(hass)
+
+    def _query() -> datetime | None:
+        # Step 1: Probe month
+        months = span_mod.statistics_during_period(
+            hass,
+            now - _MAX_SPAN,
+            now,
+            {target_entity_id},
+            "month",
+            None,
+            {"mean"},
+        )
+        month_rows = months.get(target_entity_id) or []
+        if not month_rows:
+            return None
+        oldest_month_ts = min(r["start"] for r in month_rows if "start" in r)
+        oldest_month_dt = dt_util.utc_from_timestamp(oldest_month_ts)
+
+        # Step 2: Probe day within that month
+        day_start = oldest_month_dt
+        day_end = min(oldest_month_dt + timedelta(days=33), now)
+        days = span_mod.statistics_during_period(
+            hass,
+            day_start,
+            day_end,
+            {target_entity_id},
+            "day",
+            None,
+            {"mean"},
+        )
+        day_rows = days.get(target_entity_id) or []
+        if not day_rows:
+            return oldest_month_dt
+        oldest_day_ts = min(r["start"] for r in day_rows if "start" in r)
+        oldest_day_dt = dt_util.utc_from_timestamp(oldest_day_ts)
+
+        # Step 3: Probe hour within that day
+        hour_start = oldest_day_dt
+        hour_end = min(oldest_day_dt + timedelta(days=2), now)
+        hours = span_mod.statistics_during_period(
+            hass,
+            hour_start,
+            hour_end,
+            {target_entity_id},
+            "hour",
+            None,
+            {"mean"},
+        )
+        hour_rows = hours.get(target_entity_id) or []
+        if not hour_rows:
+            return oldest_day_dt
+        oldest_hour_ts = min(r["start"] for r in hour_rows if "start" in r)
+        return dt_util.utc_from_timestamp(oldest_hour_ts)
+
+    oldest = await recorder.async_add_executor_job(_query)
+    if oldest is None:
         return current_hour
+    return min(oldest, current_hour)
 
 
 async def _first_hour_home_assistant_owns(
@@ -275,11 +294,16 @@ def mean_metadata(
     *,
     unit: str | None,
     unit_class: str | None,
+    has_sum: bool = False,
 ) -> StatisticMetaData:
-    """What the imported rows describe, in the shape the recorder validates."""
+    """What the imported rows describe, in the shape the recorder validates.
+
+    Rows carry a ``mean`` by default, or with ``has_sum`` a ``state``/``sum``
+    and no mean.
+    """
     return StatisticMetaData(
-        mean_type=StatisticMeanType.ARITHMETIC,
-        has_sum=False,
+        mean_type=StatisticMeanType.NONE if has_sum else StatisticMeanType.ARITHMETIC,
+        has_sum=has_sum,
         name=None,
         source=_RECORDER_DOMAIN,
         statistic_id=statistic_id,

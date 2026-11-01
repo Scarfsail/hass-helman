@@ -178,7 +178,9 @@ async function mountEditor(
                                     key: target.key,
                                     draft: depth
                                         ? {
-                                            entityId: "sensor.stub",
+                                            entityId: target.key.startsWith("helman.share_energy.")
+                                                ? `sensor.helman_share_energy_${target.key.slice("helman.share_energy.".length)}`
+                                                : "sensor.stub",
                                             status: "ok",
                                             facts: [
                                                 {
@@ -506,11 +508,10 @@ test("a controllable the house trainer skips gets no row", async ({ page }) => {
     expect(tables.flat().some((row) => row[0].includes("Inverter"))).toBe(false);
 });
 
-test("a carved meter's metered child gets a row, since the trainer reads it", async ({
+test("only the schedulable child gets a house carve row", async ({
     page,
 }) => {
-    // The breaker is carved (its meterless child is schedulable), and its own
-    // energy is its meter minus the plug's -- so the house window reads both.
+    // The passive breaker and plug remain in the baseline.
     const config = JSON.parse(JSON.stringify(CONFIG));
     config.devices.consumers.push({
         id: "breaker",
@@ -531,15 +532,19 @@ test("a carved meter's metered child gets a row, since the trainer reads it", as
         ],
     });
 
-    await mountEditor(page, config);
+    await mountEditor(page, config, {
+        ...DEPTHS,
+        "helman.share_energy.heater": { raw_states: 5, statistics: 20 },
+    });
     const tables = await waitForRows(page, 7);
     // The appliance table, last, lists every consumer device anyway.
     const houseAndSolarRows = tables.slice(0, -1).flat();
 
-    expect(houseAndSolarRows.length).toBe(9);
-    expect(houseAndSolarRows.some((row) => row[0].includes("Breaker"))).toBe(true);
-    expect(houseAndSolarRows.some((row) => row[0].includes("Plug"))).toBe(true);
-    expect(houseAndSolarRows.some((row) => row[0].includes("Heater"))).toBe(false);
+    expect(houseAndSolarRows.length).toBe(8);
+    expect(houseAndSolarRows.some((row) => row[0].includes("Breaker"))).toBe(false);
+    expect(houseAndSolarRows.some((row) => row[0].includes("Plug"))).toBe(false);
+    expect(houseAndSolarRows.some((row) => row[0].includes("Heater"))).toBe(true);
+    expect(houseAndSolarRows.some((row) => row[0].includes("sensor.helman_share_energy_heater"))).toBe(true);
 });
 
 test("a row with both tables shallow is marked, on the row rather than a cell", async ({
@@ -684,6 +689,8 @@ test("an appliance's activity entity is judged against the lookback training rea
         "devices.consumers.1.consumption.energy_entity_id": { raw_states: 30, statistics: 30 },
         "devices.consumers.1.children.0.controls.climate.entity_id": { raw_states: 30, statistics: 0 },
         "devices.consumers.1.children.1.controls.climate.entity_id": { raw_states: 10, statistics: 0 },
+        "helman.share_energy.ac_living": { raw_states: 30, statistics: 30 },
+        "helman.share_energy.ac_bedroom": { raw_states: 10, statistics: 10 },
     });
 
     // One row per device (#321), every consumer device included.
@@ -710,12 +717,12 @@ test("an appliance's activity entity is judged against the lookback training rea
             { name: "ac_breaker", entities: ["sensor.ac_breaker"], warning: false },
             {
                 name: "Living AC",
-                entities: ["sensor.ac_breaker", "climate.living"],
+                entities: ["sensor.helman_share_energy_ac_living", "climate.living"],
                 warning: false,
             },
             {
                 name: "Bedroom AC",
-                entities: ["sensor.ac_breaker", "climate.bedroom"],
+                entities: ["sensor.helman_share_energy_ac_bedroom", "climate.bedroom"],
                 warning: true,
             },
             { name: "Pool", entities: ["sensor.pool_energy", "switch.pool"], warning: false },
@@ -724,9 +731,9 @@ test("an appliance's activity entity is judged against the lookback training rea
     await expect(rows.nth(0).locator("td").nth(3)).toContainText("5 d");
     await expect(rows.nth(0).locator("td").nth(3)).toContainText("meter 33 d");
     await expect(rows.nth(0).locator("td").nth(3)).toContainText("switch 5 d");
-    // The fixed sharer is judged against the shared meter's learning lookback.
+    // The fixed sharer uses its own default lookback.
     await expect(rows.nth(3).locator("td").nth(1)).toHaveText("1.0 kW (—)");
-    await expect(rows.nth(3).locator("td").nth(2)).toHaveText("14 d");
+    await expect(rows.nth(3).locator("td").nth(2)).toHaveText("30 d");
     await expect(rows.nth(4).locator("td").nth(2)).toHaveText("30 d");
 
     // Regrouping changed the rows, not what the shared poll asks about.
@@ -779,11 +786,12 @@ test("an EV charger sharing a meter is judged by its charge switch", async ({ pa
         "devices.consumers.0.consumption.energy_entity_id": { raw_states: 30, statistics: 30 },
         "devices.consumers.0.children.0.controls.switch.entity_id": { raw_states: 30, statistics: 0 },
         "devices.consumers.0.children.1.controls.charge.entity_id": { raw_states: 3, statistics: 0 },
+        "helman.share_energy.garage_ev": { raw_states: 30, statistics: 30 },
     });
 
     const ev = applianceRows(page).filter({ hasText: "Garage EV" });
     await expect(ev.locator("td:first-child .training-depth-entity-id")).toHaveText([
-        "sensor.garage_breaker",
+        "sensor.helman_share_energy_garage_ev",
         "switch.ev_charge",
     ]);
     await expect(ev).toHaveClass(/training-depth-warn/);
@@ -793,10 +801,7 @@ test("an EV charger sharing a meter is judged by its charge switch", async ({ pa
     expect(requestedKeys).toContain("devices.consumers.0.children.1.controls.charge.entity_id");
 });
 
-test("a learner on a shared meter also lists its metered siblings' meters", async ({ page }) => {
-    // Training splits the parent's own energy, its meter minus its metered
-    // children, so a shallow sub-meter distorts the estimate as much as the
-    // parent's meter would.
+test("a learner on a shared meter reads its own share sensor", async ({ page }) => {
     const config = JSON.parse(JSON.stringify(CONFIG));
     config.devices.consumers = [
         {
@@ -832,17 +837,17 @@ test("a learner on a shared meter also lists its metered siblings' meters", asyn
         "devices.consumers.0.consumption.energy_entity_id": { raw_states: 30, statistics: 30 },
         "devices.consumers.0.children.1.consumption.energy_entity_id": { raw_states: 4, statistics: 4 },
         "devices.consumers.0.children.0.controls.switch.entity_id": { raw_states: 30, statistics: 0 },
+        "helman.share_energy.garage_heater": { raw_states: 4, statistics: 4 },
     });
 
     const heater = applianceRows(page).filter({ hasText: "Garage heater" });
     await expect(heater.locator("td:first-child .training-depth-entity-id")).toHaveText([
-        "sensor.garage_breaker",
-        "sensor.garage_plug",
+        "sensor.helman_share_energy_garage_heater",
         "switch.garage_heater",
     ]);
-    // The shallow sub-meter is what marks the row.
+    // The child's own shallow share history marks the row.
     await expect(heater).toHaveClass(/training-depth-warn/);
-    await expect(heater.locator("td").nth(3)).toContainText("sub-meter 4 d");
+    await expect(heater.locator("td").nth(3)).toContainText("meter 4 d");
 });
 
 /** A house child DTO with the defaults the backend fills in. */

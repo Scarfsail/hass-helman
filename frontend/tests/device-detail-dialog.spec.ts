@@ -99,9 +99,10 @@ async function mountCard(
                         controllableIds: schedulableBoiler ? ["boiler"] : [],
                         children: [
                             dto({
-                                id: "pump",
+                                id: "sensor.helman_share_energy_pump",
                                 displayName: "Pump",
-                                powerSensorId: "sensor.pump_share",
+                                powerSensorId: "sensor.helman_share_power_pump",
+                                energyEntityId: "sensor.helman_share_energy_pump",
                                 isEstimated: true,
                                 controllableIds: ["pump"],
                             }),
@@ -145,7 +146,8 @@ async function mountCard(
                     "sensor.house": state("2000"),
                     "sensor.boiler_power": state("1200", { unit_of_measurement: "W", friendly_name: "Boiler Power" }),
                     "sensor.boiler_energy": state("10", { unit_of_measurement: energyUnit, friendly_name: "Boiler Energy" }),
-                    "sensor.pump_share": state("300"),
+                    "sensor.helman_share_power_pump": state("300", { unit_of_measurement: "W", friendly_name: "Share — Pump" }),
+                    "sensor.helman_share_energy_pump": state("4", { unit_of_measurement: energyUnit, friendly_name: "Share energy — Pump" }),
                     "sensor.house_unmeasured": state("500"),
                     "switch.boiler": { entity_id: "switch.boiler", state: "on", attributes: { friendly_name: "Boiler Switch" } },
                 },
@@ -369,6 +371,37 @@ test("device History's last 24 hours open HA's history of the same entities", as
     await expect(section.locator("[data-forecast-pointer]")).toHaveCount(0);
     await expectShowMore(page, section.locator("[data-show-more]"), ["sensor.boiler_power", "switch.boiler"]);
 });
+
+// A meterless child's row is a device row like any other: its energy and power
+// are its share sensors, and its record and Settings are keyed by the former.
+for (const [name, energy, power] of [
+    ["Boiler", "sensor.boiler_energy", "sensor.boiler_power"],
+    ["Pump", "sensor.helman_share_energy_pump", "sensor.helman_share_power_pump"],
+] as const) {
+    test(`${name} opens its detail, history and Settings from its energy entity`, async ({ page }) => {
+        await mountCard(page, { [energy]: BOILER_STATS["sensor.boiler_energy"] }, true, "kWh", TODAY_KWH, {}, "2026-10-21T12:00:00+00:00", true);
+        if (name === "Pump") {
+            // The pump sits under the boiler, whose children start collapsed.
+            await page.evaluate(() => {
+                const boiler = (window as any).__deepAll(document, "helman-tree-item").find((row: any) =>
+                    (row.shadowRoot?.querySelector(".deviceName")?.textContent ?? "").trim() === "Boiler");
+                (boiler.shadowRoot.querySelector(".childrenToggle") as HTMLElement).click();
+            });
+            await expect.poll(() => rowNames(page)).toContain("Pump");
+        }
+        await openDevice(page, name);
+        const detail = page.locator("node-detail-dialog");
+        await expect(detail.locator('[slot="headerTitle"]')).toHaveText(name);
+        await expect(detail.locator("node-detail-device-content helman-detail-headline")).toContainText("1.25 kWh used today");
+        expect(await page.evaluate(() => (window as any).__statRequests.map((msg: any) => msg.statistic_id))).toContain(energy);
+        expect(await page.evaluate(() => (window as any).__deviceStatsRequests)).toEqual([energy]);
+        const history = detail.locator("node-detail-device-content helman-detail-section[data-history]");
+        await expect(history.locator("[slot=summary]")).toHaveText("1.8 kW while on");
+        await history.locator("button").first().click();
+        expect(await page.evaluate(() => (window as any).__chartConfigs[0].entities)).toContain(power);
+        await expect(detail.locator("ha-button[data-settings]")).toHaveCount(1);
+    });
+}
 
 test("device runs tile keeps the plain caption for stats learned before the daily run range", async ({ page }) => {
     const { daily_runs: _, ...stats } = BOILER_STATS["sensor.boiler_energy"];

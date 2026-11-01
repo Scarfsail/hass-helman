@@ -38,7 +38,7 @@ from homeassistant.util import dt as dt_util
 
 from ..config_path import get as config_value
 
-from ..controllables.config import own_meter, peek_controllable_id
+from ..controllables.config import device_energy_entity, peek_controllable_id
 from .battery import today_ranking_report
 from .context import NodeDetailContext
 from .day_stats import SEGMENT_MAX_GAP, async_state_history, day_window, with_live_state
@@ -61,7 +61,11 @@ _CONFIG_ENTITIES = {
 
 
 def build_ev_charger_overview(
-    hass: Any, ctx: NodeDetailContext, now: datetime, device: Mapping[str, Any]
+    hass: Any,
+    ctx: NodeDetailContext,
+    now: datetime,
+    device: Mapping[str, Any],
+    _parent: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     """The charger's mappings and overview facts; no recorder read.
 
@@ -100,6 +104,7 @@ async def async_ev_charger_section(
     section: str,
     now: datetime,
     device: Mapping[str, Any],
+    parent: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     """The charging segment's start, or today's sources and attributed money.
 
@@ -129,9 +134,8 @@ async def async_ev_charger_section(
     report = await today_ranking_report(ctx, local_now)
     if "unavailable" in report:
         return {**payload, "unavailable": report["unavailable"]}
-    # The device tree, and so the report, names a metered device by its meter
-    # and a meterless one by its id.
-    node_id = own_meter(device) or payload["deviceId"]
+    # The device tree, and so the report, names a device by its energy entity.
+    node_id = device_energy_entity(device, parent)
     node = next(
         (node for node in report.get("nodes") or [] if node.get("id") == node_id), None
     )

@@ -12,6 +12,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.util import dt as dt_util
 
 from .battery_state import (
     read_battery_entities,
@@ -34,6 +35,7 @@ from .controllables.config import (
     is_active_state,
     read_shared_meters,
     running_active_states,
+    share_energy_entity_id,
 )
 from .node_details.inverter import run_mode_condition
 from .power_polarity import is_power_inverted, watts_for_value_type
@@ -47,14 +49,18 @@ _LOGGER = logging.getLogger(__name__)
 # How far back the unmeasured remainder looks when smoothing away meter skew.
 # See _smooth_unmeasured for why the raw remainder cannot be published as-is.
 _UNMEASURED_SMOOTHING_WINDOW_S = 15.0
+# The most ticks one share-energy step may span, so a stalled loop adds no
+# catch-up energy.
+_ENERGY_MAX_STEP_TICKS = 3
 
 
 class LivePowerTracker:
     """Reads the device tree's power sensors every bucket and derives the rest.
 
     Keeps the rolling history the card draws its sparklines from, and sends the
-    derived sensors' values -- unmeasured remainders, shares, totals, house
-    phases, source ratios and battery ETAs -- on ``SIGNAL_LIVE_TICK``.
+    derived sensors' values -- unmeasured remainders, shares and their energy,
+    totals, house phases, source ratios and battery ETAs -- on
+    ``SIGNAL_LIVE_TICK``.
     """
 
     def __init__(
@@ -73,6 +79,11 @@ class LivePowerTracker:
         # The device tree the buffers were built for.
         self._tree: dict | None = None
         self._unsub_tick: Callable[[], None] | None = None
+        # The tick's interval, which caps how long one share-energy step spans.
+        self._tick_seconds = 0.0
+        # When share energy was last accumulated up to; kept across a tick
+        # restart on a tree rebuild, so the rebuild drops no partial interval.
+        self._energy_since: datetime | None = None
         self._unmeasured_raw_history: dict[str, deque] = {}
         # The inverter's telemetry the measured house phases compute from,
         # resolved per tree rebuild in _init_buffers.
@@ -88,7 +99,7 @@ class LivePowerTracker:
         self._source_ratio_entity_ids: dict[str, str] = {}
         # Mapping: parent_node_id → unmeasured_entity_id (e.g. "house" → "sensor.helman_house_unmeasured_power")
         self._unmeasured_entity_id_map: dict[str, str] = {}
-        # Mapping: share node id (a meterless child's device id) → its share entity id
+        # Mapping: share node id (a meterless child's share-energy entity) → its share-power entity id
         self._share_entity_id_map: dict[str, str] = {}
         # Mapping: meterless child id → (running-signal entity, "switch" | "climate")
         self._share_running_signals: dict[str, tuple[str, str]] = {}
@@ -150,8 +161,8 @@ class LivePowerTracker:
 
         self._unmeasured_entity_id_map = dict(index.unmeasured_entity_id_map)
         self._share_entity_id_map = {
-            node_id: entity_id
-            for node_id, (entity_id, _name) in index.share_devices.items()
+            share_energy_entity_id(device_id): entity_id
+            for device_id, (entity_id, _name) in index.share_devices.items()
         }
         # The very members the shared-meter history split reads, with the same
         # running signal each, so the live split cannot pick other devices.
@@ -209,6 +220,9 @@ class LivePowerTracker:
         if self._unloaded or self._unsub_tick is not None:
             return
         bucket_duration: int = self._visualization_config()["history_bucket_duration"]
+        self._tick_seconds = float(bucket_duration)
+        if self._energy_since is None:
+            self._energy_since = dt_util.utcnow()
         self._unsub_tick = async_track_time_interval(
             self._hass,
             self._tick,
@@ -249,6 +263,19 @@ class LivePowerTracker:
                 if entity_id in self._power_history:
                     self._power_history[entity_id].append(watts if watts is not None else 0.0)
                 values[entity_id] = watts
+        # Each share's energy since the last tick, for its share-energy sensor
+        # to add up; an unavailable share adds nothing.
+        elapsed = 0.0
+        if self._energy_since is not None:
+            elapsed = min(
+                max((now - self._energy_since).total_seconds(), 0.0),
+                _ENERGY_MAX_STEP_TICKS * self._tick_seconds,
+            )
+        self._energy_since = now
+        # A share node is keyed by its share-energy entity.
+        for energy_entity_id, watts in share_map.items():
+            if watts is not None and energy_entity_id in self._share_entity_id_map:
+                values[energy_entity_id] = watts * elapsed / 3_600_000
 
         # Total power (consumption side)
         total = self._compute_consumption_total()
@@ -524,7 +551,7 @@ class LivePowerTracker:
         """
         if own is None:
             return {n["id"]: None for n in share_nodes}
-        running = [n["id"] for n in share_nodes if self._is_share_running(n["id"])]
+        running = [n["deviceId"] for n in share_nodes if self._is_share_running(n["deviceId"])]
         shares = (
             split_own_power(
                 own,
@@ -535,7 +562,7 @@ class LivePowerTracker:
             if running
             else {}
         )
-        return {n["id"]: shares.get(n["id"], 0.0) for n in share_nodes}
+        return {n["id"]: shares.get(n["deviceId"], 0.0) for n in share_nodes}
 
     def _is_share_running(self, device_id: str) -> bool:
         """Whether a meterless child runs now, by the predicate its history split uses."""

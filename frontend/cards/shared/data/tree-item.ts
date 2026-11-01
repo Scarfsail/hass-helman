@@ -35,13 +35,8 @@ export class TreeItem {
     public deferrable?: boolean;
     // The controllables this device is — the ids the schedule keys their
     // assignments by. It is what lets a box say what is planned for the
-    // appliance right now; `id` is only its energy statistic. Several when the
-    // statistic is a meter shared by several controllables, which stay one box.
+    // appliance right now; `id` is only its energy statistic.
     public controllableIds?: string[];
-    // Every controllable whose demand the device's own meter stands for: the
-    // owner when it is schedulable, else its meterless children. What its
-    // Control tab drives, one lane each.
-    public ownControllableIds?: string[];
     public applianceKind?: string | null;
     // The climate entity the device configures, for its Control tab's more-info.
     public climateEntityId: string | null = null;
@@ -49,13 +44,10 @@ export class TreeItem {
     public coverEntityId: string | null = null;
     // The device's own energy meter, for the detail dialog's energy tiles.
     public energyEntityId?: string;
-    // What locates this box's device in the config: its meter, or its
-    // controllable id when it has none. Set only on config devices; its
+    // What locates this box's device in the config: its energy entity (a
+    // meterless child's share-energy sensor). Set only on config devices; its
     // presence is what makes a name click open the device detail.
     public deviceKey?: string;
-    // Which of the two deviceKey is: ids and meters are each unique on their
-    // own but not across each other, so the key alone cannot say.
-    public deviceKeyIsMeter?: boolean;
     public valueType: ValueType;
 
     public sourcePowerHistory?: { [sourceName: string]: { power: number; color: string } }[];

@@ -331,7 +331,6 @@ export class NodeDetailDialog extends LitElement {
                 .localize=${this.localize}
                 .open=${true}
                 .deviceKey=${this.params.item.deviceKey}
-                .keyIsMeter=${this.params.item.deviceKeyIsMeter === true}
                 @closed=${() => { this._settingsOpen = false; }}
             ></helman-device-edit-dialog>
         `;

@@ -297,7 +297,7 @@ export class HelmanTreeItem extends LitElement {
                                 .compact=${this.device.compact ?? false}
                                 .valueKind=${this.device.valueKind ?? "power"}
                                 .estimated=${this.device.isEstimated ?? false}
-                                .unavailable=${this.device.isEstimated === true
+                                .unavailable=${(this.device.valueKind ?? "power") === "power"
                                     && !!this.device.powerSensorId
                                     && !Number.isFinite(parseFloat(this.hass?.states[this.device.powerSensorId ?? ""]?.state ?? ""))}
                                 .currentParentPower=${this.currentParentPower}

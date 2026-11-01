@@ -29,10 +29,11 @@ def _is_readable_entity_id(value: Any) -> bool:
 def extract_house_device_consumers(tree: Any) -> list[dict[str, Any]]:
     """Disjoint measured rows for inspector history, using tree attribution.
 
-    Passive descendants remain inside their nearest included ancestor. A carved
-    meter exposes its own load separately from its metered children, and a nested
-    carved meter is subtracted from its nearest included ancestor exactly once.
-    Estimated share and synthetic live remainder nodes never own history.
+    Passive descendants remain inside their nearest included ancestor. Each
+    schedulable leaf exposes its own load separately and is subtracted from its
+    nearest included ancestor exactly once. A meterless child reads its
+    share-energy sensor like any metered child; the
+    synthetic live remainder nodes never own history.
 
     Only relationships and metadata are resolved here. Missing readings, excess
     child energy and slot alignment belong to the inspector's own-energy reader,
@@ -51,15 +52,15 @@ def extract_house_device_consumers(tree: Any) -> list[dict[str, Any]]:
     def visit(node: Any, ancestor: dict | None, split_children: bool) -> None:
         if not isinstance(node, dict):
             return
-        if any(node.get(flag) for flag in _SKIPPED_NODE_FLAGS) or node.get("isEstimated"):
+        if any(node.get(flag) for flag in _SKIPPED_NODE_FLAGS):
             return
         meter = node.get("energyEntityId")
-        own_deferrable = bool(node.get("ownDeferrable"))
+        deferrable = bool(node.get("deferrable"))
         if _is_readable_entity_id(meter):
             if meter in seen:
                 return
             seen.add(meter)
-            if ancestor is None or split_children or own_deferrable:
+            if ancestor is None or split_children or deferrable:
                 switch = node.get("switchEntityId")
                 power = node.get("powerSensorId")
                 row = {
@@ -67,15 +68,19 @@ def extract_house_device_consumers(tree: Any) -> list[dict[str, Any]]:
                     "label": node.get("displayName") or meter,
                     "switch_entity_id": switch if isinstance(switch, str) and switch else None,
                     "power_entity_id": power if _is_readable_entity_id(power) else None,
-                    "deferrable": own_deferrable,
-                    "ids": list(node.get("ownControllableIds") or []),
+                    "deferrable": deferrable,
+                    "ids": list(node.get("controllableIds") or []),
                     "metered_children": [],
                 }
                 if ancestor is not None:
                     ancestor["metered_children"].append(meter)
+                    # A controllable is claimed by exactly one row.
+                    ancestor["ids"] = [
+                        claimed for claimed in ancestor["ids"] if claimed not in row["ids"]
+                    ]
                 result.append(row)
                 ancestor = row
-                split_children = own_deferrable
+                split_children = deferrable
         for child in node.get("children") or []:
             visit(child, ancestor, split_children)
 

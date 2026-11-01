@@ -20,10 +20,10 @@ import {
 } from "../../cards/shared/config/form-fields";
 import { configDefaultValue } from "../../cards/shared/config/config-defaults";
 import { entityGroupKey, type EntityFact } from "../../cards/shared/config/entity-group";
-import { asJsonArray, asJsonObject } from "../../cards/shared/config/config-document";
+import { asJsonObject } from "../../cards/shared/config/config-document";
 import {
+  deviceEnergyEntity,
   deviceKind,
-  isCarvedMeterOwner,
   isSchedulable,
   iterDevices,
   ownMeter,
@@ -84,9 +84,11 @@ export interface ApplianceEnergyDepthDevice {
   id: string;
   name: string;
   device: JsonObject;
+  /** The device it draws from, for a meterless child; else `null`. */
+  parent: JsonObject | null;
   learns: boolean;
   lookbackDays: number;
-  /** Its (effective) meter, sub-meters, power sensor and activity entity. */
+  /** Its energy entity, power sensor and activity entity. */
   entities: TrainingDepthRow[];
 }
 
@@ -274,10 +276,7 @@ export class TrainingTabController implements ReactiveController {
         roleKey: "editor.training_depth.role_house_meter",
       },
       ...iterDevices(this.resolvedConfig()).flatMap(({ device, parent, path }, index): TrainingDepthRow[] => {
-        const read =
-          isCarvedMeterOwner(device) ||
-          (parent !== null && isCarvedMeterOwner(parent) && ownMeter(device) !== "");
-        if (!read) return [];
+        if (!isSchedulable(device)) return [];
         const name =
           stringValue(device.name) ||
           stringValue(device.id) ||
@@ -285,8 +284,11 @@ export class TrainingTabController implements ReactiveController {
         return [
           {
             label: name,
-            path: [...path, "consumption", "energy_entity_id"],
+            path: ownMeter(device)
+              ? [...path, "consumption", "energy_entity_id"]
+              : ["helman", "share_energy", stringValue(device.id)],
             roleKey: "editor.training_depth.role_controllable",
+            ownEntity: !ownMeter(device),
           },
         ];
       }),
@@ -341,20 +343,10 @@ export class TrainingTabController implements ReactiveController {
           `${this.host._t("editor.training_depth.controllable_fallback_name")} ${index + 1}`,
         path,
         parent: drawsFromParent ? parent : null,
-        hasMeter: Boolean(drawsFromParent ? parent && ownMeter(parent) : ownMeter(device)),
-        meterPath: [
-          ...(drawsFromParent ? path.slice(0, -2) : path),
-          "consumption",
-          "energy_entity_id",
-        ],
-        submeterPaths: drawsFromParent
-          ? (asJsonArray(parent?.children) ?? []).flatMap((sibling, siblingIndex) => {
-              const siblingDevice = asJsonObject(sibling);
-              return siblingDevice && ownMeter(siblingDevice)
-                ? [[...path.slice(0, -1), siblingIndex, "consumption", "energy_entity_id"]]
-                : [];
-            })
-          : [],
+        hasMeter: Boolean(drawsFromParent ? stringValue(device.id) : ownMeter(device)),
+        meterPath: drawsFromParent
+          ? ["helman", "share_energy", stringValue(device.id)]
+          : [...path, "consumption", "energy_entity_id"],
         device,
         powerPath:
           !drawsFromParent && stringValue(consumption.power_entity_id)
@@ -368,23 +360,14 @@ export class TrainingTabController implements ReactiveController {
         lookback: typeof lookback === "number" ? lookback : 30,
       };
     });
-    const sharedLookback = (parent: JsonObject | null): number | null => {
-      if (!parent) return null;
-      const learners = items.filter((item) => item.parent === parent && item.learns);
-      if (learners.length === 0) return null;
-      return Math.max(...learners.map((member) => member.lookback));
-    };
     return items.flatMap((item): ApplianceEnergyDepthDevice[] => {
       if (!item.hasMeter || (item.parent && (!item.id || !item.activity))) return [];
-      const days = item.parent
-        ? (sharedLookback(item.parent) ?? 30)
-        : item.learns
-          ? item.lookback
-          : 30;
-      const entity = (label: string, path: PathSegment[]): TrainingDepthRow => ({
+      const days = item.learns ? item.lookback : 30;
+      const entity = (label: string, path: PathSegment[], ownEntity = false): TrainingDepthRow => ({
         label: this.host._t(`editor.training_depth.appliance_entity_${label}`),
         path,
         requiredDays: days,
+        ownEntity,
       });
       const activity = item.activity
         ? [entity(item.activity, [...item.path, "controls", item.activity, "entity_id"])]
@@ -395,11 +378,11 @@ export class TrainingTabController implements ReactiveController {
           id: item.id,
           name: item.name,
           device: item.device,
+          parent: item.parent,
           learns: item.learns,
           lookbackDays: days,
           entities: [
-            entity("meter", item.meterPath),
-            ...item.submeterPaths.map((submeterPath) => entity("submeter", submeterPath)),
+            entity("meter", item.meterPath, item.parent !== null),
             ...(item.powerPath ? [entity("power", item.powerPath)] : []),
             ...activity,
           ],
@@ -408,10 +391,10 @@ export class TrainingTabController implements ReactiveController {
     });
   }
 
-  deviceEnergyEstimate(device: JsonObject): DeviceEnergyInput {
+  deviceEnergyEstimate(device: JsonObject, parent: JsonObject | null): DeviceEnergyInput {
     const job = this.trainingJob("appliance_energy");
     const id = stringValue(device.id);
-    const recordKey = this.deviceKey(device);
+    const recordKey = this.deviceKey(device, parent);
     const projection = asJsonObject(asJsonObject(device.consumption)?.projection);
     const hourly = projection?.hourly_energy_kwh;
     const projects = isSchedulable(device) && deviceKind(device) !== "ev_charger";
@@ -458,25 +441,18 @@ export class TrainingTabController implements ReactiveController {
     return resolvedDraft(this.host.config, this.host.vendors);
   }
 
-  deviceKey(device: JsonObject): string {
-    return ownMeter(device) || stringValue(device.id);
+  /** Where a device's record and tree row are keyed: its energy entity. */
+  deviceKey(device: JsonObject, parent: JsonObject | null): string {
+    return deviceEnergyEntity(device, parent);
   }
 
-  deviceTreeKey(device: JsonObject): string {
-    return `${ownMeter(device) ? "meter" : "id"}:${this.deviceKey(device)}`;
-  }
-
-  treeItemKey(item: TreeItem): string {
-    return `${item.deviceKeyIsMeter ? "meter" : "id"}:${item.deviceKey}`;
-  }
-
-  savedDeviceUnchanged(device: JsonObject): boolean {
-    const key = this.deviceTreeKey(device);
+  savedDeviceUnchanged(device: JsonObject, parent: JsonObject | null): boolean {
+    const key = this.deviceKey(device, parent);
     const id = stringValue(device.id);
     const name = stringValue(device.name);
     return iterDevices(resolvedDraft(this.host.savedConfig, this.host.vendors)).some(
-      ({ device: saved }) =>
-        this.deviceTreeKey(saved) === key &&
+      ({ device: saved, parent: savedParent }) =>
+        this.deviceKey(saved, savedParent) === key &&
         stringValue(saved.id) === id &&
         stringValue(saved.name) === name,
     );
@@ -494,7 +470,7 @@ export class TrainingTabController implements ReactiveController {
       if (!this.deviceTreeRequest.isCurrent(request)) return;
       const items = new Map<string, TreeItem>();
       const walk = (item: TreeItem): void => {
-        if (item.deviceKey) items.set(this.treeItemKey(item), item);
+        if (item.deviceKey) items.set(item.deviceKey, item);
         item.children.forEach(walk);
       };
       for (const dto of [...payload.sources, ...payload.consumers]) {
@@ -502,7 +478,7 @@ export class TrainingTabController implements ReactiveController {
       }
       this.deviceTreeItems = items;
       if (this.deviceDetail) {
-        this.deviceDetail = items.get(this.treeItemKey(this.deviceDetail)) ?? null;
+        this.deviceDetail = items.get(this.deviceDetail.deviceKey ?? "") ?? null;
       }
     } catch (error) {
       console.error("Helman: failed to load the device tree", error);
@@ -768,8 +744,8 @@ export function renderApplianceEnergyRow(
   const known = depths.every((depth) => typeof depth === "number");
   const short = device.entities.some((row) => controller.isTrainingDepthRowShort(row));
   const label = html`<div class="training-depth-label">${device.name}</div>`;
-  const item = controller.savedDeviceUnchanged(device.device)
-    ? controller.deviceTreeItems?.get(controller.deviceTreeKey(device.device))
+  const item = controller.savedDeviceUnchanged(device.device, device.parent)
+    ? controller.deviceTreeItems?.get(controller.deviceKey(device.device, device.parent))
     : undefined;
   return html`
     <tr class=${short ? "training-depth-warn" : ""}>
@@ -791,7 +767,7 @@ export function renderApplianceEnergyRow(
       <td class="training-depth-role">
         ${renderDeviceEnergyValue(
           (key) => host._t(`device_energy.${key}`),
-          controller.deviceEnergyEstimate(device.device),
+          controller.deviceEnergyEstimate(device.device, device.parent),
         )}
       </td>
       <td class="training-depth-number">

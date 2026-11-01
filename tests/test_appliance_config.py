@@ -152,7 +152,7 @@ class ApplianceConfigTests(unittest.TestCase):
 
         self.assertEqual(registry.appliances, ())
 
-    def test_a_schedulable_child_reads_its_parents_meter(self) -> None:
+    def test_a_schedulable_meterless_child_reads_its_share_energy_sensor(self) -> None:
         child = _climate_appliance(strategy="history_average")
         del child["consumption"]["energy_entity_id"]
         breaker = {
@@ -165,7 +165,24 @@ class ApplianceConfigTests(unittest.TestCase):
 
         (appliance,) = registry.appliances
         self.assertEqual(appliance.id, "living-room-hvac")
-        self.assertEqual(appliance.projection.history_energy_entity_id, "sensor.breaker_energy")
+        self.assertEqual(
+            appliance.projection.history_energy_entity_id,
+            "sensor.helman_share_energy_living_room_hvac",
+        )
+
+    def test_a_child_without_a_published_share_sensor_gets_no_runtime(self) -> None:
+        child = _climate_appliance(strategy="history_average")
+        del child["controls"]
+        del child["consumption"]["energy_entity_id"]
+        breaker = {
+            "id": "breaker",
+            "consumption": {"energy_entity_id": "sensor.breaker_energy"},
+            "children": [child],
+        }
+
+        registry = build_appliances_runtime_registry({"devices": {"consumers": [breaker]}})
+
+        self.assertEqual(registry.appliances, ())
 
     def test_missing_appliances_key_returns_empty_registry(self) -> None:
         registry = build_appliances_runtime_registry({})

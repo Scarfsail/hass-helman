@@ -10,6 +10,11 @@ from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
 from _ha_stubs import stub_module
+from _fakes import (
+    DISHWASHER_ENERGY, DISHWASHER_KWH, KITCHEN_OWN_KW,
+    KITCHEN_REMAINDER_KWH, kitchen_config,
+)
+from custom_components.helman.controllables.config import read_carved_meters
 
 REFERENCE_TIME = datetime.fromisoformat("2026-03-20T21:07:00+01:00")
 TZ = ZoneInfo("Europe/Prague")
@@ -172,6 +177,39 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(history[0]["total"], {"value": 0.8})
         self.assertEqual(history[0]["nonDeferrable"], {"value": 0.5})
         self.assertEqual(history[0]["deferrableConsumers"][0]["value"], 0.3)
+
+    async def test_kitchen_actuals_carve_only_the_running_dishwasher(self) -> None:
+        module, _, builder = self._make_builder()
+        config = kitchen_config()
+        dishwasher = config["devices"]["consumers"][0]["children"][0]
+        dishwasher["schedulable"] = True
+        builder._config = config
+        slots = [datetime(2026, 3, 20, hour, 0, tzinfo=TZ) for hour in (10, 11)]
+        hour_keys = [dt_util.as_utc(slot) for slot in slots]
+        readings = {
+            "sensor.house_total": {key: KITCHEN_OWN_KW for key in hour_keys},
+            DISHWASHER_ENERGY: {hour_keys[0]: DISHWASHER_KWH},
+        }
+
+        async def query(entity_id: str, *, reference_time: datetime):
+            return readings[entity_id]
+
+        with (
+            patch.object(builder, "_query_slot_history", side_effect=query),
+            patch.object(module, "get_today_completed_local_slots", return_value=slots),
+        ):
+            actual = await builder._build_actual_history(
+                total_energy_entity_id="sensor.house_total",
+                consumers_config=read_carved_meters(config),
+                reference_time=REFERENCE_TIME,
+            )
+
+        self.assertEqual([entry["nonDeferrable"]["value"] for entry in actual],
+                         [KITCHEN_REMAINDER_KWH, KITCHEN_OWN_KW])
+        self.assertEqual([entry["deferrableConsumers"][0]["value"] for entry in actual],
+                         [DISHWASHER_KWH, 0.0])
+        self.assertEqual([entry["deferrableConsumers"][0]["entityId"] for entry in actual],
+                         [DISHWASHER_ENERGY, DISHWASHER_ENERGY])
 
     @staticmethod
     def _flat_profile(consumption_module, *, consumers: bool = True):

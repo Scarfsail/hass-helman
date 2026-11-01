@@ -88,9 +88,10 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 id: "house", displayName: "House", powerSensorId: "sensor.house",
                 children: [
                     dto({
-                        id: variant.evNode === "meterless" ? "garage-ev" : "sensor.ev_energy",
-                        displayName: "Garage EV", powerSensorId: "sensor.ev_power",
-                        energyEntityId: variant.evNode === "meterless" ? null : "sensor.ev_energy",
+                        id: variant.evNode === "meterless" ? "sensor.helman_share_energy_garage_ev" : "sensor.ev_energy",
+                        displayName: "Garage EV",
+                        powerSensorId: variant.evNode === "meterless" ? "sensor.helman_share_power_garage_ev" : "sensor.ev_power",
+                        energyEntityId: variant.evNode === "meterless" ? "sensor.helman_share_energy_garage_ev" : "sensor.ev_energy",
                         isEstimated: variant.evNode === "meterless",
                         controllableIds: variant.evNode === "multiple" ? ["garage-ev", "other"] : ["garage-ev"],
                         ...(variant.evNode === "missing_kind" ? {} : { applianceKind: "ev_charger" }),
