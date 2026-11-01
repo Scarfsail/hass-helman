@@ -1,24 +1,35 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from homeassistant.components.sensor import SensorDeviceClass, SensorEntity, SensorStateClass
+from homeassistant.components.sensor import (
+    RestoreSensor,
+    SensorDeviceClass,
+    SensorEntity,
+    SensorExtraStoredData,
+    SensorStateClass,
+)
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfTime
+from homeassistant.const import UnitOfEnergy, UnitOfTime
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .battery_state import read_battery_entities
+from .controllables.config import share_energy_entity_id, share_power_entity_id
 from .entity import helman_device_info
+from .share_energy_backfill import async_initial_share_energy_total
 from .tree_builder import unmeasured_power_entity_id
 
 from .const import (
     BATTERY_TIME_TO_EMPTY_ENTITY_ID,
     BATTERY_TIME_TO_FULL_ENTITY_ID,
     CONSUMPTION_TOTAL_ENTITY_ID,
+    DOMAIN,
     GRID_EXPORT_PRICE_ENTITY_ID,
     GRID_IMPORT_PRICE_ENTITY_ID,
     HOUSE_CONSUMPTION_ENTITY_ID,
@@ -119,12 +130,13 @@ async def async_setup_entry(
     coordinator.set_entity_factory(
         async_add_entities,
         {
-            "unmeasured": lambda node_id, parent_id: HelmanUnmeasuredPowerSensor(
-                entry, hass, node_id, parent_id
-            ),
-            "share": lambda node_id, entity_id, name: HelmanSharePowerSensor(
-                entry, node_id, entity_id, name
-            ),
+            "unmeasured": lambda node_id, parent_id: [
+                HelmanUnmeasuredPowerSensor(entry, hass, node_id, parent_id)
+            ],
+            "share": lambda node_id, entity_id, name: [
+                HelmanSharePowerSensor(entry, node_id, entity_id, name),
+                HelmanShareEnergySensor(entry, node_id, name),
+            ],
         },
     )
 
@@ -343,8 +355,111 @@ class HelmanSharePowerSensor(_HelmanDerivedPowerSensor):
     ) -> None:
         super().__init__(entry)
         self.entity_id = self._live_key = entity_id
-        self._attr_unique_id = f"{entry.entry_id}_share_power_{device_id}"
+        self._attr_unique_id = self.unique_id_for(entry, device_id)
         self._attr_name = f"Share — {device_name}"
+
+    @staticmethod
+    def unique_id_for(entry: ConfigEntry, device_id: str) -> str:
+        return f"{entry.entry_id}_share_power_{device_id}"
+
+
+class HelmanShareEnergySensor(_HelmanLiveSensor, RestoreSensor):
+    """A meterless child's share power, accumulated into energy.
+
+    Each live tick sends the kWh its share power delivered over the tick, and
+    the sensor adds it to a running total kept across restarts. An unavailable
+    share sends nothing, nor does time while Home Assistant is down, so there
+    is no catch-up and, share power never being negative, the total never
+    decreases.
+
+    It stays ``unavailable`` until the total it continues from is known (see
+    :mod:`.share_energy_backfill`): the higher of its restored and last
+    recorded totals, or for a new sensor the total T of its statistics'
+    back-fill from the share-power sensor's history, so the compiler records
+    no competing first state. A failed attempt is retried every
+    ``_START_RETRY_SECONDS``.
+    """
+
+    _START_RETRY_SECONDS = 300
+
+    _attr_should_poll = False
+    _attr_device_class = SensorDeviceClass.ENERGY
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+
+    def __init__(self, entry: ConfigEntry, device_id: str, device_name: str) -> None:
+        super().__init__(entry)
+        self.entity_id = self._live_key = share_energy_entity_id(device_id)
+        self._share_power_unique_id = HelmanSharePowerSensor.unique_id_for(
+            entry, device_id
+        )
+        self._default_source_entity_id = share_power_entity_id(device_id)
+        self._attr_unique_id = f"{entry.entry_id}_share_energy_{device_id}"
+        self._attr_name = f"Share energy — {device_name}"
+        self._total: float | None = None
+
+    @property
+    def available(self) -> bool:
+        return self.hass is not None and self._total is not None
+
+    @property
+    def native_value(self) -> float | None:
+        # Hundredths of a kWh: the total is kept unrounded, and a state is
+        # written only when this figure moves, not on every tick.
+        return round(self._total, 2) if self._total is not None else None
+
+    @property
+    def extra_restore_state_data(self) -> SensorExtraStoredData:
+        # The unrounded total, so a restart does not move it by the rounding.
+        return SensorExtraStoredData(self._total, self.native_unit_of_measurement)
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        if self._total is not None:
+            # An entity-id rename removes and re-adds this very object: the
+            # total it holds is newer than anything stored under either id.
+            return
+        last = await self.async_get_last_sensor_data()
+        try:
+            restored = float(last.native_value) if last is not None else None
+        except (TypeError, ValueError):
+            restored = None
+        task = self.hass.async_create_background_task(
+            self._async_start(restored), f"helman share energy start {self.entity_id}"
+        )
+        self.async_on_remove(task.cancel)
+
+    def _source_entity_id(self) -> str:
+        """The share-power sensor's entity id: renamed, its statistics follow."""
+        return (
+            er.async_get(self.hass).async_get_entity_id(
+                "sensor", DOMAIN, self._share_power_unique_id
+            )
+            or self._default_source_entity_id
+        )
+
+    async def _async_start(self, restored: float | None) -> None:
+        while (
+            total := await async_initial_share_energy_total(
+                self.hass,
+                restored=restored,
+                source_entity_id=self._source_entity_id(),
+                target_entity_id=self.entity_id,
+                store_key=self.unique_id,
+            )
+        ) is None:
+            await asyncio.sleep(self._START_RETRY_SECONDS)
+        self._total = total
+        self.async_write_ha_state()
+
+    def update_value(self, kwh: float) -> None:
+        """Add one tick's ``kwh``; dropped until the starting total is known."""
+        if self._total is None:
+            return
+        published = self.native_value
+        self._total += kwh
+        if self.native_value != published and self.hass is not None:
+            self.async_write_ha_state()
 
 
 class HelmanHousePhasePowerSensor(_HelmanDerivedPowerSensor):

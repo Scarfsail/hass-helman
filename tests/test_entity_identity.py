@@ -62,6 +62,7 @@ SENSOR_IDS = {
     ("sensor.helman_battery_time_to_empty", "battery_time_to_empty"),
     ("sensor.helman_unmeasured_power_house", "unmeasured_power_house"),
     ("sensor.helman_share_power_klima", "share_power_klima"),
+    ("sensor.helman_share_energy_klima", "share_energy_klima"),
     ("sensor.helman_consumer_total_power", "consumer_total_power"),
     ("sensor.helman_house_supply_power", "house_supply_power"),
     ("sensor.helman_house_consumption_power", "house_consumption_power"),

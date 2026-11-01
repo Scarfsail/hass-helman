@@ -39,12 +39,20 @@ class RegistryRebuildTests(unittest.IsolatedAsyncioTestCase):
             for index, (domain, unique_id) in enumerate([
                 ("sensor", "entry_unmeasured_power_old"),
                 ("sensor", "entry_share_power_old"),
+                ("sensor", "entry_share_energy_old"),
                 ("sensor", "entry_unmeasured_power_house"),
                 ("sensor", "entry_share_power_share"),
+                ("sensor", "entry_share_energy_share"),
                 ("sensor", "entry_forecast"),
                 ("switch", "entry_share_power_old"),
             ])
         ]
+
+        def entities(*unique_ids):
+            return lambda *_args: [
+                SimpleNamespace(unique_id=unique_id) for unique_id in unique_ids
+            ]
+
         registry = Mock()
         with (
             patch("custom_components.helman.entity.er.async_get", return_value=registry),
@@ -53,9 +61,18 @@ class RegistryRebuildTests(unittest.IsolatedAsyncioTestCase):
                 return_value=rows,
             ),
         ):
-            coordinator.set_entity_factory(Mock(), {"unmeasured": Mock(), "share": Mock()})
+            coordinator.set_entity_factory(
+                Mock(),
+                {
+                    "unmeasured": entities("entry_unmeasured_power_house"),
+                    "share": entities(
+                        "entry_share_power_share", "entry_share_energy_share"
+                    ),
+                },
+            )
         self.assertEqual(
-            registry.async_remove.call_args_list, [call("sensor.0"), call("sensor.1")]
+            registry.async_remove.call_args_list,
+            [call("sensor.0"), call("sensor.1"), call("sensor.2")],
         )
 
     async def test_registry_rebuild_cannot_arm_tick_after_unload(self) -> None:

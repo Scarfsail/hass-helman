@@ -245,7 +245,7 @@ class HelmanCoordinator:
         # built so far are kept per kind and node so a rebuild can diff them.
         self._async_add_entities: Callable | None = None
         self._dynamic_sensor_factories: Mapping[str, Callable] = {}
-        self._dynamic_sensors: dict[str, dict[str, Any]] = {}
+        self._dynamic_sensors: dict[str, dict[str, list[Any]]] = {}
         self._removing_entity_ids: set[str] = set()
         # The hardware profiles fill the slots they own here, so nothing
         # downstream knows they exist. `async_setup` re-reads and logs.
@@ -413,20 +413,22 @@ class HelmanCoordinator:
         """Take over the entities the device tree decides the number of.
 
         ``factories`` maps a kind (``unmeasured``, ``share``) to the callable
-        that builds one entity of it from a node. The entities are added here,
-        and added and removed again by every tree rebuild.
+        that builds a node's entities of it (a share node has a power and an
+        energy sensor). The entities are added here, and added and removed
+        again by every tree rebuild.
         """
         self._async_add_entities = async_add_entities
         self._dynamic_sensor_factories = factories
         self._sync_derived_sensors()
         wanted_ids = {
-            f"{self._entry.entry_id}_{kind}_power_"
-            f"{node_id.removeprefix('sensor.') if kind == 'unmeasured' else node_id}"
-            for kind, sensors in self._dynamic_sensors.items()
-            for node_id in sensors
+            entity.unique_id
+            for sensors in self._dynamic_sensors.values()
+            for entities in sensors.values()
+            for entity in entities
         }
         prefixes = tuple(
-            f"{self._entry.entry_id}_{kind}_power_" for kind in ("unmeasured", "share")
+            f"{self._entry.entry_id}_{kind}_"
+            for kind in ("unmeasured_power", "share_power", "share_energy")
         )
         remove_stale_entities(
             self._hass,
@@ -634,7 +636,7 @@ class HelmanCoordinator:
             )
 
     def _sync_derived_sensors(self) -> None:
-        """Add/remove the unmeasured and share power entities to match the current tree."""
+        """Add/remove the unmeasured and share entities to match the current tree."""
         if self._async_add_entities is None:
             return
         wanted = {
@@ -651,23 +653,23 @@ class HelmanCoordinator:
 
     def _sync_node_sensors(
         self,
-        sensors: dict[str, Any],
+        sensors: dict[str, list[Any]],
         wanted: dict[str, tuple],
         factory: Callable,
     ) -> None:
-        """Make ``sensors`` hold one entity per ``wanted`` node, built by ``factory(node_id, *args)``."""
+        """Make ``sensors`` hold the entities of each ``wanted`` node, built by ``factory(node_id, *args)``."""
         new_ids = set(wanted.keys())
         existing_ids = set(sensors.keys())
 
         # Remove stale entities from HA and entity registry
         ent_reg = er.async_get(self._hass)
         for node_id in existing_ids - new_ids:
-            sensor = sensors.pop(node_id)
-            entity_id = sensor.entity_id
-            if entity_id:
-                # Track the removal so _on_registry_updated skips the rebuild loop
-                self._removing_entity_ids.add(entity_id)
-                ent_reg.async_remove(entity_id)
+            for sensor in sensors.pop(node_id):
+                entity_id = sensor.entity_id
+                if entity_id:
+                    # Track the removal so _on_registry_updated skips the rebuild loop
+                    self._removing_entity_ids.add(entity_id)
+                    ent_reg.async_remove(entity_id)
 
         # Add new entities to HA
         to_add = new_ids - existing_ids
@@ -676,7 +678,9 @@ class HelmanCoordinator:
                 node_id: factory(node_id, *wanted[node_id]) for node_id in to_add
             }
             sensors.update(new_sensors)
-            self._async_add_entities(list(new_sensors.values()))
+            self._async_add_entities(
+                [entity for entities in new_sensors.values() for entity in entities]
+            )
 
     @property
     def tree_index(self) -> TreeIndex:
