@@ -13,13 +13,13 @@ energy sensor, so a past report does not change. An hour without a ``mean`` is
 a gap, never 0 kWh.
 
 **The seam.** Only hours strictly before the first hour the compiler owns are
-imported, and both their ``state`` and ``sum`` climb from the first hour's kWh
-to the back-fill total T: Home Assistant reads the ``sum`` before an entity's
-first row as 0, so the first hour's change is its own kWh. The compiler,
-though, continues a ``sum`` from the entity's latest short-term row and starts
-from 0 without one, so a short-term row of ``state = sum = T`` is seeded before
-the sensor publishes T as its first state. Neither ``state`` nor ``sum`` then
-steps backward across the seam. Until T is known the sensor is
+imported, with a zero reading one hour before the first source hour so readers
+can derive that hour's energy from consecutive states. Both ``state`` and
+``sum`` then climb from the first hour's kWh to the back-fill total T. The
+compiler, though, continues a ``sum`` from the entity's latest short-term row
+and starts from 0 without one, so a short-term row of ``state = sum = T`` is
+seeded before the sensor publishes T as its first state. Neither ``state`` nor
+``sum`` then steps backward across the seam. Until T is known the sensor is
 ``unavailable``, so the compiler records no competing first state.
 
 **Once, and resumable.** The store keeps the ownership boundary, recorded
@@ -248,10 +248,13 @@ async def _async_seed_compiler(
 
 
 def _cumulative_rows(hourly_kwh: dict[datetime, float]) -> list[StatisticData]:
-    """One row per hour in time order, ``state`` and ``sum`` both climbing to T."""
-    rows: list[StatisticData] = []
+    """Seed zero before the first hour, then climb to T in time order."""
+    if not hourly_kwh:
+        return []
+    hours = sorted(hourly_kwh)
+    rows = [StatisticData(start=hours[0] - timedelta(hours=1), state=0.0, sum=0.0)]
     state = 0.0
-    for hour in sorted(hourly_kwh):
+    for hour in hours:
         state += hourly_kwh[hour]
         rows.append(StatisticData(start=hour, state=state, sum=state))
     return rows

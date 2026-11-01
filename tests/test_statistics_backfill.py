@@ -739,8 +739,11 @@ class TestShareEnergyBackfill(unittest.IsolatedAsyncioTestCase):
         await self._run(import_fn)
 
         _hass, meta, rows = import_fn.call_args.args
-        self.assertEqual([row["start"] for row in rows], [self._at(-5), self._at(-3), self._at(-1)])
-        self.assertEqual([row["state"] for row in rows], [0.5, 1.5, 3.5])
+        self.assertEqual(
+            [row["start"] for row in rows],
+            [self._at(-6), self._at(-5), self._at(-3), self._at(-1)],
+        )
+        self.assertEqual([row["state"] for row in rows], [0.0, 0.5, 1.5, 3.5])
         self.assertEqual(meta["statistic_id"], self.TARGET)
         self.assertIs(meta["has_sum"], True)
         self.assertEqual(meta["mean_type"], StatisticMeanType.NONE)
@@ -760,11 +763,32 @@ class TestShareEnergyBackfill(unittest.IsolatedAsyncioTestCase):
 
         rows = import_fn.call_args.args[2]
         self.assertEqual(total, 3.5)
-        # The first hour's change is its own kWh, the sum before it being 0.
-        self.assertEqual(rows[0]["sum"], 0.5)
+        self.assertEqual(rows[0]["state"], 0.0)
+        self.assertEqual(rows[0]["sum"], 0.0)
+        self.assertEqual(rows[1]["sum"], 0.5)
         self.assertEqual(rows[-1]["state"], total)
         self.assertEqual(rows[-1]["sum"], total)
         self.assertTrue(all(row["start"] < self.BOUNDARY for row in rows))
+
+    async def test_reader_retains_the_first_backfilled_hour(self) -> None:
+        from custom_components.helman.recorder_statistics_span import _hourly_energy_kwh
+
+        self.source_rows = [
+            {"start": self._at(-2).timestamp(), "mean": 1000.0},
+            {"start": self._at(-1).timestamp(), "mean": 2000.0},
+        ]
+        import_fn = Mock()
+
+        total = await self._run(import_fn)
+
+        rows = import_fn.call_args.args[2]
+        by_hour = {row["start"]: {"state": row["state"]} for row in rows}
+        energy = _hourly_energy_kwh(
+            by_hour, local_start=self._at(-2), local_end=self.BOUNDARY
+        )
+        self.assertEqual(energy, {self._at(-2): 1.0, self._at(-1): 2.0})
+        self.assertEqual(sum(energy.values()), total)
+        self.assertEqual(total, 3.0)
 
     async def test_the_compiler_is_seeded_with_the_total_before_it_is_returned(self) -> None:
         import_fn = Mock()
@@ -825,12 +849,12 @@ class TestShareEnergyBackfill(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(document["total"])
 
         # The imported rows would now make the probe answer an older hour.
-        self.probe.return_value = self._at(-5)
+        self.probe.return_value = self._at(-6)
         import_fn = Mock()
         total = await self._run(import_fn)
 
         self.assertEqual(total, 3.5)
-        self.assertEqual(len(import_fn.call_args.args[2]), 3)
+        self.assertEqual(len(import_fn.call_args.args[2]), 4)
         self.probe.assert_awaited_once()
         (document,) = self.stored.values()
         self.assertEqual(document["total"], 3.5)
