@@ -62,9 +62,9 @@ from .consumption_forecast_builder import (
 )
 from .controllables.config import (
     CONTROLLABLE_ID_INVERTER,
+    device_energy_entity,
     entity_friendly_name,
     iter_devices,
-    own_meter,
     peek_controllable_id,
     read_carved_meters,
 )
@@ -1008,9 +1008,8 @@ class HelmanCoordinator:
 
         Read from the store as the job left it: nothing else holds records,
         and a failed run keeps the previous ones there. The solar inspector
-        keys a device by its controllable id, and a metered device's record
-        lives under its meter, so such an id is resolved to that meter here;
-        a meterless child's id is already its key.
+        keys a device by its controllable id, and every device's record lives
+        under its energy entity, so such an id is resolved to that entity here.
         """
         section = self.training.store.appliance_energy or {}
         devices = section.get("devices") or {}
@@ -1018,8 +1017,8 @@ class HelmanCoordinator:
         if record is None:
             meter = next(
                 (
-                    own_meter(device)
-                    for device, _parent in iter_devices(self._active_config)
+                    device_energy_entity(device, parent)
+                    for device, parent in iter_devices(self._active_config)
                     if peek_controllable_id(device) == device_key
                 ),
                 None,

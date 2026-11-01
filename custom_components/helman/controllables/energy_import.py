@@ -17,6 +17,7 @@ from typing import Any
 
 from .config import (
     CONTROLLABLE_ID_INVERTER,
+    SHARE_ENERGY_ENTITY_PREFIX,
     device_children,
     is_schedulable,
     iter_devices,
@@ -56,7 +57,8 @@ def import_energy_preferences(
 ) -> EnergyImport:
     """``devices`` with every Energy ``device_consumption`` row imported.
 
-    Each row becomes a passive device: ``id`` from the ``stat_consumption``
+    Each row becomes a passive device, except a row of Helman's own
+    share-energy sensors, which are devices already: ``id`` from the ``stat_consumption``
     object id, ``energy_entity_id`` = ``stat_consumption``, ``power_entity_id``
     = ``stat_rate`` when there is one. ``included_in_stat`` becomes nesting
     under the device owning that meter.
@@ -113,6 +115,9 @@ def import_energy_preferences(
             continue
         if ":" in meter:
             external.append(meter)
+            continue
+        if meter.startswith(SHARE_ENERGY_ENTITY_PREFIX):
+            # Helman's own estimate of a meterless child, already a device.
             continue
         power = _entity_id(row.get("stat_rate"))
         owner = owners.get(meter)

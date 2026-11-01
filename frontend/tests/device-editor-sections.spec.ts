@@ -370,8 +370,7 @@ test("the device edit dialog shows every root section collapsed, including Child
         };
         content.params = {
             nodeType: "device",
-            item: { id: "breaker", name: "AC breaker", displayName: "AC breaker", deviceKey: "sensor.breaker_energy",
-                deviceKeyIsMeter: true, children: [] },
+            item: { id: "breaker", name: "AC breaker", displayName: "AC breaker", deviceKey: "sensor.breaker_energy", children: [] },
             ancestors: [],
         };
         content.open = true;

@@ -20,6 +20,7 @@ read from the ``energy`` store beside it.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import os
 import unittest
@@ -51,6 +52,7 @@ from custom_components.helman.controllables.config import (
     read_name_cleaner_regex,
     read_schedulable_ids,
     read_shared_meters,
+    share_energy_entity_id,
 )
 from custom_components.helman.storage import HelmanStorage
 from custom_components.helman.visualization import VISUALIZATION_DEFAULTS, read_visualization
@@ -498,8 +500,18 @@ class LiveShapedMigrationTests(unittest.TestCase):
         before = _v19_runtimes(self.before)
         after = build_appliances_runtime_registry(self.migrated).appliances
 
-        # The same runtimes: the four air conditioners still read the breaker.
-        self.assertEqual(list(after), before)
+        # The same runtimes, except that the four air conditioners now read
+        # their own share-energy sensors rather than the breaker they split.
+        def reads_its_share(appliance):
+            if not appliance.id.startswith("klima-"):
+                return appliance
+            projection = dataclasses.replace(
+                appliance.projection,
+                history_energy_entity_id=share_energy_entity_id(appliance.id),
+            )
+            return dataclasses.replace(appliance, projection=projection)
+
+        self.assertEqual(list(after), [reads_its_share(appliance) for appliance in before])
 
         # A device's part of the fingerprint is read from the device tree,
         # which v19 did not have, so the shared part is what is compared: the

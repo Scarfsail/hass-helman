@@ -28,7 +28,8 @@ TREE = {
                     "powerSensorId": "sensor.meter",
                     "children": [
                         {
-                            "id": "share",
+                            "id": "sensor.helman_share_energy_share",
+                            "deviceId": "share",
                             "isEstimated": True,
                             "powerSensorId": "sensor.share",
                             "displayName": "Child",

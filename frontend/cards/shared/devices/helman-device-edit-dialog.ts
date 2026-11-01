@@ -136,11 +136,8 @@ export class HelmanDeviceEditDialog extends LitElement {
 
     @property({ type: Boolean }) public open = false;
 
-    /** The device to edit: `TreeItem.deviceKey`, its id or its own meter. */
+    /** The device to edit: `TreeItem.deviceKey`, its energy entity. */
     @property({ attribute: false }) public deviceKey = "";
-
-    /** Whether `deviceKey` is the device's own meter rather than its id. */
-    @property({ attribute: false }) public keyIsMeter = false;
 
     @state() private _view: EditViewState = { kind: "loading" };
 
@@ -350,13 +347,11 @@ export class HelmanDeviceEditDialog extends LitElement {
                 return;
             }
             this._saved = cloneJson(document);
-            // The tree keys a device by the meter it runs on, which a hardware
-            // profile fills in: a meter key no stored device has is looked up
-            // in the resolved document.
-            const entry = this.keyIsMeter
-                ? (findDeviceByKey(document, this.deviceKey, "meter") ??
-                  findDeviceByKey(resolvedDraft(document, await this._vendors.load(document)), this.deviceKey, "meter"))
-                : findDeviceByKey(document, this.deviceKey, "id");
+            // The tree keys a device by its energy entity, whose meter a
+            // hardware profile may fill in: a key no stored device has is
+            // looked up in the resolved document.
+            const entry = findDeviceByKey(document, this.deviceKey, "energy") ??
+                findDeviceByKey(resolvedDraft(document, await this._vendors.load(document)), this.deviceKey, "energy");
             const deviceId = stringValue(entry?.device.id);
             this._view = entry && deviceId
                 ? { kind: "ready", config: cloneJson(document), deviceId }

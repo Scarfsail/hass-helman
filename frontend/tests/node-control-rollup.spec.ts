@@ -50,7 +50,8 @@ const device = (name: string, overrides: Partial<TreeItemDTO>) => {
 };
 
 const share = (id: string, name: string) => treeNode({
-    id, displayName: name, isEstimated: true, powerSensorId: `sensor.helman_share_power_${id.replace(/-/g, "_")}`,
+    id: `sensor.helman_share_energy_${id.replace(/-/g, "_")}`, energyEntityId: `sensor.helman_share_energy_${id.replace(/-/g, "_")}`,
+    displayName: name, isEstimated: true, powerSensorId: `sensor.helman_share_power_${id.replace(/-/g, "_")}`,
     controllableIds: [id], applianceKind: "generic", deferrable: true,
 });
 

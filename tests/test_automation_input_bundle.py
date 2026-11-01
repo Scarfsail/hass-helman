@@ -816,18 +816,18 @@ class ApplianceEnergyAdoptionTests(unittest.TestCase):
 
         request = coordinator.training.read_appliance_request()
 
-        # Every device is a subject: the breaker by its meter, each meterless
-        # child by its id, reading its effective meter -- its parent's. Only
-        # the history_average one feeds a forecast estimate.
+        # Every device is a subject, keyed by and reading its energy entity:
+        # the breaker its meter, each meterless child its share-energy sensor.
+        # Only the history_average one feeds a forecast estimate.
         self.assertEqual(
             [
-                (s.device_key, s.meter, s.meterless, s.history_average)
+                (s.device_key, s.power_entity_id, s.history_average)
                 for s in request.subjects
             ],
             [
-                ("sensor.jistic_klimatizace_energy", "sensor.jistic_klimatizace_energy", False, False),
-                ("ac_1", "sensor.jistic_klimatizace_energy", True, True),
-                ("ac_2", "sensor.jistic_klimatizace_energy", True, False),
+                ("sensor.jistic_klimatizace_energy", None, False),
+                ("sensor.helman_share_energy_ac_1", "sensor.helman_share_power_ac_1", True),
+                ("sensor.helman_share_energy_ac_2", "sensor.helman_share_power_ac_2", False),
             ],
         )
         shared = request.shared_meters["sensor.jistic_klimatizace_energy"]
@@ -942,7 +942,6 @@ class ApplianceEnergyAdoptionTests(unittest.TestCase):
             (
                 DeviceSubject(
                     device_key="sensor.pool_pump_energy",
-                    meter="sensor.pool_pump_energy",
                     controllable_id="pool-pump",
                     power_entity_id="sensor.pool_pump_power",
                     running_signal=("switch.pool_pump", "switch"),

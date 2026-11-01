@@ -130,9 +130,10 @@ const TRAINING_STATUS = {
                     daily_kwh: { mean: 36, median: 30, min: 0, max: 80, days: 29 },
                     on_kwh_per_hour: 4,
                 },
-                // A meterless child, by its id: its runs are its on-intervals,
-                // so its power while active equals its average while on.
-                lamp: {
+                // A meterless child, by its share-energy sensor: its runs are
+                // its on-intervals, so its power while active equals its
+                // average while on.
+                "sensor.helman_share_energy_lamp": {
                     daily_kwh: { mean: 0.2, median: 0.2, min: 0, max: 0.5, days: 29 },
                     running_kw: 0.05,
                     on_kwh_per_hour: 0.05,

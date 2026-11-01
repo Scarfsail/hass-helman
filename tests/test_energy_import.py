@@ -65,6 +65,22 @@ class EnergyImportTests(unittest.TestCase):
             result.devices[0]["consumption"], {"energy_entity_id": "sensor.oven_energy"}
         )
 
+    def test_helmans_own_share_energy_sensors_are_not_imported(self) -> None:
+        breaker = {
+            "id": "breaker",
+            "consumption": {"energy_entity_id": "sensor.breaker_energy"},
+            "children": [{"id": "lamp", "controls": {"switch": {"entity_id": "switch.lamp"}}}],
+        }
+
+        result = _import(
+            [breaker],
+            _row("sensor.helman_share_energy_lamp", "sensor.helman_share_power_lamp", "sensor.breaker_energy"),
+            _row("sensor.breaker_energy"),
+        )
+
+        self.assertEqual(result.devices, [breaker])
+        self.assertEqual(result.conflicts, [])
+
     def test_included_in_stat_becomes_nesting(self) -> None:
         result = _import(
             [],

@@ -12,9 +12,28 @@ from __future__ import annotations
 
 import asyncio
 import unittest
+from datetime import datetime, timedelta, timezone
 
 
-from custom_components.helman.tree_builder import HelmanTreeBuilder  # noqa: E402
+from custom_components.helman.const import SIGNAL_LIVE_TICK
+from custom_components.helman.tree_builder import HelmanTreeBuilder, TreeIndex  # noqa: E402
+from tests._fakes import (
+    DISHWASHER_ENERGY,
+    DISHWASHER_KWH,
+    DISHWASHER_POWER,
+    DISHWASHER_SWITCH,
+    DISHWASHER_WEIGHTS,
+    KITCHEN_ENERGY,
+    KITCHEN_OWN_KW,
+    KITCHEN_POWER,
+    KITCHEN_REMAINDER_KWH,
+    FakeHass,
+    FakeState,
+    FakeStates,
+    capture_signal,
+    kitchen_config,
+    make_live_tracker,
+)
 
 
 class _Hass:
@@ -105,9 +124,11 @@ class TestHouseChildDeferrability(unittest.TestCase):
         self.assertFalse(parent["children"][0]["ownDeferrable"])
         from custom_components.helman.house_device_consumers import extract_house_device_consumers
         rows = extract_house_device_consumers(history)
+        shares = [f"sensor.helman_share_energy_ac_{i}" for i in range(4)]
         self.assertEqual([(row["energy_entity_id"], row["deferrable"]) for row in rows],
-                         [("sensor.jistic_klimatizace_energy", True), ("sensor.heater_energy", False)])
-        self.assertEqual(rows[0]["metered_children"], ["sensor.heater_energy"])
+                         [("sensor.jistic_klimatizace_energy", True), ("sensor.heater_energy", False)]
+                         + [(share, True) for share in shares])
+        self.assertEqual(rows[0]["metered_children"], ["sensor.heater_energy", *shares])
 
     def test_all_schedulable_shared_meter_and_mixed_meter_use_canonical_own_attribution(self):
         from custom_components.helman.house_device_consumers import extract_house_device_consumers
@@ -119,9 +140,12 @@ class TestHouseChildDeferrability(unittest.TestCase):
             rows = extract_house_device_consumers({"consumers": [
                 {"id": "house", "children": list(children.values())}
             ]})
-            self.assertEqual(len(rows), 1)
+            # A carved meter splits its meterless children off as rows of
+            # their own, as it would metered ones; a passive one keeps them.
+            self.assertEqual(len(rows), 1 if passive else 5)
             self.assertEqual(rows[0]["deferrable"], not passive)
-            self.assertEqual(rows[0]["ids"], [] if passive else [f"ac-{i}" for i in range(4)])
+            self.assertEqual(rows[0]["ids"], [])
+            self.assertEqual([row["ids"] for row in rows[1:]], [] if passive else [[f"ac-{i}"] for i in range(4)])
 
     def test_only_the_children_that_are_deferrable_controllables_are_marked(self):
         nodes = _house_children(
@@ -193,7 +217,7 @@ class TestHouseChildControllableId(unittest.TestCase):
         self.assertEqual(breaker["controllableIds"], [])
         self.assertEqual(
             [(c["id"], c["controllableIds"], c["deferrable"]) for c in breaker["children"]],
-            [(f"ac-{index}", [f"ac-{index}"], True) for index in range(4)],
+            [(f"sensor.helman_share_energy_ac_{index}", [f"ac-{index}"], True) for index in range(4)],
         )
 
     def test_a_roster_entry_with_no_id_is_deferrable_with_no_controllable(self):
@@ -233,6 +257,44 @@ class TestCarveOutTintFollowsOwnEnergy(unittest.TestCase):
 
         self.assertTrue(breaker["deferrable"])
         self.assertFalse(children[self.REMAINDER]["deferrable"])
+
+
+class TestKitchenSplit(unittest.TestCase):
+    """A meterless child is a device row like any other, and its share conserves its parent."""
+
+    def test_the_dishwasher_reads_its_share_sensors_and_the_remainder_keeps_the_rest(self):
+        config = kitchen_config()
+        hass = FakeHass()
+        hass.states = FakeStates({
+            "sensor.house_power": FakeState("3000"),
+            KITCHEN_POWER: FakeState(str(KITCHEN_OWN_KW * 1000)),
+            DISHWASHER_SWITCH: FakeState("on"),
+        })
+        tree = asyncio.run(HelmanTreeBuilder(hass, config).build()).tree
+        (kitchen,) = [n for n in tree["consumers"][0]["children"] if n["id"] == KITCHEN_ENERGY]
+        dishwasher, remainder = kitchen["children"]
+
+        self.assertEqual(
+            (dishwasher["id"], dishwasher["energyEntityId"], dishwasher["powerSensorId"]),
+            (DISHWASHER_ENERGY, DISHWASHER_ENERGY, DISHWASHER_POWER),
+        )
+        self.assertTrue(dishwasher["isEstimated"])
+        self.assertTrue(remainder["isUnmeasured"])
+
+        # One hour of the live split: one tick an hour long.
+        tracker = make_live_tracker(hass, config, weights=DISHWASHER_WEIGHTS)
+        tracker._init_buffers(tree, TreeIndex.from_tree(tree))
+        tracker._source_sensor_ids = []
+        tracker._tick_seconds = 3600.0
+        now = datetime(2026, 11, 1, 12, tzinfo=timezone.utc)
+        tracker._energy_since = now - timedelta(hours=1)
+        sent = capture_signal(hass, SIGNAL_LIVE_TICK)
+        tracker._tick(now)
+
+        self.assertAlmostEqual(sent[0][DISHWASHER_ENERGY], DISHWASHER_KWH)
+        self.assertAlmostEqual(
+            sent[0][remainder["powerSensorId"]] / 1000, KITCHEN_REMAINDER_KWH
+        )
 
 
 if __name__ == "__main__":

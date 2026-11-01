@@ -32,9 +32,11 @@ const TREE = treePayload({
                     energyEntityId: "sensor.boiler_energy",
                     children: [
                         treeNode({
-                            id: "heat_pump",
+                            id: "sensor.helman_share_energy_heat_pump",
                             displayName: "Heat pump",
-                            powerSensorId: "sensor.heat_pump_share",
+                            powerSensorId: "sensor.helman_share_power_heat_pump",
+                            energyEntityId: "sensor.helman_share_energy_heat_pump",
+                            switchEntityId: "climate.heat_pump",
                             climateEntityId: "climate.heat_pump",
                             controllableIds: ["heat_pump"],
                             isEstimated: true,
@@ -78,7 +80,7 @@ async function setup(page: Page): Promise<void> {
                 "sensor.house": state("2000"),
                 "sensor.boiler_power": state("1200"),
                 "sensor.boiler_energy": state("10"),
-                "sensor.heat_pump_share": state("300"),
+                "sensor.helman_share_power_heat_pump": state("300"),
                 "sensor.house_unmeasured": state("500"),
                 "switch.boiler": state("on"),
             },
@@ -115,7 +117,8 @@ test("entityIds lists the config devices' switch, power, energy and climate enti
         "climate.heat_pump",
         "sensor.boiler_energy",
         "sensor.boiler_power",
-        "sensor.heat_pump_share",
+        "sensor.helman_share_energy_heat_pump",
+        "sensor.helman_share_power_heat_pump",
         "switch.boiler",
     ]);
 });

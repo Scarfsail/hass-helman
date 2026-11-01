@@ -21,8 +21,11 @@ from .visualization import read_visualization
 from .controllables.config import (
     Device,
     device_groups,
+    device_energy_entity,
     device_phase,
+    device_power_entity,
     entity_friendly_name,
+    is_estimated,
     is_schedulable,
     iter_devices,
     own_meter,
@@ -31,11 +34,9 @@ from .controllables.config import (
     read_carved_meters,
     read_groupings,
     read_name_cleaner_regex,
-    read_shared_meters,
-    share_power_entity_id,
     resolve_device_icon,
     resolve_device_name,
-    running_signal,
+    shared_member_ids,
 )
 from .controllables.kinds import CONTROLLABLE_KIND_CLIMATE
 from .power_polarity import consumer_value_type, power_sign, source_value_type
@@ -129,7 +130,7 @@ class TreeIndex:
                     if power and (node.get("isUnmeasured") or node.get("isEstimated")):
                         virtual.add(power)
                     if power and node.get("isEstimated"):
-                        shares[node["id"]] = (power, node.get("displayName") or node["id"])
+                        shares[node["deviceId"]] = (power, node.get("displayName") or node["deviceId"])
                 walk(children, consumers=consumers)
 
         sources = tree.get("sources", [])
@@ -203,14 +204,18 @@ class TreeItemDTO:
     # The cover entity a device configures as ``controls.cover``; ``None`` for
     # every other item.
     cover_entity_id: str | None = None
-    # The device's meter, for a metered house child; ``None`` for every other
-    # item. The item ``id`` happens to be the same entity (it keeps the
-    # unmeasured sensor ids stable), but readers of the meter read it here.
+    # A house device's energy entity -- its meter, or a meterless child's
+    # share-energy sensor; ``None`` for every other item. The item ``id``
+    # happens to be the same entity (it keeps the unmeasured sensor ids
+    # stable), but readers of the energy read it here.
     energy_entity_id: str | None = None
     # A meterless child's share of its parent's own power: an estimate, not a
     # reading, so the card marks it ``≈`` and the own-power subtraction never
     # counts it.
     is_estimated: bool = False
+    # A house device's configured ``id``, which its share sensors and the live
+    # split key a meterless child by; ``None`` for every other item.
+    device_id: str | None = None
     # A house device's own group per grouping (grouping id -> group id) and
     # the short names of those groups, in grouping order: what the card groups
     # by and badges with. Empty for every other item.
@@ -266,6 +271,7 @@ class TreeItemDTO:
             "coverEntityId": self.cover_entity_id,
             "energyEntityId": self.energy_entity_id,
             "isEstimated": self.is_estimated,
+            "deviceId": self.device_id,
             "phase": self.phase,
             "power": self.power,
             "maxPowerW": self.max_power_w,
@@ -464,14 +470,18 @@ class HelmanTreeBuilder:
 
         Everything is read from the device, never inferred: a selected entity
         that is missing keeps its row, and the entity inspection reports it.
-        A meterless child is an estimated item under its parent, reading its
-        share sensor — for exactly the children ``read_shared_meters`` splits
-        the meter among, which is what the coordinator publishes shares for.
+        Every device reads :func:`device_energy_entity` and
+        :func:`device_power_entity`, keyed by its energy entity; a meterless
+        child is only flagged ``is_estimated`` — for exactly the children
+        ``read_shared_meters`` splits the meter among, which is what the
+        coordinator publishes shares for.
         """
         carved: dict[str, dict] = {
             carve["energy_entity_id"]: carve for carve in read_carved_meters(self._config)
         }
-        shared = read_shared_meters(self._config)
+        # Exactly the meterless children ``read_shared_meters`` splits a meter
+        # among get a row: those the coordinator publishes share sensors for.
+        shared_ids = shared_member_ids(self._config)
         cleaner_regex = read_name_cleaner_regex(self._config)
         # grouping id -> group id -> short name, in grouping order.
         short_names: dict[str, dict[str, str]] = {
@@ -492,115 +502,72 @@ class HelmanTreeBuilder:
         devices: dict[int, TreeItemDTO] = {}
         for device, parent in iter_devices(self._config):
             parent_device = devices.get(id(parent)) if parent is not None else None
-            meter = own_meter(device)
-            if meter is None:
-                if parent_device is not None:
-                    share_device = self._make_share_device(
-                        device, parent_device, shared, carved, cleaner_regex
-                    )
-                    if share_device is not None:
-                        apply_groups_and_phase(share_device, device)
-                        parent_device.children.append(share_device)
+            device_id = peek_controllable_id(device)
+            estimated = is_estimated(device, parent)
+            if estimated and device_id not in shared_ids:
                 continue
-            power_sensor_id = _consumption_entity(device, "power_entity_id")
-            icon = resolve_device_icon(device, entity_icon=self._entity_icon)
+            energy_entity_id = device_energy_entity(device, parent)
+            if energy_entity_id is None:
+                continue
+            schedulable = is_schedulable(device)
+            if estimated:
+                # The carve covers the parent meter's own energy, which its
+                # meterless children split; a child is a leaf, so its own load
+                # is all of it.
+                deferrable = own_deferrable = own_meter(parent) in carved
+                controllable_ids = [device_id] if schedulable else []
+                own_controllable_ids = list(controllable_ids)
+            else:
+                carve = carved.get(energy_entity_id)
+                own_deferrable = carve is not None
+                # A carved meter with metered children carves only its own
+                # energy, which its remainder shows, not this aggregate.
+                deferrable = own_deferrable and not carve["metered_children"]
+                own_controllable_ids = list(carve["ids"]) if own_deferrable else []
+                controllable_ids = list(own_controllable_ids) if schedulable else []
 
             item = TreeItemDTO(
-                id=meter,
+                id=energy_entity_id,
                 display_name=resolve_device_name(
                     device,
                     friendly_name=self._friendly_name,
                     cleaner_regex=cleaner_regex,
                 ),
-                power_sensor_id=power_sensor_id,
-                switch_entity_id=_control_entity(device, ("switch", "charge")),
+                power_sensor_id=device_power_entity(device, parent),
+                # The control the row offers: a switch, an EV charge switch, or
+                # the climate entity of an air conditioner. Never a cover.
+                switch_entity_id=_control_entity(
+                    device, ("switch", "charge", CONTROLLABLE_KIND_CLIMATE)
+                ),
                 climate_entity_id=_control_entity(device, (CONTROLLABLE_KIND_CLIMATE,)),
                 cover_entity_id=_control_entity(device, ("cover",)),
                 is_source=False,
                 is_unmeasured=False,
                 is_virtual=False,
                 value_type="default",
-                icon=icon,
+                icon=resolve_device_icon(device, entity_icon=self._entity_icon),
                 compact=False,
                 show_additional_info=False,
                 children_full_width=True,
                 hide_children=False,
                 hide_children_indicator=False,
                 sort_children_by_power=False,
-                # A carved meter with metered children carves only its own
-                # energy, which its remainder shows, not this aggregate.
-                deferrable=meter in carved and not carved[meter]["metered_children"],
-                controllable_ids=(
-                    list(carved[meter]["ids"])
-                    if meter in carved and is_schedulable(device)
-                    else []
-                ),
+                deferrable=deferrable,
+                controllable_ids=controllable_ids,
                 appliance_kind=(
-                    peek_controllable_kind(device)
-                    if meter in carved and is_schedulable(device) and len(carved[meter]["ids"]) == 1
-                    else None
+                    peek_controllable_kind(device) if len(controllable_ids) == 1 else None
                 ),
-                energy_entity_id=meter,
-                own_deferrable=meter in carved,
-                own_controllable_ids=list(carved[meter]["ids"]) if meter in carved else [],
+                energy_entity_id=energy_entity_id,
+                own_deferrable=own_deferrable,
+                own_controllable_ids=own_controllable_ids,
+                is_estimated=estimated,
+                device_id=device_id,
             )
             apply_groups_and_phase(item, device)
             devices[id(device)] = item
             (parent_device.children if parent_device is not None else tree).append(item)
 
         return tree
-
-    def _make_share_device(
-        self,
-        device: Device,
-        parent_device: TreeItemDTO,
-        shared: dict[str, dict],
-        carved: dict[str, dict],
-        cleaner_regex: str | None,
-    ) -> TreeItemDTO | None:
-        """A meterless child's row: its share of the parent's own power.
-
-        ``None`` for a child the meter is not split among (no id, no running
-        signal — validation reports both).
-        """
-        parent_meter = parent_device.energy_entity_id
-        device_id = peek_controllable_id(device)
-        members = shared.get(parent_meter, {}).get("members", ())
-        if device_id is None or device_id not in {member[0] for member in members}:
-            return None
-        return TreeItemDTO(
-            id=device_id,
-            display_name=resolve_device_name(
-                device,
-                friendly_name=self._friendly_name,
-                cleaner_regex=cleaner_regex,
-            ),
-            power_sensor_id=share_power_entity_id(device_id),
-            # The running signal is the control the row offers: a switch, or
-            # the climate entity of an air conditioner. Never put a cover in
-            # switch_entity_id.
-            switch_entity_id=_control_entity(
-                device, ("switch", "charge", CONTROLLABLE_KIND_CLIMATE)
-            ),
-            climate_entity_id=_control_entity(device, (CONTROLLABLE_KIND_CLIMATE,)),
-            cover_entity_id=_control_entity(device, ("cover",)),
-            is_source=False,
-            is_unmeasured=False,
-            is_virtual=False,
-            value_type="default",
-            icon=resolve_device_icon(device, entity_icon=self._entity_icon),
-            compact=False,
-            show_additional_info=False,
-            children_full_width=True,
-            hide_children=False,
-            hide_children_indicator=False,
-            sort_children_by_power=False,
-            # The carve covers the meter's own energy, which these children split.
-            deferrable=parent_meter in carved,
-            controllable_ids=[device_id] if is_schedulable(device) else [],
-            appliance_kind=peek_controllable_kind(device) if is_schedulable(device) else None,
-            is_estimated=True,
-        )
 
     def _entity_icon(self, entity_id: str) -> str | None:
         state = self._hass.states.get(entity_id)
@@ -652,12 +619,6 @@ class HelmanTreeBuilder:
             item.children.append(unmeasured)
         for child in item.children:
             self._add_unmeasured_items(child, own_carved)
-
-
-def _consumption_entity(device: Device, key: str) -> str | None:
-    consumption = device.get("consumption")
-    value = consumption.get(key) if isinstance(consumption, Mapping) else None
-    return value.strip() if isinstance(value, str) and value.strip() else None
 
 
 def _control_entity(device: Device, control_keys: tuple[str, ...]) -> str | None:

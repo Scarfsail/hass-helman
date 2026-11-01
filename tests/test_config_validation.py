@@ -1721,6 +1721,16 @@ class DeviceTreeValidationTests(unittest.TestCase):
             ("devices.consumers[0].children[4].controls", "running_signal_required"), errors
         )
 
+    def test_an_unsupported_meterless_child_can_lack_a_running_signal(self) -> None:
+        breaker = _ac_breaker()
+        breaker["children"].append({"kind": "future_kind", "id": "silent", "schedulable": True})
+
+        errors, report = self._codes(breaker)
+
+        self.assertEqual(errors, set())
+        self.assertTrue(report.valid)
+        self.assertIn("unsupported_kind", [warning.code for warning in report.warnings])
+
     def test_a_lights_switch_control_is_its_running_signal(self) -> None:
         breaker = _ac_breaker()
         breaker["children"].append(

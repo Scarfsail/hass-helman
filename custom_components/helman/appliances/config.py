@@ -5,12 +5,14 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from ..controllables.config import (
-    effective_meter,
+    device_energy_entity,
+    is_estimated,
     is_schedulable,
     iter_device_paths,
     read_consumers,
     read_name_cleaner_regex,
     resolve_device_name,
+    shared_member_ids,
 )
 from ..controllables.spec import (
     CONTROLLABLE_KIND_GENERIC,
@@ -45,6 +47,7 @@ def build_appliances_runtime_registry(
     appliances = []
     seen_appliance_ids: set[str] = set()
     cleaner_regex = read_name_cleaner_regex(config)
+    shared_ids = shared_member_ids(config)
 
     for path, device, parent in iter_device_paths(config):
         if not isinstance(device, Mapping):
@@ -52,6 +55,8 @@ def build_appliances_runtime_registry(
         if not is_schedulable(device):
             continue
         appliance_id = _peek_appliance_id(device)
+        if is_estimated(device, parent) and appliance_id not in shared_ids:
+            continue
 
         try:
             appliance = read_device_appliance(
@@ -113,8 +118,9 @@ def read_device_appliance(
 
     The per-kind readers receive the default ``generic`` kind, the shared
     resolved name (the id when entity states are unavailable), and the device's
-    effective meter — so a meterless child on ``history_average`` reads its
-    parent's meter. These derived fields are never written to the document.
+    energy entity (:func:`device_energy_entity`) — so a meterless child on
+    ``history_average`` reads its own share-energy sensor. These derived fields
+    are never written to the document.
     """
     view = dict(device)
     view.setdefault("kind", CONTROLLABLE_KIND_GENERIC)
@@ -123,7 +129,7 @@ def read_device_appliance(
         friendly_name=friendly_name or (lambda _entity_id: None),
         cleaner_regex=cleaner_regex,
     )
-    meter = effective_meter(device, parent)
+    meter = device_energy_entity(device, parent)
     consumption = device.get("consumption")
     if meter is not None and isinstance(consumption, Mapping):
         view["consumption"] = {**consumption, "energy_entity_id": meter}

@@ -37,7 +37,7 @@ class NodeDetailError(Exception):
 class NodeDetail:
     """One node's detail: its overview, and the sections it answers.
 
-    A device node's builders also take the device's config.
+    A device node's builders also take the device's config and its parent's.
     """
 
     overview: Callable[..., dict[str, Any]]
@@ -103,13 +103,13 @@ async def async_get_node_detail(
             )
         device_args: tuple[Mapping[str, Any], ...] = ()
     else:
-        device = _find_device(ctx.config, device_id, detail.device_kind)
-        if device is None:
+        found = _find_device(ctx.config, device_id, detail.device_kind)
+        if found is None:
             raise NodeDetailError(
                 "invalid_device",
                 f"No {detail.device_kind} device with id {device_id!r}",
             )
-        device_args = (device,)
+        device_args = found
     if section is None:
         return detail.overview(hass, ctx, now, *device_args)
     if section not in detail.sections:
@@ -121,14 +121,14 @@ async def async_get_node_detail(
 
 def _find_device(
     config: Mapping[str, Any], device_id: str | None, kind: str
-) -> Mapping[str, Any] | None:
-    """The configured consumer of ``kind`` whose id is ``device_id``, at any depth."""
+) -> tuple[Mapping[str, Any], Mapping[str, Any] | None] | None:
+    """``(device, parent)`` for the consumer of ``kind`` whose id is ``device_id``, at any depth."""
     if device_id is None:
         return None
     return next(
         (
-            device
-            for device, _parent in iter_devices(config)
+            (device, parent)
+            for device, parent in iter_devices(config)
             if peek_controllable_id(device) == device_id
             and peek_controllable_kind(device) == kind
         ),

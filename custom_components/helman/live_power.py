@@ -99,10 +99,8 @@ class LivePowerTracker:
         self._source_ratio_entity_ids: dict[str, str] = {}
         # Mapping: parent_node_id → unmeasured_entity_id (e.g. "house" → "sensor.helman_house_unmeasured_power")
         self._unmeasured_entity_id_map: dict[str, str] = {}
-        # Mapping: share node id (a meterless child's device id) → its share entity id
+        # Mapping: share node id (a meterless child's share-energy entity) → its share-power entity id
         self._share_entity_id_map: dict[str, str] = {}
-        # Mapping: share node id → its share-energy entity id
-        self._share_energy_entity_id_map: dict[str, str] = {}
         # Mapping: meterless child id → (running-signal entity, "switch" | "climate")
         self._share_running_signals: dict[str, tuple[str, str]] = {}
         self._share_tolerances: dict[str, float | None] = {}
@@ -163,12 +161,8 @@ class LivePowerTracker:
 
         self._unmeasured_entity_id_map = dict(index.unmeasured_entity_id_map)
         self._share_entity_id_map = {
-            node_id: entity_id
-            for node_id, (entity_id, _name) in index.share_devices.items()
-        }
-        self._share_energy_entity_id_map = {
-            node_id: share_energy_entity_id(node_id)
-            for node_id in self._share_entity_id_map
+            share_energy_entity_id(device_id): entity_id
+            for device_id, (entity_id, _name) in index.share_devices.items()
         }
         # The very members the shared-meter history split reads, with the same
         # running signal each, so the live split cannot pick other devices.
@@ -278,9 +272,9 @@ class LivePowerTracker:
                 _ENERGY_MAX_STEP_TICKS * self._tick_seconds,
             )
         self._energy_since = now
-        for node_id, watts in share_map.items():
-            energy_entity_id = self._share_energy_entity_id_map.get(node_id)
-            if watts is not None and energy_entity_id is not None:
+        # A share node is keyed by its share-energy entity.
+        for energy_entity_id, watts in share_map.items():
+            if watts is not None and energy_entity_id in self._share_entity_id_map:
                 values[energy_entity_id] = watts * elapsed / 3_600_000
 
         # Total power (consumption side)
@@ -557,7 +551,7 @@ class LivePowerTracker:
         """
         if own is None:
             return {n["id"]: None for n in share_nodes}
-        running = [n["id"] for n in share_nodes if self._is_share_running(n["id"])]
+        running = [n["deviceId"] for n in share_nodes if self._is_share_running(n["deviceId"])]
         shares = (
             split_own_power(
                 own,
@@ -568,7 +562,7 @@ class LivePowerTracker:
             if running
             else {}
         )
-        return {n["id"]: shares.get(n["id"], 0.0) for n in share_nodes}
+        return {n["id"]: shares.get(n["deviceId"], 0.0) for n in share_nodes}
 
     def _is_share_running(self, device_id: str) -> bool:
         """Whether a meterless child runs now, by the predicate its history split uses."""

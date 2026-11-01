@@ -30,14 +30,11 @@ class SharedMeterFit:
     ``estimates`` is each member's kWh per running hour, ``None`` where history
     did not answer. ``weights`` is each member's learned power in kW, ``None``
     for one that did not run long enough -- the ratio the live split shares
-    own power in. ``member_energy`` is the energy the split handed each member
-    per segment it ran in, ``(start, end, kWh)`` in time order, which is what
-    its estimate sums up. All three are keyed by member, every member present.
+    own power in. Both are keyed by member, every member present.
     """
 
     estimates: Mapping[str, float | None]
     weights: Mapping[str, float | None]
-    member_energy: Mapping[str, list[tuple[datetime, datetime, float]]]
 
 
 def _estimate_shared_meter_hourly_energy_kwh(
@@ -84,9 +81,7 @@ def _estimate_shared_meter_hourly_energy_kwh(
     What is split is the meter's *own* energy -- see
     :func:`own_energy_observations` -- sampled at the segment boundaries, so a
     meter with ``metered_children`` (each ``(states, default unit)``) hands its
-    members only what those children did not measure, and the exact
-    per-segment allocation is kept -- and handed back as ``member_energy``, so
-    a device's usage record is built from the very energy its estimate is.
+    members only what those children did not measure.
     """
     intervals_by_member = {
         key: _build_active_state_intervals(
@@ -101,7 +96,6 @@ def _estimate_shared_meter_hourly_energy_kwh(
     nothing = SharedMeterFit(
         estimates={key: None for key in members},
         weights={key: previous_weights.get(key) for key in members},
-        member_energy={key: [] for key in members},
     )
     if not any(intervals_by_member.values()):
         return nothing
@@ -139,8 +133,6 @@ def _estimate_shared_meter_hourly_energy_kwh(
 
     #: ``(running members, duration h, own kWh)``, nobody-running ones included.
     segments: list[tuple[tuple[str, ...], float, float]] = []
-    #: Each segment's ``(start, end)``, in step with ``segments``.
-    spans: list[tuple[datetime, datetime]] = []
     # Each member's intervals are sorted and disjoint, and every one of their
     # ends is a boundary, so walking the segments in order only ever advances a
     # per-member cursor: a segment is running for a member exactly when it lies
@@ -164,7 +156,6 @@ def _estimate_shared_meter_hourly_energy_kwh(
         if duration_hours <= 0:
             continue
         segments.append((tuple(running), duration_hours, delta))
-        spans.append((segment_start, segment_end))
 
     # Rounded before the split, so the estimates below use exactly the weights
     # the live split will read back from the store.
@@ -182,10 +173,7 @@ def _estimate_shared_meter_hourly_energy_kwh(
 
     energy_kwh = {key: 0.0 for key in members}
     active_hours = {key: 0.0 for key in members}
-    member_energy: dict[str, list[tuple[datetime, datetime, float]]] = {
-        key: [] for key in members
-    }
-    for (running, duration_hours, delta), (start, end) in zip(segments, spans):
+    for running, duration_hours, delta in segments:
         # Power in and out, in W as the live split takes it.
         shares_w = split_own_power(
             delta / duration_hours * 1000, running, weights, tolerance=tolerance
@@ -194,16 +182,13 @@ def _estimate_shared_meter_hourly_energy_kwh(
             share_kwh = share_w * duration_hours / 1000
             energy_kwh[key] += share_kwh
             active_hours[key] += duration_hours
-            member_energy[key].append((start, end, share_kwh))
 
     estimates: dict[str, float | None] = {key: None for key in members}
     for key in members:
         if active_hours[key] <= 0 or energy_kwh[key] <= _ENERGY_TOLERANCE_KWH:
             continue
         estimates[key] = round(energy_kwh[key] / active_hours[key], 4)
-    return SharedMeterFit(
-        estimates=estimates, weights=weights, member_energy=member_energy
-    )
+    return SharedMeterFit(estimates=estimates, weights=weights)
 
 
 def own_energy_observations(

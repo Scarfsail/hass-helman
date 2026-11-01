@@ -1,10 +1,9 @@
 """One device's usage record, learned from its recorder history.
 
 HA-free: the appliance energy job reads the history, slices it per device and
-hands over what it measured -- a metered device's meter deltas per local day
-and its power sensor's states, a meterless child's share of its meter per
-segment -- and this module turns that into the record stored under the
-device's ``deviceKey``::
+hands over what it measured -- a device's energy-entity deltas per local day
+and its power sensor's states -- and this module turns that into the record
+stored under the device's ``deviceKey``::
 
     {"daily_kwh": {"mean", "median", "min", "max", "days"},
      "runs_per_day": float,
@@ -31,7 +30,6 @@ cover. One idle hour sets it, and a short dip barely moves a loaded hour.
 from __future__ import annotations
 
 import math
-from bisect import bisect_right
 from collections.abc import Sequence
 from datetime import datetime, time, timedelta, timezone, tzinfo
 from statistics import mean, median
@@ -72,9 +70,9 @@ def metered_record(
     observed: Sequence[Span] | None = None,
     on_kwh_per_hour: float | None = None,
 ) -> dict[str, Any] | None:
-    """The record of a device with its own meter.
+    """The record of a device, read from its energy entity.
 
-    ``daily_kwh`` is its meter's change over each complete local day in
+    ``daily_kwh`` is its energy entity's change over each complete local day in
     ``days``, so a parent's includes its metered children. Runs come only from a power
     sensor's ``power_states``: above the standby floor, and within
     ``running`` -- its running signal's active intervals -- when it has one;
@@ -106,45 +104,6 @@ def metered_record(
         runs,
         on_kwh_per_hour,
         covered=covered,
-    )
-
-
-def member_record(
-    *,
-    window_start: datetime,
-    window_end: datetime,
-    local_tz: tzinfo,
-    member_energy: Sequence[Piece],
-    on_kwh_per_hour: float | None,
-    observed: Sequence[Span] | None = None,
-) -> dict[str, Any] | None:
-    """The record of a meterless child, from its share of the meter.
-
-    ``member_energy`` is what the split handed it per segment it ran in, so its
-    record cannot drift from its estimate or its live share. It runs while its
-    signal is active: touching segments are one run. ``window_start`` is where
-    its meter's history begins, so days the recorder no longer holds are not
-    counted as zero days, and a day its signal's ``observed`` intervals do
-    not cover is no zero-run day either.
-    """
-    runs: list[Piece] = []
-    for start, end, kwh in member_energy:
-        if runs and runs[-1][1] == start:
-            runs[-1] = (runs[-1][0], end, runs[-1][2] + kwh)
-        else:
-            runs.append((start, end, kwh))
-    midnights = local_midnights(window_start, window_end, local_tz)
-    daily = _energy_by_day(member_energy, midnights)
-    days = list(zip(midnights, midnights[1:]))
-    if observed is not None:
-        days = [day for day in days if _covers(observed, day)]
-    return _record(
-        window_start,
-        window_end,
-        daily,
-        days,
-        runs,
-        on_kwh_per_hour,
     )
 
 
@@ -306,26 +265,6 @@ def _energy_within(pieces: Sequence[Piece], spans: Sequence[Span]) -> list[float
             index += 1
         energies.append(kwh)
     return energies
-
-
-def _energy_by_day(
-    segments: Sequence[Piece], midnights: Sequence[datetime]
-) -> list[float]:
-    """Each complete local day's share of the segments' energy, pro rata."""
-    totals = [0.0] * max(len(midnights) - 1, 0)
-    for start, end, kwh in segments:
-        seconds = (end - start).total_seconds()
-        if seconds <= 0:
-            continue
-        day = max(bisect_right(midnights, start) - 1, 0)
-        while day < len(totals) and midnights[day] < end:
-            overlap = (
-                min(end, midnights[day + 1]) - max(start, midnights[day])
-            ).total_seconds()
-            if overlap > 0:
-                totals[day] += kwh * overlap / seconds
-            day += 1
-    return totals
 
 
 def _record(
