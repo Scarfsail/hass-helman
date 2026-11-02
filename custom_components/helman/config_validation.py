@@ -2131,7 +2131,7 @@ def _member_target_path(optimizer: Any, member_index: int, *, path: str) -> str:
 #: and all three inverter kinds may drive the inverter. This asks something else
 #: — whether the battery these two reason about is wired up at all — and
 #: ``export_price``, which drives the same inverter, does not need it.
-_BATTERY_DEPENDENT_KINDS = frozenset({"charge_hold", "charge_from_grid"})
+_BATTERY_DEPENDENT_KINDS = frozenset({"charge_hold", "battery_reserve"})
 
 
 def _validate_training_time(value: object, report: ValidationReport) -> None:

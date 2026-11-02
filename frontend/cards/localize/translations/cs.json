@@ -1013,13 +1013,13 @@
       },
       "optimizer": {
         "charge_hold": "Držení nabití",
-        "charge_from_grid": "Nabíjení ze sítě",
+        "battery_reserve": "Rezerva baterie",
         "export_price": "Zastavení exportu",
         "appliance_runtime": "Běh spotřebiče"
       },
       "action": {
         "charge_hold": "držet",
-        "charge_from_grid": "nabíjet",
+        "battery_reserve": "nabíjet",
         "export_price": "zastavit export",
         "appliance_runtime": "zapnout"
       },

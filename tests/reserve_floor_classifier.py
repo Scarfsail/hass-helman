@@ -1,12 +1,12 @@
 """Reserve-floor breach classifier (#274, P0 of #270).
 
-``charge_from_grid`` decides whether to bridge an expensive import window by
+``battery_reserve`` decides whether to bridge an expensive import window by
 reading the projected SoC trajectory *when it runs*. Optimizers running after
 it can add demand inside the same window, so the shipped plan can still cross
 ``reserve_floor_soc`` even though the bridge was sized correctly at the time.
 This module classifies, after the fact, whether a given evaluated window ended
 up breached in the final plan and — if so — why, by joining the raw
-observations ``charge_from_grid`` emits (see ``ReserveFloorObservation`` in
+observations ``battery_reserve`` emits (see ``ReserveFloorObservation`` in
 ``.trace``) against snapshots the pipeline captures deliberately:
 
 - the **control** snapshot: the trajectory before anything was planned
@@ -33,7 +33,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 from custom_components.helman.scheduling.schedule import appliance_actions, inverter_action, parse_slot_id
-from custom_components.helman.automation.optimizers.charge_from_grid import _min_soc_over
+from custom_components.helman.automation.optimizers.battery_reserve import _min_soc_over
 from custom_components.helman.automation.rails import forecast_covers_horizon, read_soc_by_bucket
 
 if TYPE_CHECKING:
@@ -71,9 +71,9 @@ LANE_MIXED = "mixed"
 
 @dataclass(frozen=True)
 class ReserveFloorBoundary:
-    """One emitting ``charge_from_grid`` step's boundary capture.
+    """One emitting ``battery_reserve`` step's boundary capture.
 
-    Under the phased pipeline (#272, P2 of #270), ``charge_from_grid`` is a
+    Under the phased pipeline (#272, P2 of #270), ``battery_reserve`` is a
     system-bucket optimizer running in phase 2, and phase 2 never touches an
     appliance lane — every phase-2 step reads the same fixed phase-1 appliance
     demand. So ``snapshot`` is simply a plain rebuild over the working
@@ -334,7 +334,7 @@ def classify_reserve_floor_observations(
 ) -> tuple[ReserveFloorResult, ...]:
     """Classify every observation, joining each to its own step's boundary.
 
-    Several ``charge_from_grid`` instances can exist in one run (config
+    Several ``battery_reserve`` instances can exist in one run (config
     enforces unique ids, not unique kinds) — ``boundaries`` is keyed by
     optimizer id precisely so each observation joins only its own step's
     boundary, never another instance's.

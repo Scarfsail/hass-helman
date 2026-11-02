@@ -238,6 +238,7 @@ class PerKindMoveTests(unittest.TestCase):
                 "params": {"reserve_floor_soc": 20, "margin_pct": 10},
             }
         )
+        self.assertEqual(migrated["kind"], "battery_reserve")
         # `margin_pct` itself is retired later in the chain (v15 -> v16).
         self.assertEqual(migrated["params"], {})
         self.assertEqual(migrated["conditions"][0]["reserve_floor_soc"], 20)
@@ -1425,9 +1426,8 @@ class OptimizerBucketSplitTests(unittest.TestCase):
             [o["id"] for o in automation["system_optimizers"]],
             ["hold", "export", "grid"],
         )
-        # The last step that reshapes optimizers names them: v16 -> v17 nests
-        # the appliance targets, so only those are reported.
-        self.assertEqual(ids, ["runtime-a", "runtime-b"])
+        # The latest optimizer step (v29 -> v30) visits the system bucket.
+        self.assertEqual(ids, ["hold", "export", "grid"])
 
     def test_charge_hold_before_export_price_survives(self) -> None:
         automation, _ids = self._migrate_from_v14(
@@ -1536,7 +1536,7 @@ class ChargeFromGridParamRetirementTests(unittest.TestCase):
         optimizers, ids = self._migrate_from_v15(dict(hold))
 
         self.assertEqual(optimizers[0], hold)
-        self.assertEqual(ids, [])
+        self.assertEqual(ids, ["hold"])
 
     def test_a_document_without_system_optimizers_survives(self) -> None:
         migrated, ids = migrate_config_document(
@@ -1608,7 +1608,9 @@ class ApplianceTargetGroupTests(unittest.TestCase):
         ]
         automation, _ids = self._migrate_from_v16(system=[dict(o) for o in system])
 
-        self.assertEqual(automation["system_optimizers"], system)
+        expected = deepcopy(system)
+        expected[2]["kind"] = "battery_reserve"
+        self.assertEqual(automation["system_optimizers"], expected)
 
     def test_the_migrated_document_reads_back(self) -> None:
         from custom_components.helman.automation.config import AutomationConfig
@@ -2929,6 +2931,55 @@ class ProfileKeyMigrationTests(unittest.TestCase):
             migrated_charger["profile"],
             {"id": "solax_ev_charger", "device_id": "charger-device"},
         )
+
+
+class BatteryReserveRenameTests(unittest.TestCase):
+    """v29 -> v30 changes only the system optimizer kind."""
+
+    def test_rename_preserves_settings_order_and_input(self) -> None:
+        reserve = {
+            "id": "outage-reserve",
+            "kind": "charge_from_grid",
+            "enabled": False,
+            "params": {"charge_start_margin_slots": 4},
+            "conditions": [{"reserve_floor_soc": 30, "custom": [], "params": {}}],
+        }
+        document = {
+            "config_version": 29,
+            "automation": {
+                "enabled": True,
+                "appliance_optimizers": [{"id": "appliance", "kind": "appliance_runtime"}],
+                "system_optimizers": [
+                    {"id": "hold", "kind": "charge_hold"},
+                    reserve,
+                    {"id": "already-renamed", "kind": "battery_reserve"},
+                    {"id": "another-reserve", "kind": "charge_from_grid", "params": {}},
+                    {"id": "future", "kind": "unknown"},
+                ],
+            },
+            "other": {"kept": True},
+        }
+        original = deepcopy(document)
+        expected = deepcopy(document)
+        expected["config_version"] = 30
+        for index in (1, 3):
+            expected["automation"]["system_optimizers"][index]["kind"] = "battery_reserve"
+
+        migrated, ids = migrate_config_document(document)
+
+        self.assertEqual(migrated, expected)
+        self.assertEqual(document, original)
+        self.assertEqual(
+            ids,
+            [optimizer["id"] for optimizer in document["automation"]["system_optimizers"]],
+        )
+        self.assertEqual(migrate_config_document(migrated), (migrated, []))
+
+    def test_missing_system_bucket_is_unchanged(self) -> None:
+        document = {"config_version": 29, "automation": {"enabled": True}}
+        migrated, ids = migrate_config_document(document)
+        self.assertEqual(migrated, {**document, "config_version": 30})
+        self.assertEqual(ids, [])
 
 
 if __name__ == "__main__":

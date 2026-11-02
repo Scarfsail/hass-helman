@@ -40,7 +40,7 @@ def _make_snapshot(*, schedule_adjusted: bool = True) -> dict:
                 "exportedToGridKwh": 0.0,
                 "availableSurplusKwh": 0.0,
                 "setBy": "automation",
-                "optimizer": "charge_from_grid",
+                "optimizer": "battery_reserve",
                 "hitMinSoc": True,
                 "hitMaxSoc": False,
                 "limitedByChargePower": False,
@@ -122,7 +122,7 @@ class GridFlowForecastResponseTests(unittest.TestCase):
             },
             {
                 "setBy": "automation",
-                "optimizer": "charge_from_grid",
+                "optimizer": "battery_reserve",
                 "hitMinSoc": True,
                 "hitMaxSoc": False,
                 "limitedByChargePower": False,

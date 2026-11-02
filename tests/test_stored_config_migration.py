@@ -24,6 +24,7 @@ import dataclasses
 import json
 import os
 import unittest
+from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
 
@@ -422,6 +423,14 @@ class LiveShapedMigrationTests(unittest.TestCase):
         self.before = _live_v19()
         self.migrated, _ids = migrate_config_document(self.before)
 
+    def test_system_reserve_migrates_to_current_kind(self) -> None:
+        self.assertEqual(self.migrated["config_version"], CONFIG_DOCUMENT_VERSION)
+        original = self.before["automation"]["system_optimizers"][0]
+        self.assertEqual(
+            self.migrated["automation"]["system_optimizers"][0],
+            {**original, "kind": "battery_reserve"},
+        )
+
     def test_it_migrates_to_the_expected_tree(self) -> None:
         devices = _all_devices(self.migrated)
         old = self.before["controllables"]
@@ -472,7 +481,9 @@ class LiveShapedMigrationTests(unittest.TestCase):
                 )
 
     def test_every_optimizer_target_still_names_a_schedulable_device(self) -> None:
-        self.assertEqual(self.migrated["automation"], self.before["automation"])
+        expected = deepcopy(self.before["automation"])
+        expected["system_optimizers"][0]["kind"] = "battery_reserve"
+        self.assertEqual(self.migrated["automation"], expected)
         schedulable = read_schedulable_ids(self.migrated)
         automation = read_automation_config(self.migrated)
         for optimizer in automation.all_optimizers:

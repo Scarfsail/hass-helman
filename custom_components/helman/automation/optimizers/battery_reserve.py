@@ -1,4 +1,4 @@
-"""``charge_from_grid`` optimizer (use case 4).
+"""``battery_reserve`` optimizer (use case 4).
 
 Bridge expensive import windows the battery cannot cover on its own by charging
 it from the grid during the immediately preceding cheap window, on the cheapest
@@ -104,9 +104,9 @@ GATE_LATEST_CUTOFF = "latest_cutoff"
 
 
 @dataclass(frozen=True)
-class ChargeFromGridOptimizer:
+class BatteryReserveOptimizer:
     id: str
-    kind: str = "charge_from_grid"
+    kind: str = "battery_reserve"
 
     def optimize(
         self,
@@ -168,7 +168,7 @@ class ChargeFromGridOptimizer:
             scope=SCOPE_WINDOW,
         )
 
-        emit = _ChargeFromGridEmission(trace)
+        emit = _BatteryReserveEmission(trace)
         # The forecast's SoC rail tells us *whether* an expensive window needs
         # repair.  Placement itself must be re-simulated: a hold changes the
         # cheap-window trajectory and cannot be sized from its entry SoC.
@@ -257,7 +257,7 @@ class ChargeFromGridOptimizer:
         live_soc: float | None,
         simulator,
         planned_actions: dict[datetime, ScheduleAction],
-        emit: "_ChargeFromGridEmission",
+        emit: "_BatteryReserveEmission",
     ) -> None:
         expensive_window = [
             format_slot_id(expensive_band.start),
@@ -269,7 +269,7 @@ class ChargeFromGridOptimizer:
         # #274 (P0 of #270): one raw observation per evaluated expensive
         # window, regardless of outcome — the reserve-floor breach classifier
         # joins these against snapshots the pipeline captures separately.
-        # Deliberately a plain closure, not `emit`: `_ChargeFromGridEmission`
+        # Deliberately a plain closure, not `emit`: `_BatteryReserveEmission`
         # dedupes/reduces per slot by design and must stay lossy; this must
         # not be.
         def _observe(
@@ -517,7 +517,7 @@ class ChargeFromGridOptimizer:
         window_min_soc: float,
         soc_known: "_Gate",
         floor: "_FloorResolution",
-        emit: "_ChargeFromGridEmission",
+        emit: "_BatteryReserveEmission",
         simulator,
         planned_actions: dict[datetime, ScheduleAction],
     ) -> bool:
@@ -971,7 +971,7 @@ class _SlotRecord:
     floor: _FloorResolution | None
 
 
-class _ChargeFromGridEmission:
+class _BatteryReserveEmission:
     """Accumulate per-slot records, dedupe by priority, and flush as groups.
 
     The same cheap slot can be evaluated by more than one expensive window, so
@@ -1195,8 +1195,8 @@ def _min_soc_over(
     return min(values)
 
 
-def build_charge_from_grid_optimizer(
+def build_battery_reserve_optimizer(
     config: "OptimizerInstanceConfig",
     **_kwargs: Any,
-) -> ChargeFromGridOptimizer:
-    return ChargeFromGridOptimizer(id=config.id)
+) -> BatteryReserveOptimizer:
+    return BatteryReserveOptimizer(id=config.id)

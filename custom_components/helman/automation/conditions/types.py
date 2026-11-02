@@ -564,12 +564,12 @@ CONDITION_TYPES: dict[str, ConditionType] = {
             build_mask=_all_slots_mask,
             qualifier=True,
         ),
-        # Self-gating: `charge_from_grid` conditions on the SoC dip over the
+        # Self-gating: `battery_reserve` conditions on the SoC dip over the
         # *expensive* band but writes into the *preceding cheap* band, so a mask
         # of "slots where SoC dips below the floor" would mark exactly the slots
         # it never touches. The mask is therefore all-true and the optimizer
         # reads the floor by value, keeping its own dip test. See
-        # charge_from_grid._plan_window.
+        # battery_reserve._plan_window.
         ConditionType(
             key="reserve_floor_soc",
             scope=Scope.RUN,
