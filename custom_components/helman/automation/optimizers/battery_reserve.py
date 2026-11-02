@@ -11,7 +11,7 @@ condition rather than a slot mask, because the floor test runs over the
 *expensive* band while every slot this optimizer writes lies in the *preceding
 cheap* band — a mask of "slots where projected SoC dips below the floor" would
 mark exactly the slots it never touches. Nor is the value it needs the config
-value: it needs ``dip = floor - window_min_soc``, per expensive band. So the
+value: it needs the window's deficit below its required minimum. So the
 condition contributes an all-true mask (keeping OR/candidate algebra and
 ``custom`` gating unchanged) and the dip arithmetic stays here. A consequence
 worth knowing: two groups differing only in ``reserve_floor_soc`` resolve every
@@ -315,7 +315,13 @@ class BatteryReserveOptimizer:
         # It is the condition's own result, so it is resolved onto the condition
         # node rather than recorded as a gate — window-scoped, because it is
         # answered once per expensive band and differs between bands.
-        dip = floor - window_min_soc
+        dip = -_window_slack(
+            dict(soc_by_bucket),
+            expensive_band.start,
+            expensive_band.end,
+            floor,
+            resolved.params.get("solar_dip_floor_soc", floor),
+        )
         covered = _FloorResolution(
             STATE_FALSE, floor, round(window_min_soc, 1), group_index
         )
@@ -386,6 +392,7 @@ class BatteryReserveOptimizer:
         soc_gap = target - cheap_start_soc
         charge_needed_params = {
             "targetSoc": round(target, 1),
+            "solarDipFloorSoc": resolved.params.get("solar_dip_floor_soc"),
             "cheapStartSoc": round(cheap_start_soc, 1),
         }
         required_energy_kwh = (
@@ -524,9 +531,9 @@ class BatteryReserveOptimizer:
         """Keep the cheap band at the floor, then bridge the expensive window.
 
         The bridge is the latest hold/charge plan that keeps the window's
-        *lowest* simulated SoC at the floor — or, when no plan from this cheap
-        band can, at the best minimum one can reach.  Nothing is placed for a
-        minimum no action can lift.
+        minimum slack above its required SoC nonnegative — or, when no plan
+        from this cheap band can, at the best slack one can reach. Nothing is placed for a
+        deficit no action can lift.
 
         Returning false deliberately retains the legacy rail-only path for old
         or partial forecast payloads.  Complete rails always use this path.
@@ -594,9 +601,9 @@ class BatteryReserveOptimizer:
                 ).soc_by_bucket.items()
             }
 
-        def window_min(
+        def window_slack(
             actions: dict[datetime, ScheduleAction],
-        ) -> tuple[bool, float | None]:
+        ) -> tuple[bool, float | None, float | None]:
             # SoC values are end-of-slot, so the last slot before the boundary
             # carries the SoC the expensive window starts from; it has to be
             # simulated for the window's own buckets to mean anything, and so
@@ -609,14 +616,23 @@ class BatteryReserveOptimizer:
                 for key, soc in soc_by_bucket.items()
                 if boundary <= dt_util.as_utc(key) < window_end
             ]
+            window_min_raw = min(in_window) if in_window else None
             if not preceding or not in_window:
-                return False, None
+                return False, None, None
             return (
                 max(preceding) + _SLOT_DURATION >= boundary
-                and max(simulated) + _SLOT_DURATION >= window_end
-            ), min(in_window)
+                and max(simulated) + _SLOT_DURATION >= window_end,
+                _window_slack(
+                    soc_by_bucket,
+                    boundary,
+                    window_end,
+                    floor_soc,
+                    resolved.params.get("solar_dip_floor_soc", floor_soc),
+                ),
+                window_min_raw,
+            )
 
-        window_known, unplanned_min = window_min(planned_actions)
+        window_known, unplanned_slack, unplanned_min = window_slack(planned_actions)
         if not window_known:
             # A partial rolling horizon cannot answer what SoC the expensive
             # window is entered with, or how low it sinks before the window
@@ -694,7 +710,7 @@ class BatteryReserveOptimizer:
         max_charge_soc = int(upper_target)
         every = range(len(writable))
         maximal = compose(every, every, max_charge_soc)
-        best = window_min(maximal)[1]
+        _, best, best_min = window_slack(maximal)
         # Pinned at the battery's min SoC even then, the clamp hides how deep
         # the deficit runs.  When the maximal plan still imports less inside
         # the window, the cheap energy cuts expensive import: the goal stays
@@ -712,16 +728,16 @@ class BatteryReserveOptimizer:
             )
 
         pinned = (
-            best <= lower_target + 1e-6
+            best_min <= lower_target + 1e-6
             and window_import(maximal) < window_import(planned_actions) - 1e-6
         )
-        goal = floor_soc if pinned else min(floor_soc, best)
+        goal = 0.0 if pinned else min(0.0, best)
         # Short of the floor with the battery pinned at the cap inside the
         # cheap band: a higher battery ``max_soc`` would carry more across the
         # gap, so the cap binds.  Short below it, the slots themselves ran out.
         # Judged on the maximal plan, so the cause does not depend on which
         # plan below ends up written.
-        capacity_short = best < floor_soc - 1e-6
+        capacity_short = best < -1e-6
         limit: str | None = None
         if capacity_short:
             utc_keys = {dt_util.as_utc(key) for key in keys}
@@ -752,7 +768,7 @@ class BatteryReserveOptimizer:
 
         # The run so far (or the forecast's own overlay) may already keep the
         # window at the goal; nothing to place then.
-        window_soc = window_min(planned_actions)[1]
+        _, window_soc, window_min_raw = window_slack(planned_actions)
         if reaches(window_soc):
             emit.observe_reserve_floor(
                 ReserveFloorObservation(
@@ -761,7 +777,7 @@ class BatteryReserveOptimizer:
                     limit=limit,
                 )
             )
-            if unplanned_min >= floor_soc - 1e-6:
+            if unplanned_slack >= -1e-6:
                 # Covered before this window's floor step placed anything.
                 emit.window_covered(
                     cheap_slots,
@@ -782,8 +798,9 @@ class BatteryReserveOptimizer:
                         GATE_CHARGE_NEEDED,
                         STATE_FALSE,
                         {
-                            "goalSoc": round(goal, 1),
-                            "projectedWindowMinSoc": round(window_soc, 1),
+                            "goalSoc": round(floor_soc + goal, 1),
+                            "solarDipFloorSoc": resolved.params.get("solar_dip_floor_soc"),
+                            "projectedWindowMinSoc": round(window_min_raw, 1),
                         },
                         role="veto",
                     ),
@@ -796,7 +813,7 @@ class BatteryReserveOptimizer:
         # goal preserves ordinary self-consumption for as long as possible.
         hold_start: int | None = None
         for index in range(len(writable) - 1, -1, -1):
-            window_soc = window_min(
+            window_soc = window_slack(
                 compose(range(index, len(writable)), [], max_charge_soc)
             )[1]
             if reaches(window_soc):
@@ -816,7 +833,7 @@ class BatteryReserveOptimizer:
             charge_indices: list[int] = []
             for index in range(len(writable) - 1, -1, -1):
                 charge_indices.append(index)
-                window_soc = window_min(
+                window_soc = window_slack(
                     compose(all_holds, charge_indices, max_charge_soc)
                 )[1]
                 if reaches(window_soc):
@@ -827,12 +844,14 @@ class BatteryReserveOptimizer:
             low, high = int(lower_target), max_charge_soc
             while low < high:
                 middle = (low + high) // 2
-                if reaches(window_min(compose(all_holds, charge_indices, middle))[1]):
+                if reaches(window_slack(compose(all_holds, charge_indices, middle))[1]):
                     high = middle
                 else:
                     low = middle + 1
             charge_soc = low
-            window_soc = window_min(compose(all_holds, charge_indices, charge_soc))[1]
+            _, window_soc, window_min_raw = window_slack(
+                compose(all_holds, charge_indices, charge_soc)
+            )
             required = sorted(charge_indices)
             # Extra slots are opportunities, not extra target.  They extend
             # backward only after every physically required latest slot.
@@ -841,6 +860,9 @@ class BatteryReserveOptimizer:
         else:
             charge_indices = []
 
+        _, _, window_min_raw = window_slack(
+            compose(range(hold_start, len(writable)), charge_indices, charge_soc)
+        )
         charge_set = set(charge_indices)
         hold_set = set(range(hold_start, len(writable))) - charge_set
         gates = [
@@ -849,8 +871,9 @@ class BatteryReserveOptimizer:
                 GATE_CHARGE_NEEDED,
                 STATE_TRUE,
                 {
-                    "goalSoc": round(goal, 1),
-                    "projectedWindowMinSoc": round(window_soc, 1),
+                    "goalSoc": round(floor_soc + goal, 1),
+                    "solarDipFloorSoc": resolved.params.get("solar_dip_floor_soc"),
+                    "projectedWindowMinSoc": round(window_min_raw, 1),
                     "forcedChargeSlots": len(charge_set),
                     "chargeStartMarginSlots": margin,
                     "chargeTargetSoc": charge_soc if charge_set else None,
@@ -1176,6 +1199,39 @@ def _build_import_band_timeline(day_contexts) -> tuple[ImportBand, ...]:
 
 def _first_known(*values: float | None) -> float | None:
     return next((value for value in values if value is not None), None)
+
+
+def _required_soc(
+    trajectory: Mapping[datetime, float],
+    window_start: datetime,
+    window_end: datetime,
+    reserve: float,
+    dip_floor: float,
+) -> dict[datetime, float]:
+    """Allow a lower minimum only before a later recovery in this window."""
+    start, end = dt_util.as_utc(window_start), dt_util.as_utc(window_end)
+    buckets = sorted(
+        (bucket for bucket in trajectory if start <= dt_util.as_utc(bucket) < end),
+        key=dt_util.as_utc,
+        reverse=True,
+    )
+    recovered = False
+    required = {}
+    for bucket in buckets:
+        required[bucket] = dip_floor if recovered else reserve
+        recovered = recovered or trajectory[bucket] >= reserve
+    return required
+
+
+def _window_slack(
+    trajectory: Mapping[datetime, float],
+    window_start: datetime,
+    window_end: datetime,
+    reserve: float,
+    dip_floor: float,
+) -> float:
+    required = _required_soc(trajectory, window_start, window_end, reserve, dip_floor)
+    return min(trajectory[bucket] - value for bucket, value in required.items())
 
 
 def _min_soc_over(
