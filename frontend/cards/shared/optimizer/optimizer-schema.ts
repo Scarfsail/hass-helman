@@ -30,6 +30,7 @@ export interface SchemaField {
     type:
         | "number"
         | "integer"
+        | "boolean"
         | "time"
         | "string"
         | "day_classifications"

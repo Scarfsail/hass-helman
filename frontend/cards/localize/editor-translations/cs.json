@@ -39,7 +39,8 @@
       "cancel": "Zrušit",
       "apply_suggestions": "Použít návrhy",
       "import_energy": "Importovat z panelu Energie",
-      "apply": "Použít"
+      "apply": "Použít",
+      "use_optimizer_default": "Použít výchozí nastavení optimalizátoru"
     },
     "status": {
       "loading_config": "Načítám uloženou konfiguraci...",
@@ -305,7 +306,8 @@
       "max_allowed_export_power": "Max. povolený výkon exportu",
       "max_power": "Maximální výkon",
       "device_phase": "Fáze v domě",
-      "solar_dip_floor_soc": "Minimum SoC před sluncem %"
+      "solar_dip_floor_soc": "Minimum SoC před sluncem %",
+      "hold_reserve_in_expensive_windows": "Držet rezervu v drahých oknech"
     },
     "entity_status": {
       "value": "{value} {unit}",
@@ -382,7 +384,8 @@
       "add_device_profile": "Jeho entity poskytuje profil, takže se nic nevybírá ručně. Jeho id se jednou vygeneruje z názvu zařízení a už se nemění.",
       "add_child_device": "Vyberte senzor pro podřízené zařízení s vlastním elektroměrem, nebo spínač, světlo, ventilátor, přehrávač médií, žaluzie či vrata anebo klimatizaci podřízeného zařízení, které odebírá z elektroměru tohoto zařízení. Jeho id se jednou vygeneruje z entity a už se nemění.",
       "device_phase": "Volitelné. Fáze, na kterou je zařízení zapojené podle elektroinstalace domu. Detail domu z ní odhaduje zatížení jednotlivých fází. Jednotlivě se zapojuje jen zařízení nejvyšší úrovně nebo zařízení pod třífázovým zařízením; ostatní přebírají fázi nadřazeného zařízení.",
-      "device_phase_inherited": "Pod jednofázovým nebo nepřiřazeným zařízením je toto zařízení na jeho fázi. Fázi změňte tam."
+      "device_phase_inherited": "Pod jednofázovým nebo nepřiřazeným zařízením je toto zařízení na jeho fázi. Fázi změňte tam.",
+      "inherited_optimizer_default": "Převzato z nastavení optimalizátoru"
     },
     "messages": {
       "reloaded_config": "Uložená konfigurace Helman byla znovu načtena z backendu.",
@@ -603,7 +606,8 @@
       "solar_max_power": "Nejvyšší výkon fotovoltaiky ve wattech. Určuje škálu čar toku výkonu solární elektrárny na kartách a také mez pro vyřazení chybných dat v korekci solárního biasu a maximum uvedené v detailu fotovoltaiky. Ponechte prázdné, pokud je nechcete používat; karty pak použijí výchozí škálu.",
       "battery_max_power": "Nejvyšší nabíjecí či vybíjecí výkon baterie ve wattech: plná škála jejích čar toku výkonu na kartách. Ponechte prázdné pro výchozí hodnotu.",
       "grid_max_power": "Nejvyšší výkon přípojky k síti ve wattech: plná škála jejích čar toku výkonu na kartách. Ponechte prázdné pro výchozí hodnotu.",
-      "battery_reserve_solar_dip_floor_soc": "Nejnižší povolené SoC v drahém okně, pokud předpověď očekává, že slunce vrátí baterii na rezervu před koncem okna. Rezerva pro případ příliš optimistické předpovědi slunce. Prázdné = stejné jako rezerva."
+      "battery_reserve_solar_dip_floor_soc": "Nejnižší povolené SoC v drahém okně, pokud předpověď očekává, že slunce vrátí baterii na rezervu před koncem okna. Rezerva pro případ příliš optimistické předpovědi slunce. Prázdné přebírá nastavení optimalizátoru; pokud není nastavené ani tam, použije rezervu této skupiny.",
+      "battery_reserve_hold_reserve_in_expensive_windows": "Pokud by baterie i po nabití v levném okně klesla v drahém okně pod rezervu (nebo minimum před sluncem), od tohoto slotu zastaví vybíjení a místo něj odebírá ze sítě. Stojí přibližně energii rezervy za drahou cenu; uchová ji pro výpadek sítě."
     },
     "device_filter": {
       "label": "Zobrazit zařízení",

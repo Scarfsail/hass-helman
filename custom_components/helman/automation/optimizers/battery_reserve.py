@@ -8,8 +8,7 @@ ever adds energy.
 
 **Self-gating.** ``reserve_floor_soc`` is registered as a RUN-scope, self-gating
 condition rather than a slot mask, because the floor test runs over the
-*expensive* band while every slot this optimizer writes lies in the *preceding
-cheap* band — a mask of "slots where projected SoC dips below the floor" would
+*expensive* band while cheap bridge slots lie in the *preceding cheap* band — a mask of "slots where projected SoC dips below the floor" would
 mark exactly the slots it never touches. Nor is the value it needs the config
 value: it needs the window's deficit below its required minimum. So the
 condition contributes an all-true mask (keeping OR/candidate algebra and
@@ -43,6 +42,7 @@ from ...scheduling.schedule import (
     build_horizon_end,
     build_horizon_start,
     format_slot_id,
+    parse_slot_id,
 )
 from ..base import ScheduleWriter
 from ..conditions.types import ConditionRailsUnavailable
@@ -101,6 +101,7 @@ GATE_SLOT_AVAILABLE = "slot_available"
 #: The slot lies at or after the latest simulated hold cutoff that still keeps
 #: the expensive window's lowest SoC at the goal.
 GATE_LATEST_CUTOFF = "latest_cutoff"
+GATE_RESERVE_HOLD = "reserve_hold"
 
 
 @dataclass(frozen=True)
@@ -234,6 +235,78 @@ class BatteryReserveOptimizer:
                 planned_actions=planned_actions,
                 emit=emit,
             )
+
+        # Size every cheap bridge first: expensive holds must never reduce the
+        # cheap charge selected for another window.
+        if simulator is not None:
+            for band in bands:
+                if band.level != IMPORT_BAND_LEVEL_EXPENSIVE:
+                    continue
+                for slot_id in horizon_slots_between(
+                    band.start,
+                    band.end,
+                    horizon_start=horizon_start,
+                    horizon_end=horizon_end,
+                ):
+                    resolved = eligibility.at(slot_id)
+                    if (
+                        resolved is None
+                        or not resolved.condition_met
+                        or not resolved.params.get(
+                            "hold_reserve_in_expensive_windows", False
+                        )
+                        or is_user_owned(
+                            writer.document.slots.get(slot_id, {}).get(
+                                CONTROLLABLE_ID_INVERTER
+                            )
+                        )
+                    ):
+                        continue
+                    trajectory = {
+                        dt_util.as_utc(key): soc
+                        for key, soc in simulator.simulate(
+                            {}, action_overrides=planned_actions
+                        ).soc_by_bucket.items()
+                    }
+                    reserve = resolved.condition_value("reserve_floor_soc")
+                    required = _required_soc(
+                        trajectory, band.start, band.end, reserve,
+                        resolved.params.get("solar_dip_floor_soc", reserve),
+                    )
+                    bucket = dt_util.as_utc(parse_slot_id(slot_id))
+                    projected = trajectory.get(bucket)
+                    minimum = required.get(bucket)
+                    if (
+                        projected is None
+                        or minimum is None
+                        or projected >= minimum - 1e-6
+                    ):
+                        continue
+                    action = ScheduleAction(kind=SCHEDULE_ACTION_STOP_DISCHARGING)
+                    writer.set(slot_id, action)
+                    planned_actions[bucket] = action
+                    emit.applied(
+                        slot_id,
+                        gates=[
+                            _Gate(
+                                GATE_RESERVE_HOLD,
+                                STATE_TRUE,
+                                {
+                                    "requiredSoc": minimum,
+                                    "projectedSoc": projected,
+                                    "solarRecovers": any(
+                                        bucket < key < dt_util.as_utc(band.end)
+                                        and soc >= reserve
+                                        for key, soc in trajectory.items()
+                                    ),
+                                },
+                                role="veto",
+                            )
+                        ],
+                        floor=_FloorResolution(
+                            STATE_TRUE, reserve, projected, resolved.group.index
+                        ),
+                    )
 
         emit.flush()
         return writer.flush()

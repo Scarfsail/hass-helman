@@ -206,9 +206,33 @@ There is no surplus to distribute. Everything an appliance runs will come from t
 
 Phase 1 still does the same real work here, through a different channel. `battery_reserve` does not read surplus at all — it reads the **projected battery SoC trajectory** and decides whether an expensive import window needs bridging with cheap energy bought beforehand. That trajectory is built from phase 1's appliance demand:
 
-Import-price bands are classified per local calendar day, but a continuous price window may span midnight and is treated as one window by `battery_reserve`. It keeps the reserve floor through the cheap band before every expensive window as well as through the window itself. If the battery enters a slot of the cheap band below the floor, the first such slot charges it back to the floor and the rest of the band holds it there (stop discharging), even when the expensive window that follows is already covered. The bridge for the expensive window uses a required minimum for each bucket: `reserve_floor_soc`, or the optional `solar_dip_floor_soc` when a later bucket in the same expensive window recovers to the reserve. Empty means the reserve. The solar dip floor must not exceed any group's reserve and applies only inside expensive windows. For example, with a 20% reserve, a 12% dip floor, a 10 kWh battery and 0.5 kW load, a battery entering 06:00 at 25% can dip to 15% at 08:00 before solar lifts it to 90%. No energy is bought for that dip; without the setting, the optimizer buys energy to enter at 30%. On a dark day without recovery, every bucket still requires 20%.
+Import-price bands are classified per local calendar day, but a continuous price window may span midnight and is treated as one window by `battery_reserve`. It keeps the reserve floor through the cheap band before every expensive window as well as through the window itself. If the battery enters a slot of the cheap band below the floor, the first such slot charges it back to the floor and the rest of the band holds it there (stop discharging), even when the expensive window that follows is already covered. The bridge for the expensive window uses a required minimum for each bucket: `reserve_floor_soc`, or the optional `solar_dip_floor_soc` when a later bucket in the same expensive window recovers to the reserve. Empty means the reserve. Each group's effective solar dip floor must not exceed its reserve and applies only inside expensive windows. For example, with a 20% reserve, a 12% dip floor, a 10 kWh battery and 0.5 kW load, a battery entering 06:00 at 25% can dip to 15% at 08:00 before solar lifts it to 90%. No energy is bought for that dip; without the setting, the optimizer buys energy to enter at 30%. On a dark day without recovery, every bucket still requires 20%.
 
 Sizing uses the smallest difference between simulated SoC and its required minimum. It first preserves battery energy with the latest cheap-band hold cutoff, then charges the residual in the latest feasible cheap slots at the lowest sufficient inverter target. Two extra 15-minute charge opportunities are included by default without raising the target. If the requirement cannot be reached, it aims for the best achievable difference and reports the existing cap/capacity limit. When the battery's minimum clamp hides an improvement in expensive-window grid import, the maximal cheap charge is retained. The fallback for incomplete simulation uses the same required-minimum rule on the forecast rail. The dip floor trusts the solar forecast; its buffer covers small forecast misses.
+
+The solar dip floor and expensive-window hold can be set next to the reserve
+floor in each condition group. Empty solar dip floor inherits the optimizer
+default; the hold switch can override it on or off, and “Use optimizer default”
+restores inheritance.
+
+With `hold_reserve_in_expensive_windows: true` (default: false), Battery reserve
+protects the required minimum in expensive windows. It first sizes the cheap
+charge without any expensive hold, then stops discharging only in slots where
+that plan still falls below the reserve, or the solar dip floor before a forecast
+recovery. The hold imports only the energy the reserve would otherwise have
+given up, at the expensive price; the next cheap band has that much less to
+recharge. User-owned slots are preserved. Holds require the battery simulator.
+
+For reserve 20%, solar dip floor 12%, and holds enabled:
+
+- On a heat-pump day with 1 kW load, even 100% at 06:00 may reach 20% at
+  14:00. The cheap plan charges to the cap, then holds 14:00–22:00. Without
+  the setting, the battery drains to its minimum at 15:00.
+- After a sunny day filled the battery, more cheap charging cannot lift the
+  evening low point. A crossing at 20:00 holds 20:00–22:00.
+- If solar arrives 1.5 hours late, the night plan may have needed no hold.
+  A fresh morning run sees the dip below 12% and holds until solar takes over.
+
 
 - It projects the battery *including* the 3.8 kWh of appliance load phase 1 placed, sees it dip below the reserve floor during the evening peak, and buys enough cheap energy beforehand to bridge it.
 - Had phase 1 not run first — a bare house instead — the battery would look 3.8 kWh healthier than it will be, no bridge would be bought, and the evening peak would be covered at peak import prices. That is exactly issue #116, and it is what running appliances for real in phase 1 (rather than restoring a previous run's placement) closes for cold start too — see Example 5.

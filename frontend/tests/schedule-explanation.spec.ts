@@ -398,3 +398,20 @@ test.describe("slot explanation, the tab strip", () => {
         await expect(panel(page).locator("scheduling-logic-diagram")).toHaveCount(0);
     });
 });
+
+
+test("reserve hold gate shows its label and required minimum", async ({ page }) => {
+    const payload = explanationRows({ controllableId: "inverter", date: DATE,
+        slotIds: SLOT_IDS, runAt: RUN_AT, optimizers: [{ optimizerId: "battery_reserve",
+            slots: [{ slotId: SLOT_IDS[0], verdict: "execute", winningOptimizer: "battery_reserve",
+                matchedGroupIndex: 0, groups: [{ conditions: [{ key: "reserve_floor_soc", scope: "window", state: "true", value: 20 }] }],
+                gates: [{ key: "reserve_hold", role: "veto", state: "true", params: { projectedSoc: 18, requiredSoc: 20, solarRecovers: false } }] }] }] });
+    await mountPanel(page, payload, 0);
+    await page.evaluate(() => {
+        const element = document.querySelector("scheduling-explanation-panel") as HTMLElement & { localize: unknown };
+        element.localize = Object.assign((key: string) => key === "scheduling.explanation.condition.reserve_hold" ? "Reserve hold" : key,
+            { has: (key: string) => key === "scheduling.explanation.condition.reserve_hold" });
+    });
+    await expect(panel(page)).toContainText("Reserve hold");
+    await expect(panel(page)).toContainText("18/20 %");
+});
