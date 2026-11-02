@@ -49,7 +49,7 @@ class Field:
     """One config key: its type, its bounds and (for objects) its children."""
 
     key: str
-    type: str  # number | integer | time | string | day_classifications | object | object_list
+    type: str  # number | integer | boolean | time | string | day_classifications | object | object_list
     required: bool = True
     default: Any = MISSING
     minimum: float | None = None
@@ -99,6 +99,10 @@ class Field:
 
 def time_hhmm(key: str, **kwargs: Any) -> Field:
     return Field(key=key, type="time", **kwargs)
+
+
+def boolean(key: str, **kwargs: Any) -> Field:
+    return Field(key=key, type="boolean", **kwargs)
 
 
 def soc(key: str, **kwargs: Any) -> Field:
@@ -234,6 +238,12 @@ def read_field(
         else:
             return MISSING
 
+    if field.type == "boolean":
+        if not isinstance(value, bool):
+            raise AutomationConfigError(
+                path=path, code="invalid_type", message=f"{path} must be a boolean"
+            )
+        return value
     if field.type == "object":
         return read_fields(field.fields, value, path=path, partial=partial)
     if field.type == "object_list":

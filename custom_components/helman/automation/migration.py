@@ -1656,6 +1656,17 @@ def _migrate_v28_to_v29(document: dict[str, Any]) -> tuple[dict[str, Any], list[
     return (document, [])
 
 
+def _migrate_v29_to_v30(document: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Rename the outage-reserve optimizer, preserving its authored settings."""
+    return _migrate_optimizers(document, _rename_battery_reserve, bucket="system_optimizers")
+
+
+def _rename_battery_reserve(optimizer: dict[str, Any]) -> dict[str, Any]:
+    if optimizer.get("kind") == "charge_from_grid":
+        return {**optimizer, "kind": "battery_reserve"}
+    return optimizer
+
+
 def _slug_id(name: Any, taken: set[str], fallback: str) -> str:
     """A stable id slugged from ``name``, unique within ``taken`` (which it joins).
 
@@ -1703,6 +1714,7 @@ _MIGRATIONS = {
     26: _migrate_v26_to_v27,
     27: _migrate_v27_to_v28,
     28: _migrate_v28_to_v29,
+    29: _migrate_v29_to_v30,
 }
 
 

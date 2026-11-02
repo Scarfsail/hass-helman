@@ -23,7 +23,7 @@
       "add_import_price_window": "Add import price window",
       "add_export_price_optimizer": "Add export price optimizer",
       "add_charge_hold_optimizer": "Add charge hold optimizer",
-      "add_charge_from_grid_optimizer": "Add charge from grid optimizer",
+      "add_battery_reserve_optimizer": "Add battery reserve optimizer",
       "add_appliance_runtime_optimizer": "Add appliance runtime optimizer",
       "add_vehicle": "Add vehicle",
       "add_use_mode": "Add use mode",
@@ -39,7 +39,8 @@
       "cancel": "Cancel",
       "apply_suggestions": "Apply suggestions",
       "import_energy": "Import from Energy dashboard",
-      "apply": "Apply"
+      "apply": "Apply",
+      "use_optimizer_default": "Use optimizer default"
     },
     "status": {
       "loading_config": "Loading stored config...",
@@ -304,7 +305,9 @@
       "vendor_device": "Device",
       "max_allowed_export_power": "Max allowed export power",
       "max_power": "Max power",
-      "device_phase": "House phase"
+      "device_phase": "House phase",
+      "solar_dip_floor_soc": "Solar dip floor SoC %",
+      "hold_reserve_in_expensive_windows": "Hold reserve in expensive windows"
     },
     "entity_status": {
       "value": "{value} {unit}",
@@ -381,7 +384,8 @@
       "add_device_profile": "The profile provides its entities, so nothing is picked by hand. Its id is generated from the device's name once and never changes.",
       "add_child_device": "Pick a sensor for a child with its own meter, or the switch, light, fan, media player, cover or climate entity of a child that draws from this device's meter. Its id is generated from the entity once and never changes.",
       "device_phase": "Optional. The phase this device is wired to, as your house wiring says. The house detail estimates each phase's load from it. Only a top-level device or one under a three-phase device is wired individually; the rest follow the device above them.",
-      "device_phase_inherited": "Under a single-phase or unassigned device, this device is on that device's phase. Change the phase there."
+      "device_phase_inherited": "Under a single-phase or unassigned device, this device is on that device's phase. Change the phase there.",
+      "inherited_optimizer_default": "Inherited from optimizer settings"
     },
     "messages": {
       "reloaded_config": "Reloaded the stored Helman config from the backend.",
@@ -423,7 +427,7 @@
       "history_average": "History average",
       "export_price": "Export price",
       "charge_hold": "Charge hold",
-      "charge_from_grid": "Charge from grid",
+      "battery_reserve": "Battery reserve",
       "appliance_runtime": "Appliance runtime",
       "classification_surplus": "Surplus",
       "classification_tight": "Tight",
@@ -543,7 +547,7 @@
       "day_context_surplus_ratio": "Predicted solar/consumption ratio at or above which a day is classified surplus (subject to the baseline-full guard).",
       "charge_hold_target_soc": "Battery-first target SoC (%). The hold sizes the charge needed to reach this SoC from the current one.",
       "charge_hold_margin_pct": "Safety margin (%) added on top of the needed energy when deciding the latest safe release slot.",
-      "charge_from_grid_reserve_floor_soc": "Reserve floor SoC (%). Expensive windows where the simulated SoC dips below this are bridged from the grid.",
+      "battery_reserve_reserve_floor_soc": "Outage reserve (%). Kept in cheap windows, and cheap energy is bought ahead of expensive windows so the battery does not drop below it.",
       "charge_start_margin_slots": "Additional 15-minute charge opportunities before the required latest slots. This advances charging without raising the target.",
       "appliance_runtime_daily_minimum": "Guarantee a minimum number of hours per day, placed on the cheapest slots. Leave off to run on every slot the conditions allow instead.",
       "appliance_runtime_daily_minimum_min_hours_per_day": "Minimum hours the appliance should run each day; already-observed runtime is subtracted.",
@@ -601,7 +605,9 @@
       "grid_max_allowed_export_power": "The most your contract with the grid provider lets you export, in watts; 0 for a no-export contract. Take it from your grid contract: it is a fact of your site, not of the hardware. Required with a hardware profile that drives the inverter's modes, which restores the inverter's export limit to it after a stop-export slot. Unused otherwise.",
       "solar_max_power": "The most the solar array produces, in watts. It scales the solar power-flow lines on the cards, and also sets the solar-bias data-glitch cap and the maximum shown in the solar detail. Leave empty to keep those two off; the cards then scale to the default.",
       "battery_max_power": "The most the battery charges or discharges at, in watts: the full scale of its power-flow lines on the cards. Leave empty for the default.",
-      "grid_max_power": "The most the grid connection carries, in watts: the full scale of its power-flow lines on the cards. Leave empty for the default."
+      "grid_max_power": "The most the grid connection carries, in watts: the full scale of its power-flow lines on the cards. Leave empty for the default.",
+      "battery_reserve_solar_dip_floor_soc": "Lowest SoC allowed inside an expensive window when the forecast says solar brings the battery back to the reserve before the window ends. A buffer in case the solar forecast is too optimistic. Empty inherits the optimizer setting; if neither is set, uses this group’s reserve.",
+      "battery_reserve_hold_reserve_in_expensive_windows": "When the battery would still fall below the reserve (or the solar dip floor) inside an expensive window despite the cheap-window charge, stop discharging from that slot and import instead. Costs roughly the reserve energy at the expensive price; keeps it for a grid outage."
     },
     "device_filter": {
       "label": "Show devices",

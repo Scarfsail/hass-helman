@@ -128,6 +128,22 @@ class OptimizerSpec:
         }
 
 
+def _validate_battery_reserve(
+    params: Mapping[str, Any],
+    condition_values: Mapping[str, Any] | None,
+    *,
+    path: str,
+) -> None:
+    dip_floor = params.get("solar_dip_floor_soc")
+    if condition_values is not None and dip_floor is not None:
+        if dip_floor > condition_values["reserve_floor_soc"]:
+            raise OptimizerConfigError(
+                path=f"{path}.solar_dip_floor_soc",
+                code="invalid_value",
+                message="Solar dip floor must not exceed the reserve floor",
+            )
+
+
 def _validate_window(
     params: Mapping[str, Any],
     _condition_values: Mapping[str, Any] | None = None,
@@ -307,12 +323,15 @@ OPTIMIZER_SPECS: dict[str, OptimizerSpec] = {
             },
         ),
         OptimizerSpec(
-            kind="charge_from_grid",
+            kind="battery_reserve",
             target=_INVERTER_TARGET,
             params=(
                 F.non_negative_int("charge_start_margin_slots", default=2),
+                F.soc("solar_dip_floor_soc", required=False),
+                F.boolean("hold_reserve_in_expensive_windows", default=False),
             ),
             condition_types=("reserve_floor_soc",),
+            validate=_validate_battery_reserve,
             param_scope=Scope.RUN,
             new_draft={
                 "target": {"controllable_id": CONTROLLABLE_ID_INVERTER},

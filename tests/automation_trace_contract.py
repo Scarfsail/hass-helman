@@ -25,7 +25,7 @@ CONTRACT_TESTED_KINDS: frozenset[str] = frozenset(
     {
         "export_price",
         "charge_hold",
-        "charge_from_grid",
+        "battery_reserve",
         "appliance_runtime",
     }
 )

@@ -14,7 +14,7 @@ used, with the candidate placements' demand added to the house.
 feasible, and ``system_mask &= mask`` assumes slots are independent. The
 condition is therefore self-gating: it contributes an all-true mask and the
 optimizer does the work, exactly as ``reserve_floor_soc`` does for
-``charge_from_grid``.
+``battery_reserve``.
 """
 
 from __future__ import annotations

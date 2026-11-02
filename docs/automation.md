@@ -31,11 +31,13 @@ You configure a list of optimizers. Each one owns exactly one **lane** — one c
 | Kind | Lane | What it decides |
 | --- | --- | --- |
 | `charge_hold` | inverter | which slots to charge the battery in, so the rest is exported at better prices |
-| `charge_from_grid` | inverter | whether to buy cheap grid energy ahead of an expensive window |
+| `battery_reserve` (Battery reserve) | inverter | maintain an outage reserve using cheap energy ahead of expensive windows |
 | `export_price` | inverter | when to stop exporting because the price is too low |
 | `appliance_runtime` | one appliance | when that appliance runs, and for how long |
 
-They run **in the order you configured them**, one after another. There is no hard-coded priority — position in the list is the priority. Order is scoped to two separate buckets, not one flat list: **appliance optimizers** (`appliance_runtime`) and **system optimizers** (`charge_hold`, `charge_from_grid`, `export_price` — the inverter lane). Membership is derived from what each kind affects, never a hand-written list; you order each bucket independently, but the bucket a kind belongs to is fixed.
+They run **in the order you configured them**, one after another. There is no hard-coded priority — position in the list is the priority. Order is scoped to two separate buckets, not one flat list: **appliance optimizers** (`appliance_runtime`) and **system optimizers** (`charge_hold`, `battery_reserve`, `export_price` — the inverter lane). Membership is derived from what each kind affects, never a hand-written list; you order each bucket independently, but the bucket a kind belongs to is fixed.
+
+Existing configs are migrated automatically to the `battery_reserve` kind.
 
 ### One document, stripped once
 
@@ -68,7 +70,7 @@ The actual fix is not a better proxy. It is running the appliance optimizers **t
 | 2 | system optimizers, in order | the total phase-1 appliance demand | yes |
 | 3 | appliance optimizers, in order, again | earlier appliances (this phase) + the phase-2 inverter plan | yes |
 
-Phase 1 is a real run of every appliance optimizer against an empty appliance bucket and no inverter actions — not a restore, not a guess. It produces a genuine, if provisional, placement for every appliance, and the system optimizers in phase 2 read the *sum* of those placements as house demand. Phase 3 then strips the appliance lanes once — clearing phase 1's estimate — and re-plans each appliance for real, this time able to see the battery's phase-2 decisions (a `charge_hold` slot, a `charge_from_grid` bridge). Two optimizers on the same appliance lane compose in list order within a phase exactly as they did before: the later one sees the earlier one's writes and may extend or overwrite them.
+Phase 1 is a real run of every appliance optimizer against an empty appliance bucket and no inverter actions — not a restore, not a guess. It produces a genuine, if provisional, placement for every appliance, and the system optimizers in phase 2 read the *sum* of those placements as house demand. Phase 3 then strips the appliance lanes once — clearing phase 1's estimate — and re-plans each appliance for real, this time able to see the battery's phase-2 decisions (a `charge_hold` slot, a `battery_reserve` bridge). Two optimizers on the same appliance lane compose in list order within a phase exactly as they did before: the later one sees the earlier one's writes and may extend or overwrite them.
 
 Only phases 2 and 3 are traced and reported in the run's explanation. Phase 1 is a demand estimate, not a decision anyone should read as "the plan" — its placements are superseded by phase 3 before the run ends, and every optimizer contributes exactly one trace step and one day-context band regardless, keyed for phase 3's reading.
 
@@ -202,9 +204,35 @@ bare surplus   0.1    0.3    0.2    0.0    0.0
 
 There is no surplus to distribute. Everything an appliance runs will come from the battery or the grid, so placement is decided by price and by the self-sustainability limits rather than by solar coverage.
 
-Phase 1 still does the same real work here, through a different channel. `charge_from_grid` does not read surplus at all — it reads the **projected battery SoC trajectory** and decides whether an expensive import window needs bridging with cheap energy bought beforehand. That trajectory is built from phase 1's appliance demand:
+Phase 1 still does the same real work here, through a different channel. `battery_reserve` does not read surplus at all — it reads the **projected battery SoC trajectory** and decides whether an expensive import window needs bridging with cheap energy bought beforehand. That trajectory is built from phase 1's appliance demand:
 
-Import-price bands are classified per local calendar day, but a continuous price window may span midnight and is treated as one window by `charge_from_grid`. It keeps the reserve floor through the cheap band before every expensive window as well as through the window itself. If the battery enters a slot of the cheap band below the floor, the first such slot charges it back to the floor and the rest of the band holds it there (stop discharging), even when the expensive window that follows is already covered. The bridge for the expensive window is then judged by the **lowest simulated SoC over the whole window**, not by the SoC it is entered with, so a projection pinned at the battery's min SoC cannot hide the deficit. It first preserves battery energy by stopping discharge at the latest time that still keeps that minimum at the floor, then charges only the simulated residual in the latest feasible cheap slots, at the lowest inverter target that does it (up to the battery's max SoC). Two extra 15-minute charge opportunities are included by default as a safety margin; they do not raise the target. When the floor cannot be kept, the plan places the fewest actions that reach the best minimum this cheap band can reach and reports the existing cap/capacity limit; when even the maximal plan leaves the minimum at the battery's min SoC but cuts the window's grid import, every cheap slot charges to the max SoC; when no action changes the dip at all — one after solar has already filled the battery — nothing is bought. Without a complete simulated horizon the optimizer falls back to sizing the charge from the forecast's SoC rail, as the SoC entering the window plus the dip below the floor.
+Import-price bands are classified per local calendar day, but a continuous price window may span midnight and is treated as one window by `battery_reserve`. It keeps the reserve floor through the cheap band before every expensive window as well as through the window itself. If the battery enters a slot of the cheap band below the floor, the first such slot charges it back to the floor and the rest of the band holds it there (stop discharging), even when the expensive window that follows is already covered. The bridge for the expensive window uses a required minimum for each bucket: `reserve_floor_soc`, or the optional `solar_dip_floor_soc` when a later bucket in the same expensive window recovers to the reserve. Empty means the reserve. Each group's effective solar dip floor must not exceed its reserve and applies only inside expensive windows. For example, with a 20% reserve, a 12% dip floor, a 10 kWh battery and 0.5 kW load, a battery entering 06:00 at 25% can dip to 15% at 08:00 before solar lifts it to 90%. No energy is bought for that dip; without the setting, the optimizer buys energy to enter at 30%. On a dark day without recovery, every bucket still requires 20%.
+
+Sizing uses the smallest difference between simulated SoC and its required minimum. It first preserves battery energy with the latest cheap-band hold cutoff, then charges the residual in the latest feasible cheap slots at the lowest sufficient inverter target. Two extra 15-minute charge opportunities are included by default without raising the target. If the requirement cannot be reached, it aims for the best achievable difference and reports the existing cap/capacity limit. When the battery's minimum clamp hides an improvement in expensive-window grid import, the maximal cheap charge is retained. The fallback for incomplete simulation uses the same required-minimum rule on the forecast rail. The dip floor trusts the solar forecast; its buffer covers small forecast misses.
+
+The solar dip floor and expensive-window hold can be set next to the reserve
+floor in each condition group. Empty solar dip floor inherits the optimizer
+default; the hold switch can override it on or off, and “Use optimizer default”
+restores inheritance.
+
+With `hold_reserve_in_expensive_windows: true` (default: false), Battery reserve
+protects the required minimum in expensive windows. It first sizes the cheap
+charge without any expensive hold, then stops discharging only in slots where
+that plan still falls below the reserve, or the solar dip floor before a forecast
+recovery. The hold imports only the energy the reserve would otherwise have
+given up, at the expensive price; the next cheap band has that much less to
+recharge. User-owned slots are preserved. Holds require the battery simulator.
+
+For reserve 20%, solar dip floor 12%, and holds enabled:
+
+- On a heat-pump day with 1 kW load, even 100% at 06:00 may reach 20% at
+  14:00. The cheap plan charges to the cap, then holds 14:00–22:00. Without
+  the setting, the battery drains to its minimum at 15:00.
+- After a sunny day filled the battery, more cheap charging cannot lift the
+  evening low point. A crossing at 20:00 holds 20:00–22:00.
+- If solar arrives 1.5 hours late, the night plan may have needed no hold.
+  A fresh morning run sees the dip below 12% and holds until solar takes over.
+
 
 - It projects the battery *including* the 3.8 kWh of appliance load phase 1 placed, sees it dip below the reserve floor during the evening peak, and buys enough cheap energy beforehand to bridge it.
 - Had phase 1 not run first — a bare house instead — the battery would look 3.8 kWh healthier than it will be, no bridge would be bought, and the evening peak would be covered at peak import prices. That is exactly issue #116, and it is what running appliances for real in phase 1 (rather than restoring a previous run's placement) closes for cold start too — see Example 5.
@@ -229,7 +257,7 @@ Under the phased run this scenario is not special at all. Phase 1 runs the appli
 
 Overcast day, an expensive import window at 17:00–20:00, `reserve_floor_soc` at 20%.
 
-Phase 1 places the boiler at 13:00. Phase 2 (`charge_from_grid`) projects the battery's minimum SoC across the window at 24% including that placement, so the projected dip is non-negative and it buys nothing. Phase 3, now able to see `charge_hold`'s holds, moves the boiler to 18:00 — inside the expensive window, because from the appliance optimizer's own perspective that is a better price-for-runtime trade. The projected minimum for the window is now 16%: the plan ships breaching the reserve floor by 4 points.
+Phase 1 places the boiler at 13:00. Phase 2 (`battery_reserve`) projects the battery's minimum SoC across the window at 24% including that placement, so the projected dip is non-negative and it buys nothing. Phase 3, now able to see `charge_hold`'s holds, moves the boiler to 18:00 — inside the expensive window, because from the appliance optimizer's own perspective that is a better price-for-runtime trade. The projected minimum for the window is now 16%: the plan ships breaching the reserve floor by 4 points.
 
 This is not a regression introduced by phasing. It is the **same hazard** the single-pass pipeline already had — there, the equivalent trigger was the boiler having sat at 13:00 in the *previous* run's plan and moving in *this* run, for the same underlying reason: the optimizer sizing the hold cannot see a placement decided after it. Phasing does not close this; #274 classifies it (a `downstream_introduced` reserve-floor breach, in the vocabulary of that classifier) and #272 re-runs that classifier's scenario suite to confirm phasing does not make it more frequent or more severe. The repair — giving phase 2 visibility into what phase 3 might still move, or re-checking the floor after phase 3 — is deliberately a separate, later piece of work.
 

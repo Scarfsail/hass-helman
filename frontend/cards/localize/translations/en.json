@@ -812,6 +812,12 @@
         "final_appliance_placement": "Final appliance placement",
         "unavailable": "provisional; no drill-down data",
         "current": "selected optimizer runs here"
+      },
+      "condition": {
+        "reserve_hold": "Reserve hold"
+      },
+      "condition_detail": {
+        "reserve_hold": "Stops discharging when the cheap-window plan still leaves the battery below its required minimum; imports instead to preserve the outage reserve."
       }
     },
     "forecast": {

@@ -136,7 +136,7 @@ class PlainRowTests(unittest.TestCase):
             optimizers=(
                 OptimizerExplanation(
                     optimizer_id="grid-1",
-                    kind="charge_from_grid",
+                    kind="battery_reserve",
                     slots=slots,
                 ),
                 OptimizerExplanation(
@@ -164,7 +164,7 @@ class PlainRowTests(unittest.TestCase):
             self._rows(),
             {
                 "optimizerId": "grid-1",
-                "kind": "charge_from_grid",
+                "kind": "battery_reserve",
                 "phase": 2,
                 "status": "ok",
                 "conditions": [
@@ -801,7 +801,7 @@ class ExplanationBookTests(unittest.TestCase):
                     for optimizer_id, kind in (
                         ("export", "export_price"),
                         ("hold", "charge_hold"),
-                        ("grid", "charge_from_grid"),
+                        ("grid", "battery_reserve"),
                     )
                 ),
             )

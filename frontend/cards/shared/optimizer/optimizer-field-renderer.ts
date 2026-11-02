@@ -82,6 +82,34 @@ export function renderSchemaField(
     const inherited =
         inheritFrom === undefined ? undefined : host.getValue(inheritFrom);
 
+    if (field.type === "boolean") {
+        const current = host.getValue(path);
+        const overridden = typeof current === "boolean";
+        return html`
+            <div class="field">
+                <div class="field-label-row">
+                    <label>${host.t(labelKey)}</label>
+                    ${host.renderHelpIcon(labelKey, helpKey)}
+                </div>
+                <div class="inline-actions">
+                <span class="summary-toggle"><ha-switch
+                    .checked=${(overridden ? current : inherited ?? field.default) === true}
+                    aria-label=${host.t(labelKey)}
+                    @change=${(event: Event) => {
+                        host.setValue(path, (event.currentTarget as HTMLInputElement).checked);
+                    }}
+                ></ha-switch></span>
+                ${inheritFrom !== undefined ? html`
+                    <button type="button" ?disabled=${!overridden}
+                        @click=${() => host.setValue(path, undefined)}>
+                        ${host.t("editor.actions.use_optimizer_default")}
+                    </button>
+                    ${!overridden ? html`<span class="helper">${host.t("editor.helpers.inherited_optimizer_default")}</span>` : nothing}
+                ` : nothing}
+                </div>
+            </div>
+        `;
+    }
     if (field.type === "day_classifications") {
         return host.renderDayClassificationField(path, labelKey, helpKey);
     }

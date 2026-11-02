@@ -1163,7 +1163,7 @@ class ResolveExecutedScheduleActionTests(unittest.TestCase):
                         kind=kind,
                         target_soc=50,
                         set_by="automation",
-                        optimizer="charge_from_grid",
+                        optimizer="battery_reserve",
                     ),
                     current_soc=current_soc,
                 )
@@ -1174,7 +1174,7 @@ class ResolveExecutedScheduleActionTests(unittest.TestCase):
                     ScheduleAction(
                         kind=expected_kind,
                         set_by="automation",
-                        optimizer="charge_from_grid",
+                        optimizer="battery_reserve",
                     ),
                 )
 

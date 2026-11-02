@@ -1081,7 +1081,7 @@ class _SelfSustainabilityGate:
         battery is empty or power-limited (``battery_slot_simulation``). Which
         one a placement lands on is physics, so budgeting only one of them would
         leave the other ungoverned. In particular SoC alone is not enough:
-        ``charge_from_grid`` charging to a target simply imports one more kWh to
+        ``battery_reserve`` charging to a target simply imports one more kWh to
         still hit it, leaving end-of-day SoC identical while the appliance ran on
         imported energy.
 

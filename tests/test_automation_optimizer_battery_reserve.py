@@ -36,9 +36,9 @@ from custom_components.helman.automation.day_context import (  # noqa: E402
     DayContext,
     ImportBand,
 )
-from custom_components.helman.automation.optimizers.charge_from_grid import (  # noqa: E402
+from custom_components.helman.automation.optimizers.battery_reserve import (  # noqa: E402
     _build_import_band_timeline,
-    build_charge_from_grid_optimizer,
+    build_battery_reserve_optimizer,
 )
 from _fakes import make_optimization_context  # noqa: E402
 from custom_components.helman.automation.snapshot import (  # noqa: E402
@@ -172,7 +172,7 @@ def _make_snapshot(
 def _make_config(*, reserve_floor_soc: int = 30) -> OptimizerInstanceConfig:
     return make_optimizer_config(
         id="grid-bridge-charge",
-        kind="charge_from_grid",
+        kind="battery_reserve",
         params={},
         conditions=[{"reserve_floor_soc": reserve_floor_soc}],
     )
@@ -228,18 +228,82 @@ _BANDS = (
 )
 
 
-class ChargeFromGridOptimizerTests(unittest.TestCase):
+class BatteryReserveOptimizerTests(unittest.TestCase):
+    def test_solar_dip_floor_rejects_values_above_any_group_reserve(self) -> None:
+        with self.assertRaises(AutomationConfigError) as raised:
+            make_optimizer_config(
+                id="reserve", kind="battery_reserve",
+                params={"solar_dip_floor_soc": 21},
+                conditions=[{"reserve_floor_soc": 30}, {"reserve_floor_soc": 20}],
+            )
+        self.assertEqual(raised.exception.code, "invalid_value")
+        self.assertTrue(raised.exception.path.endswith("params.solar_dip_floor_soc"))
+
+    def _solar_morning(self, *, dip_floor=None, minimum=15, recovery=True, rail=False):
+        bands = (
+            ImportBand(level="cheap", start=_at(5), end=_at(6)),
+            ImportBand(level="expensive", start=_at(6), end=_at(12)),
+        )
+        initial = minimum + 10
+        series = []
+        soc = initial
+        for index in range(48 * 4):
+            at = REFERENCE_TIME + timedelta(minutes=15 * index)
+            house = 0.125 if 6 <= at.hour < 8 else 0.0
+            solar = 0.9375 if recovery and 8 <= at.hour < 10 else 0.0
+            soc = max(10, min(100, soc + (solar - house) * 10))
+            series.append({"timestamp": at.isoformat(timespec="seconds"),
+                           "durationHours": 0.25, "solarKwh": solar,
+                           "baselineHouseKwh": house, "socPct": soc})
+        snapshot = _make_snapshot(soc_series=series,
+            import_points=_import_points({5: 2, 6: 6, 12: 4}), bands=bands)
+        snapshot = _with_real_battery(snapshot, soc=initial, battery_max_soc=100)
+        config = make_optimizer_config(id="reserve", kind="battery_reserve",
+            params={} if dip_floor is None else {"solar_dip_floor_soc": dip_floor},
+            conditions=[{"reserve_floor_soc": 20}])
+        if rail:
+            with patch(
+                "custom_components.helman.automation.optimizers.self_sustainability.build_horizon_simulator",
+                return_value=None,
+            ):
+                return run_optimizer_with_trace(build_battery_reserve_optimizer(config),
+                    snapshot, config, reference_time=REFERENCE_TIME)
+        return run_optimizer_with_trace(build_battery_reserve_optimizer(config),
+            snapshot, config, reference_time=REFERENCE_TIME)
+
+    def test_solar_recovered_morning_needs_no_charge_with_dip_floor(self) -> None:
+        result, _ = self._solar_morning(dip_floor=12)
+        self.assertEqual(result.slots, {})
+        result, _ = self._solar_morning()
+        self.assertTrue(_charge_slots(result))
+
+    def test_solar_recovered_deeper_dip_sizes_target_to_dip_floor(self) -> None:
+        result, _ = self._solar_morning(dip_floor=12, minimum=10)
+        self.assertEqual(set(_charge_slots(result).values()), {22})
+
+    def test_no_recovery_keeps_reserve_sizing(self) -> None:
+        result, _ = self._solar_morning(dip_floor=12, recovery=False)
+        original, _ = self._solar_morning(recovery=False)
+        self.assertEqual(_charge_slots(result), _charge_slots(original))
+        self.assertTrue(_charge_slots(result))
+
+    def test_rail_only_morning_uses_solar_dip_floor(self) -> None:
+        result, _ = self._solar_morning(dip_floor=12, rail=True)
+        self.assertEqual(result.slots, {})
+        result, _ = self._solar_morning(rail=True)
+        self.assertTrue(_charge_slots(result))
+
     def test_charge_start_margin_slots_defaults_and_rejects_invalid_values(self) -> None:
         defaulted = make_optimizer_config(
             id="grid-bridge-charge",
-            kind="charge_from_grid",
+            kind="battery_reserve",
             params={},
             conditions=[{"reserve_floor_soc": 30}],
         )
         self.assertEqual(defaulted.params["charge_start_margin_slots"], 2)
         disabled = make_optimizer_config(
             id="grid-bridge-charge",
-            kind="charge_from_grid",
+            kind="battery_reserve",
             params={"charge_start_margin_slots": 0},
             conditions=[{"reserve_floor_soc": 30}],
         )
@@ -247,7 +311,7 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
         with self.assertRaises(AutomationConfigError):
             make_optimizer_config(
                 id="grid-bridge-charge",
-                kind="charge_from_grid",
+                kind="battery_reserve",
                 params={"charge_start_margin_slots": -1},
                 conditions=[{"reserve_floor_soc": 30}],
             )
@@ -257,7 +321,7 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(AutomationConfigError):
                 make_optimizer_config(
                     id="grid-bridge-charge",
-                    kind="charge_from_grid",
+                    kind="battery_reserve",
                     params={key: 10},
                     conditions=[{"reserve_floor_soc": 30}],
                 )
@@ -293,7 +357,7 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
             for slot_actions in result.slots.values()
             if inverter_action(slot_actions).set_by == "automation"
         }
-        self.assertEqual(optimizers, {"charge_from_grid"})
+        self.assertEqual(optimizers, {"battery_reserve"})
 
     def test_simulation_does_not_restore_inactive_document_action(self) -> None:
         inactive = ScheduleDocument(slots={
@@ -435,7 +499,7 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
         # with the 07:30 point (45), so the target is 45 + dip 10 = 55.
         soc = _soc_series({0: 45, 6: 45, 8: 40, 9: 20, 10: 60})
         prices = _import_points({6: 2.0, 8: 6.0})
-        result = build_charge_from_grid_optimizer(_make_config()).optimize(
+        result = build_battery_reserve_optimizer(_make_config()).optimize(
             _make_snapshot(soc_series=soc, import_points=prices, bands=_BANDS),
             _make_config(),
         )
@@ -539,7 +603,7 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
         config = _make_config(reserve_floor_soc=31)
 
         result, _trace = run_optimizer_with_trace(
-            build_charge_from_grid_optimizer(config),
+            build_battery_reserve_optimizer(config),
             snapshot,
             config,
             reference_time=now,
@@ -584,7 +648,7 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
         config = _make_config(reserve_floor_soc=20)
 
         result, _trace = run_optimizer_with_trace(
-            build_charge_from_grid_optimizer(config),
+            build_battery_reserve_optimizer(config),
             snapshot,
             config,
             reference_time=REFERENCE_TIME,
@@ -622,7 +686,7 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
         snapshot = _with_real_battery(snapshot, soc=50.0, battery_max_soc=battery_max_soc)
         config = _make_config()
         return run_optimizer_with_trace(
-            build_charge_from_grid_optimizer(config),
+            build_battery_reserve_optimizer(config),
             snapshot,
             config,
             reference_time=REFERENCE_TIME,
@@ -681,7 +745,7 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
             "custom_components.helman.automation.optimizers.self_sustainability.build_horizon_simulator",
             side_effect=lambda *_args, **_kwargs: FakeSimulator(),
         ):
-            optimizer = build_charge_from_grid_optimizer(_make_config())
+            optimizer = build_battery_reserve_optimizer(_make_config())
             snapshot = _make_snapshot(
                 soc_series=soc_series,
                 import_points=prices,
@@ -723,7 +787,7 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
             prices.append({"timestamp": cursor.isoformat(), "value": 2.0})
             cursor += timedelta(minutes=30)
 
-        optimizer = build_charge_from_grid_optimizer(_make_config())
+        optimizer = build_battery_reserve_optimizer(_make_config())
         snapshot = _make_snapshot(
             soc_series=soc,
             import_points=prices,
@@ -791,7 +855,7 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
         soc = _soc_series({0: 45, 6: 45, 9: 40, 10: 20, 11: 60})
         prices = _import_points({6: 2.0, 9: 6.0})
 
-        result = build_charge_from_grid_optimizer(_make_config()).optimize(
+        result = build_battery_reserve_optimizer(_make_config()).optimize(
             _make_snapshot(soc_series=soc, import_points=prices, bands=bands),
             _make_config(),
         )
@@ -808,7 +872,7 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
         prices = _import_points({6: 3.0, 8: 6.0})
         prices_map = {p["timestamp"]: p for p in prices}
         prices_map[_slot_id(7, 0)]["value"] = 1.0
-        result = build_charge_from_grid_optimizer(_make_config()).optimize(
+        result = build_battery_reserve_optimizer(_make_config()).optimize(
             _make_snapshot(soc_series=soc, import_points=prices, bands=_BANDS),
             _make_config(),
         )
@@ -819,7 +883,7 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
     def test_skips_when_window_never_dips_below_floor(self) -> None:
         soc = _soc_series({0: 80, 6: 80, 8: 70, 9: 60, 10: 60})
         prices = _import_points({6: 2.0, 8: 6.0})
-        result = build_charge_from_grid_optimizer(_make_config()).optimize(
+        result = build_battery_reserve_optimizer(_make_config()).optimize(
             _make_snapshot(soc_series=soc, import_points=prices, bands=_BANDS),
             _make_config(),
         )
@@ -829,7 +893,7 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
         # Big dip pushes target above cap; clamp to battery max_soc=60.
         soc = _soc_series({0: 55, 6: 55, 8: 55, 9: 5, 10: 60})
         prices = _import_points({6: 2.0, 8: 6.0})
-        result = build_charge_from_grid_optimizer(_make_config()).optimize(
+        result = build_battery_reserve_optimizer(_make_config()).optimize(
             _make_snapshot(
                 soc_series=soc,
                 import_points=prices,
@@ -846,7 +910,7 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
     def test_no_bands_no_op(self) -> None:
         soc = _soc_series({0: 20, 6: 20, 8: 20})
         prices = _import_points({6: 2.0})
-        result = build_charge_from_grid_optimizer(_make_config()).optimize(
+        result = build_battery_reserve_optimizer(_make_config()).optimize(
             _make_snapshot(soc_series=soc, import_points=prices, bands=()),
             _make_config(),
         )
@@ -866,7 +930,7 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
                 }
             },
         )
-        result = build_charge_from_grid_optimizer(_make_config()).optimize(
+        result = build_battery_reserve_optimizer(_make_config()).optimize(
             _make_snapshot(
                 soc_series=soc,
                 import_points=prices,
@@ -885,7 +949,7 @@ class ChargeFromGridOptimizerTests(unittest.TestCase):
         prices = _import_points({6: 3.0, 8: 6.0})
         snapshot = _make_snapshot(soc_series=soc, import_points=prices, bands=_BANDS)
         before = deepcopy(snapshot.schedule.slots)
-        build_charge_from_grid_optimizer(_make_config()).optimize(
+        build_battery_reserve_optimizer(_make_config()).optimize(
             snapshot, _make_config()
         )
         self.assertEqual(snapshot.schedule.slots, before)
@@ -911,7 +975,7 @@ _OVERNIGHT_BANDS = (
 )
 
 
-class ChargeFromGridCheapWindowFloorTests(unittest.TestCase):
+class BatteryReserveCheapWindowFloorTests(unittest.TestCase):
     """#668 on the real simulator: floor 20 %, battery min SoC 10 %.
 
     The house draws 0.1 kWh per 15 min (1 % of the lossless 10 kWh battery)
@@ -1032,7 +1096,7 @@ class ChargeFromGridCheapWindowFloorTests(unittest.TestCase):
         self.assertFalse(observation.bridge_written)
         gate = _gate(_slots_by_id(trace)[_id(_at(22))], "charge_needed")
         self.assertEqual(gate["state"], "false")
-        self.assertEqual(gate["params"], {"goalSoc": 10.0, "projectedWindowMinSoc": 10.0})
+        self.assertEqual(gate["params"], {"goalSoc": 10.0, "solarDipFloorSoc": None, "projectedWindowMinSoc": 10.0})
 
     def test_f_keeps_the_floor_even_when_the_expensive_window_is_covered(self) -> None:
         # Entered at 15 %; a light night and early sun carry the window well
@@ -1143,7 +1207,7 @@ class ChargeFromGridCheapWindowFloorTests(unittest.TestCase):
         )
         config = _make_config(reserve_floor_soc=20)
         return run_optimizer_with_trace(
-            build_charge_from_grid_optimizer(config),
+            build_battery_reserve_optimizer(config),
             snapshot,
             config,
             reference_time=now,
@@ -1166,13 +1230,13 @@ def _ids_between(start: datetime, end: datetime) -> list[str]:
     return ids
 
 
-class ChargeFromGridTraceContractTests(unittest.TestCase):
+class BatteryReserveTraceContractTests(unittest.TestCase):
     def test_bridge_and_ranking_reasons_and_contract(self) -> None:
         soc = _soc_series({0: 45, 6: 45, 8: 40, 9: 20, 10: 60})
         prices = _import_points({6: 3.0, 8: 6.0})
         prices_map = {p["timestamp"]: p for p in prices}
         prices_map[_slot_id(7, 0)]["value"] = 1.0
-        optimizer = build_charge_from_grid_optimizer(_make_config())
+        optimizer = build_battery_reserve_optimizer(_make_config())
         snapshot = _make_snapshot(soc_series=soc, import_points=prices, bands=_BANDS)
 
         _result, trace = run_optimizer_with_trace(
@@ -1201,7 +1265,7 @@ class ChargeFromGridTraceContractTests(unittest.TestCase):
         prices = _import_points({6: 3.0, 8: 6.0})
         prices_map = {p["timestamp"]: p for p in prices}
         prices_map[_slot_id(7, 0)]["value"] = 1.0
-        optimizer = build_charge_from_grid_optimizer(_make_config())
+        optimizer = build_battery_reserve_optimizer(_make_config())
         snapshot = _make_snapshot(soc_series=soc, import_points=prices, bands=_BANDS)
 
         _result, trace = run_optimizer_with_trace(
@@ -1236,7 +1300,7 @@ class ChargeFromGridTraceContractTests(unittest.TestCase):
                 }
             },
         )
-        optimizer = build_charge_from_grid_optimizer(_make_config())
+        optimizer = build_battery_reserve_optimizer(_make_config())
         snapshot = _make_snapshot(
             soc_series=soc,
             import_points=prices,
@@ -1264,7 +1328,7 @@ class ChargeFromGridTraceContractTests(unittest.TestCase):
         """
         soc = _soc_series({0: 80, 6: 80, 8: 70, 9: 60, 10: 60})
         prices = _import_points({6: 2.0, 8: 6.0})
-        optimizer = build_charge_from_grid_optimizer(_make_config())
+        optimizer = build_battery_reserve_optimizer(_make_config())
         snapshot = _make_snapshot(soc_series=soc, import_points=prices, bands=_BANDS)
 
         _result, trace = run_optimizer_with_trace(
@@ -1290,7 +1354,7 @@ class ChargeFromGridTraceContractTests(unittest.TestCase):
     def test_battery_params_missing_is_a_skipped_step(self) -> None:
         soc = _soc_series({0: 45, 6: 45, 8: 40, 9: 20, 10: 60})
         prices = _import_points({6: 3.0, 8: 6.0})
-        optimizer = build_charge_from_grid_optimizer(_make_config())
+        optimizer = build_battery_reserve_optimizer(_make_config())
         snapshot = _make_snapshot(
             soc_series=soc,
             import_points=prices,
@@ -1310,6 +1374,104 @@ class ChargeFromGridTraceContractTests(unittest.TestCase):
 
 
 from automation_trace_contract import trace_rows_payload
+
+
+class ExpensiveReserveHoldTests(unittest.TestCase):
+    def _run(self, *, hold=True, solar=False, user=False, simulator=True, initial=22, cheap=False, end=10):
+        series = []
+        for index in range(48 * 4):
+            at = _at(6 if cheap else 8) + timedelta(minutes=15 * index)
+            series.append({"timestamp": at.isoformat(timespec="seconds"),
+                "durationHours": 0.25, "solarKwh": 1 if solar and at.hour >= 9 else 0,
+                "baselineHouseKwh": 0.25, "socPct": 15})
+        document = ScheduleDocument()
+        if user:
+            document.slots[_slot_id(8, 30)] = build_controllable_actions(
+                inverter=ScheduleAction(kind="charge_to_target_soc", target_soc=25, set_by="user"))
+        snapshot = _make_snapshot(soc_series=series, import_points=_import_points({8: 6}),
+            bands=((ImportBand(level="cheap", start=_at(6), end=_at(8)),) if cheap else ())
+                + (ImportBand(level="expensive", start=_at(8), end=_at(end)),),
+            now=_at(6 if cheap else 8), schedule_document=document)
+        snapshot = _with_real_battery(snapshot, soc=initial, battery_max_soc=100)
+        config = make_optimizer_config(id="reserve", kind="battery_reserve",
+            params={"hold_reserve_in_expensive_windows": hold, "solar_dip_floor_soc": 12},
+            conditions=[{"reserve_floor_soc": 20}])
+        if not simulator:
+            with patch("custom_components.helman.automation.optimizers.self_sustainability.build_horizon_simulator", return_value=None):
+                return run_optimizer_with_trace(build_battery_reserve_optimizer(config), snapshot, config, reference_time=_at(6 if cheap else 8))
+        return run_optimizer_with_trace(build_battery_reserve_optimizer(config), snapshot, config, reference_time=_at(6 if cheap else 8))
+
+    def test_inside_expensive_window_holds_from_crossing_and_traces_floor(self):
+        result, trace = self._run()
+        self.assertEqual(len(result.slots), 8)
+        for slot in _slots_by_id(trace).values():
+            gate = _gate(slot, "reserve_hold")
+            if gate:
+                self.assertEqual(gate["params"]["requiredSoc"], 20)
+                self.assertFalse(gate["params"]["solarRecovers"])
+                self.assertLess(gate["params"]["projectedSoc"], 20)
+                self.assertEqual(_node(slot, "reserve_floor_soc")["state"], "true")
+
+    def test_off_and_no_simulator_do_not_hold(self):
+        self.assertEqual(self._run(hold=False)[0].slots, {})
+        self.assertEqual(self._run(simulator=False)[0].slots, {})
+
+    def test_solar_recovered_dip_holds_at_dip_floor_and_releases(self):
+        result, trace = self._run(solar=True, initial=14)
+        self.assertTrue(result.slots)
+        self.assertTrue(all(slot < _slot_id(9) for slot in result.slots))
+        gates = [_gate(slot, "reserve_hold") for slot in _slots_by_id(trace).values()]
+        gates = [gate for gate in gates if gate]
+        self.assertTrue(gates)
+        self.assertTrue(all(gate["params"]["requiredSoc"] == 12 and gate["params"]["solarRecovers"] for gate in gates))
+
+    def test_covered_window_has_no_hold(self):
+        self.assertEqual(self._run(initial=80)[0].slots, {})
+
+    def test_user_owned_expensive_slot_is_preserved(self):
+        result, _ = self._run(user=True)
+        self.assertEqual(inverter_action(result.slots[_slot_id(8, 30)]).set_by, "user")
+
+    def test_boolean_field_is_strict_and_serializes(self):
+        from custom_components.helman.automation import fields as F
+        field = F.boolean("hold", default=False)
+        self.assertEqual(field.to_dict()["type"], "boolean")
+        for value in (True, False):
+            self.assertIs(F.read_field(field, value, path="hold"), value)
+        for value in (1, "true"):
+            with self.assertRaises(AutomationConfigError) as raised:
+                F.read_field(field, value, path="hold")
+            self.assertEqual(raised.exception.code, "invalid_type")
+
+
+    def test_sufficient_cheap_charge_needs_no_expensive_hold(self):
+        enabled, _ = self._run(cheap=True)
+        disabled, _ = self._run(cheap=True, hold=False)
+        self.assertEqual(enabled.slots, disabled.slots)
+        self.assertTrue(_charge_slots(enabled))
+        self.assertTrue(all(slot < _slot_id(8) for slot in enabled.slots))
+
+    def test_heat_pump_residual_preserves_cheap_plan(self):
+        enabled, _ = self._run(cheap=True, end=22)
+        disabled, _ = self._run(cheap=True, end=22, hold=False)
+        self.assertEqual({slot: actions for slot, actions in enabled.slots.items() if slot < _slot_id(8)}, disabled.slots)
+        held = [slot for slot in enabled.slots if slot >= _slot_id(8)]
+        self.assertTrue(held)
+        self.assertEqual(held[-1], _slot_id(21, 45))
+
+
+    def test_reserve_params_resolve_per_group_and_validate_resolved_floors(self):
+        config = make_optimizer_config(id="reserve", kind="battery_reserve",
+            params={"solar_dip_floor_soc": 12, "hold_reserve_in_expensive_windows": True},
+            conditions=[{"reserve_floor_soc": 20, "params": {"solar_dip_floor_soc": 10, "hold_reserve_in_expensive_windows": False}},
+                        {"reserve_floor_soc": 30}])
+        self.assertEqual(config.conditions[0].params["solar_dip_floor_soc"], 10)
+        self.assertIs(config.conditions[0].params["hold_reserve_in_expensive_windows"], False)
+        self.assertIs(config.conditions[1].params["hold_reserve_in_expensive_windows"], True)
+        with self.assertRaises(AutomationConfigError):
+            make_optimizer_config(id="reserve", kind="battery_reserve", params={"solar_dip_floor_soc": 12},
+                conditions=[{"reserve_floor_soc": 20, "params": {"solar_dip_floor_soc": 21}}])
+
 
 if __name__ == "__main__":
     unittest.main()

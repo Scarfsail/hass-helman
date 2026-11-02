@@ -42,7 +42,7 @@ const SLOT_IDS = [
  * user owns the slot. 14:00 both charge_hold and export_price decide execute
  * and export_price, being later in pipeline order, takes it. 14:30 export_price
  * fails on price and charge_hold's SoC node was never consulted. 15:00
- * export_price said nothing at all. charge_from_grid never ran.
+ * export_price said nothing at all. battery_reserve never ran.
  */
 const INVERTER_PAYLOAD = explanationRows({
     controllableId: "inverter",
@@ -132,7 +132,7 @@ const INVERTER_PAYLOAD = explanationRows({
             })),
         },
         {
-            optimizerId: "charge_from_grid",
+            optimizerId: "battery_reserve",
             status: "skipped",
             statusReason: "battery_params_missing",
         },
@@ -278,14 +278,14 @@ test.describe("slot explanation, the tab strip", () => {
 
     test("a tab per optimizer that had an account of the slot, in traced-phase order", async ({ page }) => {
         // 14:00: charge_hold and export_price both decided execute;
-        // charge_from_grid never ran, so it is on the strip but not openable.
+        // battery_reserve never ran, so it is on the strip but not openable.
         await mountPanel(page, INVERTER_PAYLOAD, 2);
 
         const optimizers = await panel(page).locator(".tab").evaluateAll(
             (nodes) => nodes.map((node) => node.getAttribute("data-optimizer")),
         );
         // Traced-phase order is the payload's order, never re-sorted.
-        expect(optimizers).toEqual(["export_price", "charge_hold", "charge_from_grid"]);
+        expect(optimizers).toEqual(["export_price", "charge_hold", "battery_reserve"]);
         await expect(panel(page).locator("scheduling-logic-diagram")).toHaveCount(1);
     });
 
@@ -327,14 +327,14 @@ test.describe("slot explanation, the tab strip", () => {
     test("a skipped step stays on the strip, says why, and cannot be opened", async ({ page }) => {
         await mountPanel(page, INVERTER_PAYLOAD, 0);
 
-        const skipped = tab(page, "charge_from_grid");
+        const skipped = tab(page, "battery_reserve");
         await expect(skipped).toHaveAttribute("data-status", "skipped");
         await expect(skipped).toHaveClass(/inert/);
         await expect(skipped).toContainText("battery_params_missing");
         expect(await skipped.evaluate((node) => Number(getComputedStyle(node).opacity)))
             .toBeLessThan(1);
         // Not a button: there is no record behind it to draw.
-        await expect(panel(page).locator('button[data-optimizer="charge_from_grid"]')).toHaveCount(0);
+        await expect(panel(page).locator('button[data-optimizer="battery_reserve"]')).toHaveCount(0);
     });
 
     test("an optimizer that said nothing about the slot gets no tab at all", async ({ page }) => {
@@ -397,4 +397,21 @@ test.describe("slot explanation, the tab strip", () => {
         await expect(panel(page).locator(".placeholder.no-slot")).toHaveText(/no_slot/);
         await expect(panel(page).locator("scheduling-logic-diagram")).toHaveCount(0);
     });
+});
+
+
+test("reserve hold gate shows its label and required minimum", async ({ page }) => {
+    const payload = explanationRows({ controllableId: "inverter", date: DATE,
+        slotIds: SLOT_IDS, runAt: RUN_AT, optimizers: [{ optimizerId: "battery_reserve",
+            slots: [{ slotId: SLOT_IDS[0], verdict: "execute", winningOptimizer: "battery_reserve",
+                matchedGroupIndex: 0, groups: [{ conditions: [{ key: "reserve_floor_soc", scope: "window", state: "true", value: 20 }] }],
+                gates: [{ key: "reserve_hold", role: "veto", state: "true", params: { projectedSoc: 18, requiredSoc: 20, solarRecovers: false } }] }] }] });
+    await mountPanel(page, payload, 0);
+    await page.evaluate(() => {
+        const element = document.querySelector("scheduling-explanation-panel") as HTMLElement & { localize: unknown };
+        element.localize = Object.assign((key: string) => key === "scheduling.explanation.condition.reserve_hold" ? "Reserve hold" : key,
+            { has: (key: string) => key === "scheduling.explanation.condition.reserve_hold" });
+    });
+    await expect(panel(page)).toContainText("Reserve hold");
+    await expect(panel(page)).toContainText("18/20 %");
 });

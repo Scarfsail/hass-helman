@@ -103,8 +103,11 @@ function renderGroup(
     // A param the reader refuses per group must not appear in the override form
     // — offering it would produce a config that cannot be saved. The schema is
     // the single source for that, so nothing here names a field.
+    const reserveParams = schema.kind === "battery_reserve"
+        ? schema.params.filter(field => ["solar_dip_floor_soc", "hold_reserve_in_expensive_windows"].includes(field.key))
+        : [];
     const overridableParams = schema.params.filter(
-        (field) => field.overridable !== false,
+        (field) => field.overridable !== false && !reserveParams.includes(field),
     );
 
     return html`
@@ -128,9 +131,12 @@ function renderGroup(
             </summary>
             <div class="condition-group-body">
                 <div class="field-grid">
-                    ${schema.conditionTypes.map((condition) =>
-                        renderConditionWidget(host, schema, condition, groupPath),
-                    )}
+                    ${schema.conditionTypes.map((condition) => html`
+                        ${renderConditionWidget(host, schema, condition, groupPath)}
+                        ${condition.key === "reserve_floor_soc" ? renderSchemaFields(host, reserveParams, {
+                            basePath: overridePath, kind: schema.kind, inheritFrom: paramsPath,
+                        }) : nothing}
+                    `)}
                 </div>
 
                 ${overridableParams.length
