@@ -577,6 +577,28 @@ CONDITION_TYPES: dict[str, ConditionType] = {
             build_mask=_all_slots_mask,
             self_gating=True,
         ),
+        # Qualifiers of `reserve_floor_soc`, beside it in the group for the same
+        # reason `self_sustainability_margin_pct` sits beside its budget: they
+        # change how the floor is tested and defended, never admit or refuse a
+        # slot on their own, so they draw no block.
+        #
+        # Absent dip floor means the reserve floor applies; absent hold means
+        # off. Neither carries a default, so nothing is stamped onto a group the
+        # user never wrote.
+        ConditionType(
+            key="solar_dip_floor_soc",
+            scope=Scope.RUN,
+            field=F.soc("solar_dip_floor_soc", required=False),
+            build_mask=_all_slots_mask,
+            qualifier=True,
+        ),
+        ConditionType(
+            key="hold_reserve_in_expensive_windows",
+            scope=Scope.RUN,
+            field=F.boolean("hold_reserve_in_expensive_windows", required=False),
+            build_mask=_all_slots_mask,
+            qualifier=True,
+        ),
     )
 }
 

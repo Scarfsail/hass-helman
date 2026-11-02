@@ -252,7 +252,7 @@ class BatteryReserveOptimizer:
                     if (
                         resolved is None
                         or not resolved.condition_met
-                        or not resolved.params.get(
+                        or not resolved.condition_value(
                             "hold_reserve_in_expensive_windows", False
                         )
                         or is_user_owned(
@@ -271,7 +271,7 @@ class BatteryReserveOptimizer:
                     reserve = resolved.condition_value("reserve_floor_soc")
                     required = _required_soc(
                         trajectory, band.start, band.end, reserve,
-                        resolved.params.get("solar_dip_floor_soc", reserve),
+                        resolved.condition_value("solar_dip_floor_soc", reserve),
                     )
                     bucket = dt_util.as_utc(parse_slot_id(slot_id))
                     projected = trajectory.get(bucket)
@@ -393,7 +393,7 @@ class BatteryReserveOptimizer:
             expensive_band.start,
             expensive_band.end,
             floor,
-            resolved.params.get("solar_dip_floor_soc", floor),
+            resolved.condition_value("solar_dip_floor_soc", floor),
         )
         covered = _FloorResolution(
             STATE_FALSE, floor, round(window_min_soc, 1), group_index
@@ -465,7 +465,7 @@ class BatteryReserveOptimizer:
         soc_gap = target - cheap_start_soc
         charge_needed_params = {
             "targetSoc": round(target, 1),
-            "solarDipFloorSoc": resolved.params.get("solar_dip_floor_soc"),
+            "solarDipFloorSoc": resolved.condition_value("solar_dip_floor_soc"),
             "cheapStartSoc": round(cheap_start_soc, 1),
         }
         required_energy_kwh = (
@@ -700,7 +700,7 @@ class BatteryReserveOptimizer:
                     boundary,
                     window_end,
                     floor_soc,
-                    resolved.params.get("solar_dip_floor_soc", floor_soc),
+                    resolved.condition_value("solar_dip_floor_soc", floor_soc),
                 ),
                 window_min_raw,
             )
@@ -872,7 +872,7 @@ class BatteryReserveOptimizer:
                         STATE_FALSE,
                         {
                             "goalSoc": round(floor_soc + goal, 1),
-                            "solarDipFloorSoc": resolved.params.get("solar_dip_floor_soc"),
+                            "solarDipFloorSoc": resolved.condition_value("solar_dip_floor_soc"),
                             "projectedWindowMinSoc": round(window_min_raw, 1),
                         },
                         role="veto",
@@ -945,7 +945,7 @@ class BatteryReserveOptimizer:
                 STATE_TRUE,
                 {
                     "goalSoc": round(floor_soc + goal, 1),
-                    "solarDipFloorSoc": resolved.params.get("solar_dip_floor_soc"),
+                    "solarDipFloorSoc": resolved.condition_value("solar_dip_floor_soc"),
                     "projectedWindowMinSoc": round(window_min_raw, 1),
                     "forcedChargeSlots": len(charge_set),
                     "chargeStartMarginSlots": margin,

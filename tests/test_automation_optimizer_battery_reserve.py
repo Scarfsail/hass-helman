@@ -233,11 +233,18 @@ class BatteryReserveOptimizerTests(unittest.TestCase):
         with self.assertRaises(AutomationConfigError) as raised:
             make_optimizer_config(
                 id="reserve", kind="battery_reserve",
-                params={"solar_dip_floor_soc": 21},
-                conditions=[{"reserve_floor_soc": 30}, {"reserve_floor_soc": 20}],
+                conditions=[{"reserve_floor_soc": 30},
+                            {"reserve_floor_soc": 20, "solar_dip_floor_soc": 21}],
             )
         self.assertEqual(raised.exception.code, "invalid_value")
-        self.assertTrue(raised.exception.path.endswith("params.solar_dip_floor_soc"))
+        self.assertTrue(raised.exception.path.endswith("conditions[1].solar_dip_floor_soc"))
+
+    def test_reserve_qualifiers_are_not_params(self) -> None:
+        for key, value in (("solar_dip_floor_soc", 12), ("hold_reserve_in_expensive_windows", True)):
+            with self.subTest(key=key), self.assertRaises(AutomationConfigError) as raised:
+                make_optimizer_config(id="reserve", kind="battery_reserve",
+                    params={key: value}, conditions=[{"reserve_floor_soc": 20}])
+            self.assertEqual(raised.exception.code, "unknown_key")
 
     def _solar_morning(self, *, dip_floor=None, minimum=15, recovery=True, rail=False):
         bands = (
@@ -259,8 +266,8 @@ class BatteryReserveOptimizerTests(unittest.TestCase):
             import_points=_import_points({5: 2, 6: 6, 12: 4}), bands=bands)
         snapshot = _with_real_battery(snapshot, soc=initial, battery_max_soc=100)
         config = make_optimizer_config(id="reserve", kind="battery_reserve",
-            params={} if dip_floor is None else {"solar_dip_floor_soc": dip_floor},
-            conditions=[{"reserve_floor_soc": 20}])
+            conditions=[{"reserve_floor_soc": 20}
+                | ({} if dip_floor is None else {"solar_dip_floor_soc": dip_floor})])
         if rail:
             with patch(
                 "custom_components.helman.automation.optimizers.self_sustainability.build_horizon_simulator",
@@ -1394,8 +1401,8 @@ class ExpensiveReserveHoldTests(unittest.TestCase):
             now=_at(6 if cheap else 8), schedule_document=document)
         snapshot = _with_real_battery(snapshot, soc=initial, battery_max_soc=100)
         config = make_optimizer_config(id="reserve", kind="battery_reserve",
-            params={"hold_reserve_in_expensive_windows": hold, "solar_dip_floor_soc": 12},
-            conditions=[{"reserve_floor_soc": 20}])
+            conditions=[{"reserve_floor_soc": 20, "hold_reserve_in_expensive_windows": hold,
+                          "solar_dip_floor_soc": 12}])
         if not simulator:
             with patch("custom_components.helman.automation.optimizers.self_sustainability.build_horizon_simulator", return_value=None):
                 return run_optimizer_with_trace(build_battery_reserve_optimizer(config), snapshot, config, reference_time=_at(6 if cheap else 8))
@@ -1460,17 +1467,14 @@ class ExpensiveReserveHoldTests(unittest.TestCase):
         self.assertEqual(held[-1], _slot_id(21, 45))
 
 
-    def test_reserve_params_resolve_per_group_and_validate_resolved_floors(self):
+    def test_reserve_qualifiers_are_read_per_group(self):
         config = make_optimizer_config(id="reserve", kind="battery_reserve",
-            params={"solar_dip_floor_soc": 12, "hold_reserve_in_expensive_windows": True},
-            conditions=[{"reserve_floor_soc": 20, "params": {"solar_dip_floor_soc": 10, "hold_reserve_in_expensive_windows": False}},
-                        {"reserve_floor_soc": 30}])
-        self.assertEqual(config.conditions[0].params["solar_dip_floor_soc"], 10)
-        self.assertIs(config.conditions[0].params["hold_reserve_in_expensive_windows"], False)
-        self.assertIs(config.conditions[1].params["hold_reserve_in_expensive_windows"], True)
-        with self.assertRaises(AutomationConfigError):
-            make_optimizer_config(id="reserve", kind="battery_reserve", params={"solar_dip_floor_soc": 12},
-                conditions=[{"reserve_floor_soc": 20, "params": {"solar_dip_floor_soc": 21}}])
+            conditions=[{"reserve_floor_soc": 20, "solar_dip_floor_soc": 10, "hold_reserve_in_expensive_windows": False},
+                        {"reserve_floor_soc": 30, "hold_reserve_in_expensive_windows": True}])
+        self.assertEqual(config.conditions[0].condition_values["solar_dip_floor_soc"], 10)
+        self.assertIs(config.conditions[0].condition_values["hold_reserve_in_expensive_windows"], False)
+        self.assertNotIn("solar_dip_floor_soc", config.conditions[1].condition_values)
+        self.assertIs(config.conditions[1].condition_values["hold_reserve_in_expensive_windows"], True)
 
 
 if __name__ == "__main__":

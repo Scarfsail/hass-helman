@@ -9,6 +9,7 @@ import {
 } from "../config/sortable-list";
 import type { PathSegment } from "../config/types";
 import {
+    renderBooleanField,
     renderInheritedNote,
     renderSchemaFields,
 } from "./optimizer-field-renderer";
@@ -103,11 +104,8 @@ function renderGroup(
     // A param the reader refuses per group must not appear in the override form
     // — offering it would produce a config that cannot be saved. The schema is
     // the single source for that, so nothing here names a field.
-    const reserveParams = schema.kind === "battery_reserve"
-        ? schema.params.filter(field => ["solar_dip_floor_soc", "hold_reserve_in_expensive_windows"].includes(field.key))
-        : [];
     const overridableParams = schema.params.filter(
-        (field) => field.overridable !== false && !reserveParams.includes(field),
+        (field) => field.overridable !== false,
     );
 
     return html`
@@ -131,12 +129,9 @@ function renderGroup(
             </summary>
             <div class="condition-group-body">
                 <div class="field-grid">
-                    ${schema.conditionTypes.map((condition) => html`
-                        ${renderConditionWidget(host, schema, condition, groupPath)}
-                        ${condition.key === "reserve_floor_soc" ? renderSchemaFields(host, reserveParams, {
-                            basePath: overridePath, kind: schema.kind, inheritFrom: paramsPath,
-                        }) : nothing}
-                    `)}
+                    ${schema.conditionTypes.map((condition) =>
+                        renderConditionWidget(host, schema, condition, groupPath),
+                    )}
                 </div>
 
                 ${overridableParams.length
@@ -300,6 +295,13 @@ function renderConditionWidget(
             })),
             helpKey,
         );
+    }
+    if (condition.field.type === "boolean") {
+        return renderBooleanField(host, path, labelKey, helpKey, condition.field);
+    }
+    if (condition.field.required === false) {
+        // Clearing an optional number deletes the key; `null` would read as misconfigured.
+        return host.renderOptionalNumberField(path, labelKey, undefined, helpKey);
     }
     return host.renderRequiredNumberField(
         path,

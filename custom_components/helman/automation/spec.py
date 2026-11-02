@@ -134,11 +134,15 @@ def _validate_battery_reserve(
     *,
     path: str,
 ) -> None:
-    dip_floor = params.get("solar_dip_floor_soc")
-    if condition_values is not None and dip_floor is not None:
+    if condition_values is None:
+        return
+    dip_floor = condition_values.get("solar_dip_floor_soc")
+    if dip_floor is not None:
         if dip_floor > condition_values["reserve_floor_soc"]:
+            # The hook is handed the group's `.params` path; the dip floor is a
+            # key of the group itself.
             raise OptimizerConfigError(
-                path=f"{path}.solar_dip_floor_soc",
+                path=f"{path.removesuffix('.params')}.solar_dip_floor_soc",
                 code="invalid_value",
                 message="Solar dip floor must not exceed the reserve floor",
             )
@@ -327,10 +331,12 @@ OPTIMIZER_SPECS: dict[str, OptimizerSpec] = {
             target=_INVERTER_TARGET,
             params=(
                 F.non_negative_int("charge_start_margin_slots", default=2),
-                F.soc("solar_dip_floor_soc", required=False),
-                F.boolean("hold_reserve_in_expensive_windows", default=False),
             ),
-            condition_types=("reserve_floor_soc",),
+            condition_types=(
+                "reserve_floor_soc",
+                "solar_dip_floor_soc",
+                "hold_reserve_in_expensive_windows",
+            ),
             validate=_validate_battery_reserve,
             param_scope=Scope.RUN,
             new_draft={
