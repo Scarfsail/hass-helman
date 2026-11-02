@@ -304,7 +304,8 @@
       "vendor_device": "Device",
       "max_allowed_export_power": "Max allowed export power",
       "max_power": "Max power",
-      "device_phase": "House phase"
+      "device_phase": "House phase",
+      "solar_dip_floor_soc": "Solar dip floor SoC %"
     },
     "entity_status": {
       "value": "{value} {unit}",
@@ -601,7 +602,8 @@
       "grid_max_allowed_export_power": "The most your contract with the grid provider lets you export, in watts; 0 for a no-export contract. Take it from your grid contract: it is a fact of your site, not of the hardware. Required with a hardware profile that drives the inverter's modes, which restores the inverter's export limit to it after a stop-export slot. Unused otherwise.",
       "solar_max_power": "The most the solar array produces, in watts. It scales the solar power-flow lines on the cards, and also sets the solar-bias data-glitch cap and the maximum shown in the solar detail. Leave empty to keep those two off; the cards then scale to the default.",
       "battery_max_power": "The most the battery charges or discharges at, in watts: the full scale of its power-flow lines on the cards. Leave empty for the default.",
-      "grid_max_power": "The most the grid connection carries, in watts: the full scale of its power-flow lines on the cards. Leave empty for the default."
+      "grid_max_power": "The most the grid connection carries, in watts: the full scale of its power-flow lines on the cards. Leave empty for the default.",
+      "battery_reserve_solar_dip_floor_soc": "Lowest SoC allowed inside an expensive window when the forecast says solar brings the battery back to the reserve before the window ends. A buffer in case the solar forecast is too optimistic. Empty = same as the reserve."
     },
     "device_filter": {
       "label": "Show devices",

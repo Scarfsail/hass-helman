@@ -229,6 +229,70 @@ _BANDS = (
 
 
 class BatteryReserveOptimizerTests(unittest.TestCase):
+    def test_solar_dip_floor_rejects_values_above_any_group_reserve(self) -> None:
+        with self.assertRaises(AutomationConfigError) as raised:
+            make_optimizer_config(
+                id="reserve", kind="battery_reserve",
+                params={"solar_dip_floor_soc": 21},
+                conditions=[{"reserve_floor_soc": 30}, {"reserve_floor_soc": 20}],
+            )
+        self.assertEqual(raised.exception.code, "invalid_value")
+        self.assertTrue(raised.exception.path.endswith("params.solar_dip_floor_soc"))
+
+    def _solar_morning(self, *, dip_floor=None, minimum=15, recovery=True, rail=False):
+        bands = (
+            ImportBand(level="cheap", start=_at(5), end=_at(6)),
+            ImportBand(level="expensive", start=_at(6), end=_at(12)),
+        )
+        initial = minimum + 10
+        series = []
+        soc = initial
+        for index in range(48 * 4):
+            at = REFERENCE_TIME + timedelta(minutes=15 * index)
+            house = 0.125 if 6 <= at.hour < 8 else 0.0
+            solar = 0.9375 if recovery and 8 <= at.hour < 10 else 0.0
+            soc = max(10, min(100, soc + (solar - house) * 10))
+            series.append({"timestamp": at.isoformat(timespec="seconds"),
+                           "durationHours": 0.25, "solarKwh": solar,
+                           "baselineHouseKwh": house, "socPct": soc})
+        snapshot = _make_snapshot(soc_series=series,
+            import_points=_import_points({5: 2, 6: 6, 12: 4}), bands=bands)
+        snapshot = _with_real_battery(snapshot, soc=initial, battery_max_soc=100)
+        config = make_optimizer_config(id="reserve", kind="battery_reserve",
+            params={} if dip_floor is None else {"solar_dip_floor_soc": dip_floor},
+            conditions=[{"reserve_floor_soc": 20}])
+        if rail:
+            with patch(
+                "custom_components.helman.automation.optimizers.self_sustainability.build_horizon_simulator",
+                return_value=None,
+            ):
+                return run_optimizer_with_trace(build_battery_reserve_optimizer(config),
+                    snapshot, config, reference_time=REFERENCE_TIME)
+        return run_optimizer_with_trace(build_battery_reserve_optimizer(config),
+            snapshot, config, reference_time=REFERENCE_TIME)
+
+    def test_solar_recovered_morning_needs_no_charge_with_dip_floor(self) -> None:
+        result, _ = self._solar_morning(dip_floor=12)
+        self.assertEqual(result.slots, {})
+        result, _ = self._solar_morning()
+        self.assertTrue(_charge_slots(result))
+
+    def test_solar_recovered_deeper_dip_sizes_target_to_dip_floor(self) -> None:
+        result, _ = self._solar_morning(dip_floor=12, minimum=10)
+        self.assertEqual(set(_charge_slots(result).values()), {22})
+
+    def test_no_recovery_keeps_reserve_sizing(self) -> None:
+        result, _ = self._solar_morning(dip_floor=12, recovery=False)
+        original, _ = self._solar_morning(recovery=False)
+        self.assertEqual(_charge_slots(result), _charge_slots(original))
+        self.assertTrue(_charge_slots(result))
+
+    def test_rail_only_morning_uses_solar_dip_floor(self) -> None:
+        result, _ = self._solar_morning(dip_floor=12, rail=True)
+        self.assertEqual(result.slots, {})
+        result, _ = self._solar_morning(rail=True)
+        self.assertTrue(_charge_slots(result))
+
     def test_charge_start_margin_slots_defaults_and_rejects_invalid_values(self) -> None:
         defaulted = make_optimizer_config(
             id="grid-bridge-charge",
@@ -1032,7 +1096,7 @@ class BatteryReserveCheapWindowFloorTests(unittest.TestCase):
         self.assertFalse(observation.bridge_written)
         gate = _gate(_slots_by_id(trace)[_id(_at(22))], "charge_needed")
         self.assertEqual(gate["state"], "false")
-        self.assertEqual(gate["params"], {"goalSoc": 10.0, "projectedWindowMinSoc": 10.0})
+        self.assertEqual(gate["params"], {"goalSoc": 10.0, "solarDipFloorSoc": None, "projectedWindowMinSoc": 10.0})
 
     def test_f_keeps_the_floor_even_when_the_expensive_window_is_covered(self) -> None:
         # Entered at 15 %; a light night and early sun carry the window well
