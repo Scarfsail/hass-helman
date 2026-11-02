@@ -333,15 +333,16 @@ const BOILER_STATS = {
         run_minutes: { median: 105, min: 60, max: 150 },
         run_kwh: { median: 3.4, min: 2, max: 5 },
         on_kwh_per_hour: 1.8,
+        running_kw: 1.96,
     },
 };
 
-test("device History header gives the learned average while on, collapsed; the body has the last 24 hours and the typical tiles", async ({ page }) => {
+test("device History header gives the learned average during a run, collapsed; the body has the last 24 hours and the typical tiles", async ({ page }) => {
     await mountCard(page, BOILER_STATS, true);
     await openDevice(page, "Boiler");
     const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
-    await expect(section.locator("[slot=summary]")).toHaveText("1.8 kW while on");
-    await expect(section.locator("[slot=summary] b")).toHaveText("1.8 kW");
+    await expect(section.locator("[slot=summary]")).toHaveText("2.0 kW during a run");
+    await expect(section.locator("[slot=summary] b")).toHaveText("2.0 kW");
     await expect(section.locator("[data-history-body]")).toHaveCount(0);
     expect(await page.evaluate(() => (window as any).__chartConfigs.length)).toBe(0);
     await section.locator("button").first().click();
@@ -356,8 +357,30 @@ test("device History header gives the learned average while on, collapsed; the b
     await expect(tiles.nth(1)).toContainText("a typical day (1–3 runs)");
     await expect(tiles.nth(2)).toContainText("1 h 45 min");
     await expect(tiles.nth(2)).toContainText("a typical run ≈ 3.4 kWh");
-    await expect(tiles.nth(3)).toContainText("1.8 kW");
-    await expect(tiles.nth(3)).toContainText("average while on");
+    await expect(tiles.nth(3)).toContainText("2.0 kW");
+    await expect(tiles.nth(3)).toContainText("average during a run");
+});
+
+test("device History falls back to the average while on without learned runs, and drops the running tile", async ({ page }) => {
+    const { running_kw: _, ...stats } = BOILER_STATS["sensor.boiler_energy"];
+    await mountCard(page, { "sensor.boiler_energy": stats }, true);
+    await openDevice(page, "Boiler");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
+    await expect(section.locator("[slot=summary]")).toHaveText("1.8 kW while on");
+    await section.locator("button").first().click();
+    await expect(section.locator("[data-typical] [data-stat]")).toHaveCount(3);
+    await expect(section.locator("[data-typical] [data-stat=running]")).toHaveCount(0);
+});
+
+test("device History without a power figure says it has none yet, and drops the running tile", async ({ page }) => {
+    const { running_kw: _, on_kwh_per_hour: __, ...stats } = BOILER_STATS["sensor.boiler_energy"];
+    await mountCard(page, { "sensor.boiler_energy": stats }, true);
+    await openDevice(page, "Boiler");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
+    await expect(section.locator("[slot=summary]")).toHaveText("No figures yet");
+    await section.locator("button").first().click();
+    await expect(section.locator("[data-typical] [data-stat]")).toHaveCount(3);
+    await expect(section.locator("[data-typical] [data-stat=running]")).toHaveCount(0);
 });
 
 test("device History's last 24 hours open HA's history of the same entities", async ({ page }) => {
@@ -396,7 +419,7 @@ for (const [name, energy, power] of [
         expect(await page.evaluate(() => (window as any).__statRequests.map((msg: any) => msg.statistic_id))).toContain(energy);
         expect(await page.evaluate(() => (window as any).__deviceStatsRequests)).toEqual([energy]);
         const history = detail.locator("node-detail-device-content helman-detail-section[data-history]");
-        await expect(history.locator("[slot=summary]")).toHaveText("1.8 kW while on");
+        await expect(history.locator("[slot=summary]")).toHaveText("2.0 kW during a run");
         await history.locator("button").first().click();
         expect(await page.evaluate(() => (window as any).__chartConfigs[0].entities)).toContain(power);
         await expect(detail.locator("ha-button[data-settings]")).toHaveCount(1);

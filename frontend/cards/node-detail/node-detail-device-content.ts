@@ -170,16 +170,17 @@ export class NodeDetailDeviceContent extends LitElement {
         if (!this._chart.available() && !this.params.item.deviceKey) return nothing;
         const stats = this._stats.payload;
         const measures = deviceEnergyMeasures(stats ?? undefined);
-        const whileOn = measures.on ?? measures.running;
         const h = (key: string) => this.localize(`node_detail.shared.history.${key}`);
-        const summary = historySummary(this._stats, this.localize, whileOn !== undefined ? boldTemplate(h("device_summary"), { kw: formatPower(whileOn).display }) : null);
+        const headline = measures.running !== undefined ? { key: "device_summary_running", watts: measures.running }
+            : measures.on !== undefined ? { key: "device_summary", watts: measures.on } : null;
+        const summary = historySummary(this._stats, this.localize, headline ? boldTemplate(h(headline.key), { kw: formatPower(headline.watts).display }) : null);
         return renderHistorySection(this.localize, summary, this._historyOpen, (open) => { this._historyOpen = open; }, () => html`
             ${this._chart.render(this.localize)}
             ${this.params.item.deviceKey ? this._renderTypical() : nothing}
         `);
     }
 
-    /** A typical day, how often and how long it runs, and its average while on: 2×2 tiles. */
+    /** A typical day, how often and how long it runs, and its average power during a run: 2×2 tiles. */
     private _renderTypical() {
         const notReady = sectionNotReady(this._stats, this.localize);
         if (notReady) return notReady;
@@ -188,8 +189,7 @@ export class NodeDetailDeviceContent extends LitElement {
         if (!stats) return html`<p class="note" data-no-stats>${h("device_no_stats")}</p>`;
         const range = (spread: Pick<DeviceStatsSpread, "min" | "max">, digits: number) => `${spread.min.toFixed(digits)}–${spread.max.toFixed(digits)}`;
         const day = stats.daily_kwh;
-        const measures = deviceEnergyMeasures(stats);
-        const whileOn = measures.on ?? measures.running;
+        const running = deviceEnergyMeasures(stats).running;
         const run = stats.run_minutes && stats.run_kwh ? { minutes: stats.run_minutes.median, kwh: stats.run_kwh.median } : null;
         return html`
             ${subTitle(day ? fillTemplate(h("device_typical"), { days: day.days }) : h("device_typical_undated"))}
@@ -197,7 +197,7 @@ export class NodeDetailDeviceContent extends LitElement {
                 ${day ? statTile(`${formatKwh(day.median)} kWh`, fillTemplate(h("device_day"), { range: range(day, 1) }), "day") : nothing}
                 ${typeof stats.runs_per_day === "number" ? statTile(fillTemplate(h("device_runs"), { n: Math.round(stats.runs_per_day * 10) / 10 }), stats.daily_runs ? fillTemplate(h("device_runs_range"), { range: range(stats.daily_runs, 0) }) : h("device_runs_caption"), "runs") : nothing}
                 ${run ? statTile(formatMinutes(run.minutes), fillTemplate(h("device_run"), { kwh: formatKwh(run.kwh) }), "run") : nothing}
-                ${whileOn !== undefined ? statTile(formatPower(whileOn).display, h("device_while_on"), "while-on") : nothing}
+                ${running !== undefined ? statTile(formatPower(running).display, h("device_running"), "running") : nothing}
             </div>
         `;
     }

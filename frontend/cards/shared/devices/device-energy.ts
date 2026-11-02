@@ -5,8 +5,9 @@ import type { DeviceStats } from "../../helman-api";
 
 /**
  * One device's energy on one power scale, auto-scaled W or kW, wherever it is
- * shown: the Training tab's device table, the device editor and the device
- * detail dialog all render through `renderDeviceEnergyValue`.
+ * shown: the Training tab's device table and the device editor render through
+ * `renderDeviceEnergyValue`. The device detail dialog formats its own History
+ * section and does not follow this module's headline rule.
  *
  * The headline is chosen by schedulability: a schedulable device headlines its
  * average while switched on, which the scheduler projects with; any other
