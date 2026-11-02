@@ -1296,3 +1296,67 @@ test("optimizer editing is frozen while a save is pending", async ({ page }) => 
     await page.evaluate(() => (window as any).__releaseSave());
     await expect(dialog(page)).toHaveCount(0);
 });
+
+
+test("battery reserve boolean switch saves both true and false", async ({ page }) => {
+    for (const on of [true, false]) {
+        await mountPanel(page, {
+            payload: { ...PAYLOAD, optimizers: [{ ...PAYLOAD.optimizers[0], kind: "battery_reserve" }] },
+            schema: { version: 2, kinds: [{ ...SCHEMA.kinds[0], kind: "battery_reserve",
+                params: [{ key: "hold_reserve_in_expensive_windows", type: "boolean", default: false, overridable: false }] }] },
+            config: { ...CONFIG, automation: { ...CONFIG.automation,
+                system_optimizers: [{ ...CONFIG.automation.system_optimizers[1], kind: "battery_reserve",
+                    params: { hold_reserve_in_expensive_windows: !on } }] } },
+        });
+        await openDialog(page);
+        const toggle = dialog(page).locator('.field ha-switch');
+        await expect(toggle).toHaveCount(1);
+        await toggle.evaluate((element, checked) => {
+            (element as HTMLElement & { checked: boolean }).checked = checked;
+            element.dispatchEvent(new Event("change", { bubbles: true }));
+        }, on);
+        await dialog(page).getByText("Save and reload").click();
+        const saved = (await calls(page)).filter(call => call.type === "helman/save_config");
+        const config = saved[0].config as { automation: { system_optimizers: { params: Record<string, boolean> }[] } };
+        expect(config.automation.system_optimizers[0].params.hold_reserve_in_expensive_windows).toBe(on);
+    }
+});
+
+
+for (const reset of [false, true]) {
+    test(`reserve group switch ${reset ? "restores inheritance" : "overrides true with false"} beside the floors`, async ({ page }) => {
+        await mountPanel(page, {
+            payload: { ...PAYLOAD, optimizers: [{ ...PAYLOAD.optimizers[0], kind: "battery_reserve" }] },
+            schema: { version: 2, kinds: [{ ...SCHEMA.kinds[0], kind: "battery_reserve",
+                params: [{ key: "solar_dip_floor_soc", type: "number", required: false },
+                    { key: "hold_reserve_in_expensive_windows", type: "boolean", default: false }],
+                conditionTypes: [{ key: "reserve_floor_soc", scope: "run", field: { key: "reserve_floor_soc", type: "number" } }] }] },
+            config: { ...CONFIG, automation: { ...CONFIG.automation,
+                system_optimizers: [{ ...CONFIG.automation.system_optimizers[1], kind: "battery_reserve",
+                    params: { solar_dip_floor_soc: 12, hold_reserve_in_expensive_windows: true },
+                    conditions: [{ reserve_floor_soc: 20 }] }] } },
+        });
+        await openDialog(page);
+        const group = dialog(page).locator('.condition-group .field-grid').first();
+        await expect(group.locator('input[type="number"]')).toHaveCount(2);
+        const toggle = group.locator('ha-switch');
+        await expect(toggle).toHaveJSProperty("checked", true);
+        await toggle.evaluate(element => {
+            (element as HTMLElement & { checked: boolean }).checked = false;
+            element.dispatchEvent(new Event("change", { bubbles: true }));
+        });
+        if (reset) {
+            await group.locator('.inline-actions > button').click();
+            await expect(toggle).toHaveJSProperty("checked", true);
+            // Keep a numeric edit so the inherited boolean is saved in a real draft.
+        }
+        await group.locator('input[type="number"]').nth(1).fill("10");
+        await group.locator('input[type="number"]').nth(1).blur();
+        await dialog(page).getByText("Save and reload").click();
+        const saved = (await calls(page)).filter(call => call.type === "helman/save_config");
+        const config = saved[0].config as { automation: { system_optimizers: { conditions: { params: Record<string, unknown> }[] }[] } };
+        const params = config.automation.system_optimizers[0].conditions[0].params;
+        expect(params.solar_dip_floor_soc).toBe(10);
+        expect(params.hold_reserve_in_expensive_windows).toBe(reset ? undefined : false);
+    });
+}

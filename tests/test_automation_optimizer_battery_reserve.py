@@ -1375,5 +1375,103 @@ class BatteryReserveTraceContractTests(unittest.TestCase):
 
 from automation_trace_contract import trace_rows_payload
 
+
+class ExpensiveReserveHoldTests(unittest.TestCase):
+    def _run(self, *, hold=True, solar=False, user=False, simulator=True, initial=22, cheap=False, end=10):
+        series = []
+        for index in range(48 * 4):
+            at = _at(6 if cheap else 8) + timedelta(minutes=15 * index)
+            series.append({"timestamp": at.isoformat(timespec="seconds"),
+                "durationHours": 0.25, "solarKwh": 1 if solar and at.hour >= 9 else 0,
+                "baselineHouseKwh": 0.25, "socPct": 15})
+        document = ScheduleDocument()
+        if user:
+            document.slots[_slot_id(8, 30)] = build_controllable_actions(
+                inverter=ScheduleAction(kind="charge_to_target_soc", target_soc=25, set_by="user"))
+        snapshot = _make_snapshot(soc_series=series, import_points=_import_points({8: 6}),
+            bands=((ImportBand(level="cheap", start=_at(6), end=_at(8)),) if cheap else ())
+                + (ImportBand(level="expensive", start=_at(8), end=_at(end)),),
+            now=_at(6 if cheap else 8), schedule_document=document)
+        snapshot = _with_real_battery(snapshot, soc=initial, battery_max_soc=100)
+        config = make_optimizer_config(id="reserve", kind="battery_reserve",
+            params={"hold_reserve_in_expensive_windows": hold, "solar_dip_floor_soc": 12},
+            conditions=[{"reserve_floor_soc": 20}])
+        if not simulator:
+            with patch("custom_components.helman.automation.optimizers.self_sustainability.build_horizon_simulator", return_value=None):
+                return run_optimizer_with_trace(build_battery_reserve_optimizer(config), snapshot, config, reference_time=_at(6 if cheap else 8))
+        return run_optimizer_with_trace(build_battery_reserve_optimizer(config), snapshot, config, reference_time=_at(6 if cheap else 8))
+
+    def test_inside_expensive_window_holds_from_crossing_and_traces_floor(self):
+        result, trace = self._run()
+        self.assertEqual(len(result.slots), 8)
+        for slot in _slots_by_id(trace).values():
+            gate = _gate(slot, "reserve_hold")
+            if gate:
+                self.assertEqual(gate["params"]["requiredSoc"], 20)
+                self.assertFalse(gate["params"]["solarRecovers"])
+                self.assertLess(gate["params"]["projectedSoc"], 20)
+                self.assertEqual(_node(slot, "reserve_floor_soc")["state"], "true")
+
+    def test_off_and_no_simulator_do_not_hold(self):
+        self.assertEqual(self._run(hold=False)[0].slots, {})
+        self.assertEqual(self._run(simulator=False)[0].slots, {})
+
+    def test_solar_recovered_dip_holds_at_dip_floor_and_releases(self):
+        result, trace = self._run(solar=True, initial=14)
+        self.assertTrue(result.slots)
+        self.assertTrue(all(slot < _slot_id(9) for slot in result.slots))
+        gates = [_gate(slot, "reserve_hold") for slot in _slots_by_id(trace).values()]
+        gates = [gate for gate in gates if gate]
+        self.assertTrue(gates)
+        self.assertTrue(all(gate["params"]["requiredSoc"] == 12 and gate["params"]["solarRecovers"] for gate in gates))
+
+    def test_covered_window_has_no_hold(self):
+        self.assertEqual(self._run(initial=80)[0].slots, {})
+
+    def test_user_owned_expensive_slot_is_preserved(self):
+        result, _ = self._run(user=True)
+        self.assertEqual(inverter_action(result.slots[_slot_id(8, 30)]).set_by, "user")
+
+    def test_boolean_field_is_strict_and_serializes(self):
+        from custom_components.helman.automation import fields as F
+        field = F.boolean("hold", default=False)
+        self.assertEqual(field.to_dict()["type"], "boolean")
+        for value in (True, False):
+            self.assertIs(F.read_field(field, value, path="hold"), value)
+        for value in (1, "true"):
+            with self.assertRaises(AutomationConfigError) as raised:
+                F.read_field(field, value, path="hold")
+            self.assertEqual(raised.exception.code, "invalid_type")
+
+
+    def test_sufficient_cheap_charge_needs_no_expensive_hold(self):
+        enabled, _ = self._run(cheap=True)
+        disabled, _ = self._run(cheap=True, hold=False)
+        self.assertEqual(enabled.slots, disabled.slots)
+        self.assertTrue(_charge_slots(enabled))
+        self.assertTrue(all(slot < _slot_id(8) for slot in enabled.slots))
+
+    def test_heat_pump_residual_preserves_cheap_plan(self):
+        enabled, _ = self._run(cheap=True, end=22)
+        disabled, _ = self._run(cheap=True, end=22, hold=False)
+        self.assertEqual({slot: actions for slot, actions in enabled.slots.items() if slot < _slot_id(8)}, disabled.slots)
+        held = [slot for slot in enabled.slots if slot >= _slot_id(8)]
+        self.assertTrue(held)
+        self.assertEqual(held[-1], _slot_id(21, 45))
+
+
+    def test_reserve_params_resolve_per_group_and_validate_resolved_floors(self):
+        config = make_optimizer_config(id="reserve", kind="battery_reserve",
+            params={"solar_dip_floor_soc": 12, "hold_reserve_in_expensive_windows": True},
+            conditions=[{"reserve_floor_soc": 20, "params": {"solar_dip_floor_soc": 10, "hold_reserve_in_expensive_windows": False}},
+                        {"reserve_floor_soc": 30}])
+        self.assertEqual(config.conditions[0].params["solar_dip_floor_soc"], 10)
+        self.assertIs(config.conditions[0].params["hold_reserve_in_expensive_windows"], False)
+        self.assertIs(config.conditions[1].params["hold_reserve_in_expensive_windows"], True)
+        with self.assertRaises(AutomationConfigError):
+            make_optimizer_config(id="reserve", kind="battery_reserve", params={"solar_dip_floor_soc": 12},
+                conditions=[{"reserve_floor_soc": 20, "params": {"solar_dip_floor_soc": 21}}])
+
+
 if __name__ == "__main__":
     unittest.main()

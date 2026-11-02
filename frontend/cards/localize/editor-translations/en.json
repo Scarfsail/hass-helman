@@ -39,7 +39,8 @@
       "cancel": "Cancel",
       "apply_suggestions": "Apply suggestions",
       "import_energy": "Import from Energy dashboard",
-      "apply": "Apply"
+      "apply": "Apply",
+      "use_optimizer_default": "Use optimizer default"
     },
     "status": {
       "loading_config": "Loading stored config...",
@@ -305,7 +306,8 @@
       "max_allowed_export_power": "Max allowed export power",
       "max_power": "Max power",
       "device_phase": "House phase",
-      "solar_dip_floor_soc": "Solar dip floor SoC %"
+      "solar_dip_floor_soc": "Solar dip floor SoC %",
+      "hold_reserve_in_expensive_windows": "Hold reserve in expensive windows"
     },
     "entity_status": {
       "value": "{value} {unit}",
@@ -382,7 +384,8 @@
       "add_device_profile": "The profile provides its entities, so nothing is picked by hand. Its id is generated from the device's name once and never changes.",
       "add_child_device": "Pick a sensor for a child with its own meter, or the switch, light, fan, media player, cover or climate entity of a child that draws from this device's meter. Its id is generated from the entity once and never changes.",
       "device_phase": "Optional. The phase this device is wired to, as your house wiring says. The house detail estimates each phase's load from it. Only a top-level device or one under a three-phase device is wired individually; the rest follow the device above them.",
-      "device_phase_inherited": "Under a single-phase or unassigned device, this device is on that device's phase. Change the phase there."
+      "device_phase_inherited": "Under a single-phase or unassigned device, this device is on that device's phase. Change the phase there.",
+      "inherited_optimizer_default": "Inherited from optimizer settings"
     },
     "messages": {
       "reloaded_config": "Reloaded the stored Helman config from the backend.",
@@ -603,7 +606,8 @@
       "solar_max_power": "The most the solar array produces, in watts. It scales the solar power-flow lines on the cards, and also sets the solar-bias data-glitch cap and the maximum shown in the solar detail. Leave empty to keep those two off; the cards then scale to the default.",
       "battery_max_power": "The most the battery charges or discharges at, in watts: the full scale of its power-flow lines on the cards. Leave empty for the default.",
       "grid_max_power": "The most the grid connection carries, in watts: the full scale of its power-flow lines on the cards. Leave empty for the default.",
-      "battery_reserve_solar_dip_floor_soc": "Lowest SoC allowed inside an expensive window when the forecast says solar brings the battery back to the reserve before the window ends. A buffer in case the solar forecast is too optimistic. Empty = same as the reserve."
+      "battery_reserve_solar_dip_floor_soc": "Lowest SoC allowed inside an expensive window when the forecast says solar brings the battery back to the reserve before the window ends. A buffer in case the solar forecast is too optimistic. Empty inherits the optimizer setting; if neither is set, uses this group’s reserve.",
+      "battery_reserve_hold_reserve_in_expensive_windows": "When the battery would still fall below the reserve (or the solar dip floor) inside an expensive window despite the cheap-window charge, stop discharging from that slot and import instead. Costs roughly the reserve energy at the expensive price; keeps it for a grid outage."
     },
     "device_filter": {
       "label": "Show devices",
