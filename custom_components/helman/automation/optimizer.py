@@ -4,7 +4,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Protocol
 
 from .optimizers import (
-    build_charge_from_grid_optimizer,
+    build_battery_reserve_optimizer,
     build_charge_hold_optimizer,
     build_appliance_runtime_optimizer,
     build_export_price_optimizer,
@@ -40,7 +40,7 @@ class Optimizer(Protocol):
 _BUILDERS: dict[str, Callable[..., "Optimizer"]] = {
     "export_price": build_export_price_optimizer,
     "charge_hold": build_charge_hold_optimizer,
-    "charge_from_grid": build_charge_from_grid_optimizer,
+    "battery_reserve": build_battery_reserve_optimizer,
     "appliance_runtime": build_appliance_runtime_optimizer,
 }
 

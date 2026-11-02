@@ -55,7 +55,7 @@ class TraceGroupExplanationTests(unittest.TestCase):
     def test_groups_are_stored_per_slot_and_ordered_by_index(self) -> None:
         slots = _slot_ids(2)
         trace = OptimizerTrace(slot_ids=slots)
-        trace.begin_step("opt", "charge_from_grid")
+        trace.begin_step("opt", "battery_reserve")
         trace.set_group_explanations(
             {
                 slots[0]: [_group(index=1, label="night"), _group(index=0, label="day")],
@@ -77,7 +77,7 @@ class TraceGroupExplanationTests(unittest.TestCase):
         slots = _slot_ids(1)
         stray = format_slot_id(datetime(2020, 1, 1, 0, 0, tzinfo=TZ))
         trace = OptimizerTrace(slot_ids=slots)
-        trace.begin_step("opt", "charge_from_grid")
+        trace.begin_step("opt", "battery_reserve")
         trace.set_group_explanations({slots[0]: [_group()], stray: [_group()]})
         trace.end_step(status="ok")
         explanation = trace.optimizer_explanations()[0]
@@ -86,7 +86,7 @@ class TraceGroupExplanationTests(unittest.TestCase):
     def test_replaces_previous_generation(self) -> None:
         slots = _slot_ids(1)
         trace = OptimizerTrace(slot_ids=slots)
-        trace.begin_step("opt", "charge_from_grid")
+        trace.begin_step("opt", "battery_reserve")
         trace.set_group_explanations({slots[0]: [_group(label="stale")]})
         trace.set_group_explanations({slots[0]: [_group(label="fresh")]})
         trace.end_step(status="ok")
@@ -124,7 +124,7 @@ class TraceGateTests(unittest.TestCase):
     def test_ranking_is_recorded_as_an_ordinal_not_a_boolean(self) -> None:
         slots = _slot_ids(2)
         trace = OptimizerTrace(slot_ids=slots)
-        trace.begin_step("opt", "charge_from_grid")
+        trace.begin_step("opt", "battery_reserve")
         trace.gate(role="veto",
             slot_ids=[slots[0]],
             key="cheapness_rank",
@@ -204,7 +204,7 @@ class TraceResolveConditionTests(unittest.TestCase):
     def test_resolves_placeholder_and_keeps_scope(self) -> None:
         slots = _slot_ids(2)
         trace = OptimizerTrace(slot_ids=slots)
-        trace.begin_step("opt", "charge_from_grid")
+        trace.begin_step("opt", "battery_reserve")
         trace.set_group_explanations(
             {
                 slots[0]: [
@@ -331,7 +331,7 @@ class TraceStepStatusTests(unittest.TestCase):
     def test_skipped_step_carries_a_reason(self) -> None:
         slots = _slot_ids(2)
         trace = OptimizerTrace(slot_ids=slots)
-        trace.begin_step("opt", "charge_from_grid")
+        trace.begin_step("opt", "battery_reserve")
         trace.set_step_status(status="skipped", reason="battery_params_missing")
         trace.end_step(status="skipped")
         explanation = trace.optimizer_explanations()[0]
@@ -375,7 +375,7 @@ class TraceExplanationPayloadTests(unittest.TestCase):
     def test_status_reason_survives_serialization(self) -> None:
         slots = _slot_ids(1)
         trace = OptimizerTrace(slot_ids=slots)
-        trace.begin_step("opt", "charge_from_grid")
+        trace.begin_step("opt", "battery_reserve")
         trace.set_group_explanations({slots[0]: [_group()]})
         trace.set_step_status(status="failed", reason="battery_params_missing")
         trace.end_step(status="failed")

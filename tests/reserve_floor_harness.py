@@ -61,7 +61,7 @@ def _safe_classify_reserve_floor(observations, **kwargs):
 
 def run_optimizer_loop_pure(*, capture_reserve_floor_diagnostics=False, **kwargs):
     if not capture_reserve_floor_diagnostics or not any(
-        optimizer.kind == "charge_from_grid" for optimizer in kwargs["system_optimizers"]
+        optimizer.kind == "battery_reserve" for optimizer in kwargs["system_optimizers"]
     ):
         return DiagnosticRunResult(_run_loop(**kwargs), ())
 

@@ -45,10 +45,10 @@ class TraceWrite:
 
 @dataclass(frozen=True)
 class ReserveFloorObservation:
-    """One evaluated expensive window from a ``charge_from_grid`` step (#274).
+    """One evaluated expensive window from a ``battery_reserve`` step (#274).
 
     Raw and unreduced — one entry per evaluated window, including overlapping
-    windows — unlike ``_ChargeFromGridEmission`` (charge_from_grid.py), which
+    windows — unlike ``_BatteryReserveEmission`` (battery_reserve.py), which
     is lossy per slot by design. This is the transport for the P0 reserve-floor
     breach classifier (#270/#274): a diagnostic-only collector on
     :class:`OptimizerTrace`, deliberately excluded from
@@ -61,7 +61,7 @@ class ReserveFloorObservation:
     is already folded into ``slots_needed`` before this point.
     """
 
-    #: The ``charge_from_grid`` instance that evaluated this window.
+    #: The ``battery_reserve`` instance that evaluated this window.
     optimizer_id: str
     #: The condition group whose ``reserve_floor_soc`` was consulted.
     group_index: int

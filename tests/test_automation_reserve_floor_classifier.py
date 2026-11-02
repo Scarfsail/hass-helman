@@ -6,7 +6,7 @@ Three layers:
    (no pipeline needed).
 2. A deterministic scenario suite run through the real
    ``run_optimizer_loop_pure`` (the actual, unrestructured pipeline), using a
-   real ``ChargeFromGridOptimizer`` plus small test-double "later optimizer"
+   real ``BatteryReserveOptimizer`` plus small test-double "later optimizer"
    steps that mutate the working document the way a real appliance/inverter
    optimizer would. SoC trajectories are produced by a deliberately simple,
    documented toy physics model (``_project_soc``) rather than the real
@@ -54,8 +54,8 @@ from custom_components.helman.automation.day_context import (  # noqa: E402
     DayContext,
     ImportBand,
 )
-from custom_components.helman.automation.optimizers.charge_from_grid import (  # noqa: E402
-    build_charge_from_grid_optimizer,
+from custom_components.helman.automation.optimizers.battery_reserve import (  # noqa: E402
+    build_battery_reserve_optimizer,
 )
 import reserve_floor_harness as harness_module  # noqa: E402
 from reserve_floor_harness import run_optimizer_loop_pure  # noqa: E402
@@ -527,12 +527,12 @@ class _MutatingOptimizer:
         return document
 
 
-def _charge_from_grid_config(
+def _battery_reserve_config(
     *, optimizer_id: str = "grid-bridge", floor: int = FLOOR
 ) -> OptimizerInstanceConfig:
     return make_optimizer_config(
         id=optimizer_id,
-        kind="charge_from_grid",
+        kind="battery_reserve",
         params={},
         conditions=[{"reserve_floor_soc": floor}],
     )
@@ -585,7 +585,7 @@ def _run(
     is partitioned into the two phase buckets by kind (only
     ``appliance_runtime`` is an appliance kind -- see ``spec.py``), and each
     bucket keeps its own relative order. A "later system optimizer" test
-    double therefore still runs after ``charge_from_grid`` exactly as before
+    double therefore still runs after ``battery_reserve`` exactly as before
     (both stay in phase 2, in list order); an appliance test double instead
     runs once in phase 1 (before any system optimizer) and again in phase 3
     (after) -- see ``_two_phase_mutation`` for scenarios that care which call
@@ -602,8 +602,8 @@ def _run(
     )
 
     def dispatch(config, **kwargs):
-        if config.kind == "charge_from_grid":
-            return build_charge_from_grid_optimizer(config)
+        if config.kind == "battery_reserve":
+            return build_battery_reserve_optimizer(config)
         return _MutatingOptimizer(mutations_by_id[config.id])
 
     with patch.object(pipeline_module, "build_optimizer", side_effect=dispatch):
@@ -642,11 +642,11 @@ class ScenarioSuiteTests(unittest.TestCase):
         """#272 (P2 of #270) deliberately changes this scenario's outcome.
 
         Under the old flat pipeline this was the cold-start form of the #116
-        look-ahead gap: with no previous plan to restore, ``charge_from_grid``
+        look-ahead gap: with no previous plan to restore, ``battery_reserve``
         saw a bare house and a later appliance step introduced the breach —
         ``downstream_introduced``. G1's own cold-start fix is exactly this
         case: the appliance now runs for real in phase 1, *before*
-        ``charge_from_grid`` (phase 2) ever reads the house, so its bridge is
+        ``battery_reserve`` (phase 2) ever reads the house, so its bridge is
         sized against the true demand from the start and the final plan is
         never breached at all. This is the one scenario the issue's
         acceptance criteria explicitly expect to reclassify.
@@ -654,7 +654,7 @@ class ScenarioSuiteTests(unittest.TestCase):
         build_snapshot = _make_build_snapshot()
         result = _run(
             execution_optimizers=[
-                _charge_from_grid_config(),
+                _battery_reserve_config(),
                 _stub_config(
                     optimizer_id="boiler",
                     kind="appliance_runtime",
@@ -670,7 +670,7 @@ class ScenarioSuiteTests(unittest.TestCase):
 
     def test_appliance_moves_into_expensive_window_is_exclusive_appliance(self) -> None:
         """The parent issue's own scenario D: the boiler is placed safely in
-        phase 1 (before ``charge_from_grid`` sizes its bridge in phase 2), but
+        phase 1 (before ``battery_reserve`` sizes its bridge in phase 2), but
         phase 3 re-plans it into the expensive window -- exactly the
         "downstream_introduced" hazard #274 classifies and #272 explicitly
         ships unfixed (see the parent issue's Accepted Risk section)."""
@@ -689,7 +689,7 @@ class ScenarioSuiteTests(unittest.TestCase):
 
         result = _run(
             execution_optimizers=[
-                _charge_from_grid_config(),
+                _battery_reserve_config(),
                 _stub_config(optimizer_id="boiler", kind="appliance_runtime", controllable_id="boiler"),
             ],
             mutations_by_id={
@@ -718,7 +718,7 @@ class ScenarioSuiteTests(unittest.TestCase):
 
         result = _run(
             execution_optimizers=[
-                _charge_from_grid_config(),
+                _battery_reserve_config(),
                 _stub_config(optimizer_id="later-inverter", kind="charge_hold", controllable_id="inverter"),
             ],
             mutations_by_id={"later-inverter": clear_bridge},
@@ -737,7 +737,7 @@ class ScenarioSuiteTests(unittest.TestCase):
     # wins first, per the table's own ordering. A flat, un-breached base
     # trajectory plus an EARLIER automation step that introduces the deficit
     # (an appliance moving demand into the window) gives exactly that: control
-    # sees none of it, but charge_from_grid's own input does.
+    # sees none of it, but battery_reserve's own input does.
     _FLAT_SOC_BY_HOUR = {0: 45, 6: 45, 7: 45, 8: 45, 9: 45, 10: 45, 20: 45}
 
     @staticmethod
@@ -764,7 +764,7 @@ class ScenarioSuiteTests(unittest.TestCase):
         result = _run(
             execution_optimizers=[
                 _stub_config(optimizer_id="boiler", kind="appliance_runtime", controllable_id="boiler"),
-                _charge_from_grid_config(),
+                _battery_reserve_config(),
             ],
             mutations_by_id={"boiler": self._add_draining_appliance},
             build_snapshot=build_snapshot,
@@ -790,7 +790,7 @@ class ScenarioSuiteTests(unittest.TestCase):
         result = _run(
             execution_optimizers=[
                 _stub_config(optimizer_id="boiler", kind="appliance_runtime", controllable_id="boiler"),
-                _charge_from_grid_config(),
+                _battery_reserve_config(),
             ],
             mutations_by_id={"boiler": self._add_draining_appliance},
             build_snapshot=build_snapshot,
@@ -805,7 +805,7 @@ class ScenarioSuiteTests(unittest.TestCase):
         self.assertEqual(observation.limit, REASON_CAP)
 
     def test_bridge_lands_early_discharges_before_window_is_unresolved(self) -> None:
-        # charge_from_grid computes and writes a bridge that (per its own,
+        # battery_reserve computes and writes a bridge that (per its own,
         # necessarily simplified, arithmetic) should cover the window. This
         # toy model's ``bump_expires_at`` deliberately disagrees: the bridge's
         # benefit is spent by the time the expensive window opens. Boundary
@@ -819,7 +819,7 @@ class ScenarioSuiteTests(unittest.TestCase):
         result = _run(
             execution_optimizers=[
                 _stub_config(optimizer_id="boiler", kind="appliance_runtime", controllable_id="boiler"),
-                _charge_from_grid_config(),
+                _battery_reserve_config(),
             ],
             mutations_by_id={"boiler": self._add_draining_appliance},
             build_snapshot=build_snapshot,
@@ -830,7 +830,7 @@ class ScenarioSuiteTests(unittest.TestCase):
         self.assertEqual(outcome.klass, CLASS_UNRESOLVED_AT_BOUNDARY)
         self.assertEqual(outcome.reason, REASON_UNRESOLVED)
 
-    def test_two_charge_from_grid_instances_join_their_own_boundary(self) -> None:
+    def test_two_battery_reserve_instances_join_their_own_boundary(self) -> None:
         # Record each boundary object in build order, then inspect the mapping
         # handed to the batch classifier.  The outcome classes alone are not a
         # sufficient assertion here: rule 2 makes bridge-a clean before its
@@ -864,18 +864,18 @@ class ScenarioSuiteTests(unittest.TestCase):
         ):
             result = _run(
                 execution_optimizers=[
-                    _charge_from_grid_config(
+                    _battery_reserve_config(
                         optimizer_id="bridge-b",
                         floor=95,
                     ),
-                    _charge_from_grid_config(
+                    _battery_reserve_config(
                         optimizer_id="bridge-a",
                         floor=FLOOR,
                     ),
                 ],
                 build_snapshot=build_snapshot,
             )
-        self._record("two_charge_from_grid_instances", result.reserve_floor_results)
+        self._record("two_battery_reserve_instances", result.reserve_floor_results)
         by_id: dict[str, object] = {r.optimizer_id: r for r in result.reserve_floor_results}
         self.assertIn("bridge-a", by_id)
         self.assertIn("bridge-b", by_id)
@@ -892,7 +892,7 @@ class ScenarioSuiteTests(unittest.TestCase):
     def test_control_below_floor_bridge_repairs_it_is_none(self) -> None:
         build_snapshot = _make_build_snapshot()
         result = _run(
-            execution_optimizers=[_charge_from_grid_config()],
+            execution_optimizers=[_battery_reserve_config()],
             build_snapshot=build_snapshot,
         )
         self._record("control_below_floor_repaired", result.reserve_floor_results)
@@ -907,7 +907,7 @@ class ScenarioSuiteTests(unittest.TestCase):
         # plan (== boundary, single-step run) never reaches the floor either.
         build_snapshot = _make_build_snapshot(charge_bump_pp=2.0)
         result = _run(
-            execution_optimizers=[_charge_from_grid_config()],
+            execution_optimizers=[_battery_reserve_config()],
             build_snapshot=build_snapshot,
         )
         self._record("control_below_floor_never_restored", result.reserve_floor_results)
@@ -928,7 +928,7 @@ class ScenarioSuiteTests(unittest.TestCase):
             bump_expires_at=_at(9, 30),
         )
         result = _run(
-            execution_optimizers=[_charge_from_grid_config()],
+            execution_optimizers=[_battery_reserve_config()],
             build_snapshot=build_snapshot,
         )
         self._record("overlapping_expensive_windows", result.reserve_floor_results)
@@ -944,14 +944,14 @@ class ScenarioSuiteTests(unittest.TestCase):
     def test_truncated_soc_series_is_unmeasurable(self) -> None:
         build_snapshot = _make_build_snapshot(truncate_before=_at(7))
         result = _run(
-            execution_optimizers=[_charge_from_grid_config()],
+            execution_optimizers=[_battery_reserve_config()],
             build_snapshot=build_snapshot,
         )
         self._record("truncated_soc_series", result.reserve_floor_results)
         outcome = result.reserve_floor_results[0]
         self.assertEqual(outcome.klass, CLASS_UNMEASURABLE)
 
-    def test_run_with_no_charge_from_grid_captures_nothing(self) -> None:
+    def test_run_with_no_battery_reserve_captures_nothing(self) -> None:
         build_snapshot = _make_build_snapshot()
         captured_calls: list[object] = []
         real_build = build_snapshot
@@ -973,7 +973,7 @@ class ScenarioSuiteTests(unittest.TestCase):
         # phase-1 post-step rebuild, the phase-3 setup rebuild (after
         # stripping its lane), and the phase-3 post-step rebuild. No extra
         # control/boundary capture calls, because there is no
-        # `charge_from_grid` in this run.
+        # `battery_reserve` in this run.
         self.assertEqual(len(captured_calls), 4)
 
 
@@ -984,7 +984,7 @@ class TransportAndSafetyTests(unittest.TestCase):
         from custom_components.helman.automation.trace import OptimizerTrace
 
         trace = OptimizerTrace(slot_ids=(_slot_id(8),))
-        trace.begin_step("grid-bridge", "charge_from_grid", controllable_id="inverter")
+        trace.begin_step("grid-bridge", "battery_reserve", controllable_id="inverter")
         trace.record_reserve_floor_observation(
             ReserveFloorObservation(
                 optimizer_id="grid-bridge",
@@ -1015,9 +1015,9 @@ class TransportAndSafetyTests(unittest.TestCase):
         is simply the working document right after the emitting step writes
         (see ``reserve_floor_harness._safe_build_reserve_floor_boundary``). It must still
         carry the fixed phase-1 appliance demand -- the same demand basis
-        ``charge_from_grid``'s own input used -- because the appliance
+        ``battery_reserve``'s own input used -- because the appliance
         (phase 1, before any system optimizer) already wrote it by the time
-        ``charge_from_grid`` (phase 2) runs.
+        ``battery_reserve`` (phase 2) runs.
         """
         build_snapshot = _make_build_snapshot()
         captured_boundaries: list[ReserveFloorBoundary] = []
@@ -1041,7 +1041,7 @@ class TransportAndSafetyTests(unittest.TestCase):
         ):
             result = _run(
                 execution_optimizers=[
-                    _charge_from_grid_config(),
+                    _battery_reserve_config(),
                     _stub_config(optimizer_id="boiler", kind="appliance_runtime", controllable_id="boiler"),
                 ],
                 mutations_by_id={"boiler": add_boiler},
@@ -1069,7 +1069,7 @@ class TransportAndSafetyTests(unittest.TestCase):
             return real_build(doc)
 
         _run(
-            execution_optimizers=[_charge_from_grid_config()],
+            execution_optimizers=[_battery_reserve_config()],
             build_snapshot=spying_build,
             schedule_document=document,
         )
@@ -1100,9 +1100,9 @@ class TransportAndSafetyTests(unittest.TestCase):
         document = ScheduleDocument(execution_enabled=True)
 
         def dispatch(config, **kwargs):
-            return build_charge_from_grid_optimizer(config)
+            return build_battery_reserve_optimizer(config)
 
-        optimizers = [_charge_from_grid_config()]
+        optimizers = [_battery_reserve_config()]
         with patch.object(pipeline_module, "build_optimizer", side_effect=dispatch):
             with_diagnostics = run_optimizer_loop_pure(
                 appliance_optimizers=(),

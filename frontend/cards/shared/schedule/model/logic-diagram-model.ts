@@ -314,7 +314,7 @@ function comparisonSide(value: unknown): string | null {
  * Nothing is invented. An ordinal gets no operator, a window gets no threshold,
  * and a gate this does not know about gets no face numbers at all; its params
  * are still whole in the tooltip. Read off the `GATE_*` docstrings in
- * `appliance_runtime.py`, `charge_hold.py` and `charge_from_grid.py`.
+ * `appliance_runtime.py`, `charge_hold.py` and `battery_reserve.py`.
  */
 export function gateDetail(
     key: string,

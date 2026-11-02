@@ -101,12 +101,12 @@ GATE_HOLD_WINDOW = "hold_window"
 GATE_HOLD_ROOM = "hold_room"
 #: Where the slot placed in the day's export-price ranking. **An ordinal, not a
 #: truth value** — ``params.rank`` / ``params.rankOf`` carry the position, the
-#: same shape ``charge_from_grid`` uses for its cheap band.
+#: same shape ``battery_reserve`` uses for its cheap band.
 #:
 #: The polarity is the one this module's gates have always had — ``true`` means
 #: *this slot is held*. So ``true`` is the slot that lost the ranking: enough
 #: cheaper slots already cover the need, and the surplus here is worth more
-#: exported. ``false`` releases the slot to charge. (``charge_from_grid`` reads
+#: exported. ``false`` releases the slot to charge. (``battery_reserve`` reads
 #: the other way round because there the cut is what it *writes*; here the cut
 #: is what it leaves alone.) The diagram requires it this way too: a slot that
 #: ends at ``execute`` must have every gate ``true``, or the picture contradicts

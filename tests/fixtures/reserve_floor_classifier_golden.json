@@ -184,7 +184,7 @@
       ]
     }
   ],
-  "two_charge_from_grid_instances": [
+  "two_battery_reserve_instances": [
     {
       "applianceLaneChanged": null,
       "class": "none",

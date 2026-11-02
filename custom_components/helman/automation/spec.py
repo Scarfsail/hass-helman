@@ -307,7 +307,7 @@ OPTIMIZER_SPECS: dict[str, OptimizerSpec] = {
             },
         ),
         OptimizerSpec(
-            kind="charge_from_grid",
+            kind="battery_reserve",
             target=_INVERTER_TARGET,
             params=(
                 F.non_negative_int("charge_start_margin_slots", default=2),
