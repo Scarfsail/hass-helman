@@ -749,6 +749,26 @@ class GroupExplanationTests(unittest.TestCase):
             {node.key for node in explanations[SLOT_0][0].conditions},
         )
 
+    def test_reserve_qualifiers_get_no_column_or_node(self) -> None:
+        """The dip floor and hold switch qualify `reserve_floor_soc`; only it is drawn."""
+        config = make_optimizer_config(
+            id="reserve",
+            kind="battery_reserve",
+            conditions=[
+                {
+                    "reserve_floor_soc": 20,
+                    "solar_dip_floor_soc": 12,
+                    "hold_reserve_in_expensive_windows": True,
+                }
+            ],
+        )
+        explanations = self._explanations(_snapshot(prices=_PRICES), config)
+
+        self.assertEqual(
+            [node.key for node in explanations[SLOT_0][0].conditions],
+            ["reserve_floor_soc"],
+        )
+
     def test_condition_scope_is_carried_onto_the_node(self) -> None:
         config = make_appliance_member_config(
             id="runtime",

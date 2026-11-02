@@ -2961,7 +2961,7 @@ class BatteryReserveRenameTests(unittest.TestCase):
         }
         original = deepcopy(document)
         expected = deepcopy(document)
-        expected["config_version"] = 30
+        expected["config_version"] = CONFIG_DOCUMENT_VERSION
         for index in (1, 3):
             expected["automation"]["system_optimizers"][index]["kind"] = "battery_reserve"
 
@@ -2978,8 +2978,81 @@ class BatteryReserveRenameTests(unittest.TestCase):
     def test_missing_system_bucket_is_unchanged(self) -> None:
         document = {"config_version": 29, "automation": {"enabled": True}}
         migrated, ids = migrate_config_document(document)
-        self.assertEqual(migrated, {**document, "config_version": 30})
+        self.assertEqual(migrated, {**document, "config_version": CONFIG_DOCUMENT_VERSION})
         self.assertEqual(ids, [])
+
+
+class BatteryReserveQualifiersTests(unittest.TestCase):
+    """v30 -> v31 moves the dip floor and hold switch from params into each group."""
+
+    @staticmethod
+    def _migrate(reserve: dict) -> dict:
+        document = {
+            "config_version": 30,
+            "automation": {"system_optimizers": [{"id": "reserve", "kind": "battery_reserve", **reserve}]},
+        }
+        migrated, _ = migrate_config_document(document)
+        return migrated["automation"]["system_optimizers"][0]
+
+    def test_master_values_are_written_onto_every_group(self) -> None:
+        migrated = self._migrate({
+            "params": {"charge_start_margin_slots": 2, "solar_dip_floor_soc": 12,
+                       "hold_reserve_in_expensive_windows": True},
+            "conditions": [{"reserve_floor_soc": 20}, {"reserve_floor_soc": 30}],
+        })
+        self.assertEqual(migrated["params"], {"charge_start_margin_slots": 2})
+        self.assertEqual(migrated["conditions"], [
+            {"reserve_floor_soc": 20, "solar_dip_floor_soc": 12, "hold_reserve_in_expensive_windows": True},
+            {"reserve_floor_soc": 30, "solar_dip_floor_soc": 12, "hold_reserve_in_expensive_windows": True},
+        ])
+
+    def test_null_master_value_is_popped_and_not_written(self) -> None:
+        migrated = self._migrate({
+            "params": {"charge_start_margin_slots": 2, "solar_dip_floor_soc": None},
+            "conditions": [{"reserve_floor_soc": 20}],
+        })
+        self.assertEqual(migrated["params"], {"charge_start_margin_slots": 2})
+        self.assertEqual(migrated["conditions"], [{"reserve_floor_soc": 20}])
+
+    def test_group_override_wins_and_explicit_false_is_kept(self) -> None:
+        migrated = self._migrate({
+            "params": {"solar_dip_floor_soc": 12, "hold_reserve_in_expensive_windows": True},
+            "conditions": [
+                {"reserve_floor_soc": 20, "params": {"solar_dip_floor_soc": 10,
+                                                     "hold_reserve_in_expensive_windows": False}},
+                {"reserve_floor_soc": 30, "params": {"charge_start_margin_slots": 4,
+                                                     "hold_reserve_in_expensive_windows": False}},
+            ],
+        })
+        self.assertEqual(migrated["params"], {})
+        self.assertEqual(migrated["conditions"], [
+            {"reserve_floor_soc": 20, "solar_dip_floor_soc": 10, "hold_reserve_in_expensive_windows": False},
+            {"reserve_floor_soc": 30, "params": {"charge_start_margin_slots": 4},
+             "solar_dip_floor_soc": 12, "hold_reserve_in_expensive_windows": False},
+        ])
+
+    def test_master_false_is_kept(self) -> None:
+        migrated = self._migrate({
+            "params": {"hold_reserve_in_expensive_windows": False},
+            "conditions": [{"reserve_floor_soc": 20}],
+        })
+        self.assertEqual(migrated["conditions"],
+                         [{"reserve_floor_soc": 20, "hold_reserve_in_expensive_windows": False}])
+
+    def test_nothing_is_written_when_neither_is_set(self) -> None:
+        reserve = {"params": {"charge_start_margin_slots": 2},
+                   "conditions": [{"reserve_floor_soc": 20, "params": {}}]}
+        self.assertEqual(self._migrate(deepcopy(reserve)), {"id": "reserve", "kind": "battery_reserve", **reserve})
+
+    def test_emptied_override_is_dropped(self) -> None:
+        migrated = self._migrate({
+            "conditions": [{"reserve_floor_soc": 20, "params": {"solar_dip_floor_soc": 15}}],
+        })
+        self.assertEqual(migrated["conditions"], [{"reserve_floor_soc": 20, "solar_dip_floor_soc": 15}])
+
+    def test_non_list_conditions_are_left_alone(self) -> None:
+        reserve = {"params": {"solar_dip_floor_soc": 12}, "conditions": {"reserve_floor_soc": 20}}
+        self.assertEqual(self._migrate(deepcopy(reserve)), {"id": "reserve", "kind": "battery_reserve", **reserve})
 
 
 if __name__ == "__main__":

@@ -1667,6 +1667,71 @@ def _rename_battery_reserve(optimizer: dict[str, Any]) -> dict[str, Any]:
     return optimizer
 
 
+def _migrate_v30_to_v31(document: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    return _migrate_optimizers(
+        document, _move_battery_reserve_qualifiers, bucket="system_optimizers"
+    )
+
+
+#: ``battery_reserve`` params that became qualifiers of ``reserve_floor_soc``.
+_BATTERY_RESERVE_QUALIFIERS = ("solar_dip_floor_soc", "hold_reserve_in_expensive_windows")
+
+
+def _move_battery_reserve_qualifiers(optimizer: dict[str, Any]) -> dict[str, Any]:
+    """The dip floor and hold switch move from ``params`` into each group.
+
+    Same move as ``_unify_self_sustainability``'s margin: each was a param
+    resolved as master-plus-override, so each group takes what it resolved
+    before — its own override, else the master value. A key is written only
+    where one of them existed; an absent key already means "same as the reserve"
+    and "off", so nothing is stamped that the user never wrote. An explicit
+    ``false`` is a value the user wrote and is kept.
+    """
+    if optimizer.get("kind") != "battery_reserve":
+        return optimizer
+
+    conditions = optimizer.get("conditions")
+    if not isinstance(conditions, list):
+        # Same bail as `_unify_self_sustainability`: nothing to move onto, and a
+        # malformed `conditions` is the reader's to reject.
+        return optimizer
+
+    params = optimizer.get("params")
+    params = dict(params) if isinstance(params, Mapping) else {}
+    master = {key: params.pop(key) for key in _BATTERY_RESERVE_QUALIFIERS if key in params}
+
+    rebuilt: list[Any] = []
+    for group in conditions:
+        if not isinstance(group, Mapping):
+            rebuilt.append(group)
+            continue
+        group = dict(group)
+        override = group.get("params")
+        override = override if isinstance(override, Mapping) else {}
+        for key in _BATTERY_RESERVE_QUALIFIERS:
+            # A `None` is "not set" (as `_margin_from` reads it): popped from
+            # params above, never written as a group key.
+            if override.get(key) is not None:
+                group[key] = override[key]
+            elif key not in override and master.get(key) is not None:
+                group[key] = master[key]
+        if any(key in override for key in _BATTERY_RESERVE_QUALIFIERS):
+            remaining = {
+                key: value
+                for key, value in override.items()
+                if key not in _BATTERY_RESERVE_QUALIFIERS
+            }
+            # Dropped when emptied, as in `_unify_self_sustainability`.
+            if remaining:
+                group["params"] = remaining
+            else:
+                group.pop("params")
+        rebuilt.append(group)
+
+    # `params` stays even when emptied, as in `_unify_self_sustainability`.
+    return {**optimizer, "params": params, "conditions": rebuilt}
+
+
 def _slug_id(name: Any, taken: set[str], fallback: str) -> str:
     """A stable id slugged from ``name``, unique within ``taken`` (which it joins).
 
@@ -1715,6 +1780,7 @@ _MIGRATIONS = {
     27: _migrate_v27_to_v28,
     28: _migrate_v28_to_v29,
     29: _migrate_v29_to_v30,
+    30: _migrate_v30_to_v31,
 }
 
 

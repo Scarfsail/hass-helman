@@ -41,6 +41,31 @@ export function renderSchemaFields(
     return fields.map((field) => renderSchemaField(host, field, options));
 }
 
+/** A plain on/off switch: a boolean field has no "inherit" state of its own. */
+export function renderBooleanField(
+    host: OptimizerEditorHost,
+    path: PathSegment[],
+    labelKey: string,
+    helpKey: string,
+    field: SchemaField,
+): TemplateResult {
+    return html`
+        <div class="field">
+            <div class="field-label-row">
+                <label>${host.t(labelKey)}</label>
+                ${host.renderHelpIcon(labelKey, helpKey)}
+            </div>
+            <span class="summary-toggle"><ha-switch
+                .checked=${(host.getValue(path) ?? field.default) === true}
+                aria-label=${host.t(labelKey)}
+                @change=${(event: Event) => {
+                    host.setValue(path, (event.currentTarget as HTMLInputElement).checked);
+                }}
+            ></ha-switch></span>
+        </div>
+    `;
+}
+
 export function renderSchemaField(
     host: OptimizerEditorHost,
     field: SchemaField,
@@ -83,32 +108,7 @@ export function renderSchemaField(
         inheritFrom === undefined ? undefined : host.getValue(inheritFrom);
 
     if (field.type === "boolean") {
-        const current = host.getValue(path);
-        const overridden = typeof current === "boolean";
-        return html`
-            <div class="field">
-                <div class="field-label-row">
-                    <label>${host.t(labelKey)}</label>
-                    ${host.renderHelpIcon(labelKey, helpKey)}
-                </div>
-                <div class="inline-actions">
-                <span class="summary-toggle"><ha-switch
-                    .checked=${(overridden ? current : inherited ?? field.default) === true}
-                    aria-label=${host.t(labelKey)}
-                    @change=${(event: Event) => {
-                        host.setValue(path, (event.currentTarget as HTMLInputElement).checked);
-                    }}
-                ></ha-switch></span>
-                ${inheritFrom !== undefined ? html`
-                    <button type="button" ?disabled=${!overridden}
-                        @click=${() => host.setValue(path, undefined)}>
-                        ${host.t("editor.actions.use_optimizer_default")}
-                    </button>
-                    ${!overridden ? html`<span class="helper">${host.t("editor.helpers.inherited_optimizer_default")}</span>` : nothing}
-                ` : nothing}
-                </div>
-            </div>
-        `;
+        return renderBooleanField(host, path, labelKey, helpKey, field);
     }
     if (field.type === "day_classifications") {
         return host.renderDayClassificationField(path, labelKey, helpKey);

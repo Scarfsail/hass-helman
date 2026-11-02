@@ -255,7 +255,7 @@ export const configFormStyles = css`
         align-items: stretch;
     }
 
-    .number-input-wrap input {
+    .number-input-wrap input:not(:last-child) {
         border-top-right-radius: 0;
         border-bottom-right-radius: 0;
     }
