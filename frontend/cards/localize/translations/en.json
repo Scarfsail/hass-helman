@@ -960,5 +960,21 @@
       "note": "Mean power per hour of day, over the hours each row has data for. Each row is shaded relative to its own peak; hatched cells have no data.",
       "empty": "No devices to show"
     }
+  },
+  "device_card": {
+    "fields": {
+      "state": "State",
+      "power": "Power",
+      "energy_today": "Energy today",
+      "target_temperature": "Set temperature",
+      "current_temperature": "Current temperature",
+      "soc": "State of charge",
+      "import_today": "Imported today",
+      "export_today": "Exported today"
+    },
+    "idle": "idle",
+    "waiting": "waiting",
+    "not_found": "\"{target}\" is not in Helman's configuration. It may have been renamed or removed.",
+    "no_target": "Pick a device or an energy node for this card."
   }
 }

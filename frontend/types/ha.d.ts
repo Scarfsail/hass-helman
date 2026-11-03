@@ -32,6 +32,8 @@ export interface HomeAssistant {
   loadBackendTranslation(category: string): Promise<LocalizeFunc>;
   loadFragmentTranslation(fragment: string): Promise<LocalizeFunc | undefined>;
   callWS<T>(msg: MessageBase): Promise<T>;
+  formatEntityState(stateObj: HassEntity, state?: string): string;
+  formatEntityAttributeValue(stateObj: HassEntity, attribute: string, value?: unknown): string;
 }
 
 /** `data/lovelace/config/card.ts`. */

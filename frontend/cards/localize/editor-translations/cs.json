@@ -778,5 +778,18 @@
     "scheduler_note": "Plánovač zařízení počítá s touto hodnotou",
     "failed": "Bez odhadu: {reason}",
     "not_trained": "Zatím nenaučeno"
+  },
+  "device_card_editor": {
+    "fields": {
+      "target": "Zařízení nebo energetický uzel",
+      "name": "Název",
+      "fields": "Pole",
+      "hide_when_idle": "Skrýt v klidu"
+    },
+    "helpers": {
+      "name": "Výchozí je název zařízení nebo uzlu",
+      "fields": "Zobrazí se v tomto pořadí; nabízí se jen to, co Helman o cíli ví",
+      "hide_when_idle": "Tato pole se vynechají, když je cíl vypnutý, nenabíjí nebo neodebírá"
+    }
   }
 }

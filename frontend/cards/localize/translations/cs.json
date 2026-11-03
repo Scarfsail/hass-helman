@@ -1324,5 +1324,21 @@
       "note": "Průměrný výkon v každé hodině dne, za hodiny, pro které má řádek data. Každý řádek je stínovaný vůči svému vlastnímu maximu; šrafované buňky nemají data.",
       "empty": "Žádné spotřebiče k zobrazení"
     }
+  },
+  "device_card": {
+    "fields": {
+      "state": "Stav",
+      "power": "Výkon",
+      "energy_today": "Energie dnes",
+      "target_temperature": "Nastavená teplota",
+      "current_temperature": "Aktuální teplota",
+      "soc": "Stav nabití",
+      "import_today": "Odběr dnes",
+      "export_today": "Dodávka dnes"
+    },
+    "idle": "v klidu",
+    "waiting": "čeká",
+    "not_found": "„{target}“ není v konfiguraci Helmanu. Možná byl přejmenován nebo odstraněn.",
+    "no_target": "Vyberte pro tuto kartu zařízení nebo energetický uzel."
   }
 }

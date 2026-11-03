@@ -1,6 +1,9 @@
 import type { HomeAssistant } from "../../types/ha";
 import { convertToKWh } from "../helman/energy-unit-converter";
 import type { TreeItem } from "../shared/data/tree-item";
+import type { EvChargerDetailPayload } from "../helman-api";
+import { readPowerW } from "../shared/power-reading";
+import { IDLE_W } from "./live-flows";
 
 type HassState = HomeAssistant["states"][string];
 
@@ -67,4 +70,22 @@ export const deviceAncestors = (houseNode: TreeItem | null, item: TreeItem): Tre
         return null;
     };
     return houseNode ? search(houseNode.children, []) ?? [] : [];
+};
+
+/**
+ * The charger id when the device is one schedulable EV charger, by its
+ * configured appliance kind; `null` for any other device.
+ */
+export const evChargerId = (item: TreeItem): string | null => {
+    const ids = item.controllableIds ?? [];
+    if (ids.length !== 1) return null;
+    return item.applianceKind === "ev_charger" ? ids[0] : null;
+};
+
+/** Charging as reported; a Custom charger without a status, by its power. */
+export const evCharging = (hass: HomeAssistant, overview: EvChargerDetailPayload): boolean => {
+    if (overview.status) return overview.status.kind === "charging";
+    if (overview.entities.run_mode) return false;
+    const power = readPowerW(hass, overview.entities.power);
+    return power !== null && power > IDLE_W;
 };

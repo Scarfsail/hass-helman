@@ -778,5 +778,18 @@
     "scheduler_note": "The device scheduler projects with this figure",
     "failed": "No estimate: {reason}",
     "not_trained": "Not trained yet"
+  },
+  "device_card_editor": {
+    "fields": {
+      "target": "Device or energy node",
+      "name": "Name",
+      "fields": "Fields",
+      "hide_when_idle": "Hide while idle"
+    },
+    "helpers": {
+      "name": "Defaults to the device's or node's name",
+      "fields": "Shown in this order; only what Helman knows about the target is offered",
+      "hide_when_idle": "These fields are left out while the target is off, not charging or not drawing power"
+    }
   }
 }
