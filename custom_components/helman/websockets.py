@@ -18,6 +18,7 @@ from .const import (
     DOMAIN,
     EVENT_DATA_CHANGED,
 )
+from .automation.config import assign_missing_optimizer_ids
 from .automation.spec import OPTIMIZER_SPECS
 from .controllables.spec import appliance_controllable_kinds
 from .config_defaults import CONFIG_FIELD_DEFAULTS
@@ -369,8 +370,9 @@ def ws_validate_config(
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
+    config = assign_missing_optimizer_ids(msg["config"])
     connection.send_result(
-        msg["id"], _validate_with_vendors(hass, msg["config"])[1].to_dict()
+        msg["id"], _validate_with_vendors(hass, config)[1].to_dict()
     )
 
 
@@ -441,8 +443,12 @@ async def ws_save_config(
     # Stamp the version before validating, so a YAML round-trip through the
     # editor can never drop it — a document that lost `config_version` would
     # re-trigger the load migration on the next start, against a document
-    # already in the new shape.
-    config = {**msg["config"], "config_version": CONFIG_DOCUMENT_VERSION}
+    # already in the new shape. An optimizer authored without an id gets a
+    # generated one here, so the stored document always carries it.
+    config = {
+        **assign_missing_optimizer_ids(msg["config"]),
+        "config_version": CONFIG_DOCUMENT_VERSION,
+    }
 
     resolved, validation = _validate_with_vendors(hass, config)
     if not validation.valid:

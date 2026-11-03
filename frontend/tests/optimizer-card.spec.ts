@@ -209,12 +209,13 @@ test.describe("schema-driven optimizer card", () => {
         });
         const card = await openCard(panel);
 
-        // Only the optimizer id — `export_price` is fully described by its
-        // conditions, so `params` is empty and nothing is invented for it.
+        // Nothing at all — `export_price` is fully described by its
+        // conditions, so `params` is empty and nothing is invented for it, and
+        // the id is generated on save, never shown or asked for.
         const labels = await card
             .locator(".appliance-body > .field-grid label")
             .allInnerTexts();
-        expect(labels).toEqual(["Optimizer id"]);
+        expect(labels).toEqual([]);
     });
 
     test("every declared condition group is listed", async ({ page }) => {
@@ -581,11 +582,44 @@ test.describe("an optimizer's YAML mode", () => {
         await expect(panel.getByRole("button", { name: "Save" })).toBeEnabled();
 
         await modeButton(card, "Visual").click();
-        await expect(card.locator(".card-title strong")).toHaveText("renamed-hold");
+        // This schema declares no target, so the card is titled by its kind —
+        // never by the id the YAML just renamed.
+        await expect(card.locator(".card-title strong")).toHaveText("Charge hold");
         const values = await card
             .locator(".appliance-body > .field-grid input")
             .evaluateAll((inputs) => inputs.map((input) => (input as HTMLInputElement).value));
-        expect(values.slice(0, 2)).toEqual(["renamed-hold", "07:00"]);
+        expect(values[0]).toBe("07:00");
+        expect(values).not.toContain("renamed-hold");
+    });
+
+    test("a YAML card is titled by its selected target", async ({ page }) => {
+        // The real `charge_hold` targets the inverter, and the title comes from
+        // that target in either mode — YAML hides the form, not the summary.
+        const schema = {
+            ...SCHEMA,
+            kinds: SCHEMA.kinds.map((kind) => kind.kind !== "charge_hold" ? kind : {
+                ...kind,
+                target: [{ key: "controllable_id", type: "string", default: "inverter" }],
+                controllableKinds: ["inverter"],
+            }),
+        };
+        const config = {
+            energy_nodes: { inverter: { controls: {} } },
+            automation: {
+                ...CONFIG.automation,
+                system_optimizers: [{
+                    ...CONFIG.automation.system_optimizers[0],
+                    target: { controllable_id: "inverter" },
+                }],
+            },
+        };
+        const panel = await mountEditor(page, config, schema);
+        const card = await openCard(panel);
+
+        await modeButton(card, "YAML").click();
+
+        await expect(card.locator(".yaml-surface")).toHaveCount(1);
+        await expect(card.locator(".card-title strong")).toHaveText("Inverter");
     });
 
     test("invalid YAML shows the error and blocks the way back", async ({ page }) => {
@@ -751,8 +785,9 @@ test.describe("an optimizer's YAML mode", () => {
                 );
             });
 
-        await expect(panel.locator(".optimizer-card .card-title strong").first()).toHaveText(
-            "export",
+        // Both target the inverter, so the kind subtitle tells them apart.
+        await expect(panel.locator(".optimizer-card .card-subtitle").first()).toHaveText(
+            "Export price",
         );
         await expect(panel.locator(".yaml-surface")).toHaveCount(0);
     });

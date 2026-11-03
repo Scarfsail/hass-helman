@@ -30,6 +30,7 @@ __all__ = [
     "DayContextConfig",
     "OptimizerConfigError",
     "OptimizerInstanceConfig",
+    "assign_missing_optimizer_ids",
     "read_automation_config",
 ]
 
@@ -339,6 +340,59 @@ def _read_optimizer_list(
             )
         optimizers.append(optimizer)
     return tuple(optimizers)
+
+
+def assign_missing_optimizer_ids(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a copy of ``config`` in which every optimizer without an id has one.
+
+    An optimizer entry with a string ``kind`` and a missing or blank ``id`` gets
+    ``kind`` with ``_`` → ``-``, made unique across both buckets with a ``-2``,
+    ``-3``, … suffix — the scheme the editor's ``createUniqueKey`` uses, so an id
+    reads the same whichever side made it. Existing ids, non-string ids and
+    malformed entries are left as they are, so validation still reports the
+    malformed ones.
+    """
+    result = dict(config)
+    automation = result.get("automation")
+    if not isinstance(automation, Mapping):
+        return result
+    automation = dict(automation)
+    result["automation"] = automation
+
+    buckets = {
+        key: list(automation[key])
+        for key in _BUCKET_KEYS
+        if isinstance(automation.get(key), list)
+    }
+    taken = {
+        entry["id"].strip()
+        for entries in buckets.values()
+        for entry in entries
+        if isinstance(entry, Mapping) and isinstance(entry.get("id"), str)
+    }
+    for key, entries in buckets.items():
+        for index, entry in enumerate(entries):
+            if (
+                not isinstance(entry, Mapping)
+                or not _is_missing_id(entry.get("id"))
+                or not isinstance(entry.get("kind"), str)
+                or not entry["kind"]
+            ):
+                continue
+            base = entry["kind"].replace("_", "-")
+            optimizer_id = base
+            suffix = 2
+            while optimizer_id in taken:
+                optimizer_id = f"{base}-{suffix}"
+                suffix += 1
+            taken.add(optimizer_id)
+            entries[index] = {**entry, "id": optimizer_id}
+        automation[key] = entries
+    return result
+
+
+def _is_missing_id(value: object) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip())
 
 
 def _read_optimizer(

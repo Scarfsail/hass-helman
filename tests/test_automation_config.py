@@ -18,6 +18,7 @@ _install_import_stubs()
 from custom_components.helman.automation.config import (
     AutomationConfig,
     AutomationConfigError,
+    assign_missing_optimizer_ids,
     read_automation_config,
 )
 from custom_components.helman.automation.spec import OPTIMIZER_SPECS
@@ -889,6 +890,98 @@ class DayContextTests(unittest.TestCase):
                 }
             )
         self.assertEqual(ctx.exception.code, "invalid_value")
+
+
+class AssignMissingOptimizerIdsTests(unittest.TestCase):
+    @staticmethod
+    def _ids(config: dict, bucket: str) -> list:
+        return [entry.get("id") for entry in config["automation"][bucket]]
+
+    def test_missing_and_empty_ids_get_the_kind_slug(self) -> None:
+        result = assign_missing_optimizer_ids({"automation": {
+            "appliance_optimizers": [{"kind": "appliance_runtime"}],
+            "system_optimizers": [{"id": "", "kind": "export_price"}],
+        }})
+
+        self.assertEqual(self._ids(result, "appliance_optimizers"), ["appliance-runtime"])
+        self.assertEqual(self._ids(result, "system_optimizers"), ["export-price"])
+
+    def test_whitespace_only_id_gets_the_kind_slug(self) -> None:
+        result = assign_missing_optimizer_ids({"automation": {
+            "system_optimizers": [{"id": "  ", "kind": "export_price"}],
+        }})
+
+        self.assertEqual(self._ids(result, "system_optimizers"), ["export-price"])
+
+    def test_generated_id_skips_a_padded_id_that_validation_strips(self) -> None:
+        result = assign_missing_optimizer_ids({"automation": {
+            "system_optimizers": [
+                {"id": "export-price ", "kind": "export_price"},
+                {"kind": "export_price"},
+            ],
+        }})
+
+        self.assertEqual(
+            self._ids(result, "system_optimizers"), ["export-price ", "export-price-2"]
+        )
+
+    def test_non_string_ids_pass_through_for_validation_to_report(self) -> None:
+        result = assign_missing_optimizer_ids({"automation": {
+            "system_optimizers": [
+                {"id": 0, "kind": "export_price"},
+                {"id": False, "kind": "export_price"},
+            ],
+        }})
+
+        self.assertEqual(self._ids(result, "system_optimizers"), [0, False])
+        with self.assertRaises(AutomationConfigError):
+            read_automation_config(result)
+
+    def test_generated_id_skips_ids_taken_in_either_bucket(self) -> None:
+        result = assign_missing_optimizer_ids({"automation": {
+            "appliance_optimizers": [{"id": "charge-hold", "kind": "appliance_runtime"}],
+            "system_optimizers": [
+                {"kind": "charge_hold"},
+                {"id": "charge-hold-2", "kind": "export_price"},
+            ],
+        }})
+
+        self.assertEqual(
+            self._ids(result, "system_optimizers"), ["charge-hold-3", "charge-hold-2"]
+        )
+
+    def test_two_new_optimizers_of_one_kind_get_distinct_ids(self) -> None:
+        result = assign_missing_optimizer_ids({"automation": {
+            "system_optimizers": [{"kind": "charge_hold"}, {"kind": "charge_hold"}],
+        }})
+
+        self.assertEqual(
+            self._ids(result, "system_optimizers"), ["charge-hold", "charge-hold-2"]
+        )
+
+    def test_existing_ids_are_untouched_and_input_is_not_mutated(self) -> None:
+        config = {"automation": {
+            "system_optimizers": [{"id": "my-export", "kind": "export_price"}, {"kind": "export_price"}],
+        }}
+
+        result = assign_missing_optimizer_ids(config)
+
+        self.assertEqual(self._ids(result, "system_optimizers"), ["my-export", "export-price"])
+        self.assertEqual(
+            config["automation"]["system_optimizers"][1], {"kind": "export_price"}
+        )
+
+    def test_malformed_entries_pass_through_for_validation_to_report(self) -> None:
+        malformed = ["not-a-mapping", {"kind": 5}, {}]
+        result = assign_missing_optimizer_ids({"automation": {
+            "appliance_optimizers": "not-a-list",
+            "system_optimizers": list(malformed),
+        }})
+
+        self.assertEqual(result["automation"]["appliance_optimizers"], "not-a-list")
+        self.assertEqual(result["automation"]["system_optimizers"], malformed)
+        with self.assertRaises(AutomationConfigError):
+            read_automation_config(result)
 
 
 if __name__ == "__main__":

@@ -123,6 +123,8 @@ const STRINGS: Record<string, string> = {
     // The card's own switch, which the dialog gets by mounting the editor.
     "editor.mode.visual": "Visual",
     "editor.mode.yaml": "YAML",
+    // The kind name the diagram head titles an inverter-lane optimizer by.
+    "editor.values.export_price": "Export price",
 };
 
 interface MountOptions {
@@ -372,7 +374,7 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
         // The tab strip labels by kind and disappears when a slot has one
         // optimizer, so without this the head names no optimizer at all.
         await expect(page.locator("scheduling-explanation-panel .optimizer"))
-            .toHaveText("export_price");
+            .toHaveText("Export price");
     });
 
     test("an appliance-driving optimizer is named the way its card is", async ({ page }) => {
@@ -398,13 +400,13 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
             .toHaveText("Bathroom radiator");
     });
 
-    test("an optimizer that drives no appliance keeps its id", async ({ page }) => {
-        // The inverter lane's optimizers are titled by id in the config editor
-        // too, so a lane name must not leak onto them.
+    test("an optimizer that drives no appliance is named by its kind", async ({ page }) => {
+        // The inverter lane's optimizers are named by kind in the config
+        // editor too, so a lane name must not leak onto them.
         await mountPanel(page, { applianceName: "Bathroom radiator" });
 
         await expect(page.locator("scheduling-explanation-panel .optimizer"))
-            .toHaveText("export_price");
+            .toHaveText("Export price");
     });
 
     test("pressing it opens the config editor's card for that optimizer", async ({ page }) => {
@@ -412,15 +414,14 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
         await openDialog(page);
 
         // The same element the config panel's optimizer list is made of, and
-        // the id field it renders is this optimizer's — not the first in the
+        // the kind it renders is this optimizer's — not the first in the
         // pipeline, which is the bug an index-based lookup would have.
         await expect(dialog(page).locator("helman-optimizer-editor")).toHaveCount(1);
         // Open already: the reader chose this optimizer to get here, so making
         // them click the card open would be asking the same question twice.
         const card = dialog(page).locator(".optimizer-card");
         await expect(card).toHaveAttribute("open", "");
-        await expect(card.locator(".appliance-body > .field-grid input").first())
-            .toHaveValue("export_price");
+        await expect(card.locator(".card-subtitle")).toHaveText("Export price");
     });
 
     test("the card offers no way to disturb the pipeline it came from", async ({ page }) => {
@@ -487,6 +488,9 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
         // And the id the schema defaults to is the one shown as chosen, so a
         // config written before the field existed does not read as unset.
         await expect(picker).toHaveValue("inverter");
+        // The inverter titles the card like any other target, never the id.
+        await expect(dialog(page).locator(".optimizer-card .card-title strong"))
+            .toHaveText("Inverter");
     });
 
     /** The dependency-picker fixture: one heat pump depending on one provider. */
@@ -495,7 +499,8 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
         {
             devices,
             requires,
-        }: { devices: unknown[]; requires: string },
+            targets = ["heatpump"],
+        }: { devices: unknown[]; requires: string; targets?: string[] },
     ) =>
         mountPanel(page, {
             payload: {
@@ -536,13 +541,46 @@ test.describe("editing the deciding optimizer from the slot diagram", () => {
                         id: "heat",
                         kind: "appliance_runtime",
                         enabled: true,
-                        target: { controllables: [{ controllable_id: "heatpump" }] },
+                        target: {
+                            controllables: targets.map((id) => ({ controllable_id: id })),
+                        },
                         conditions: [{ requires_appliance: requires }],
                     }],
                     system_optimizers: [],
                 },
             },
         });
+
+    test("a group target titles the card by its members in priority order", async ({
+        page,
+    }) => {
+        await mountDependencyPanel(page, {
+            requires: "",
+            targets: ["heatpump", "filtration"],
+            devices: [
+                { kind: "generic", schedulable: true, id: "filtration", name: "Filtration" },
+                { kind: "generic", schedulable: true, id: "heatpump", name: "Heat pump" },
+            ],
+        });
+        await openDialog(page);
+
+        await expect(dialog(page).locator(".optimizer-card .card-title strong"))
+            .toHaveText("Heat pump, Filtration");
+    });
+
+    test("a target no longer in the config titles the card as stale", async ({ page }) => {
+        await mountDependencyPanel(page, {
+            requires: "",
+            targets: ["gone"],
+            devices: [
+                { kind: "generic", schedulable: true, id: "heatpump", name: "Heat pump" },
+            ],
+        });
+        await openDialog(page);
+
+        await expect(dialog(page).locator(".optimizer-card .card-title strong"))
+            .toHaveText("gone (no longer in current config)");
+    });
 
     /** The second select on the card; the first is the target picker. */
     const dependencyPicker = (page: import("@playwright/test").Page) =>

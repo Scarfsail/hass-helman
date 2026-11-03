@@ -55,6 +55,7 @@ import {
     type ControllableTargetOption,
     type SurplusClimateModeFieldState,
 } from "./controllable-target-ui";
+import { optimizerName } from "../../node-detail/node-detail-schedule";
 import { renderOptimizerCard } from "./optimizer-card";
 import { optimizerCardStyles } from "./optimizer-styles";
 import type {
@@ -279,7 +280,7 @@ export class HelmanOptimizerEditor
         const schema = this.schema?.kinds.find((entry) => entry.kind === kind);
         return html`
             ${this._yaml
-                ? this._renderYamlCard(optimizer)
+                ? this._renderYamlCard(schema)
                 : schema
                   ? this._renderCard(schema, optimizer)
                   : this._renderUnsupported(optimizer, kind)}
@@ -301,15 +302,16 @@ export class HelmanOptimizerEditor
      * cursor and formatting, then doing it again once the kind became valid.
      * Rendered from the same template throughout, the editor survives typing.
      *
-     * Titled without the schema for the same reason: a title that changed with
-     * the kind would churn mid-edit. Always open, because YAML mode is entered
-     * deliberately and a collapsed card would hide the editor it just opened.
+     * Titled like the visual card while the kind is known, and "Optimizer N"
+     * while it is not, so a half-typed kind only changes the text, never the
+     * template. Always open, because YAML mode is entered deliberately and a
+     * collapsed card would hide the editor it just opened.
      */
-    private _renderYamlCard(optimizer: JsonObject): TemplateResult {
+    private _renderYamlCard(schema: OptimizerSchema | undefined): TemplateResult {
         const enabled = booleanValue(this.getValue([...this._basePath, "enabled"]), true);
-        const title =
-            stringValue(optimizer.id) ||
-            this.t("editor.dynamic.optimizer", { index: this.index + 1 });
+        const title = schema
+            ? this._cardTitle(schema)
+            : this.t("editor.dynamic.optimizer", { index: this.index + 1 });
         return html`
             <details
                 class=${`list-card optimizer-card optimizer-card--${enabled ? "enabled" : "disabled"}`}
@@ -346,7 +348,7 @@ export class HelmanOptimizerEditor
             bucket: this.bucket,
             index: this.index,
             enabled,
-            title: this._cardTitle(schema, optimizer),
+            title: this._cardTitle(schema),
             warning: this.warning,
             open: this.expanded,
             renderSvgIcon,
@@ -378,9 +380,7 @@ export class HelmanOptimizerEditor
      */
     private _renderUnsupported(optimizer: JsonObject, kind: string): TemplateResult {
         const enabled = booleanValue(this.getValue([...this._basePath, "enabled"]), true);
-        const title =
-            stringValue(optimizer.id) ||
-            this.t("editor.dynamic.optimizer", { index: this.index + 1 });
+        const title = this.t("editor.dynamic.optimizer", { index: this.index + 1 });
         const subtitle = this.t("editor.dynamic.unsupported_optimizer_kind", {
             kind: kind || this.t("editor.values.unknown"),
         });
@@ -412,26 +412,19 @@ export class HelmanOptimizerEditor
     }
 
     /**
-     * An appliance-driving card is titled by the appliance it drives, plus its
-     * own id.
-     *
-     * Every kind carries a `controllable_id` now, so "has a target" no longer
-     * separates them — the inverter does. Its three optimizers share one lane
-     * and one name, so titling them "Inverter" three times would tell the
-     * reader nothing and lose the ids that tell them apart; they keep their id,
-     * exactly as before. An appliance can just as legitimately carry two
-     * optimizers in the same bucket (P2, #272) -- composing in order rather
-     * than one replacing the other -- so two cards sharing an appliance's name
-     * is expected, not a bug, and the id is what tells them apart. Reuses
-     * `appliance_option`'s "{name} ({id})" shape rather than inventing a
-     * second one for the same pairing.
+     * A card is titled by what it acts on: the names of its selected targets,
+     * in priority order, with the inverter named like any other target. The
+     * kind label is the card's subtitle, so together they read "kind + target".
+     * With no target chosen yet the title falls back to the kind label itself.
+     * Two optimizers of the same kind and target share a title; their place in
+     * the list tells them apart. The id is never shown.
      */
-    private _cardTitle(schema: OptimizerSchema, optimizer: JsonObject): string {
-        const fallback =
-            stringValue(optimizer.id) ||
+    private _cardTitle(schema: OptimizerSchema): string {
+        const kindTitle =
+            optimizerName(schema.kind, this.localize) ??
             this.t("editor.dynamic.optimizer", { index: this.index + 1 });
         if (!this._targetsControllable(schema)) {
-            return fallback;
+            return kindTitle;
         }
         const states = this._targetPaths(schema).map((targetPath) =>
             this._selectionState(schema, targetPath),
@@ -439,15 +432,8 @@ export class HelmanOptimizerEditor
         const selected = states.flatMap((state) =>
             state.selectedOption ? [state.selectedOption] : [],
         );
-        if (selected.some((option) => option.kind === "inverter")) {
-            return fallback;
-        }
         if (selected.length > 0) {
-            // A group is titled by every member it names, in priority order.
-            return this.t("editor.dynamic.appliance_option", {
-                name: selected.map((option) => option.name).join(", "),
-                id: fallback,
-            });
+            return selected.map((option) => this._controllableName(option)).join(", ");
         }
         const stale = states.find(
             (state) => state.selectedMissingFromDraft && state.selectedId.length > 0,
@@ -455,7 +441,7 @@ export class HelmanOptimizerEditor
         if (stale) {
             return this.t("editor.dynamic.stale_appliance", { id: stale.selectedId });
         }
-        return fallback;
+        return kindTitle;
     }
 
     /**
@@ -1115,10 +1101,14 @@ export class HelmanOptimizerEditor
         return null;
     }
 
+    private _controllableName(option: ControllableTargetOption): string {
+        // The inverter has no name of its own; the editor names it.
+        return option.kind === "inverter" ? this.t("editor.dynamic.inverter") : option.name;
+    }
+
     /** "Name (id)", or the bare id when the two are the same. */
     private _controllableOptionLabel(option: ControllableTargetOption): string {
-        // The inverter has no name of its own; the picker names it.
-        const name = option.kind === "inverter" ? this.t("editor.dynamic.inverter") : option.name;
+        const name = this._controllableName(option);
         return name === option.id
             ? option.id
             : this.t("editor.dynamic.appliance_option", {

@@ -107,12 +107,6 @@ function renderCardBody(
     const { host, schema, bucket, index } = options;
     return html`
         <div class="field-grid">
-            ${host.renderRequiredTextField(
-                [...basePath, "id"],
-                "editor.fields.optimizer_id",
-                undefined,
-                "editor.help.automation_optimizer_id",
-            )}
             ${host.renderControllableTargetFields(index, schema.kind)}
             ${renderSchemaFields(host, schema.params, {
                 basePath: [...basePath, "params"],

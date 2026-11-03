@@ -19,6 +19,7 @@ import {
     type ScheduleExplanationModel,
 } from "../model/schedule-explanation-model";
 import { INVERTER_CONTROLLABLE_ID } from "../schedule-types";
+import { optimizerName } from "../../../node-detail/node-detail-schedule";
 import { formatScheduleTime } from "../model/schedule-time";
 import { schedulingSharedStyles } from "../styles/scheduling-shared-styles";
 
@@ -592,18 +593,18 @@ export class SchedulingExplanationPanel extends LitElement {
      * What the config editor calls this optimizer.
      *
      * A lane that is not the inverter's is an appliance's, which is exactly
-     * when the editor's card is titled by the appliance instead of by the id —
-     * so this reads the same fact off the lane rather than re-deriving it from
-     * a list of kinds that would go stale the next time a kind is added. The
-     * test used to be a `appliance:` prefix on the lane key; the keys are plain
-     * controllable ids now, so it is the reserved inverter id instead.
+     * when the editor's card is titled by the appliance — so this reads the
+     * same fact off the lane rather than re-deriving it from a list of kinds
+     * that would go stale the next time a kind is added. The inverter's
+     * optimizers go by their kind, as the editor names them; the id is the
+     * last resort for a kind with no name.
      */
     private _optimizerTitle(column: ExplanationColumn): string {
         const drivesAnAppliance = column.controllableId !== INVERTER_CONTROLLABLE_ID;
         if (drivesAnAppliance && this.applianceName) {
             return this.applianceName;
         }
-        return column.optimizerId;
+        return (column.kind ? optimizerName(column.kind, this.localize) : null) ?? column.optimizerId;
     }
 
     private _optimizerLabel(kind: string | null): string {
