@@ -176,6 +176,8 @@ export class HelmanDeviceCard extends LitElement implements LovelaceCard {
 
         const tree = this._host.deviceTree;
         if (this._resolvedFrom?.tree !== tree || this._resolvedFrom.config !== config) {
+            // A refreshed tree may carry a changed power entity under the same EV id: the overview is read again.
+            const treeRefreshed = !!this._resolvedFrom && this._resolvedFrom.tree !== tree;
             this._resolvedFrom = { tree, config };
             this._target = resolveTarget(config, tree, this._host.energyNodes);
             const evId = this._target?.kind === "device" ? evChargerId(this._target.item) : null;
@@ -186,6 +188,8 @@ export class HelmanDeviceCard extends LitElement implements LovelaceCard {
                 this._evFailed = false;
                 this._evRequest += 1;
                 if (evId) void this._loadEv(evId, false);
+            } else if (evId && treeRefreshed) {
+                void this._loadEv(evId, true);
             }
             this._announceWatched();
         }

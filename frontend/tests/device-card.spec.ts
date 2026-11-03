@@ -138,6 +138,16 @@ test("an EV charger reads its charging status and power, and collapses to its id
     expect(await overviewReads()).toBe(before + 1);
 });
 
+test("an EV charger reads its overview again when the device tree is refreshed", async ({ page }) => {
+    await setup(page);
+    await mount(page, { device: "sensor.ev_energy", fields: ["state", "power"] });
+    await expect(line(page)).toHaveText("charging now · 7.2 kW");
+    const overviewReads = () => page.evaluate(() => window.__mockRequests.filter((request) => request.type === "helman/get_node_detail").length);
+    const before = await overviewReads();
+    await page.evaluate(() => window.__fireDataChanged("config"));
+    await expect.poll(overviewReads).toBeGreaterThan(before);
+});
+
 test("an EV charger whose run mode resolved no status still reads it again when the run mode comes back", async ({ page }) => {
     await setup(page);
     await page.evaluate(() => window.__push({ "select.ev_run_mode": { state: "unavailable", attributes: {} } }));
