@@ -9,6 +9,7 @@ import { HistoryEngine } from "../shared/data/history-engine";
 import type { TreeItem } from "../shared/data/tree-item";
 import { dispatchWatchedEntities } from "../shared/hass-change";
 import { readTodayKWh } from "../shared/devices/device-energy";
+import { todayKey } from "../shared/time/day-key";
 import { helmanColorVars } from "../color-vars";
 import { fillTemplate } from "../localize/localize";
 import { evChargerId, powerEntity } from "../node-detail/node-detail-utils";
@@ -129,6 +130,8 @@ export class HelmanDeviceCard extends LitElement implements LovelaceCard {
     /** Whether the last overview read failed: the next update reads it again. */
     private _evFailed = false;
     private _meterState?: unknown;
+    /** The local day the energy today was last read on: a new day reads it again. */
+    private _meterDay?: string;
     private _meter?: string;
     private _todayKWh?: number | null;
     private _todayRequest = 0;
@@ -207,8 +210,11 @@ export class HelmanDeviceCard extends LitElement implements LovelaceCard {
             this._todayRequest += 1;
         }
         const meterState = meter ? hass.states[meter] : undefined;
-        if (meter && meterState !== this._meterState) {
+        // The host's periodic history tick updates an idle tile past midnight.
+        const day = todayKey(hass.config?.time_zone);
+        if (meter && (meterState !== this._meterState || day !== this._meterDay)) {
             this._meterState = meterState;
+            this._meterDay = day;
             void this._loadToday(meter);
         }
 
@@ -300,8 +306,9 @@ export class HelmanDeviceCard extends LitElement implements LovelaceCard {
         dispatchWatchedEntities(this, "device-card", ids);
     }
 
+    /** The run mode entity's state, read even while the overview resolved no status from it. */
     private _statusState(hass: HomeAssistant): string | undefined {
-        const entityId = this._ev?.status?.entityId;
+        const entityId = this._ev?.entities.run_mode;
         return entityId ? hass.states[entityId]?.state : undefined;
     }
 

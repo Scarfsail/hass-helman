@@ -102,7 +102,7 @@ export function availableFields(target: DeviceCardTarget): FieldId[] {
 export function fieldEntityIds(target: DeviceCardTarget, field: FieldId, ev: EvChargerDetailPayload | null): Array<string | null | undefined> {
     const { item } = target;
     switch (field) {
-        case "state": return [stateEntityId(item), ev?.status?.entityId, ev?.entities.power];
+        case "state": return [stateEntityId(item), ev?.entities.run_mode, ev?.entities.power];
         case "power": return target.kind === "device" ? [powerEntity(item)] : [item.power?.entityId, item.powerSensorId];
         case "energy_today": return [target.kind === "device" ? item.energyEntityId : item.todayEnergyEntityId];
         case "target_temperature":

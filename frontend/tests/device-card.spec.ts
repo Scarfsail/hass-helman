@@ -100,7 +100,9 @@ async function setup(page: Page): Promise<void> {
                 return {
                     node: "ev_charger", deviceId: request.device_id, asOf: "2026-10-21T12:00:00+00:00", profile: null, sections: [],
                     entities: { power: "sensor.ev_power", run_mode: "select.ev_run_mode" },
-                    status: { kind: runMode === "charging" ? "charging" : "waiting", runMode, entityId: "select.ev_run_mode" },
+                    // An unavailable run mode resolves no status, as the backend's run_mode_condition reads it.
+                    status: runMode === "unavailable" ? null
+                        : { kind: runMode === "charging" ? "charging" : "waiting", runMode, entityId: "select.ev_run_mode" },
                 };
             },
         });
@@ -136,6 +138,16 @@ test("an EV charger reads its charging status and power, and collapses to its id
     expect(await overviewReads()).toBe(before + 1);
 });
 
+test("an EV charger whose run mode resolved no status still reads it again when the run mode comes back", async ({ page }) => {
+    await setup(page);
+    await page.evaluate(() => window.__push({ "select.ev_run_mode": { state: "unavailable", attributes: {} } }));
+    await mount(page, { device: "sensor.ev_energy", fields: ["state", "power"], hide_when_idle: ["power"] });
+    await expect(line(page)).toHaveText("idle");
+
+    await page.evaluate(() => window.__push({ "select.ev_run_mode": { state: "charging", attributes: {} } }));
+    await expect(line(page)).toHaveText("charging now · 7.2 kW");
+});
+
 test("a climate device shows its mode, set temperature and power", async ({ page }) => {
     await setup(page);
     await mount(page, { device: "sensor.heat_pump_energy", name: "HP", fields: ["state", "target_temperature", "power"] });
@@ -155,6 +167,18 @@ test("a device's energy today is the recorder's change since midnight", async ({
     await setup(page);
     await mount(page, { device: "sensor.boiler_energy", fields: ["state", "energy_today"] });
     await expect(line(page)).toHaveText("on · 3.5 kWh");
+});
+
+test("a device's energy today is read again when the day changes, though its meter does not", async ({ page }) => {
+    await page.clock.install({ time: new Date("2026-10-21T23:59:50Z") });
+    await setup(page);
+    await mount(page, { device: "sensor.boiler_energy", fields: ["energy_today"] });
+    await expect(line(page)).toHaveText("3.5 kWh");
+
+    await page.evaluate(() => window.__setMockReply(window.__deviceCardHass, "recorder/statistic_during_period", { change: 0.2 }));
+    // The host's periodic history tick updates the idle tile past midnight.
+    await page.clock.runFor(15_000);
+    await expect(line(page)).toHaveText("0.20 kWh");
 });
 
 test("the solar node shows its power and today's energy", async ({ page }) => {
