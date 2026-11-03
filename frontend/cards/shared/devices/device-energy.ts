@@ -2,6 +2,8 @@ import { formatPower } from "../format";
 import { css, html, type TemplateResult } from "lit";
 
 import type { DeviceStats } from "../../helman-api";
+import type { HomeAssistant } from "../../../types/ha";
+import { convertToKWh, isSupportedEnergyUnit } from "../../helman/energy-unit-converter";
 
 /**
  * One device's energy on one power scale, auto-scaled W or kW, wherever it is
@@ -137,6 +139,21 @@ export function renderDeviceEnergyValue(
     return html`<span class="device-energy" title=${title}>${configured !== undefined
         ? html`<span class="device-energy-value configured">${formatDeviceEnergyWatts(configuredWatts)}</span> (${learned})`
         : learned}</span>`;
+}
+
+/**
+ * The energy `meter` counted today, kWh, from the recorder's statistics; `null`
+ * when the recorder has no answer or the meter's unit is not an energy unit.
+ */
+export async function readTodayKWh(hass: HomeAssistant, meter: string): Promise<number | null> {
+    try {
+        const result = await hass.callWS<{ change?: number | null }>({
+            type: "recorder/statistic_during_period", statistic_id: meter, types: ["change"], calendar: { period: "day" },
+        });
+        const unit = hass.states[meter]?.attributes.unit_of_measurement as string | undefined;
+        return typeof result?.change === "number" && unit && isSupportedEnergyUnit(unit)
+            ? convertToKWh(result.change, unit) : null;
+    } catch { return null; }
 }
 
 /** The source colours, which Home Assistant's theme owns. */

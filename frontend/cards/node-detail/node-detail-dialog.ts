@@ -14,7 +14,6 @@ import {
     type NodeDetailSectionRequest,
     type NodeDetailTarget,
 } from "./node-detail-types";
-import type { TreeItem } from "../shared/data/tree-item";
 import { INVERTER_CONTROLLABLE_ID } from "../shared/schedule/schedule-types";
 import { getSharedScheduleOwner } from "../shared/schedule/schedule-owner";
 import type { SchedulePayload } from "../helman-api";
@@ -35,7 +34,7 @@ import "./node-control-rollup";
 import "./node-breadcrumb";
 import type { HelmanDeviceEditDialog } from "../shared/devices/helman-device-edit-dialog";
 import "../shared/devices/helman-device-edit-dialog";
-import { deviceControllableIds } from "./node-detail-utils";
+import { deviceControllableIds, evChargerId } from "./node-detail-utils";
 import { SHOW_HISTORY_EVENT } from "./node-detail-history";
 
 /**
@@ -379,7 +378,7 @@ export class NodeDetailDialog extends LitElement {
                     >${schedule}</node-detail-inverter-content>
                 `;
             case "device": {
-                const chargerId = this._evChargerId(this.params.item);
+                const chargerId = evChargerId(this.params.item);
                 if (chargerId !== null) {
                     return html`
                         <node-detail-ev-charger-content
@@ -399,16 +398,6 @@ export class NodeDetailDialog extends LitElement {
                 `;
             }
         }
-    }
-
-    /**
-     * The charger id when the device is one schedulable EV charger, by its
-     * configured appliance kind; `null` for any other device.
-     */
-    private _evChargerId(item: TreeItem): string | null {
-        const ids = item.controllableIds ?? [];
-        if (ids.length !== 1) return null;
-        return item.applianceKind === "ev_charger" ? ids[0] : null;
     }
 
     private _closeDialogElement(): void {

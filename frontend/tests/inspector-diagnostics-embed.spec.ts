@@ -36,6 +36,7 @@ const CARD_TYPES = [
     "helman-card",
     "helman-simple-card",
     "helman-solar-inspector-card",
+    "helman-device-card",
 ];
 
 interface Served {

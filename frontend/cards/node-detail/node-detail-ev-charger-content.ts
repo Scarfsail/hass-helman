@@ -29,7 +29,7 @@ import { powerUnitFactor } from "../shared/power-reading";
 import { runtimeText, laneActionLabel, mergeRuns, runtimeFor, withinTodayTomorrow } from "./node-detail-schedule";
 import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { DeviceDetailParams } from "./node-detail-types";
-import { deviceDirectControls } from "./node-detail-utils";
+import { deviceDirectControls, evCharging } from "./node-detail-utils";
 import { estimatedConsumerMix } from "./live-flows";
 import "./detail-headline";
 import "./flow-gauge";
@@ -263,7 +263,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
     protected _renderOverview(overview: EvChargerDetailPayload) {
         const selection = this._selection();
         const power = this._powerW(overview);
-        const charging = this._charging(overview);
+        const charging = evCharging(this.hass, overview);
         const direct = deviceDirectControls(this.params.item);
         const session = this._sessionKWh(overview);
         const caption = [direct?.switchEntityId && this.hass.states[direct.switchEntityId]?.state === "off"
@@ -490,7 +490,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         }).tone;
         return (this._segment.payload?.charging ?? []).map((stretch) => ({
             start: Date.parse(stretch.start),
-            end: stretch.open && this._charging(overview) ? Infinity : Date.parse(stretch.end),
+            end: stretch.open && evCharging(this.hass, overview) ? Infinity : Date.parse(stretch.end),
             tone,
             label: laneActionLabel({ charge: true }, this.localize),
         }));
@@ -590,7 +590,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         | { kind: "reasons"; reasons: string[]; eco: boolean } {
         const fault = this._fault(overview);
         if (fault) return { kind: "fault", text: fault };
-        if (this._charging(overview)) return { kind: "charging" };
+        if (evCharging(this.hass, overview)) return { kind: "charging" };
         if (overview.status?.kind === "no_car") return { kind: "no_car" };
         const reasons: string[] = [];
         if (selection.kind === "selected" && selection.car.neededKwh !== null && selection.car.neededKwh <= 0) {
@@ -681,14 +681,6 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         return kwh === null || kwh < 0 ? null : kwh;
     }
 
-    /** Charging as reported; a Custom charger without a status, by its power. */
-    private _charging(overview: EvChargerDetailPayload): boolean {
-        if (overview.status) return overview.status.kind === "charging";
-        if (overview.entities.run_mode) return false;
-        const power = this._powerW(overview);
-        return power !== null && power > IDLE_W;
-    }
-
     private _faultKnown(overview: EvChargerDetailPayload): boolean {
         return overview.status !== null || readingNumber(this.hass, overview.entities.fault_code) !== null;
     }
@@ -700,7 +692,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
     private _fault(overview: EvChargerDetailPayload): string | null {
         const code = readingNumber(this.hass, overview.entities.fault_code);
         const description = this._reading(overview, "fault_description");
-        if (overview.status?.kind !== "fault" && (code === null || code === 0 || this._charging(overview))) return null;
+        if (overview.status?.kind !== "fault" && (code === null || code === 0 || evCharging(this.hass, overview))) return null;
         const parts = [overview.status?.kind === "fault" ? overview.status.runMode : null, description, code ? fillTemplate(this._t("trust.code"), { code: String(code) }) : null];
         return parts.filter(Boolean).join(" · ");
     }

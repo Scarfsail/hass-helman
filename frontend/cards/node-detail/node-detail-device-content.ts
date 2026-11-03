@@ -5,7 +5,6 @@ import type { LocalizeFunction } from "../localize/localize";
 import { fillTemplate } from "../localize/localize";
 import type { TreeItem } from "../shared/data/tree-item";
 import { formatKwh, formatMinutes, formatPower } from "../shared/format";
-import { convertToKWh, isSupportedEnergyUnit } from "../helman/energy-unit-converter";
 import { readPowerW } from "../shared/power-reading";
 import { dispatchWatchedEntities } from "../shared/hass-change";
 import type { DeviceDetailParams } from "./node-detail-types";
@@ -15,7 +14,7 @@ import { isSwitchOn } from "../shared/config/devices";
 import { SectionResource } from "./section-resource";
 import type { ApplianceProjectionsPayload, ApplianceRuntimeDTO, DeviceStats, DeviceStatsSpread } from "../helman-api";
 import { callHelman } from "../shared/data/helman-commands";
-import { deviceEnergyMeasures } from "../shared/devices/device-energy";
+import { deviceEnergyMeasures, readTodayKWh } from "../shared/devices/device-energy";
 import { ScheduleController } from "./schedule-controller";
 import { runtimeText, runtimeFor } from "./node-detail-schedule";
 import {
@@ -52,7 +51,7 @@ export class NodeDetailDeviceContent extends LitElement {
     @property({ attribute: false }) public localize!: LocalizeFunction;
     @property({ attribute: false }) public params!: DeviceDetailParams;
     private readonly _energy = new SectionResource<number | null>(this, "energy", {
-        fetch: () => this._readToday(this.params.item.energyEntityId!),
+        fetch: () => readTodayKWh(this.hass, this.params.item.energyEntityId!),
         shown: () => !!this.params.item.energyEntityId,
         staleness: () => false,
     });
@@ -269,14 +268,4 @@ export class NodeDetailDeviceContent extends LitElement {
         `;
     }
 
-    private async _readToday(meter: string): Promise<number | null> {
-        try {
-            const result = await this.hass.callWS<{ change?: number | null }>({
-                type: "recorder/statistic_during_period", statistic_id: meter, types: ["change"], calendar: { period: "day" },
-            });
-            const unit = this.hass.states[meter]?.attributes.unit_of_measurement as string | undefined;
-            return typeof result?.change === "number" && unit && isSupportedEnergyUnit(unit)
-                ? convertToKWh(result.change, unit) : null;
-        } catch { return null; }
-    }
 }
