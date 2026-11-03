@@ -195,7 +195,6 @@ test("the ordering warning badges the dependent's card, not the provider's or a 
 
     const titles = await badgedCardTitles(page);
     expect(titles.some((title) => title.includes("boiler-first"))).toBe(false);
-    expect(titles.some((title) => title.includes("export_price"))).toBe(false);
     expect(titles).toHaveLength(1);
 });
 

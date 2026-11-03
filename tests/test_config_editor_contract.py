@@ -680,6 +680,54 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(connection.results[0][1]["success"])
 
+    async def test_save_config_generates_a_missing_optimizer_id(self) -> None:
+        storage = FakeStorage()
+        connection = FakeConnection(is_admin=True)
+        hass = FakeHass(storage)
+        config = {
+            "automation": {
+                "enabled": False,
+                "system_optimizers": [
+                    {"kind": "export_price", "conditions": [{"when_price_below": 0.0}]}
+                ],
+            }
+        }
+
+        await _save_config_handler(
+            hass,
+            connection,
+            {"id": 1, "type": "helman/save_config", "config": config},
+        )
+
+        self.assertTrue(connection.results[0][1]["success"])
+        self.assertEqual(
+            storage.config["automation"]["system_optimizers"][0]["id"], "export-price"
+        )
+        self.assertEqual(connection.results[0][1]["config"], storage.config)
+
+    def test_validate_config_accepts_an_optimizer_without_an_id(self) -> None:
+        connection = FakeConnection(is_admin=True)
+
+        ws_validate_config(
+            FakeHass(FakeStorage()),
+            connection,
+            {
+                "id": 1,
+                "type": "helman/validate_config",
+                "config": {
+                    "automation": {
+                        "enabled": False,
+                        "system_optimizers": [
+                            {"kind": "export_price", "conditions": [{"when_price_below": 0.0}]}
+                        ],
+                    }
+                },
+            },
+        )
+
+        self.assertEqual(connection.errors, [])
+        self.assertTrue(connection.results[0][1]["valid"])
+
     async def test_save_config_persists_appliance_runtime_optimizer(self) -> None:
         self._set_known_optimizer_kinds("export_price", "appliance_runtime")
         storage = FakeStorage()
