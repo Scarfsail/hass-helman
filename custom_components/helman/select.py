@@ -10,6 +10,7 @@ the executor or the user does it, applies the profile's vendor writes.
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 from homeassistant.components.select import SelectEntity
@@ -31,6 +32,8 @@ from .vendors.modes import (
     mode_write_templates,
     register_matches,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
@@ -56,8 +59,9 @@ class HelmanInverterModeSelect(SelectEntity, RestoreEntity):
     """The inverter's commanded mode, one option per schedule action kind.
 
     Shows the last commanded mode, not what the inverter is doing, the same as
-    the ``input_select`` it replaces. After a restart it restores that option
-    without applying it again.
+    the ``input_select`` it replaces. After a restart it restores that option;
+    the executor then picks it again every tick, and a pick of the current
+    option rewrites, with a warning, any register the inverter drifted from.
     """
 
     _attr_has_entity_name = True
@@ -96,11 +100,37 @@ class HelmanInverterModeSelect(SelectEntity, RestoreEntity):
 
     async def async_select_option(self, option: str) -> None:
         async with self._lock:
-            for entity_id, target in self._writes(option):
+            writes = self._writes(option)
+            if option == self._attr_current_option:
+                # The executor re-applies the option every tick: an off-target
+                # register means the inverter left the mode on its own. One
+                # that cannot be read (the link is down) is not drift.
+                writes = [
+                    (entity_id, target)
+                    for entity_id, target in writes
+                    if register_matches(
+                        self.hass.states.get(entity_id), entity_id, target
+                    )
+                    is False
+                ]
+                if writes:
+                    _LOGGER.warning(
+                        "Inverter drifted from '%s': %s; re-applying",
+                        option,
+                        ", ".join(
+                            f"{entity_id} was '{self._actual(entity_id)}', "
+                            f"expected '{target}'"
+                            for entity_id, target in writes
+                        ),
+                    )
+            for entity_id, target in writes:
+                # Checked right before each write: an earlier write can move
+                # a later register (Manual Mode resets the manual mode).
                 if not self._in_target(entity_id, target):
                     await async_write_vendor_entity(self.hass, entity_id, target)
-            self._attr_current_option = option
-            self.async_write_ha_state()
+            if option != self._attr_current_option:
+                self._attr_current_option = option
+                self.async_write_ha_state()
 
     def _vendor_option(self) -> str | None:
         """The first option whose writes the vendor entities already match."""
@@ -133,3 +163,7 @@ class HelmanInverterModeSelect(SelectEntity, RestoreEntity):
 
     def _in_target(self, entity_id: str, target: str | float) -> bool:
         return register_matches(self.hass.states.get(entity_id), entity_id, target) is True
+
+    def _actual(self, entity_id: str) -> str | None:
+        state = self.hass.states.get(entity_id)
+        return None if state is None else state.state

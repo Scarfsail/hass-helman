@@ -20,6 +20,8 @@ from ..appliances.state import AppliancesRuntimeRegistry
 from ..battery_state import BatteryLiveState
 from ..controllables.controllers import SelectEntityController
 from ..const import (
+    INVERTER_MODE_ENTITY_ID,
+    INVERTER_MODE_UNIQUE_ID,
     SCHEDULE_ACTION_EMPTY,
     SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
     SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
@@ -27,6 +29,7 @@ from ..const import (
     SCHEDULE_ACTION_STOP_EXPORT,
     SCHEDULE_EXECUTOR_INTERVAL_SECONDS,
 )
+from ..vendors import helman_entity_id
 from .action_resolution import resolve_executed_schedule_action
 from .actuation import ScheduleActuator
 from .runtime_status import (
@@ -105,11 +108,13 @@ class InverterExecutionResult:
 class InverterExecutor:
     def __init__(
         self,
+        hass: HomeAssistant,
         actuator: ScheduleActuator,
         runtime: ScheduleExecutionRuntime,
         *,
         read_battery_state: Callable[[], BatteryLiveState | None] | None = None,
     ) -> None:
+        self._hass = hass
         self._actuator = actuator
         self._runtime = runtime
         self._read_battery_state = read_battery_state or (lambda: None)
@@ -382,8 +387,17 @@ class InverterExecutor:
         )
         controller.validate_option(state, desired_option)
 
+        # Helman's own select shows the last commanded option, not the
+        # hardware, and rewrites only the registers that drifted: always pick,
+        # so an inverter that left the mode on its own is put back.
         current_option = getattr(state, "state", None)
-        if current_option != desired_option:
+        if (
+            current_option != desired_option
+            or controller.entity_id
+            == helman_entity_id(
+                self._hass, "select", INVERTER_MODE_UNIQUE_ID, INVERTER_MODE_ENTITY_ID
+            )
+        ):
             await controller.async_select_option(self._actuator, option=desired_option)
 
         self._runtime.last_applied_action = action
@@ -424,6 +438,7 @@ class ScheduleExecutor:
         )
         self._runtime = ScheduleExecutionRuntime()
         self._inverter_executor = InverterExecutor(
+            self._hass,
             self._actuator,
             self._runtime,
             read_battery_state=lambda: self._dependencies.read_battery_state(),
@@ -456,6 +471,7 @@ class ScheduleExecutor:
     def reset_runtime(self) -> None:
         self._runtime = ScheduleExecutionRuntime()
         self._inverter_executor = InverterExecutor(
+            self._hass,
             self._actuator,
             self._runtime,
             read_battery_state=lambda: self._dependencies.read_battery_state(),

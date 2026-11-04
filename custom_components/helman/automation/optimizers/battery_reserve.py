@@ -716,7 +716,10 @@ class BatteryReserveOptimizer:
             return False
 
         # The cheap band itself: from the first slot entered below the floor,
-        # charge back up to it, then hold the rest of the band.  Placed first
+        # or that would end below it.  Entered below, charge back up to the
+        # floor, then hold the rest of the band; entered at or above, hold from
+        # that slot on — its few percent are worth more kept for the expensive
+        # window than a charge back to the floor in the next slot.  Placed first
         # and merged into ``planned_actions``, so the bridge below builds on it
         # and never weakens it.  A cheap band shared by two expensive windows
         # gets it once: the second finds the same actions already in place.
@@ -732,24 +735,27 @@ class BatteryReserveOptimizer:
                 if dt_util.as_utc(key) <= first_bucket
                 else soc_by_bucket[dt_util.as_utc(key) - _SLOT_DURATION]
             )
-            if soc < floor_soc - 1e-6:
+            end_soc = soc_by_bucket.get(dt_util.as_utc(key), soc)
+            if min(soc, end_soc) < floor_soc - 1e-6:
                 entry = index, soc
                 break
         if entry is not None:
             start, entry_soc = entry
             floor_target = min(ceil(floor_soc), int(upper_target))
             floor_charges: list[int] = []
-            for index in range(start, len(writable)):
-                floor_charges.append(index)
-                if (
-                    simulate(compose([], floor_charges, floor_target))[
-                        dt_util.as_utc(keys[index])
-                    ]
-                    >= floor_soc - 1e-6
-                ):
-                    break
+            if entry_soc < floor_soc - 1e-6:
+                for index in range(start, len(writable)):
+                    floor_charges.append(index)
+                    if (
+                        simulate(compose([], floor_charges, floor_target))[
+                            dt_util.as_utc(keys[index])
+                        ]
+                        >= floor_soc - 1e-6
+                    ):
+                        break
+            hold_from = floor_charges[-1] + 1 if floor_charges else start
             floor_actions = compose(
-                range(floor_charges[-1] + 1, len(writable)), floor_charges, floor_target
+                range(hold_from, len(writable)), floor_charges, floor_target
             )
             # The floor is breached inside the cheap band itself, whether or not
             # the expensive window is covered, so the step's records say so.

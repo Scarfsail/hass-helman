@@ -6,6 +6,7 @@ import asyncio
 import unittest
 from dataclasses import replace
 from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 
@@ -25,6 +26,8 @@ def _install_import_stubs() -> None:
 
 _install_import_stubs()
 
+from homeassistant.helpers import entity_registry as er  # noqa: E402
+
 from custom_components.helman.battery_state import BatteryLiveState  # noqa: E402
 from custom_components.helman.appliances.ev_charger import (  # noqa: E402
     EvChargerApplianceRuntime,
@@ -33,6 +36,8 @@ from custom_components.helman.appliances.ev_charger import (  # noqa: E402
 from custom_components.helman.appliances.execution import AppliancesExecutor  # noqa: E402
 from custom_components.helman.appliances.state import AppliancesRuntimeRegistry  # noqa: E402
 from custom_components.helman.const import (  # noqa: E402
+    INVERTER_MODE_ENTITY_ID,
+    INVERTER_MODE_UNIQUE_ID,
     SCHEDULE_ACTION_EMPTY,
     SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC,
     SCHEDULE_ACTION_DISCHARGE_TO_TARGET_SOC,
@@ -113,6 +118,13 @@ class FakeHass(SharedFakeHass):
         self.states = FakeStates(states)
         self.services = FakeServices()
         self.created_tasks = 0
+        # Helman's own entities by unique id, as the entity registry has them.
+        self.registered_entity_ids: dict[str, str] = {}
+        self.data[er.DATA_REGISTRY] = SimpleNamespace(
+            async_get_entity_id=lambda _domain, _platform, unique_id: (
+                self.registered_entity_ids.get(unique_id)
+            )
+        )
 
     def async_create_background_task(self, coro, name):
         self.created_tasks += 1
@@ -680,6 +692,87 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
         await executor.async_reconcile(reason="test", reference_time=REFERENCE_TIME)
 
         self.assertEqual(hass.services.calls, [])
+
+    async def test_reconcile_reapplies_unchanged_option_on_helman_select(self) -> None:
+        # Helman's select shows the commanded option, not the hardware: it is
+        # picked every tick so it can put back a register that drifted.
+        executor, hass, _store = _build_executor(
+            entity_id=INVERTER_MODE_ENTITY_ID,
+            state=FakeState(
+                "Stop Discharging",
+                options=["Normal", "Stop Charging", "Stop Discharging"],
+            ),
+            document=ScheduleDocument(
+                execution_enabled=True,
+                slots={
+                    CURRENT_SLOT_ID: build_controllable_actions(
+                        inverter=ScheduleAction(
+                            kind=SCHEDULE_ACTION_STOP_DISCHARGING
+                        )
+                    )
+                },
+            ),
+        )
+
+        await executor.async_reconcile(
+            reason="interval", reference_time=REFERENCE_TIME
+        )
+
+        self.assertEqual(
+            hass.services.calls,
+            [
+                (
+                    "select",
+                    "select_option",
+                    {
+                        "entity_id": INVERTER_MODE_ENTITY_ID,
+                        "option": "Stop Discharging",
+                    },
+                    True,
+                )
+            ],
+        )
+
+    async def test_reconcile_reapplies_unchanged_option_on_renamed_helman_select(
+        self,
+    ) -> None:
+        # Renamed in the registry, the select is still Helman's own: found by
+        # its unique id, it is picked every tick like under the default id.
+        renamed = "select.my_inverter_mode"
+        executor, hass, _store = _build_executor(
+            entity_id=renamed,
+            state=FakeState(
+                "Stop Discharging",
+                options=["Normal", "Stop Charging", "Stop Discharging"],
+            ),
+            document=ScheduleDocument(
+                execution_enabled=True,
+                slots={
+                    CURRENT_SLOT_ID: build_controllable_actions(
+                        inverter=ScheduleAction(
+                            kind=SCHEDULE_ACTION_STOP_DISCHARGING
+                        )
+                    )
+                },
+            ),
+        )
+        hass.registered_entity_ids[INVERTER_MODE_UNIQUE_ID] = renamed
+
+        await executor.async_reconcile(
+            reason="interval", reference_time=REFERENCE_TIME
+        )
+
+        self.assertEqual(
+            hass.services.calls,
+            [
+                (
+                    "select",
+                    "select_option",
+                    {"entity_id": renamed, "option": "Stop Discharging"},
+                    True,
+                )
+            ],
+        )
 
     async def test_reconcile_executes_charge_target_option_when_target_not_reached(
         self,
