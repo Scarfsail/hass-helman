@@ -222,6 +222,22 @@ def test_the_same_option_on_an_unreadable_register_writes_nothing(caplog):
     entity.async_write_ha_state.assert_not_called()
 
 
+def test_drifted_writes_lists_only_registers_definitively_off_target():
+    entity, _calls = build(
+        {
+            USE_MODE: "Self Use Mode",
+            MANUAL_MODE: "unavailable",
+            EXPORT_LIMIT: "9900",
+        }
+    )
+
+    # What the executor asks before it picks the current option again.
+    with patch.object(select_module, "resolve_unique_ids", side_effect=_resolve):
+        drifted = entity.drifted_writes("stop_discharging")
+
+    assert drifted == [(USE_MODE, "Manual Mode")]
+
+
 def test_a_failed_write_surfaces_and_keeps_the_last_option():
     entity, _calls = build()
     entity._attr_current_option = "normal"

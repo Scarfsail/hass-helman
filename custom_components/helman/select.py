@@ -60,8 +60,8 @@ class HelmanInverterModeSelect(SelectEntity, RestoreEntity):
 
     Shows the last commanded mode, not what the inverter is doing, the same as
     the ``input_select`` it replaces. After a restart it restores that option;
-    the executor then picks it again every tick, and a pick of the current
-    option rewrites, with a warning, any register the inverter drifted from.
+    the executor picks it again whenever a register drifted from it, and a
+    pick of the current option rewrites, with a warning, only those registers.
     """
 
     _attr_has_entity_name = True
@@ -102,17 +102,9 @@ class HelmanInverterModeSelect(SelectEntity, RestoreEntity):
         async with self._lock:
             writes = self._writes(option)
             if option == self._attr_current_option:
-                # The executor re-applies the option every tick: an off-target
-                # register means the inverter left the mode on its own. One
-                # that cannot be read (the link is down) is not drift.
-                drifted = [
-                    (entity_id, target)
-                    for entity_id, target in writes
-                    if register_matches(
-                        self.hass.states.get(entity_id), entity_id, target
-                    )
-                    is False
-                ]
+                # The executor re-picks the option only when a register
+                # drifted: the inverter left the mode on its own.
+                drifted = self.drifted_writes(option)
                 if not drifted:
                     return
                 _LOGGER.warning(
@@ -137,6 +129,19 @@ class HelmanInverterModeSelect(SelectEntity, RestoreEntity):
             if option != self._attr_current_option:
                 self._attr_current_option = option
                 self.async_write_ha_state()
+
+    def drifted_writes(self, option: str) -> list[tuple[str, str | float]]:
+        """The writes of ``option`` whose register reads off target.
+
+        A register that cannot be read (the link is down) is not drift. Raises
+        :class:`HomeAssistantError` when the option's writes cannot be bound.
+        """
+        return [
+            (entity_id, target)
+            for entity_id, target in self._writes(option)
+            if register_matches(self.hass.states.get(entity_id), entity_id, target)
+            is False
+        ]
 
     def _vendor_option(self) -> str | None:
         """The first option whose writes the vendor entities already match."""

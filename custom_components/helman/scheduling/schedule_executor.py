@@ -7,7 +7,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Awaitable, Callable
 
+from homeassistant.components.select import DATA_COMPONENT as SELECT_DATA_COMPONENT
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
 
@@ -387,22 +389,38 @@ class InverterExecutor:
         )
         controller.validate_option(state, desired_option)
 
-        # Helman's own select shows the last commanded option, not the
-        # hardware, and rewrites only the registers that drifted: always pick,
-        # so an inverter that left the mode on its own is put back.
         current_option = getattr(state, "state", None)
-        if (
-            current_option != desired_option
-            or controller.entity_id
-            == helman_entity_id(
-                self._hass, "select", INVERTER_MODE_UNIQUE_ID, INVERTER_MODE_ENTITY_ID
-            )
+        if current_option != desired_option or self._helman_mode_drifted(
+            controller.entity_id, desired_option
         ):
             await controller.async_select_option(self._actuator, option=desired_option)
 
         self._runtime.last_applied_action = action
         self._runtime.last_active_slot_id = active_slot_id
         self._runtime.last_runtime_action_kind = action_kind
+
+    def _helman_mode_drifted(self, entity_id: str, option: str) -> bool:
+        """Whether Helman's own mode select shows ``option`` but a register left it.
+
+        That select shows the last commanded option, not the hardware: an
+        inverter that left the mode on its own is put back by picking the
+        option again, which rewrites only the drifted registers. Checked here
+        first, so a tick with nothing to repair calls no service. Any other
+        mode entity reads its own state: an equal option needs no pick.
+        """
+        if entity_id != helman_entity_id(
+            self._hass, "select", INVERTER_MODE_UNIQUE_ID, INVERTER_MODE_ENTITY_ID
+        ):
+            return False
+        component = self._hass.data.get(SELECT_DATA_COMPONENT)
+        select = None if component is None else component.get_entity(entity_id)
+        if select is None:
+            return False
+        try:
+            return bool(select.drifted_writes(option))
+        except HomeAssistantError:
+            # The option's writes cannot be bound: the pick reports why.
+            return True
 
 
 @dataclass
