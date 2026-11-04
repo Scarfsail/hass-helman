@@ -982,6 +982,14 @@ export class SchedulingEntityDayBand extends LitElement {
     /** Draw the hour ticks, or leave the axis to the host's own chart. */
     @property({ type: Boolean }) public showAxis = true;
     /**
+     * Name each lane in its track: its state, its automation, its name and
+     * its run total.
+     *
+     * A host about one device has already said which one it is; there the
+     * label only covers the runs it is showing.
+     */
+    @property({ type: Boolean }) public showLaneLabel = true;
+    /**
      * Where a lane says its name: in a column beside the tracks, or inside the
      * track itself.
      *
@@ -1560,7 +1568,7 @@ export class SchedulingEntityDayBand extends LitElement {
                     Outside the track, which clips: the name has to be free to
                     reach back into whatever gutter the host inset the track by.
                 -->
-                ${this._renderTrackLabel(lane)}
+                ${this.showLaneLabel ? this._renderTrackLabel(lane) : nothing}
             </div>
         `;
     }

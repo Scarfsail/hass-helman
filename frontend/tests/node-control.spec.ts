@@ -435,6 +435,24 @@ test.describe("the override", () => {
         expect(await page.evaluate(() => window.__toasts)).toEqual(["Override saved until Today 13:00."]);
     });
 
+    test("the selects keep showing the chosen values when the option lists shift", async ({ page }) => {
+        await mount(page);
+        await openControl(page);
+        await openOverride(page);
+        const from = overrideDialog(page).locator("[data-from]");
+        const to = overrideDialog(page).locator("[data-to]");
+        await overrideDialog(page).locator('[data-pick="plus_1h"]').click();
+        await expect(to).toHaveValue(String(Date.parse(`${DAY}T13:00:00Z`)));
+        // Moving From shifts the end list; both selects must still show the state.
+        await from.selectOption(String(Date.parse(`${DAY}T12:30:00Z`)));
+        await expect(from).toHaveValue(String(Date.parse(`${DAY}T12:30:00Z`)));
+        await expect(to).toHaveValue(String(Date.parse(`${DAY}T13:00:00Z`)));
+        await to.selectOption(String(Date.parse(`${DAY}T14:00:00Z`)));
+        await from.selectOption(String(Date.parse(`${DAY}T13:00:00Z`)));
+        await expect(from).toHaveValue(String(Date.parse(`${DAY}T13:00:00Z`)));
+        await expect(to).toHaveValue(String(Date.parse(`${DAY}T14:00:00Z`)));
+    });
+
     test("holding the automation's own action still takes the slots over", async ({ page }) => {
         await mount(page);
         await openControl(page);
@@ -537,25 +555,47 @@ test.describe("the override", () => {
         await expect(overrideDialog(page).locator("[data-plan]")).toBeVisible();
     });
 
-    test("shows the lane's plan read only, today and tomorrow, with the chosen range marked", async ({ page }) => {
+    test("shows the lane's plan read only, one day at a time, with the chosen range marked", async ({ page }) => {
         await mount(page, { schedule: plan([["13:00", "14:00", { inverter: auto("stop_export") }]]) });
         await openControl(page);
         await openOverride(page);
         const bands = overrideDialog(page).locator("[data-plan] scheduling-entity-day-band");
-        await expect(bands).toHaveCount(2);
-        await expect(overrideDialog(page).locator("[data-plan] .field-label")).toHaveText(["Today", "Tomorrow"]);
-        const today = bands.nth(0);
-        // This lane alone: no other lane, no forecast rows.
-        await expect(today.locator(".lane")).toHaveCount(1);
-        await expect(today.locator('.lane[data-lane="inverter"]')).toHaveCount(1);
-        await expect(today.locator('.lane[data-lane="inverter"] button.segment')).toHaveCount(3);
-        await expect(today.locator(".handle")).toHaveCount(0);
+        const days = overrideDialog(page).locator("[data-plan] [data-day]");
+        await expect(bands).toHaveCount(1);
+        await expect(days).toHaveText(["Today", "Tomorrow"]);
+        await expect(days.nth(0)).toHaveAttribute("aria-pressed", "true");
+        await expect(days.nth(1)).toHaveAttribute("aria-pressed", "false");
+        await expect(overrideDialog(page).locator("[data-plan] .field-label")).toHaveCount(0);
+        const band = bands.first();
+        // This lane alone: no other lane, no forecast rows, no label of its own.
+        await expect(band.locator(".lane")).toHaveCount(1);
+        await expect(band.locator('.lane[data-lane="inverter"]')).toHaveCount(1);
+        await expect(band.locator('.lane[data-lane="inverter"] button.segment')).toHaveCount(3);
+        await expect(band.locator(".handle")).toHaveCount(0);
+        await expect(band.locator(".track-label")).toHaveCount(0);
         await overrideDialog(page).locator('[data-pick="plus_3h"]').click();
         // Windowed from 12:00 to midnight: 12:00-15:00 is a quarter of it.
-        const highlight = today.locator(".time-highlight.selected");
+        const highlight = band.locator(".time-highlight.selected");
         await expect(highlight).toHaveCount(1);
         await expect(highlight).toHaveAttribute("style", /left: 0%; width: 25%/);
-        await expect(bands.nth(1).locator(".time-highlight.selected")).toHaveCount(0);
+        await overrideDialog(page).locator('[data-plan] [data-day="2026-10-22"]').click();
+        await expect(bands).toHaveCount(1);
+        await expect(days.nth(1)).toHaveAttribute("aria-pressed", "true");
+        await expect.poll(() => bands.first().evaluate((el) => (el as unknown as { day: { dayKey: string } }).day.dayKey)).toBe("2026-10-22");
+        await expect(bands.first().locator(".time-highlight.selected")).toHaveCount(0);
+    });
+
+    test("a start on another day shows that day's plan", async ({ page }) => {
+        await mount(page);
+        await openControl(page);
+        await openOverride(page);
+        await overrideDialog(page).locator("[data-from]").selectOption(String(Date.parse("2026-10-22T02:00:00Z")));
+        const days = overrideDialog(page).locator("[data-plan] [data-day]");
+        await expect(days.nth(1)).toHaveAttribute("aria-pressed", "true");
+        const band = overrideDialog(page).locator("[data-plan] scheduling-entity-day-band");
+        await expect(band).toHaveCount(1);
+        await expect.poll(() => band.evaluate((el) => (el as unknown as { day: { dayKey: string } }).day.dayKey)).toBe("2026-10-22");
+        await expect(band.locator(".time-highlight.selected")).toHaveCount(1);
     });
 
     test("a range that elapsed before the press saves nothing and stays open", async ({ page }) => {

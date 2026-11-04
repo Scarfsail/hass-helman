@@ -1,5 +1,6 @@
 import { LitElement, css, html, nothing, type PropertyValues } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
+import { repeat } from "lit/directives/repeat.js";
 import type { HomeAssistant } from "../../types/ha";
 import { fillTemplate, type LocalizeFunction } from "../localize/localize";
 import { showToast } from "../shared/fire-event";
@@ -96,12 +97,14 @@ export class ControlOverrideDialog extends LitElement {
             flex-direction: column;
             gap: 6px;
         }
-        .picks {
+        .picks,
+        .days {
             display: flex;
             flex-wrap: wrap;
             gap: 8px;
         }
-        .picks button {
+        .picks button,
+        .days button {
             font: inherit;
             font-size: 0.85rem;
             min-height: 32px;
@@ -112,7 +115,8 @@ export class ControlOverrideDialog extends LitElement {
             color: var(--primary-text-color);
             cursor: pointer;
         }
-        .picks button[aria-pressed="true"] {
+        .picks button[aria-pressed="true"],
+        .days button[aria-pressed="true"] {
             border-color: var(--primary-color);
             font-weight: 600;
         }
@@ -136,6 +140,8 @@ export class ControlOverrideDialog extends LitElement {
     /** Null is the slot in progress, whichever slot that is by now. */
     @state() private _fromMs: number | null = null;
     @state() private _toMs: number | null = null;
+    /** The day the plan shows; null is the run's first. */
+    @state() private _dayKey: string | null = null;
     @state() private _saving = false;
     @state() private _error: string | null = null;
     private _sessionKey = 0;
@@ -150,6 +156,7 @@ export class ControlOverrideDialog extends LitElement {
             this._valid = !isEntityScheduleActionEmpty(action);
             this._fromMs = null;
             this._toMs = null;
+            this._dayKey = null;
             this._error = null;
             this._sessionKey += 1;
         }
@@ -179,7 +186,7 @@ export class ControlOverrideDialog extends LitElement {
                             <label class="field">
                                 <span class="field-label">${this._t("from")}</span>
                                 <select data-from .value=${String(edges.fromMs)} @change=${this._handleFromChange}>
-                                    ${edges.starts.map((ms) => html`
+                                    ${repeat(edges.starts, (ms) => ms, (ms) => html`
                                         <option value=${String(ms)} ?selected=${ms === edges.fromMs}>${this._label(ms)}</option>
                                     `)}
                                 </select>
@@ -188,7 +195,7 @@ export class ControlOverrideDialog extends LitElement {
                                 <span class="field-label">${this._t("to")}</span>
                                 <select data-to required .value=${toMs === null ? "" : String(toMs)} @change=${this._handleToChange}>
                                     <option value="" ?selected=${toMs === null} disabled>${this._t("choose_to")}</option>
-                                    ${edges.ends.map((ms) => html`
+                                    ${repeat(edges.ends, (ms) => ms, (ms) => html`
                                         <option value=${String(ms)} ?selected=${ms === toMs}>${this._label(ms)}</option>
                                     `)}
                                 </select>
@@ -223,15 +230,19 @@ export class ControlOverrideDialog extends LitElement {
     }
 
     /**
-     * The lane's plan on each local day the run touches, read only, with the
+     * The lane's plan on one local day the run touches, read only, with the
      * range the override would replace marked: the chosen end, or the first
      * slot's until one is chosen. Today's starts at the slot in progress.
+     * The run's first day unless another is picked; a button per day when it
+     * reaches more than one.
      */
     private _renderPlan(edges: OverrideEdges, toMs: number | null) {
         const runStartMs = edges.starts[0];
         const runEndMs = edges.ends[edges.ends.length - 1];
         const { days, nowMs } = this._planDays();
         const highlights = [{ startMs: edges.fromMs, endMs: toMs ?? edges.ends[0], kind: "selected" as const }];
+        const runDays = days.filter(({ day }) => day.startMs < runEndMs && day.endMs > runStartMs);
+        const shown = runDays.find(({ day }) => day.dayKey === this._dayKey) ?? runDays[0];
         return html`
             <div class="plan" data-plan @show-controllable-detail=${this._stopPlanEvent}
                 @entity-day-band-block-select=${this._stopPlanEvent}
@@ -239,25 +250,33 @@ export class ControlOverrideDialog extends LitElement {
                 @entity-day-band-context-select=${this._stopPlanEvent}
                 @entity-day-band-slot-select=${this._stopPlanEvent}
                 @entity-day-band-gap-select=${this._stopPlanEvent}>
-                ${days
-                    .filter(({ day }) => day.startMs < runEndMs && day.endMs > runStartMs)
-                    .map(({ day, lanes }) => html`
-                        <span class="field-label">${day.label}</span>
-                        <scheduling-entity-day-band
-                            .hass=${this.hass}
-                            .localize=${this.localize}
-                            .day=${day}
-                            .lanes=${lanes}
-                            .locale=${this._locale}
-                            .timeZone=${this._timeZone}
-                            .windowStartMs=${day.startMs < runStartMs ? runStartMs : null}
-                            .highlightRanges=${highlights}
-                            .nowMs=${nowMs}
-                            .readonly=${true}
-                            .showForecastRows=${false}
-                            .showAxis=${true}
-                        ></scheduling-entity-day-band>
-                    `)}
+                ${runDays.length > 1 ? html`
+                    <div class="days">
+                        ${runDays.map(({ day }) => html`
+                            <button type="button" data-day=${day.dayKey} aria-pressed=${day === shown?.day ? "true" : "false"}
+                                @click=${() => { this._dayKey = day.dayKey; }}>
+                                ${day.label}
+                            </button>
+                        `)}
+                    </div>
+                ` : nothing}
+                ${shown ? html`
+                    <scheduling-entity-day-band
+                        .hass=${this.hass}
+                        .localize=${this.localize}
+                        .day=${shown.day}
+                        .lanes=${shown.lanes}
+                        .locale=${this._locale}
+                        .timeZone=${this._timeZone}
+                        .windowStartMs=${shown.day.startMs < runStartMs ? runStartMs : null}
+                        .highlightRanges=${highlights}
+                        .nowMs=${nowMs}
+                        .readonly=${true}
+                        .showForecastRows=${false}
+                        .showAxis=${true}
+                        .showLaneLabel=${false}
+                    ></scheduling-entity-day-band>
+                ` : nothing}
             </div>
         `;
     }
@@ -273,7 +292,7 @@ export class ControlOverrideDialog extends LitElement {
         if (previous !== null && previous.normalized === normalized && previous.controllable === controllable) {
             return { days: previous.result, nowMs: previous.nowMs };
         }
-        const nowMs = Date.now();
+        const nowMs = getSharedScheduleOwner(this.hass).getNowMs();
         const appliance = asScheduleAppliance(controllable);
         const lane = {
             key: controllable.id,
@@ -366,6 +385,9 @@ export class ControlOverrideDialog extends LitElement {
     private _handleFromChange(event: Event): void {
         this._fromMs = Number((event.currentTarget as HTMLSelectElement).value);
         if (this._toMs !== null && this._toMs <= this._fromMs) this._toMs = null;
+        // Shown on its own day, so its mark is in view.
+        const fromMs = this._fromMs;
+        this._dayKey = this.normalized.slots.find((slot) => slot.startMs === fromMs)?.dayKey ?? null;
         this._error = null;
     }
 
