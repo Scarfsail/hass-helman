@@ -594,7 +594,7 @@ export type ScheduleApplianceActionDTO =
     | ScheduleGenericApplianceActionDTO
     | ScheduleClimateApplianceActionDTO;
 
-export type ScheduleRuntimeReason = "scheduled" | "target_soc_reached";
+export type ScheduleRuntimeReason = "scheduled" | "target_soc_reached" | "vehicle_not_accepting";
 export type RuntimeActionKind = "apply" | "slot_stop" | "noop";
 export type RuntimeOutcome = "success" | "failed" | "skipped";
 
@@ -622,6 +622,7 @@ export interface InverterRuntimeDTO {
 export interface ApplianceRuntimeDTO {
     actionKind: RuntimeActionKind;
     outcome: RuntimeOutcome;
+    reason?: ScheduleRuntimeReason;
     errorCode?: string;
     message?: string;
     updatedAt?: string;

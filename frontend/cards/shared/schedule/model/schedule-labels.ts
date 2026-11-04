@@ -1,5 +1,6 @@
 import type { LocalizeFunction } from "../../../localize/localize";
 import type { ScheduleAction } from "../schedule-types";
+import type { ScheduleRuntimeReason } from "../../../helman-api";
 
 export function getScheduleActionLabel(
     action: ScheduleAction,
@@ -24,7 +25,7 @@ export function getScheduleActionLabel(
 }
 
 export function getScheduleReasonLabel(
-    reason: "scheduled" | "target_soc_reached" | null | undefined,
+    reason: ScheduleRuntimeReason | null | undefined,
     localize: LocalizeFunction,
 ): string | null {
     if (reason === undefined || reason === null) {
@@ -36,5 +37,7 @@ export function getScheduleReasonLabel(
             return localize("scheduling.reason.scheduled");
         case "target_soc_reached":
             return localize("scheduling.reason.target_soc_reached");
+        case "vehicle_not_accepting":
+            return localize("scheduling.reason.vehicle_not_accepting");
     }
 }

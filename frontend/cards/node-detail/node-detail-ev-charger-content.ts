@@ -19,6 +19,7 @@ import { currencyFromPriceUnit } from "../helman-solar-inspector/money-model";
 import { getSharedHelmanStore } from "../shared/data/store";
 
 import { modeStripWindow, type ModeSegment } from "../shared/mode-strip";
+import { getScheduleReasonLabel } from "../shared/schedule/model/schedule-labels";
 import { getScheduleApplianceActionPresentation } from "../shared/schedule/model/schedule-appliance-action-presentation";
 import { resolveScheduleSlotBoundaries, type ScheduleSlotBoundary } from "../shared/schedule/model/schedule-time";
 import { IDLE_W, NodeDetailContentBase } from "./node-detail-base";
@@ -593,7 +594,8 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         if (evCharging(this.hass, overview)) return { kind: "charging" };
         if (overview.status?.kind === "no_car") return { kind: "no_car" };
         const reasons: string[] = [];
-        if (selection.kind === "selected" && selection.car.neededKwh !== null && selection.car.neededKwh <= 0) {
+        const limitReached = selection.kind === "selected" && selection.car.neededKwh !== null && selection.car.neededKwh <= 0;
+        if (limitReached) {
             reasons.push(fillTemplate(this._t("waiting.reached"), {
                 name: selection.car.vehicle.name, soc: this._percent(selection.car.soc!), limit: this._percent(selection.car.limit!),
             }));
@@ -613,6 +615,8 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
             const runtime = runtimeFor<ApplianceRuntimeDTO>(this._plan.schedule, this.deviceId, Date.now());
             if (runtime?.outcome === "failed") {
                 reasons.push(fillTemplate(this._t("waiting.runtime_failed"), { message: runtime.message ?? runtime.errorCode ?? this._t("unknown") }));
+            } else if (runtime?.reason === "vehicle_not_accepting" && !limitReached) {
+                reasons.push(getScheduleReasonLabel(runtime.reason, this.localize)!);
             }
             eco = (current.useMode ?? this._reading(overview, "use_mode")) === "ECO";
         }

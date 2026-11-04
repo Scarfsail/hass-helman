@@ -8,7 +8,9 @@ from ..controllables.config import CONTROLLABLE_ID_INVERTER
 if TYPE_CHECKING:
     from .schedule import ScheduleAction, ScheduleActionDict
 
-ScheduleExecutionReason = Literal["scheduled", "target_soc_reached"]
+ScheduleExecutionReason = Literal[
+    "scheduled", "target_soc_reached", "vehicle_not_accepting"
+]
 RuntimeActionKind = Literal["apply", "slot_stop", "noop"]
 RuntimeOutcome = Literal["success", "failed", "skipped"]
 

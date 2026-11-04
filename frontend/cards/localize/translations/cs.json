@@ -715,7 +715,8 @@
     },
     "reason": {
       "scheduled": "Podle plánu",
-      "target_soc_reached": "Cílové SoC dosaženo"
+      "target_soc_reached": "Cílové SoC dosaženo",
+      "vehicle_not_accepting": "Vozidlo nepřijímá nabíjení"
     },
     "runtime": {
       "applied": "Použito",

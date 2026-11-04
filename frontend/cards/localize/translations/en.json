@@ -836,7 +836,8 @@
     },
     "reason": {
       "scheduled": "As scheduled",
-      "target_soc_reached": "Target SoC reached"
+      "target_soc_reached": "Target SoC reached",
+      "vehicle_not_accepting": "Vehicle not accepting charge"
     },
     "appliance": {
       "climate": {

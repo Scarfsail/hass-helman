@@ -49,6 +49,9 @@ from custom_components.helman.appliances.execution import (  # noqa: E402
 from custom_components.helman.scheduling.actuation import (  # noqa: E402
     ScheduleActuator,
 )
+from custom_components.helman.scheduling.slots import (  # noqa: E402
+    ScheduleChargeNotAcceptedError,
+)
 from custom_components.helman.vendors import resolve_vendor_config  # noqa: E402
 
 
@@ -553,7 +556,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(runtime)
         self.assertEqual(memory.last_runtime_action_kind, "slot_stop")
 
-    async def test_ev_failed_apply_stays_retryable_within_same_slot(self) -> None:
+    async def test_ev_failed_turn_on_call_latches_as_not_accepting(self) -> None:
         hass = FakeHass({"switch.ev_nabijeni": FakeState("off")})
         hass.services.error = RuntimeError("temporary outage")
         executor = ApplianceExecutor(_actuator(hass), EvChargerDriver())
@@ -567,9 +570,11 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
             reference_time=REFERENCE_TIME,
         )
 
-        self.assertEqual(first_runtime.outcome, "failed")
-        self.assertIsNone(first_memory)
+        self.assertEqual(first_runtime.outcome, "skipped")
+        self.assertEqual(first_runtime.reason, "vehicle_not_accepting")
+        self.assertIsNotNone(first_memory.not_accepting)
 
+        # The charger keeps refusing; nothing it can see changed, so no retry.
         hass.services.error = None
         second_runtime, second_memory = await executor.async_execute(
             appliance=_build_appliance(),
@@ -580,13 +585,11 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
             reference_time=REFERENCE_TIME,
         )
 
-        self.assertEqual(len(hass.services.calls), 1)
-        self.assertEqual(hass.services.calls[0][0:2], ("switch", "turn_on"))
-        self.assertEqual(second_runtime.outcome, "success")
-        self.assertIsNotNone(second_memory)
-        self.assertTrue(second_memory.last_enabled)
+        self.assertEqual(hass.services.calls, [])
+        self.assertEqual(second_runtime.reason, "vehicle_not_accepting")
+        self.assertEqual(second_memory, first_memory)
 
-    async def test_stalled_ev_switch_call_times_out_and_stays_retryable(self) -> None:
+    async def test_stalled_ev_switch_call_times_out_as_not_accepting(self) -> None:
         hass = FakeHass({"switch.ev_nabijeni": FakeState("off")})
         hass.services.stalled.add(("switch", "turn_on"))
         executor = ApplianceExecutor(
@@ -603,18 +606,17 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
             reference_time=REFERENCE_TIME,
         )
 
-        self.assertEqual(runtime.outcome, "failed")
-        self.assertEqual(runtime.error_code, "execution_unavailable")
-        # The switch wrapper keeps the actuator's diagnostics: service, target
-        # and how long it waited.
-        self.assertIn("switch.turn_on", runtime.message)
-        self.assertIn("switch.ev_nabijeni", runtime.message)
-        self.assertIn("0.01 seconds", runtime.message)
+        self.assertEqual(runtime.outcome, "skipped")
+        self.assertEqual(runtime.reason, "vehicle_not_accepting")
+        self.assertIsNone(runtime.error_code)
+        self.assertIsNone(runtime.message)
         # A timed-out service call stops that path: no charge-state polling.
         self.assertEqual(len(hass.services.calls), 1)
-        self.assertIsNone(memory)
+        self.assertIsNotNone(memory.not_accepting)
 
+        # The charge switch changing state clears the latch.
         hass.services.stalled.clear()
+        hass.states._states["switch.ev_nabijeni"].state = "on"
         retry_runtime, retry_memory = await executor.async_execute(
             appliance=_build_appliance(),
             action={"charge": True, "vehicleId": "kona"},
@@ -625,7 +627,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(retry_runtime.outcome, "success")
-        self.assertIsNotNone(retry_memory)
+        self.assertIsNone(retry_memory.not_accepting)
 
     async def test_stalled_ev_select_call_times_out_with_service_diagnostics(
         self,
@@ -1168,7 +1170,9 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(runtime.action_kind, "noop")
         self.assertEqual(runtime.outcome, "skipped")
 
-    async def test_timeout_waiting_for_charge_on_fails_before_selects(self) -> None:
+    async def test_timeout_waiting_for_charge_on_is_not_accepting_before_selects(
+        self,
+    ) -> None:
         hass = FakeHass(
             {
                 "switch.ev_nabijeni": FakeState("off"),
@@ -1203,8 +1207,167 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(hass.services.calls), 1)
         self.assertEqual(hass.services.calls[0][0:2], ("switch", "turn_on"))
+        self.assertEqual(runtime.outcome, "skipped")
+        self.assertEqual(runtime.reason, "vehicle_not_accepting")
+        self.assertIsNone(runtime.error_code)
+
+
+async def _no_sleep(_delay: float) -> None:
+    return None
+
+
+NEXT_SLOT_ID = "2026-03-20T21:15:00+01:00"
+CHARGE_LIMIT_ENTITY_ID = "number.kona_ac_charging_limit"
+CHARGE_ACTION = {"charge": True, "vehicleId": "kona"}
+
+
+class EvNotAcceptingLatchTests(unittest.IsolatedAsyncioTestCase):
+    """A start the car refused is tried once, then latched until something changes."""
+
+    def setUp(self) -> None:
+        self.hass = FakeHass(
+            {
+                "switch.ev_nabijeni": FakeState("off"),
+                CHARGE_LIMIT_ENTITY_ID: FakeState("80"),
+            },
+            auto_turn_on=False,
+        )
+        self.appliance = _build_appliance()
+        self.appliance = replace(
+            self.appliance,
+            vehicles=(
+                replace(
+                    self.appliance.vehicles[0],
+                    charge_limit_entity_id=CHARGE_LIMIT_ENTITY_ID,
+                ),
+            ),
+        )
+        self.executor = ApplianceExecutor(
+            _actuator(self.hass),
+            EvChargerDriver(charge_on_wait_seconds=0, sleep=_no_sleep),
+        )
+
+    async def _execute(self, memory, *, action=CHARGE_ACTION, slot_id=CURRENT_SLOT_ID):
+        return await self.executor.async_execute(
+            appliance=self.appliance,
+            action=action,
+            last_scheduled_action=None,
+            memory=memory,
+            active_slot_id=slot_id,
+            reference_time=REFERENCE_TIME,
+        )
+
+    def _turn_on_calls(self) -> int:
+        return sum(1 for call in self.hass.services.calls if call[1] == "turn_on")
+
+    async def _latched_memory(self) -> ApplianceExecutionMemory:
+        runtime, memory = await self._execute(None)
+        self.assertEqual(runtime.outcome, "skipped")
+        self.assertEqual(runtime.reason, "vehicle_not_accepting")
+        self.assertIsNone(runtime.error_code)
+        self.assertIsNone(runtime.message)
+        self.assertEqual(
+            memory.not_accepting,
+            ((True, "kona", None, None), "off", "80"),
+        )
+        self.assertIsNone(memory.last_action_signature)
+        self.assertEqual(self._turn_on_calls(), 1)
+        return memory
+
+    async def test_next_tick_and_next_slot_do_not_retry(self) -> None:
+        memory = await self._latched_memory()
+
+        runtime, tick_memory = await self._execute(memory)
+        self.assertEqual(runtime.outcome, "skipped")
+        self.assertEqual(runtime.reason, "vehicle_not_accepting")
+        self.assertEqual(tick_memory, memory)
+
+        runtime, slot_memory = await self._execute(tick_memory, slot_id=NEXT_SLOT_ID)
+        self.assertEqual(runtime.reason, "vehicle_not_accepting")
+        self.assertEqual(slot_memory, memory)
+        self.assertEqual(self._turn_on_calls(), 1)
+
+    async def test_switch_state_change_clears_the_latch(self) -> None:
+        memory = await self._latched_memory()
+        self.hass.states._states["switch.ev_nabijeni"].state = "on"
+
+        runtime, memory = await self._execute(memory)
+
+        self.assertEqual(runtime.outcome, "success")
+        self.assertIsNone(memory.not_accepting)
+
+    async def test_switch_on_just_past_the_wait_does_not_latch(self) -> None:
+        driver = self.executor._driver
+
+        async def _on_too_late(actuator, *, switch_controller) -> None:
+            # The charger reports on a moment after the wait gave up.
+            self.hass.states._states["switch.ev_nabijeni"].state = "on"
+            raise ScheduleChargeNotAcceptedError("Timed out waiting")
+
+        with patch.object(driver, "_async_wait_until_charge_on", _on_too_late):
+            runtime, memory = await self._execute(None)
+
+        self.assertEqual(runtime.reason, "vehicle_not_accepting")
+        self.assertIsNone(memory.not_accepting)
+
+        runtime, memory = await self._execute(memory)
+
+        self.assertEqual(runtime.action_kind, "apply")
+        self.assertEqual(runtime.outcome, "success")
+        self.assertIsNone(memory.not_accepting)
+
+    async def test_charge_limit_change_clears_the_latch_and_retries(self) -> None:
+        memory = await self._latched_memory()
+        self.hass.states._states[CHARGE_LIMIT_ENTITY_ID].state = "90"
+        self.hass.auto_turn_on = True
+
+        runtime, memory = await self._execute(memory, slot_id=NEXT_SLOT_ID)
+
+        self.assertEqual(self._turn_on_calls(), 2)
+        self.assertEqual(runtime.outcome, "success")
+        self.assertIsNone(memory.not_accepting)
+
+    async def test_action_signature_change_retries(self) -> None:
+        memory = await self._latched_memory()
+
+        runtime, memory = await self._execute(memory, action={"charge": True})
+
+        self.assertEqual(self._turn_on_calls(), 2)
+        self.assertEqual(runtime.reason, "vehicle_not_accepting")
+        self.assertEqual(memory.not_accepting[0], (True, None, None, None))
+
+    async def test_idle_slot_clears_the_latch(self) -> None:
+        memory = await self._latched_memory()
+
+        runtime, idle_memory = await self._execute(memory, action=None, slot_id=NEXT_SLOT_ID)
+        self.assertIsNone(runtime)
+        self.assertIsNone(idle_memory.not_accepting)
+
+        runtime, _memory = await self._execute(
+            idle_memory, slot_id="2026-03-20T21:30:00+01:00"
+        )
+        self.assertEqual(self._turn_on_calls(), 2)
+        self.assertEqual(runtime.reason, "vehicle_not_accepting")
+
+    async def test_unavailable_charge_entity_is_still_a_hard_failure(self) -> None:
+        self.hass.states._states["switch.ev_nabijeni"].state = "unavailable"
+
+        runtime, memory = await self._execute(None)
+
         self.assertEqual(runtime.outcome, "failed")
         self.assertEqual(runtime.error_code, "execution_unavailable")
+        self.assertIsNone(runtime.reason)
+        self.assertIsNone(memory)
+        self.assertEqual(self.hass.services.calls, [])
+
+    async def test_hard_failure_clears_the_latch(self) -> None:
+        memory = await self._latched_memory()
+        self.hass.states._states["switch.ev_nabijeni"].state = "unavailable"
+
+        runtime, memory = await self._execute(memory)
+
+        self.assertEqual(runtime.outcome, "failed")
+        self.assertIsNone(memory.not_accepting)
 
 
 if __name__ == "__main__":
