@@ -1472,7 +1472,7 @@ class ScheduleExecutorConcurrencyTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("enable_request", captured.output[0])
 
-    async def test_requests_coalesce_while_an_ev_never_turns_on_then_retry_succeeds(
+    async def test_requests_coalesce_while_an_ev_never_turns_on_then_latch_clears(
         self,
     ) -> None:
         executor, hass, _store = self._build(
@@ -1512,33 +1512,36 @@ class ScheduleExecutorConcurrencyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(hass.created_tasks, 1)
         self.assertIsNotNone(executor._pending_request)
 
-        with self.assertLogs(
+        with self.assertNoLogs(
             "custom_components.helman.scheduling.schedule_executor",
             level="WARNING",
         ):
             stop_polling.set()
             await self._wait(executor._worker_task)
 
-        # The first attempt and the one merged follow-up both retried turn_on:
-        # a failed apply keeps no memory, so it stays retryable.
+        # The first attempt tried turn_on once; the merged follow-up found the
+        # refusal latched and did not retry, nor warn.
         self.assertEqual(
             [call[:2] for call in hass.services.calls],
-            [("switch", "turn_on"), ("switch", "turn_on")],
+            [("switch", "turn_on")],
         )
         runtime = executor.runtime.execution_status.active_slot_runtime
-        self.assertEqual(runtime.appliances["garage-ev"].outcome, "failed")
-        self.assertIn(
-            "Timed out waiting for EV charge entity",
-            runtime.appliances["garage-ev"].message,
+        self.assertEqual(runtime.appliances["garage-ev"].outcome, "skipped")
+        self.assertEqual(
+            runtime.appliances["garage-ev"].reason, "vehicle_not_accepting"
         )
-        self.assertNotIn("garage-ev", executor.runtime.appliance_memories)
+        self.assertIsNotNone(
+            executor.runtime.appliance_memories["garage-ev"].not_accepting
+        )
 
-        # The charger comes up; the next request succeeds and is remembered.
+        # The charger comes up; the latch clears and the apply is remembered.
         hass.states._states["switch.ev_charge"].state = "on"
         executor.request_reconcile(reason="interval")
         await self._wait(executor._worker_task)
 
-        self.assertIn("garage-ev", executor.runtime.appliance_memories)
+        self.assertIsNone(
+            executor.runtime.appliance_memories["garage-ev"].not_accepting
+        )
         self.assertEqual(
             executor.runtime.execution_status.active_slot_runtime.appliances[
                 "garage-ev"

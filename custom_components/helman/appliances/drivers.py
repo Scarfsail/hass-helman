@@ -9,6 +9,7 @@ names the driver to build, so this module imports nothing from it.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -23,8 +24,13 @@ from ..scheduling.runtime_status import (
     ControllableRuntimeStatus,
     RuntimeActionKind,
     RuntimeOutcome,
+    ScheduleExecutionReason,
 )
-from ..scheduling.slots import ScheduleError, ScheduleExecutionUnavailableError
+from ..scheduling.slots import (
+    ScheduleChargeNotAcceptedError,
+    ScheduleError,
+    ScheduleExecutionUnavailableError,
+)
 from .climate_appliance import ClimateApplianceRuntime
 from .climate_schedule import (
     ClimateApplianceScheduleActionDict,
@@ -40,6 +46,8 @@ from .generic_schedule import (
 
 _UNAVAILABLE_STATES = {"unknown", "unavailable", "none"}
 CHARGE_POLL_INTERVAL_SECONDS = 1.0
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class SwitchEntityController:
@@ -183,7 +191,7 @@ class ClimateEntityController:
 class ApplianceActionDriver(Protocol):
     """The per-kind half of appliance execution.
 
-    Everything an appliance kind does differently lives behind these three
+    Everything an appliance kind does differently lives behind these
     methods; the slot-stop / signature / noop / apply decision sequence around
     them is written once, in :class:`ApplianceExecutor`.
     """
@@ -193,6 +201,17 @@ class ApplianceActionDriver(Protocol):
 
     def is_enabled(self, appliance: Any, action: Any) -> bool:
         """Whether this action means the appliance is running."""
+
+    def acceptance_fingerprint(
+        self,
+        actuator: ScheduleActuator,
+        appliance: Any,
+        action: Any,
+    ) -> tuple[object, ...] | None:
+        """What must change before a start the appliance refused is retried.
+
+        ``None`` means the kind never latches a refused start.
+        """
 
     async def async_apply(
         self,
@@ -233,6 +252,26 @@ class EvChargerDriver:
     ) -> bool:
         return is_ev_charger_action_running(action)
 
+    def acceptance_fingerprint(
+        self,
+        actuator: ScheduleActuator,
+        appliance: EvChargerApplianceRuntime,
+        action: EvChargerScheduleActionDict,
+    ) -> tuple[object, ...] | None:
+        charge_state = _read_raw_state(actuator, appliance.charge_entity_id)
+        if is_switch_on(charge_state):
+            # Charging after all (e.g. it came on just past the wait): accepted.
+            return None
+        return (
+            self.signature(action),
+            charge_state,
+            *(
+                _read_raw_state(actuator, vehicle.charge_limit_entity_id)
+                for vehicle in appliance.vehicles
+                if vehicle.charge_limit_entity_id
+            ),
+        )
+
     async def async_apply(
         self,
         actuator: ScheduleActuator,
@@ -257,7 +296,10 @@ class EvChargerDriver:
             )
             charge_state = switch_controller.read_state(actuator)
             if not switch_controller.is_on(charge_state):
-                await switch_controller.async_turn_on(actuator)
+                try:
+                    await switch_controller.async_turn_on(actuator)
+                except ScheduleExecutionUnavailableError as err:
+                    raise ScheduleChargeNotAcceptedError(str(err)) from err
                 await self._async_wait_until_charge_on(
                     actuator,
                     switch_controller=switch_controller,
@@ -351,7 +393,7 @@ class EvChargerDriver:
             if switch_controller.is_on(state):
                 return
 
-        raise ScheduleExecutionUnavailableError(
+        raise ScheduleChargeNotAcceptedError(
             f"Timed out waiting for EV charge entity '{switch_controller.entity_id}' "
             f"to turn on within {int(self._charge_on_wait_seconds)} seconds"
         )
@@ -370,6 +412,14 @@ class GenericApplianceDriver:
         action: GenericApplianceScheduleActionDict,
     ) -> bool:
         return is_generic_action_running(action)
+
+    def acceptance_fingerprint(
+        self,
+        actuator: ScheduleActuator,
+        appliance: GenericApplianceRuntime,
+        action: GenericApplianceScheduleActionDict,
+    ) -> tuple[object, ...] | None:
+        return None
 
     async def async_apply(
         self,
@@ -420,6 +470,14 @@ class ClimateApplianceDriver:
     ) -> bool:
         return is_climate_action_running(action)
 
+    def acceptance_fingerprint(
+        self,
+        actuator: ScheduleActuator,
+        appliance: ClimateApplianceRuntime,
+        action: ClimateApplianceScheduleActionDict,
+    ) -> tuple[object, ...] | None:
+        return None
+
     async def async_apply(
         self,
         actuator: ScheduleActuator,
@@ -464,16 +522,27 @@ class ClimateApplianceDriver:
         )
 
 
+def _read_raw_state(actuator: ScheduleActuator, entity_id: str) -> object:
+    return getattr(actuator.read_state(entity_id), "state", None)
+
+
 def build_runtime_status(
     *,
     action_kind: RuntimeActionKind,
     outcome: RuntimeOutcome,
     reference_time: datetime,
     error: ScheduleError | None = None,
+    reason: ScheduleExecutionReason | None = None,
 ) -> ControllableRuntimeStatus:
+    if isinstance(error, ScheduleChargeNotAcceptedError):
+        # The car refused the start (e.g. it reached its charge limit): a
+        # state to report, not an execution failure.
+        _LOGGER.debug("EV start not accepted: %s", error)
+        outcome, reason, error = "skipped", "vehicle_not_accepting", None
     return ControllableRuntimeStatus(
         action_kind=action_kind,
         outcome=outcome,
+        reason=reason,
         error_code=None if error is None else error.code,
         message=None if error is None else str(error),
         updated_at=dt_util.as_local(reference_time).isoformat(timespec="seconds"),

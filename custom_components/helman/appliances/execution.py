@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any
 
@@ -26,6 +26,9 @@ class ApplianceExecutionMemory:
     last_action_signature: tuple[object, ...] | None
     last_enabled: bool
     last_runtime_action_kind: str | None = None
+    # Set when the appliance refused a start: the driver's acceptance
+    # fingerprint at that moment. The start is not retried until it changes.
+    not_accepting: tuple[object, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -41,7 +44,9 @@ class ApplianceExecutor:
     Slot stop, signature comparison, noop, apply, memory — written once, with
     the per-kind differences behind :class:`ApplianceActionDriver`. Memory is
     only advanced on a successful apply, so a failed actuation is retried on the
-    next reconcile instead of being remembered as done.
+    next reconcile instead of being remembered as done. A start the appliance
+    refused is the exception: it is latched, across slots, until the driver's
+    acceptance fingerprint changes.
     """
 
     def __init__(
@@ -116,6 +121,22 @@ class ApplianceExecutor:
                 ),
             )
 
+        if (
+            memory is not None
+            and memory.not_accepting is not None
+            and memory.not_accepting
+            == self._driver.acceptance_fingerprint(self._actuator, appliance, action)
+        ):
+            return (
+                build_runtime_status(
+                    action_kind="noop",
+                    outcome="skipped",
+                    reason="vehicle_not_accepting",
+                    reference_time=reference_time,
+                ),
+                memory,
+            )
+
         runtime = await self._driver.async_apply(
             self._actuator,
             appliance=appliance,
@@ -123,7 +144,22 @@ class ApplianceExecutor:
             action_kind="apply",
             reference_time=reference_time,
         )
+        if runtime.outcome == "skipped" and runtime.reason == "vehicle_not_accepting":
+            return (
+                runtime,
+                ApplianceExecutionMemory(
+                    last_active_slot_id=active_slot_id,
+                    last_action_signature=None,
+                    last_enabled=enabled,
+                    last_runtime_action_kind="apply",
+                    not_accepting=self._driver.acceptance_fingerprint(
+                        self._actuator, appliance, action
+                    ),
+                ),
+            )
         if runtime.outcome != "success":
+            if memory is not None and memory.not_accepting is not None:
+                memory = replace(memory, not_accepting=None)
             return runtime, memory
         return (
             runtime,

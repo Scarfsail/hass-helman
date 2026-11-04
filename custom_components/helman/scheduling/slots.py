@@ -33,6 +33,10 @@ class ScheduleExecutionUnavailableError(ScheduleError):
         super().__init__("execution_unavailable", message)
 
 
+class ScheduleChargeNotAcceptedError(ScheduleExecutionUnavailableError):
+    """The EV charge was asked to start, but the switch never came on."""
+
+
 def parse_slot_id(slot_id: str) -> datetime:
     parsed = dt_util.parse_datetime(slot_id)
     if parsed is None or parsed.tzinfo is None:
