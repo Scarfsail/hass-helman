@@ -423,7 +423,7 @@ export class ControlOverrideDialog extends LitElement {
         }
         const patches = buildEntityScheduleLanePatches({
             slots,
-            lanes: [{ target: this.controllable.id, draft, claim: true }],
+            lanes: [{ target: this.controllable.id, draft }],
             nowMs,
         });
         if (patches.length === 0) {

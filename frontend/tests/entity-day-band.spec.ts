@@ -55,12 +55,19 @@ interface MountOptions {
     axis?: boolean;
     /** How much room the tracks get, which is what decides how dense the grid can be. */
     widthPx?: number;
+    /**
+     * Authored, as the day editor draws it: the boiler lane selected, an
+     * automation run at 16:00-18:00 beside the manual one, and the manual one
+     * selected when `selectedBlock` is set.
+     */
+    authoring?: boolean;
+    selectedBlock?: boolean;
 }
 
 async function mountBand(page: Page, options: MountOptions = {}): Promise<void> {
     await loadBundle(page, "scheduling-entity-day-band");
 
-    await page.evaluate(({ dayStartMs, nowMs, hourMs, windowStartMs, windowEndMs, windowed, highlight, live, slotGrid, slotPicks, twoLanes, selectedSlot, halfHourly, slotMinutes, gridTicks, axis, widthPx }) => {
+    await page.evaluate(({ dayStartMs, nowMs, hourMs, windowStartMs, windowEndMs, windowed, highlight, live, slotGrid, slotPicks, twoLanes, selectedSlot, halfHourly, slotMinutes, gridTicks, axis, widthPx, authoring, selectedBlock }) => {
         const at = (hour: number) => dayStartMs + hour * hourMs;
         const stepMs = slotMinutes * 60_000;
         const slots = Array.from({ length: (24 * hourMs) / stepMs }, (_, index) => ({
@@ -136,12 +143,25 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
             // every one of these geometry assertions is about.
             blockProjections: new Map(),
             blockVehicleSoc: new Map(),
+            freedRanges: [],
         };
         band.lanes = twoLanes
             ? [boilerLane, { ...boilerLane, key: "pump", name: "Pump", blocks: [] }]
             : [boilerLane];
+        if (authoring) {
+            boilerLane.blocks.push({
+                ...boilerLane.blocks[0],
+                key: "block:boiler:16",
+                startMs: at(16),
+                endMs: at(18),
+                slotIds: [new Date(at(16)).toISOString(), new Date(at(17)).toISOString()],
+                authorship: "automation",
+            });
+            band.selectedLaneKey = "boiler";
+            band.editingRange = selectedBlock ? { startMs: at(12), endMs: at(14) } : null;
+        }
         band.nowMs = nowMs;
-        band.readonly = true;
+        band.readonly = !authoring;
         band.slotGrid = slotGrid;
         band.slotPicks = slotPicks;
         band.selectedSlot = selectedSlot === undefined
@@ -178,6 +198,9 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
             "entity-day-band-slot-select",
             "entity-day-band-time-hover",
             "entity-day-band-gap-select",
+            "entity-day-band-range-change",
+            "entity-day-band-range-paint",
+            "entity-day-band-deselect",
             "show-controllable-detail",
             "hass-more-info",
         ]) {
@@ -207,6 +230,8 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
         gridTicks: options.gridTicks ?? [],
         axis: options.axis ?? false,
         widthPx: options.widthPx ?? 1000,
+        authoring: options.authoring ?? false,
+        selectedBlock: options.selectedBlock ?? false,
     });
     await page.waitForFunction(
         () => !!document.querySelector("scheduling-entity-day-band")?.shadowRoot?.querySelector(".track"),
@@ -669,5 +694,101 @@ test.describe("entity day band, its own slot grid", () => {
         await expect(band.locator(".axis-tick").first()).toHaveText("06");
         await expect(band.locator(".axis-tick").last()).toHaveText("18");
         await expect(band.locator(".track .time-grid-line")).toHaveCount(12);
+    });
+});
+
+/**
+ * The band as the day editor draws it. Manual always wins: what a gesture
+ * covers is the host's to replace, so the band only reports what was pressed
+ * and where the pointer went -- and never offers to move the automation's run.
+ */
+test.describe("entity day band, authoring", () => {
+    /** Page coordinates for a moment on the boiler's track. */
+    async function pointAt(page: Page, hour: number): Promise<{ x: number; y: number }> {
+        return page.evaluate(({ dayStartMs, hourMs, atHour }) => {
+            const band = document.querySelector("scheduling-entity-day-band")!;
+            const rect = band.shadowRoot!.querySelector('.lane[data-lane="boiler"] .track')!.getBoundingClientRect();
+            return {
+                x: rect.left + ((atHour * hourMs) / (24 * hourMs)) * rect.width,
+                y: rect.top + rect.height / 2,
+            };
+        }, { dayStartMs: DAY_START_MS, hourMs: HOUR_MS, atHour: hour });
+    }
+
+    async function drag(page: Page, fromHour: number, toHour: number): Promise<void> {
+        const from = await pointAt(page, fromHour);
+        const to = await pointAt(page, toHour);
+        await page.mouse.move(from.x, from.y);
+        await page.mouse.down();
+        await page.mouse.move(to.x, to.y, { steps: 8 });
+        await page.mouse.up();
+    }
+
+    test("an automation run is painted over, never dragged", async ({ page }) => {
+        await mountBand(page, { authoring: true });
+
+        await expect(page.locator("scheduling-entity-day-band .segment.authorship-automation .handle"))
+            .toHaveCount(0);
+        await drag(page, 16.5, 19.5);
+
+        const events = (await readEvents(page)).filter((event) => event.type !== "entity-day-band-time-hover");
+        expect(events.some((event) => event.type === "entity-day-band-range-change")).toBe(false);
+        const paints = events.filter((event) => event.type === "entity-day-band-range-paint");
+        // From the pressed slot to the slot under the pointer, opened once.
+        expect(paints[0].detail).toEqual({
+            laneKey: "boiler",
+            startMs: DAY_START_MS + 16 * HOUR_MS,
+            endMs: DAY_START_MS + 17 * HOUR_MS,
+            first: true,
+        });
+        expect(paints.at(-1)!.detail).toEqual({
+            laneKey: "boiler",
+            startMs: DAY_START_MS + 16 * HOUR_MS,
+            endMs: DAY_START_MS + 20 * HOUR_MS,
+            first: false,
+        });
+        expect(paints.filter((event) => event.detail.first)).toHaveLength(1);
+    });
+
+    test("a manual block's drag reshapes it, past whatever it crosses", async ({ page }) => {
+        await mountBand(page, { authoring: true });
+
+        // 12:00-14:00 four hours right, over the automation's 16:00 run.
+        await drag(page, 13, 17);
+
+        const events = await readEvents(page);
+        // Selected first, so the host has the block open when the range lands.
+        const types = events.map((event) => event.type).filter((type) => type !== "entity-day-band-time-hover");
+        expect(types[0]).toBe("entity-day-band-block-select");
+        const changes = events.filter((event) => event.type === "entity-day-band-range-change");
+        expect(changes.at(-1)!.detail).toEqual({
+            startMs: DAY_START_MS + 16 * HOUR_MS,
+            endMs: DAY_START_MS + 18 * HOUR_MS,
+        });
+    });
+
+    test("tapping the selected block lets go of it", async ({ page }) => {
+        await mountBand(page, { authoring: true, selectedBlock: true });
+
+        const point = await pointAt(page, 13);
+        await page.mouse.click(point.x, point.y);
+
+        const types = (await readEvents(page)).map((event) => event.type);
+        expect(types).toContain("entity-day-band-deselect");
+        expect(types).not.toContain("entity-day-band-block-select");
+    });
+
+    test("tapping free track adds a block where it landed", async ({ page }) => {
+        await mountBand(page, { authoring: true });
+
+        const point = await pointAt(page, 20.2);
+        await page.mouse.click(point.x, point.y);
+
+        const gaps = (await readEvents(page)).filter((event) => event.type === "entity-day-band-gap-select");
+        expect(gaps.map((event) => event.detail)).toEqual([{
+            laneKey: "boiler",
+            startMs: DAY_START_MS + 20 * HOUR_MS,
+            limitMs: DAY_START_MS + 24 * HOUR_MS,
+        }]);
     });
 });

@@ -175,7 +175,7 @@ async function mountBand(page: Page, date: string): Promise<void> {
                 metadata: { icon: "mdi:water-boiler", scheduleCapabilities: { onOffToggle: true } }, controls: { switch: { entityId: "switch.boiler" } },
             },
             isAvailable: true, actualSegments: [], blocks: [],
-            blockProjections: new Map(), blockVehicleSoc: new Map(),
+            blockProjections: new Map(), blockVehicleSoc: new Map(), freedRanges: [],
         }];
         band.readonly = true;
         band.showForecastRows = false;

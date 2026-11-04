@@ -35,6 +35,8 @@ async function mountEditor(
         neighbour?: boolean;
         /** A run at 20:00-22:00 as well, leaving a single free slot at 19:00. */
         oneSlotGap?: boolean;
+        /** A manual "off" at 21:00-22:00: a neighbour with a different action. */
+        offNeighbour?: boolean;
         /** Half-hour slots and a single 16:00-17:00 run, so a default-length
          *  block spans a slot boundary rather than sitting on one. */
         halfHourSlots?: boolean;
@@ -49,9 +51,11 @@ async function mountEditor(
         /** Today as the backend serves it: elapsed slots pruned, then padded
          *  back to midnight by the card, with forecast for those hours. */
         pruned?: boolean;
+        /** The forecast horizon stops at 13:00 on day two. */
+        shortHorizon?: boolean;
     } = {},
 ): Promise<void> {
-    await page.evaluate(({ dayOne, dayTwo, nowMs, neighbour, oneSlotGap, halfHourSlots, acrossMidnight, straddling, futureAutomation, multiLane, pruned, explainable }) => {
+    await page.evaluate(({ dayOne, dayTwo, nowMs, neighbour, offNeighbour, oneSlotGap, halfHourSlots, acrossMidnight, straddling, futureAutomation, multiLane, pruned, explainable, shortHorizon }) => {
         const stepMs = halfHourSlots ? 1_800_000 : 3_600_000;
         const buildSlot = (dayKey: string, index: number) => {
             const startMs = Date.parse(`${dayKey}T00:00:00Z`) + index * stepMs;
@@ -75,7 +79,7 @@ async function mountEditor(
         const perDay = halfHourSlots ? 48 : 24;
         const slots = [
             ...Array.from({ length: perDay }, (_unused, index) => buildSlot(dayOne, index)),
-            ...Array.from({ length: perDay }, (_unused, index) => buildSlot(dayTwo, index)),
+            ...Array.from({ length: shortHorizon ? 13 : perDay }, (_unused, index) => buildSlot(dayTwo, index)),
         ];
         for (const slot of slots) {
             if (slot.dayKey !== dayOne) {
@@ -116,6 +120,9 @@ async function mountEditor(
             }
             if (neighbour && hour === 21) {
                 slot.assignments.boiler = { action: { on: true }, setBy: "user" };
+            }
+            if (offNeighbour && hour === 21) {
+                slot.assignments.boiler = { action: { on: false }, setBy: "user" };
             }
             if (oneSlotGap && (hour === 20 || hour === 21)) {
                 slot.assignments.boiler = { action: { on: true }, setBy: "user" };
@@ -296,6 +303,7 @@ async function mountEditor(
         dayTwo: DAY_TWO,
         nowMs: NOW_MS,
         neighbour: options.neighbour ?? false,
+        offNeighbour: options.offNeighbour ?? false,
         oneSlotGap: options.oneSlotGap ?? false,
         halfHourSlots: options.halfHourSlots ?? false,
         acrossMidnight: options.acrossMidnight ?? false,
@@ -304,33 +312,50 @@ async function mountEditor(
         multiLane: options.multiLane ?? false,
         pruned: options.pruned ?? false,
         explainable: options.explainable ?? false,
+        shortHorizon: options.shortHorizon ?? false,
     });
 
     await page.waitForFunction(() => {
         const el = document.querySelector("scheduling-entity-day-editor") as any;
-        return !!el?.shadowRoot?.querySelector(".block-list");
+        return !!el?.shadowRoot?.querySelector(".edit-panel");
     });
 }
 
-/** The block rows as `range | authorship | past?` triples. */
-async function readBlockRows(page: Page) {
-    return page.evaluate(() => {
+/** A lane's runs on the band as `range | authorship | past | dirty`, in order. */
+async function readBlocks(page: Page, laneKey = "boiler") {
+    return page.evaluate((lane) => {
         const el = document.querySelector("scheduling-entity-day-editor") as any;
-        return [...el.shadowRoot.querySelectorAll(".block-row")].map((row: Element) => ({
-            range: row.querySelector(".block-range")?.textContent?.trim() ?? "",
-            authorship: row.querySelector(".block-authorship")?.textContent?.trim() ?? "",
-            past: row.classList.contains("past"),
-            hasButtons: row.querySelectorAll(".block-buttons button").length > 0,
-        }));
-    });
+        const band = el.shadowRoot.querySelector("scheduling-entity-day-band") as any;
+        return [...band.shadowRoot.querySelectorAll(`.lane[data-lane="${lane}"] .segment:not(.actual)`)]
+            .map((segment: Element) => ({
+                range: /\d\d:\d\d–\d\d:\d\d/.exec(segment.getAttribute("aria-label") ?? "")?.[0] ?? "",
+                authorship: /authorship-(user|automation)\b/.exec(segment.className)?.[1] ?? null,
+                past: segment.classList.contains("past"),
+                dirty: segment.classList.contains("dirty"),
+            }));
+    }, laneKey);
+}
+
+/** The block ranges alone, which is what most edits are about. */
+async function readRanges(page: Page, laneKey = "boiler"): Promise<string[]> {
+    return (await readBlocks(page, laneKey)).map((block) => block.range);
 }
 
 /** The range the edit panel currently shows, as `from|to` ms. */
 async function editingRange(page: Page): Promise<string | null> {
     return page.evaluate(() => {
         const el = document.querySelector("scheduling-entity-day-editor") as any;
-        const selects = el.shadowRoot.querySelectorAll(".edit-panel select");
-        return selects.length === 2 ? `${selects[0].value}|${selects[1].value}` : null;
+        const from = el.shadowRoot.querySelector(".edit-panel select[data-from]");
+        const to = el.shadowRoot.querySelector(".edit-panel select[data-to]");
+        return from && to ? `${from.value}|${to.value}` : null;
+    });
+}
+
+/** Whether Save is offered; `ha-button` carries the attribute the binding sets. */
+async function saveDisabled(page: Page): Promise<boolean> {
+    return page.evaluate(() => {
+        const el = document.querySelector("scheduling-entity-day-editor") as any;
+        return el.shadowRoot.querySelector("ha-button[slot=primaryAction]").hasAttribute("disabled");
     });
 }
 
@@ -352,10 +377,35 @@ async function trackPoint(
     }, { ms: atMs, lane: laneKey });
 }
 
+/** Press a lane at a moment without moving: a tap on a block or on free track. */
+async function tapAt(page: Page, atMs: number, laneKey?: string): Promise<void> {
+    const point = await trackPoint(page, atMs, laneKey);
+    await page.mouse.click(point.x, point.y);
+}
+
 /** Click the band's free stretch at a moment, the way "add a block here" is done. */
 async function clickGapAt(page: Page, atMs: number): Promise<void> {
-    const point = await trackPoint(page, atMs);
-    await page.mouse.click(point.x, point.y);
+    await tapAt(page, atMs);
+}
+
+/** Press a lane at one moment and let go at another. */
+async function dragAcross(page: Page, fromMs: number, toMs: number, laneKey?: string, offsetX = 0): Promise<void> {
+    const from = await trackPoint(page, fromMs, laneKey);
+    const to = await trackPoint(page, toMs, laneKey);
+    await page.mouse.move(from.x + offsetX, from.y);
+    await page.mouse.down();
+    await page.mouse.move(to.x, to.y, { steps: 8 });
+    await page.mouse.up();
+}
+
+/** A moment on day one. */
+function at(hhmm: string, day = DAY_ONE): number {
+    return Date.parse(`${day}T${hhmm}:00Z`);
+}
+
+/** A slot id on day one, as a patch names it. */
+function slotId(hhmm: string, day = DAY_ONE): string {
+    return `${day}T${hhmm}:00.000Z`;
 }
 
 async function savedPatches(page: Page) {
@@ -535,67 +585,263 @@ test.describe("entity day editor", () => {
         await loadCardBundle(page);
         await mountEditor(page);
 
-        const rows = await readBlockRows(page);
-        expect(rows).toHaveLength(2);
-        expect(rows[0].range).toBe("05:00–07:00");
-        expect(rows[0].past).toBe(true);
-        expect(rows[0].hasButtons).toBe(false);
-        expect(rows[0].authorship).toBe("scheduling.authorship.set_by_automation");
-        expect(rows[1].range).toBe("17:00–19:00");
-        expect(rows[1].past).toBe(false);
-        expect(rows[1].authorship).toBe("scheduling.authorship.set_by_user");
+        expect(await readBlocks(page)).toEqual([
+            { range: "05:00–07:00", authorship: "automation", past: true, dirty: false },
+            { range: "17:00–19:00", authorship: "user", past: false, dirty: false },
+        ]);
     });
 
     test("extending a block patches only the slots it gained", async ({ page }) => {
         await loadCardBundle(page);
         await mountEditor(page);
 
-        // Edit the evening block and drag its end from 19:00 to 21:00.
-        await page.locator(".block-row").nth(1).locator("button").first().click();
-        await page.locator(".edit-panel select").nth(1).selectOption(
-            String(Date.parse(`${DAY_ONE}T21:00:00Z`)),
-        );
+        // Select the evening block and move its end from 19:00 to 21:00.
+        await tapAt(page, at("18:00"));
+        await page.locator(".edit-panel select[data-to]").selectOption(String(at("21:00")));
 
-        const rowsWhileEditing = await readBlockRows(page);
-        expect(rowsWhileEditing[1].range).toBe("17:00–21:00");
-        expect(rowsWhileEditing[1].authorship).toBe("scheduling.entity_editor.unsaved");
+        expect(await readBlocks(page)).toContainEqual(
+            { range: "17:00–21:00", authorship: "user", past: false, dirty: true },
+        );
 
         await page.locator("ha-button[slot=primaryAction]").click();
 
         const [patches] = await savedPatches(page);
-        expect(patches.map((patch: { id: string }) => patch.id)).toEqual([
-            `${DAY_ONE}T19:00:00.000Z`,
-            `${DAY_ONE}T20:00:00.000Z`,
-        ]);
+        expect(patches.map((patch: { id: string }) => patch.id)).toEqual([slotId("19:00"), slotId("20:00")]);
         expect(patches[0].controllables.boiler).toEqual({ on: true });
     });
 
-    test("removing a block clears its slots and leaves the rest alone", async ({ page }) => {
+    /**
+     * A saved manual block that is deleted is freed rather than handed to
+     * anything: the slots are drafted empty, the band draws the stretch
+     * dashed, and the automation re-plans it after Save.
+     */
+    test("deleting a saved manual block drafts its slots empty", async ({ page }) => {
         await loadCardBundle(page);
         await mountEditor(page);
 
-        await page.locator(".block-row").nth(1).locator("button").nth(1).click();
-        expect(await readBlockRows(page)).toHaveLength(1);
+        await tapAt(page, at("18:00"));
+        await page.locator(".edit-panel [data-delete]").click();
+        expect(await readRanges(page)).toEqual(["05:00–07:00"]);
+        await expect(page.locator("scheduling-entity-day-band .freed")).toHaveCount(1);
 
         await page.locator("ha-button[slot=primaryAction]").click();
 
         const [patches] = await savedPatches(page);
-        expect(patches.map((patch: { id: string }) => patch.id)).toEqual([
-            `${DAY_ONE}T17:00:00.000Z`,
-            `${DAY_ONE}T18:00:00.000Z`,
+        expect(patches).toEqual([
+            { id: slotId("17:00"), controllables: {} },
+            { id: slotId("18:00"), controllables: {} },
         ]);
-        expect(patches[0].controllables).toEqual({});
     });
 
-    test("clearing an automation-owned lane sends a patch even with no user action", async ({ page }) => {
+    /**
+     * Manual always wins: a paint across the automation's run replaces it,
+     * and the slot whose action the paint repeats is still claimed -- holding
+     * "on" over the automation's "on" is the user saying "this is mine".
+     */
+    test("painting across an automation block makes it manual and claims its slots", async ({ page }) => {
         await loadCardBundle(page);
         await mountEditor(page, { futureAutomation: true });
 
-        await page.locator(".block-row").nth(1).locator("button").nth(1).click();
-        await page.locator("ha-button[slot=primaryAction]").click();
+        await dragAcross(page, at("12:30"), at("14:30"));
 
+        expect(await readBlocks(page)).toContainEqual(
+            { range: "12:00–15:00", authorship: "user", past: false, dirty: true },
+        );
+        expect(await editingRange(page)).toBe(`${at("12:00")}|${at("15:00")}`);
+
+        await page.locator("ha-button[slot=primaryAction]").click();
         const [patches] = await savedPatches(page);
-        expect(patches).toEqual([{ id: `${DAY_ONE}T13:00:00.000Z`, controllables: {} }]);
+        expect(patches).toEqual([
+            { id: slotId("12:00"), controllables: { boiler: { on: true } } },
+            { id: slotId("13:00"), controllables: { boiler: { on: true } } },
+            { id: slotId("14:00"), controllables: { boiler: { on: true } } },
+        ]);
+    });
+
+    test("deleting a block painted over the automation brings its run back", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { futureAutomation: true });
+
+        await dragAcross(page, at("12:30"), at("14:30"));
+        await page.locator(".edit-panel [data-delete]").click();
+
+        expect(await readBlocks(page)).toContainEqual(
+            { range: "13:00–14:00", authorship: "automation", past: false, dirty: false },
+        );
+        await expect(page.locator("scheduling-entity-day-band .freed")).toHaveCount(0);
+        expect(await saveDisabled(page)).toBe(true);
+    });
+
+    /**
+     * An automation run is read-only: all it offers is to be overridden, and
+     * the override is a manual block over the run with the run's own action --
+     * a change Save has to send even though no action changed.
+     */
+    test("overriding an automation run claims it even with its action unchanged", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { futureAutomation: true });
+
+        await tapAt(page, at("13:30"));
+        const panel = page.locator("scheduling-entity-day-editor .edit-panel");
+        await expect(panel.locator(".authorship-badge.automation")).toHaveCount(1);
+        await expect(panel.locator("scheduling-entity-action-editor")).toHaveCount(0);
+        expect(await saveDisabled(page)).toBe(true);
+
+        await panel.locator("[data-override]").click();
+        await expect(panel.locator(".authorship-badge.user")).toHaveCount(1);
+        expect(await editingRange(page)).toBe(`${at("13:00")}|${at("14:00")}`);
+        expect(await saveDisabled(page)).toBe(false);
+
+        await page.locator("ha-button[slot=primaryAction]").click();
+        const [patches] = await savedPatches(page);
+        expect(patches).toEqual([{ id: slotId("13:00"), controllables: { boiler: { on: true } } }]);
+    });
+
+    test("automation blocks cannot be dragged, only painted over", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { futureAutomation: true });
+
+        // From the middle of the 13:00 run three hours right: the run stays
+        // where it is and a manual range is painted from it instead.
+        await dragAcross(page, at("13:30"), at("16:30"));
+
+        expect(await readBlocks(page)).toEqual([
+            { range: "05:00–07:00", authorship: "automation", past: true, dirty: false },
+            { range: "13:00–17:00", authorship: "user", past: false, dirty: true },
+            { range: "17:00–19:00", authorship: "user", past: false, dirty: false },
+        ]);
+        await expect(page.locator("scheduling-entity-day-band .segment.authorship-automation .handle"))
+            .toHaveCount(0);
+    });
+
+    test("tapping the selected block again deselects it", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page);
+
+        await tapAt(page, at("18:00"));
+        expect(await editingRange(page)).toBe(`${at("17:00")}|${at("19:00")}`);
+
+        await tapAt(page, at("18:00"));
+        expect(await editingRange(page)).toBeNull();
+        await expect(page.locator("scheduling-entity-day-editor .edit-panel [data-start-pick]"))
+            .not.toHaveCount(0);
+    });
+
+    test("moving a manual block onto another replaces what it lands on", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { offNeighbour: true });
+
+        // 17:00-19:00 "on" three hours right, over the 21:00 "off".
+        await dragAcross(page, at("18:00"), at("21:00"));
+        expect(await readRanges(page)).toEqual(["05:00–07:00", "20:00–22:00"]);
+
+        await page.locator("ha-button[slot=primaryAction]").click();
+        const [patches] = await savedPatches(page);
+        expect(patches).toEqual([
+            { id: slotId("17:00"), controllables: {} },
+            { id: slotId("18:00"), controllables: {} },
+            { id: slotId("20:00"), controllables: { boiler: { on: true } } },
+            { id: slotId("21:00"), controllables: { boiler: { on: true } } },
+        ]);
+    });
+
+    test("the From picker carries a block over its neighbour and replaces it", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { offNeighbour: true });
+
+        await tapAt(page, at("18:00"));
+        await page.locator(".edit-panel select[data-from]").selectOption(String(at("20:00")));
+
+        // 20:00 + the block's two hours reaches 22:00, through the "off".
+        expect(await editingRange(page)).toBe(`${at("20:00")}|${at("22:00")}`);
+        expect(await readRanges(page)).toEqual(["05:00–07:00", "20:00–22:00"]);
+    });
+
+    test("an end pick sets where the block stops", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { offNeighbour: true });
+
+        await tapAt(page, at("18:00"));
+        const picks = page.locator(".edit-panel [data-pick]");
+        await expect(picks).toHaveText([
+            "scheduling.entity_editor.pick.plus_1h",
+            "scheduling.entity_editor.pick.plus_3h",
+            "scheduling.entity_editor.pick.end_of_day",
+            "scheduling.entity_editor.pick.next_change",
+        ]);
+
+        // The saved plan is "on" from 17:00 and changes at 19:00.
+        await page.locator('.edit-panel [data-pick="next_change"]').click();
+        expect(await editingRange(page)).toBe(`${at("17:00")}|${at("19:00")}`);
+        await page.locator('.edit-panel [data-pick="end_of_day"]').click();
+        expect(await editingRange(page)).toBe(`${at("17:00")}|${at("00:00", DAY_TWO)}`);
+        // What the block now replaces is listed under it.
+        await expect(page.locator(".edit-panel .replaced-run")).toHaveCount(1);
+    });
+
+    test("Replaces lists only runs the draft changes inside the block", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page);
+
+        // Shortening 17:00-19:00 to 17:00-18:00 frees 18:00, outside the
+        // block: nothing the block now covers was changed.
+        await tapAt(page, at("18:00"));
+        await page.locator(".edit-panel select[data-to]").selectOption(String(at("18:00")));
+        expect(await editingRange(page)).toBe(`${at("17:00")}|${at("18:00")}`);
+        await expect(page.locator(".edit-panel .replaced-run")).toHaveCount(0);
+    });
+
+    test("End of day is the last writable boundary, selected or not", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { shortHorizon: true });
+
+        await page.locator(".day-chip").nth(1).click();
+        await page.locator('.edit-panel [data-start-pick="end_of_day"]').click();
+        expect(await editingRange(page)).toBe(`${at("00:00", DAY_TWO)}|${at("13:00", DAY_TWO)}`);
+
+        await page.locator('.edit-panel [data-pick="plus_1h"]').click();
+        await page.locator('.edit-panel [data-pick="end_of_day"]').click();
+        expect(await editingRange(page)).toBe(`${at("00:00", DAY_TWO)}|${at("13:00", DAY_TWO)}`);
+    });
+
+    test("selecting a block does not change what the next paint starts with", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { offNeighbour: true });
+
+        // Select the saved "off" run, let go, then paint a new block.
+        await tapAt(page, at("21:30"));
+        await tapAt(page, at("21:30"));
+        await dragAcross(page, at("13:30"), at("14:30"));
+
+        await page.locator("ha-button[slot=primaryAction]").click();
+        const [patches] = await savedPatches(page);
+        expect(patches).toEqual([
+            { id: slotId("13:00"), controllables: { boiler: { on: true } } },
+            { id: slotId("14:00"), controllables: { boiler: { on: true } } },
+        ]);
+    });
+
+    /**
+     * A new block whose action is not one yet places nothing, so the saved
+     * block still drawn under it is its own block: a tap selects it.
+     */
+    test("a block under a session that places nothing can be selected", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { offNeighbour: true });
+
+        await dragAcross(page, at("20:30"), at("21:30"));
+        expect(await editingRange(page)).toBe(`${at("20:00")}|${at("22:00")}`);
+        await page.evaluate(() => {
+            const el = document.querySelector("scheduling-entity-day-editor") as any;
+            el.shadowRoot.querySelector("scheduling-entity-action-editor").dispatchEvent(new CustomEvent(
+                "entity-action-change",
+                { bubbles: true, composed: true, detail: { action: { on: true }, valid: false } },
+            ));
+        });
+        expect(await readRanges(page)).toContain("21:00–22:00");
+
+        await tapAt(page, at("21:30"));
+        expect(await editingRange(page)).toBe(`${at("21:00")}|${at("22:00")}`);
     });
 
     test("adding a block on the next day writes that day's slots", async ({ page }) => {
@@ -603,24 +849,20 @@ test.describe("entity day editor", () => {
         await mountEditor(page);
 
         await page.locator(".day-chip").nth(1).click();
-        expect(await readBlockRows(page)).toHaveLength(0);
+        expect(await readRanges(page)).toEqual([]);
 
-        await page.locator(".block-list .link-button").click();
-        await page.locator(".edit-panel select").first().selectOption(
-            String(Date.parse(`${DAY_TWO}T09:00:00Z`)),
-        );
-        await page.locator(".edit-panel select").nth(1).selectOption(
-            String(Date.parse(`${DAY_TWO}T11:00:00Z`)),
-        );
+        await page.locator('.edit-panel [data-start-pick="plus_1h"]').click();
+        await page.locator(".edit-panel select[data-from]").selectOption(String(at("09:00", DAY_TWO)));
+        await page.locator(".edit-panel select[data-to]").selectOption(String(at("11:00", DAY_TWO)));
 
-        expect((await readBlockRows(page))[0].range).toBe("09:00–11:00");
+        expect(await readRanges(page)).toEqual(["09:00–11:00"]);
 
         await page.locator("ha-button[slot=primaryAction]").click();
 
         const [patches] = await savedPatches(page);
         expect(patches.map((patch: { id: string }) => patch.id)).toEqual([
-            `${DAY_TWO}T09:00:00.000Z`,
-            `${DAY_TWO}T10:00:00.000Z`,
+            slotId("09:00", DAY_TWO),
+            slotId("10:00", DAY_TWO),
         ]);
         expect(patches[0].controllables.boiler).toEqual({ on: true });
     });
@@ -629,46 +871,35 @@ test.describe("entity day editor", () => {
         await loadCardBundle(page);
         await mountEditor(page, { neighbour: true });
 
-        await page.locator(".block-row").nth(1).locator("button").first().click();
-        expect(await editingRange(page)).toBe(
-            `${Date.parse(`${DAY_ONE}T17:00:00Z`)}|${Date.parse(`${DAY_ONE}T19:00:00Z`)}`,
-        );
+        await tapAt(page, at("18:00"));
+        expect(await editingRange(page)).toBe(`${at("17:00")}|${at("19:00")}`);
 
         // No "done" step: picking the next block is the whole gesture.
-        await page.locator(".block-row").nth(2).locator("button").first().click();
-        expect(await editingRange(page)).toBe(
-            `${Date.parse(`${DAY_ONE}T21:00:00Z`)}|${Date.parse(`${DAY_ONE}T22:00:00Z`)}`,
-        );
+        await tapAt(page, at("21:30"));
+        expect(await editingRange(page)).toBe(`${at("21:00")}|${at("22:00")}`);
     });
 
     /**
      * A block is derived from the slots, so one authored right against a run
-     * carrying the same action used to fold into it: the block list showed the
-     * old run grown and the edit session took the neighbour with it. The edges
-     * the user authors here hold the two apart for as long as the dialog is
-     * open, which is long enough to give the new block its own parameters.
+     * carrying the same action used to fold into it. The edges the user
+     * authors here hold the two apart for as long as the dialog is open, which
+     * is long enough to give the new block its own parameters.
      */
     test("a block authored right after a run stays its own block", async ({ page }) => {
         await loadCardBundle(page);
         await mountEditor(page);
 
-        await clickGapAt(page, Date.parse(`${DAY_ONE}T19:00:00Z`));
-        expect(await editingRange(page)).toBe(
-            `${Date.parse(`${DAY_ONE}T19:00:00Z`)}|${Date.parse(`${DAY_ONE}T20:00:00Z`)}`,
-        );
-
-        const rows = await readBlockRows(page);
-        expect(rows.map((row) => row.range)).toEqual(["05:00–07:00", "17:00–19:00", "19:00–20:00"]);
+        await clickGapAt(page, at("19:00"));
+        expect(await editingRange(page)).toBe(`${at("19:00")}|${at("20:00")}`);
+        expect(await readRanges(page)).toEqual(["05:00–07:00", "17:00–19:00", "19:00–20:00"]);
 
         // Changing the new block reaches the new block alone: the run it was
-        // born against keeps its range and its authorship.
-        await page.locator(".edit-panel select").nth(1).selectOption(
-            String(Date.parse(`${DAY_ONE}T21:00:00Z`)),
-        );
-        const changed = await readBlockRows(page);
-        expect(changed.map((row) => row.range)).toEqual(["05:00–07:00", "17:00–19:00", "19:00–21:00"]);
-        expect(changed[1].authorship).toBe("scheduling.authorship.set_by_user");
-        expect(changed[2].authorship).toBe("scheduling.entity_editor.unsaved");
+        // born against keeps its range and stays clean.
+        await page.locator(".edit-panel select[data-to]").selectOption(String(at("21:00")));
+        const changed = await readBlocks(page);
+        expect(changed.map((block) => block.range)).toEqual(["05:00–07:00", "17:00–19:00", "19:00–21:00"]);
+        expect(changed[1].dirty).toBe(false);
+        expect(changed[2].dirty).toBe(true);
     });
 
     test("a block authored right before a run stays its own block", async ({ page }) => {
@@ -676,10 +907,9 @@ test.describe("entity day editor", () => {
         await mountEditor(page);
 
         // 16:00-17:00 ends exactly where the evening run begins.
-        await clickGapAt(page, Date.parse(`${DAY_ONE}T16:00:00Z`));
+        await clickGapAt(page, at("16:00"));
 
-        const rows = await readBlockRows(page);
-        expect(rows.map((row) => row.range)).toEqual(["05:00–07:00", "16:00–17:00", "17:00–19:00"]);
+        expect(await readRanges(page)).toEqual(["05:00–07:00", "16:00–17:00", "17:00–19:00"]);
     });
 
     /**
@@ -691,75 +921,59 @@ test.describe("entity day editor", () => {
         await loadCardBundle(page);
         await mountEditor(page, { oneSlotGap: true });
 
-        await clickGapAt(page, Date.parse(`${DAY_ONE}T19:00:00Z`));
+        await clickGapAt(page, at("19:00"));
 
-        const rows = await readBlockRows(page);
-        expect(rows.map((row) => row.range)).toEqual([
-            "05:00–07:00",
-            "17:00–19:00",
-            "19:00–20:00",
-            "20:00–22:00",
-        ]);
+        expect(await readRanges(page)).toEqual(["05:00–07:00", "17:00–19:00", "19:00–20:00", "20:00–22:00"]);
     });
 
     /**
      * Edges outlive their session, but they must not outlive their block: the
-     * two left behind by a removed block used to cut the next block authored
-     * across that stretch in two -- the gap the user pressed, then the ghost of
-     * what they deleted.
+     * two left behind by a deleted block used to cut the next block authored
+     * across that stretch in two.
      */
-    test("removing a block takes its edges with it", async ({ page }) => {
+    test("deleting a block takes its edges with it", async ({ page }) => {
         await loadCardBundle(page);
         await mountEditor(page, { halfHourSlots: true });
 
-        // A slot's width past the run, then removed from its own row -- which
-        // leaves the session open over a block that no longer exists, so the
-        // press that ends it lands the edges of a ghost.
-        await clickGapAt(page, Date.parse(`${DAY_ONE}T17:30:00Z`));
-        expect(await readBlockRows(page)).toHaveLength(2);
-        await page.locator(".block-row").nth(1).locator("button").nth(1).click();
-        expect(await readBlockRows(page)).toHaveLength(1);
+        await clickGapAt(page, at("17:30"));
+        expect(await readRanges(page)).toHaveLength(2);
+        await page.locator(".edit-panel [data-delete]").click();
+        expect(await readRanges(page)).toHaveLength(1);
 
-        // Straight after the run, across where the removed block was: one
-        // block, not one per ghost.
-        await clickGapAt(page, Date.parse(`${DAY_ONE}T17:00:00Z`));
+        // Straight after the run, across where the deleted block was: one
+        // block, not one per ghost. Pressed just inside the free track, since
+        // the run's own edge sits on 17:00 and a tap there selects the run.
+        await clickGapAt(page, at("17:10"));
 
-        const rows = await readBlockRows(page);
-        expect(rows.map((row) => row.range)).toEqual(["16:00–17:00", "17:00–18:00"]);
+        expect(await readRanges(page)).toEqual(["16:00–17:00", "17:00–18:00"]);
     });
 
     /**
      * The day's first slot is only "the now-line" on today. On any later day
      * the editable boundary is simply that day's midnight, so a start there is
-     * as much a decision as any other -- and the run ending at that midnight is
-     * a neighbour like any other.
+     * as much a decision as any other.
      */
     test("a block authored at a later day's midnight stays off its neighbour", async ({ page }) => {
         await loadCardBundle(page);
         await mountEditor(page, { acrossMidnight: true });
 
         await page.locator(".day-chip").nth(1).click();
-        await clickGapAt(page, Date.parse(`${DAY_TWO}T00:00:00Z`));
+        await clickGapAt(page, at("00:00", DAY_TWO));
 
-        // No leading arrow: the block begins at midnight rather than carrying
-        // on from the run that ends there.
-        const rows = await readBlockRows(page);
-        expect(rows.map((row) => row.range)).toEqual(["00:00–01:00"]);
+        expect(await readRanges(page)).toEqual(["00:00–01:00"]);
     });
 
     test("saving a block authored against a run writes only that block's slots", async ({ page }) => {
         await loadCardBundle(page);
         await mountEditor(page);
 
-        await clickGapAt(page, Date.parse(`${DAY_ONE}T19:00:00Z`));
+        await clickGapAt(page, at("19:00"));
         await page.locator("ha-button[slot=primaryAction]").click();
 
         // The neighbour's 17:00 and 18:00 slots already say what they should
         // say, and the new block never claimed them.
         const [patches] = await savedPatches(page);
-        expect(patches.map((patch: { id: string }) => patch.id)).toEqual([
-            `${DAY_ONE}T19:00:00.000Z`,
-        ]);
+        expect(patches.map((patch: { id: string }) => patch.id)).toEqual([slotId("19:00")]);
         expect(patches[0].controllables.boiler).toEqual({ on: true });
     });
 
@@ -772,49 +986,34 @@ test.describe("entity day editor", () => {
         await loadCardBundle(page);
         await mountEditor(page, { neighbour: true });
 
-        const edge = await trackPoint(page, Date.parse(`${DAY_ONE}T19:00:00Z`));
-        const target = await trackPoint(page, Date.parse(`${DAY_ONE}T23:00:00Z`));
-        await page.mouse.move(edge.x - 2, edge.y);
-        await page.mouse.down();
-        await page.mouse.move(target.x, target.y, { steps: 8 });
-        await page.mouse.up();
+        // The 17:00-19:00 block's end, pulled up to the 21:00 neighbour.
+        await dragAcross(page, at("19:00"), at("21:00"), undefined, -2);
 
         // Close the session by pressing outside it, then reopen the earlier
         // block: both are still there, and editing one is still about one.
         await page.locator(".day-switcher").click();
         expect(await editingRange(page)).toBeNull();
-        expect((await readBlockRows(page)).map((row) => row.range)).toEqual([
-            "05:00–07:00",
-            "17:00–21:00",
-            "21:00–22:00",
-        ]);
+        expect(await readRanges(page)).toEqual(["05:00–07:00", "17:00–21:00", "21:00–22:00"]);
 
-        await page.locator(".block-row").nth(1).locator("button").first().click();
-        expect(await editingRange(page)).toBe(
-            `${Date.parse(`${DAY_ONE}T17:00:00Z`)}|${Date.parse(`${DAY_ONE}T21:00:00Z`)}`,
-        );
+        await tapAt(page, at("18:00"));
+        expect(await editingRange(page)).toBe(`${at("17:00")}|${at("21:00")}`);
     });
 
     test("clicking outside closes the panel and keeps the edit in the draft", async ({ page }) => {
         await loadCardBundle(page);
         await mountEditor(page);
 
-        await page.locator(".block-row").nth(1).locator("button").first().click();
-        await page.locator(".edit-panel select").nth(1).selectOption(
-            String(Date.parse(`${DAY_ONE}T21:00:00Z`)),
-        );
+        await tapAt(page, at("18:00"));
+        await page.locator(".edit-panel select[data-to]").selectOption(String(at("21:00")));
 
         await page.locator(".day-switcher").click();
         expect(await editingRange(page)).toBeNull();
 
         // The block keeps its new end, and Save still has something to write.
-        expect((await readBlockRows(page))[1].range).toBe("17:00–21:00");
+        expect(await readRanges(page)).toContain("17:00–21:00");
         await page.locator("ha-button[slot=primaryAction]").click();
         const [patches] = await savedPatches(page);
-        expect(patches.map((patch: { id: string }) => patch.id)).toEqual([
-            `${DAY_ONE}T19:00:00.000Z`,
-            `${DAY_ONE}T20:00:00.000Z`,
-        ]);
+        expect(patches.map((patch: { id: string }) => patch.id)).toEqual([slotId("19:00"), slotId("20:00")]);
     });
 
     test("editing a block that is already running keeps its running part", async ({ page }) => {
@@ -822,43 +1021,29 @@ test.describe("entity day editor", () => {
         await mountEditor(page, { straddling: true });
 
         // 08:00-12:00 spans "now" (10:30), so 08:00-10:00 has already elapsed.
-        expect((await readBlockRows(page)).map((row) => row.range)).toEqual([
-            "05:00–07:00",
-            "08:00–12:00",
-            "17:00–19:00",
-        ]);
+        expect(await readRanges(page)).toEqual(["05:00–07:00", "08:00–12:00", "17:00–19:00"]);
 
-        await page.locator(".block-row").nth(1).locator("button").first().click();
+        await tapAt(page, at("11:00"));
 
-        // The session starts at the running slot, and the block stays whole in
-        // the list rather than losing the hours it has already run.
-        expect(await editingRange(page)).toBe(
-            `${Date.parse(`${DAY_ONE}T10:00:00Z`)}|${Date.parse(`${DAY_ONE}T12:00:00Z`)}`,
-        );
-        expect((await readBlockRows(page)).map((row) => row.range)).toEqual([
-            "05:00–07:00",
-            "08:00–12:00",
-            "17:00–19:00",
-        ]);
+        // The session starts at the running slot, and the block stays whole on
+        // the band rather than losing the hours it has already run.
+        expect(await editingRange(page)).toBe(`${at("10:00")}|${at("12:00")}`);
+        expect(await readRanges(page)).toEqual(["05:00–07:00", "08:00–12:00", "17:00–19:00"]);
     });
 
     test("a new block can start in the slot that is running now", async ({ page }) => {
         await loadCardBundle(page);
         await mountEditor(page);
 
-        await page.locator(".block-list .link-button").click();
+        await page.locator('.edit-panel [data-start-pick="plus_1h"]').click();
 
         // 10:30 sits inside the 10:00 slot, and "start it now" means 10:00 --
         // the backend's write horizon begins at the same floored boundary.
-        expect(await editingRange(page)).toBe(
-            `${Date.parse(`${DAY_ONE}T10:00:00Z`)}|${Date.parse(`${DAY_ONE}T11:00:00Z`)}`,
-        );
+        expect(await editingRange(page)).toBe(`${at("10:00")}|${at("11:00")}`);
 
         await page.locator("ha-button[slot=primaryAction]").click();
         const [patches] = await savedPatches(page);
-        expect(patches.map((patch: { id: string }) => patch.id)).toEqual([
-            `${DAY_ONE}T10:00:00.000Z`,
-        ]);
+        expect(patches.map((patch: { id: string }) => patch.id)).toEqual([slotId("10:00")]);
     });
 
     /**
@@ -874,22 +1059,16 @@ test.describe("entity day editor", () => {
         await mountEditor(page);
 
         // A block from the slot running now (10:00) through 13:00.
-        await page.locator(".block-list .link-button").click();
-        await page.locator(".edit-panel select").nth(1).selectOption(
-            String(Date.parse(`${DAY_ONE}T13:00:00Z`)),
-        );
+        await page.locator('.edit-panel [data-start-pick="plus_3h"]').click();
 
         // The wall clock crosses into the next slot. `nowMs` is untouched --
         // that is exactly the window this guards: the card has not ticked yet.
-        await page.clock.setFixedTime(Date.parse(`${DAY_ONE}T11:30:00Z`));
+        await page.clock.setFixedTime(at("11:30"));
 
         await page.locator("ha-button[slot=primaryAction]").click();
 
         const [patches] = await savedPatches(page);
-        expect(patches.map((patch: { id: string }) => patch.id)).toEqual([
-            `${DAY_ONE}T11:00:00.000Z`,
-            `${DAY_ONE}T12:00:00.000Z`,
-        ]);
+        expect(patches.map((patch: { id: string }) => patch.id)).toEqual([slotId("11:00"), slotId("12:00")]);
     });
 
     /** Nothing writable left is still an answer, not a dead button. */
@@ -897,15 +1076,13 @@ test.describe("entity day editor", () => {
         await loadCardBundle(page);
         await mountEditor(page);
 
-        await page.locator(".block-list .link-button").click();
-        await page.clock.setFixedTime(Date.parse(`${DAY_ONE}T11:30:00Z`));
+        await page.locator('.edit-panel [data-start-pick="plus_1h"]').click();
+        await page.clock.setFixedTime(at("11:30"));
 
         await page.locator("ha-button[slot=primaryAction]").click();
 
         expect(await savedPatches(page)).toEqual([]);
-        await expect(page.locator(".save-error")).toContainText(
-            "scheduling.entity_editor.save_elapsed",
-        );
+        await expect(page.locator(".save-error")).toContainText("scheduling.entity_editor.save_elapsed");
     });
 
     test("clicking a block on the band opens the panel and keeps it open", async ({ page }) => {
@@ -916,56 +1093,21 @@ test.describe("entity day editor", () => {
         // to the dialog body. That click must not read as "clicked outside".
         await page.locator("scheduling-entity-day-band .segment").nth(1).click();
 
-        expect(await editingRange(page)).toBe(
-            `${Date.parse(`${DAY_ONE}T17:00:00Z`)}|${Date.parse(`${DAY_ONE}T19:00:00Z`)}`,
-        );
-    });
-
-    test("hovering either the row or its segment highlights both", async ({ page }) => {
-        await loadCardBundle(page);
-        await mountEditor(page);
-
-        // Which block is highlighted, by index, on each side.
-        const highlighted = () => page.evaluate(() => {
-            const el = document.querySelector("scheduling-entity-day-editor") as any;
-            const band = el.shadowRoot.querySelector("scheduling-entity-day-band") as any;
-            const indexOf = (nodes: NodeListOf<Element>, selector: string) =>
-                [...nodes].findIndex((node) => node.matches(selector));
-            return {
-                row: indexOf(el.shadowRoot.querySelectorAll(".block-row"), ".hovered"),
-                segment: indexOf(band.shadowRoot.querySelectorAll(".segment"), ".hovered"),
-            };
-        });
-
-        await page.locator(".block-row").nth(1).hover();
-        expect(await highlighted()).toEqual({ row: 1, segment: 1 });
-
-        await page.locator("scheduling-entity-day-band .segment").nth(1).hover();
-        expect(await highlighted()).toEqual({ row: 1, segment: 1 });
-
-        await page.locator(".day-switcher").hover();
-        expect(await highlighted()).toEqual({ row: -1, segment: -1 });
+        expect(await editingRange(page)).toBe(`${at("17:00")}|${at("19:00")}`);
     });
 
     test("dragging the middle of a block moves it whole", async ({ page }) => {
         await loadCardBundle(page);
         await mountEditor(page);
 
-        const from = await trackPoint(page, Date.parse(`${DAY_ONE}T18:00:00Z`));
-        const to = await trackPoint(page, Date.parse(`${DAY_ONE}T21:00:00Z`));
-        await page.mouse.move(from.x, from.y);
-        await page.mouse.down();
-        await page.mouse.move(to.x, to.y, { steps: 8 });
-        await page.mouse.up();
+        await dragAcross(page, at("18:00"), at("21:00"));
 
-        expect((await readBlockRows(page))[1].range).toBe("20:00–22:00");
+        expect(await readRanges(page)).toEqual(["05:00–07:00", "20:00–22:00"]);
 
         // The click that ends a drag retargets to the dialog body once the
         // segment has re-rendered; it must not read as "clicked outside" and
         // close the editor the drag just opened.
-        expect(await editingRange(page)).toBe(
-            `${Date.parse(`${DAY_ONE}T20:00:00Z`)}|${Date.parse(`${DAY_ONE}T22:00:00Z`)}`,
-        );
+        expect(await editingRange(page)).toBe(`${at("20:00")}|${at("22:00")}`);
     });
 
     /**
@@ -995,62 +1137,6 @@ test.describe("entity day editor", () => {
         // It belongs to the drag, and goes with it.
         await page.mouse.up();
         await expect(readout).toHaveCount(0);
-    });
-
-    test("dragging an edge stops at the neighbouring block", async ({ page }) => {
-        await loadCardBundle(page);
-        await mountEditor(page, { neighbour: true });
-
-        // Grab the 17:00-19:00 block's right edge and pull it well past the
-        // 21:00-22:00 block: it must stop where that block starts.
-        const edge = await trackPoint(page, Date.parse(`${DAY_ONE}T19:00:00Z`));
-        const target = await trackPoint(page, Date.parse(`${DAY_ONE}T23:00:00Z`));
-        await page.mouse.move(edge.x - 2, edge.y);
-        await page.mouse.down();
-        await page.mouse.move(target.x, target.y, { steps: 8 });
-        await page.mouse.up();
-
-        // The drag stopped at 21:00, so the neighbour's own slot is untouched
-        // and never reaches the patch batch. The two runs now touch and carry
-        // the same action, but the edge the drag authored keeps them two blocks
-        // -- the user pulled this one up to the neighbour, not into it.
-        const rows = await readBlockRows(page);
-        expect(rows).toHaveLength(3);
-        expect(rows[1].range).toBe("17:00–21:00");
-        expect(rows[2].range).toBe("21:00–22:00");
-
-        await page.locator("ha-button[slot=primaryAction]").click();
-        const [patches] = await savedPatches(page);
-        expect(patches.map((patch: { id: string }) => patch.id)).toEqual([
-            `${DAY_ONE}T19:00:00.000Z`,
-            `${DAY_ONE}T20:00:00.000Z`,
-        ]);
-    });
-
-    /**
-     * The "from" picker moves the end along with the start, and that end has to
-     * stop at the neighbour exactly as a drag does -- otherwise the picker is
-     * the back door that overwrites the block next door.
-     */
-    test("moving a block's start with the picker still stops at the neighbour", async ({ page }) => {
-        await loadCardBundle(page);
-        await mountEditor(page, { neighbour: true });
-
-        await page.locator(".block-row").nth(1).locator(".block-main").click();
-        await page.locator(".edit-panel select").first()
-            .selectOption(String(Date.parse(`${DAY_ONE}T20:00:00Z`)));
-
-        // 20:00 + the block's two hours would reach 22:00, over the neighbour
-        // that starts at 21:00. It is cut to 21:00 instead.
-        expect(await editingRange(page)).toBe(
-            `${Date.parse(`${DAY_ONE}T20:00:00Z`)}|${Date.parse(`${DAY_ONE}T21:00:00Z`)}`,
-        );
-
-        await page.locator("ha-button[slot=primaryAction]").click();
-        const [patches] = await savedPatches(page);
-        expect(patches.map((patch: { id: string }) => patch.id)).not.toContain(
-            `${DAY_ONE}T21:00:00.000Z`,
-        );
     });
 
     /**
@@ -1107,16 +1193,8 @@ test.describe("entity day editor", () => {
         await loadCardBundle(page);
         await mountEditor(page);
 
-        const authorship = await page.evaluate(() => {
-            const el = document.querySelector("scheduling-entity-day-editor") as any;
-            const band = el.shadowRoot.querySelector("scheduling-entity-day-band") as any;
-            return [...band.shadowRoot.querySelectorAll(".segment")]
-                .map((segment: Element) => /authorship-(user|automation|mixed)\b/
-                    .exec(segment.className)?.[1] ?? null);
-        });
-
         // 05:00-07:00 is the optimizer's, 17:00-19:00 the user's.
-        expect(authorship).toEqual(["automation", "user"]);
+        expect((await readBlocks(page)).map((block) => block.authorship)).toEqual(["automation", "user"]);
     });
 
     /**
@@ -1157,14 +1235,14 @@ test.describe("entity day editor", () => {
 
         // The morning run went with the pruning, so the evening one is the only
         // block left -- and nothing behind the boundary is on offer for it.
-        await expect(page.locator(".block-row")).toHaveCount(1);
-        await page.locator(".block-row").first().locator(".block-main").click();
+        expect(await readRanges(page)).toEqual(["17:00–19:00"]);
+        await tapAt(page, at("18:00"));
         const options = await page.evaluate(() => {
             const el = document.querySelector("scheduling-entity-day-editor") as any;
-            const select = el.shadowRoot.querySelector(".edit-panel select") as HTMLSelectElement;
+            const select = el.shadowRoot.querySelector(".edit-panel select[data-from]") as HTMLSelectElement;
             return [...select.options].map((option) => Number(option.value));
         });
-        expect(Math.min(...options)).toBe(Date.parse(`${DAY_ONE}T10:00:00Z`));
+        expect(Math.min(...options)).toBe(at("10:00"));
     });
 
     /**
@@ -1286,8 +1364,7 @@ test.describe("entity day editor", () => {
 
         // The block underneath still opens for editing, through the grid.
         await band().locator(".segment").first().click();
-        await expect(page.locator("scheduling-entity-day-editor").locator(".edit-panel"))
-            .toHaveCount(1);
+        expect(await editingRange(page)).not.toBeNull();
     });
 
     test("a past block cannot be edited from the band either", async ({ page }) => {
@@ -1316,7 +1393,7 @@ test.describe("entity day editor", () => {
                     key: lane.getAttribute("data-lane"),
                     selected: lane.classList.contains("selected"),
                 })),
-                blockListLabel: el.shadowRoot.querySelector(".block-list .field-label")
+                panelLane: el.shadowRoot.querySelector(".edit-panel .lane-name")
                     ?.textContent?.trim() ?? null,
             };
         });
@@ -1331,22 +1408,38 @@ test.describe("entity day editor", () => {
                 { key: "boiler", selected: true },
                 { key: "pump", selected: false },
             ]);
-            expect(state.blockListLabel).toContain("Boiler");
+            expect(state.panelLane).toBe("Boiler");
         });
 
-        test("clicking another lane's track moves the editor to that entity", async ({ page }) => {
+        /** The selected lane is the control surface, the others shrink to context. */
+        test("the selected lane is taller than the muted ones", async ({ page }) => {
             await loadCardBundle(page);
             await mountEditor(page, { multiLane: true });
 
-            // The inverter's whole day is free, so this is a gap: it selects the
-            // lane and opens a session on it in one press.
-            const point = await trackPoint(page, Date.parse(`${DAY_ONE}T13:00:00Z`), "inverter");
-            await page.mouse.click(point.x, point.y);
+            const heights = await page.evaluate(() => {
+                const el = document.querySelector("scheduling-entity-day-editor") as any;
+                const band = el.shadowRoot.querySelector("scheduling-entity-day-band") as any;
+                const height = (lane: string) => band.shadowRoot
+                    .querySelector(`.lane[data-lane="${lane}"] .track`).getBoundingClientRect().height;
+                return { selected: height("boiler"), muted: height("inverter") };
+            });
+            expect(heights.selected).toBe(44);
+            expect(heights.muted).toBe(26);
+        });
+
+        test("pressing a muted lane selects it and nothing else", async ({ page }) => {
+            await loadCardBundle(page);
+            await mountEditor(page, { multiLane: true });
+
+            // The inverter's afternoon is free, but on a muted lane a press only
+            // says which lane: no block is added.
+            await tapAt(page, at("13:00"), "inverter");
 
             const state = await laneState(page);
             expect(state.lanes.find((lane) => lane.selected)?.key).toBe("inverter");
-            expect(state.blockListLabel).toContain("Inverter");
-            expect(await editingRange(page)).not.toBeNull();
+            expect(state.panelLane).toBe("Inverter");
+            expect(await editingRange(page)).toBeNull();
+            expect(await readRanges(page, "inverter")).toEqual(["20:00–21:00", "21:00–22:00"]);
         });
 
         /**
@@ -1358,19 +1451,50 @@ test.describe("entity day editor", () => {
             await loadCardBundle(page);
             await mountEditor(page, { multiLane: true });
 
-            const inverterPoint = await trackPoint(page, Date.parse(`${DAY_ONE}T13:00:00Z`), "inverter");
-            await page.mouse.click(inverterPoint.x, inverterPoint.y);
-            const boilerPoint = await trackPoint(page, Date.parse(`${DAY_ONE}T13:00:00Z`), "boiler");
-            await page.mouse.click(boilerPoint.x, boilerPoint.y);
+            // The first press selects the lane, the second adds the block.
+            await tapAt(page, at("13:00"), "inverter");
+            await tapAt(page, at("13:00"), "inverter");
+            await tapAt(page, at("13:00"), "boiler");
+            await tapAt(page, at("13:00"), "boiler");
 
             await page.locator("ha-button[slot=primaryAction]").click();
             const [patches] = await savedPatches(page);
             // Both blocks start where the pointer landed, so both land on the
             // 13:00 slot -- and it is patched once, carrying both lanes.
             expect(patches).toHaveLength(1);
-            expect(patches[0].id).toBe(`${DAY_ONE}T13:00:00.000Z`);
+            expect(patches[0].id).toBe(slotId("13:00"));
             expect(patches[0].controllables.inverter.kind).toBe("charge_to_target_soc");
             expect(patches[0].controllables.boiler).toEqual({ on: true });
+        });
+
+        test("a paint starts with the lane's last placed action", async ({ page }) => {
+            await loadCardBundle(page);
+            await mountEditor(page, { multiLane: true });
+
+            await tapAt(page, at("13:00"), "inverter");
+            await tapAt(page, at("13:00"), "inverter");
+            const pickStopExport = () => page.evaluate(async () => {
+                const el = document.querySelector("scheduling-entity-day-editor") as any;
+                const editor = el.shadowRoot.querySelector("scheduling-entity-action-editor") as any;
+                const card = [...editor.shadowRoot.querySelectorAll("scheduling-action-option-card")]
+                    .find((option: any) => option.action.kind === "stop_export") as any;
+                card.dispatchEvent(new CustomEvent("schedule-action-option-select", {
+                    detail: { actionKind: "stop_export" },
+                    bubbles: true,
+                    composed: true,
+                }));
+                await el.updateComplete;
+            });
+            await pickStopExport();
+
+            await dragAcross(page, at("15:30"), at("16:30"), "inverter");
+            await page.locator("ha-button[slot=primaryAction]").click();
+            const [patches] = await savedPatches(page);
+            expect(patches.map((patch: any) => [patch.id, patch.controllables.inverter.kind])).toEqual([
+                [slotId("13:00"), "stop_export"],
+                [slotId("15:00"), "stop_export"],
+                [slotId("16:00"), "stop_export"],
+            ]);
         });
 
         test("pressing a lane's elapsed stretch selects it, like its name does", async ({ page }) => {
@@ -1396,8 +1520,8 @@ test.describe("entity day editor", () => {
             await loadCardBundle(page);
             await mountEditor(page, { multiLane: true });
 
-            const point = await trackPoint(page, Date.parse(`${DAY_ONE}T13:00:00Z`), "inverter");
-            await page.mouse.click(point.x, point.y);
+            await tapAt(page, at("13:00"), "inverter");
+            await tapAt(page, at("13:00"), "inverter");
 
             // A plain element with a value property would pass the typing checks
             // even if it rendered nothing, so assert the field has a real box.
@@ -1533,12 +1657,11 @@ test.describe("entity day editor", () => {
             await loadCardBundle(page);
             await mountEditor(page, { multiLane: true });
 
-            const point = await trackPoint(page, Date.parse(`${DAY_ONE}T13:00:00Z`), "pump");
-            await page.mouse.click(point.x, point.y);
+            await tapAt(page, at("13:00"), "pump");
 
             const state = await laneState(page);
             expect(state.lanes.find((lane) => lane.selected)?.key).toBe("pump");
-            expect(state.blockListLabel).toContain("Pump");
+            expect(state.panelLane).toBe("Pump");
         });
     });
 });
@@ -1583,7 +1706,7 @@ test.describe("entity day editor, explain mode", () => {
         await mountEditor(page, { multiLane: true, explainable: true });
 
         await expect(editor(page).locator('.mode-button[data-mode="edit"]')).toHaveClass(/selected/);
-        await expect(editor(page).locator(".block-list")).toHaveCount(1);
+        await expect(editor(page).locator(".edit-panel")).toHaveCount(1);
         await expect(editor(page).locator("scheduling-explanation-panel")).toHaveCount(0);
     });
 
@@ -1592,10 +1715,10 @@ test.describe("entity day editor, explain mode", () => {
         await mountEditor(page, { multiLane: true, explainable: true });
         await enterExplain(page);
 
-        // Nothing to author here: the block list and the action editor are the
-        // edit mode's whole surface, and both go.
-        await expect(editor(page).locator(".block-list")).toHaveCount(0);
+        // Nothing to author here: the panel is the edit mode's whole surface,
+        // and it goes, legend and all.
         await expect(editor(page).locator(".edit-panel")).toHaveCount(0);
+        await expect(editor(page).locator(".legend")).toHaveCount(0);
 
         // The pump's record is null: no optimizer ever touched it, so there is
         // nothing to press it for.
@@ -1638,8 +1761,8 @@ test.describe("entity day editor, explain mode", () => {
     test("typing in the editor keeps the derived days", async ({ page }) => {
         await loadCardBundle(page);
         await mountEditor(page, { multiLane: true });
-        const point = await trackPoint(page, Date.parse(`${DAY_ONE}T13:00:00Z`), "inverter");
-        await page.mouse.click(point.x, point.y);
+        await tapAt(page, at("13:00"), "inverter");
+        await tapAt(page, at("13:00"), "inverter");
         const sameDays = await page.evaluate(async () => {
             const el = document.querySelector("scheduling-entity-day-editor") as any;
             const before = el._days();
@@ -1724,14 +1847,10 @@ test.describe("entity day editor, explain mode", () => {
         expect(marked).toEqual([["boiler", `${DAY_ONE}T13:00:00.000Z`]]);
 
         await editor(page).locator('.mode-button[data-mode="edit"]').click();
-        await expect(editor(page).locator(".block-list")).toHaveCount(1);
+        await expect(editor(page).locator(".edit-panel")).toHaveCount(1);
         await expect(editor(page).locator("scheduling-explanation-panel")).toHaveCount(0);
         // The lane that was being edited is still the lane being edited.
-        const label = await page.evaluate(() => {
-            const el = document.querySelector("scheduling-entity-day-editor") as any;
-            return el.shadowRoot.querySelector(".block-list .field-label")?.textContent ?? "";
-        });
-        expect(label).toContain("Boiler");
+        await expect(editor(page).locator(".edit-panel .lane-name")).toHaveText("Boiler");
     });
 
     test("snapshotDraftState captures and restoreDraftState restores unsaved drafts and lane selection", async ({ page }) => {

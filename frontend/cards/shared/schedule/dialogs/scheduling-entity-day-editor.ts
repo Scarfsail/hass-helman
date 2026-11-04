@@ -13,10 +13,12 @@ import "../components/scheduling-explanation-panel";
 import "./scheduling-entity-action-editor";
 import type {
     EntityDayBandBlockSelectDetail,
+    EntityDayBandDeselectDetail,
     EntityDayBandGapSelectDetail,
     EntityDayBandLane,
     EntityDayBandLaneSelectDetail,
     EntityDayBandRangeChangeDetail,
+    EntityDayBandRangePaintDetail,
     EntityDayBandSlotSelectDetail,
 } from "../components/scheduling-entity-day-band";
 import type {
@@ -27,23 +29,31 @@ import type {
     EntityScheduleDraft,
     EntityScheduleDrafts,
     EntityScheduleLane,
+    EntityScheduleRange,
     EntityScheduleTarget,
 } from "../model/entity-day-schedule-model";
 import {
+    areEntityScheduleActionsEqual,
     areEntityScheduleLanesDirty,
     buildEntityScheduleBlocks,
     buildEntityScheduleBoundaryOptions,
     buildEntityScheduleDays,
     buildEntityScheduleLanePatches,
+    freeEntityScheduleRange,
     isInverterScheduleTarget,
     isEntityScheduleActionEmpty,
-    resolveEntityScheduleRangeLimits,
+    placeEntityScheduleManualRange,
+    readEntityScheduleAction,
     sanitizeEntityScheduleAction,
     selectEntityScheduleDayBlocks,
-    selectEntityScheduleSlotsInRange,
+    selectEntityScheduleReplacedRuns,
 } from "../model/entity-day-schedule-model";
 import { isScheduleInverterAction } from "../schedule-types";
-import { buildEntityDayBandLanes } from "../model/entity-lane-source";
+import {
+    buildEntityDayBandLanes,
+    formatLaneRunHours,
+    resolveLaneRunPresentation,
+} from "../model/entity-lane-source";
 import {
     parseScheduleExplanation,
     type ScheduleExplanationModel,
@@ -65,14 +75,25 @@ import type {
 import { schedulingSharedStyles } from "../styles/scheduling-shared-styles";
 import type { EntityScheduleActionChangeDetail } from "./scheduling-entity-action-editor";
 
-const DEFAULT_NEW_BLOCK_DURATION_MS = 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+const DEFAULT_NEW_BLOCK_DURATION_MS = HOUR_MS;
+
+/** The end picks under a manual block, as the node detail's override offers them. */
+type EndPick = "plus_1h" | "plus_3h" | "end_of_day" | "next_change";
 
 /** What the dialog is for right now: authoring the day, or accounting for it. */
 type EntityDayEditorMode = "edit" | "explain";
 
+/**
+ * The manual block being placed: where it came from and where it is now.
+ *
+ * Every change replays the placement from the draft as it was when the
+ * session began, so moving a block across others and back leaves them as
+ * they were rather than eaten.
+ */
 export interface EntityScheduleEditSession {
-    /** Slots the block held when the edit began, so moving it can free them. */
-    originalSlotIds: string[];
+    /** The block's range when the session began, freed as it moves; null for a new block. */
+    origin: EntityScheduleRange | null;
     startMs: number;
     endMs: number;
     action: EntityScheduleAction;
@@ -104,9 +125,14 @@ export interface EntityScheduleSaveDetail {
  *
  * Every controllable entity gets a track on a shared time axis, because when to
  * run one thing is a question about what everything else is doing. Exactly one
- * of them is selected: the block list and the action editor below are about that
- * lane alone, so the editing model stays the simple single-entity one and the
- * other lanes are read-only context until they are clicked.
+ * of them is selected: the panel below is about that lane alone, so the editing
+ * model stays the simple single-entity one and the other lanes are read-only
+ * context until they are clicked.
+ *
+ * **Manual always wins, and automation fills whatever is left.** A manual block
+ * replaces whatever it covers, however it got there, and deleting one gives its
+ * range back to the automation. Automation blocks are never edited: the only
+ * thing they offer is to be overridden.
  *
  * The whole day is drafted locally and written as a single batch on Save, so
  * moving three blocks around is one schedule write and one automation re-run
@@ -256,111 +282,199 @@ export class SchedulingEntityDayEditor extends LitElement {
                 font-size: 0.82rem;
             }
 
-            .block-list {
+            /* Fixed whatever the device: where the block is on top, what it
+               does under a divider. The placement controls are the same for
+               every lane, so they stay right under the timeline. */
+            .edit-panel {
+                gap: 0;
+                padding: 0;
+            }
+
+            .placement,
+            .details {
                 display: flex;
                 flex-direction: column;
-                gap: 4px;
-            }
-
-            .block-row {
-                display: flex;
-                align-items: center;
-                gap: 4px;
-                padding: 0 4px;
-                border: 1px solid transparent;
-                border-radius: 8px;
-            }
-
-            .block-main {
-                display: flex;
-                flex: 1 1 auto;
-                align-items: center;
                 gap: 10px;
-                min-width: 0;
-                padding: 5px 4px;
-                border: none;
+                padding: 14px;
+            }
+
+            .details {
+                border-top: 1px solid var(--divider-color);
+            }
+
+            .placement-row {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: flex-end;
+                gap: 10px 14px;
+            }
+
+            /* Badge, read-only range and duration line up with the selects'
+               boxes rather than with their labels above them. */
+            .placement-row > .authorship-badge,
+            .placement-row > .placement-range,
+            .placement-row > .placement-duration,
+            .placement-row > .lane-name {
+                align-self: center;
+            }
+
+            .placement-row.read-only {
+                align-items: center;
+            }
+
+            .placement-row .field {
+                gap: 4px;
+            }
+
+            .placement-actions {
+                margin-left: auto;
+                align-self: center;
+            }
+
+            .authorship-badge {
+                padding: 3px 8px;
+                border: 1px solid color-mix(in srgb, var(--schedule-authorship-color) 45%, transparent);
                 border-radius: 6px;
-                background: none;
-                color: inherit;
-                font: inherit;
-                text-align: start;
-                cursor: pointer;
+                background: color-mix(in srgb, var(--schedule-authorship-color) 16%, transparent);
+                color: var(--schedule-authorship-color);
+                font-size: 0.7rem;
+                font-weight: 700;
+                letter-spacing: 0.06em;
+                text-transform: uppercase;
             }
 
-            .block-main:disabled {
-                cursor: default;
+            .authorship-badge.user {
+                --schedule-authorship-color: var(--schedule-authorship-user-color, #c49012);
             }
 
-            .block-row.editing {
-                border-color: color-mix(in srgb, var(--primary-color) 44%, var(--divider-color));
-                background: color-mix(in srgb, var(--primary-color) 8%, transparent);
+            .authorship-badge.automation {
+                --schedule-authorship-color: var(--schedule-authorship-automation-color, #2563eb);
             }
 
-            /* Hover is mirrored between this row and its segment on the band, so
-               pointing at either one says which run the other means. */
-            .block-row.hovered:not(.editing) {
-                background: var(--secondary-background-color);
+            .placement-range {
+                font-weight: 600;
+                font-variant-numeric: tabular-nums;
             }
 
-            .block-row.past {
+            .placement-duration {
                 color: var(--secondary-text-color);
-                opacity: 0.7;
-            }
-
-            .block-range {
-                flex: 0 0 auto;
-                min-width: 96px;
                 font-size: 0.85rem;
                 font-variant-numeric: tabular-nums;
             }
 
-            .block-action {
-                flex: 1 1 auto;
-                min-width: 0;
+            .lane-name {
+                font-weight: 600;
             }
 
-            .block-authorship {
-                flex: 0 0 auto;
-                color: var(--secondary-text-color);
-                font-size: 0.74rem;
-            }
-
-            .block-buttons {
-                display: flex;
-                flex: 0 0 auto;
-                gap: 4px;
-            }
-
-            .block-buttons .icon-button {
-                display: inline-flex;
-                align-items: center;
-                justify-content: center;
-                padding: 4px;
-                --mdc-icon-size: 18px;
-            }
-
-            .edit-panel {
-                display: flex;
-                flex-direction: column;
-                gap: 12px;
-            }
-
-            .range-fields {
+            .picks {
                 display: flex;
                 flex-wrap: wrap;
-                gap: 10px;
-            }
-
-            .range-fields .field {
-                flex: 1 1 140px;
-                min-width: 0;
-            }
-
-            .edit-panel-buttons {
-                display: flex;
                 align-items: center;
-                justify-content: space-between;
                 gap: 8px;
+            }
+
+            .pick {
+                min-height: 30px;
+                padding: 2px 12px;
+                border: 1px solid var(--divider-color);
+                border-radius: 999px;
+                background: var(--card-background-color);
+                color: var(--primary-text-color);
+                font: inherit;
+                font-size: 0.85rem;
+                font-weight: 600;
+                cursor: pointer;
+            }
+
+            .pick[aria-pressed="true"] {
+                border-color: var(--primary-color);
+                color: var(--primary-color);
+            }
+
+            .pill-button {
+                min-height: 34px;
+                padding: 4px 14px;
+                border-radius: 999px;
+                font: inherit;
+                font-size: 0.85rem;
+                font-weight: 600;
+                cursor: pointer;
+            }
+
+            .pill-button.delete {
+                border: 1px solid color-mix(in srgb, var(--error-color, #db4437) 60%, var(--divider-color));
+                background: none;
+                color: var(--error-color, #db4437);
+            }
+
+            .pill-button.override {
+                border: none;
+                background: var(--primary-color);
+                color: var(--text-primary-color, #fff);
+            }
+
+            .replaces {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                gap: 6px 12px;
+                font-size: 0.82rem;
+            }
+
+            .replaced-run {
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+                color: var(--secondary-text-color);
+                font-variant-numeric: tabular-nums;
+            }
+
+            .replaced-run .replaced-action {
+                text-decoration: line-through;
+                opacity: 0.75;
+            }
+
+            .details-title {
+                font-weight: 700;
+            }
+
+            /* The footer's left side: what the band's marks mean, so the
+               placement controls can sit right under the timeline. */
+            .legend {
+                display: flex;
+                flex-wrap: wrap;
+                align-items: center;
+                gap: 4px 14px;
+                margin-inline-end: auto;
+                color: var(--secondary-text-color);
+                font-size: 0.78rem;
+            }
+
+            .legend-item {
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+            }
+
+            .legend-swatch {
+                box-sizing: border-box;
+                width: 18px;
+                height: 10px;
+                border-radius: 2px;
+                background: color-mix(in srgb, var(--primary-text-color) 22%, transparent);
+            }
+
+            .legend-swatch.user {
+                box-shadow: inset 0 -3px 0 var(--schedule-authorship-user-color, #c49012);
+            }
+
+            .legend-swatch.automation {
+                box-shadow: inset 0 -3px 0 var(--schedule-authorship-automation-color, #2563eb);
+            }
+
+            .legend-swatch.freed {
+                border: 1px dashed var(--schedule-authorship-automation-color, #2563eb);
+                background: color-mix(in srgb, var(--schedule-authorship-automation-color, #2563eb) 8%, transparent);
             }
         `,
     ];
@@ -434,9 +548,15 @@ export class SchedulingEntityDayEditor extends LitElement {
     /** The lane being edited, or null when the user clicked away from all of them. */
     @state() private _selectedLaneKey: string | null = null;
     @state() private _dayIndex = 0;
+    /** The manual block being placed, when one is selected. */
     @state() private _editing: EntityScheduleEditSession | null = null;
-    /** The block the pointer is over, in either the list or the band. */
-    @state() private _hoveredBlockKey: string | null = null;
+    /** The automation run selected instead, read only: all it offers is "override". */
+    @state() private _selectedAutomation: EntityScheduleBlock | null = null;
+    /**
+     * The action each lane last placed in this opening, so painting the next
+     * block starts from it rather than from the lane's default every time.
+     */
+    private _lastActions: Record<string, EntityScheduleAction> = {};
     @state() private _mode: EntityDayEditorMode = "edit";
     /**
      * The press found nothing left to write: every drafted slot had elapsed.
@@ -477,6 +597,11 @@ export class SchedulingEntityDayEditor extends LitElement {
         draft: EntityScheduleDraft; splits: ReadonlySet<number>; editing: EntityScheduleEditSession | null;
         nowMs: number; blocks: EntityScheduleBlock[];
     }>();
+    /** The lane's saved runs, which change only with the baseline. */
+    private _baselineBlocksFor = new Map<string, {
+        slots: readonly ScheduleSlot[]; target: EntityScheduleTarget; nowMs: number;
+        blocks: EntityScheduleBlock[];
+    }>();
     private _bandLanesFor: {
         day: EntityScheduleDay; lanes: readonly EntityScheduleLane[];
         slots: readonly ScheduleSlot[]; drafts: EntityScheduleDrafts;
@@ -516,6 +641,7 @@ export class SchedulingEntityDayEditor extends LitElement {
         this._blockSplits = snapshot.blockSplits;
         this._draftBeforeEdit = target === snapshot.selectedLaneKey ? snapshot.draftBeforeEdit : {};
         this._editing = target === snapshot.selectedLaneKey ? snapshot.editing : null;
+        this._selectedAutomation = null;
         this._selectedLaneKey = target;
         this._dayIndex = dayKey === null ? snapshot.dayIndex : this._resolveInitialDayIndex();
         this._restoredDraft = true;
@@ -598,8 +724,12 @@ export class SchedulingEntityDayEditor extends LitElement {
             ? this._explainableBandLanes(this._buildBandLanes(day), day)
             : this._buildBandLanes(day);
         const selectedLane = this._selectedLane;
-        const blocks = bandLanes.find((lane) => lane.key === selectedLane?.key)?.blocks ?? [];
-        const editingBlock = this._resolveEditingBlock(blocks);
+        const selectedBandLane = bandLanes.find((lane) => lane.key === selectedLane?.key) ?? null;
+        // A session that places nothing is not on the band, so the blocks still
+        // drawn under its range must not read as the one being edited.
+        const selection = this._editing === null
+            ? this._selectedAutomation
+            : this._sessionPlaces(this._editing) ? this._editing : null;
         const heading = selectedLane?.name ?? this.localize("scheduling.entity_editor.title");
         return html`
             <!--
@@ -615,8 +745,8 @@ export class SchedulingEntityDayEditor extends LitElement {
                 @closed=${this._onClosed}
             >
                 <!--
-                    Pressing anything that is not the edit panel, the block list
-                    or the band ends the edit session. The block keeps whatever
+                    Pressing anything that is not the edit panel or the band
+                    ends the selection. The block keeps whatever
                     the session did to it: the draft is the only edit buffer,
                     and Save and Cancel are the only places it is committed or
                     thrown away.
@@ -658,13 +788,13 @@ export class SchedulingEntityDayEditor extends LitElement {
                         .slotGrid=${true}
                         .slotPicks=${explaining}
                         .selectedSlot=${this._explainSelection}
-                        .editingRange=${this._editing === null || explaining ? null : {
-                            startMs: this._editing.startMs,
-                            endMs: this._editing.endMs,
+                        .editingRange=${selection === null || explaining ? null : {
+                            startMs: selection.startMs,
+                            endMs: selection.endMs,
                         }}
-                        .hoveredBlockKey=${explaining ? null : this._hoveredBlockKey}
-                        @entity-day-band-block-hover=${this._handleBandBlockHover}
                         @entity-day-band-block-select=${this._handleBandBlockSelect}
+                        @entity-day-band-deselect=${this._handleBandDeselect}
+                        @entity-day-band-range-paint=${this._handleBandRangePaint}
                         @entity-day-band-lane-select=${this._handleBandLaneSelect}
                         @entity-day-band-context-select=${this._handleBandContextSelect}
                         @entity-day-band-gap-select=${this._handleBandGapSelect}
@@ -676,10 +806,7 @@ export class SchedulingEntityDayEditor extends LitElement {
                         <div class="field-help select-hint">
                             ${this.localize("scheduling.entity_editor.select_entity")}
                         </div>
-                    ` : html`
-                        ${this._renderBlockList(day, selectedLane, blocks, editingBlock?.key ?? null)}
-                        ${this._renderEditPanel(day, selectedLane, blocks, editingBlock)}
-                    `}
+                    ` : this._renderEditPanel(day, selectedLane, selectedBandLane)}
 
                     <!--
                         Last in the content, so a refused Save is next to the
@@ -689,6 +816,7 @@ export class SchedulingEntityDayEditor extends LitElement {
                 </div>
 
                 <ha-dialog-footer slot="footer">
+                    ${explaining ? nothing : this._renderLegend()}
                     <ha-button slot="secondaryAction" .appearance=${"plain"} @click=${this._close}>
                         ${this.localize("scheduling.dialog.cancel")}
                     </ha-button>
@@ -831,109 +959,46 @@ export class SchedulingEntityDayEditor extends LitElement {
         `;
     }
 
-    private _renderBlockList(
-        day: EntityScheduleDay,
-        lane: EntityScheduleLane,
-        blocks: readonly EntityScheduleBlock[],
-        editingBlockKey: string | null,
-    ) {
-        return html`
-            <div class="block-list">
-                <div class="field-label">
-                    ${this.localize("scheduling.entity_editor.blocks")} · ${lane.name}
-                </div>
-                ${blocks.length === 0 ? html`
-                    <div class="field-help">${this.localize("scheduling.entity_editor.no_blocks")}</div>
-                ` : blocks.map((block) => this._renderBlockRow(day, lane, block, editingBlockKey))}
-                <div>
-                    <button
-                        class="link-button"
-                        type="button"
-                        ?disabled=${this._findFreeStartMs(day, blocks) === null}
-                        @click=${() => this._handleAddBlock(day, lane)}
-                    >
-                        ${this.localize("scheduling.entity_editor.add_block")}
-                    </button>
-                </div>
-            </div>
-        `;
-    }
-
-    private _renderBlockRow(
-        day: EntityScheduleDay,
-        lane: EntityScheduleLane,
-        block: EntityScheduleBlock,
-        editingBlockKey: string | null,
-    ) {
-        const editing = editingBlockKey === block.key;
-        const classes = [
-            "block-row",
-            editing ? "editing" : "",
-            block.isPast ? "past" : "",
-            this._hoveredBlockKey === block.key ? "hovered" : "",
-        ].filter((value) => value.length > 0).join(" ");
-        // The row itself selects the block -- a pencil next to something that is
-        // already one click away is a button that only says "yes, really".
-        // Remove stays its own button because it is the destructive one.
-        return html`
-            <div
-                class=${classes}
-                @mouseenter=${() => this._setHoveredBlock(block.key)}
-                @mouseleave=${() => this._setHoveredBlock(null)}
-            >
-                <button
-                    class="block-main"
-                    type="button"
-                    ?disabled=${block.isPast}
-                    aria-pressed=${editing}
-                    @click=${() => this._handleEditBlock(block)}
-                >
-                    <span class="block-range">${this._formatBlockRange(day, block)}</span>
-                    <span class="block-action">${this._renderActionChip(lane, block.action)}</span>
-                    <span class="block-authorship">${this._authorshipLabel(block)}</span>
-                </button>
-                <span class="block-buttons">
-                    ${block.isPast ? nothing : html`
-                        <button
-                            class="icon-button"
-                            type="button"
-                            aria-label=${this.localize("scheduling.entity_editor.remove_block")}
-                            @click=${() => this._handleRemoveBlock(block)}
-                        >
-                            <ha-icon icon="mdi:close"></ha-icon>
-                        </button>
-                    `}
-                </span>
-            </div>
-        `;
-    }
-
+    /**
+     * The panel under the band: placement on top, the action's details below
+     * a divider, in the same layout for every kind of device.
+     */
     private _renderEditPanel(
         day: EntityScheduleDay,
         lane: EntityScheduleLane,
-        blocks: readonly EntityScheduleBlock[],
-        editingBlock: EntityScheduleBlock | null,
+        bandLane: EntityDayBandLane | null,
     ) {
         const editing = this._editing;
-        if (editing === null) {
-            return nothing;
-        }
+        const automation = this._selectedAutomation;
+        return html`
+            <div class="panel edit-panel">
+                ${editing !== null
+                    ? this._renderManualPanel(day, lane, editing)
+                    : automation !== null && bandLane !== null
+                        ? this._renderAutomationPanel(day, bandLane, automation)
+                        : this._renderNothingPanel(day, lane)}
+            </div>
+        `;
+    }
 
-        // Bounded by the neighbours exactly as a drag is: the pickers must not
-        // be the back door that overwrites the block next door.
-        const limits = resolveEntityScheduleRangeLimits({
-            blocks,
-            day,
-            startMs: editing.startMs,
-            endMs: editing.endMs,
-        });
+    private _renderManualPanel(day: EntityScheduleDay, lane: EntityScheduleLane, editing: EntityScheduleEditSession) {
         const boundaries = buildEntityScheduleBoundaryOptions({
             day,
             includeMs: [editing.startMs, editing.endMs],
-        }).filter((ms) => ms >= limits.minMs && ms <= limits.maxMs);
+        });
+        const ends = boundaries.filter((ms) => ms > editing.startMs);
+        const picks = this._endPicks(day, lane, editing.startMs, ends);
+        const replaced = selectEntityScheduleReplacedRuns({
+            slots: this._baselineSlots,
+            baselineBlocks: this._baselineBlocks(lane),
+            target: lane.target,
+            draft: this._draft,
+            range: editing,
+        });
         return html`
-            <div class="panel edit-panel">
-                <div class="range-fields">
+            <div class="placement">
+                <div class="placement-row">
+                    <span class="authorship-badge user">${this.localize("scheduling.entity_editor.manual")}</span>
                     <label class="field">
                         <span class="field-label">${this.localize("scheduling.entity_editor.from")}</span>
                         <!--
@@ -941,7 +1006,7 @@ export class SchedulingEntityDayEditor extends LitElement {
                             ones before the current end: moving a block later is
                             a start-first gesture, and the end follows it.
                         -->
-                        <select class="select-input" @change=${this._handleStartChange}>
+                        <select class="select-input" data-from @change=${this._handleStartChange}>
                             ${boundaries.slice(0, -1).map((ms) => html`
                                 <option value=${ms} ?selected=${ms === editing.startMs}>
                                     ${this._formatBoundary(day, ms)}
@@ -951,32 +1016,155 @@ export class SchedulingEntityDayEditor extends LitElement {
                     </label>
                     <label class="field">
                         <span class="field-label">${this.localize("scheduling.entity_editor.to")}</span>
-                        <select class="select-input" @change=${this._handleEndChange}>
-                            ${boundaries.filter((ms) => ms > editing.startMs).map((ms) => html`
+                        <select class="select-input" data-to @change=${this._handleEndChange}>
+                            ${ends.map((ms) => html`
                                 <option value=${ms} ?selected=${ms === editing.endMs}>
                                     ${this._formatBoundary(day, ms)}
                                 </option>
                             `)}
                         </select>
                     </label>
+                    <span class="placement-duration">${formatLaneRunHours(editing.endMs - editing.startMs, this.locale)}</span>
+                    <button class="pill-button delete placement-actions" type="button" data-delete @click=${this._handleDelete}>
+                        ${this.localize("scheduling.entity_editor.remove_block")}
+                    </button>
                 </div>
-
+                ${picks.length === 0 ? nothing : html`
+                    <div class="picks">
+                        <span class="field-label">${this.localize("scheduling.entity_editor.end")}</span>
+                        ${picks.map(({ key, ms }) => html`
+                            <button
+                                class="pick"
+                                type="button"
+                                data-pick=${key}
+                                aria-pressed=${ms === editing.endMs ? "true" : "false"}
+                                @click=${() => this._updateEditSession({ ...editing, endMs: ms })}
+                            >${this.localize(`scheduling.entity_editor.pick.${key}`)}</button>
+                        `)}
+                    </div>
+                `}
+                ${replaced.length === 0 ? nothing : html`
+                    <div class="replaces">
+                        <span class="field-label">${this.localize("scheduling.entity_editor.replaces")}</span>
+                        ${replaced.map((run) => html`
+                            <span class="replaced-run">
+                                <span class="replaced-action">${this._renderActionChip(lane, run.action)}</span>
+                                <span>${this.localize(run.authorship === "user"
+                                    ? "scheduling.authorship.set_by_user"
+                                    : "scheduling.authorship.set_by_automation")}</span>
+                                <span>${this._formatBoundary(day, run.startMs)}–${this._formatBoundary(day, run.endMs)}</span>
+                            </span>
+                        `)}
+                    </div>
+                `}
+            </div>
+            <div class="details">
                 <scheduling-entity-action-editor
                     .localize=${this.localize}
                     .target=${lane.target}
                     .appliance=${lane.appliance}
                     .action=${editing.action}
                     .sessionKey=${this._editSessionId}
-                    .authorship=${editingBlock?.authorship ?? "user"}
+                    .authorship=${"user"}
                     @entity-action-change=${this._handleActionChange}
                 ></scheduling-entity-action-editor>
+            </div>
+        `;
+    }
 
-                <div class="edit-panel-buttons">
-                    <button class="secondary-button" type="button" @click=${this._handleRemoveEditedBlock}>
-                        ${this.localize("scheduling.entity_editor.remove_block")}
+    private _renderAutomationPanel(day: EntityScheduleDay, lane: EntityDayBandLane, block: EntityScheduleBlock) {
+        return html`
+            <div class="placement">
+                <div class="placement-row read-only">
+                    <span class="authorship-badge automation">${this.localize("scheduling.entity_editor.automation")}</span>
+                    <span class="placement-range">
+                        ${this._formatBoundary(day, block.startMs)} – ${this._formatBoundary(day, block.endMs)}
+                    </span>
+                    <span class="placement-duration">${formatLaneRunHours(block.endMs - block.startMs, this.locale)}</span>
+                    <button class="pill-button override placement-actions" type="button" data-override @click=${this._handleOverride}>
+                        ${this.localize("scheduling.entity_editor.override_range")}
                     </button>
-                    <span class="field-help">${this.localize("scheduling.entity_editor.edit_hint")}</span>
                 </div>
+            </div>
+            <div class="details">
+                <div class="details-title">${resolveLaneRunPresentation(lane, block, this.localize).label}</div>
+                <div class="field-help">${this.localize("scheduling.entity_editor.automation_hint")}</div>
+            </div>
+        `;
+    }
+
+    /**
+     * Nothing selected: a manual block from the first slot that can still be
+     * written, one press away, and how to put one anywhere else.
+     */
+    private _renderNothingPanel(day: EntityScheduleDay, lane: EntityScheduleLane) {
+        const fromMs = Math.max(day.startMs, day.editableFromMs);
+        const ends = buildEntityScheduleBoundaryOptions({ day }).filter((ms) => ms > fromMs);
+        const picks = this._endPicks(day, lane, fromMs, ends).filter(({ key }) => key !== "next_change");
+        return html`
+            <div class="placement">
+                <div class="placement-row read-only">
+                    ${this.lanes.length > 1 ? html`<span class="lane-name">${lane.name}</span>` : nothing}
+                    ${picks.length === 0 ? nothing : html`
+                        <div class="picks">
+                            <span class="field-label">${this.localize("scheduling.entity_editor.override_from_here")}</span>
+                            ${picks.map(({ key, ms }) => html`
+                                <button
+                                    class="pick"
+                                    type="button"
+                                    data-start-pick=${key}
+                                    @click=${() => this._beginEdit(null, fromMs, ms, this._newBlockAction(lane))}
+                                >${this.localize(`scheduling.entity_editor.pick.${key === "end_of_day" ? "until_end_of_day" : key}`)}</button>
+                            `)}
+                        </div>
+                    `}
+                </div>
+            </div>
+            <div class="details">
+                <div class="field-help">${this.localize("scheduling.entity_editor.paint_hint")}</div>
+            </div>
+        `;
+    }
+
+    /**
+     * Where a manual block starting at `startMs` could end, as the node
+     * detail's override offers it: an hour, three, the end of the day (its last
+     * writable boundary), and the next slot where the saved plan changes --
+     * each only when it is one of the ends the pickers offer.
+     */
+    private _endPicks(
+        day: EntityScheduleDay,
+        lane: EntityScheduleLane,
+        startMs: number,
+        ends: readonly number[],
+    ): { key: EndPick; ms: number }[] {
+        const daySlots = day.slots.filter((slot) => slot.startMs >= startMs);
+        const startAction = daySlots[0] === undefined ? null : readEntityScheduleAction(daySlots[0], lane.target);
+        const nextChange = daySlots.slice(1).find((slot) => !areEntityScheduleActionsEqual(
+            readEntityScheduleAction(slot, lane.target),
+            startAction,
+        ))?.startMs;
+        const candidates: [EndPick, number | undefined][] = [
+            ["plus_1h", startMs + HOUR_MS],
+            ["plus_3h", startMs + 3 * HOUR_MS],
+            ["end_of_day", ends[ends.length - 1]],
+            ["next_change", nextChange],
+        ];
+        return candidates
+            .filter((candidate): candidate is [EndPick, number] => candidate[1] !== undefined && ends.includes(candidate[1]))
+            .map(([key, ms]) => ({ key, ms }));
+    }
+
+    /** What the band's marks mean, in the footer left of Cancel and Save. */
+    private _renderLegend() {
+        return html`
+            <div class="legend" slot="secondaryAction">
+                ${(["user", "automation", "freed"] as const).map((kind) => html`
+                    <span class="legend-item">
+                        <span class=${`legend-swatch ${kind}`}></span>
+                        ${this.localize(`scheduling.entity_editor.legend_${kind}`)}
+                    </span>
+                `)}
             </div>
         `;
     }
@@ -1091,6 +1279,8 @@ export class SchedulingEntityDayEditor extends LitElement {
         this._blockSplits = {};
         this._draftBeforeEdit = {};
         this._editing = null;
+        this._selectedAutomation = null;
+        this._lastActions = {};
         this._elapsedDraftNotice = false;
         // Every opening is an opening to edit: the dialog is reached by
         // pressing something the user means to change far more often than
@@ -1206,6 +1396,20 @@ export class SchedulingEntityDayEditor extends LitElement {
         return blocks;
     }
 
+    private _baselineBlocks(lane: EntityScheduleLane): EntityScheduleBlock[] {
+        const previous = this._baselineBlocksFor.get(lane.key);
+        if (previous && previous.slots === this._baselineSlots && previous.target === lane.target
+            && previous.nowMs === this.nowMs) return previous.blocks;
+        const blocks = buildEntityScheduleBlocks({
+            slots: this._baselineSlots,
+            target: lane.target,
+            draft: EMPTY_DRAFT,
+            nowMs: this.nowMs,
+        });
+        this._baselineBlocksFor.set(lane.key, { slots: this._baselineSlots, target: lane.target, nowMs: this.nowMs, blocks });
+        return blocks;
+    }
+
     private _buildBandLanes(day: EntityScheduleDay): EntityDayBandLane[] {
         const previous = this._bandLanesFor;
         if (previous && previous.day === day && previous.lanes === this.lanes
@@ -1291,8 +1495,7 @@ export class SchedulingEntityDayEditor extends LitElement {
             return;
         }
 
-        this._commitEditSession();
-        this._hoveredBlockKey = null;
+        this._clearSelection();
         this._selectedLaneKey = laneKey;
     }
 
@@ -1310,8 +1513,7 @@ export class SchedulingEntityDayEditor extends LitElement {
             return;
         }
 
-        this._commitEditSession();
-        this._hoveredBlockKey = null;
+        this._clearSelection();
         this._explainSelection = null;
         this._mode = mode;
         if (mode === "explain") {
@@ -1399,20 +1601,6 @@ export class SchedulingEntityDayEditor extends LitElement {
         });
     }
 
-    /** The block the edit session currently covers, for highlighting. */
-    private _resolveEditingBlock(
-        blocks: readonly EntityScheduleBlock[],
-    ): EntityScheduleBlock | null {
-        const editing = this._editing;
-        if (editing === null) {
-            return null;
-        }
-
-        return blocks.find(
-            (candidate) => candidate.startMs < editing.endMs && candidate.endMs > editing.startMs,
-        ) ?? null;
-    }
-
     private _selectDayIndex(index: number): void {
         const days = this._days();
         if (index < 0 || index >= days.length) {
@@ -1420,8 +1608,8 @@ export class SchedulingEntityDayEditor extends LitElement {
         }
 
         // The draft is keyed by slot id and spans every day, so switching days
-        // keeps unsaved work; only the open edit session is day-local.
-        this._commitEditSession();
+        // keeps unsaved work; only the selection is day-local.
+        this._clearSelection();
         this._dayIndex = index;
         // The selected slot belongs to the day it was pressed on, and so does
         // every record: a new day is a new set of questions.
@@ -1431,6 +1619,10 @@ export class SchedulingEntityDayEditor extends LitElement {
         }
     }
 
+    /**
+     * A block was pressed: a manual one opens for placing, an automation run
+     * is selected read only, since all it offers is to be overridden.
+     */
     private _handleBandBlockSelect(event: CustomEvent<EntityDayBandBlockSelectDetail>): void {
         event.stopPropagation();
         this._selectLane(event.detail.laneKey);
@@ -1441,9 +1633,27 @@ export class SchedulingEntityDayEditor extends LitElement {
         }
 
         const block = this._dayBlocks(day, lane).find((candidate) => candidate.key === event.detail.blockKey);
-        if (block !== undefined) {
-            this._handleEditBlock(block);
+        if (block === undefined || block.isPast) {
+            return;
         }
+
+        if (block.authorship === "automation") {
+            this._clearSelection();
+            this._selectedAutomation = block;
+            return;
+        }
+
+        const editing = this._editing;
+        if (editing === null || !this._sessionPlaces(editing)
+            || block.startMs >= editing.endMs || block.endMs <= editing.startMs) {
+            this._beginEdit(block, block.startMs, block.endMs, block.action);
+        }
+    }
+
+    /** The selected block was pressed again. */
+    private _handleBandDeselect(event: CustomEvent<EntityDayBandDeselectDetail>): void {
+        event.stopPropagation();
+        this._clearSelection();
     }
 
     private _handleBandLaneSelect(event: CustomEvent<EntityDayBandLaneSelectDetail>): void {
@@ -1455,15 +1665,6 @@ export class SchedulingEntityDayEditor extends LitElement {
     private _handleBandContextSelect(event: Event): void {
         event.stopPropagation();
         this._selectLane(null);
-    }
-
-    private _handleBandBlockHover(event: CustomEvent<{ blockKey: string | null }>): void {
-        event.stopPropagation();
-        this._setHoveredBlock(event.detail.blockKey);
-    }
-
-    private _setHoveredBlock(blockKey: string | null): void {
-        this._hoveredBlockKey = blockKey;
     }
 
     /** A drag on the band moves or resizes the block being edited. */
@@ -1482,24 +1683,47 @@ export class SchedulingEntityDayEditor extends LitElement {
     }
 
     /**
-     * Anything outside the edit panel, the block list and the band ends the
-     * session. What the session already wrote into the draft stays there.
+     * A paint across the selected lane: its opening paint starts a new manual
+     * block, every later one reshapes that block as the pointer moves.
      */
-    private _handleContentPointerDown(event: PointerEvent): void {
-        if (this._editing === null) {
+    private _handleBandRangePaint(event: CustomEvent<EntityDayBandRangePaintDetail>): void {
+        event.stopPropagation();
+        const { startMs, endMs, first } = event.detail;
+        const editing = this._editing;
+        const lane = this._selectedLane;
+        if (lane === null) {
             return;
         }
 
-        // The block list counts as inside: its rows and its "add block" button
-        // open sessions, and this handler runs after theirs -- treating them as
-        // outside would close the session they just opened.
-        const keepsSession = event.composedPath().some((node) => node instanceof HTMLElement && (
+        if (first || editing === null) {
+            // Let go first: when the opening paint lies wholly in the past no
+            // session begins, and the follow-ups must not reshape the old one.
+            this._clearSelection();
+            this._beginEdit(null, startMs, endMs, this._newBlockAction(lane));
+            return;
+        }
+
+        this._updateEditSession({ ...editing, startMs, endMs });
+    }
+
+    /**
+     * Anything outside the edit panel and the band lets go of the selection.
+     * What the session already wrote into the draft stays there.
+     */
+    private _handleContentPointerDown(event: PointerEvent): void {
+        if (this._editing === null && this._selectedAutomation === null) {
+            return;
+        }
+
+        // The panel counts as inside: its buttons open sessions, and this
+        // handler runs after theirs -- treating them as outside would close
+        // the session they just opened.
+        const keepsSelection = event.composedPath().some((node) => node instanceof HTMLElement && (
             node.classList.contains("edit-panel")
-            || node.classList.contains("block-list")
             || node.localName === "scheduling-entity-day-band"
         ));
-        if (!keepsSession) {
-            this._commitEditSession();
+        if (!keepsSelection) {
+            this._clearSelection();
         }
     }
 
@@ -1512,88 +1736,63 @@ export class SchedulingEntityDayEditor extends LitElement {
             // The default hour is cut short by the end of the free stretch: a
             // new block must not be born overlapping the next one.
             this._beginEdit(
-                [],
+                null,
                 event.detail.startMs,
                 Math.min(this._resolveDefaultEndMs(day, event.detail.startMs), event.detail.limitMs),
-                this._buildDefaultAction(lane),
+                this._newBlockAction(lane),
             );
         }
     }
 
-    private _handleAddBlock(day: EntityScheduleDay, lane: EntityScheduleLane): void {
-        const startMs = this._findFreeStartMs(day, this._dayBlocks(day, lane));
-        if (startMs === null) {
-            return;
-        }
-
-        this._beginEdit([], startMs, this._resolveDefaultEndMs(day, startMs), this._buildDefaultAction(lane));
-    }
-
-    /**
-     * Start editing a block, switching straight from another one if a session
-     * is already open -- the previous block's edits are already in the draft,
-     * so there is nothing to confirm on the way out.
-     */
-    private _handleEditBlock(block: EntityScheduleBlock): void {
-        if (block.isPast || this._isEditingBlock(block)) {
-            return;
-        }
-
-        this._beginEdit(block.slotIds, block.startMs, block.endMs, block.action);
-    }
-
-    private _handleRemoveBlock(block: EntityScheduleBlock): void {
-        if (block.isPast) {
-            return;
-        }
-
-        this._setDraft(this._clearSlots(this._draft, block.slotIds));
-    }
-
-    private _handleRemoveEditedBlock(): void {
+    /** Give the selected block's range back to the automation and let go of it. */
+    private _handleDelete(): void {
         const editing = this._editing;
-        if (editing === null) {
+        const lane = this._selectedLane;
+        if (editing === null || lane === null) {
             return;
         }
 
         // Back to the pre-edit draft minus the block: whatever the session did
         // to the range goes away with it.
-        this._setDraft(this._clearSlots(this._draftBeforeEdit, editing.originalSlotIds));
+        this._setDraft(editing.origin === null
+            ? { ...this._draftBeforeEdit }
+            : freeEntityScheduleRange({
+                slots: this._baselineSlots,
+                target: lane.target,
+                draft: this._draftBeforeEdit,
+                range: editing.origin,
+                nowMs: this.nowMs,
+            }));
         this._editing = null;
         this._draftBeforeEdit = {};
     }
 
-    private _isEditingBlock(block: EntityScheduleBlock): boolean {
-        const editing = this._editing;
-        return editing !== null && block.startMs < editing.endMs && block.endMs > editing.startMs;
+    /** Put a manual block with the run's own action over it, and select that. */
+    private _handleOverride(): void {
+        const block = this._selectedAutomation;
+        if (block !== null) {
+            this._beginEdit(null, block.startMs, block.endMs, block.action);
+        }
     }
 
     /**
      * Move the block's start, dragging the end with it when it would overtake
-     * it, so the block keeps its length instead of collapsing.
-     *
-     * The end it drags along stops at the neighbour, exactly as a drag on the
-     * band does. Bounding only by the end of the day would make this picker the
-     * back door that eats the next block.
+     * it, so the block keeps its length instead of collapsing -- as far as the
+     * day's last boundary. Whatever it lands on is replaced, as a drag does.
      */
     private _handleStartChange(event: Event): void {
         const editing = this._editing;
         const day = this._selectedDay();
-        const lane = this._selectedLane;
-        if (editing === null || day === null || lane === null) {
+        if (editing === null || day === null) {
             return;
         }
 
-        const limits = resolveEntityScheduleRangeLimits({
-            blocks: this._dayBlocks(day, lane),
-            day,
-            startMs: editing.startMs,
-            endMs: editing.endMs,
-        });
+        const boundaries = buildEntityScheduleBoundaryOptions({ day });
+        const lastMs = boundaries[boundaries.length - 1] ?? day.endMs;
         const startMs = Number((event.currentTarget as HTMLSelectElement).value);
         const endMs = startMs < editing.endMs
             ? editing.endMs
-            : Math.min(startMs + (editing.endMs - editing.startMs), limits.maxMs);
+            : Math.min(startMs + (editing.endMs - editing.startMs), lastMs);
         this._updateEditSession({ ...editing, startMs, endMs });
     }
 
@@ -1616,11 +1815,13 @@ export class SchedulingEntityDayEditor extends LitElement {
             return;
         }
 
-        this._updateEditSession({
-            ...editing,
-            action: sanitizeEntityScheduleAction(event.detail.action),
-            valid: event.detail.valid,
-        });
+        const action = sanitizeEntityScheduleAction(event.detail.action);
+        this._updateEditSession({ ...editing, action, valid: event.detail.valid });
+        // Only an action the user chose seeds the next paint; selecting a
+        // block or overriding a run does not.
+        if (this._selectedLane !== null && event.detail.valid && !isEntityScheduleActionEmpty(action)) {
+            this._lastActions = { ...this._lastActions, [this._selectedLane.key]: action };
+        }
     }
 
     /**
@@ -1631,7 +1832,7 @@ export class SchedulingEntityDayEditor extends LitElement {
      * and the running part stays exactly as scheduled.
      */
     private _beginEdit(
-        originalSlotIds: readonly string[],
+        origin: EntityScheduleRange | null,
         startMs: number,
         endMs: number,
         action: EntityScheduleAction,
@@ -1649,11 +1850,11 @@ export class SchedulingEntityDayEditor extends LitElement {
         // Switching straight to another block ends the previous session rather
         // than dropping it, so the edges it authored are kept: the block the
         // user just placed must stay its own series once they move on.
-        this._commitEditSession();
+        this._clearSelection();
         this._draftBeforeEdit = { ...this._draft };
         this._editSessionId += 1;
         this._updateEditSession({
-            originalSlotIds: [...originalSlotIds],
+            origin: origin === null ? null : { startMs: editableStartMs, endMs: origin.endMs },
             startMs: editableStartMs,
             endMs,
             action: sanitizeEntityScheduleAction(action),
@@ -1667,17 +1868,48 @@ export class SchedulingEntityDayEditor extends LitElement {
      *
      * Every change replays from the pre-edit draft rather than patching the last
      * one, so dragging a block back and forth cannot leave a trail of slots
-     * behind it.
+     * behind it, and a block it passed over comes back once it has moved on.
+     * An action that is not one yet -- a target still being typed, or none --
+     * places nothing: the range shows what it would be without the block.
      */
     private _updateEditSession(session: EntityScheduleEditSession): void {
+        const lane = this._selectedLane;
+        if (lane === null) {
+            return;
+        }
+
         this._editing = session;
-        this._setDraft(this._applyRange({
-            base: this._draftBeforeEdit,
-            clearSlotIds: session.originalSlotIds,
-            startMs: session.startMs,
-            endMs: session.endMs,
-            action: session.valid ? session.action : null,
-        }));
+        const places = this._sessionPlaces(session);
+        this._setDraft(places
+            ? placeEntityScheduleManualRange({
+                slots: this._baselineSlots,
+                target: lane.target,
+                draft: this._draftBeforeEdit,
+                previous: session.origin,
+                range: session,
+                action: session.action,
+                nowMs: this.nowMs,
+            })
+            : session.origin === null
+                ? { ...this._draftBeforeEdit }
+                : freeEntityScheduleRange({
+                    slots: this._baselineSlots,
+                    target: lane.target,
+                    draft: this._draftBeforeEdit,
+                    range: session.origin,
+                    nowMs: this.nowMs,
+                }));
+    }
+
+    /** Whether the session's action is one yet, so it places a block. */
+    private _sessionPlaces(session: EntityScheduleEditSession): boolean {
+        return session.valid && !isEntityScheduleActionEmpty(session.action);
+    }
+
+    /** Let go of whatever is selected; a manual block keeps what it placed. */
+    private _clearSelection(): void {
+        this._commitEditSession();
+        this._selectedAutomation = null;
     }
 
     private _commitEditSession(): void {
@@ -1713,87 +1945,17 @@ export class SchedulingEntityDayEditor extends LitElement {
         this._draftBeforeEdit = {};
     }
 
-    private _applyRange({
-        base,
-        clearSlotIds,
-        startMs,
-        endMs,
-        action,
-    }: {
-        base: EntityScheduleDraft;
-        clearSlotIds: readonly string[];
-        startMs: number;
-        endMs: number;
-        action: EntityScheduleAction;
-    }): EntityScheduleDraft {
-        const day = this._selectedDay();
-        const lane = this._selectedLane;
-        if (day === null || lane === null) {
-            return base;
-        }
-
-        const next = this._clearSlots(base, clearSlotIds);
-        const rangeAction = isEntityScheduleActionEmpty(action) ? null : action;
-        for (const slot of selectEntityScheduleSlotsInRange({ day, startMs, endMs })) {
-            if (slot.startMs < day.editableFromMs) {
-                continue;
-            }
-
-            next[slot.id] = rangeAction;
-        }
-
-        return next;
-    }
-
-    /** Drop the entity's action from these slots, keeping the rest of the draft. */
-    private _clearSlots(
-        base: EntityScheduleDraft,
-        slotIds: readonly string[],
-    ): EntityScheduleDraft {
-        const day = this._selectedDay();
-        const lane = this._selectedLane;
-        if (lane === null || day === null) {
-            return base;
-        }
-
-        const editableSlotIds = new Set(this._editableSlotIds(day));
-        const next: EntityScheduleDraft = { ...base };
-        for (const slotId of slotIds) {
-            // A slot that is already running or past cannot be rewritten, so
-            // clearing it would only make the block vanish from the view while
-            // the schedule kept it.
-            if (editableSlotIds.has(slotId)) {
-                next[slotId] = null;
-            }
-        }
-
-        return next;
-    }
-
-    private _editableSlotIds(day: EntityScheduleDay): string[] {
-        return day.slots
-            .filter((slot) => slot.startMs >= day.editableFromMs)
-            .map((slot) => slot.id);
-    }
-
-    /** The first slot start of the day with nothing scheduled on it. */
-    private _findFreeStartMs(
-        day: EntityScheduleDay,
-        blocks: readonly EntityScheduleBlock[],
-    ): number | null {
-        const candidates = buildEntityScheduleBoundaryOptions({ day })
-            .filter((ms) => ms >= day.editableFromMs && ms < day.endMs);
-        return candidates.find(
-            (ms) => !blocks.some((block) => block.startMs <= ms && block.endMs > ms),
-        ) ?? null;
-    }
-
     private _resolveDefaultEndMs(day: EntityScheduleDay, startMs: number): number {
         const boundaries = buildEntityScheduleBoundaryOptions({ day }).filter((ms) => ms > startMs);
         const preferred = startMs + DEFAULT_NEW_BLOCK_DURATION_MS;
         return boundaries.find((ms) => ms >= preferred)
             ?? boundaries[boundaries.length - 1]
             ?? day.endMs;
+    }
+
+    /** What a new block starts with: the lane's last placed action, or its default. */
+    private _newBlockAction(lane: EntityScheduleLane): EntityScheduleAction {
+        return this._lastActions[lane.key] ?? this._buildDefaultAction(lane);
     }
 
     /**
@@ -1819,35 +1981,11 @@ export class SchedulingEntityDayEditor extends LitElement {
         return { on: true };
     }
 
-    private _formatBlockRange(day: EntityScheduleDay, block: EntityScheduleBlock): string {
-        const start = block.continuesBefore
-            ? `←${this._formatBoundary(day, block.startMs)}`
-            : this._formatBoundary(day, block.startMs);
-        const end = block.continuesAfter
-            ? `${this._formatBoundary(day, block.endMs)}→`
-            : this._formatBoundary(day, block.endMs);
-        return `${start}–${end}`;
-    }
-
     /** Midnight at the end of a day reads as 24:00, not as the next 00:00. */
     private _formatBoundary(day: EntityScheduleDay, atMs: number): string {
         return atMs === day.endMs && atMs !== day.startMs
             ? "24:00"
             : formatScheduleTime(atMs, this.locale, this.timeZone);
-    }
-
-    private _authorshipLabel(block: EntityScheduleBlock): string {
-        if (block.isDirty) {
-            return this.localize("scheduling.entity_editor.unsaved");
-        }
-
-        if (block.authorship === "automation") {
-            return this.localize("scheduling.authorship.set_by_automation");
-        }
-
-        return block.authorship === "user"
-            ? this.localize("scheduling.authorship.set_by_user")
-            : this.localize("scheduling.authorship.mixed");
     }
 
     private _isDirty(nowMs: number = this.nowMs): boolean {

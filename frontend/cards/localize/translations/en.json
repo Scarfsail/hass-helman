@@ -853,6 +853,42 @@
           "eco": "ECO"
         }
       }
+    },
+    "entity_editor": {
+      "open": "Edit this device's schedule",
+      "add_block": "Add block",
+      "remove_block": "Delete",
+      "from": "From",
+      "to": "To",
+      "save": "Save",
+      "previous_day": "Previous day",
+      "next_day": "Next day",
+      "schedule_changed": "The schedule changed in the meantime. Saving overwrites the loaded changes for this device.",
+      "save_failed": "Saving failed:",
+      "save_elapsed": "The edited slots have already passed, so there is nothing to save.",
+      "title": "Schedule",
+      "select_entity": "Select a device by clicking its lane or one of its blocks.",
+      "mode_edit": "Edit",
+      "mode_explain": "Explain automation",
+      "explain_hint": "Click a slot in any lane to see why it is planned that way.",
+      "manual": "Manual",
+      "automation": "Automation",
+      "end": "End",
+      "pick": {
+        "plus_1h": "+1 h",
+        "plus_3h": "+3 h",
+        "end_of_day": "End of day",
+        "next_change": "Next planned change",
+        "until_end_of_day": "Until end of day"
+      },
+      "replaces": "Replaces",
+      "override_range": "Override this range",
+      "automation_hint": "Planned by the optimizer. You can't edit it. Override the range to put a manual action there instead.",
+      "override_from_here": "Override from here",
+      "paint_hint": "Drag across the lane to paint a manual block anywhere.",
+      "legend_user": "Manual",
+      "legend_automation": "Automation",
+      "legend_freed": "Freed, automation re-plans"
     }
   },
   "device_energy": {

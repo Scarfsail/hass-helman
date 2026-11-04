@@ -121,6 +121,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
             blocks: [],
             blockProjections: new Map(),
             blockVehicleSoc: new Map(),
+            freedRanges: [],
         });
 
         const band = document.createElement("scheduling-entity-day-band") as HTMLElement
