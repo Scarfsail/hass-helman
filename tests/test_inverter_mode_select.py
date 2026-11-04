@@ -158,6 +158,33 @@ def test_the_same_option_rewrites_a_drifted_register_and_warns(caplog):
     entity.async_write_ha_state.assert_not_called()
 
 
+def test_the_same_option_rechecks_a_register_an_earlier_repair_resets():
+    states = {
+        USE_MODE: "Self Use Mode",
+        MANUAL_MODE: "Stop Charge and Discharge",
+        EXPORT_LIMIT: "9900",
+    }
+    entity, calls = build(states)
+    entity._attr_current_option = "stop_discharging"
+    recorded = entity.hass.services.async_call.side_effect
+
+    async def resetting(domain, service, data, *, blocking):
+        await recorded(domain, service, data, blocking=blocking)
+        if data["entity_id"] == USE_MODE:
+            # Switching back to Manual Mode resets the manual mode.
+            states[USE_MODE] = "Manual Mode"
+            states[MANUAL_MODE] = "Force Charge"
+
+    entity.hass.services.async_call.side_effect = resetting
+
+    select(entity, "stop_discharging")
+
+    assert calls == [
+        (USE_MODE, "Manual Mode"),
+        (MANUAL_MODE, "Stop Charge and Discharge"),
+    ]
+
+
 def test_the_same_option_on_matching_registers_writes_nothing(caplog):
     entity, calls = build(
         {
