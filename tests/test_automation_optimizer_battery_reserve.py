@@ -345,7 +345,7 @@ class BatteryReserveOptimizerTests(unittest.TestCase):
         self.assertEqual(
             list(actions.values()), ["stop_discharging"] * 4
         )
-        self.assertEqual(list(actions)[0], _slot_id(7, 0))
+        self.assertEqual(min(actions), _slot_id(7, 0))
 
     def test_simulated_residual_charges_latest_slots_with_default_margin(self) -> None:
         result = self._run_with_fake_simulator(holds_needed=99, charges_needed=3)
@@ -354,7 +354,7 @@ class BatteryReserveOptimizerTests(unittest.TestCase):
             for slot_id, slot_actions in result.slots.items()
             if inverter_action(slot_actions).set_by == "automation"
         }
-        charges = [slot_id for slot_id, kind in actions.items() if kind == "charge_to_target_soc"]
+        charges = sorted(slot_id for slot_id, kind in actions.items() if kind == "charge_to_target_soc")
         self.assertEqual(charges, [_slot_id(6, 45), _slot_id(7), _slot_id(7, 15), _slot_id(7, 30), _slot_id(7, 45)])
 
     def test_written_actions_record_the_optimizer_kind(self) -> None:
@@ -384,11 +384,11 @@ class BatteryReserveOptimizerTests(unittest.TestCase):
 
         # The candidate is omitted by the forecast overlay and must not count
         # as a hold while selecting the latest cutoff.
-        holds = [
+        holds = sorted(
             slot_id for slot_id, actions in result.slots.items()
             if inverter_action(actions).kind == "stop_discharging"
             and inverter_action(actions).condition_met
-        ]
+        )
         self.assertEqual(holds, [_slot_id(7), _slot_id(7, 15), _slot_id(7, 30), _slot_id(7, 45)])
 
     def test_simulated_hold_trace_records_the_actual_action(self) -> None:
@@ -432,10 +432,10 @@ class BatteryReserveOptimizerTests(unittest.TestCase):
             charges_needed=99,
             soc={0: 80, 6: 80, 7: 40, 9: 20, 10: 60},
         )
-        holds = [
+        holds = sorted(
             slot_id for slot_id, actions in result.slots.items()
             if inverter_action(actions).kind == "stop_discharging"
-        ]
+        )
         self.assertEqual(holds, [_slot_id(7), _slot_id(7, 15), _slot_id(7, 30), _slot_id(7, 45)])
 
     def test_simulated_writes_nothing_when_boundary_already_reaches_target(self) -> None:
@@ -492,12 +492,12 @@ class BatteryReserveOptimizerTests(unittest.TestCase):
             for slot_id, actions in result.slots.items()
         }
         self.assertEqual(
-            [slot_id for slot_id, kind in kinds.items() if kind == "charge_to_target_soc"],
+            sorted(slot_id for slot_id, kind in kinds.items() if kind == "charge_to_target_soc"),
             [_slot_id(6, 45), _slot_id(7), _slot_id(7, 15), _slot_id(7, 30), _slot_id(7, 45)],
         )
         self.assertEqual(set(_charge_slots(result).values()), {30})
         self.assertEqual(
-            [slot_id for slot_id, kind in kinds.items() if kind == "stop_discharging"],
+            sorted(slot_id for slot_id, kind in kinds.items() if kind == "stop_discharging"),
             [_slot_id(6), _slot_id(6, 15), _slot_id(6, 30)],
         )
 
@@ -975,6 +975,11 @@ def _sunny(at: datetime) -> float:
     return 0.5 if at.date() > DAY and 8 <= at.hour < 18 else 0.0
 
 
+def _heavy_until_two(at: datetime) -> float:
+    """2.5 kWh per 15 min from 22:00 tonight to 02:00, 0.1 kWh otherwise."""
+    return 2.5 if _at(22) <= at < _tomorrow(2) else 0.1
+
+
 # Cheap tonight 22:00 - 06:00, expensive tomorrow 06:00 - 22:00.
 _OVERNIGHT_BANDS = (
     ImportBand(level="cheap", start=_at(22), end=_tomorrow(6)),
@@ -1067,19 +1072,14 @@ class BatteryReserveCheapWindowFloorTests(unittest.TestCase):
     def test_d_holds_earlier_to_cover_the_pre_solar_morning(self) -> None:
         # Entered at 42 %, the battery would reach 10 % by 06:00.  `entry +
         # dip` holds from 03:30 to enter at 20 %; the morning before the sun
-        # needs 28 %, so the hold starts at 01:30.  The floor step's charge at
-        # 03:45 (entered at 19 % before the hold was placed) is entered at
-        # 28 % and buys nothing.
+        # needs 28 %, so the hold starts at 01:30.  The floor step holds from
+        # 03:30, the first slot that would end below the floor, and buys
+        # nothing.
         result, trace = self._run_overnight(soc=46.0, solar=_sunny)
 
-        self.assertEqual(_charge_slots(result), {_id(_tomorrow(3, 45)): 20})
+        self.assertEqual(_charge_slots(result), {})
         self.assertEqual(
-            _holds(result),
-            [
-                slot_id
-                for slot_id in _ids_between(_tomorrow(1, 30), _tomorrow(6))
-                if slot_id != _id(_tomorrow(3, 45))
-            ],
+            _holds(result), _ids_between(_tomorrow(1, 30), _tomorrow(6))
         )
         params = _gate(_slots_by_id(trace)[_id(_tomorrow(1, 30))], "charge_needed")[
             "params"
@@ -1135,6 +1135,52 @@ class BatteryReserveCheapWindowFloorTests(unittest.TestCase):
         self.assertEqual(
             _gate(_slots_by_id(trace)[_id(_at(23))], "cheap_window_floor")["params"],
             {"floorSoc": 20, "entrySoc": 15.0},
+        )
+
+    def test_i_holds_a_battery_at_the_floor_instead_of_cycling_it(self) -> None:
+        # #719: a run at 22:30 finds the battery back at the 20 % floor while
+        # the house draws 2.5 kWh per 15 min until 02:00.  The slot is entered
+        # at the floor but would end at 10 %: hold it, never charge the next
+        # slot back to the floor.  Only the pre-solar top-up is bought.
+        result, trace = self._run_overnight(
+            soc=20.0, solar=_sunny, house=_heavy_until_two, now=_at(22, 30)
+        )
+
+        self.assertEqual(
+            _charge_slots(result),
+            {
+                _id(_tomorrow(5, 15)): 28,
+                _id(_tomorrow(5, 30)): 28,
+                _id(_tomorrow(5, 45)): 28,
+            },
+        )
+        self.assertEqual(
+            _holds(result), _ids_between(_at(22, 30), _tomorrow(5, 15))
+        )
+        self.assertEqual(
+            _gate(_slots_by_id(trace)[_id(_at(22, 30))], "cheap_window_floor")[
+                "params"
+            ],
+            {"floorSoc": 20, "entrySoc": 20.0},
+        )
+
+    def test_j_holds_a_slot_entered_above_the_floor_that_would_end_below(
+        self,
+    ) -> None:
+        # Entered at 25 %, the slot would end at 15 %: held whole, the few
+        # percent kept for the expensive window rather than bought back.
+        result, trace = self._run_overnight(
+            soc=25.0, solar=_sunny, house=_heavy_until_two, now=_at(22, 30)
+        )
+
+        self.assertNotIn(_id(_at(22, 30)), _charge_slots(result))
+        self.assertNotIn(_id(_at(22, 45)), _charge_slots(result))
+        self.assertEqual(min(_holds(result)), _id(_at(22, 30)))
+        self.assertEqual(
+            _gate(_slots_by_id(trace)[_id(_at(22, 30))], "cheap_window_floor")[
+                "params"
+            ],
+            {"floorSoc": 20, "entrySoc": 25.0},
         )
 
     def test_h_leaves_a_cheap_band_without_expensive_band_alone(self) -> None:

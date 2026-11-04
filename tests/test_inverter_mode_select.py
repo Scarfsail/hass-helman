@@ -137,6 +137,107 @@ def test_an_entity_already_in_its_target_state_is_skipped():
     assert calls == [(MANUAL_MODE, "Stop Charge and Discharge")]
 
 
+def test_the_same_option_rewrites_a_drifted_register_and_warns(caplog):
+    entity, calls = build(
+        {
+            USE_MODE: "Self Use Mode",
+            MANUAL_MODE: "Stop Charge and Discharge",
+            EXPORT_LIMIT: "9900",
+        }
+    )
+    entity._attr_current_option = "stop_discharging"
+
+    with caplog.at_level("WARNING", logger=select_module.__name__):
+        select(entity, "stop_discharging")
+
+    assert calls == [(USE_MODE, "Manual Mode")]
+    assert [record.getMessage() for record in caplog.records] == [
+        "Inverter drifted from 'stop_discharging': "
+        f"{USE_MODE} was 'Self Use Mode', expected 'Manual Mode'; re-applying"
+    ]
+    entity.async_write_ha_state.assert_not_called()
+
+
+def test_the_same_option_rechecks_a_register_an_earlier_repair_resets():
+    states = {
+        USE_MODE: "Self Use Mode",
+        MANUAL_MODE: "Stop Charge and Discharge",
+        EXPORT_LIMIT: "9900",
+    }
+    entity, calls = build(states)
+    entity._attr_current_option = "stop_discharging"
+    recorded = entity.hass.services.async_call.side_effect
+
+    async def resetting(domain, service, data, *, blocking):
+        await recorded(domain, service, data, blocking=blocking)
+        if data["entity_id"] == USE_MODE:
+            # Switching back to Manual Mode resets the manual mode.
+            states[USE_MODE] = "Manual Mode"
+            states[MANUAL_MODE] = "Force Charge"
+
+    entity.hass.services.async_call.side_effect = resetting
+
+    select(entity, "stop_discharging")
+
+    assert calls == [
+        (USE_MODE, "Manual Mode"),
+        (MANUAL_MODE, "Stop Charge and Discharge"),
+    ]
+
+
+def test_the_same_option_on_matching_registers_writes_nothing(caplog):
+    entity, calls = build(
+        {
+            USE_MODE: "Manual Mode",
+            MANUAL_MODE: "Stop Charge and Discharge",
+            EXPORT_LIMIT: "9900",
+        }
+    )
+    entity._attr_current_option = "stop_discharging"
+
+    with caplog.at_level("WARNING", logger=select_module.__name__):
+        select(entity, "stop_discharging")
+
+    assert calls == []
+    assert caplog.records == []
+    entity.async_write_ha_state.assert_not_called()
+
+
+def test_the_same_option_on_an_unreadable_register_writes_nothing(caplog):
+    entity, calls = build(
+        {
+            USE_MODE: "unavailable",
+            MANUAL_MODE: "Stop Charge and Discharge",
+            EXPORT_LIMIT: "9900",
+        }
+    )
+    entity._attr_current_option = "stop_discharging"
+
+    with caplog.at_level("WARNING", logger=select_module.__name__):
+        select(entity, "stop_discharging")
+
+    # A dropped link is not drift: no warning, no write to the dead entity.
+    assert calls == []
+    assert caplog.records == []
+    entity.async_write_ha_state.assert_not_called()
+
+
+def test_drifted_writes_lists_only_registers_definitively_off_target():
+    entity, _calls = build(
+        {
+            USE_MODE: "Self Use Mode",
+            MANUAL_MODE: "unavailable",
+            EXPORT_LIMIT: "9900",
+        }
+    )
+
+    # What the executor asks before it picks the current option again.
+    with patch.object(select_module, "resolve_unique_ids", side_effect=_resolve):
+        drifted = entity.drifted_writes("stop_discharging")
+
+    assert drifted == [(USE_MODE, "Manual Mode")]
+
+
 def test_a_failed_write_surfaces_and_keeps_the_last_option():
     entity, _calls = build()
     entity._attr_current_option = "normal"
