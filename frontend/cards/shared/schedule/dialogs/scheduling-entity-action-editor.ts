@@ -105,6 +105,8 @@ export class SchedulingEntityActionEditor extends LitElement {
     @property({ type: Number }) public sessionKey = 0;
     /** Who owns the block being edited, which decorates the picked option. */
     @property({ attribute: false }) public authorship: EntityScheduleBlockAuthorship = "user";
+    /** An appliance's name over its options; off where the dialog is already titled by it. */
+    @property({ type: Boolean }) public showName = true;
 
     @state() private _actionKind: ScheduleAction["kind"] | null = null;
     @state() private _targetSocInput = "";
@@ -189,6 +191,7 @@ export class SchedulingEntityActionEditor extends LitElement {
                 .action=${action}
                 .selectedAuthorship=${this._authorshipSummary()}
                 .showControls=${true}
+                .showName=${this.showName}
                 @schedule-appliance-action-change=${this._handleApplianceActionChange}
             ></scheduling-appliance-action-editor>
         `;
@@ -242,9 +245,7 @@ export class SchedulingEntityActionEditor extends LitElement {
      * put the block there.
      */
     private _authorshipSummary(): ScheduleActionAuthorshipSummary {
-        return summarizeScheduleAuthorship(
-            this.authorship === "mixed" ? ["user", "automation"] : [this.authorship],
-        );
+        return summarizeScheduleAuthorship([this.authorship]);
     }
 
     private _emitChange(action: EntityScheduleAction, valid: boolean): void {

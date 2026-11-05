@@ -29,6 +29,8 @@ export class SchedulingApplianceActionEditor extends LitElement {
     @property({ attribute: false }) public action: ScheduleApplianceAction | null = null;
     @property({ attribute: false }) public selectedAuthorship: ScheduleActionAuthorshipSummary | null = null;
     @property({ type: Boolean }) public showControls = true;
+    /** The appliance's name and kind over its options. */
+    @property({ type: Boolean }) public showName = true;
 
     @state() private _mode = "none";
     @state() private _vehicleId = "";
@@ -46,10 +48,12 @@ export class SchedulingApplianceActionEditor extends LitElement {
         const descriptor = APPLIANCE_KIND_UI[appliance.kind];
         return html`
             <div class=${`appliance-panel${this._panelHighlightClass()}`}>
-                <div class="panel-header-inline">
-                    <div class="panel-title">${appliance.name}</div>
-                    <div class="field-help">${this.localize(`scheduling.dialog.appliance_kind.${appliance.kind}`)}</div>
-                </div>
+                ${this.showName ? html`
+                    <div class="panel-header-inline">
+                        <div class="panel-title">${appliance.name}</div>
+                        <div class="field-help">${this.localize(`scheduling.dialog.appliance_kind.${appliance.kind}`)}</div>
+                    </div>
+                ` : nothing}
                 ${this.showControls ? html`
                     <div class="action-options compact-action-options">
                         ${descriptor.options(appliance, this.localize).map((option) => this._renderOption(option))}

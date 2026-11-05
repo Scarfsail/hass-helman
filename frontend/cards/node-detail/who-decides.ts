@@ -1,16 +1,14 @@
-import { LitElement, css, html, nothing } from "lit";
-import { customElement, property, state } from "lit/decorators.js";
+import { LitElement, css, html } from "lit";
+import { customElement, property } from "lit/decorators.js";
 import type { HomeAssistant } from "../../types/ha";
 import { fillTemplate, type LocalizeFunction } from "../localize/localize";
 import { LaneOwnershipController } from "./lane-ownership";
 import type { ControlStatus } from "./lane-ownership";
 import { formatScheduleTime } from "../shared/schedule/model/schedule-time";
-import { DialogHistoryController } from "../shared/dialog-history-controller";
+import { openScheduleEditorOnLane } from "../shared/schedule/dialogs/scheduling-day-editor-host";
 import { laneDoingNow, laneRuns, nextLaneChange, scheduleReason } from "./node-detail-schedule";
-import type { ControlOverrideDialog } from "./control-override-dialog";
 import "./help-tip";
 import { nodeDetailSharedStyles } from "./node-detail-shared-styles";
-import "./control-override-dialog";
 
 export function ownershipText(status: ControlStatus, localize: LocalizeFunction, locale: string, timeZone: string): string {
     if (status.kind === "automatic") return localize("node_detail.shared.helman_schedule");
@@ -33,25 +31,11 @@ export class HelmanWhoDecides extends LitElement {
     @property({ attribute: false }) public hass!: HomeAssistant;
     @property({ attribute: false }) public localize!: LocalizeFunction;
     @property() public controllableId = "";
-    @state() private _overrideOpen = false;
     private readonly _lanes = new LaneOwnershipController(this, () => this.hass);
-    private readonly _history = new DialogHistoryController(this, "__helmanWhoDecidesOverrideId", {
-        onBack: () => {
-            const dialog = this.renderRoot.querySelector<ControlOverrideDialog>("control-override-dialog");
-            if (dialog === null) return false;
-            queueMicrotask(() => dialog.requestClose());
-            return true;
-        },
-        close: () => { this._overrideOpen = false; },
-    });
+    /** Ask the card hosting the detail to open its day editor on this lane alone. */
     private _openOverride(): void {
-        this._overrideOpen = true;
-        this._history.push();
+        openScheduleEditorOnLane(this, this.controllableId);
     }
-    private _onOverrideClosed = (): void => {
-        this._history.closed();
-        this._overrideOpen = false;
-    };
     render() {
         const now = Date.now();
         const schedule = this._lanes.snapshot.schedule;
@@ -70,10 +54,6 @@ export class HelmanWhoDecides extends LitElement {
                 .explanation=${time === null ? this.localize("node_detail.shared.switch_help_no_time") : fillTemplate(this.localize("node_detail.shared.switch_help"), { time })}></helman-help-tip></span><span>${who}</span></div>
             <div class="row"><span class="label">${this.localize("node_detail.shared.planned_now")}</span><span>${planned}</span></div>
             <button type="button" class="outline-button" ?disabled=${!controllable?.supportsAuthoring} @click=${this._openOverride}>${this.localize("node_detail.shared.override")}</button>
-            </div>
-            ${this._overrideOpen && controllable ? html`<control-override-dialog .hass=${this.hass} .localize=${this.localize}
-                .controllable=${controllable} .normalized=${this._lanes.normalized}
-                .executionEnabled=${schedule?.executionEnabled ?? false} .open=${true}
-                @closed=${this._onOverrideClosed}></control-override-dialog>` : nothing}`;
+            </div>`;
     }
 }

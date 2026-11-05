@@ -3,6 +3,7 @@ export { addDays as addDaysToDayKey } from "../../time/day-key";
 import { getCachedLocalDateTimeDescriptor } from "../../../shared/time/day-key";
 
 const TIME_FORMATTERS = new Map<string, Intl.DateTimeFormat>();
+const WEEKDAY_FORMATTERS = new Map<string, Intl.DateTimeFormat>();
 const DAY_LABEL_FORMATTERS = new Map<string, Intl.DateTimeFormat>();
 /**
  * `dayKey` + locale → the weekday-and-date label.
@@ -252,11 +253,18 @@ export function formatScheduleInstantLabel(
     const parts = getScheduleLocalTimeParts(atMs, timeZone);
     const day = formatScheduleDayLabel({ dayKey: parts?.dayKey ?? "", currentDayKey, locale, todayLabel, tomorrowLabel });
     const label = `${day} ${formatScheduleTime(atMs, locale, timeZone)}`;
+    const offset = getScheduleRepeatedHourOffset(atMs, timeZone);
+    return offset === null ? label : `${label} (UTC${offset})`;
+}
+
+/** The UTC offset of an instant whose local clock time occurs twice (daylight saving ends), else null. */
+export function getScheduleRepeatedHourOffset(atMs: number, timeZone: string): string | null {
+    const parts = getScheduleLocalTimeParts(atMs, timeZone);
     const repeated = parts !== null && [atMs - 3_600_000, atMs + 3_600_000].some((otherMs) => {
         const other = getScheduleLocalTimeParts(otherMs, timeZone);
         return other?.dayKey === parts.dayKey && other.hour === parts.hour && other.minute === parts.minute;
     });
-    return repeated ? `${label} (UTC${parts.offset})` : label;
+    return repeated ? parts.offset : null;
 }
 
 export function getScheduleLocalTimeParts(
@@ -294,6 +302,70 @@ export function getScheduleLocalDayStartMs(atMs: number, timeZone: string): numb
         else break;
     }
     return start;
+}
+
+/**
+ * The local midnight after the one `atMs` falls on, in `timeZone`.
+ *
+ * Found from the clock rather than by adding a day, so a daylight-saving day of
+ * 23 or 25 hours still ends on its own midnight: 30 hours on from the day's
+ * start always lands inside the next day, never two days on.
+ */
+export function getScheduleNextLocalDayStartMs(atMs: number, timeZone: string): number {
+    return getScheduleLocalDayStartMs(getScheduleLocalDayStartMs(atMs, timeZone) + 30 * 3_600_000, timeZone);
+}
+
+/** The short weekday `atMs` falls on, in `timeZone`: "Thu", "čt". */
+export function formatScheduleWeekday(atMs: number, locale: string, timeZone: string): string {
+    const cacheKey = `${locale}::${timeZone}`;
+    let formatter = WEEKDAY_FORMATTERS.get(cacheKey);
+    if (formatter === undefined) {
+        formatter = new Intl.DateTimeFormat(locale, { timeZone, weekday: "short" });
+        WEEKDAY_FORMATTERS.set(cacheKey, formatter);
+    }
+
+    return formatter.format(new Date(atMs));
+}
+
+/** "Thu 10:20": a moment on a timeline that runs across midnight. */
+export function formatScheduleWeekdayTime(atMs: number, locale: string, timeZone: string): string {
+    return `${formatScheduleWeekday(atMs, locale, timeZone)} ${formatScheduleTime(atMs, locale, timeZone)}`;
+}
+
+/**
+ * How a span of the timeline names its moments, settled once per render
+ * rather than per label: whether it runs past a midnight, so its times carry
+ * their weekday, and the midnight that closes its last day, which reads as
+ * that day's 24:00 rather than as the next day's 00:00.
+ */
+export type ScheduleSpanClock = {
+    startMs: number;
+    closingMidnightMs: number;
+    crossesMidnight: boolean;
+};
+
+export function resolveScheduleSpanClock(startMs: number, endMs: number, timeZone: string): ScheduleSpanClock {
+    return {
+        startMs,
+        closingMidnightMs: getScheduleNextLocalDayStartMs(endMs - 1, timeZone),
+        crossesMidnight: endMs > getScheduleNextLocalDayStartMs(startMs, timeZone),
+    };
+}
+
+/** A moment on a span: "10:20" or "Thu 10:20", and its closing midnight "24:00" or "Thu 24:00". */
+export function formatScheduleSpanTime(
+    atMs: number,
+    clock: ScheduleSpanClock,
+    locale: string,
+    timeZone: string,
+): string {
+    if (atMs === clock.closingMidnightMs && atMs !== clock.startMs) {
+        return clock.crossesMidnight ? `${formatScheduleWeekday(atMs - 1, locale, timeZone)} 24:00` : "24:00";
+    }
+
+    return clock.crossesMidnight
+        ? formatScheduleWeekdayTime(atMs, locale, timeZone)
+        : formatScheduleTime(atMs, locale, timeZone);
 }
 
 export function buildScheduleCompactExpandedRangeLabel({

@@ -361,6 +361,18 @@ test.describe("opening the day editor from a scheduling badge", () => {
     });
 
     /**
+     * Select the boiler's first manual run on the band and delete it.
+     *
+     * By keyboard: the run is the one running now, so in a window that opens
+     * at now it sits at the track's left edge, under the lane's own label.
+     */
+    async function deleteFirstBoilerRun(page: Page): Promise<void> {
+        await page.locator('scheduling-entity-day-band .lane[data-lane="boiler"] .segment.authorship-user')
+            .first().press("Enter");
+        await page.locator("scheduling-entity-day-editor .edit-panel [data-delete]").click();
+    }
+
+    /**
      * A refused write keeps the day on screen -- correctly, since the draft is
      * the only copy of it. Without the reason on screen too that reads as a
      * dead Save: nothing closes, nothing is written, and why is in the console.
@@ -383,8 +395,8 @@ test.describe("opening the day editor from a scheduling badge", () => {
             });
         });
 
-        // Clear the boiler's run, so there is a draft worth writing.
-        await page.locator(".block-row").first().locator("button").nth(1).click();
+        // Delete the boiler's run, so there is a draft worth writing.
+        await deleteFirstBoilerRun(page);
         await page.locator("ha-button[slot=primaryAction]").click();
 
         await expect(page.locator(".save-error")).toContainText(
@@ -405,7 +417,7 @@ test.describe("opening the day editor from a scheduling badge", () => {
         await pressBadge(page, "Boiler");
         const before = (await mockRequests(page)).length;
 
-        await page.locator(".block-row").first().locator("button").nth(1).click();
+        await deleteFirstBoilerRun(page);
         await page.locator("ha-button[slot=primaryAction]").click();
         await expect.poll(async () => (await editorState(page)).open).toBe(false);
 
@@ -434,7 +446,7 @@ test.describe("opening the day editor from a scheduling badge", () => {
         });
         const before = (await mockRequests(page)).length;
 
-        await page.locator(".block-row").first().locator("button").nth(1).click();
+        await deleteFirstBoilerRun(page);
         await page.locator("ha-button[slot=primaryAction]").click();
         await page.waitForFunction(() => typeof (window as any).__releaseWrite === "function");
         await page.evaluate(() => {
@@ -536,6 +548,46 @@ test.describe("opening the day editor from a scheduling badge", () => {
             selected: null,
             hasHint: false,
         });
+    });
+
+    test("a schedule with nothing left ahead opens nothing", async ({ page }) => {
+        await mount(page, [
+            { id: "s1", name: "Dishwasher", deferrable: true, controllableIds: ["dishwasher"] },
+            { id: "s2", name: "Boiler", deferrable: true, controllableIds: ["boiler"] },
+        ]);
+
+        const opened = await page.evaluate(async () => {
+            const host = document.querySelector("scheduling-day-editor-host") as any;
+            // Every slot elapsed: the editor would have nothing to draw, and a
+            // dialog that renders nothing never reports itself closed.
+            host._nowMs = Math.max(...host.dayView.slots.map((slot: { endMs: number }) => slot.endMs)) + 60_000;
+            await host.updateComplete;
+            host.openFor("boiler");
+            await host.updateComplete;
+            return host._editorMounted;
+        });
+        expect(opened).toBe(false);
+        expect((await editorState(page)).open).toBe(false);
+    });
+
+    test("an open editor closes and releases the host when its horizon expires", async ({ page }) => {
+        await mount(page, [
+            { id: "s1", name: "Dishwasher", deferrable: true, controllableIds: ["dishwasher"] },
+            { id: "s2", name: "Boiler", deferrable: true, controllableIds: ["boiler"] },
+        ]);
+
+        const state = await page.evaluate(async () => {
+            const host = document.querySelector("scheduling-day-editor-host") as any;
+            host.openFor("boiler");
+            await host.updateComplete;
+            const wasOpen = host._editorMounted;
+            host._nowMs = Math.max(...host.dayView.slots.map((slot: { endMs: number }) => slot.endMs)) + 60_000;
+            await host.updateComplete;
+            await new Promise((resolve) => setTimeout(resolve, 50));
+            await host.updateComplete;
+            return { wasOpen, mounted: host._editorMounted, open: host._editorOpen };
+        });
+        expect(state).toEqual({ wasOpen: true, mounted: false, open: false });
     });
 });
 

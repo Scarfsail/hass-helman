@@ -120,7 +120,7 @@ export interface EntityScheduleDay {
     slotMinutes: number;
 }
 
-export type EntityScheduleBlockAuthorship = "user" | "automation" | "mixed";
+export type EntityScheduleBlockAuthorship = "user" | "automation";
 
 /**
  * A run of adjacent slots holding the same action, which is the unit a person
@@ -330,6 +330,45 @@ export function buildEntityScheduleDays({
 }
 
 /**
+ * Everything still ahead as one span: from the slot running now to the end of
+ * the last slot the schedule holds.
+ *
+ * Shaped as a day so the band, the boundary pickers and the block clipping take
+ * it unchanged -- but it is not one: it starts at the editable boundary rather
+ * than at a midnight, and runs across as many midnights as the schedule does,
+ * so a run across midnight is one block rather than two halves on two days.
+ * Nothing elapsed is in it; the editor is about what can still be changed.
+ */
+export function buildEntityScheduleHorizon({
+    slots,
+    slotMinutes,
+    nowMs,
+}: {
+    slots: readonly ScheduleSlot[];
+    slotMinutes: number;
+    nowMs: number;
+}): EntityScheduleDay | null {
+    const editableFromMs = _resolveEditableFromMs(slots, nowMs);
+    const ahead = [...slots]
+        .filter((slot) => slot.startMs >= editableFromMs)
+        .sort((left, right) => left.startMs - right.startMs);
+    const first = ahead[0];
+    if (first === undefined) {
+        return null;
+    }
+
+    return {
+        dayKey: first.dayKey,
+        label: "",
+        slots: ahead,
+        startMs: editableFromMs,
+        endMs: ahead[ahead.length - 1].endMs,
+        editableFromMs,
+        slotMinutes,
+    };
+}
+
+/**
  * The whole schedule as this entity's blocks, with the draft applied.
  *
  * Built across day boundaries and clipped afterwards, so a run that spans
@@ -364,24 +403,28 @@ export function buildEntityScheduleBlocks({
         }
 
         const { startMs, endMs } = slot;
-        const setBy = readEntityScheduleSetBy(slot, target);
         const isDirty = _isSlotDirty(slot, target, draft);
         // A drafted action is the user's by definition, whoever owned the slot
-        // before -- editing is the takeover.
-        const authorship: EntityScheduleBlockAuthorship = isDirty || setBy === "user"
+        // before -- placing it is the takeover, even when the action is the
+        // one the automation had planned.
+        const authorship: EntityScheduleBlockAuthorship = slot.id in draft
+            || readEntityScheduleSetBy(slot, target) === "user"
             ? "user"
             : "automation";
         const previous = blocks[blocks.length - 1];
+        // Authorship is an edge: a manual block placed against an automation
+        // run carrying the same action is still two things, one of which the
+        // automation will re-plan and one of which it will not.
         if (
             previous !== undefined
             && previous.endMs === startMs
             && splitAtMs?.has(startMs) !== true
+            && previous.authorship === authorship
             && areEntityScheduleActionsEqual(previous.action, action)
         ) {
             previous.endMs = endMs;
             previous.slotIds.push(slot.id);
             previous.isDirty = previous.isDirty || isDirty;
-            previous.authorship = previous.authorship === authorship ? authorship : "mixed";
             previous.isPast = previous.isPast && endMs <= nowMs;
             continue;
         }
@@ -498,49 +541,155 @@ export function buildEntityScheduleBoundaryOptions({
     return [...boundaries].sort((left, right) => left - right);
 }
 
-/**
- * How far a block may be moved or stretched before it would hit something.
- *
- * Bounded by its neighbours, by the end of the day and by the part of the day
- * that has already happened. Shared by the time pickers and by dragging on the
- * band so both refuse the same moves: a block the user is not touching should
- * never be eaten, whichever way the edit was made.
- */
-export function resolveEntityScheduleRangeLimits({
-    blocks,
-    day,
-    startMs,
-    endMs,
-}: {
-    blocks: readonly EntityScheduleBlock[];
-    day: EntityScheduleDay;
+/** A stretch of time on the schedule's own grid, `[startMs, endMs)`. */
+export interface EntityScheduleRange {
     startMs: number;
     endMs: number;
-}): { minMs: number; maxMs: number } {
-    const editableFromMs = Math.max(day.startMs, day.editableFromMs);
-    // Whatever overlaps the range is the block being edited, not a neighbour.
-    const neighbours = blocks.filter((block) => block.endMs <= startMs || block.startMs >= endMs);
-    return {
-        minMs: neighbours
-            .filter((block) => block.endMs <= startMs)
-            .reduce((max, block) => Math.max(max, block.endMs), editableFromMs),
-        maxMs: neighbours
-            .filter((block) => block.startMs >= endMs)
-            .reduce((min, block) => Math.min(min, block.startMs), day.endMs),
-    };
 }
 
-/** The slots of a day covered by `[startMs, endMs)`. */
-export function selectEntityScheduleSlotsInRange({
-    day,
-    startMs,
-    endMs,
+/**
+ * Give a range of one lane back to the automation.
+ *
+ * A slot the automation planned is simply un-drafted, so its own block
+ * reappears. A slot the user saved is drafted empty instead: it is freed, and
+ * the automation re-plans it once the draft is saved. Slots that can no
+ * longer be written are left alone -- freeing them would only make a block
+ * vanish from the view while the schedule kept it.
+ */
+export function freeEntityScheduleRange({
+    slots,
+    target,
+    draft,
+    range,
+    nowMs,
 }: {
-    day: EntityScheduleDay;
-    startMs: number;
-    endMs: number;
-}): ScheduleSlot[] {
-    return day.slots.filter((slot) => slot.startMs < endMs && slot.endMs > startMs);
+    slots: readonly ScheduleSlot[];
+    target: EntityScheduleTarget;
+    draft: EntityScheduleDraft;
+    range: EntityScheduleRange;
+    nowMs: number;
+}): EntityScheduleDraft {
+    const editableFromMs = _resolveEditableFromMs(slots, nowMs);
+    const next: EntityScheduleDraft = { ...draft };
+    for (const slot of slots) {
+        if (slot.startMs < editableFromMs || slot.startMs >= range.endMs || slot.endMs <= range.startMs) {
+            continue;
+        }
+
+        if (readEntityScheduleSetBy(slot, target) === "user") {
+            next[slot.id] = null;
+        } else {
+            delete next[slot.id];
+        }
+    }
+
+    return next;
+}
+
+/**
+ * Put a manual action over a range of one lane, whatever is there.
+ *
+ * Manual always wins: the action overwrites automation and other manual
+ * blocks alike, and the block's previous range (when it is being moved or
+ * resized) is freed first, so what it leaves behind goes back to the
+ * automation. Clamped to the first slot that can still be written and to the
+ * last slot the schedule holds.
+ */
+export function placeEntityScheduleManualRange({
+    slots,
+    target,
+    draft,
+    previous,
+    range,
+    action,
+    nowMs,
+}: {
+    slots: readonly ScheduleSlot[];
+    target: EntityScheduleTarget;
+    draft: EntityScheduleDraft;
+    /** The block's range before this placement, or null for a new block. */
+    previous: EntityScheduleRange | null;
+    range: EntityScheduleRange;
+    action: EntityScheduleAction;
+    nowMs: number;
+}): EntityScheduleDraft {
+    const next = previous === null
+        ? { ...draft }
+        : freeEntityScheduleRange({ slots, target, draft, range: previous, nowMs });
+    const editableFromMs = _resolveEditableFromMs(slots, nowMs);
+    for (const slot of slots) {
+        if (slot.startMs >= editableFromMs && slot.startMs < range.endMs && slot.endMs > range.startMs) {
+            next[slot.id] = action;
+        }
+    }
+
+    return next;
+}
+
+/**
+ * The saved runs a lane's draft replaces inside a range, clipped to it.
+ *
+ * A run counts when any of its slots inside the range is dirty -- including
+ * one whose action the draft repeats but whose owner was the automation,
+ * because the claim is itself the change. `baselineBlocks` are the lane's
+ * saved runs, built from `slots` with no draft.
+ */
+export function selectEntityScheduleReplacedRuns({
+    slots,
+    baselineBlocks,
+    target,
+    draft,
+    range,
+}: {
+    slots: readonly ScheduleSlot[];
+    baselineBlocks: readonly EntityScheduleBlock[];
+    target: EntityScheduleTarget;
+    draft: EntityScheduleDraft;
+    range: EntityScheduleRange;
+}): EntityScheduleBlock[] {
+    const dirtySlotIds = new Set(slots
+        .filter((slot) => slot.startMs < range.endMs && slot.endMs > range.startMs
+            && _isSlotDirty(slot, target, draft))
+        .map((slot) => slot.id));
+    return baselineBlocks
+        .filter((block) => block.startMs < range.endMs && block.endMs > range.startMs
+            && block.slotIds.some((slotId) => dirtySlotIds.has(slotId)))
+        .map((block) => ({
+            ...block,
+            startMs: Math.max(block.startMs, range.startMs),
+            endMs: Math.min(block.endMs, range.endMs),
+        }));
+}
+
+/**
+ * The stretches a draft frees from the user: saved manual slots drafted
+ * empty, which the automation re-plans after Save.
+ */
+export function buildEntityScheduleFreedRanges({
+    slots,
+    target,
+    draft,
+}: {
+    slots: readonly ScheduleSlot[];
+    target: EntityScheduleTarget;
+    draft: EntityScheduleDraft;
+}): EntityScheduleRange[] {
+    const ranges: EntityScheduleRange[] = [];
+    for (const slot of [...slots].sort((left, right) => left.startMs - right.startMs)) {
+        if (!(slot.id in draft) || !isEntityScheduleActionEmpty(draft[slot.id])
+            || readEntityScheduleSetBy(slot, target) !== "user") {
+            continue;
+        }
+
+        const previous = ranges[ranges.length - 1];
+        if (previous !== undefined && previous.endMs === slot.startMs) {
+            previous.endMs = slot.endMs;
+        } else {
+            ranges.push({ startMs: slot.startMs, endMs: slot.endMs });
+        }
+    }
+
+    return ranges;
 }
 
 /**
@@ -551,36 +700,41 @@ export function selectEntityScheduleSlotsInRange({
  * one patch per lane would make the last one win and silently drop the other
  * entity's edit. Elapsed slots are omitted before constructing their patches.
  *
- * A lane drafted with `claim` takes ownership of every drafted slot that holds
- * an action, even one equal to the automation's: holding "normal" over an
- * automation's "normal" is still the user saying "this is mine", which the
- * action-equality dirty check alone would drop.
+ * Every drafted slot that holds an action is claimed, even one equal to the
+ * automation's: holding "normal" over an automation's "normal" is still the
+ * user saying "this is mine" -- see `_isSlotDirty`.
  */
 export function buildEntityScheduleLanePatches({
     slots,
+    latestSlots = slots,
     lanes,
     nowMs,
 }: {
+    /** The baseline the drafts were made against: decides which slots are dirty. */
     slots: readonly ScheduleSlot[];
-    lanes: readonly { target: EntityScheduleTarget; draft: EntityScheduleDraft; claim?: boolean }[];
+    /**
+     * The schedule as it is now. A patch replaces the slot's whole controllables
+     * map, so every lane the user did not draft is carried over from here --
+     * another client's change to a different device must survive this save.
+     */
+    latestSlots?: readonly ScheduleSlot[];
+    lanes: readonly { target: EntityScheduleTarget; draft: EntityScheduleDraft }[];
     nowMs: number;
 }): ScheduleSlotPatch[] {
     const editableFromMs = _resolveEditableFromMs(slots, nowMs);
+    const latestById = new Map(latestSlots.map((slot) => [slot.id, slot]));
     const patches: ScheduleSlotPatch[] = [];
-    for (const slot of slots) {
-        if (slot.startMs < editableFromMs) {
+    for (const baselineSlot of slots) {
+        if (baselineSlot.startMs < editableFromMs) {
             continue;
         }
 
-        const dirtyLanes = lanes.filter((lane) => _isSlotDirty(slot, lane.target, lane.draft)
-            || (lane.claim === true
-                && slot.id in lane.draft
-                && !isEntityScheduleActionEmpty(lane.draft[slot.id])
-                && slot.assignments[lane.target]?.setBy !== "user"));
+        const dirtyLanes = lanes.filter((lane) => _isSlotDirty(baselineSlot, lane.target, lane.draft));
         if (dirtyLanes.length === 0) {
             continue;
         }
 
+        const slot = latestById.get(baselineSlot.id) ?? baselineSlot;
         const current: ScheduleControllableActions = {};
         for (const [id, assignment] of Object.entries(slot.assignments)) {
             if (assignment.setBy === "user") {
@@ -589,7 +743,7 @@ export function buildEntityScheduleLanePatches({
         }
         const next: ScheduleControllableActions = { ...current };
         for (const lane of dirtyLanes) {
-            const action = readEntityScheduleDraftAction(slot, lane.target, lane.draft);
+            const action = readEntityScheduleDraftAction(baselineSlot, lane.target, lane.draft);
             if (isEntityScheduleActionEmpty(action)) {
                 delete next[lane.target];
             } else {
@@ -624,6 +778,10 @@ export function areEntityScheduleLanesDirty(
         && lanes.some((lane) => _isSlotDirty(slot, lane.target, lane.draft)));
 }
 
+/**
+ * The draft changes the slot: a different action, or an action the user now
+ * claims from the automation even though it is the one it had planned.
+ */
 function _isSlotDirty(
     slot: ScheduleSlot,
     target: EntityScheduleTarget,
@@ -633,7 +791,9 @@ function _isSlotDirty(
         return false;
     }
 
-    return !areEntityScheduleActionsEqual(draft[slot.id], readEntityScheduleAction(slot, target));
+    const action = draft[slot.id];
+    return !areEntityScheduleActionsEqual(action, readEntityScheduleAction(slot, target))
+        || (!isEntityScheduleActionEmpty(action) && readEntityScheduleSetBy(slot, target) !== "user");
 }
 
 /**

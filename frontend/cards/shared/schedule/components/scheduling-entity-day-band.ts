@@ -15,19 +15,27 @@ import type {
     EntityScheduleAction,
     EntityScheduleBlock,
     EntityScheduleDay,
+    EntityScheduleRange,
 } from "../model/entity-day-schedule-model";
 import {
+    formatLaneRunHours,
     formatLaneRunRange,
     resolveLaneRunPresentation,
     type EntityDayBandLane,
 } from "../model/entity-lane-source";
 import type { ScheduleApplianceProjectionBadge } from "../model/schedule-appliance-projection";
 import { getScheduleApplianceProjectionBadgeLabel } from "../model/schedule-appliance-projection-presentation";
+import { areEntityScheduleActionsEqual } from "../model/entity-day-schedule-model";
 import {
-    areEntityScheduleActionsEqual,
-    resolveEntityScheduleRangeLimits,
-} from "../model/entity-day-schedule-model";
-import { formatScheduleTime } from "../model/schedule-time";
+    formatScheduleSpanTime,
+    formatScheduleTime,
+    formatScheduleWeekday,
+    getScheduleLocalDayStartMs,
+    getScheduleLocalTimeParts,
+    getScheduleNextLocalDayStartMs,
+    resolveScheduleSpanClock,
+    type ScheduleSpanClock,
+} from "../model/schedule-time";
 import type { SlotForecastPoint } from "../model/slot-forecast-model";
 import { schedulingSharedStyles } from "../styles/scheduling-shared-styles";
 import { SLOT_GRID_LINE_OPACITY, slotGridTicks, type SlotGridTick } from "../../slot-gridlines";
@@ -44,8 +52,18 @@ const MINUTE_MS = 60_000;
 const AXIS_EDGE_PERCENT = 0.5;
 /** Half the room the drag readout needs, so it can be kept inside the track. */
 const DRAG_READOUT_HALF_WIDTH_PX = 58;
+/** The same, when its times carry their weekday too. */
+const DRAG_READOUT_HALF_WIDTH_DAYS_PX = 80;
 /** A bar this short still has to be visible, or a small value reads as none. */
 const MIN_BAR_PCT = 8;
+/** A press that travels less than this is a tap, not a drag. */
+const TAP_SLOP_PX = 5;
+/** Room the "now 10:20" label takes at the axis's left edge; hours inside it are skipped. */
+const NOW_LABEL_CLEARANCE_PX = 84;
+/** Room the pan hint takes at the axis's right edge. */
+const PAN_HINT_CLEARANCE_PX = 28;
+/** A pause in the wheel this long ends one scroll, so the next starts from the window again. */
+const WHEEL_IDLE_MS = 250;
 /** Segments narrower than this are move-only: two edge handles would not fit. */
 const MIN_RESIZABLE_WIDTH_PX = 34;
 /** Wide enough for the projected energy to carry its unit as well as its value. */
@@ -84,7 +102,7 @@ interface SlotValueAnchor {
     below?: boolean;
 }
 
-export type { EntityDayBandLane };
+export type { EntityDayBandLane, EntityScheduleRange };
 
 export interface EntityDayBandBlockSelectDetail {
     laneKey: string;
@@ -96,10 +114,6 @@ export interface EntityDayBandGapSelectDetail {
     startMs: number;
     /** Where the free stretch ends, so the new block stops short of it. */
     limitMs: number;
-}
-
-export interface EntityDayBandBlockHoverDetail {
-    blockKey: string | null;
 }
 
 export interface EntityDayBandLaneSelectDetail {
@@ -124,9 +138,26 @@ export interface EntityDayBandRangeChangeDetail {
     endMs: number;
 }
 
-export interface EntityScheduleRange {
+/** A new manual range being painted across the selected lane. */
+export interface EntityDayBandRangePaintDetail {
+    laneKey: string;
     startMs: number;
     endMs: number;
+    /**
+     * The gesture's opening paint: the host starts a new block on it, and
+     * every later one reshapes that block rather than starting another.
+     */
+    first: boolean;
+}
+
+/** The selected block was pressed again: the host lets go of it. */
+export interface EntityDayBandDeselectDetail {
+    laneKey: string;
+}
+
+/** Where the host should move the window to; the host clamps it. */
+export interface EntityDayBandWindowChangeDetail {
+    startMs: number;
 }
 
 /** A stretch of the day the host wants marked, and why. */
@@ -140,6 +171,8 @@ export interface EntityDayBandHighlight {
 export interface EntityDayBandGridTick {
     atMs: number;
     major: boolean;
+    /** A local midnight, dashed down through every row. */
+    midnight?: boolean;
 }
 
 export interface EntityDayBandTimeHoverDetail {
@@ -160,20 +193,39 @@ export interface EntityDayBandPointerMoveDetail {
     clientY: number;
 }
 
-type DragMode = "start" | "end" | "move";
+/** The edges and the middle reshape a manual block; "paint" lays down a new one. */
+type DragMode = "start" | "end" | "move" | "paint";
 
 interface DragSession {
     laneKey: string;
     mode: DragMode;
-    /** The block's range when the drag began; every update derives from it. */
+    /** The pressed block, or null for a press on the free track. */
+    block: EntityScheduleBlock | null;
+    /** The pressed free stretch, or null for a press on a block. */
+    gap: EntityScheduleRange | null;
+    /** The block's range when the drag began, or the pressed slot when painting. */
     originStartMs: number;
     originEndMs: number;
     grabMs: number;
-    /** How far the range may travel before it would hit a neighbour or the day edge. */
+    /** How far the range may travel: the editable boundary and the last slot's end. */
     minMs: number;
     maxMs: number;
     trackRect: DOMRect;
     pointerId: number;
+    /** Where the press landed, to tell a tap from a drag. */
+    pressX: number;
+    pressY: number;
+    /** The pointer has travelled far enough for this to be a drag. */
+    started: boolean;
+}
+
+/** A drag that moves the window rather than anything on it. */
+interface PanSession {
+    /** The pointer doing it, or null for two fingers, which pan by their midpoint. */
+    pointerId: number | null;
+    anchorX: number;
+    anchorStartMs: number;
+    msPerPx: number;
 }
 
 /**
@@ -187,9 +239,11 @@ interface DragSession {
  * about -- and the rest are muted so the stack still reads as context rather
  * than as seven equal things.
  *
- * Blocks are draggable: the edges resize, the middle moves. A drag stops at a
- * neighbouring block rather than eating it, so nothing the user was not
- * touching can disappear.
+ * On the selected lane a manual block's edges resize it and its middle moves
+ * it, while a drag across an automation block or the free track paints a new
+ * manual range. Manual always wins, so none of these stop at a neighbour: what
+ * they cover is replaced, and the host decides what that means for the draft.
+ * Automation blocks are context and are never dragged themselves.
  *
  * It also serves as a read-only readout wherever else the day is worth showing.
  * In that mode it authors nothing and answers nothing: it reports which run was
@@ -589,6 +643,12 @@ export class SchedulingEntityDayBand extends LitElement {
                 pointer-events: none;
             }
 
+            /* A local midnight, dashed down through every row so a run that
+               crosses it is seen to. */
+            .time-grid-line.midnight {
+                border-left: 1px dashed color-mix(in srgb, var(--primary-text-color) 70%, transparent);
+            }
+
             /* A stretch of time the host is asking about, in the colours the
                rest of the surface uses for the same two questions. */
             .time-highlight {
@@ -627,6 +687,32 @@ export class SchedulingEntityDayBand extends LitElement {
                 box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary-color) 30%, transparent);
             }
 
+            /* A lane being authored: the selected one is the control surface
+               and gets the room a press needs, alone or among others; the
+               others shrink to context. Pressing one of them selects it. */
+            .band.stack .lane.selected .track {
+                height: 44px;
+            }
+
+            .band.stack .lane:not(.selected) .track {
+                height: 26px;
+                cursor: pointer;
+            }
+
+            /* A saved manual stretch the draft gives back: nothing is planned
+               there until the automation re-plans it after Save. Dashed in the
+               automation colour, the legend in the dialog footer says so. */
+            .freed {
+                position: absolute;
+                top: 2px;
+                bottom: 2px;
+                box-sizing: border-box;
+                border: 1px dashed var(--schedule-authorship-automation-color, #2563eb);
+                border-radius: 4px;
+                background: color-mix(in srgb, var(--schedule-authorship-automation-color, #2563eb) 8%, transparent);
+                pointer-events: none;
+            }
+
             .gap,
             .segment {
                 position: absolute;
@@ -640,6 +726,12 @@ export class SchedulingEntityDayBand extends LitElement {
             .gap {
                 background: none;
                 cursor: copy;
+            }
+
+            /* On the selected lane a drag across free track paints, so the
+               browser must not take it for a scroll. */
+            .lane.selected .gap {
+                touch-action: none;
             }
 
             .gap:hover,
@@ -662,6 +754,11 @@ export class SchedulingEntityDayBand extends LitElement {
 
             .segment.dragging {
                 cursor: grabbing;
+            }
+
+            /* Read-only context: a drag across it paints a new manual range. */
+            .segment.authorship-automation {
+                cursor: copy;
             }
 
             /* What the run still has left to draw, beside its own icon. It is
@@ -732,10 +829,6 @@ export class SchedulingEntityDayBand extends LitElement {
                 --schedule-authorship-color: var(--schedule-authorship-automation-color, #2563eb);
             }
 
-            .segment.authorship-mixed {
-                --schedule-authorship-color: var(--schedule-authorship-mixed-color, #ea7a18);
-            }
-
             .segment {
                 box-shadow: inset 0 -3px 0 var(--schedule-authorship-color, transparent);
             }
@@ -759,7 +852,7 @@ export class SchedulingEntityDayBand extends LitElement {
                 outline-offset: -2px;
             }
 
-            /* The block under edit, matching the highlight on its list row. */
+            /* The selected block. */
             .segment.editing {
                 z-index: 2;
                 outline: 2px solid var(--primary-color);
@@ -767,12 +860,6 @@ export class SchedulingEntityDayBand extends LitElement {
                 box-shadow:
                     inset 0 -3px 0 var(--schedule-authorship-color, transparent),
                     0 0 0 1px color-mix(in srgb, var(--primary-color) 40%, transparent);
-            }
-
-            /* Mirrors the hover on this block's list row. */
-            .segment.hovered:not(.editing) {
-                outline: 2px solid color-mix(in srgb, var(--primary-color) 55%, transparent);
-                outline-offset: -2px;
             }
 
             .segment.past {
@@ -916,6 +1003,47 @@ export class SchedulingEntityDayBand extends LitElement {
                 height: 14px;
             }
 
+            /* A window that moves: its axis is the handle to move it by, so it
+               reads as a strip of its own rather than as loose numbers. */
+            .band.pannable .axis {
+                height: 18px;
+                border-radius: 4px;
+                background: var(--secondary-background-color);
+                cursor: grab;
+                touch-action: none;
+                user-select: none;
+            }
+
+            .band.pannable .axis-tick {
+                top: 2px;
+            }
+
+            .band.pannable .axis-tick.edge-start {
+                padding-left: 4px;
+            }
+
+            /* Where a new day begins, named rather than numbered. */
+            .axis-tick.midnight {
+                color: var(--primary-text-color);
+                font-weight: 700;
+            }
+
+            /* The window opening at now says so at its left edge. */
+            .axis-tick.axis-now {
+                color: var(--error-color, #db4437);
+                font-weight: 700;
+                white-space: nowrap;
+            }
+
+            .axis-pan-hint {
+                position: absolute;
+                top: 1px;
+                right: 4px;
+                color: var(--secondary-text-color);
+                font-size: 0.75rem;
+                pointer-events: none;
+            }
+
             .axis-tick {
                 position: absolute;
                 top: 0;
@@ -948,15 +1076,13 @@ export class SchedulingEntityDayBand extends LitElement {
     @property({ attribute: false }) public day!: EntityScheduleDay;
     @property({ attribute: false }) public lanes: readonly EntityDayBandLane[] = [];
     @property({ attribute: false }) public forecastPoints: ReadonlyMap<string, SlotForecastPoint> = new Map();
-    /** The range being edited on the selected lane, highlighted and draggable. */
+    /** The selected block's range on the selected lane, highlighted; pressing it again lets go. */
     @property({ attribute: false }) public editingRange: EntityScheduleRange | null = null;
-    /** The lane the block list and the editor below are about. */
+    /** The lane the editor below is about. */
     @property({ type: String }) public selectedLaneKey: string | null = null;
     @property({ type: Number }) public nowMs = Date.now();
     /** How the price is denominated, for the chart's own tooltips. */
     @property({ type: String }) public priceUnit: string | null = null;
-    /** The block the pointer is over, wherever it was pointed at. */
-    @property({ type: String }) public hoveredBlockKey: string | null = null;
     @property({ type: String }) public locale = "cs";
     @property({ type: String }) public timeZone = "UTC";
     /**
@@ -1052,6 +1178,22 @@ export class SchedulingEntityDayBand extends LitElement {
      * `day.slots` -- see `slotGrid`.
      */
     @property({ attribute: false }) public timeGridTicks: readonly EntityDayBandGridTick[] = [];
+    /**
+     * The window can be moved along the day: by dragging the axis, by dragging
+     * with the secondary button or two fingers anywhere, or by a sideways
+     * wheel. The band only says where to; the host owns the window and its
+     * limits, and answers by handing a new `windowStartMs` back down.
+     *
+     * One finger and the primary button keep painting and moving blocks on a
+     * lane -- those gestures are what the lanes are for.
+     */
+    @property({ type: Boolean }) public pannable = false;
+    /**
+     * The window opens at now, which its left edge then says. Told by the
+     * host rather than read off the times: a window that merely starts at the
+     * same instant -- a run that began a moment ago -- is not "now".
+     */
+    @property({ type: Boolean }) public windowAtNow = false;
 
     @state() private _drag: DragSession | null = null;
     /**
@@ -1101,6 +1243,25 @@ export class SchedulingEntityDayBand extends LitElement {
      */
     private _ownTicks: readonly SlotGridTick[] = [];
     private _gridTicks: readonly EntityDayBandGridTick[] = [];
+    /**
+     * The local midnight the window opens on: the axis counts its minutes from
+     * there, so its hours are clock hours whatever instant the window starts at.
+     */
+    private _axisOriginMs = 0;
+    /**
+     * Whether the day runs past a midnight, so its times say which day they
+     * are on, and which midnight closes it.
+     */
+    private _spanClock: ScheduleSpanClock = { startMs: 0, closingMidnightMs: 0, crossesMidnight: false };
+    /** The slots the window shows, which are all a forecast row draws. */
+    private _windowSlots: EntityScheduleDay["slots"] = [];
+    private _pan: PanSession | null = null;
+    /** Touch pointers down on the band, and where each one is now. */
+    private readonly _touches = new Map<number, number>();
+    private _panListening = false;
+    /** Where a run of wheel events has asked the window to go, raw. */
+    private _wheelTargetMs: number | null = null;
+    private _wheelIdleTimer: ReturnType<typeof setTimeout> | undefined;
 
     private readonly _handlePointerMove = (event: PointerEvent): void => {
         const drag = this._drag;
@@ -1109,16 +1270,42 @@ export class SchedulingEntityDayBand extends LitElement {
         }
 
         event.preventDefault();
-        const pointerMs = this._snapMs(this._readPointerMs(event, drag.trackRect));
-        const range = this._resolveDragRange(drag, pointerMs);
+        if (!drag.started) {
+            if (Math.hypot(event.clientX - drag.pressX, event.clientY - drag.pressY) < TAP_SLOP_PX) {
+                return;
+            }
+
+            this._drag = { ...drag, started: true };
+            // Reshaping a block edits it, so a drag on one that was not
+            // selected selects it first -- synchronously, so the host has a
+            // session open before the first range arrives.
+            if (drag.block !== null && drag.mode !== "paint" && !this._isEditing(drag.block)) {
+                this._emitBlockSelect(drag.laneKey, drag.block);
+            }
+        }
+
+        const pointerMs = this._readPointerMs(event, drag.trackRect);
+        const first = drag.mode === "paint" && this._dragRange === null;
+        const range = drag.mode === "paint"
+            ? this._resolvePaintRange(drag, pointerMs)
+            : this._resolveDragRange(drag, this._snapMs(pointerMs));
         // Ranges are snapped to whole slots, so most pointer moves land where
         // the last one did. Announcing those rebuilds the draft for nothing --
         // and the readout says the same two times either way.
-        if (range.startMs === this._dragRange?.startMs && range.endMs === this._dragRange.endMs) {
+        if (!first && range.startMs === this._dragRange?.startMs && range.endMs === this._dragRange.endMs) {
             return;
         }
 
         this._dragRange = range;
+        if (drag.mode === "paint") {
+            this.dispatchEvent(new CustomEvent<EntityDayBandRangePaintDetail>("entity-day-band-range-paint", {
+                bubbles: true,
+                composed: true,
+                detail: { laneKey: drag.laneKey, ...range, first },
+            }));
+            return;
+        }
+
         this.dispatchEvent(new CustomEvent<EntityDayBandRangeChangeDetail>("entity-day-band-range-change", {
             bubbles: true,
             composed: true,
@@ -1139,11 +1326,15 @@ export class SchedulingEntityDayBand extends LitElement {
     private _lastHoverMs: number | null = null;
 
     private readonly _handlePointerUp = (event: PointerEvent): void => {
-        if (this._drag !== null && event.pointerId !== this._drag.pointerId) {
+        const drag = this._drag;
+        if (drag !== null && event.pointerId !== drag.pointerId) {
             return;
         }
 
         this._endDrag();
+        if (drag !== null && !drag.started && event.type === "pointerup") {
+            this._handleTap(drag);
+        }
     };
 
     /** The track currently under observation, kept for identity comparison. */
@@ -1167,6 +1358,11 @@ export class SchedulingEntityDayBand extends LitElement {
     disconnectedCallback(): void {
         super.disconnectedCallback();
         this._endDrag();
+        this._pan = null;
+        this._touches.clear();
+        this._syncPanListeners();
+        clearTimeout(this._wheelIdleTimer);
+        this._wheelTargetMs = null;
         this._disconnectTrackResizeObserver();
         this._unsubscribeAutomationCoverage?.();
         this._unsubscribeAutomationCoverage = null;
@@ -1255,6 +1451,17 @@ export class SchedulingEntityDayBand extends LitElement {
             return nothing;
         }
 
+        // The axis, the grid and the rows all read these, so they are settled
+        // once here rather than per row.
+        const windowStartMs = this._windowStartMs;
+        const windowEndMs = this._windowEndMs;
+        this._axisOriginMs = getScheduleLocalDayStartMs(windowStartMs, this.timeZone);
+        // Measured to the last slot's end rather than to the day's own end: a
+        // single day is shaped as 24 hours, which on a 23-hour daylight-saving
+        // day runs past its real midnight.
+        const lastSlotEndMs = this.day.slots[this.day.slots.length - 1]?.endMs ?? this.day.endMs;
+        this._spanClock = resolveScheduleSpanClock(this.day.startMs, lastSlotEndMs, this.timeZone);
+        this._windowSlots = this.day.slots.filter((slot) => slot.endMs > windowStartMs && slot.startMs < windowEndMs);
         // Once per render, not once per row: every row is ruled by the same
         // ticks, and deriving them per lane would be the same walk of the day
         // repeated seven times on every pointer move.
@@ -1265,13 +1472,18 @@ export class SchedulingEntityDayBand extends LitElement {
         const classes = [
             "band",
             hasSelection ? "has-selection" : "",
+            hasSelection && !this.readonly ? "stack" : "",
             this.readonly ? "readonly" : "",
+            this.pannable ? "pannable" : "",
         ].filter((value) => value.length > 0).join(" ");
         return html`
             <div
                 class=${classes}
                 @mousemove=${this._handleTimeHover}
                 @mouseleave=${() => { this._clearHoveredSlot(); this._emitTimeHover(null); }}
+                @pointerdown=${{ handleEvent: this._handleBandPointerDownCapture, capture: true }}
+                @contextmenu=${this._handleContextMenu}
+                @wheel=${this._handleWheel}
             >
                 ${this.showForecastRows ? html`
                     ${this._renderSolarRow()}
@@ -1280,8 +1492,13 @@ export class SchedulingEntityDayBand extends LitElement {
                 ` : nothing}
                 ${this.lanes.map((lane) => this._renderLane(lane))}
                 ${this.showAxis ? html`
-                    <div class="axis">
+                    <div
+                        class="axis"
+                        title=${this.pannable ? this.localize("scheduling.window.pan_hint") : nothing}
+                        @pointerdown=${this._handleAxisPointerDown}
+                    >
                         ${this._renderAxisTicks()}
+                        ${this.pannable ? html`<span class="axis-pan-hint" aria-hidden="true">⟷</span>` : nothing}
                     </div>
                 ` : nothing}
             </div>
@@ -1306,12 +1523,36 @@ export class SchedulingEntityDayBand extends LitElement {
             return [];
         }
 
+        const originMs = this._axisOriginMs;
         return slotGridTicks({
-            startMinutes: (this._windowStartMs - this.day.startMs) / MINUTE_MS,
-            endMinutes: (this._windowEndMs - this.day.startMs) / MINUTE_MS,
+            startMinutes: (this._windowStartMs - originMs) / MINUTE_MS,
+            endMinutes: (this._windowEndMs - originMs) / MINUTE_MS,
             slotMinutes: this.day.slotMinutes,
             plotWidth: this._trackWidthPx,
+            midnightMinutes: this._spanClock.crossesMidnight ? this._windowMidnightMinutes() : undefined,
+            clockMinutesAt: (minutes) => {
+                const parts = getScheduleLocalTimeParts(originMs + minutes * MINUTE_MS, this.timeZone);
+                return parts === null ? minutes : parts.hour * 60 + parts.minute;
+            },
         });
+    }
+
+    /**
+     * Every local midnight from the axis's origin to the window's end, in
+     * minutes from the origin -- taken from the clock in the configured time
+     * zone rather than by adding days, so a daylight-saving day lines up.
+     */
+    private _windowMidnightMinutes(): number[] {
+        const minutes: number[] = [];
+        for (
+            let midnightMs = this._axisOriginMs;
+            midnightMs <= this._windowEndMs;
+            midnightMs = getScheduleNextLocalDayStartMs(midnightMs, this.timeZone)
+        ) {
+            minutes.push((midnightMs - this._axisOriginMs) / MINUTE_MS);
+        }
+
+        return minutes;
     }
 
     /**
@@ -1332,8 +1573,9 @@ export class SchedulingEntityDayBand extends LitElement {
         }
 
         return this._ownTicks.map((tick) => ({
-            atMs: this.day.startMs + tick.minutes * MINUTE_MS,
+            atMs: this._axisOriginMs + tick.minutes * MINUTE_MS,
             major: tick.hour !== null,
+            midnight: tick.midnight === true,
         }));
     }
 
@@ -1348,21 +1590,38 @@ export class SchedulingEntityDayBand extends LitElement {
      * is worse than no tick at all.
      */
     private _renderAxisTicks() {
-        return this._ownTicks.flatMap((tick) => {
+        // A window opening at now says so at its left edge, and the hours that
+        // label would cover give way to it.
+        const atNow = this.windowAtNow;
+        const widthPx = this._trackWidthPx;
+        const ticks = this._ownTicks.flatMap((tick) => {
             if (tick.hour === null) {
                 return [];
             }
 
-            const percent = this._toPercent(this.day.startMs + tick.minutes * MINUTE_MS);
+            const atMs = this._axisOriginMs + tick.minutes * MINUTE_MS;
+            const percent = this._toPercent(atMs);
+            const fromStartPx = (percent / 100) * widthPx;
+            if ((atNow && fromStartPx < NOW_LABEL_CLEARANCE_PX)
+                || (this.pannable && widthPx - fromStartPx < PAN_HINT_CLEARANCE_PX)) {
+                return [];
+            }
+
             const edge = percent <= AXIS_EDGE_PERCENT
                 ? " edge-start"
                 : percent >= 100 - AXIS_EDGE_PERCENT ? " edge-end" : "";
             return [html`
-                <span class=${`axis-tick${edge}`} style=${`left: ${percent}%`}>
-                    ${pad2(tick.hour)}
+                <span class=${`axis-tick${edge}${tick.midnight ? " midnight" : ""}`} style=${`left: ${percent}%`}>
+                    ${tick.midnight ? formatScheduleWeekday(atMs, this.locale, this.timeZone) : pad2(tick.hour)}
                 </span>
             `];
         });
+        return atNow ? html`
+            <span class="axis-tick axis-now edge-start" style="left: 0%">
+                ${this.localize("scheduling.window.now_mark")} ${formatScheduleTime(this.nowMs, this.locale, this.timeZone)}
+            </span>
+            ${ticks}
+        ` : ticks;
     }
 
     private _renderContextTrackLabel(labelKey: string) {
@@ -1426,12 +1685,16 @@ export class SchedulingEntityDayBand extends LitElement {
                 : [{ slot, socPct: Math.max(0, Math.min(socPct, 100)) }];
         });
 
-        return readings.map((reading, index) => ({
-            ...reading,
-            direction: index + 1 < readings.length
-                ? resolveSocDirection(readings[index + 1].socPct - reading.socPct)
-                : "idle",
-        }));
+        // Directions come from the whole day, so the column at the window's
+        // right edge still leads into the reading past it.
+        return readings
+            .map((reading, index) => ({
+                ...reading,
+                direction: index + 1 < readings.length
+                    ? resolveSocDirection(readings[index + 1].socPct - reading.socPct)
+                    : "idle" as SocDirection,
+            }))
+            .filter(({ slot }) => slot.endMs > this._windowStartMs && slot.startMs < this._windowEndMs);
     }
 
     private _renderSolarRow() {
@@ -1558,8 +1821,16 @@ export class SchedulingEntityDayBand extends LitElement {
                 >
                     ${this._renderVehicleSocRamp(lane)}
                     ${lane.actualSegments.map((segment) => this._renderActualSegment(lane, segment, changeBoundaries))}
-                    ${this._renderGaps(lane)}
-                    ${lane.blocks.map((block) => this._renderSegment(lane, block, selected, changeBoundaries))}
+                    ${this._renderGaps(lane, selected)}
+                    ${lane.freedRanges.map((range) => html`
+                        <span
+                            class="freed"
+                            style=${`left: ${this._toPercent(range.startMs)}%; width: ${this._toWidthPercent(range.startMs, range.endMs)}%`}
+                        ></span>
+                    `)}
+                    ${lane.blocks.map((block) => block.endMs <= this._windowStartMs || block.startMs >= this._windowEndMs
+                        ? nothing
+                        : this._renderSegment(lane, block, selected, changeBoundaries))}
                     ${this._renderRowOverlays()}
                     ${this._renderSlotPicks(lane)}
                     ${this._renderDragReadout(lane)}
@@ -1591,7 +1862,7 @@ export class SchedulingEntityDayBand extends LitElement {
             return nothing;
         }
 
-        return this.day.slots.map((slot) => {
+        return this._windowSlots.map((slot) => {
             const hovered = this._hoveredSlotId === slot.id;
             const classes = [
                 "slot-pick",
@@ -1637,18 +1908,15 @@ export class SchedulingEntityDayBand extends LitElement {
             : drag.mode === "end"
                 ? range.endMs
                 : (range.startMs + range.endMs) / 2;
+        const halfWidthPx = this._spanClock.crossesMidnight ? DRAG_READOUT_HALF_WIDTH_DAYS_PX : DRAG_READOUT_HALF_WIDTH_PX;
         const halfPct = this._trackWidthPx > 0
-            ? Math.min((DRAG_READOUT_HALF_WIDTH_PX / this._trackWidthPx) * 100, 50)
+            ? Math.min((halfWidthPx / this._trackWidthPx) * 100, 50)
             : 0;
         const leftPct = Math.min(Math.max(this._toPercent(anchorMs), halfPct), 100 - halfPct);
         return html`
             <span class="drag-readout" style=${`left: ${leftPct}%`}>
-                <span class="drag-readout-range">${
-                    formatScheduleTime(range.startMs, this.locale, this.timeZone)
-                }–${
-                    formatScheduleTime(range.endMs, this.locale, this.timeZone)
-                }</span>
-                <span class="drag-readout-duration">${this._formatHours(range.endMs - range.startMs)}</span>
+                <span class="drag-readout-range">${this._formatTime(range.startMs)}–${this._formatTime(range.endMs)}</span>
+                <span class="drag-readout-duration">${formatLaneRunHours(range.endMs - range.startMs, this.locale)}</span>
             </span>
         `;
     }
@@ -1877,9 +2145,9 @@ export class SchedulingEntityDayBand extends LitElement {
     /**
      * The stretches with nothing scheduled, as buttons that start a new block
      * there -- pointing at an empty evening is the fastest way to say "run it
-     * then".
+     * then". A tap adds an hour; a drag paints the range it crosses.
      */
-    private _renderGaps(lane: EntityDayBandLane) {
+    private _renderGaps(lane: EntityDayBandLane, laneSelected: boolean) {
         if (this.readonly) {
             return nothing;
         }
@@ -1896,14 +2164,24 @@ export class SchedulingEntityDayBand extends LitElement {
             gaps.push({ startMs: cursorMs, endMs: this.day.endMs });
         }
 
-        return gaps.map((gap) => html`
+        // Only what the window shows, as the blocks are: a gap scrolled off
+        // would be a zero-width button that still takes focus and places a
+        // block nobody can see. Cut at the slot the window opens in, so a block
+        // added from the keyboard still starts on a slot; the end stays the
+        // free stretch's own, as the limit a new block may run to.
+        const visibleFromMs = this._floorMs(this._windowStartMs);
+        return gaps
+            .filter((gap) => gap.endMs > this._windowStartMs && gap.startMs < this._windowEndMs)
+            .map((gap) => ({ startMs: Math.max(gap.startMs, visibleFromMs), endMs: gap.endMs }))
+            .map((gap) => html`
             <button
                 class="gap"
                 type="button"
                 title=${this.localize("scheduling.entity_editor.add_block")}
                 aria-label=${this.localize("scheduling.entity_editor.add_block")}
                 style=${`left: ${this._toPercent(gap.startMs)}%; width: ${this._toWidthPercent(gap.startMs, gap.endMs)}%`}
-                @click=${(event: MouseEvent) => this._handleGapClick(event, lane.key, gap)}
+                @pointerdown=${(event: PointerEvent) => this._handleLanePointerDown(event, lane, laneSelected, null, gap)}
+                @click=${(event: MouseEvent) => this._handleKeyboardClick(event, lane, laneSelected, null, gap)}
             ></button>
         `);
     }
@@ -1913,17 +2191,16 @@ export class SchedulingEntityDayBand extends LitElement {
      * began -- on a day with one block in it the gap is most of the day, and
      * "add a block" has to mean "here".
      */
-    private _handleGapClick(
-        event: MouseEvent,
+    private _selectGapAt(
         laneKey: string,
-        gap: { startMs: number; endMs: number },
+        gap: EntityScheduleRange,
+        pointerMs: number | null,
     ): void {
-        const trackRect = this._readTrackRect(laneKey);
         const stepMs = this.day.slotMinutes * MINUTE_MS;
-        const startMs = trackRect === null
+        const startMs = pointerMs === null
             ? gap.startMs
             : Math.min(
-                Math.max(this._snapMs(this._readPointerMs(event, trackRect)), gap.startMs),
+                Math.max(this._snapMs(pointerMs), gap.startMs),
                 Math.max(gap.endMs - stepMs, gap.startMs),
             );
         this._emitGapSelect(laneKey, startMs, gap.endMs);
@@ -1967,12 +2244,21 @@ export class SchedulingEntityDayBand extends LitElement {
         const presentation = this._getPresentation(lane, block);
         const editing = laneSelected && this._isEditing(block);
         const widthPct = this._toWidthPercent(block.startMs, block.endMs);
-        // Handles only on the lane being edited: eight tracks' worth of grips
-        // would be noise, and a muted lane is context, not a control.
+        // Handles only on the lane being edited, and only on what the user
+        // owns: eight tracks' worth of grips would be noise, a muted lane is
+        // context, and an automation run is never reshaped -- only overridden.
         const resizable = laneSelected
             && !this.readonly
             && !block.isPast
+            && block.authorship === "user"
             && this._isWideEnoughToResize(widthPct);
+        // An edge the window crops gets no handle: drawn at the window's edge,
+        // it would set the real edge, off screen, to wherever it was let go --
+        // and drop the hidden part with it. Moving still works, and the pickers
+        // still reach the edge. The window's own slot counts as shown, so a
+        // window opening at now keeps the handle of a block starting there.
+        const startHandle = resizable && block.startMs >= this._floorMs(this._windowStartMs);
+        const endHandle = resizable && block.endMs <= this._ceilMs(this._windowEndMs);
         const classes = [
             "segment",
             presentation.toneClass,
@@ -1982,8 +2268,7 @@ export class SchedulingEntityDayBand extends LitElement {
             block.isPast ? "past" : "",
             editing ? "editing" : "",
             changeBoundaries.has(block.startMs) ? "changed" : "",
-            laneSelected && this.hoveredBlockKey === block.key ? "hovered" : "",
-            this._drag !== null && editing ? "dragging" : "",
+            this._drag?.started === true && this._drag.mode !== "paint" && editing ? "dragging" : "",
         ].filter((value) => value.length > 0).join(" ");
         const projection = lane.blockProjections.get(block.key) ?? null;
         const blockSoc = lane.blockVehicleSoc.get(block.key);
@@ -2014,15 +2299,15 @@ export class SchedulingEntityDayBand extends LitElement {
                 aria-label=${title}
                 aria-pressed=${editing}
                 style=${`left: ${this._toPercent(block.startMs)}%; width: ${widthPct}%`}
-                @pointerdown=${(event: PointerEvent) => this._handleSegmentPointerDown(event, lane, block, "move")}
-                @click=${() => this._emitBlockSelect(lane.key, block)}
-                @mouseenter=${() => this._emitBlockHover(laneSelected ? block.key : null)}
-                @mouseleave=${() => this._emitBlockHover(null)}
+                @pointerdown=${(event: PointerEvent) => this._handleLanePointerDown(event, lane, laneSelected, block, null, "move")}
+                @click=${(event: MouseEvent) => this.readonly
+                    ? this._emitBlockSelect(lane.key, block)
+                    : this._handleKeyboardClick(event, lane, laneSelected, block, null)}
             >
-                ${resizable ? html`
+                ${startHandle ? html`
                     <span
                         class="handle start"
-                        @pointerdown=${(event: PointerEvent) => this._handleSegmentPointerDown(event, lane, block, "start")}
+                        @pointerdown=${(event: PointerEvent) => this._handleLanePointerDown(event, lane, laneSelected, block, null, "start")}
                     ></span>
                 ` : nothing}
                 ${this._renderVehicleSocEndpoints(lane, block, widthPct)}
@@ -2032,10 +2317,10 @@ export class SchedulingEntityDayBand extends LitElement {
                     widthPct,
                     lane.blockVehicleSoc.has(block.key) ? SOC_ENDPOINT_ALLOWANCE_PX : 0,
                 )}
-                ${resizable ? html`
+                ${endHandle ? html`
                     <span
                         class="handle end"
-                        @pointerdown=${(event: PointerEvent) => this._handleSegmentPointerDown(event, lane, block, "end")}
+                        @pointerdown=${(event: PointerEvent) => this._handleLanePointerDown(event, lane, laneSelected, block, null, "end")}
                     ></span>
                 ` : nothing}
             </button>
@@ -2100,7 +2385,7 @@ export class SchedulingEntityDayBand extends LitElement {
             }
         }
 
-        return this.day.slots.map((slot) => {
+        return this._windowSlots.map((slot) => {
             const endPct = endPctBySlotId.get(slot.id);
             if (endPct === undefined) {
                 return nothing;
@@ -2146,22 +2431,28 @@ export class SchedulingEntityDayBand extends LitElement {
     }
 
     /**
-     * How long this entity runs today, the whole day through.
+     * How long this entity runs over what the band shows: the day, or the
+     * window the host crops it to.
      *
      * The blocks say when; this says how much, which is the number a person
      * actually holds an opinion about ("the boiler only needs three hours").
      * It counts the hours already run as well as the ones still scheduled --
      * a day is not two days -- with the split in the tooltip, because adding a
-     * measured past to a planned future hides which half is which.
+     * measured past to a planned future hides which half is which. A planned
+     * block counts only the part inside the window, so the figure is about the
+     * hours on screen rather than ones scrolled off.
      */
     private _renderLaneTotal(lane: EntityDayBandLane) {
-        const plannedMs = lane.blocks.reduce((total, block) => total + (block.endMs - block.startMs), 0);
+        const plannedMs = lane.blocks.reduce((total, block) => total + Math.max(
+            0,
+            Math.min(block.endMs, this._windowEndMs) - Math.max(block.startMs, this._windowStartMs),
+        ), 0);
         const actualMs = lane.actualSegments.reduce((total, segment) => total + segment.activeMs, 0);
         if (plannedMs + actualMs <= 0) {
             return nothing;
         }
 
-        const format = (ms: number): string => this._formatHours(ms);
+        const format = (ms: number): string => formatLaneRunHours(ms, this.locale);
         const title = actualMs > 0 && plannedMs > 0
             ? `${format(actualMs)} + ${format(plannedMs)}`
             : "";
@@ -2182,7 +2473,7 @@ export class SchedulingEntityDayBand extends LitElement {
      * would leave stretches that answer nothing when pointed at.
      */
     private _renderSlotHits(kind: "battery" | "solar" | "price") {
-        return this.day.slots.map((slot) => {
+        return this._windowSlots.map((slot) => {
             const title = this._buildSlotHitTitle(kind, slot);
             const classes = [
                 "slot-hit",
@@ -2224,7 +2515,8 @@ export class SchedulingEntityDayBand extends LitElement {
         kind: "battery" | "solar" | "price",
         anchors: ReadonlyMap<string, SlotValueAnchor>,
     ) {
-        const texts = this.day.slots.map((slot) => this._buildSlotValueText(kind, slot));
+        const slots = this._windowSlots;
+        const texts = slots.map((slot) => this._buildSlotValueText(kind, slot));
         const labelled = selectLabelledColumns(
             texts.map((text) => ({ text, value: text === null ? null : Number.parseFloat(text) })),
             {
@@ -2237,15 +2529,15 @@ export class SchedulingEntityDayBand extends LitElement {
                 // would visibly re-thin once the real one arrives.
                 columnWidthPx: this._trackWidthPx === 0
                     ? MIN_SLOT_VALUE_WIDTH_PX
-                    : (Math.max(0, ...this.day.slots.map((slot) => this._toSlotWidthPercent(slot)))
+                    : (Math.max(0, ...slots.map((slot) => this._toSlotWidthPercent(slot)))
                         / 100) * this._trackWidthPx,
                 minLabelWidthPx: MIN_SLOT_VALUE_WIDTH_PX,
-                anchorOffset: hourAnchorOffset(this.day.slots.map(
-                    (slot) => (slot.startMs - this.day.startMs) / MINUTE_MS,
+                anchorOffset: hourAnchorOffset(slots.map(
+                    (slot) => (slot.startMs - this._axisOriginMs) / MINUTE_MS,
                 )),
             },
         );
-        return this.day.slots.map((slot, index) => {
+        return slots.map((slot, index) => {
             const text = texts[index];
             if (text === null) {
                 return nothing;
@@ -2394,7 +2686,7 @@ export class SchedulingEntityDayBand extends LitElement {
             const opacity = tick.major ? SLOT_GRID_LINE_OPACITY.major : SLOT_GRID_LINE_OPACITY.minor;
             return html`
                 <span
-                    class=${`time-grid-line ${tick.major ? "major" : ""}`}
+                    class=${`time-grid-line${tick.major ? " major" : ""}${tick.midnight ? " midnight" : ""}`}
                     style=${`left: ${percent}%; opacity: ${opacity}`}
                 ></span>
             `;
@@ -2478,60 +2770,301 @@ export class SchedulingEntityDayBand extends LitElement {
     }
 
     /**
-     * Begin a drag.
+     * Every press on the band passes here first, before any lane sees it.
      *
-     * The block is selected first -- which also selects its lane -- so a drag on
-     * a block that was not being edited edits it. The travel limits are frozen
-     * here: they come from where that lane's neighbours are *now*, and the block
-     * being dragged changes identity as it moves.
+     * A second finger turns the gesture into a pan: whatever the first one
+     * had started on a lane is dropped, and the host is told to put the draft
+     * back the way it was at the press. The secondary button pans from
+     * anywhere. Both are stopped here, so no lane takes them for a paint.
      */
-    private _handleSegmentPointerDown(
-        event: PointerEvent,
-        lane: EntityDayBandLane,
-        block: EntityScheduleBlock,
-        mode: DragMode,
-    ): void {
-        if (this.readonly || block.isPast || event.button !== 0) {
+    private readonly _handleBandPointerDownCapture = (event: PointerEvent): void => {
+        if (!this.pannable) {
+            return;
+        }
+
+        if (event.pointerType === "touch") {
+            this._touches.set(event.pointerId, event.clientX);
+            this._syncPanListeners();
+            if (this._touches.size < 2) {
+                return;
+            }
+
+            event.stopPropagation();
+            event.preventDefault();
+            if (this._pan?.pointerId !== null && this._touches.size === 2) {
+                this._endDrag();
+                this.dispatchEvent(new CustomEvent("entity-day-band-gesture-cancel", { bubbles: true, composed: true }));
+                this._beginPan(null, this._touchMidpointX());
+            }
+            return;
+        }
+
+        if (event.button === 2) {
+            event.stopPropagation();
+            event.preventDefault();
+            this._beginPan(event.pointerId, event.clientX);
+        }
+    };
+
+    /** The axis strip is a handle on the window, for any pointer. */
+    private readonly _handleAxisPointerDown = (event: PointerEvent): void => {
+        if (!this.pannable || this._pan !== null) {
             return;
         }
 
         event.stopPropagation();
         event.preventDefault();
-        this._emitBlockSelect(lane.key, block);
+        this._beginPan(event.pointerId, event.clientX);
+    };
+
+    /** A right-button drag pans, so the menu it would open has no place here. */
+    private readonly _handleContextMenu = (event: Event): void => {
+        if (this.pannable) {
+            event.preventDefault();
+        }
+    };
+
+    /**
+     * A sideways wheel, or Shift with an upright one, slides the window.
+     *
+     * The host snaps the window to whole slots, and one notch of a touchpad is
+     * far less than a slot -- so the notches add up here into where the scroll
+     * has got to, and only a pause starts the next scroll from the window.
+     */
+    private readonly _handleWheel = (event: WheelEvent): void => {
+        if (!this.pannable) {
+            return;
+        }
+
+        const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY)
+            ? event.deltaX
+            : event.shiftKey ? event.deltaY : 0;
+        const msPerPx = this._msPerPx();
+        if (delta === 0 || msPerPx === null) {
+            return;
+        }
+
+        event.preventDefault();
+        const deltaPx = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? delta * 16 : delta;
+        // Held to where the window can go -- not before now, not past the
+        // day's end -- so a flick beyond either limit builds no overshoot that
+        // the opposite scroll would first have to undo before anything moved.
+        const minMs = Math.max(this.day.startMs, this.nowMs);
+        const maxMs = Math.max(minMs, this.day.endMs - (this._windowEndMs - this._windowStartMs));
+        this._wheelTargetMs = Math.min(
+            Math.max((this._wheelTargetMs ?? this._windowStartMs) + deltaPx * msPerPx, minMs),
+            maxMs,
+        );
+        clearTimeout(this._wheelIdleTimer);
+        this._wheelIdleTimer = setTimeout(() => {
+            this._wheelTargetMs = null;
+        }, WHEEL_IDLE_MS);
+        this._emitWindowChange(this._wheelTargetMs);
+    };
+
+    private _beginPan(pointerId: number | null, anchorX: number): void {
+        const msPerPx = this._msPerPx();
+        if (msPerPx === null) {
+            return;
+        }
+
+        this._pan = { pointerId, anchorX, anchorStartMs: this._windowStartMs, msPerPx };
+        this._syncPanListeners();
+    }
+
+    private readonly _handlePanMove = (event: PointerEvent): void => {
+        if (this._touches.has(event.pointerId)) {
+            this._touches.set(event.pointerId, event.clientX);
+        }
+
+        const pan = this._pan;
+        if (pan === null || (pan.pointerId === null ? !this._touches.has(event.pointerId) : event.pointerId !== pan.pointerId)) {
+            return;
+        }
+
+        event.preventDefault();
+        const x = pan.pointerId === null ? this._touchMidpointX() : event.clientX;
+        this._emitWindowChange(pan.anchorStartMs - (x - pan.anchorX) * pan.msPerPx);
+    };
+
+    /** Lifting the panning pointer ends the pan, and so does lifting either finger. */
+    private readonly _handlePanEnd = (event: PointerEvent): void => {
+        this._touches.delete(event.pointerId);
+        const pan = this._pan;
+        if (pan !== null && (pan.pointerId === null || pan.pointerId === event.pointerId)) {
+            this._pan = null;
+        }
+
+        this._syncPanListeners();
+    };
+
+    /** Listen on the window while anything is down, and only then. */
+    private _syncPanListeners(): void {
+        const listen = this._pan !== null || this._touches.size > 0;
+        if (listen === this._panListening) {
+            return;
+        }
+
+        this._panListening = listen;
+        if (listen) {
+            window.addEventListener("pointermove", this._handlePanMove);
+            window.addEventListener("pointerup", this._handlePanEnd);
+            window.addEventListener("pointercancel", this._handlePanEnd);
+        } else {
+            window.removeEventListener("pointermove", this._handlePanMove);
+            window.removeEventListener("pointerup", this._handlePanEnd);
+            window.removeEventListener("pointercancel", this._handlePanEnd);
+        }
+    }
+
+    private _touchMidpointX(): number {
+        const xs = [...this._touches.values()].slice(0, 2);
+        return xs.reduce((sum, x) => sum + x, 0) / xs.length;
+    }
+
+    /** How much time a pixel of track is worth, or null before the track is laid out. */
+    private _msPerPx(): number | null {
+        const rect = this._readTrackRect(this.lanes[0]?.key ?? "");
+        return rect === null || rect.width <= 0
+            ? null
+            : (this._windowEndMs - this._windowStartMs) / rect.width;
+    }
+
+    private _emitWindowChange(startMs: number): void {
+        this.dispatchEvent(new CustomEvent<EntityDayBandWindowChangeDetail>("entity-day-band-window-change", {
+            bubbles: true,
+            composed: true,
+            detail: { startMs },
+        }));
+    }
+
+    /**
+     * A press on a lane: a block or a stretch of free track.
+     *
+     * Nothing is decided until the pointer either travels or lets go. A press
+     * that travels is a drag -- a manual block's edge or middle reshapes it,
+     * anything else paints a new manual range -- and one that does not is a
+     * tap, settled in `_handleTap`. A press on a muted lane only selects that
+     * lane: it is context until it is chosen.
+     */
+    private _handleLanePointerDown(
+        event: PointerEvent,
+        lane: EntityDayBandLane,
+        laneSelected: boolean,
+        block: EntityScheduleBlock | null,
+        gap: EntityScheduleRange | null,
+        mode: DragMode = "move",
+    ): void {
+        if (this.readonly || event.button !== 0) {
+            return;
+        }
+
+        event.stopPropagation();
+        event.preventDefault();
+        if (!laneSelected) {
+            this._emitLaneSelect(lane.key);
+            return;
+        }
+
+        if (block?.isPast === true) {
+            this._emitBlockSelect(lane.key, block);
+            return;
+        }
 
         const trackRect = this._readTrackRect(lane.key);
         if (trackRect === null) {
             return;
         }
 
+        const stepMs = this.day.slotMinutes * MINUTE_MS;
+        const minMs = Math.max(this.day.startMs, this.day.editableFromMs);
+        const maxMs = this.day.slots.reduce((max, slot) => Math.max(max, slot.endMs), minMs);
+        const pointerMs = this._readPointerMs(event, trackRect);
+        const reshaping = block !== null && block.authorship === "user";
         // A block that is already running starts in the past, but the session
         // the editor opened only owns the part still ahead. Dragging has to move
         // that part: taking the block's own start as the origin would carry the
         // elapsed hours along, and the clamp to the editable boundary would then
         // stretch the block by however much of it had already happened.
-        const originStartMs = Math.max(block.startMs, this.day.editableFromMs);
+        // A paint starts from the slot that was pressed.
+        const paintStartMs = Math.min(Math.max(this._floorMs(pointerMs), minMs), maxMs - stepMs);
+        const originStartMs = reshaping ? Math.max(block.startMs, minMs) : paintStartMs;
+        const originEndMs = reshaping ? block.endMs : paintStartMs + stepMs;
         this._drag = {
             laneKey: lane.key,
-            mode,
+            mode: reshaping ? mode : "paint",
+            block,
+            gap,
             originStartMs,
-            originEndMs: block.endMs,
-            grabMs: this._snapMs(this._readPointerMs(event, trackRect)),
-            ...resolveEntityScheduleRangeLimits({
-                blocks: lane.blocks,
-                day: this.day,
-                startMs: originStartMs,
-                endMs: block.endMs,
-            }),
+            originEndMs,
+            grabMs: this._snapMs(pointerMs),
+            minMs,
+            maxMs,
             trackRect,
             pointerId: event.pointerId,
+            pressX: event.clientX,
+            pressY: event.clientY,
+            started: false,
         };
-        // The run's own hours, before the pointer has moved anywhere: the
-        // readout is what says where the drag started from, so it cannot wait
-        // for the first move to have something to show.
-        this._dragRange = { startMs: originStartMs, endMs: block.endMs };
+        // A reshape shows the run's own hours before the pointer has moved
+        // anywhere: the readout is what says where the drag started from. A
+        // paint has nothing to show until it has painted something.
+        this._dragRange = reshaping ? { startMs: originStartMs, endMs: originEndMs } : null;
         window.addEventListener("pointermove", this._handlePointerMove);
         window.addEventListener("pointerup", this._handlePointerUp);
         window.addEventListener("pointercancel", this._handlePointerUp);
+    }
+
+    /**
+     * A press that never became a drag.
+     *
+     * On a block it selects that block -- an automation run read-only, since
+     * all it offers is to be overridden -- and on the block already selected it
+     * lets go of it. On free track it adds an hour where it landed.
+     */
+    private _handleTap(drag: DragSession): void {
+        if (drag.block === null) {
+            if (drag.gap !== null) {
+                this._selectGapAt(drag.laneKey, drag.gap, this._readPointerMs({ clientX: drag.pressX }, drag.trackRect));
+            }
+            return;
+        }
+
+        if (this._isEditing(drag.block)) {
+            this.dispatchEvent(new CustomEvent<EntityDayBandDeselectDetail>("entity-day-band-deselect", {
+                bubbles: true,
+                composed: true,
+                detail: { laneKey: drag.laneKey },
+            }));
+            return;
+        }
+
+        this._emitBlockSelect(drag.laneKey, drag.block);
+    }
+
+    /**
+     * A click with no pointer behind it: Enter or Space on a focused block or
+     * gap. A pointer's own click is ignored here, because the press already
+     * said what it was when it was let go.
+     */
+    private _handleKeyboardClick(
+        event: MouseEvent,
+        lane: EntityDayBandLane,
+        laneSelected: boolean,
+        block: EntityScheduleBlock | null,
+        gap: EntityScheduleRange | null,
+    ): void {
+        if (event.detail !== 0) {
+            return;
+        }
+
+        if (!laneSelected) {
+            this._emitLaneSelect(lane.key);
+        } else if (block !== null) {
+            this._emitBlockSelect(lane.key, block);
+        } else if (gap !== null) {
+            this._selectGapAt(lane.key, gap, null);
+        }
     }
 
     /** Only presses that missed a gap or a segment; those speak for themselves. */
@@ -2549,6 +3082,16 @@ export class SchedulingEntityDayBand extends LitElement {
             composed: true,
         }));
     };
+
+    /** From the pressed slot to the slot under the pointer, whichever way it went. */
+    private _resolvePaintRange(drag: DragSession, pointerMs: number): EntityScheduleRange {
+        const stepMs = this.day.slotMinutes * MINUTE_MS;
+        const pointerStartMs = Math.min(Math.max(this._floorMs(pointerMs), drag.minMs), drag.maxMs - stepMs);
+        return {
+            startMs: Math.min(drag.originStartMs, pointerStartMs),
+            endMs: Math.max(drag.originEndMs, pointerStartMs + stepMs),
+        };
+    }
 
     private _resolveDragRange(drag: DragSession, pointerMs: number): EntityDayBandRangeChangeDetail {
         const stepMs = this.day.slotMinutes * MINUTE_MS;
@@ -2598,8 +3141,26 @@ export class SchedulingEntityDayBand extends LitElement {
             return this._windowStartMs;
         }
 
-        const ratio = (event.clientX - trackRect.left) / trackRect.width;
-        return this._windowStartMs + ratio * (this._windowEndMs - this._windowStartMs);
+        // Held to the window: a drag past the track's edge must not reach into
+        // hours that are not on screen. Just short of the end, so a paint
+        // there floors to the last slot shown rather than the first one after.
+        const ratio = Math.min(Math.max((event.clientX - trackRect.left) / trackRect.width, 0), 1);
+        return Math.min(
+            this._windowStartMs + ratio * (this._windowEndMs - this._windowStartMs),
+            this._windowEndMs - 1,
+        );
+    }
+
+    /** The start of the slot a moment falls in. */
+    private _floorMs(atMs: number): number {
+        const stepMs = this.day.slotMinutes * MINUTE_MS;
+        return this.day.startMs + Math.floor((atMs - this.day.startMs) / stepMs) * stepMs;
+    }
+
+    /** The end of the slot a moment falls in, or the moment itself on a boundary. */
+    private _ceilMs(atMs: number): number {
+        const stepMs = this.day.slotMinutes * MINUTE_MS;
+        return this.day.startMs + Math.ceil((atMs - this.day.startMs) / stepMs) * stepMs;
     }
 
     /** The nearest slot boundary: a block never starts mid-slot. */
@@ -2623,7 +3184,7 @@ export class SchedulingEntityDayBand extends LitElement {
     }
 
     private _readSeries(kind: "solar" | "price") {
-        return this.day.slots.map((slot) => {
+        return this._windowSlots.map((slot) => {
             const point = this.forecastPoints.get(slot.id);
             const value = point === undefined
                 ? null
@@ -2640,13 +3201,13 @@ export class SchedulingEntityDayBand extends LitElement {
         return Math.max(Math.min(Math.abs(value) / max, 1) * 100, MIN_BAR_PCT);
     }
 
-    private _getPresentation(lane: EntityDayBandLane, run: { action: EntityScheduleAction }) {
-        return resolveLaneRunPresentation(lane, run, this.localize);
+    /** A time on the drag readout, naming its day when the band spans more than one. */
+    private _formatTime(atMs: number): string {
+        return formatScheduleSpanTime(atMs, this._spanClock, this.locale, this.timeZone);
     }
 
-    private _formatHours(durationMs: number): string {
-        const hours = durationMs / 3_600_000;
-        return `${hours.toLocaleString(this.locale, { maximumFractionDigits: 1 })} h`;
+    private _getPresentation(lane: EntityDayBandLane, run: { action: EntityScheduleAction }) {
+        return resolveLaneRunPresentation(lane, run, this.localize);
     }
 
     /** The span the tracks are drawn across: the whole day, or the host's crop. */
@@ -2714,14 +3275,6 @@ export class SchedulingEntityDayBand extends LitElement {
             bubbles: true,
             composed: true,
             detail: { atMs },
-        }));
-    }
-
-    private _emitBlockHover(blockKey: string | null): void {
-        this.dispatchEvent(new CustomEvent<EntityDayBandBlockHoverDetail>("entity-day-band-block-hover", {
-            bubbles: true,
-            composed: true,
-            detail: { blockKey },
         }));
     }
 

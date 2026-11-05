@@ -4,13 +4,13 @@ import { loadBundle } from "./support/card-page";
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
 
 /**
- * "Edit blocks" in a device detail the solar inspector opened.
+ * "Override" in a device detail the solar inspector opened.
  *
  * The inspector opens a device's detail from its house breakdown, and hosts
- * one day editor for the whole card. A press on "Edit blocks" in the detail's
+ * one day editor for the whole card. A press on "Override" in the detail's
  * Schedule section asks the card around it for the editor; the inspector
- * answers by opening that editor on the device's lane, over the detail, and
- * closing it returns to the still-open detail.
+ * answers by opening that editor on the device's lane alone, over the detail,
+ * and closing it returns to the still-open detail.
  *
  * The detail is built from the live house tree, as the power card builds it,
  * so it carries the same breadcrumb and swaps in place on its requests.
@@ -82,10 +82,10 @@ const dayEditor = (page: Page) => page.evaluate(async () => {
     const host = (window as any).__inspector().shadowRoot.querySelector("scheduling-day-editor-host");
     await host.updateComplete;
     const editor = host.shadowRoot.querySelector("scheduling-entity-day-editor");
-    return { open: editor?.open === true, selected: editor?._selectedLaneKey ?? null };
+    return { open: editor?.open === true, selected: editor?._selectedLaneKey ?? null, single: editor?.single === true };
 });
 
-test("Edit blocks opens the inspector's day editor over the device detail on its lane", async ({ page }) => {
+test("Override opens the inspector's day editor over the device detail on its lane alone", async ({ page }) => {
     await mountInspector(page);
     // A device box in the breakdown asks for the device's detail.
     await page.evaluate(() => {
@@ -99,8 +99,8 @@ test("Edit blocks opens the inspector's day editor over the device detail on its
     });
     const detail = page.locator("helman-solar-inspector node-detail-dialog");
     await detail.locator("helman-detail-section[data-schedule] button").first().click();
-    await detail.locator("helman-node-control [data-edit-blocks]").click();
-    await expect.poll(() => dayEditor(page)).toEqual({ open: true, selected: "boiler" });
+    await detail.locator("helman-node-control [data-change]").click();
+    await expect.poll(() => dayEditor(page)).toEqual({ open: true, selected: "boiler", single: true });
     await page.evaluate(() => {
         const host = (window as any).__inspector().shadowRoot.querySelector("scheduling-day-editor-host");
         host.shadowRoot.querySelector("scheduling-entity-day-editor").shadowRoot.querySelector("ha-dialog").close();
@@ -201,8 +201,8 @@ test("remounting device detail from day editor over existing detail preserves hi
     const detail = page.locator("helman-solar-inspector node-detail-dialog");
     await expect(detail.locator('[slot="headerTitle"]')).toHaveText("Boiler");
     await detail.locator("helman-detail-section[data-schedule] button").first().click();
-    await detail.locator("helman-node-control [data-edit-blocks]").click();
-    await expect.poll(() => dayEditor(page)).toEqual({ open: true, selected: "boiler" });
+    await detail.locator("helman-node-control [data-change]").click();
+    await expect.poll(() => dayEditor(page)).toEqual({ open: true, selected: "boiler", single: true });
 
     await page.evaluate(() => {
         const body = (window as any).__inspector().shadowRoot.querySelector(".body");
@@ -216,7 +216,7 @@ test("remounting device detail from day editor over existing detail preserves hi
 
     await detail.locator("ha-dialog").evaluate((dialog: any) => dialog.close());
     await expect(detail).toHaveCount(0);
-    await expect.poll(() => dayEditor(page)).toEqual({ open: true, selected: "boiler" });
+    await expect.poll(() => dayEditor(page)).toEqual({ open: true, selected: "boiler", single: true });
 
     await page.evaluate(() => {
         const host = (window as any).__inspector().shadowRoot.querySelector("scheduling-day-editor-host");
