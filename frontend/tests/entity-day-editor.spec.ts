@@ -1043,6 +1043,35 @@ test.describe("entity day editor", () => {
         expect(await readRanges(page)).toEqual(["05:00–07:00"]);
     });
 
+    /**
+     * A paint whose action is not one yet places nothing, so it authors no
+     * edges either: the saved block it lay across is still one block once the
+     * session ends, and Delete takes all of it.
+     */
+    test("a session that places nothing leaves no edges behind", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page);
+
+        await dragAcross(page, at("20:30"), at("18:30"));
+        expect(await editingRange(page)).toBe(`${at("18:00")}|${at("21:00")}`);
+        await page.evaluate(() => {
+            const el = document.querySelector("scheduling-entity-day-editor") as any;
+            el.shadowRoot.querySelector("scheduling-entity-action-editor").dispatchEvent(new CustomEvent(
+                "entity-action-change",
+                { bubbles: true, composed: true, detail: { action: { on: true }, valid: false } },
+            ));
+        });
+        expect(await readRanges(page)).toEqual(["05:00–07:00", "17:00–19:00"]);
+
+        await page.locator(".day-switcher").click();
+        expect(await readRanges(page)).toEqual(["05:00–07:00", "17:00–19:00"]);
+
+        await tapAt(page, at("17:30"));
+        expect(await editingRange(page)).toBe(`${at("17:00")}|${at("19:00")}`);
+        await page.locator(".edit-panel [data-delete]").click();
+        expect(await readRanges(page)).toEqual(["05:00–07:00"]);
+    });
+
     test("clicking outside closes the panel and keeps the edit in the draft", async ({ page }) => {
         await loadCardBundle(page);
         await mountEditor(page);

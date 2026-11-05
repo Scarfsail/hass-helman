@@ -1446,11 +1446,12 @@ export class SchedulingEntityDayEditor extends LitElement {
      * The session contributes while it is open but is only recorded on commit:
      * a drag passes through every position between where it started and where
      * it was let go, and recording each of them would strew edges that later
-     * split unrelated runs in half.
+     * split unrelated runs in half. A session that places nothing has no
+     * block, so it contributes no edges.
      */
     private _laneBlockSplits(laneKey: string): ReadonlySet<number> {
         const stored = this._blockSplits[laneKey];
-        if (this._editing === null || laneKey !== this._selectedLaneKey) {
+        if (this._editing === null || laneKey !== this._selectedLaneKey || !this._sessionPlaces(this._editing)) {
             return stored ?? EMPTY_BLOCK_SPLITS;
         }
 
@@ -1961,7 +1962,8 @@ export class SchedulingEntityDayEditor extends LitElement {
         // remove button on the block's row leaves the session open, so the
         // press that ends it is landing edges for a block that is already
         // gone. Whether they survive is the same question as always -- is
-        // there still a run for them to hold apart.
+        // there still a run for them to hold apart. A session that places
+        // nothing has no block, so it leaves no edges.
         if (this._selectedLaneKey !== null) {
             const laneKey = this._selectedLaneKey;
             this._blockSplits = this._pruneBlockSplits(
@@ -1969,7 +1971,7 @@ export class SchedulingEntityDayEditor extends LitElement {
                     ...this._blockSplits,
                     [laneKey]: new Set([
                         ...(this._blockSplits[laneKey] ?? []),
-                        ...this._sessionEdges(this._editing),
+                        ...(this._sessionPlaces(this._editing) ? this._sessionEdges(this._editing) : []),
                     ]),
                 },
                 laneKey,
