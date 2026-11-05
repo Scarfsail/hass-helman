@@ -281,6 +281,49 @@ class ChargeHoldOptimizerTests(unittest.TestCase):
         self.assertNotIn(_slot_id(13, 0), held)
         self.assertNotIn(_slot_id(13, 30), held)
 
+    def test_equal_prices_extend_the_charge_set_into_one_run(self) -> None:
+        """The prod plan of 2026-11-06 (issue #733), at the same prices.
+
+        Four 5.459 slots at 12:00–12:45 and four 5.526 slots before them, with a
+        need of seven slots: the three 5.526 slots are the ones next to 12:00,
+        so the battery charges unbroken from 11:15 instead of exporting 11:45
+        between two charging runs.
+        """
+        prices = {10: 9.0, 11: 5.526, 12: 5.459, 13: 9.0}
+        snapshot = _make_snapshot(
+            day_context=_day_context(),
+            # 3.5 kWh to target: seven 0.5 kWh slots.
+            current_soc=65.0,
+            export_price_points=_export_price_points(prices),
+        )
+        result, trace = run_optimizer_with_trace(
+            build_charge_hold_optimizer(_make_config()),
+            snapshot,
+            _make_config(),
+            reference_time=REFERENCE_TIME,
+        )
+        # Up to 12:45, where the charge set reaches target; the hold ends there.
+        released = {
+            _slot_id(hour, minute)
+            for hour in range(10, 13)
+            for minute in (0, 15, 30, 45)
+        } - _held_slot_ids(result)
+        self.assertEqual(
+            released,
+            {_slot_id(11, minute) for minute in (15, 30, 45)}
+            | {_slot_id(12, minute) for minute in (0, 15, 30, 45)},
+        )
+
+        slots = _slots_by_id(trace)
+        for minute, rank in ((45, 5), (30, 6), (15, 7)):
+            gate = _gate(slots[_slot_id(11, minute)], "cheapest_rank")
+            self.assertEqual(gate["state"], "false")
+            self.assertEqual(gate["params"]["rank"], rank)
+        held = slots[_slot_id(11, 0)]
+        self.assertEqual(held["verdict"], "execute")
+        self.assertEqual(_gate(held, "cheapest_rank")["state"], "true")
+        self.assertEqual(_gate(held, "cheapest_rank")["params"]["rank"], 8)
+
     def test_a_cheap_morning_frees_the_dear_afternoon_behind_it(self) -> None:
         """Reaching target ends the hold, however dear what follows is.
 
@@ -427,7 +470,8 @@ class ChargeHoldOptimizerTests(unittest.TestCase):
         # The battery reads 60% now but the forecast has it down to 30% by the
         # time the window opens, so the need is 7 kWh rather than 4 — and the
         # charge set grows from the eight cheapest slots to the fourteen
-        # cheapest.
+        # cheapest. The last two come from the four equal 4.0 slots, and they
+        # are the two next to 11:00, so the charge runs unbroken from 10:30.
         # Sizing this off the run-time reading is what held 10:00–11:30 while
         # the battery was still 30 points short.
         result = build_charge_hold_optimizer(_make_config()).optimize(
@@ -446,7 +490,7 @@ class ChargeHoldOptimizerTests(unittest.TestCase):
                 for hour in range(6, 10)
                 for minute in (0, 15, 30, 45)
             }
-            | {_slot_id(10, 30), _slot_id(10, 45)},
+            | {_slot_id(10, 0), _slot_id(10, 15)},
         )
 
     def test_a_forecast_soc_above_the_reading_shrinks_the_charge_set(self) -> None:
@@ -538,9 +582,10 @@ class ChargeHoldTraceContractTests(unittest.TestCase):
         self.assertEqual(_gate(held, "hold_room")["state"], "true")
         rank = _gate(held, "cheapest_rank")
         # 10:00 opens the dearest hour of the day, so it ranks below every
-        # cheaper slot and lost to a marginal price of 2.0.
+        # cheaper slot and lost to a marginal price of 2.0. Its equal-price
+        # hour ranks from 10:45 back, next to the cheaper 11:00, so it is last.
         self.assertEqual(rank["state"], "true")
-        self.assertEqual(rank["params"]["rank"], 13)
+        self.assertEqual(rank["params"]["rank"], 16)
         self.assertEqual(rank["params"]["rankOf"], 16)
         self.assertEqual(rank["params"]["price"], 4.0)
         self.assertEqual(rank["params"]["marginalPrice"], 2.0)

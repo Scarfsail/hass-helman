@@ -66,8 +66,6 @@ from datetime import date, datetime, timedelta
 from math import ceil
 from typing import TYPE_CHECKING, Any
 
-from homeassistant.util import dt as dt_util
-
 from ...const import SCHEDULE_SLOT_MINUTES
 from ...scheduling.schedule import (
     ScheduleDocument,
@@ -93,6 +91,7 @@ from ..rails import (
     read_when_active_hourly_energy_kwh,
     slot_solar_coverage_pct,
 )
+from ..slot_ranking import rank_slots_contiguous
 from ..trace import NULL_TRACE
 
 if TYPE_CHECKING:
@@ -619,11 +618,11 @@ class ApplianceRuntimeOptimizer:
             # by coverage first takes the slots that move the SoC least. The
             # coverage flag is already computed.
             prefer_covered=plan.forced_after_skips is not None,
-        )
-        ranked = _promote_in_flight_slot(
-            ranked,
-            active=snapshot.context.appliance_active_by_id.get(appliance_id, False),
-            active_slot_id=format_slot_id(horizon_start),
+            in_flight_slot_id=(
+                format_slot_id(horizon_start)
+                if snapshot.context.appliance_active_by_id.get(appliance_id)
+                else None
+            ),
         )
         chosen, floor_rejected = gate.take(
             ranked,
@@ -1425,15 +1424,39 @@ def _rank_slots(
     export_price_by_bucket: dict[datetime, float],
     reference_time: datetime,
     prefer_covered: bool = False,
+    in_flight_slot_id: str | None = None,
 ) -> list[tuple[float, str]]:
-    """Window slots cheapest-first, solar-covered slots winning ties.
+    """Window slots cheapest-first, solar coverage then adjacency winning ties.
 
     ``prefer_covered`` inverts the two keys for a forced run, which places past
     every condition including self-sustainability: ordering by coverage first
     takes the slots that move the battery least, so the escape hatch does as
     little damage as it can while still delivering the runtime.
+
+    Among exactly equal keys a slot next to one already ranked goes first, then
+    the earlier one. This only extends existing picks into adjacent equal-key
+    slots; an isolated earliest pick can still start a separate run.
+
+    ``in_flight_slot_id`` is the slot a running appliance is executing right
+    now; it goes first and seeds adjacency. Because ``slots_needed`` shrinks as
+    runtime is delivered, the cut at ``ranked[:slots_needed]`` walks up the
+    list, and without this the slot being executed is routinely the one it
+    removes: the appliance is switched off mid-run and back on at whichever slot
+    won instead. Seeding adjacency also lets the run continue into the next
+    equal-key slot.
+
+    Promotion, not exemption. The slot must still be a candidate here, which
+    means it is still in ``placeable_slots`` — so every condition that gates
+    placement (``min_soc_pct``, ``max_run_price``, ``run_when``) still stops
+    the appliance the moment it stops holding. A ``custom`` condition going
+    false stops it too, by a different route: the action is still placed here,
+    but stamped ``condition_met=False`` and stripped before execution.
+
+    The cost is one marginal slot: promoting displaces whatever sat last above
+    the cut. That is the trade for not short-cycling the appliance.
     """
-    candidates: list[tuple[float, int, datetime, str]] = []
+    price_by_slot: dict[str, float] = {}
+    key_by_slot: dict[str, tuple[float, int] | tuple[int, float]] = {}
     for slot_id in window_slots:
         current_actions = document.slots.get(slot_id, {})
         if is_user_owned(current_actions.get(appliance_id)):
@@ -1444,57 +1467,18 @@ def _rank_slots(
             available_surplus_by_bucket=available_surplus_by_bucket,
             demand_hourly_energy=demand_hourly_energy,
         )
-        cursor = parse_slot_id(slot_id)
-        candidates.append(
-            (
-                export_price_by_bucket.get(cursor, float("inf")),
-                0 if covered else 1,
-                cursor,
-                slot_id,
-            )
+        price = export_price_by_bucket.get(parse_slot_id(slot_id), float("inf"))
+        uncovered = 0 if covered else 1
+        price_by_slot[slot_id] = price
+        key_by_slot[slot_id] = (
+            (uncovered, price) if prefer_covered else (price, uncovered)
         )
-    candidates.sort(
-        key=lambda item: (
-            (item[1], item[0], dt_util.as_utc(item[2]))
-            if prefer_covered
-            else (item[0], item[1], dt_util.as_utc(item[2]))
-        )
+    ranking = rank_slots_contiguous(
+        key_by_slot,
+        key=key_by_slot.__getitem__,
+        seed=in_flight_slot_id,
     )
-    return [(cost, slot_id) for cost, _covered, _cursor, slot_id in candidates]
-
-
-def _promote_in_flight_slot(
-    ranked: list[tuple[float, str]],
-    *,
-    active: bool,
-    active_slot_id: str,
-) -> list[tuple[float, str]]:
-    """Move a running appliance's current slot to the front of the ranking.
-
-    Ranking sorts by price, then solar coverage, then time — and knows nothing
-    about what is running. Because ``slots_needed`` shrinks as runtime is
-    delivered, the cut at ``ranked[:slots_needed]`` walks up the list, and the
-    slot being executed right now is routinely the one it removes: the appliance
-    is switched off mid-run and back on at whichever slot won instead.
-
-    Promotion, not exemption. The slot must still have survived ranking, which
-    means it is still in ``placeable_slots`` — so every condition that gates
-    placement (``min_soc_pct``, ``max_run_price``, ``run_when``) still stops
-    the appliance the moment it stops holding. A ``custom`` condition going
-    false stops it too, by a different route: the action is still placed here,
-    but stamped ``condition_met=False`` and stripped before execution.
-
-    The cost is one marginal slot: promoting displaces whatever sat last above
-    the cut. That is the trade for not short-cycling the appliance.
-    """
-    if not active:
-        return ranked
-    for index, (_cost, slot_id) in enumerate(ranked):
-        if slot_id == active_slot_id:
-            if index == 0:
-                return ranked
-            return [ranked[index], *ranked[:index], *ranked[index + 1 :]]
-    return ranked
+    return [(price_by_slot[slot_id], slot_id) for slot_id in ranking]
 
 
 def _slot_coverage_pct(
