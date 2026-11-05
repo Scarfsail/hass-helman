@@ -1022,6 +1022,27 @@ test.describe("entity day editor", () => {
         expect(await readRanges(page)).toEqual(["05:00–07:00", "17:00–19:00", "19:00–20:00", "21:00–22:00"]);
     });
 
+    /**
+     * A block placed across an authored edge replaces it along with the
+     * blocks it held apart: the paint is one block, and Delete takes all of it.
+     */
+    test("painting across an authored edge makes one block", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page);
+
+        await clickGapAt(page, at("19:00"));
+        await page.locator(".day-switcher").click();
+        expect(await readRanges(page)).toEqual(["05:00–07:00", "17:00–19:00", "19:00–20:00"]);
+
+        await dragAcross(page, at("16:00"), at("20:30"));
+        await page.locator(".day-switcher").click();
+        expect(await readRanges(page)).toEqual(["05:00–07:00", "16:00–21:00"]);
+
+        await tapAt(page, at("18:30"));
+        await page.locator(".edit-panel [data-delete]").click();
+        expect(await readRanges(page)).toEqual(["05:00–07:00"]);
+    });
+
     test("clicking outside closes the panel and keeps the edit in the draft", async ({ page }) => {
         await loadCardBundle(page);
         await mountEditor(page);

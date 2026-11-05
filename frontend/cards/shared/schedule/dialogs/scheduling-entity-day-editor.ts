@@ -1889,7 +1889,9 @@ export class SchedulingEntityDayEditor extends LitElement {
 
         this._editing = session;
         const places = this._sessionPlaces(session);
-        this._blockSplits = this._splitsBeforeEdit;
+        this._blockSplits = places
+            ? this._splitsOutside(this._splitsBeforeEdit, lane.key, session)
+            : this._splitsBeforeEdit;
         this._setDraft(places
             ? placeEntityScheduleManualRange({
                 slots: this._baselineSlots,
@@ -1909,6 +1911,30 @@ export class SchedulingEntityDayEditor extends LitElement {
                     range: session.origin,
                     nowMs: this.nowMs,
                 }));
+    }
+
+    /**
+     * The lane's edges with those strictly inside the range dropped.
+     *
+     * A placed block replaces what it covers, edges included: one left inside
+     * it would cut it in two wherever it spans equal-action blocks. Only the
+     * replay drops them -- the snapshot keeps them, so they come back once the
+     * block moves off.
+     */
+    private _splitsOutside(
+        splits: EntityScheduleBlockSplits,
+        laneKey: string,
+        range: EntityScheduleRange,
+    ): EntityScheduleBlockSplits {
+        const stored = splits[laneKey];
+        if (stored === undefined || ![...stored].some((ms) => ms > range.startMs && ms < range.endMs)) {
+            return splits;
+        }
+
+        return {
+            ...splits,
+            [laneKey]: new Set([...stored].filter((ms) => ms <= range.startMs || ms >= range.endMs)),
+        };
     }
 
     /** Whether the session's action is one yet, so it places a block. */
