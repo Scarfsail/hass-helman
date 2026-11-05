@@ -25,6 +25,8 @@ export type SlotGridTick = {
   minutes: number;
   /** The whole hour to print under the line, or null for an unlabelled line. */
   hour: number | null;
+  /** The line is a local midnight; only ever set when the caller named its midnights. */
+  midnight?: true;
 };
 
 /**
@@ -51,6 +53,23 @@ export function slotGridTicks(options: {
   endMinutes: number;
   slotMinutes: number;
   plotWidth: number;
+  /**
+   * The local midnights the span runs across, in the same minutes, for a span
+   * that is not one day: each midnight's line is marked, and hours are read
+   * off the local clock rather than counted from minute zero, so past a
+   * midnight they start again from 00 instead of running on past 24. Left
+   * out, the span is one day counted from its own midnight -- the grid every
+   * single-day chart has always been ruled by.
+   */
+  midnightMinutes?: readonly number[];
+  /**
+   * The local clock's minute of the day at a line, for the midnight path:
+   * what makes its labels clock hours on a daylight-saving day too, where the
+   * minutes elapsed since midnight are an hour off the clock after the change.
+   * Left out, the minutes since the midnight before the line stand in for it,
+   * which is right on every other day.
+   */
+  clockMinutesAt?: (minutes: number) => number;
 }): SlotGridTick[] {
   const span = options.endMinutes - options.startMinutes;
   if (span <= 0 || options.plotWidth <= 0) return [];
@@ -68,25 +87,50 @@ export function slotGridTicks(options: {
   // Never coarser than the labels: past that there is nothing left to thin out.
   step = Math.min(step, labelStride * 60);
 
+  const named = options.midnightMinutes;
+  const midnights = named === undefined ? [0] : [...named].sort((a, b) => a - b);
+  // The clock the label reads: minutes since the midnight a line follows,
+  // unless the caller can read the real clock.
+  const sinceMidnight = (minutes: number) =>
+    minutes - (midnights.filter((midnight) => midnight <= minutes).pop() ?? 0);
+  const clockOf = named === undefined ? sinceMidnight : options.clockMinutesAt ?? sinceMidnight;
   // Multiples of the stride from midnight, not from the window's own edge, so a
   // cropped day is still labelled on round hours.
-  const labelled = (minutes: number) =>
-    minutes % 60 === 0 && (minutes / 60) % labelStride === 0;
+  const hourOf = (minutes: number) => {
+    const clock = clockOf(minutes);
+    return clock % 60 === 0 && (clock / 60) % labelStride === 0 ? clock / 60 : null;
+  };
+  const tick = (minutes: number): SlotGridTick => {
+    const hour = hourOf(minutes);
+    return named !== undefined && named.includes(minutes)
+      ? { minutes, hour, midnight: true }
+      : { minutes, hour };
+  };
 
   const ticks: SlotGridTick[] = [];
   const first = Math.ceil(options.startMinutes / step) * step;
   for (let minutes = first; minutes <= options.endMinutes; minutes += step) {
-    ticks.push({ minutes, hour: labelled(minutes) ? minutes / 60 : null });
+    ticks.push(tick(minutes));
   }
   // Doubling can step over a labelled hour (a 40-minute step clears 60), so the
   // labels are laid in independently -- the numbers are the coarse scale, and
-  // one going missing would leave a stretch of the day unreadable.
-  for (let hour = 0; hour <= 24; hour += labelStride) {
-    const minutes = hour * 60;
-    if (minutes < options.startMinutes || minutes > options.endMinutes) continue;
-    if (minutes % step === 0) continue;
-    ticks.push({ minutes, hour });
-  }
+  // one going missing would leave a stretch of the day unreadable. A named
+  // midnight can fall off the step too, on the day after a clock change.
+  midnights.forEach((midnight, index) => {
+    // One day's hours, up to its own 24 when it is the only day; otherwise up
+    // to the next midnight, which labels itself. Past a midnight every whole
+    // hour is tried and only the labelled ones kept: after a clock change the
+    // stride's hours are no longer a stride of elapsed minutes apart.
+    const last = named === undefined ? midnight + 24 * 60 : (midnights[index + 1] ?? Infinity) - 1;
+    const stride = named === undefined ? labelStride * 60 : 60;
+    for (let minutes = midnight; minutes <= Math.min(last, options.endMinutes); minutes += stride) {
+      if (minutes < options.startMinutes) continue;
+      if (minutes % step === 0) continue;
+      const added = tick(minutes);
+      if (named !== undefined && added.hour === null) continue;
+      ticks.push(added);
+    }
+  });
   ticks.sort((a, b) => a.minutes - b.minutes);
   return ticks;
 }

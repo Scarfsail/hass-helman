@@ -43,6 +43,8 @@ async function mountEditor(
         /** A run on day one's last hour, so day two opens against a neighbour
          *  that ends exactly at its midnight. */
         acrossMidnight?: boolean;
+        /** A manual run from 22:00 on day one to 02:00 on day two. */
+        overMidnight?: boolean;
         straddling?: boolean;
         futureAutomation?: boolean;
         multiLane?: boolean;
@@ -53,9 +55,11 @@ async function mountEditor(
         pruned?: boolean;
         /** The forecast horizon stops at 13:00 on day two. */
         shortHorizon?: boolean;
+        /** No day two at all: the horizon ends at day one's midnight. */
+        oneDay?: boolean;
     } = {},
 ): Promise<void> {
-    await page.evaluate(({ dayOne, dayTwo, nowMs, neighbour, offNeighbour, oneSlotGap, halfHourSlots, acrossMidnight, straddling, futureAutomation, multiLane, pruned, explainable, shortHorizon }) => {
+    await page.evaluate(({ dayOne, dayTwo, nowMs, neighbour, offNeighbour, oneSlotGap, halfHourSlots, acrossMidnight, overMidnight, straddling, futureAutomation, multiLane, pruned, explainable, shortHorizon, oneDay }) => {
         const stepMs = halfHourSlots ? 1_800_000 : 3_600_000;
         const buildSlot = (dayKey: string, index: number) => {
             const startMs = Date.parse(`${dayKey}T00:00:00Z`) + index * stepMs;
@@ -79,9 +83,12 @@ async function mountEditor(
         const perDay = halfHourSlots ? 48 : 24;
         const slots = [
             ...Array.from({ length: perDay }, (_unused, index) => buildSlot(dayOne, index)),
-            ...Array.from({ length: shortHorizon ? 13 : perDay }, (_unused, index) => buildSlot(dayTwo, index)),
+            ...Array.from({ length: oneDay ? 0 : shortHorizon ? 13 : perDay }, (_unused, index) => buildSlot(dayTwo, index)),
         ];
         for (const slot of slots) {
+            if (overMidnight && (slot.dayKey === dayOne ? slot.index >= 22 : slot.index < 2)) {
+                slot.assignments.boiler = { action: { on: true }, setBy: "user" };
+            }
             if (slot.dayKey !== dayOne) {
                 continue;
             }
@@ -281,10 +288,13 @@ async function mountEditor(
                 connection: {},
                 states: {},
                 callWS: window.__mockHass({
-                    "helman/get_schedule_explanation": async ({ controllable_id }: {
+                    // Recorded for day one only; the window reaches into day
+                    // two, which has nothing recorded yet.
+                    "helman/get_schedule_explanation": async ({ controllable_id, date }: {
                         controllable_id: string;
+                        date: string;
                     }) => {
-                        return payloads[controllable_id] ?? null;
+                        return date === dayOne ? payloads[controllable_id] ?? null : null;
                     }
                 }).callWS,
             };
@@ -292,7 +302,6 @@ async function mountEditor(
 
         el.slots = slots;
         el.slotMinutes = stepMs / 60_000;
-        el.currentDayKey = dayOne;
         el.locale = "cs";
         el.timeZone = "UTC";
         el.nowMs = nowMs;
@@ -307,12 +316,14 @@ async function mountEditor(
         oneSlotGap: options.oneSlotGap ?? false,
         halfHourSlots: options.halfHourSlots ?? false,
         acrossMidnight: options.acrossMidnight ?? false,
+        overMidnight: options.overMidnight ?? false,
         straddling: options.straddling ?? false,
         futureAutomation: options.futureAutomation ?? false,
         multiLane: options.multiLane ?? false,
         pruned: options.pruned ?? false,
         explainable: options.explainable ?? false,
         shortHorizon: options.shortHorizon ?? false,
+        oneDay: options.oneDay ?? false,
     });
 
     await page.waitForFunction(() => {
@@ -371,8 +382,8 @@ async function trackPoint(
         const selector = lane === undefined ? ".track" : `.lane[data-lane="${lane}"] .track`;
         const track = band.shadowRoot.querySelector(selector) as HTMLElement;
         const rect = track.getBoundingClientRect();
-        const day = band.day;
-        const ratio = (ms - day.startMs) / (day.endMs - day.startMs);
+        // The band draws its window, not the whole horizon it is handed.
+        const ratio = (ms - band.windowStartMs) / (band.windowEndMs - band.windowStartMs);
         return { x: rect.left + ratio * rect.width, y: rect.top + rect.height / 2 };
     }, { ms: atMs, lane: laneKey });
 }
@@ -581,12 +592,11 @@ test.describe("entity day editor", () => {
         expect(layout.contentWidth).not.toMatch(/^9\d\dpx$/);
     });
 
-    test("merges adjacent slots into blocks and locks the past ones", async ({ page }) => {
+    test("merges adjacent slots into blocks, and draws nothing elapsed", async ({ page }) => {
         await loadCardBundle(page);
         await mountEditor(page);
 
         expect(await readBlocks(page)).toEqual([
-            { range: "05:00–07:00", authorship: "automation", past: true, dirty: false },
             { range: "17:00–19:00", authorship: "user", past: false, dirty: false },
         ]);
     });
@@ -621,7 +631,7 @@ test.describe("entity day editor", () => {
 
         await tapAt(page, at("18:00"));
         await page.locator(".edit-panel [data-delete]").click();
-        expect(await readRanges(page)).toEqual(["05:00–07:00"]);
+        expect(await readRanges(page)).toEqual([]);
         await expect(page.locator("scheduling-entity-day-band .freed")).toHaveCount(1);
 
         await page.locator("ha-button[slot=primaryAction]").click();
@@ -706,7 +716,6 @@ test.describe("entity day editor", () => {
         await dragAcross(page, at("13:30"), at("16:30"));
 
         expect(await readBlocks(page)).toEqual([
-            { range: "05:00–07:00", authorship: "automation", past: true, dirty: false },
             { range: "13:00–17:00", authorship: "user", past: false, dirty: true },
             { range: "17:00–19:00", authorship: "user", past: false, dirty: false },
         ]);
@@ -733,7 +742,7 @@ test.describe("entity day editor", () => {
 
         // 17:00-19:00 "on" three hours right, over the 21:00 "off".
         await dragAcross(page, at("18:00"), at("21:00"));
-        expect(await readRanges(page)).toEqual(["05:00–07:00", "20:00–22:00"]);
+        expect(await readRanges(page)).toEqual(["20:00–22:00"]);
 
         await page.locator("ha-button[slot=primaryAction]").click();
         const [patches] = await savedPatches(page);
@@ -754,7 +763,7 @@ test.describe("entity day editor", () => {
 
         // 20:00 + the block's two hours reaches 22:00, through the "off".
         expect(await editingRange(page)).toBe(`${at("20:00")}|${at("22:00")}`);
-        expect(await readRanges(page)).toEqual(["05:00–07:00", "20:00–22:00"]);
+        expect(await readRanges(page)).toEqual(["20:00–22:00"]);
     });
 
     test("an end pick sets where the block stops", async ({ page }) => {
@@ -791,17 +800,22 @@ test.describe("entity day editor", () => {
         await expect(page.locator(".edit-panel .replaced-run")).toHaveCount(0);
     });
 
-    test("End of day is the last writable boundary, selected or not", async ({ page }) => {
+    /**
+     * End of day is the midnight after the block's start, across the window --
+     * or the horizon's last boundary, when the schedule stops before that.
+     */
+    test("End of day is the start's own midnight, or the horizon's end", async ({ page }) => {
         await loadCardBundle(page);
         await mountEditor(page, { shortHorizon: true });
 
-        await page.locator(".day-chip").nth(1).click();
         await page.locator('.edit-panel [data-start-pick="end_of_day"]').click();
-        expect(await editingRange(page)).toBe(`${at("00:00", DAY_TWO)}|${at("13:00", DAY_TWO)}`);
+        expect(await editingRange(page)).toBe(`${at("10:00")}|${at("00:00", DAY_TWO)}`);
 
+        // Moved onto day two, which this horizon cuts off at 13:00.
+        await page.locator(".edit-panel select[data-from]").selectOption(String(at("02:00", DAY_TWO)));
         await page.locator('.edit-panel [data-pick="plus_1h"]').click();
         await page.locator('.edit-panel [data-pick="end_of_day"]').click();
-        expect(await editingRange(page)).toBe(`${at("00:00", DAY_TWO)}|${at("13:00", DAY_TWO)}`);
+        expect(await editingRange(page)).toBe(`${at("02:00", DAY_TWO)}|${at("13:00", DAY_TWO)}`);
     });
 
     test("selecting a block does not change what the next paint starts with", async ({ page }) => {
@@ -848,7 +862,7 @@ test.describe("entity day editor", () => {
         await loadCardBundle(page);
         await mountEditor(page);
 
-        await page.locator(".day-chip").nth(1).click();
+        await page.locator('[data-jump="tomorrow"]').click();
         expect(await readRanges(page)).toEqual([]);
 
         await page.locator('.edit-panel [data-start-pick="plus_1h"]').click();
@@ -891,15 +905,15 @@ test.describe("entity day editor", () => {
 
         await clickGapAt(page, at("19:00"));
         expect(await editingRange(page)).toBe(`${at("19:00")}|${at("20:00")}`);
-        expect(await readRanges(page)).toEqual(["05:00–07:00", "17:00–19:00", "19:00–20:00"]);
+        expect(await readRanges(page)).toEqual(["17:00–19:00", "19:00–20:00"]);
 
         // Changing the new block reaches the new block alone: the run it was
         // born against keeps its range and stays clean.
         await page.locator(".edit-panel select[data-to]").selectOption(String(at("21:00")));
         const changed = await readBlocks(page);
-        expect(changed.map((block) => block.range)).toEqual(["05:00–07:00", "17:00–19:00", "19:00–21:00"]);
-        expect(changed[1].dirty).toBe(false);
-        expect(changed[2].dirty).toBe(true);
+        expect(changed.map((block) => block.range)).toEqual(["17:00–19:00", "19:00–21:00"]);
+        expect(changed[0].dirty).toBe(false);
+        expect(changed[1].dirty).toBe(true);
     });
 
     test("a block authored right before a run stays its own block", async ({ page }) => {
@@ -909,7 +923,7 @@ test.describe("entity day editor", () => {
         // 16:00-17:00 ends exactly where the evening run begins.
         await clickGapAt(page, at("16:00"));
 
-        expect(await readRanges(page)).toEqual(["05:00–07:00", "16:00–17:00", "17:00–19:00"]);
+        expect(await readRanges(page)).toEqual(["16:00–17:00", "17:00–19:00"]);
     });
 
     /**
@@ -923,7 +937,7 @@ test.describe("entity day editor", () => {
 
         await clickGapAt(page, at("19:00"));
 
-        expect(await readRanges(page)).toEqual(["05:00–07:00", "17:00–19:00", "19:00–20:00", "20:00–22:00"]);
+        expect(await readRanges(page)).toEqual(["17:00–19:00", "19:00–20:00", "20:00–22:00"]);
     });
 
     /**
@@ -949,15 +963,15 @@ test.describe("entity day editor", () => {
     });
 
     /**
-     * The day's first slot is only "the now-line" on today. On any later day
-     * the editable boundary is simply that day's midnight, so a start there is
-     * as much a decision as any other.
+     * Only a start raised to the slot running now is "the now-line". A block
+     * started at a midnight against a run ending there is a decision like any
+     * other, so it stays its own block.
      */
     test("a block authored at a later day's midnight stays off its neighbour", async ({ page }) => {
         await loadCardBundle(page);
         await mountEditor(page, { acrossMidnight: true });
 
-        await page.locator(".day-chip").nth(1).click();
+        await page.locator('[data-jump="tomorrow"]').click();
         await clickGapAt(page, at("00:00", DAY_TWO));
 
         expect(await readRanges(page)).toEqual(["00:00–01:00"]);
@@ -991,9 +1005,9 @@ test.describe("entity day editor", () => {
 
         // Close the session by pressing outside it, then reopen the earlier
         // block: both are still there, and editing one is still about one.
-        await page.locator(".day-switcher").click();
+        await page.locator(".window-span").click();
         expect(await editingRange(page)).toBeNull();
-        expect(await readRanges(page)).toEqual(["05:00–07:00", "17:00–21:00", "21:00–22:00"]);
+        expect(await readRanges(page)).toEqual(["17:00–21:00", "21:00–22:00"]);
 
         await tapAt(page, at("18:00"));
         expect(await editingRange(page)).toBe(`${at("17:00")}|${at("21:00")}`);
@@ -1009,17 +1023,17 @@ test.describe("entity day editor", () => {
         await mountEditor(page, { offNeighbour: true });
 
         await clickGapAt(page, at("19:00"));
-        await page.locator(".day-switcher").click();
-        expect(await readRanges(page)).toEqual(["05:00–07:00", "17:00–19:00", "19:00–20:00", "21:00–22:00"]);
+        await page.locator(".window-span").click();
+        expect(await readRanges(page)).toEqual(["17:00–19:00", "19:00–20:00", "21:00–22:00"]);
 
         // The "off" pulled back over the new block, then let go of it again.
         await tapAt(page, at("21:30"));
         const from = page.locator(".edit-panel select[data-from]");
         await from.selectOption(String(at("19:00")));
-        expect(await readRanges(page)).toEqual(["05:00–07:00", "17:00–19:00", "19:00–22:00"]);
+        expect(await readRanges(page)).toEqual(["17:00–19:00", "19:00–22:00"]);
         await from.selectOption(String(at("21:00")));
 
-        expect(await readRanges(page)).toEqual(["05:00–07:00", "17:00–19:00", "19:00–20:00", "21:00–22:00"]);
+        expect(await readRanges(page)).toEqual(["17:00–19:00", "19:00–20:00", "21:00–22:00"]);
     });
 
     /**
@@ -1031,16 +1045,17 @@ test.describe("entity day editor", () => {
         await mountEditor(page);
 
         await clickGapAt(page, at("19:00"));
-        await page.locator(".day-switcher").click();
-        expect(await readRanges(page)).toEqual(["05:00–07:00", "17:00–19:00", "19:00–20:00"]);
+        await page.locator(".window-span").click();
+        expect(await readRanges(page)).toEqual(["17:00–19:00", "19:00–20:00"]);
 
-        await dragAcross(page, at("16:00"), at("20:30"));
-        await page.locator(".day-switcher").click();
-        expect(await readRanges(page)).toEqual(["05:00–07:00", "16:00–21:00"]);
+        // Pressed just inside 16:00, so the slot edge cannot round to 15:00.
+        await dragAcross(page, at("16:10"), at("20:30"));
+        await page.locator(".window-span").click();
+        expect(await readRanges(page)).toEqual(["16:00–21:00"]);
 
         await tapAt(page, at("18:30"));
         await page.locator(".edit-panel [data-delete]").click();
-        expect(await readRanges(page)).toEqual(["05:00–07:00"]);
+        expect(await readRanges(page)).toEqual([]);
     });
 
     /**
@@ -1061,15 +1076,15 @@ test.describe("entity day editor", () => {
                 { bubbles: true, composed: true, detail: { action: { on: true }, valid: false } },
             ));
         });
-        expect(await readRanges(page)).toEqual(["05:00–07:00", "17:00–19:00"]);
+        expect(await readRanges(page)).toEqual(["17:00–19:00"]);
 
-        await page.locator(".day-switcher").click();
-        expect(await readRanges(page)).toEqual(["05:00–07:00", "17:00–19:00"]);
+        await page.locator(".window-span").click();
+        expect(await readRanges(page)).toEqual(["17:00–19:00"]);
 
         await tapAt(page, at("17:30"));
         expect(await editingRange(page)).toBe(`${at("17:00")}|${at("19:00")}`);
         await page.locator(".edit-panel [data-delete]").click();
-        expect(await readRanges(page)).toEqual(["05:00–07:00"]);
+        expect(await readRanges(page)).toEqual([]);
     });
 
     test("clicking outside closes the panel and keeps the edit in the draft", async ({ page }) => {
@@ -1079,7 +1094,7 @@ test.describe("entity day editor", () => {
         await tapAt(page, at("18:00"));
         await page.locator(".edit-panel select[data-to]").selectOption(String(at("21:00")));
 
-        await page.locator(".day-switcher").click();
+        await page.locator(".window-span").click();
         expect(await editingRange(page)).toBeNull();
 
         // The block keeps its new end, and Save still has something to write.
@@ -1093,15 +1108,16 @@ test.describe("entity day editor", () => {
         await loadCardBundle(page);
         await mountEditor(page, { straddling: true });
 
-        // 08:00-12:00 spans "now" (10:30), so 08:00-10:00 has already elapsed.
-        expect(await readRanges(page)).toEqual(["05:00–07:00", "08:00–12:00", "17:00–19:00"]);
+        // 08:00-12:00 spans "now" (10:30), so 08:00-10:00 has already elapsed
+        // and is not drawn: the band starts at the slot running now.
+        expect(await readRanges(page)).toEqual(["10:00–12:00", "17:00–19:00"]);
 
         await tapAt(page, at("11:00"));
 
-        // The session starts at the running slot, and the block stays whole on
-        // the band rather than losing the hours it has already run.
+        // The session starts at the running slot, and the block is not cut at
+        // the start of the session.
         expect(await editingRange(page)).toBe(`${at("10:00")}|${at("12:00")}`);
-        expect(await readRanges(page)).toEqual(["05:00–07:00", "08:00–12:00", "17:00–19:00"]);
+        expect(await readRanges(page)).toEqual(["10:00–12:00", "17:00–19:00"]);
     });
 
     test("a new block can start in the slot that is running now", async ({ page }) => {
@@ -1164,7 +1180,7 @@ test.describe("entity day editor", () => {
 
         // The press re-renders the segment, so the release retargets its click
         // to the dialog body. That click must not read as "clicked outside".
-        await page.locator("scheduling-entity-day-band .segment").nth(1).click();
+        await page.locator("scheduling-entity-day-band .segment").first().click();
 
         expect(await editingRange(page)).toBe(`${at("17:00")}|${at("19:00")}`);
     });
@@ -1175,7 +1191,7 @@ test.describe("entity day editor", () => {
 
         await dragAcross(page, at("18:00"), at("21:00"));
 
-        expect(await readRanges(page)).toEqual(["05:00–07:00", "20:00–22:00"]);
+        expect(await readRanges(page)).toEqual(["20:00–22:00"]);
 
         // The click that ends a drag retargets to the dialog body once the
         // segment has re-rendered; it must not read as "clicked outside" and
@@ -1201,10 +1217,11 @@ test.describe("entity day editor", () => {
         await page.mouse.down();
         // Grabbed and not yet moved: it already says where the run stands, so
         // the drag has something to be read against.
-        await expect(readout.locator(".drag-readout-range")).toHaveText("17:00–19:00");
+        // The band runs past midnight, so each end names its day.
+        await expect(readout.locator(".drag-readout-range")).toHaveText("pá 17:00–pá 19:00");
 
         await page.mouse.move(to.x, to.y, { steps: 8 });
-        await expect(readout.locator(".drag-readout-range")).toHaveText("20:00–22:00");
+        await expect(readout.locator(".drag-readout-range")).toHaveText("pá 20:00–pá 22:00");
         await expect(readout.locator(".drag-readout-duration")).toHaveText(/2/);
 
         // It belongs to the drag, and goes with it.
@@ -1264,50 +1281,37 @@ test.describe("entity day editor", () => {
 
     test("each run on the strip carries who put it there", async ({ page }) => {
         await loadCardBundle(page);
-        await mountEditor(page);
+        await mountEditor(page, { futureAutomation: true });
 
-        // 05:00-07:00 is the optimizer's, 17:00-19:00 the user's.
+        // 13:00-14:00 is the optimizer's, 17:00-19:00 the user's.
         expect((await readBlocks(page)).map((block) => block.authorship)).toEqual(["automation", "user"]);
     });
 
     /**
-     * The card pads today back to midnight so the forecast rows can show the
-     * hours that have gone. Those slots hold no schedule and must stay inert:
-     * the day is only wider to look at, not wider to write.
+     * The card pads today back to midnight, but the editor starts at now:
+     * nothing elapsed is drawn -- no washed-out past, no forecast for hours
+     * that have gone -- and nothing behind the editable boundary is on offer.
      */
-    test("padded elapsed hours are drawn but stay unwritable", async ({ page }) => {
+    test("nothing elapsed is drawn, and nothing behind the boundary is offered", async ({ page }) => {
         await loadCardBundle(page);
         await mountEditor(page, { pruned: true });
 
         const band = await page.evaluate(() => {
             const el = document.querySelector("scheduling-entity-day-editor") as any;
             const bandEl = el.shadowRoot.querySelector("scheduling-entity-day-band") as any;
-            const track = bandEl.shadowRoot.querySelector(".track") as HTMLElement;
-            const overlay = bandEl.shadowRoot.querySelector(".track .past-overlay") as HTMLElement;
             return {
                 contextRows: bandEl.shadowRoot.querySelectorAll(".context-row").length,
-                laneCount: bandEl.shadowRoot.querySelectorAll(".lane").length,
-                chartOverlays: bandEl.shadowRoot.querySelectorAll(".context-row .past-overlay").length,
-                nowMarkers: bandEl.shadowRoot.querySelectorAll(".now-marker").length,
-                // The elapsed hours carry forecast bars of their own.
-                barsBeforeNow: [...bandEl.shadowRoot.querySelectorAll(".context-bar")]
-                    .filter((bar: Element) => parseFloat((bar as HTMLElement).style.left) < 40).length,
-                pastWidthPct: (overlay.getBoundingClientRect().width / track.getBoundingClientRect().width) * 100,
+                pastOverlays: bandEl.shadowRoot.querySelectorAll(".past-overlay").length,
+                // The forecast is drawn for the window's slots alone.
+                slotHits: bandEl.shadowRoot.querySelectorAll(".context-row.price .slot-hit").length,
             };
         });
 
         expect(band.contextRows).toBe(3);
-        // The charts say "this is behind us" the same way the tracks do, and
-        // carry the same now-line, so the band reads as one day.
-        expect(band.chartOverlays).toBe(3);
-        expect(band.nowMarkers).toBe(band.contextRows + band.laneCount);
-        expect(band.barsBeforeNow).toBeGreaterThan(0);
-        // Ten of twenty-four hours have gone.
-        expect(band.pastWidthPct).toBeGreaterThan(40);
-        expect(band.pastWidthPct).toBeLessThan(43);
+        expect(band.pastOverlays).toBe(0);
+        // 10:00 on day one through 10:00 on day two: the window's 25 slots.
+        expect(band.slotHits).toBe(25);
 
-        // The morning run went with the pruning, so the evening one is the only
-        // block left -- and nothing behind the boundary is on offer for it.
         expect(await readRanges(page)).toEqual(["17:00–19:00"]);
         await tapAt(page, at("18:00"));
         const options = await page.evaluate(() => {
@@ -1334,21 +1338,21 @@ test.describe("entity day editor", () => {
                 band.shadowRoot.querySelectorAll(`${selector} .slot-hit`)[index]?.getAttribute("title");
             // The charts stack solar, battery, price.
             const chartRows = band.shadowRoot.querySelectorAll(".context-row:not(.price)");
+            // The window's slots, from the one running now (10:00).
             return {
-                // 09:00, an hour that has gone: it still answers.
-                battery: chartRows[1]?.querySelectorAll(".slot-hit")[9]?.getAttribute("title"),
-                price: rowTitle(".context-row.price", 9),
-                // 00:00 has no sun and so no bar, and still answers.
+                battery: chartRows[1]?.querySelectorAll(".slot-hit")[1]?.getAttribute("title"),
+                price: rowTitle(".context-row.price", 1),
+                // Midnight has no sun and so no bar, and still answers.
                 solarAtMidnight: chartRows[0]
-                    ?.querySelector(".slot-hit")?.getAttribute("title"),
+                    ?.querySelectorAll(".slot-hit")[14]?.getAttribute("title"),
                 hitsPerRow: band.shadowRoot.querySelectorAll(".context-row.price .slot-hit").length,
             };
         });
 
-        expect(titles.battery).toBe("scheduling.forecast.battery_label · 76 % · 09:00–10:00");
-        expect(titles.price).toBe("scheduling.forecast.price_label · 2.5 CZK/kWh · 09:00–10:00");
+        expect(titles.battery).toBe("scheduling.forecast.battery_label · 84 % · 11:00–12:00");
+        expect(titles.price).toBe("scheduling.forecast.price_label · 2.5 CZK/kWh · 11:00–12:00");
         expect(titles.solarAtMidnight).toBe("scheduling.forecast.solar_label · 0.0 kWh/h · 00:00–01:00");
-        expect(titles.hitsPerRow).toBe(24);
+        expect(titles.hitsPerRow).toBe(25);
     });
 
     /**
@@ -1366,9 +1370,11 @@ test.describe("entity day editor", () => {
         const values = await page.evaluate(() => {
             const el = document.querySelector("scheduling-entity-day-editor") as any;
             const band = el.shadowRoot.querySelector("scheduling-entity-day-band") as any;
+            // The window opens at 10:30, so a cell's hour is 10.5 plus its
+            // offset, floored: the running slot is clipped to the left edge.
             const read = (row: Element) => Object.fromEntries(
                 [...row.querySelectorAll(".slot-value")].map((cell) => [
-                    Math.round(Number.parseFloat((cell as HTMLElement).style.left) / 100 * 24),
+                    Math.floor(10.5 + Number.parseFloat((cell as HTMLElement).style.left) / 100 * 24 + 1e-6) % 24,
                     cell.textContent?.trim(),
                 ]),
             );
@@ -1382,12 +1388,13 @@ test.describe("entity day editor", () => {
 
         // Solar is kWh, the battery is whole percent, the price is its own unit
         // to one decimal -- the units belong to the row, not to the cell.
-        // 09:00 is the tenth hour: 0.81 kWh and 76 %.
-        expect(values.solar[9]).toBe("0.8");
-        expect(values.battery[9]).toBe("76");
+        // 12:00: 1.08 kWh; 10:00, the slot running now: 80 %.
+        expect(values.solar[12]).toBe("1.1");
+        expect(values.battery[10]).toBe("80");
         // This fixture prices the whole day at one rate, so the price row says
-        // it once and then leaves the bars to say it stayed there.
-        expect(values.price).toEqual({ 0: "2.5" });
+        // it once, at the window's first slot, and then leaves the bars to say
+        // it stayed there.
+        expect(values.price).toEqual({ 10: "2.5" });
     });
 
     /**
@@ -1438,18 +1445,6 @@ test.describe("entity day editor", () => {
         // The block underneath still opens for editing, through the grid.
         await band().locator(".segment").first().click();
         expect(await editingRange(page)).not.toBeNull();
-    });
-
-    test("a past block cannot be edited from the band either", async ({ page }) => {
-        await loadCardBundle(page);
-        await mountEditor(page);
-
-        // Pressing it is allowed -- that is how its lane gets selected -- but it
-        // opens no session, because none of its slots can still be written.
-        const pastSegment = page.locator("scheduling-entity-day-band .segment").first();
-        await expect(pastSegment).toHaveClass(/\bpast\b/);
-        await pastSegment.click();
-        expect(await editingRange(page)).toBeNull();
     });
 
     /**
@@ -1570,20 +1565,6 @@ test.describe("entity day editor", () => {
             ]);
         });
 
-        test("pressing a lane's elapsed stretch selects it, like its name does", async ({ page }) => {
-            await loadCardBundle(page);
-            await mountEditor(page, { multiLane: true });
-
-            // 03:00 is behind the editable boundary, so there is no gap button
-            // there and the press lands on the bare track.
-            const point = await trackPoint(page, Date.parse(`${DAY_ONE}T03:00:00Z`), "inverter");
-            await page.mouse.click(point.x, point.y);
-
-            const state = await laneState(page);
-            expect(state.lanes.find((lane) => lane.selected)?.key).toBe("inverter");
-            expect(await editingRange(page)).toBeNull();
-        });
-
         /**
          * The parent echoes a rebuilt action back after every keystroke, so the
          * SoC field must not re-seed itself from it: it would refill an emptied
@@ -1620,51 +1601,28 @@ test.describe("entity day editor", () => {
         });
 
         /**
-         * The past is a different fact from the plan: measured, authorless and
-         * finished. It is drawn on the same axis so a run still going meets its
-         * scheduled continuation, but it must not become something to edit.
+         * What really ran is the node detail's and the inspector's to show: the
+         * editor starts at now, so the lanes carry the plan and nothing else,
+         * and a lane's total is what it still has planned.
          */
-        test("what really ran is drawn behind the now-line, and counts", async ({ page }) => {
+        test("what really ran is not drawn, and does not count", async ({ page }) => {
             await loadCardBundle(page);
             await mountEditor(page, { multiLane: true });
 
             const lanes = await page.evaluate(() => {
                 const el = document.querySelector("scheduling-entity-day-editor") as any;
                 const band = el.shadowRoot.querySelector("scheduling-entity-day-band") as any;
-                return [...band.shadowRoot.querySelectorAll(".lane")].map((lane: Element) => ({
-                    key: lane.getAttribute("data-lane"),
-                    // Two elapsed hours merge into one run.
-                    actual: [...lane.querySelectorAll(".segment.actual")].map((segment: Element) => ({
-                        left: Math.round(parseFloat((segment as HTMLElement).style.left)),
-                        width: Math.round(parseFloat((segment as HTMLElement).style.width)),
-                    })),
-                    total: lane.querySelector(".lane-total")?.textContent?.trim() ?? null,
-                    totalTitle: lane.querySelector(".lane-total")?.getAttribute("title") ?? null,
-                }));
+                return Object.fromEntries([...band.shadowRoot.querySelectorAll(".lane")].map((lane: Element) => [
+                    lane.getAttribute("data-lane"),
+                    {
+                        actual: lane.querySelectorAll(".segment.actual").length,
+                        total: lane.querySelector(".lane-total")?.textContent?.trim() ?? null,
+                    },
+                ]));
             });
 
-            const boiler = lanes.find((lane) => lane.key === "boiler")!;
-            // 07:00-09:00 is one run of two hours, starting seven twenty-fourths in.
-            expect(boiler.actual).toHaveLength(1);
-            expect(boiler.actual[0].left).toBe(29);
-            expect(boiler.actual[0].width).toBe(8);
-
-            // Pointing at it is allowed; editing it is not -- there is nothing
-            // left to change about an hour that has gone.
-            await page.locator('.lane[data-lane="boiler"] .segment.actual').click();
-            expect(await editingRange(page)).toBeNull();
-            // Two hours really run, plus the four this fixture still holds in
-            // the schedule (the morning block as well as the evening one --
-            // today's elapsed slots are pruned in production, not here).
-            expect(boiler.total).toBe("6 h");
-            expect(boiler.totalTitle).toBe("2 h + 4 h");
-
-            // Half an hour of charging is half an hour, however wide it is
-            // drawn -- plus the two hours this lane holds in the evening.
-            const inverter = lanes.find((lane) => lane.key === "inverter")!;
-            expect(inverter.actual).toHaveLength(1);
-            expect(inverter.total).toBe("2,5 h");
-            expect(inverter.totalTitle).toBe("0,5 h + 2 h");
+            expect(lanes.boiler).toEqual({ actual: 0, total: "2 h" });
+            expect(lanes.inverter).toEqual({ actual: 0, total: "2 h" });
         });
 
         /**
@@ -1688,42 +1646,13 @@ test.describe("entity day editor", () => {
                 return { inverter: read("inverter"), boiler: read("boiler") };
             });
 
-            // The 09:00 charge it really ran and the 20:00 block both follow a
-            // gap; 21:00 follows a run it differs from.
+            // The 20:00 block follows a gap; 21:00 follows a run it differs from.
+            // The window opens at 10:30, so 20:00 is 9.5 of its 24 hours in.
             expect(marked.inverter).toEqual([
-                { left: 38, changed: false },
-                { left: 83, changed: false },
-                { left: 88, changed: true },
+                { left: 40, changed: false },
+                { left: 44, changed: true },
             ]);
-
-            // The boiler's morning run continues into what it really did at
-            // 07:00 -- same action, so no cut: that seam has to read as one bar.
             expect(marked.boiler.every((segment) => !segment.changed)).toBe(true);
-        });
-
-        /**
-         * A run you cannot point at cannot tell you what it was, so the past
-         * keeps its hit area: hovering names it, pressing selects its lane.
-         */
-        test("what really ran names itself on hover and selects its lane", async ({ page }) => {
-            await loadCardBundle(page);
-            await mountEditor(page, { multiLane: true });
-
-            const segment = page.locator('.lane[data-lane="boiler"] .segment.actual');
-            await expect(segment).toHaveAttribute(
-                "title",
-                // Two whole hours really run, said in the same words the
-                // scheduled runs use.
-                "Boiler · scheduling.appliance.generic.action.on · 07:00–09:00 (2 h)",
-            );
-
-            await segment.click();
-            const selected = await page.evaluate(() => {
-                const el = document.querySelector("scheduling-entity-day-editor") as any;
-                const band = el.shadowRoot.querySelector("scheduling-entity-day-band") as any;
-                return band.shadowRoot.querySelector(".lane.selected")?.getAttribute("data-lane");
-            });
-            expect(selected).toBe("boiler");
         });
 
         test("an entity that cannot be reached is still a lane", async ({ page }) => {
@@ -1736,6 +1665,310 @@ test.describe("entity day editor", () => {
             expect(state.lanes.find((lane) => lane.selected)?.key).toBe("pump");
             expect(state.panelLane).toBe("Pump");
         });
+    });
+});
+
+/**
+ * The window: 24 hours from now, slid along the horizon rather than switched
+ * between days. The band only reports where it was asked to go; the editor
+ * owns the window, snaps it to slots and holds it inside the horizon.
+ */
+test.describe("entity day editor, window", () => {
+    const HOUR_MS = 3_600_000;
+
+    const readWindow = (page: Page) => page.evaluate(() => {
+        const el = document.querySelector("scheduling-entity-day-editor") as any;
+        const band = el.shadowRoot.querySelector("scheduling-entity-day-band") as any;
+        return { startMs: band.windowStartMs as number, endMs: band.windowEndMs as number };
+    });
+
+    /** The axis strip's box, which is the handle the window is moved by. */
+    const axisBox = (page: Page) => page.evaluate(() => {
+        const el = document.querySelector("scheduling-entity-day-editor") as any;
+        const band = el.shadowRoot.querySelector("scheduling-entity-day-band") as any;
+        const rect = band.shadowRoot.querySelector(".axis").getBoundingClientRect();
+        return { left: rect.left, width: rect.width, y: rect.top + rect.height / 2 };
+    });
+
+    async function dragAxis(page: Page, dx: number): Promise<void> {
+        const box = await axisBox(page);
+        const x = box.left + box.width / 2;
+        await page.mouse.move(x, box.y);
+        await page.mouse.down();
+        await page.mouse.move(x + dx, box.y, { steps: 6 });
+        await page.mouse.up();
+    }
+
+    test("opens with the window starting at now and spanning 24 hours", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page);
+
+        expect(await readWindow(page)).toEqual({ startMs: NOW_MS, endMs: NOW_MS + 24 * HOUR_MS });
+        await expect(page.locator('[data-jump="now"]')).toHaveAttribute("aria-pressed", "true");
+        await expect(page.locator('[data-jump="tomorrow"]')).toHaveAttribute("aria-pressed", "false");
+        // 2026-07-25 is a Saturday.
+        await expect(page.locator(".window-span")).toHaveText("scheduling.window.now_mark → so 10:30");
+    });
+
+    test("dragging the axis slides the window by whole slots and stops at both clamps", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page);
+
+        // Dragging the axis left pulls later hours into view.
+        const box = await axisBox(page);
+        await dragAxis(page, -box.width * (3.2 / 24));
+        const moved = await readWindow(page);
+        expect(moved.startMs).toBe(at("14:00"));
+        expect(moved.endMs - moved.startMs).toBe(24 * HOUR_MS);
+
+        // Far right: back to now exactly, the one start that is not a slot edge.
+        await dragAxis(page, box.width);
+        expect((await readWindow(page)).startMs).toBe(NOW_MS);
+        await expect(page.locator('[data-jump="now"]')).toHaveAttribute("aria-pressed", "true");
+
+        // Far left: the last start that still shows 24 hours of the horizon,
+        // which ends at day two's midnight.
+        await dragAxis(page, -box.width);
+        await dragAxis(page, -box.width);
+        expect(await readWindow(page)).toEqual({ startMs: at("00:00", DAY_TWO), endMs: at("00:00", DAY_TWO) + 24 * HOUR_MS });
+    });
+
+    test("a right-button drag on a track pans and does not paint", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page);
+
+        const from = await trackPoint(page, at("14:00"));
+        const box = await axisBox(page);
+        await page.mouse.move(from.x, from.y);
+        await page.mouse.down({ button: "right" });
+        await page.mouse.move(from.x - box.width * (2.4 / 24), from.y, { steps: 6 });
+        await page.mouse.up({ button: "right" });
+
+        // 10:30 plus 2.4 hours, snapped to the nearest slot.
+        expect((await readWindow(page)).startMs).toBe(at("13:00"));
+        expect(await editingRange(page)).toBeNull();
+        expect(await saveDisabled(page)).toBe(true);
+    });
+
+    test("a sideways wheel slides the window too", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page);
+
+        const from = await trackPoint(page, at("14:00"));
+        const box = await axisBox(page);
+        await page.mouse.move(from.x, from.y);
+        await page.mouse.wheel(box.width * (4 / 24), 0);
+
+        await expect.poll(async () => (await readWindow(page)).startMs).toBe(at("15:00"));
+    });
+
+    test("Now and Tomorrow jump the window", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page);
+
+        await page.locator('[data-jump="tomorrow"]').click();
+        expect((await readWindow(page)).startMs).toBe(at("00:00", DAY_TWO));
+        await expect(page.locator('[data-jump="tomorrow"]')).toHaveAttribute("aria-pressed", "true");
+        await expect(page.locator('[data-jump="now"]')).toHaveAttribute("aria-pressed", "false");
+        await expect(page.locator(".window-span")).toHaveText("so 00:00 → ne 00:00");
+
+        await page.locator('[data-jump="now"]').click();
+        expect((await readWindow(page)).startMs).toBe(NOW_MS);
+        await expect(page.locator('[data-jump="now"]')).toHaveAttribute("aria-pressed", "true");
+    });
+
+    test("Override from here starts at the window's left edge", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page);
+
+        await page.locator('[data-jump="tomorrow"]').click();
+        await page.locator('.edit-panel [data-start-pick="plus_3h"]').click();
+        expect(await editingRange(page)).toBe(`${at("00:00", DAY_TWO)}|${at("03:00", DAY_TWO)}`);
+    });
+
+    test("a block crossing midnight is one block with one selection", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { overMidnight: true });
+
+        expect(await readRanges(page)).toEqual(["17:00–19:00", "22:00–02:00"]);
+
+        await tapAt(page, at("01:00", DAY_TWO));
+        expect(await editingRange(page)).toBe(`${at("22:00")}|${at("02:00", DAY_TWO)}`);
+        await expect(page.locator("scheduling-entity-day-band .segment.editing")).toHaveCount(1);
+        // Its ends name their days, since the same hour occurs twice.
+        await expect(page.locator(".edit-panel select[data-from] option:checked")).toHaveText("pá 22:00");
+        await expect(page.locator(".edit-panel select[data-to] option:checked")).toHaveText("so 02:00");
+    });
+
+    test("the midnight is named and ruled, and the now label clears the hours", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { multiLane: true });
+        // The label as it reads, rather than its key: its room is sized for "now".
+        await page.evaluate(async () => {
+            const el = document.querySelector("scheduling-entity-day-editor") as any;
+            el.localize = (key: string) => key === "scheduling.window.now_mark" ? "now" : key;
+            await el.updateComplete;
+        });
+
+        const axis = await page.evaluate(() => {
+            const el = document.querySelector("scheduling-entity-day-editor") as any;
+            const band = el.shadowRoot.querySelector("scheduling-entity-day-band") as any;
+            const root = band.shadowRoot;
+            const now = root.querySelector(".axis-now") as HTMLElement;
+            const nowRect = now.getBoundingClientRect();
+            const hours = [...root.querySelectorAll(".axis-tick:not(.axis-now)")] as HTMLElement[];
+            return {
+                now: now.textContent?.replace(/\s+/g, " ").trim(),
+                midnights: [...root.querySelectorAll(".axis-tick.midnight")].map((tick: Element) => tick.textContent?.trim()),
+                // One dashed line per row: three lanes, no forecast rows here.
+                midnightLines: root.querySelectorAll(".lane .time-grid-line.midnight").length,
+                overlapping: hours.filter((tick) => tick.getBoundingClientRect().left < nowRect.right).length,
+                hourCount: hours.length,
+            };
+        });
+
+        expect(axis.now).toBe("now 10:30");
+        expect(axis.midnights).toEqual(["so"]);
+        expect(axis.midnightLines).toBe(3);
+        expect(axis.hourCount).toBeGreaterThan(3);
+        expect(axis.overlapping).toBe(0);
+    });
+
+    /** Park the window at a later start, as a pan that landed there would. */
+    async function viewFrom(page: Page, startMs: number): Promise<void> {
+        await page.evaluate(async (ms) => {
+            const el = document.querySelector("scheduling-entity-day-editor") as any;
+            el._setViewStart(ms);
+            await el.updateComplete;
+            await el.shadowRoot.querySelector("scheduling-entity-day-band").updateComplete;
+        }, startMs);
+    }
+
+    test("the midnight closing the horizon reads as 24:00, with its day when there are two", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { oneDay: true });
+        await tapAt(page, at("18:00"));
+        await expect(page.locator(".edit-panel select[data-to] option").last()).toHaveText("24:00");
+
+        await page.evaluate(() => document.querySelector("scheduling-entity-day-editor")!.remove());
+        await mountEditor(page);
+        await tapAt(page, at("18:00"));
+        // Day two, 2026-07-25, is a Saturday: its own end, not Sunday's 00:00.
+        await expect(page.locator(".edit-panel select[data-to] option").last()).toHaveText("so 24:00");
+    });
+
+    test("an edge the window crops has no handle, so a drag cannot cut off what is hidden", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { overMidnight: true });
+        await viewFrom(page, at("23:00"));
+        await tapAt(page, at("01:00", DAY_TWO));
+        expect(await editingRange(page)).toBe(`${at("22:00")}|${at("02:00", DAY_TWO)}`);
+
+        const handles = await page.evaluate(() => {
+            const el = document.querySelector("scheduling-entity-day-editor") as any;
+            const band = el.shadowRoot.querySelector("scheduling-entity-day-band") as any;
+            const segment = band.shadowRoot.querySelector(".segment.editing");
+            return { start: segment.querySelectorAll(".handle.start").length, end: segment.querySelectorAll(".handle.end").length };
+        });
+        expect(handles).toEqual({ start: 0, end: 1 });
+        // The picker still reaches the hidden start.
+        await expect(page.locator(".edit-panel select[data-from] option:checked")).toHaveText("pá 22:00");
+    });
+
+    test("a lane's total counts only the hours the window shows", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { overMidnight: true });
+        const total = () => page.evaluate(() => {
+            const el = document.querySelector("scheduling-entity-day-editor") as any;
+            const band = el.shadowRoot.querySelector("scheduling-entity-day-band") as any;
+            return band.shadowRoot.querySelector('.lane[data-lane="boiler"] .lane-total')?.textContent?.trim();
+        });
+
+        // 17:00-19:00 and 22:00-02:00, both in a window opening at now.
+        expect(await total()).toBe("6 h");
+        // From 23:00 the first is gone and an hour of the second with it.
+        await viewFrom(page, at("23:00"));
+        expect(await total()).toBe("3 h");
+    });
+
+    test("a free stretch scrolled off is no button to tab to", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page);
+        await page.locator('[data-jump="tomorrow"]').click();
+
+        const gaps = await page.evaluate(async () => {
+            const el = document.querySelector("scheduling-entity-day-editor") as any;
+            const band = el.shadowRoot.querySelector("scheduling-entity-day-band") as any;
+            await band.updateComplete;
+            return [...band.shadowRoot.querySelectorAll('.lane[data-lane="boiler"] .gap')]
+                .map((gap: Element) => parseFloat((gap as HTMLElement).style.width));
+        });
+        // 10:00-17:00 on day one is off screen; only 19:00 onwards reaches in.
+        expect(gaps).toHaveLength(1);
+        expect(gaps[0]).toBeGreaterThan(0);
+    });
+
+    test("a paint dragged past the window's edge stops at it", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page);
+
+        await dragAcross(page, at("08:30", DAY_TWO), at("11:30", DAY_TWO));
+        // The window ends at 10:30 on day two: the paint ends with its slot.
+        expect(await editingRange(page)).toBe(`${at("08:00", DAY_TWO)}|${at("11:00", DAY_TWO)}`);
+    });
+
+    test("a wheel flicked past now builds no overshoot to scroll back through", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page);
+
+        const from = await trackPoint(page, at("14:00"));
+        const box = await axisBox(page);
+        await page.mouse.move(from.x, from.y);
+        await page.mouse.wheel(-box.width * (6 / 24), 0);
+        await page.mouse.wheel(box.width * (4 / 24), 0);
+
+        await expect.poll(async () => (await readWindow(page)).startMs).toBe(at("15:00"));
+    });
+
+    /**
+     * A second finger turns the press into a pan, and whatever the first
+     * finger had started is rolled back to the draft at the press.
+     */
+    test("a second finger rolls back the first finger's paint and pans", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page);
+
+        const from = await trackPoint(page, at("13:30"));
+        const to = await trackPoint(page, at("15:30"));
+        const box = await axisBox(page);
+        await page.evaluate(({ from, to, slotPx }) => {
+            const el = document.querySelector("scheduling-entity-day-editor") as any;
+            const band = el.shadowRoot.querySelector("scheduling-entity-day-band") as any;
+            const target = band.shadowRoot.elementFromPoint(from.x, from.y) as Element;
+            const touch = (type: string, pointerId: number, x: number, on: EventTarget) => on.dispatchEvent(
+                new PointerEvent(type, {
+                    pointerId, pointerType: "touch", isPrimary: pointerId === 1, button: 0,
+                    clientX: x, clientY: from.y, bubbles: true, composed: true, cancelable: true,
+                }),
+            );
+            touch("pointerdown", 1, from.x, target);
+            touch("pointermove", 1, to.x, window);
+            (window as any).paintedBeforePan = el._editing !== null;
+            touch("pointerdown", 2, to.x + 40, target);
+            // Both fingers move 2.4 hours to the left: the window follows.
+            touch("pointermove", 1, to.x - 2.4 * slotPx, window);
+            touch("pointermove", 2, to.x + 40 - 2.4 * slotPx, window);
+            touch("pointerup", 2, to.x + 40 - 2.4 * slotPx, window);
+            // The finger left behind starts nothing.
+            touch("pointermove", 1, to.x - 6 * slotPx, window);
+            touch("pointerup", 1, to.x - 6 * slotPx, window);
+        }, { from, to, slotPx: box.width / 24 });
+
+        expect(await page.evaluate(() => (window as any).paintedBeforePan)).toBe(true);
+        expect(await editingRange(page)).toBeNull();
+        expect(await saveDisabled(page)).toBe(true);
+        // 10:30 plus 2.4 hours, snapped to the nearest slot.
+        expect((await readWindow(page)).startMs).toBe(at("13:00"));
     });
 });
 
@@ -1819,7 +2052,8 @@ test.describe("entity day editor, explain mode", () => {
             };
         });
         await enterExplain(page);
-        await page.waitForFunction(() => (window as any).explanationCalls === 1);
+        // One per local day the window shows: the rest of day one, and day two.
+        await page.waitForFunction(() => (window as any).explanationCalls === 2);
         await page.evaluate(async () => {
             const el = document.querySelector("scheduling-entity-day-editor") as any;
             el.open = false;
@@ -1828,28 +2062,28 @@ test.describe("entity day editor, explain mode", () => {
             await el.updateComplete;
             el._setMode("explain");
         });
-        expect(await page.evaluate(() => (window as any).explanationCalls)).toBe(1);
+        expect(await page.evaluate(() => (window as any).explanationCalls)).toBe(2);
     });
 
-    test("typing in the editor keeps the derived days", async ({ page }) => {
+    test("typing in the editor keeps the derived horizon", async ({ page }) => {
         await loadCardBundle(page);
         await mountEditor(page, { multiLane: true });
         await tapAt(page, at("13:00"), "inverter");
         await tapAt(page, at("13:00"), "inverter");
         const sameDays = await page.evaluate(async () => {
             const el = document.querySelector("scheduling-entity-day-editor") as any;
-            const before = el._days();
+            const before = el._horizon();
             const actionEditor = el.shadowRoot.querySelector("scheduling-entity-action-editor") as any;
             const field = actionEditor.shadowRoot.querySelector(".target-field input") as HTMLInputElement;
             field.value = "75";
             field.dispatchEvent(new Event("input", { bubbles: true }));
             await el.updateComplete;
-            return el._days() === before;
+            return el._horizon() === before;
         });
         expect(sameDays).toBe(true);
     });
 
-    test("the lanes are split into the day's slots, and nothing is preselected", async ({ page }) => {
+    test("the lanes are split into the window's slots, and nothing is preselected", async ({ page }) => {
         await loadCardBundle(page);
         await mountEditor(page, { multiLane: true, explainable: true });
         await enterExplain(page);
@@ -1859,7 +2093,7 @@ test.describe("entity day editor, explain mode", () => {
             const band = el.shadowRoot.querySelector("scheduling-entity-day-band") as any;
             return band.shadowRoot.querySelectorAll('.lane[data-lane="inverter"] .slot-pick').length;
         });
-        expect(picks).toBe(24);
+        expect(picks).toBe(25);
 
         // A diagram nobody asked for would be about a slot nobody pressed.
         await expect(editor(page).locator(".explain-hint")).toHaveCount(1);
@@ -1935,7 +2169,6 @@ test.describe("entity day editor, explain mode", () => {
             el._drafts = { boiler: { "slot-1": { kind: "switch", on: true } } };
             el._blockSplits = { boiler: new Set([12345]) };
             el._selectedLaneKey = "boiler";
-            el._dayIndex = 1;
 
             const snapshot = el.snapshotDraftState();
 
@@ -1943,19 +2176,17 @@ test.describe("entity day editor, explain mode", () => {
             el._seedFromSlots();
 
             // Restore for different target
-            el.restoreDraftState(snapshot, "inverter", null);
+            el.restoreDraftState(snapshot, "inverter");
             const forInverter = {
                 drafts: el._drafts,
                 selected: el._selectedLaneKey,
-                dayIndex: el._dayIndex,
             };
 
             // Restore for same target
-            el.restoreDraftState(snapshot, "boiler", null);
+            el.restoreDraftState(snapshot, "boiler");
             const forBoiler = {
                 drafts: el._drafts,
                 selected: el._selectedLaneKey,
-                dayIndex: el._dayIndex,
             };
 
             return { snapshot, forInverter, forBoiler };
@@ -1964,7 +2195,6 @@ test.describe("entity day editor, explain mode", () => {
         expect(result.snapshot.drafts).toEqual({ boiler: { "slot-1": { kind: "switch", on: true } } });
         expect(result.forInverter.drafts).toEqual({ boiler: { "slot-1": { kind: "switch", on: true } } });
         expect(result.forInverter.selected).toBe("inverter");
-        expect(result.forInverter.dayIndex).toBe(1);
         expect(result.forBoiler.selected).toBe("boiler");
     });
 });

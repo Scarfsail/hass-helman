@@ -21,6 +21,7 @@ import {
 } from "../model/controllable-entity-status";
 import {
     buildEntityScheduleDays,
+    buildEntityScheduleHorizon,
     type EntityScheduleDay,
     type EntityScheduleLane,
     type EntityScheduleTarget,
@@ -94,9 +95,10 @@ export class SchedulingDayEditorHost extends LitElement {
      * Something beside this host draws the day, so it must always be complete.
      *
      * The inspector's band is that something. A card that only ever opens the
-     * dialog — the power card — leaves this off and pays for the recorder's
-     * morning and the projections when somebody actually asks for an editor,
-     * rather than on every schedule refresh for every user who never does.
+     * dialog — the power card — leaves this off and pays for the projections
+     * when somebody actually asks for an editor, rather than on every schedule
+     * refresh for every user who never does. The recorder's morning is read
+     * only for that band: the editor starts at now and draws nothing elapsed.
      */
     @property({ type: Boolean }) public preload = false;
     @state() private _ownerSnapshot: ScheduleOwnerSnapshot = EMPTY_SCHEDULE_OWNER_SNAPSHOT;
@@ -116,14 +118,6 @@ export class SchedulingDayEditorHost extends LitElement {
      * event, which never arrives if the element was torn out at the same moment.
      */
     @state() private _editorMounted = false;
-    /**
-     * The day the open dialog was asked for, or null for today.
-     *
-     * Per opening, not per host: a band press means the day the band is
-     * drawing, while a badge press means today whatever day is on screen
-     * around it, since a badge reports the slot running now.
-     */
-    @state() private _editorDayKey: string | null = null;
     /** The schedule changed under the open draft; Save will overwrite what arrived. */
     @state() private _editorScheduleChanged = false;
     /**
@@ -218,18 +212,22 @@ export class SchedulingDayEditorHost extends LitElement {
      * the roster has not loaded, or the appliance cannot be authored, and an
      * editor listing the day beats a press that does nothing.
      */
-    public openFor(target: EntityScheduleTarget | null, dayKey: string | null = null): void {
-        if (this._normalized.slots.length === 0) {
+    public openFor(target: EntityScheduleTarget | null): void {
+        // The editor draws only what lies ahead; with all of it elapsed it
+        // would render nothing and never close.
+        const slotMinutes = this._lastSlotMinutes;
+        if (slotMinutes === null
+            || buildEntityScheduleHorizon({ slots: this._dayView.slots, slotMinutes, nowMs: this._nowMs }) === null) {
             return;
         }
         if (this._editorMounted) {
-            void this._reopenFor(target, dayKey);
+            void this._reopenFor(target);
             return;
         }
-        this._applyOpenFor(target, dayKey);
+        this._applyOpenFor(target);
     }
 
-    private async _reopenFor(target: EntityScheduleTarget | null, dayKey: string | null): Promise<void> {
+    private async _reopenFor(target: EntityScheduleTarget | null): Promise<void> {
         let opening = ++this._editorOpening;
         const existingEditor = this.shadowRoot?.querySelector<SchedulingEntityDayEditor>("scheduling-entity-day-editor");
         const draftSnapshot = existingEditor?.snapshotDraftState();
@@ -246,7 +244,7 @@ export class SchedulingDayEditorHost extends LitElement {
         if (opening !== this._editorOpening) {
             return;
         }
-        this._applyOpenFor(target, dayKey);
+        this._applyOpenFor(target);
         this._editorScheduleAtOpen = scheduleAtOpen;
         this._editorScheduleChanged = scheduleChanged;
         this._editorSaveError = saveError;
@@ -258,13 +256,12 @@ export class SchedulingDayEditorHost extends LitElement {
         if (draftSnapshot) {
             this.shadowRoot
                 ?.querySelector<SchedulingEntityDayEditor>("scheduling-entity-day-editor")
-                ?.restoreDraftState(draftSnapshot, target, dayKey);
+                ?.restoreDraftState(draftSnapshot, target);
         }
     }
 
-    private _applyOpenFor(target: EntityScheduleTarget | null, dayKey: string | null = null): void {
+    private _applyOpenFor(target: EntityScheduleTarget | null): void {
         this._opened = true;
-        void this._loadActualHistory();
         void this._loadForecast();
         void this._loadProjections();
         this._editorOpening += 1;
@@ -274,7 +271,6 @@ export class SchedulingDayEditorHost extends LitElement {
         this._editorLane = target === null
             ? null
             : this._lanes.find((lane) => lane.target === target) ?? null;
-        this._editorDayKey = dayKey;
         this._editorMounted = true;
         this._editorOpen = true;
     }
@@ -347,8 +343,6 @@ export class SchedulingDayEditorHost extends LitElement {
                 .forecastPoints=${this._dayView.forecastPoints}
                 .projectionIndex=${this._projectionIndex}
                 .priceUnit=${this._forecastMap.priceDisplayUnit}
-                .currentDayKey=${this._normalized.currentDayKey}
-                .initialDayKey=${this._editorDayKey ?? this._normalized.currentDayKey}
                 .locale=${this._locale}
                 .timeZone=${this.timeZone}
                 .nowMs=${this._nowMs}
@@ -366,7 +360,6 @@ export class SchedulingDayEditorHost extends LitElement {
         this._editorOpen = false;
         this._editorMounted = false;
         this._editorLane = null;
-        this._editorDayKey = null;
         this._editorScheduleChanged = false;
         this._editorSaveError = null;
         this._editorScheduleAtOpen = null;
@@ -470,8 +463,10 @@ export class SchedulingDayEditorHost extends LitElement {
         }
         this._projectionLoadGeneration += 1;
         this._projectionIndex = EMPTY_SCHEDULE_APPLIANCE_PROJECTION_INDEX;
-        if (snapshot.schedule !== null && (this.preload || this._opened)) {
+        if (snapshot.schedule !== null && this.preload) {
             void this._loadActualHistory();
+        }
+        if (snapshot.schedule !== null && (this.preload || this._opened)) {
             void this._loadProjections();
         }
     }
@@ -534,7 +529,7 @@ export class SchedulingDayEditorHost extends LitElement {
             }
             this._controllables = controllables;
             this._emitWatchedEntities();
-            if (this.preload || this._opened) {
+            if (this.preload) {
                 void this._loadActualHistory();
             }
         } catch (error) {
@@ -547,7 +542,8 @@ export class SchedulingDayEditorHost extends LitElement {
     }
 
     /**
-     * What the entities really did earlier today, from the recorder.
+     * What the entities really did earlier today, from the recorder, for the
+     * band drawn beside this host -- the editor itself starts at now.
      *
      * Failure is silent: the day is perfectly readable with the morning blank,
      * and an error banner would be louder than the loss.
