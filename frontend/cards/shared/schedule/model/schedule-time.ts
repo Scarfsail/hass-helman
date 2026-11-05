@@ -253,11 +253,18 @@ export function formatScheduleInstantLabel(
     const parts = getScheduleLocalTimeParts(atMs, timeZone);
     const day = formatScheduleDayLabel({ dayKey: parts?.dayKey ?? "", currentDayKey, locale, todayLabel, tomorrowLabel });
     const label = `${day} ${formatScheduleTime(atMs, locale, timeZone)}`;
+    const offset = getScheduleRepeatedHourOffset(atMs, timeZone);
+    return offset === null ? label : `${label} (UTC${offset})`;
+}
+
+/** The UTC offset of an instant whose local clock time occurs twice (daylight saving ends), else null. */
+export function getScheduleRepeatedHourOffset(atMs: number, timeZone: string): string | null {
+    const parts = getScheduleLocalTimeParts(atMs, timeZone);
     const repeated = parts !== null && [atMs - 3_600_000, atMs + 3_600_000].some((otherMs) => {
         const other = getScheduleLocalTimeParts(otherMs, timeZone);
         return other?.dayKey === parts.dayKey && other.hour === parts.hour && other.minute === parts.minute;
     });
-    return repeated ? `${label} (UTC${parts.offset})` : label;
+    return repeated ? parts.offset : null;
 }
 
 export function getScheduleLocalTimeParts(

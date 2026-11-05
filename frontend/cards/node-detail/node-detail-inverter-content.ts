@@ -1,6 +1,6 @@
 import { formatPower } from "../shared/format";
 import { css, html, nothing, svg } from "lit";
-import { customElement, property, state } from "lit/decorators.js";
+import { customElement, property } from "lit/decorators.js";
 import { fillTemplate } from "../localize/localize";
 import type {
     InverterDetailPayload,
@@ -34,13 +34,11 @@ import { powerUnitFactor } from "../shared/power-reading";
 import { nodeDetailPictureStyles, nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import type { InverterDetailParams } from "./node-detail-types";
 import { LaneOwnershipController } from "./lane-ownership";
-import { DialogHistoryController } from "../shared/dialog-history-controller";
-import type { ControlOverrideDialog } from "./control-override-dialog";
+import { openScheduleEditorOnLane } from "../shared/schedule/dialogs/scheduling-day-editor-host";
 import { boldTemplate } from "./detail-section";
 import { historyRow, historySummary, renderShowMore, sectionNotReady, subTitle } from "./node-detail-history";
 import "./detail-headline";
 import "./help-tip";
-import "./control-override-dialog";
 
 const PHASES = [1, 2, 3] as const;
 
@@ -188,25 +186,11 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
     protected readonly _node = "inverter" as const;
 
     @property({ attribute: false }) public params!: InverterDetailParams;
-    @state() private _overrideOpen = false;
     private readonly _lanes = new LaneOwnershipController(this, () => this.hass);
-    private readonly _history = new DialogHistoryController(this, "__helmanInverterOverrideId", {
-        onBack: () => {
-            const dialog = this.renderRoot.querySelector<ControlOverrideDialog>("control-override-dialog");
-            if (dialog === null) return false;
-            queueMicrotask(() => dialog.requestClose());
-            return true;
-        },
-        close: () => { this._overrideOpen = false; },
-    });
+    /** Ask the card hosting the detail to open its day editor on the inverter's lane alone. */
     private _openOverride(): void {
-        this._overrideOpen = true;
-        this._history.push();
+        openScheduleEditorOnLane(this, INVERTER_CONTROLLABLE_ID);
     }
-    private _onOverrideClosed = (): void => {
-        this._history.closed();
-        this._overrideOpen = false;
-    };
 
     /** The inverter's plan. */
     private readonly _plan = this._useSchedule(inverterRuns);
@@ -267,10 +251,6 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
                     <div class="row"><span class="label">${this.localize("node_detail.shared.temperature")}</span><span>${this._reading(overview, "inverter_temperature") ?? "—"}</span></div>
                 </div>
                 <button type="button" class="outline-button" ?disabled=${!controllable?.supportsAuthoring} @click=${this._openOverride}>${this.localize("node_detail.shared.override_mode")}</button>
-                ${this._overrideOpen && controllable ? html`<control-override-dialog .hass=${this.hass} .localize=${this.localize}
-                    .controllable=${controllable} .normalized=${this._lanes.normalized}
-                    .executionEnabled=${this._lanes.snapshot.schedule?.executionEnabled ?? false} .open=${true}
-                    @closed=${this._onOverrideClosed}></control-override-dialog>` : nothing}
             </div>
         `;
     }

@@ -213,6 +213,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             } } },
             replies: {
                 "helman/get_appliances": { appliances: [{ id: "inverter", name: "Inverter", kind: "inverter", primaryEntityId: "select.helman_inverter_mode", supportsAuthoring: true, normalState: "normal", actionOptions: { normal: "normal", stop_export: "stop_export" } }] },
+                "helman/set_schedule": () => schedule,
                 "helman/get_node_detail": async (msg: {
                     type: string;
                     node?: string;
@@ -261,14 +262,41 @@ test("inverter Overview shows the P1 detail layout", async ({ page }) => {
     await expect(c.locator("[data-verdict]")).toBeVisible();
 });
 
+/** The simple card's day editor, as Override mode opens it over the detail. */
+const editor = (page: Page) => page.locator("scheduling-entity-day-editor");
+const editorState = (page: Page) => page.evaluate(async () => {
+    const host = document.querySelector("helman-simple-card")!.shadowRoot!.querySelector("scheduling-day-editor-host") as any;
+    await host.updateComplete;
+    const editor = host.shadowRoot.querySelector("scheduling-entity-day-editor") as any;
+    return { open: editor?.open === true, selected: editor?._selectedLaneKey ?? null, single: editor?.single === true };
+});
+
+test("Overview's Override mode opens the editor on the inverter alone and saves a claimed hour", async ({ page }) => {
+    await mount(page);
+    await page.locator(".inverter-cell").click();
+    await content(page).getByRole("button", { name: /Override mode/ }).click();
+    await expect.poll(() => editorState(page)).toEqual({ open: true, selected: "inverter", single: true });
+    await expect.poll(() => editor(page).locator("ha-dialog").evaluate((dialog: any) => dialog.heading)).toBe("Schedule · Inverter");
+    await expect(editor(page).locator("scheduling-entity-day-band .lane")).toHaveCount(1);
+    await editor(page).locator('.edit-panel [data-start-pick="plus_1h"]').click();
+    await editor(page).locator("ha-button[slot=primaryAction]").click();
+    await expect.poll(() => editorState(page).then((state) => state.open)).toBe(false);
+    await expect(content(page)).toBeVisible();
+    const writes = await page.evaluate(() => window.__NodeDetailRequests.filter((r) => r.type === "helman/set_schedule").map((r) => r.slots));
+    // From the slot in progress, holding what the automation has it doing, each slot claimed by the user.
+    expect(writes).toEqual([["12:00", "12:15", "12:30", "12:45"].map((time) => ({
+        id: `2026-10-21T${time}:00+00:00`, controllables: { inverter: { kind: "normal" } },
+    }))]);
+});
+
 test("Back closes the Overview mode override and keeps the inverter detail", async ({ page }) => {
     await mount(page);
     await page.locator(".inverter-cell").click();
     await content(page).getByRole("button", { name: /Override mode/ }).click();
-    await expect(page.locator("control-override-dialog")).toBeVisible();
-    await expect.poll(() => page.evaluate(() => window.history.state?.__helmanInverterOverrideId)).toBeTruthy();
+    await expect.poll(() => editorState(page).then((state) => state.open)).toBe(true);
+    await expect.poll(() => page.evaluate(() => window.history.state?.__helmanEntityScheduleDialogId)).toBeTruthy();
     await page.evaluate(() => window.history.back());
-    await expect(page.locator("control-override-dialog")).toHaveCount(0);
+    await expect.poll(() => editorState(page).then((state) => state.open)).toBe(false);
     await expect(content(page)).toBeVisible();
 });
 

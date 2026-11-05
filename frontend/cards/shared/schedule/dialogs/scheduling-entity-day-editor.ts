@@ -5,7 +5,7 @@ import { LitElement, css, html } from "lit-element";
 import { customElement, property, state } from "lit/decorators.js";
 import { nothing } from "lit-html";
 import type { HomeAssistant } from "../../../../types/ha";
-import type { LocalizeFunction } from "../../../localize/localize";
+import { fillTemplate, type LocalizeFunction } from "../../../localize/localize";
 import "../components/scheduling-action-chip";
 import "../components/scheduling-appliance-chip";
 import "../components/scheduling-entity-day-band";
@@ -67,6 +67,7 @@ import { getScheduleApplianceActionPresentation } from "../model/schedule-applia
 import { describeScheduleAppliance, type ScheduleApplianceMetadata } from "../model/schedule-appliance-metadata";
 import {
     formatScheduleSpanTime,
+    getScheduleRepeatedHourOffset,
     formatScheduleTime,
     formatScheduleWeekdayTime,
     getScheduleNextLocalDayStartMs,
@@ -279,6 +280,18 @@ export class SchedulingEntityDayEditor extends LitElement {
                 border: 1px solid color-mix(in srgb, var(--warning-color, #c27c0e) 40%, var(--divider-color));
                 border-radius: 10px;
                 background: color-mix(in srgb, var(--warning-color, #c27c0e) 10%, var(--card-background-color));
+                font-size: 0.82rem;
+            }
+
+            /* Execution off: what is saved stays in the schedule, and this says
+               the hardware will not follow it. */
+            .notice {
+                display: flex;
+                gap: 8px;
+                padding: 8px 10px;
+                border: 1px solid color-mix(in srgb, var(--info-color, #039be5) 40%, var(--divider-color));
+                border-radius: 10px;
+                background: color-mix(in srgb, var(--info-color, #039be5) 10%, var(--card-background-color));
                 font-size: 0.82rem;
             }
 
@@ -495,6 +508,12 @@ export class SchedulingEntityDayEditor extends LitElement {
     /** The lane selected when the dialog opens: the row the user pressed. */
     @property({ attribute: false }) public target: EntityScheduleTarget | null = null;
     @property({ attribute: false }) public appliance: ScheduleApplianceMetadata | null = null;
+    /**
+     * The target's lane alone, as the node detail opens it: titled by the
+     * device, with no lane label and no name in the panel, and the lane kept
+     * selected. The other lanes still hold whatever was drafted on them.
+     */
+    @property({ type: Boolean }) public single = false;
     /** Every controllable entity with an authorable lane, in display order. */
     @property({ attribute: false }) public lanes: readonly EntityScheduleLane[] = [];
     @property({ attribute: false }) public slots: readonly ScheduleSlot[] = [];
@@ -521,6 +540,8 @@ export class SchedulingEntityDayEditor extends LitElement {
      * changes, and the reason is only in the console.
      */
     @property({ attribute: false }) public saveError: ScheduleOwnerError | null = null;
+    /** Off, a save lands in the schedule but changes no hardware, and the dialog says so. */
+    @property({ type: Boolean }) public executionEnabled = true;
 
     /**
      * The slots as they were when the dialog opened.
@@ -632,7 +653,11 @@ export class SchedulingEntityDayEditor extends LitElement {
     private _restoredDraft = false;
     /** Bumped per edit session, so the action editor knows a new one began. */
     private _editSessionId = 0;
-    private readonly _history = new DialogHistoryController(this, "__helmanEntityScheduleDialogId", { close: () => this._close() });
+    /** Back while a save is on its way keeps the editor, as Cancel and Escape do. */
+    private readonly _history = new DialogHistoryController(this, "__helmanEntityScheduleDialogId", {
+        onBack: () => this.busy,
+        close: () => this._close(),
+    });
 
     public releaseHistory(): Promise<void> {
         return this._history.release();
@@ -753,9 +778,11 @@ export class SchedulingEntityDayEditor extends LitElement {
 
         const view = this._window(day);
         const explaining = this._mode === "explain";
-        const bandLanes = explaining
-            ? this._explainableBandLanes(this._buildBandLanes(day), view)
-            : this._buildBandLanes(day);
+        const allBandLanes = this._buildBandLanes(day);
+        const shownBandLanes = this.single
+            ? allBandLanes.filter((lane) => lane.key === this._selectedLaneKey)
+            : allBandLanes;
+        const bandLanes = explaining ? this._explainableBandLanes(shownBandLanes, view) : shownBandLanes;
         const selectedLane = this._selectedLane;
         const selectedBandLane = bandLanes.find((lane) => lane.key === selectedLane?.key) ?? null;
         // A session that places nothing is not on the band, so the blocks still
@@ -763,7 +790,11 @@ export class SchedulingEntityDayEditor extends LitElement {
         const selection = this._editing === null
             ? this._selectedAutomation
             : this._sessionPlaces(this._editing) ? this._editing : null;
-        const heading = selectedLane?.name ?? this.localize("scheduling.entity_editor.title");
+        const otherDirtyLanes = this.single ? this._otherDirtyLaneCount() : 0;
+        const title = this.localize("scheduling.entity_editor.title");
+        const heading = this.single && selectedLane !== null
+            ? `${title} · ${selectedLane.name}`
+            : selectedLane?.name ?? title;
         return html`
             <!--
                 The widest preset there is -- min(95vw, safe-width): this
@@ -775,6 +806,7 @@ export class SchedulingEntityDayEditor extends LitElement {
                 width="full"
                 .heading=${heading}
                 .headerTitle=${heading}
+                @wa-hide=${this._handleHideRequest}
                 @closed=${this._onClosed}
             >
                 <!--
@@ -793,6 +825,21 @@ export class SchedulingEntityDayEditor extends LitElement {
                 -->
                 <div class="dialog-content" @pointerdown=${this._handleContentPointerDown}>
                     ${this._renderWindowRow(day, view)}
+                    ${this.executionEnabled ? nothing : html`
+                        <div class="notice" data-execution-off>
+                            <ha-icon icon="mdi:information-outline"></ha-icon>
+                            <span>${this.localize("scheduling.entity_editor.execution_off")}</span>
+                        </div>
+                    `}
+                    ${otherDirtyLanes === 0 ? nothing : html`
+                        <div class="notice" data-other-lanes-unsaved>
+                            <ha-icon icon="mdi:information-outline"></ha-icon>
+                            <span>${fillTemplate(
+                                this.localize("scheduling.entity_editor.other_lanes_unsaved"),
+                                { count: otherDirtyLanes },
+                            )}</span>
+                        </div>
+                    `}
                     ${this.scheduleChanged ? html`
                         <div class="stale-banner">
                             <ha-icon icon="mdi:alert-outline"></ha-icon>
@@ -814,6 +861,7 @@ export class SchedulingEntityDayEditor extends LitElement {
                         .pannable=${true}
                         .windowAtNow=${view.startMs === this.nowMs}
                         .lanes=${bandLanes}
+                        .showLaneLabel=${!this.single}
                         .selectedLaneKey=${explaining ? null : this._selectedLaneKey}
                         .forecastPoints=${this.forecastPoints}
                         .priceUnit=${this.priceUnit}
@@ -856,7 +904,7 @@ export class SchedulingEntityDayEditor extends LitElement {
 
                 <ha-dialog-footer slot="footer">
                     ${explaining ? nothing : this._renderLegend()}
-                    <ha-button slot="secondaryAction" .appearance=${"plain"} @click=${this._close}>
+                    <ha-button slot="secondaryAction" .appearance=${"plain"} ?disabled=${this.busy} @click=${this._close}>
                         ${this.localize("scheduling.dialog.cancel")}
                     </ha-button>
                     <ha-button slot="primaryAction" ?disabled=${!this._canSave()} @click=${this._handleSave}>
@@ -1110,6 +1158,7 @@ export class SchedulingEntityDayEditor extends LitElement {
                     .action=${editing.action}
                     .sessionKey=${this._editSessionId}
                     .authorship=${"user"}
+                    .showName=${!this.single}
                     @entity-action-change=${this._handleActionChange}
                 ></scheduling-entity-action-editor>
             </div>
@@ -1154,7 +1203,7 @@ export class SchedulingEntityDayEditor extends LitElement {
         return html`
             <div class="placement">
                 <div class="placement-row read-only">
-                    ${this.lanes.length > 1 ? html`<span class="lane-name">${lane.name}</span>` : nothing}
+                    ${this.single || this.lanes.length <= 1 ? nothing : html`<span class="lane-name">${lane.name}</span>`}
                     ${picks.length === 0 ? nothing : html`
                         <div class="picks">
                             <span class="field-label">${this.localize("scheduling.entity_editor.override_from_here")}</span>
@@ -1163,7 +1212,7 @@ export class SchedulingEntityDayEditor extends LitElement {
                                     class="pick"
                                     type="button"
                                     data-start-pick=${key}
-                                    @click=${() => this._beginEdit(null, fromMs, ms, this._newBlockAction(lane))}
+                                    @click=${() => this._beginEdit(null, fromMs, ms, this._actionInProgress(day, lane, fromMs))}
                                 >${this.localize(`scheduling.entity_editor.pick.${key === "end_of_day" ? "until_end_of_day" : key}`)}</button>
                             `)}
                         </div>
@@ -1781,10 +1830,17 @@ export class SchedulingEntityDayEditor extends LitElement {
         this._selectLane(event.detail.laneKey);
     }
 
-    /** The forecast rows are about the day, not about any one entity. */
+    /**
+     * The forecast rows are about the day, not about any one entity. With one
+     * lane on screen there is no other to pick, so it stays selected.
+     */
     private _handleBandContextSelect(event: Event): void {
         event.stopPropagation();
-        this._selectLane(null);
+        if (this.single) {
+            this._clearSelection();
+        } else {
+            this._selectLane(null);
+        }
     }
 
     /** A drag on the band moves or resizes the block being edited. */
@@ -2108,6 +2164,17 @@ export class SchedulingEntityDayEditor extends LitElement {
             ?? day.endMs;
     }
 
+    /**
+     * What an override from here starts with: what the lane is already set to
+     * do at its start, by whoever set it, so a pick with nothing changed holds
+     * it as a manual action. A lane with nothing there starts as a new block.
+     */
+    private _actionInProgress(day: EntityScheduleDay, lane: EntityScheduleLane, startMs: number): EntityScheduleAction {
+        const slot = day.slots.find((candidate) => candidate.startMs === startMs);
+        const action = slot === undefined ? null : readEntityScheduleAction(slot, lane.target);
+        return isEntityScheduleActionEmpty(action) ? this._newBlockAction(lane) : action;
+    }
+
     /** What a new block starts with: the lane's last placed action, or its default. */
     private _newBlockAction(lane: EntityScheduleLane): EntityScheduleAction {
         return this._lastActions[lane.key] ?? this._buildDefaultAction(lane);
@@ -2144,13 +2211,21 @@ export class SchedulingEntityDayEditor extends LitElement {
     private _formatBoundary(atMs: number): string {
         this._horizon();
         const clock = this._horizonClock;
-        return clock === null
+        const label = clock === null
             ? formatScheduleTime(atMs, this.locale, this.timeZone)
             : formatScheduleSpanTime(atMs, clock, this.locale, this.timeZone);
+        const offset = getScheduleRepeatedHourOffset(atMs, this.timeZone);
+        return offset === null ? label : `${label} (UTC${offset})`;
     }
 
     private _isDirty(nowMs: number = this.nowMs): boolean {
         return areEntityScheduleLanesDirty(this._baselineSlots, this._laneDrafts(), nowMs);
+    }
+
+    /** Lanes other than the one shown alone whose drafts Save would write too. */
+    private _otherDirtyLaneCount(): number {
+        return this._laneDrafts().filter(({ target, draft }) => target !== this._selectedLaneKey
+            && areEntityScheduleLanesDirty(this._baselineSlots, [{ target, draft }], this.nowMs)).length;
     }
 
     private _canSave(nowMs: number = this.nowMs): boolean {
@@ -2182,6 +2257,7 @@ export class SchedulingEntityDayEditor extends LitElement {
         // to leave as a single patch, or one of the two edits is lost.
         const patches = buildEntityScheduleLanePatches({
             slots: this._baselineSlots,
+            latestSlots: this.slots,
             lanes: this._laneDrafts(),
             nowMs,
         });
@@ -2208,7 +2284,21 @@ export class SchedulingEntityDayEditor extends LitElement {
      * a confirmation prompt here pointless friction.
      */
     private _close = (): void => {
+        // Held open while a save is on its way, so a refused write is shown
+        // over the draft that caused it rather than lost with the editor.
+        if (this.busy) return;
         this.open = false;
+    };
+
+    /**
+     * The dialog's own ways out -- the scrim, Escape, the header's close --
+     * refused while a save is on its way, as Cancel is. `wa-hide` is
+     * cancellable and fires before the dialog animates away.
+     */
+    private _handleHideRequest = (event: Event): void => {
+        // Dialogs opened from inside this one hide through here too.
+        if (event.target !== this.renderRoot.querySelector("ha-dialog")) return;
+        if (this.busy && this.open) event.preventDefault();
     };
 
     private _onClosed(event?: Event): void {

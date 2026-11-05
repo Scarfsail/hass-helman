@@ -706,25 +706,35 @@ export function buildEntityScheduleFreedRanges({
  */
 export function buildEntityScheduleLanePatches({
     slots,
+    latestSlots = slots,
     lanes,
     nowMs,
 }: {
+    /** The baseline the drafts were made against: decides which slots are dirty. */
     slots: readonly ScheduleSlot[];
+    /**
+     * The schedule as it is now. A patch replaces the slot's whole controllables
+     * map, so every lane the user did not draft is carried over from here --
+     * another client's change to a different device must survive this save.
+     */
+    latestSlots?: readonly ScheduleSlot[];
     lanes: readonly { target: EntityScheduleTarget; draft: EntityScheduleDraft }[];
     nowMs: number;
 }): ScheduleSlotPatch[] {
     const editableFromMs = _resolveEditableFromMs(slots, nowMs);
+    const latestById = new Map(latestSlots.map((slot) => [slot.id, slot]));
     const patches: ScheduleSlotPatch[] = [];
-    for (const slot of slots) {
-        if (slot.startMs < editableFromMs) {
+    for (const baselineSlot of slots) {
+        if (baselineSlot.startMs < editableFromMs) {
             continue;
         }
 
-        const dirtyLanes = lanes.filter((lane) => _isSlotDirty(slot, lane.target, lane.draft));
+        const dirtyLanes = lanes.filter((lane) => _isSlotDirty(baselineSlot, lane.target, lane.draft));
         if (dirtyLanes.length === 0) {
             continue;
         }
 
+        const slot = latestById.get(baselineSlot.id) ?? baselineSlot;
         const current: ScheduleControllableActions = {};
         for (const [id, assignment] of Object.entries(slot.assignments)) {
             if (assignment.setBy === "user") {
@@ -733,7 +743,7 @@ export function buildEntityScheduleLanePatches({
         }
         const next: ScheduleControllableActions = { ...current };
         for (const lane of dirtyLanes) {
-            const action = readEntityScheduleDraftAction(slot, lane.target, lane.draft);
+            const action = readEntityScheduleDraftAction(baselineSlot, lane.target, lane.draft);
             if (isEntityScheduleActionEmpty(action)) {
                 delete next[lane.target];
             } else {

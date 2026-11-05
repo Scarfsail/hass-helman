@@ -383,7 +383,7 @@ export class EnergyCardHost implements ReactiveController {
         const host = this.host.shadowRoot?.querySelector<SchedulingDayEditorHost>(
             "scheduling-day-editor-host",
         );
-        host?.openFor(detail.target);
+        host?.openFor(detail.target, detail.single);
     };
 
     private _handleShowNodeDetail = (event: Event): void => {

@@ -687,9 +687,9 @@ export class SchedulingEntityDayBand extends LitElement {
                 box-shadow: 0 0 0 1px color-mix(in srgb, var(--primary-color) 30%, transparent);
             }
 
-            /* Several lanes being authored: the selected one is the control
-               surface and gets the room a press needs, the others shrink to
-               context. Pressing one of them selects it. */
+            /* A lane being authored: the selected one is the control surface
+               and gets the room a press needs, alone or among others; the
+               others shrink to context. Pressing one of them selects it. */
             .band.stack .lane.selected .track {
                 height: 44px;
             }
@@ -1472,7 +1472,7 @@ export class SchedulingEntityDayBand extends LitElement {
         const classes = [
             "band",
             hasSelection ? "has-selection" : "",
-            hasSelection && !this.readonly && this.lanes.length > 1 ? "stack" : "",
+            hasSelection && !this.readonly ? "stack" : "",
             this.readonly ? "readonly" : "",
             this.pannable ? "pannable" : "",
         ].filter((value) => value.length > 0).join(" ");

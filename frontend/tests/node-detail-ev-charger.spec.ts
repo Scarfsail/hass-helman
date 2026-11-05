@@ -398,8 +398,37 @@ test("charger Schedule strip draws today's charging before now and the plan afte
     // What was charged and what is planned to charge are one mode, named once.
     expect(await control.locator("helman-mode-strip [data-legend-entry]").allInnerTexts()).toEqual(["Charging", "Charging · candidate"]);
     await expect(control.locator("[data-history-note]")).toHaveCount(0);
-    await expect(control.locator("[data-edit-blocks]")).toBeVisible();
+    // One button: the override is the day editor on this charger alone.
+    await expect(control.locator(".actions > button")).toHaveCount(1);
     await expect(control.locator("[data-change]")).toHaveText("Override…");
+});
+
+test("charger Override opens the day editor on the charger alone, saves a claimed hour and returns to the detail", async ({ page }) => {
+    await mount(page);
+    await openDevice(page, "Garage EV");
+    await page.locator("node-detail-dialog helman-detail-section[data-schedule] button").first().click();
+    await page.locator("helman-node-control [data-change]").click();
+    const editorState = () => page.evaluate(async () => {
+        const host = document.querySelector("helman-card")!.shadowRoot!.querySelector("scheduling-day-editor-host") as any;
+        await host.updateComplete;
+        const editor = host.shadowRoot.querySelector("scheduling-entity-day-editor") as any;
+        return { open: editor?.open === true, selected: editor?._selectedLaneKey ?? null, single: editor?.single === true };
+    });
+    await expect.poll(editorState).toEqual({ open: true, selected: "garage-ev", single: true });
+    const editor = page.locator("scheduling-entity-day-editor");
+    await expect.poll(() => editor.locator("ha-dialog").evaluate((dialog: any) => dialog.heading)).toBe("Schedule · Garage EV");
+    await expect(editor.locator("scheduling-entity-day-band .lane")).toHaveCount(1);
+    await expect(editor.locator(".edit-panel .panel-title")).toHaveCount(0);
+    await editor.locator('.edit-panel [data-start-pick="plus_1h"]').click();
+    await editor.locator('.edit-panel select:has(option[value="kona"])').selectOption("kona");
+    await editor.locator("ha-button[slot=primaryAction]").click();
+    await expect.poll(() => editorState().then((state) => state.open)).toBe(false);
+    await expect(page.locator("helman-node-control")).toBeVisible();
+    const writes = await page.evaluate(() => window.__NodeDetailRequests.filter((r) => r.type === "helman/set_schedule").map((r) => r.slots));
+    // The automation's Fast window is taken over: each slot is now the user's.
+    expect(writes).toEqual([["12:00", "12:15", "12:30", "12:45"].map((time) => ({
+        id: `2026-10-21T${time}:00+00:00`, controllables: { "garage-ev": { charge: true, vehicleId: "kona", useMode: "Fast" } },
+    }))]);
 });
 
 // Forecast -------------------------------------------------------------------
