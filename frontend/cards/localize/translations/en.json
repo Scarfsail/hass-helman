@@ -147,8 +147,7 @@
         "planned": "planned",
         "candidate": "candidate",
         "no_changes": "No changes planned today or tomorrow",
-        "edit_blocks": "Edit blocks",
-        "buttons_help": "\"Edit blocks\" opens the schedule day editor with this device selected. \"Override\" sets a fixed state until a time you pick.",
+        "buttons_help": "\"Override\" opens the schedule editor on this device alone, where you set a manual action for a range you pick.",
         "default": "default"
       },
       "who": "Who decides",
@@ -441,27 +440,6 @@
         "lanes_help": "Every device Helman can control, what it is doing, and who decides. Tap one to open its own detail.",
         "automation_explain": "(optimizers plan the schedule)",
         "execution_explain": "(the plan is applied)"
-      },
-      "override": {
-        "title": "Manual override",
-        "from": "From",
-        "to": "To",
-        "choose_to": "Choose the end",
-        "pick": {
-          "plus_1h": "+1 h",
-          "plus_3h": "+3 h",
-          "end_of_day": "End of day",
-          "next_change": "Next plan change"
-        },
-        "no_slot": "The schedule has no slot in progress to start from.",
-        "save": "Save override",
-        "saving": "Saving…",
-        "cancel": "Cancel",
-        "saved": "Override saved until {time}.",
-        "saved_execution_off": "Override saved until {time}. Execution is off, so the hardware does not change.",
-        "nothing_to_save": "Nothing to save: the chosen slots have already passed or already hold this override.",
-        "save_failed": "The override could not be saved:",
-        "execution_off": "Execution is off: the override is saved in the schedule, but Helman does not change the hardware."
       }
     },
     "cover": {
@@ -868,6 +846,9 @@
       "save": "Save",
       "schedule_changed": "The schedule changed in the meantime. Saving overwrites the loaded changes for this device.",
       "save_failed": "Saving failed:",
+      "execution_off": "Execution is off: changes are saved in the schedule, but Helman does not change the hardware.",
+      "other_lanes_unsaved": "Unsaved changes on {count} other devices will also be saved.",
+      "no_slot": "The schedule has no slot in progress to start from.",
       "save_elapsed": "The edited slots have already passed, so there is nothing to save.",
       "title": "Schedule",
       "select_entity": "Select a device by clicking its lane or one of its blocks.",

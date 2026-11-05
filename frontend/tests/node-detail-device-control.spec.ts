@@ -195,7 +195,15 @@ async function openDevice(page: Page, name: string): Promise<void> {
 const scheduleButton = (page: Page) => page.locator("node-detail-dialog helman-detail-section[data-schedule] button").first();
 const controls = (page: Page) => page.locator("helman-node-control");
 const switchTile = (page: Page) => page.locator("node-detail-device-content helman-switch-tile");
-const overrideDialog = (page: Page) => page.locator("control-override-dialog");
+/** The card's day editor, as Override opens it over the detail. */
+const editor = (page: Page) => page.locator("scheduling-entity-day-editor");
+/** Whether the card's day editor is open, the lane it selected, and whether on that lane alone. */
+const dayEditor = (page: Page) => page.evaluate(async () => {
+    const host = document.querySelector("helman-card")!.shadowRoot!.querySelector("scheduling-day-editor-host") as any;
+    await host.updateComplete;
+    const editor = host.shadowRoot.querySelector("scheduling-entity-day-editor") as any;
+    return { open: editor?.open === true, selected: editor?._selectedLaneKey ?? null, single: editor?.single === true };
+});
 const writes = (page: Page) => page.evaluate(() => window.__NodeDetailRequests.filter((r) => r.type === "helman/set_schedule").map((r) => r.slots));
 
 async function openControl(page: Page, name: string): Promise<void> {
@@ -206,40 +214,31 @@ async function openControl(page: Page, name: string): Promise<void> {
 /** Override a control's lane from now for an hour with the editor option `mode`. */
 async function override(page: Page, control: ReturnType<typeof controls>, mode: string): Promise<void> {
     await control.locator("[data-change]").click();
+    await editor(page).locator('.edit-panel [data-start-pick="plus_1h"]').click();
     // The option's radio is visually hidden: a reader presses its chip.
-    await overrideDialog(page).locator(`label:has(input[value="${mode}"])`).click();
-    await overrideDialog(page).locator('[data-pick="plus_1h"]').click();
-    await overrideDialog(page).locator("[data-save]").click();
-    await expect(overrideDialog(page)).toHaveCount(0);
+    await editor(page).locator(`.edit-panel label:has(input[value="${mode}"])`).click();
+    await editor(page).locator("ha-button[slot=primaryAction]").click();
+    await expect.poll(() => dayEditor(page).then((state) => state.open)).toBe(false);
 }
 
 const hour = (lanes: Record<string, object>) => ["12:00", "12:15", "12:30", "12:45"].map((time) => ({ id: `${DAY}T${time}:00+00:00`, controllables: lanes }));
 
 test.describe("a schedulable device", () => {
-    test("Overview shows an unmet candidate as off and Back closes its override first", async ({ page }) => {
+    test("Overview shows an unmet candidate as off; its Override opens the editor on the device alone and Back returns to the detail", async ({ page }) => {
         await mount(page, plan([["12:00", "13:00", { boiler: auto({ on: true, conditionMet: false }) }]]));
         await openDevice(page, "Boiler");
         const overview = page.locator("node-detail-device-content helman-who-decides");
         await expect(overview.locator(".row").nth(1).locator("span").last()).toContainText("off until");
         await overview.locator("button").first().click();
-        await expect(overrideDialog(page)).toBeVisible();
-        await expect.poll(() => page.evaluate(() => window.history.state?.__helmanWhoDecidesOverrideId)).toBeTruthy();
+        await expect.poll(() => dayEditor(page)).toEqual({ open: true, selected: "boiler", single: true });
+        await expect.poll(() => editor(page).locator("ha-dialog").evaluate((dialog: any) => dialog.heading)).toBe("Schedule · Boiler");
+        await expect(editor(page).locator("scheduling-entity-day-band .lane")).toHaveCount(1);
+        // The device is named by the title, not again over its options.
+        await expect(editor(page).locator(".edit-panel .lane-name, .edit-panel .panel-title")).toHaveCount(0);
+        await expect.poll(() => page.evaluate(() => window.history.state?.__helmanEntityScheduleDialogId)).toBeTruthy();
         await page.evaluate(() => window.history.back());
-        await expect(overrideDialog(page)).toHaveCount(0);
+        await expect.poll(() => dayEditor(page).then((state) => state.open)).toBe(false);
         await expect(page.locator("node-detail-device-content")).toBeVisible();
-
-        await overview.locator("button").first().click();
-        await overrideDialog(page).evaluate((dialog: any) => { dialog._saving = true; });
-        await page.evaluate(() => new Promise<void>((resolve) => {
-            window.addEventListener("popstate", () => resolve(), { once: true });
-            window.history.back();
-        }));
-        await expect.poll(() => page.evaluate(() => window.history.state?.__helmanWhoDecidesOverrideId)).toBeTruthy();
-        await expect(overrideDialog(page)).toBeVisible();
-        await expect(page.locator("node-detail-device-content")).toBeVisible();
-        await overrideDialog(page).evaluate((dialog: any) => { dialog._saving = false; });
-        await page.evaluate(() => window.history.back());
-        await expect(overrideDialog(page)).toHaveCount(0);
     });
 
     test("Planned now ends where the author changes and the summary skips that boundary", async ({ page }) => {
@@ -354,7 +353,6 @@ test.describe("a schedulable device", () => {
         await expect(controls(page).locator("[data-status]")).toHaveText("Not automated");
         await expect(controls(page).locator("[data-unsupported]")).toBeVisible();
         await expect(controls(page).locator("[data-change]")).toHaveCount(0);
-        await expect(overrideDialog(page)).toHaveCount(0);
     });
 });
 

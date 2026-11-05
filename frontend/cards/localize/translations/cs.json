@@ -47,8 +47,7 @@
         "planned": "plánováno",
         "candidate": "kandidát",
         "no_changes": "Dnes ani zítra nejsou naplánované žádné změny",
-        "edit_blocks": "Upravit bloky",
-        "buttons_help": "„Upravit bloky“ otevře denní editor plánu s vybraným tímto zařízením. „Přepsat“ nastaví pevný stav až do zvoleného času.",
+        "buttons_help": "„Přepsat“ otevře editor plánu jen pro toto zařízení, kde nastavíte ruční akci pro zvolený rozsah.",
         "default": "výchozí"
       },
       "who": "Kdo rozhoduje",
@@ -341,27 +340,6 @@
         "lanes_help": "Každé zařízení, které Helman umí řídit, co právě dělá a kdo rozhoduje. Klepnutím otevřete jeho vlastní detail.",
         "automation_explain": "(optimalizátory plánují rozvrh)",
         "execution_explain": "(plán se uplatňuje)"
-      },
-      "override": {
-        "title": "Ruční zásah",
-        "from": "Od",
-        "to": "Do",
-        "choose_to": "Vyberte konec",
-        "pick": {
-          "plus_1h": "+1 h",
-          "plus_3h": "+3 h",
-          "end_of_day": "Konec dne",
-          "next_change": "Další změna plánu"
-        },
-        "no_slot": "Rozvrh nemá probíhající slot, od kterého začít.",
-        "save": "Uložit zásah",
-        "saving": "Ukládání…",
-        "cancel": "Zrušit",
-        "saved": "Zásah uložen do {time}.",
-        "saved_execution_off": "Zásah uložen do {time}. Vykonávání je vypnuté, takže se hardware nezmění.",
-        "nothing_to_save": "Není co uložit: vybrané sloty už proběhly nebo už tento zásah obsahují.",
-        "save_failed": "Zásah se nepodařilo uložit:",
-        "execution_off": "Vykonávání je vypnuté: zásah se uloží do rozvrhu, ale Helman hardware nezmění."
       }
     },
     "cover": {
@@ -831,6 +809,9 @@
       "save": "Uložit den",
       "schedule_changed": "Rozvrh se mezitím změnil. Uložení přepíše načtené změny pro toto zařízení.",
       "save_failed": "Uložení se nezdařilo:",
+      "execution_off": "Vykonávání je vypnuté: změny se uloží do rozvrhu, ale Helman hardware nezmění.",
+      "other_lanes_unsaved": "Uloží se také neuložené změny na dalších zařízeních (počet: {count}).",
+      "no_slot": "Rozvrh nemá probíhající slot, od kterého začít.",
       "save_elapsed": "Upravené sloty už mezitím proběhly, takže není co uložit.",
       "title": "Plán zařízení",
       "select_entity": "Vyberte zařízení kliknutím na jeho pruh nebo na jeho blok.",

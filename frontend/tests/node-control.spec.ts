@@ -9,11 +9,11 @@ import type { SchedulePayload } from "../cards/helman-api";
  *
  * What is pinned: who owns the inverter lane now and how that is worked out
  * (execution, the user's run in progress, the automation coverage, and
- * loading or unavailable before any of it is known); that an override is a
- * bounded user-authored stretch of the schedule written through the shared
- * slot patches, claiming its slots even where the automation planned the
- * same, keeping every other lane's user action and never copying an
- * automation's; that returning to automatic clears only the run in progress;
+ * loading or unavailable before any of it is known); that Override opens the
+ * card's day editor on the lane alone, whose save claims its slots even where
+ * the automation planned the same, keeping every other lane's user action
+ * and never copying an automation's; that returning to automatic clears only
+ * the run in progress;
  * that an admin's automation switch saves one flag against the revision it
  * read; and the tabs and nested dialogs' keyboard and Back behaviour.
  */
@@ -175,7 +175,8 @@ const control = (page: Page) => page.locator("helman-node-control");
 const status = (page: Page) => control(page).locator("[data-status]");
 const scheduleSection = (page: Page) => page.locator("node-detail-dialog helman-detail-section[data-schedule]");
 const scheduleButton = (page: Page) => scheduleSection(page).locator("button").first();
-const overrideDialog = (page: Page) => page.locator("control-override-dialog");
+/** The card's day editor, as Override opens it over the detail. */
+const editor = (page: Page) => page.locator("scheduling-entity-day-editor");
 const requests = (page: Page, type: string) => page.evaluate((type) => window.__NodeDetailRequests.filter((r) => r.type === type), type);
 
 async function openControl(page: Page, node: "inverter" | "battery" = "inverter"): Promise<void> {
@@ -197,12 +198,33 @@ async function flushDataChanged(page: Page): Promise<void> {
 
 async function openOverride(page: Page): Promise<void> {
     await control(page).locator("[data-change]").click();
-    await expect(overrideDialog(page).locator("[data-to]")).toBeVisible();
+    await expect(editor(page).locator(".edit-panel")).toBeVisible();
+}
+
+/** Override from the slot in progress for an hour, with the lane's default action unless `kind` is picked. */
+async function overrideHour(page: Page, kind?: string): Promise<void> {
+    await editor(page).locator('.edit-panel [data-start-pick="plus_1h"]').click();
+    // The option's radio is visually hidden: a reader presses its chip.
+    if (kind) await editor(page).locator(`scheduling-action-option-card:has(input[value="${kind}"])`).click();
 }
 
 async function save(page: Page): Promise<void> {
-    await overrideDialog(page).locator("[data-save]").click();
+    await editor(page).locator("ha-button[slot=primaryAction]").click();
 }
+
+/** Whether the card's day editor is open, the lane it selected, and whether on that lane alone. */
+const dayEditor = (page: Page, card = "helman-simple-card") => page.evaluate(async (card) => {
+    const host = document.querySelector(card)!.shadowRoot!.querySelector("scheduling-day-editor-host") as any;
+    await host.updateComplete;
+    const editor = host.shadowRoot.querySelector("scheduling-entity-day-editor") as any;
+    return { open: editor?.open === true, selected: editor?._selectedLaneKey ?? null, single: editor?.single === true };
+}, card);
+
+/** Close the card's day editor as its header's close does. */
+const closeDayEditor = (page: Page, card = "helman-simple-card") => page.evaluate((card) => {
+    const host = document.querySelector(card)!.shadowRoot!.querySelector("scheduling-day-editor-host") as any;
+    host.shadowRoot.querySelector("scheduling-entity-day-editor").shadowRoot.querySelector("ha-dialog").close();
+}, card);
 
 const setScheduleSlots = async (page: Page) => (await requests(page, "helman/set_schedule")).map((r) => r.slots as Array<{ id: string; controllables: unknown }>);
 
@@ -391,7 +413,7 @@ test.describe("the Schedule section", () => {
         await expect(control(page)).toBeVisible();
     });
 
-    test("Back closes the override first, then the node detail", async ({ page }) => {
+    test("Back closes the override's editor first, then the node detail", async ({ page }) => {
         await mount(page);
         await openControl(page);
         await page.locator("node-detail-dialog").evaluate((detail: any) => {
@@ -399,9 +421,9 @@ test.describe("the Schedule section", () => {
             detail.shadowRoot.querySelector("[data-dialog='close']").addEventListener("click", () => { window.__detailClosed = true; });
         });
         await openOverride(page);
-        await expect.poll(() => page.evaluate(() => window.history.state?.__helmanNodeControlDialogId)).toBeTruthy();
+        await expect.poll(() => page.evaluate(() => window.history.state?.__helmanEntityScheduleDialogId)).toBeTruthy();
         await page.evaluate(() => window.history.back());
-        await expect(overrideDialog(page)).toHaveCount(0);
+        await expect.poll(() => dayEditor(page).then((state) => state.open)).toBe(false);
         expect(await page.evaluate(() => window.__detailClosed)).toBe(false);
         await expect(control(page)).toBeVisible();
         await page.evaluate(() => window.history.back());
@@ -410,217 +432,81 @@ test.describe("the Schedule section", () => {
 });
 
 test.describe("the override", () => {
-    test("writes the chosen range as user slots, keeping another lane's user action and no automation's", async ({ page }) => {
+    for (const card of ["helman-simple-card", "helman-card"]) {
+        test(`opens ${card}'s day editor on this lane alone, titled by the device, and closing it returns to the detail`, async ({ page }) => {
+            await mount(page, {}, card);
+            await openControl(page);
+            await openOverride(page);
+            await expect.poll(() => dayEditor(page, card)).toEqual({ open: true, selected: "inverter", single: true });
+            await expect.poll(() => editor(page).locator("ha-dialog").evaluate((dialog: any) => dialog.heading)).toBe("Schedule · Inverter");
+            const band = editor(page).locator("scheduling-entity-day-band");
+            // One lane, already selected at the taller height, with no label of its own.
+            await expect(band.locator(".lane")).toHaveCount(1);
+            await expect(band.locator('.lane.selected[data-lane="inverter"]')).toHaveCount(1);
+            await expect(band.locator(".track-label")).toHaveCount(0);
+            expect(await band.locator(".lane.selected .track").evaluate((track) => track.getBoundingClientRect().height)).toBe(44);
+            // The device is named by the title, not again in the panel.
+            await expect(editor(page).locator(".edit-panel .lane-name")).toHaveCount(0);
+            await closeDayEditor(page, card);
+            await expect.poll(() => dayEditor(page, card).then((state) => state.open)).toBe(false);
+            await expect(control(page)).toBeVisible();
+            await expect(scheduleButton(page)).toHaveAttribute("aria-expanded", "true");
+        });
+    }
+
+    test("Override from here writes the hour as user slots, keeping another lane's user action and no automation's", async ({ page }) => {
         await mount(page, { schedule: plan([
             ["12:00", "12:30", { boiler: { on: true, setBy: "user" } }],
             ["12:00", "14:00", { heater: { on: true, setBy: "automation" } }],
         ]) });
         await openControl(page);
         await openOverride(page);
-        await expect(overrideDialog(page).locator("[data-from]")).toHaveValue(String(Date.parse(`${DAY}T12:00:00Z`)));
-        await expect(overrideDialog(page).locator("[data-save]")).toHaveJSProperty("disabled", true);
-        // The option's radio is visually hidden: a reader presses its chip.
-        await overrideDialog(page).locator('scheduling-action-option-card:has(input[value="stop_export"])').click();
+        await overrideHour(page, "stop_export");
         await expect(page.getByRole("radio", { name: "Stop export" })).toBeChecked();
-        await overrideDialog(page).locator('[data-pick="plus_1h"]').click();
-        await expect(overrideDialog(page).locator("[data-to]")).toHaveValue(String(Date.parse(`${DAY}T13:00:00Z`)));
         await save(page);
-        await expect(overrideDialog(page)).toHaveCount(0);
+        await expect.poll(() => dayEditor(page).then((state) => state.open)).toBe(false);
         expect(await setScheduleSlots(page)).toEqual([[
             { id: `${DAY}T12:00:00+00:00`, controllables: { boiler: { on: true }, inverter: { kind: "stop_export" } } },
             { id: `${DAY}T12:15:00+00:00`, controllables: { boiler: { on: true }, inverter: { kind: "stop_export" } } },
             { id: `${DAY}T12:30:00+00:00`, controllables: { inverter: { kind: "stop_export" } } },
             { id: `${DAY}T12:45:00+00:00`, controllables: { inverter: { kind: "stop_export" } } },
         ]]);
-        expect(await page.evaluate(() => window.__toasts)).toEqual(["Override saved until Today 13:00."]);
-    });
-
-    test("the selects keep showing the chosen values when the option lists shift", async ({ page }) => {
-        await mount(page);
-        await openControl(page);
-        await openOverride(page);
-        const from = overrideDialog(page).locator("[data-from]");
-        const to = overrideDialog(page).locator("[data-to]");
-        await overrideDialog(page).locator('[data-pick="plus_1h"]').click();
-        await expect(to).toHaveValue(String(Date.parse(`${DAY}T13:00:00Z`)));
-        // Moving From shifts the end list; both selects must still show the state.
-        await from.selectOption(String(Date.parse(`${DAY}T12:30:00Z`)));
-        await expect(from).toHaveValue(String(Date.parse(`${DAY}T12:30:00Z`)));
-        await expect(to).toHaveValue(String(Date.parse(`${DAY}T13:00:00Z`)));
-        await to.selectOption(String(Date.parse(`${DAY}T14:00:00Z`)));
-        await from.selectOption(String(Date.parse(`${DAY}T13:00:00Z`)));
-        await expect(from).toHaveValue(String(Date.parse(`${DAY}T13:00:00Z`)));
-        await expect(to).toHaveValue(String(Date.parse(`${DAY}T14:00:00Z`)));
+        await expect(control(page)).toBeVisible();
     });
 
     test("holding the automation's own action still takes the slots over", async ({ page }) => {
         await mount(page);
         await openControl(page);
         await openOverride(page);
-        // Seeded with the action in progress: the automation's "normal".
+        // The automation's own "normal", picked over the lane's default.
+        await overrideHour(page, "normal");
         await expect(page.getByRole("radio", { name: "Normal" })).toBeChecked();
-        await overrideDialog(page).locator('[data-pick="plus_1h"]').click();
         await save(page);
+        await expect.poll(() => setScheduleSlots(page).then((writes) => writes.length)).toBe(1);
         const [slots] = await setScheduleSlots(page);
         expect(slots).toHaveLength(4);
         expect(slots.every((slot) => JSON.stringify(slot.controllables) === JSON.stringify({ inverter: { kind: "normal" } }))).toBe(true);
     });
 
-    test("offers only the quick picks the loaded schedule has an edge for", async ({ page }) => {
-        // Two hours of schedule: no +3 h, no end of day; the plan changes at 13:00.
-        await mount(page, { schedule: plan([["13:00", "14:00", { inverter: auto("stop_export") }]], { hours: 2 }) });
+    test("with execution off the editor says the hardware does not change, and still saves", async ({ page }) => {
+        await mount(page, { schedule: plan([], { executionEnabled: false }) });
         await openControl(page);
         await openOverride(page);
-        const picks = overrideDialog(page).locator("[data-pick]");
-        await expect(picks).toHaveCount(2);
-        await expect(picks.nth(0)).toHaveAttribute("data-pick", "plus_1h");
-        await expect(picks.nth(1)).toHaveAttribute("data-pick", "next_change");
-        await picks.nth(1).click();
-        await expect(overrideDialog(page).locator("[data-to]")).toHaveValue(String(Date.parse(`${DAY}T13:00:00Z`)));
-        // The last edge is the horizon.
-        await expect(overrideDialog(page).locator("[data-to] option").last()).toHaveText("Today 14:00");
-    });
-
-    test("spans midnight and the repeated hour as daylight saving ends, telling the two apart", async ({ page }) => {
-        // 23:30 in Prague on the night the clocks go back: 02:00–03:00 happens twice.
-        await mount(page, { now: "2026-10-24T21:30:00Z", timeZone: "Europe/Prague", schedule: plan([], { start: "2026-10-24T21:30:00Z", hours: 6 }) });
-        await openControl(page);
-        await openOverride(page);
-        await expect(overrideDialog(page).locator("[data-from]")).toHaveValue(String(Date.parse("2026-10-24T21:30:00Z")));
-        await expect(overrideDialog(page).locator("[data-from] option:checked")).toHaveText("Today 23:30");
-        const options = await overrideDialog(page).locator("[data-to] option").allTextContents();
-        expect(options.filter((label) => label.includes("02:15"))).toEqual(["Tomorrow 02:15 (UTC+02:00)", "Tomorrow 02:15 (UTC+01:00)"]);
-        await overrideDialog(page).locator('[data-pick="end_of_day"]').click();
-        await expect(overrideDialog(page).locator("[data-to]")).toHaveValue(String(Date.parse("2026-10-24T22:00:00Z")));
-        // To the second 02:15: 15 slots, across midnight and both 02:00 hours.
-        await overrideDialog(page).locator("[data-to]").selectOption(String(Date.parse("2026-10-25T01:15:00Z")));
+        await expect(editor(page).locator("[data-execution-off]")).toContainText("does not change the hardware");
+        await overrideHour(page);
         await save(page);
-        const [slots] = await setScheduleSlots(page);
-        expect(slots.map((slot) => slot.id)).toEqual(Array.from({ length: 15 }, (_, i) =>
-            new Date(Date.parse("2026-10-24T21:30:00Z") + i * 900_000).toISOString().replace(".000Z", "+00:00")));
+        await expect.poll(() => setScheduleSlots(page).then((writes) => writes.length)).toBe(1);
     });
 
-    test("starts at the slot in progress; a later start writes only from it, keeping the slots before it", async ({ page }) => {
-        await mount(page, { schedule: plan([["12:00", "12:30", { inverter: user("stop_charging") }]]) });
-        await openControl(page);
-        await openOverride(page);
-        const from = overrideDialog(page).locator("[data-from]");
-        await expect(from).toHaveValue(String(Date.parse(`${DAY}T12:00:00Z`)));
-        // Every start of the run, never its final end.
-        await expect(from.locator("option")).toHaveCount(96);
-        await from.selectOption(String(Date.parse(`${DAY}T12:30:00Z`)));
-        await overrideDialog(page).locator('scheduling-action-option-card:has(input[value="stop_export"])').click();
-        await overrideDialog(page).locator("[data-to]").selectOption(String(Date.parse(`${DAY}T13:00:00Z`)));
-        await save(page);
-        await expect(overrideDialog(page)).toHaveCount(0);
-        expect(await setScheduleSlots(page)).toEqual([[
-            { id: `${DAY}T12:30:00+00:00`, controllables: { inverter: { kind: "stop_export" } } },
-            { id: `${DAY}T12:45:00+00:00`, controllables: { inverter: { kind: "stop_export" } } },
-        ]]);
-    });
-
-    test("a later start offers only the ends after it, and the quick picks count from it", async ({ page }) => {
-        await mount(page, { schedule: plan([["14:00", "15:00", { inverter: auto("stop_export") }]]) });
-        await openControl(page);
-        await openOverride(page);
-        await overrideDialog(page).locator("[data-from]").selectOption(String(Date.parse(`${DAY}T13:00:00Z`)));
-        await expect(overrideDialog(page).locator("[data-to] option:not([disabled])").first()).toHaveText("Today 13:15");
-        await overrideDialog(page).locator('[data-pick="plus_1h"]').click();
-        await expect(overrideDialog(page).locator("[data-to]")).toHaveValue(String(Date.parse(`${DAY}T14:00:00Z`)));
-        await overrideDialog(page).locator('[data-pick="next_change"]').click();
-        await expect(overrideDialog(page).locator("[data-to]")).toHaveValue(String(Date.parse(`${DAY}T14:00:00Z`)));
-    });
-
-    test("moving the start past the chosen end clears the end and disables Save", async ({ page }) => {
+    test("with execution on there is no such notice", async ({ page }) => {
         await mount(page);
         await openControl(page);
         await openOverride(page);
-        await overrideDialog(page).locator('[data-pick="plus_1h"]').click();
-        await expect(overrideDialog(page).locator("[data-save]")).toHaveJSProperty("disabled", false);
-        await overrideDialog(page).locator("[data-from]").selectOption(String(Date.parse(`${DAY}T13:00:00Z`)));
-        await expect(overrideDialog(page).locator("[data-to]")).toHaveValue("");
-        await expect(overrideDialog(page).locator("[data-save]")).toHaveJSProperty("disabled", true);
-        await overrideDialog(page).locator("[data-from]").selectOption(String(Date.parse(`${DAY}T12:00:00Z`)));
-        await expect(overrideDialog(page).locator("[data-to]")).toHaveValue("");
-        await expect(overrideDialog(page).locator("[data-save]")).toHaveJSProperty("disabled", true);
+        await expect(editor(page).locator("[data-execution-off]")).toHaveCount(0);
+        await expect(editor(page).locator("[data-other-lanes-unsaved]")).toHaveCount(0);
     });
 
-    test("the plan band's lane press does not leave the override dialog", async ({ page }) => {
-        await mount(page);
-        await openControl(page);
-        await openOverride(page);
-        await overrideDialog(page).locator("[data-plan] scheduling-entity-day-band").first().evaluate((band) => {
-            band.dispatchEvent(new CustomEvent("show-controllable-detail", { bubbles: true, composed: true, detail: {} }));
-        });
-        await expect(overrideDialog(page).locator("[data-plan]")).toBeVisible();
-    });
-
-    test("shows the lane's plan read only, one day at a time, with the chosen range marked", async ({ page }) => {
-        await mount(page, { schedule: plan([["13:00", "14:00", { inverter: auto("stop_export") }]]) });
-        await openControl(page);
-        await openOverride(page);
-        const bands = overrideDialog(page).locator("[data-plan] scheduling-entity-day-band");
-        const days = overrideDialog(page).locator("[data-plan] [data-day]");
-        await expect(bands).toHaveCount(1);
-        await expect(days).toHaveText(["Today", "Tomorrow"]);
-        await expect(days.nth(0)).toHaveAttribute("aria-pressed", "true");
-        await expect(days.nth(1)).toHaveAttribute("aria-pressed", "false");
-        await expect(overrideDialog(page).locator("[data-plan] .field-label")).toHaveCount(0);
-        const band = bands.first();
-        // This lane alone: no other lane, no forecast rows, no label of its own.
-        await expect(band.locator(".lane")).toHaveCount(1);
-        await expect(band.locator('.lane[data-lane="inverter"]')).toHaveCount(1);
-        await expect(band.locator('.lane[data-lane="inverter"] button.segment')).toHaveCount(3);
-        await expect(band.locator(".handle")).toHaveCount(0);
-        await expect(band.locator(".track-label")).toHaveCount(0);
-        await overrideDialog(page).locator('[data-pick="plus_3h"]').click();
-        // Windowed from 12:00 to midnight: 12:00-15:00 is a quarter of it.
-        const highlight = band.locator(".time-highlight.selected");
-        await expect(highlight).toHaveCount(1);
-        await expect(highlight).toHaveAttribute("style", /left: 0%; width: 25%/);
-        await overrideDialog(page).locator('[data-plan] [data-day="2026-10-22"]').click();
-        await expect(bands).toHaveCount(1);
-        await expect(days.nth(1)).toHaveAttribute("aria-pressed", "true");
-        await expect.poll(() => bands.first().evaluate((el) => (el as unknown as { day: { dayKey: string } }).day.dayKey)).toBe("2026-10-22");
-        await expect(bands.first().locator(".time-highlight.selected")).toHaveCount(0);
-    });
-
-    test("a start on another day shows that day's plan", async ({ page }) => {
-        await mount(page);
-        await openControl(page);
-        await openOverride(page);
-        await overrideDialog(page).locator("[data-from]").selectOption(String(Date.parse("2026-10-22T02:00:00Z")));
-        const days = overrideDialog(page).locator("[data-plan] [data-day]");
-        await expect(days.nth(1)).toHaveAttribute("aria-pressed", "true");
-        const band = overrideDialog(page).locator("[data-plan] scheduling-entity-day-band");
-        await expect(band).toHaveCount(1);
-        await expect.poll(() => band.evaluate((el) => (el as unknown as { day: { dayKey: string } }).day.dayKey)).toBe("2026-10-22");
-        await expect(band.locator(".time-highlight.selected")).toHaveCount(1);
-    });
-
-    test("a range that elapsed before the press saves nothing and stays open", async ({ page }) => {
-        await mount(page);
-        await openControl(page);
-        await openOverride(page);
-        await overrideDialog(page).locator("[data-to]").selectOption(String(Date.parse(`${DAY}T12:15:00Z`)));
-        await page.clock.setFixedTime(new Date(`${DAY}T12:16:00Z`));
-        await save(page);
-        await expect(overrideDialog(page).locator("[data-error]")).toContainText("Nothing to save");
-        expect(await requests(page, "helman/set_schedule")).toHaveLength(0);
-    });
-
-    test("a refused write is shown and keeps the dialog open", async ({ page }) => {
-        await mount(page);
-        await openControl(page);
-        await openOverride(page);
-        await page.evaluate(() => { window.__setScheduleFails = true; });
-        await overrideDialog(page).locator('[data-pick="plus_1h"]').click();
-        await save(page);
-        await expect(overrideDialog(page).locator("[data-error]")).toContainText("write refused");
-        expect(await page.evaluate(() => window.__toasts)).toEqual([]);
-    });
-
-    test("the dialog's own close waits for the write, so a refused write is still shown", async ({ page }) => {
+    test("the editor stays open while a save is on its way, so a refused write is still shown", async ({ page }) => {
         await mount(page);
         await openControl(page);
         await openOverride(page);
@@ -628,23 +514,108 @@ test.describe("the override", () => {
             window.__setScheduleFails = true;
             window.__scheduleWrite = new Promise((resolve) => { window.__releaseNodeSave = resolve; });
         });
-        await overrideDialog(page).locator('[data-pick="plus_1h"]').click();
+        await overrideHour(page, "stop_export");
         await save(page);
-        await expect(overrideDialog(page).locator("[data-save]")).toHaveText("Saving…");
-        await overrideDialog(page).evaluate((dialog) => (dialog.shadowRoot!.querySelector("ha-dialog") as any).close());
+        await expect.poll(() => requests(page, "helman/set_schedule").then((list) => list.length)).toBe(1);
+        // Escape or the scrim, as the real dialog asks: a cancellable hide, then closed unless refused.
+        await editor(page).locator("ha-dialog").evaluate((dialog: any) => {
+            if (dialog.dispatchEvent(new CustomEvent("wa-hide", { cancelable: true, bubbles: true, composed: true }))) dialog.close();
+        });
+        await editor(page).locator("ha-button[slot=secondaryAction]").click();
+        await page.evaluate(() => window.history.back());
+        await expect.poll(() => page.evaluate(() => window.history.state?.__helmanEntityScheduleDialogId)).toBeTruthy();
+        expect((await dayEditor(page)).open).toBe(true);
         await page.evaluate(() => window.__releaseNodeSave!());
-        await expect(overrideDialog(page).locator("[data-error]")).toContainText("write refused");
+        await expect(editor(page).locator(".save-error")).toContainText("write refused");
+        await expect.poll(() => dayEditor(page)).toEqual({ open: true, selected: "inverter", single: true });
     });
 
-    test("with execution off it is saved but never claimed to run", async ({ page }) => {
-        await mount(page, { schedule: plan([], { executionEnabled: false }) });
+    test("Override from here holds what the lane is doing now, and saving claims it from the automation", async ({ page }) => {
+        await mount(page, { schedule: plan([["12:00", "14:00", { inverter: auto("stop_charging") }]]) });
         await openControl(page);
         await openOverride(page);
-        await expect(overrideDialog(page).locator("[data-execution-off]")).toContainText("does not change the hardware");
-        await overrideDialog(page).locator('[data-pick="plus_1h"]').click();
+        await overrideHour(page);
+        await expect(page.getByRole("radio", { name: "Stop charging" })).toBeChecked();
         await save(page);
-        await expect(overrideDialog(page)).toHaveCount(0);
-        expect(await page.evaluate(() => window.__toasts)).toEqual(["Override saved until Today 13:00. Execution is off, so the hardware does not change."]);
+        await expect.poll(() => setScheduleSlots(page).then((writes) => writes.length)).toBe(1);
+        const [slots] = await setScheduleSlots(page);
+        expect(slots).toHaveLength(4);
+        expect(slots.every((slot) => JSON.stringify(slot.controllables) === JSON.stringify({ inverter: { kind: "stop_charging" } }))).toBe(true);
+    });
+
+    test("pressed before the schedule is read, it opens once the schedule arrives", async ({ page }) => {
+        await mount(page);
+        await openControl(page);
+        // The card's host forgets the day, as it is right after a load or a reconnect.
+        await page.locator("helman-simple-card").evaluate(async (card) => {
+            const host = card.shadowRoot!.querySelector("scheduling-day-editor-host") as any;
+            host._lastSlotMinutes = null;
+            host._derivedFor = null;
+        });
+        await control(page).locator("[data-change]").click();
+        expect((await dayEditor(page)).open).toBe(false);
+        await page.locator("helman-simple-card").evaluate((card) => {
+            (card.shadowRoot!.querySelector("scheduling-day-editor-host") as any).requestUpdate();
+        });
+        await expect.poll(() => dayEditor(page)).toEqual({ open: true, selected: "inverter", single: true });
+    });
+
+    test("pressed before its lane is listed, it opens on that lane alone once it is, never on every lane", async ({ page }) => {
+        await mount(page);
+        await openControl(page);
+        await page.locator("helman-simple-card").evaluate((card) => {
+            const host = card.shadowRoot!.querySelector("scheduling-day-editor-host") as any;
+            host._savedControllables = host._controllables;
+            host._controllables = [];
+        });
+        await control(page).locator("[data-change]").click();
+        expect((await dayEditor(page)).open).toBe(false);
+        await page.locator("helman-simple-card").evaluate((card) => {
+            const host = card.shadowRoot!.querySelector("scheduling-day-editor-host") as any;
+            host._controllables = host._savedControllables;
+        });
+        await expect.poll(() => dayEditor(page)).toEqual({ open: true, selected: "inverter", single: true });
+    });
+
+    test("spans midnight and the repeated hour as daylight saving ends, as two distinct ends", async ({ page }) => {
+        // 23:30 in Prague on the night the clocks go back: 02:00–03:00 happens twice.
+        await mount(page, { now: "2026-10-24T21:30:00Z", timeZone: "Europe/Prague", schedule: plan([], { start: "2026-10-24T21:30:00Z", hours: 6 }) });
+        await openControl(page);
+        await openOverride(page);
+        await overrideHour(page, "stop_export");
+        const from = editor(page).locator(".edit-panel select[data-from]");
+        const to = editor(page).locator(".edit-panel select[data-to]");
+        await expect(from).toHaveValue(String(Date.parse("2026-10-24T21:30:00Z")));
+        // Both 02:15s are ends of their own, an hour apart.
+        const ends = await to.locator("option").evaluateAll((options) => options.map((option) => [Number((option as HTMLOptionElement).value), option.textContent!.trim()]));
+        expect(ends.filter(([, label]) => String(label).includes("02:15")).map(([ms]) => ms))
+            .toEqual([Date.parse("2026-10-25T00:15:00Z"), Date.parse("2026-10-25T01:15:00Z")]);
+        // The two read differently: each names its UTC offset.
+        const repeated = ends.filter(([, label]) => String(label).includes("02:15")).map(([, label]) => String(label));
+        expect(new Set(repeated).size).toBe(2);
+        expect(repeated[0]).toContain("UTC+02:00");
+        expect(repeated[1]).toContain("UTC+01:00");
+        // To the second 02:15: 15 slots, across midnight and both 02:00 hours.
+        await to.selectOption(String(Date.parse("2026-10-25T01:15:00Z")));
+        await save(page);
+        await expect.poll(() => setScheduleSlots(page).then((writes) => writes.length)).toBe(1);
+        const [slots] = await setScheduleSlots(page);
+        expect(slots.map((slot) => slot.id)).toEqual(Array.from({ length: 15 }, (_, i) =>
+            new Date(Date.parse("2026-10-24T21:30:00Z") + i * 900_000).toISOString().replace(".000Z", "+00:00")));
+        expect(slots.every((slot) => JSON.stringify(slot.controllables) === JSON.stringify({ inverter: { kind: "stop_export" } }))).toBe(true);
+    });
+
+    test("with nothing ahead in the schedule it says so instead of opening", async ({ page }) => {
+        await mount(page);
+        await openControl(page);
+        // The host's clock past the schedule's last slot.
+        await page.locator("helman-simple-card").evaluate((card) => {
+            const host = card.shadowRoot!.querySelector("scheduling-day-editor-host") as any;
+            host._nowMs = Date.parse("2026-10-22T13:00:00Z");
+        });
+        await control(page).locator("[data-change]").click();
+        await expect.poll(() => page.evaluate(() => window.__toasts)).toEqual(["The schedule has no slot in progress to start from."]);
+        expect((await dayEditor(page)).open).toBe(false);
     });
 });
 
@@ -736,37 +707,11 @@ test.describe("the automation rows", () => {
         await expect(status(page)).toHaveText("Automatic");
         await expect(control(page).locator("[data-automations]")).toHaveCount(0);
         await openOverride(page);
-        await overrideDialog(page).locator('[data-pick="plus_1h"]').click();
+        await overrideHour(page);
         await save(page);
         await expect.poll(() => requests(page, "helman/set_schedule").then((list) => list.length)).toBe(1);
         expect(await requests(page, "helman/get_config")).toHaveLength(0);
     });
-});
-
-/** The day editor the card hosts: whether it is open and the lane it selected. */
-const dayEditor = (page: Page, card: string) => page.evaluate(async (card) => {
-    const host = document.querySelector(card)!.shadowRoot!.querySelector("scheduling-day-editor-host") as any;
-    await host.updateComplete;
-    const editor = host.shadowRoot.querySelector("scheduling-entity-day-editor") as any;
-    return { open: editor?.open === true, selected: editor?._selectedLaneKey ?? null };
-}, card);
-
-test.describe("Edit blocks", () => {
-    for (const card of ["helman-simple-card", "helman-card"]) {
-        test(`opens ${card}'s day editor over the detail on the lane, and closing it returns to the detail`, async ({ page }) => {
-            await mount(page, {}, card);
-            await openControl(page);
-            await control(page).locator("[data-edit-blocks]").click();
-            await expect.poll(() => dayEditor(page, card)).toEqual({ open: true, selected: "inverter" });
-            await page.evaluate((card) => {
-                const host = document.querySelector(card)!.shadowRoot!.querySelector("scheduling-day-editor-host") as any;
-                host.shadowRoot.querySelector("scheduling-entity-day-editor").shadowRoot.querySelector("ha-dialog").close();
-            }, card);
-            await expect.poll(() => dayEditor(page, card).then((editor) => editor.open)).toBe(false);
-            await expect(control(page)).toBeVisible();
-            await expect(scheduleButton(page)).toHaveAttribute("aria-expanded", "true");
-        });
-    }
 });
 
 test.describe("Schedule lane icons in power card editor", () => {
@@ -823,9 +768,9 @@ test.describe("Schedule lane icons in power card editor", () => {
         await expect.poll(() => page.locator(card).evaluate((el) =>
             (el.shadowRoot?.querySelector("scheduling-day-editor-host") as any)?.lanes?.length ?? 0,
         )).toBe(3);
-        await openControl(page);
-        await control(page).locator("[data-edit-blocks]").click();
-        await expect.poll(() => dayEditor(page, card)).toEqual({ open: true, selected: "inverter" });
+        // As the card's schedule entry opens it: every lane, on the inverter's.
+        await page.locator(card).evaluate((el) => (el.shadowRoot!.querySelector("scheduling-day-editor-host") as any).openFor("inverter"));
+        await expect.poll(() => dayEditor(page, card)).toEqual({ open: true, selected: "inverter", single: false });
     };
 
     const clickLaneIcon = async (page: Page, card: string, laneKey: string) => {
@@ -855,7 +800,7 @@ test.describe("Schedule lane icons in power card editor", () => {
             )).toEqual(["scheduling-day-editor-host", "node-detail-dialog"]);
             await detail.locator("ha-dialog").evaluate((dialog: any) => dialog.close());
             await expect(detail).toHaveCount(0);
-            await expect.poll(() => dayEditor(page, card)).toEqual({ open: true, selected: "inverter" });
+            await expect.poll(() => dayEditor(page, card)).toEqual({ open: true, selected: "inverter", single: false });
             await page.evaluate(({ card }) => {
                 const host = document.querySelector(card)!.shadowRoot!.querySelector("scheduling-day-editor-host") as any;
                 const editor = host.shadowRoot.querySelector("scheduling-entity-day-editor") as any;
@@ -864,27 +809,29 @@ test.describe("Schedule lane icons in power card editor", () => {
             await expect.poll(() => page.evaluate(() => window.history.state)).toEqual({ dashboard: "energy" });
         });
 
-        test(`Edit blocks from device detail opened over day editor brings editor forward on that device from ${card}`, async ({ page }) => {
+        test(`Override from device detail opened over day editor brings editor forward on that device alone, keeping the drafts, from ${card}`, async ({ page }) => {
             await page.evaluate(() => window.history.replaceState({ dashboard: "energy" }, ""));
             await openDayEditor(page, card);
             await page.evaluate(({ card }) => {
                 const host = document.querySelector(card)!.shadowRoot!.querySelector("scheduling-day-editor-host") as any;
                 const editor = host.shadowRoot.querySelector("scheduling-entity-day-editor") as any;
                 editor._drafts = {
-                    inverter: { "unsaved-inverter": { kind: "inverter", mode: "eco" } },
+                    inverter: { "2026-10-21T13:00:00+00:00": { kind: "stop_export" } },
                 };
             }, { card });
             await clickLaneIcon(page, card, "boiler");
             const detail = page.locator("node-detail-dialog");
             await expect(detail.locator('[slot="headerTitle"]')).toHaveText("Boiler");
             await scheduleButton(page).click();
-            await control(page).locator("[data-edit-blocks]").click();
-            await expect.poll(() => dayEditor(page, card)).toEqual({ open: true, selected: "boiler" });
+            await control(page).locator("[data-change]").click();
+            await expect.poll(() => dayEditor(page, card)).toEqual({ open: true, selected: "boiler", single: true });
             await expect.poll(() => page.evaluate(({ card }) => {
                 const host = document.querySelector(card)!.shadowRoot!.querySelector("scheduling-day-editor-host") as any;
                 const editor = host.shadowRoot.querySelector("scheduling-entity-day-editor") as any;
                 return editor?._drafts?.inverter;
-            }, { card })).toEqual({ "unsaved-inverter": { kind: "inverter", mode: "eco" } });
+            }, { card })).toEqual({ "2026-10-21T13:00:00+00:00": { kind: "stop_export" } });
+            // The inverter's lane is not on screen, so the editor says Save writes it too.
+            await expect(editor(page).locator("[data-other-lanes-unsaved]")).toHaveText("Unsaved changes on 1 other devices will also be saved.");
             await page.evaluate(({ card }) => {
                 const host = document.querySelector(card)!.shadowRoot!.querySelector("scheduling-day-editor-host") as any;
                 const editor = host.shadowRoot.querySelector("scheduling-entity-day-editor") as any;
@@ -907,7 +854,7 @@ test.describe("Schedule lane icons in power card editor", () => {
             )).toEqual(["scheduling-day-editor-host", "node-detail-dialog"]);
             await detail.locator("ha-dialog").evaluate((dialog: any) => dialog.close());
             await expect(detail).toHaveCount(0);
-            await expect.poll(() => dayEditor(page, card)).toEqual({ open: true, selected: "inverter" });
+            await expect.poll(() => dayEditor(page, card)).toEqual({ open: true, selected: "inverter", single: false });
         });
 
         test(`unmatched lane falls back to more-info from ${card}`, async ({ page }) => {
@@ -925,7 +872,7 @@ test.describe("on both cards and a phone", () => {
         await expect(status(page)).toHaveText("Manual until Today 13:00");
     });
 
-    test("fits 360 px without sideways scrolling, the override dialog too", async ({ page }) => {
+    test("fits 360 px without sideways scrolling", async ({ page }) => {
         await page.setViewportSize({ width: 360, height: 800 });
         await mount(page, { admin: true });
         await openControl(page);
@@ -934,7 +881,5 @@ test.describe("on both cards and a phone", () => {
             .every((element) => element.getBoundingClientRect().right <= 360
                 && (element.clientWidth === 0 || element.scrollWidth <= element.clientWidth + 1)));
         expect(await fits("helman-node-control")).toBe(true);
-        await openOverride(page);
-        expect(await fits("control-override-dialog")).toBe(true);
     });
 });

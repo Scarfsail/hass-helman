@@ -1137,7 +1137,7 @@ export class HelmanSolarInspector extends LitElement {
    */
   private _handleOpenScheduleEditor = (event: CustomEvent<OpenScheduleEditorDetail>): void => {
     event.stopPropagation();
-    this._editorHost?.openFor(event.detail.target);
+    this._editorHost?.openFor(event.detail.target, event.detail.single);
   };
 
   private _handleShowDeviceDetail = (event: CustomEvent<{ item: TreeItem }>): void => {

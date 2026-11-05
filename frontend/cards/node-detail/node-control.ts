@@ -5,7 +5,7 @@ import type { HomeAssistant } from "../../types/ha";
 import type { ScheduleControllableActionDTO } from "../helman-api";
 import { fillTemplate, getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import { DialogHistoryController } from "../shared/dialog-history-controller";
-import { fireEvent, showToast } from "../shared/fire-event";
+import { showToast } from "../shared/fire-event";
 import { asJsonObject, getValueAtPath, setValueAtPath } from "../shared/config/config-document";
 import { booleanValue, stringValue } from "../shared/config/form-fields";
 import "../shared/mode-strip";
@@ -14,7 +14,7 @@ import { getLaneAutomationCoverage } from "../shared/optimizer/automation-covera
 import { findOptimizerLocations } from "../shared/optimizer/optimizer-locations";
 import type { HelmanOptimizerEditDialog } from "../shared/optimizer/helman-optimizer-edit-dialog";
 import { getScheduleActionTone, type ScheduleActionTone } from "../shared/schedule/action-tones";
-import { OPEN_SCHEDULE_EDITOR_EVENT, type OpenScheduleEditorDetail } from "../shared/schedule/dialogs/scheduling-day-editor-host";
+import { openScheduleEditorOnLane } from "../shared/schedule/dialogs/scheduling-day-editor-host";
 import { buildEntityScheduleLanePatches } from "../shared/schedule/model/entity-day-schedule-model";
 import { getScheduleApplianceActionPresentation } from "../shared/schedule/model/schedule-appliance-action-presentation";
 import {
@@ -32,8 +32,6 @@ import { effectiveLaneAction, inverterModeLabel, laneActionLabel, laneRuns, opti
 import { NO_LANE_HISTORY, type LaneHistory } from "./node-detail-types";
 import { nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-shared-styles";
 import "../shared/optimizer/helman-optimizer-edit-dialog";
-import type { ControlOverrideDialog } from "./control-override-dialog";
-import "./control-override-dialog";
 import "./help-tip";
 
 /** One optimizer driving the lane, as its config reads. */
@@ -42,20 +40,19 @@ interface OptimizerRow {
     enabled: boolean;
 }
 
-type NestedDialog = { kind: "override" } | { kind: "optimizer"; optimizerId: string };
+type NestedDialog = { kind: "optimizer"; optimizerId: string };
 
 /**
  * The Schedule section of a lane: the plan from today to noon tomorrow as a
- * strip, the changes coming today and tomorrow, Edit blocks and Override,
- * who owns the lane now and the automations that drive it.
+ * strip, the changes coming today and tomorrow, Override, who owns the lane
+ * now and the automations that drive it.
  *
  * The plan, the coverage and the roster are the shared ones, followed while
  * the section is in the page. What happened before now is the host's:
- * `history`, from the detail that reads it. "Edit blocks" asks the card
- * hosting the detail to open its day editor on this lane. An override is a
- * user-authored stretch of the schedule written through the same patches as
- * the day editor, so it never writes to the hardware itself, and with
- * execution off says so.
+ * `history`, from the detail that reads it. "Override" asks the card hosting
+ * the detail to open its day editor on this lane alone; what it saves is a
+ * user-authored stretch of the schedule, so it never writes to the hardware
+ * itself, and with execution off says so.
  *
  * The automation rows are an admin's: only then is the config read, and each
  * switch reads the current document again before it saves its one flag with
@@ -138,9 +135,7 @@ export class HelmanNodeControl extends LitElement {
     /** Back goes through the nested dialog's own close, so a draft or a write in flight keeps it open. */
     private readonly _history = new DialogHistoryController(this, "__helmanNodeControlDialogId", {
         onBack: () => {
-            const dialog = this.renderRoot.querySelector<HelmanOptimizerEditDialog | ControlOverrideDialog>(
-                "helman-optimizer-edit-dialog, control-override-dialog",
-            );
+            const dialog = this.renderRoot.querySelector<HelmanOptimizerEditDialog>("helman-optimizer-edit-dialog");
             if (dialog === null) return false;
             // Once the entry is back, so a close that goes ahead consumes it.
             queueMicrotask(() => dialog.requestClose());
@@ -187,8 +182,7 @@ export class HelmanNodeControl extends LitElement {
                 ${this._controllable?.supportsAuthoring === false ? html`<p class="note" data-unsupported>${this._t("unsupported_authoring")}</p>` : nothing}
                 ${canAuthor ? html`
                     <div class="actions">
-                        <button type="button" class="outline-button" data-edit-blocks @click=${this._editBlocks}>${this._s("edit_blocks")}</button>
-                        <button type="button" class="outline-button" data-change ?disabled=${writing} @click=${() => this._openDialog({ kind: "override" })}>
+                        <button type="button" class="outline-button" data-change ?disabled=${writing} @click=${this._override}>
                             ${this.localize("node_detail.shared.override")}
                         </button>
                         <helman-help-tip .explanation=${this._s("buttons_help")}></helman-help-tip>
@@ -342,28 +336,15 @@ export class HelmanNodeControl extends LitElement {
     private _renderDialog() {
         const dialog = this._dialog;
         if (dialog === null) return nothing;
-        if (dialog.kind === "optimizer") {
-            return html`
-                <helman-optimizer-edit-dialog
-                    .hass=${this.hass}
-                    .localize=${this.localize}
-                    .open=${true}
-                    .optimizerIds=${[dialog.optimizerId]}
-                    @closed=${this._onDialogClosed}
-                ></helman-optimizer-edit-dialog>
-            `;
-        }
-        return this._controllable ? html`
-            <control-override-dialog
+        return html`
+            <helman-optimizer-edit-dialog
                 .hass=${this.hass}
                 .localize=${this.localize}
-                .controllable=${this._controllable}
-                .normalized=${this._lanes.normalized}
-                .executionEnabled=${this._lanes.snapshot.schedule?.executionEnabled ?? false}
                 .open=${true}
+                .optimizerIds=${[dialog.optimizerId]}
                 @closed=${this._onDialogClosed}
-            ></control-override-dialog>
-        ` : nothing;
+            ></helman-optimizer-edit-dialog>
+        `;
     }
 
     // ── Actions ─────────────────────────────────────────────────────────────
@@ -380,9 +361,10 @@ export class HelmanNodeControl extends LitElement {
         this._dialog = null;
     };
 
-    /** Ask the card hosting the detail to open its day editor on this lane. */
-    private _editBlocks = (): void => {
-        fireEvent<OpenScheduleEditorDetail>(this, OPEN_SCHEDULE_EDITOR_EVENT, { target: this.controllableId });
+    /** Ask the card hosting the detail to open its day editor on this lane alone. */
+    private _override = (): void => {
+        this._error = null;
+        openScheduleEditorOnLane(this, this.controllableId);
     };
 
     /**
