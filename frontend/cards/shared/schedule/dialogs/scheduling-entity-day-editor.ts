@@ -107,6 +107,7 @@ export interface EntityDayEditorDraftSnapshot {
     drafts: EntityScheduleDrafts;
     blockSplits: EntityScheduleBlockSplits;
     draftBeforeEdit: EntityScheduleDraft;
+    splitsBeforeEdit: EntityScheduleBlockSplits;
     editing: EntityScheduleEditSession | null;
     selectedLaneKey: string | null;
     dayIndex: number;
@@ -610,6 +611,8 @@ export class SchedulingEntityDayEditor extends LitElement {
         result: EntityDayBandLane[];
     } | null = null;
     private _draftBeforeEdit: EntityScheduleDraft = {};
+    /** The edges as they stood when the session began, replayed with the draft. */
+    private _splitsBeforeEdit: EntityScheduleBlockSplits = {};
     private _restoredDraft = false;
     /** Bumped per edit session, so the action editor knows a new one began. */
     private _editSessionId = 0;
@@ -625,6 +628,7 @@ export class SchedulingEntityDayEditor extends LitElement {
             drafts: this._drafts,
             blockSplits: this._blockSplits,
             draftBeforeEdit: this._draftBeforeEdit,
+            splitsBeforeEdit: this._splitsBeforeEdit,
             editing: this._editing,
             selectedLaneKey: this._selectedLaneKey,
             dayIndex: this._dayIndex,
@@ -640,6 +644,7 @@ export class SchedulingEntityDayEditor extends LitElement {
         this._drafts = snapshot.drafts;
         this._blockSplits = snapshot.blockSplits;
         this._draftBeforeEdit = target === snapshot.selectedLaneKey ? snapshot.draftBeforeEdit : {};
+        this._splitsBeforeEdit = snapshot.splitsBeforeEdit;
         this._editing = target === snapshot.selectedLaneKey ? snapshot.editing : null;
         this._selectedAutomation = null;
         this._selectedLaneKey = target;
@@ -1754,6 +1759,7 @@ export class SchedulingEntityDayEditor extends LitElement {
 
         // Back to the pre-edit draft minus the block: whatever the session did
         // to the range goes away with it.
+        this._blockSplits = this._splitsBeforeEdit;
         this._setDraft(editing.origin === null
             ? { ...this._draftBeforeEdit }
             : freeEntityScheduleRange({
@@ -1852,6 +1858,7 @@ export class SchedulingEntityDayEditor extends LitElement {
         // user just placed must stay its own series once they move on.
         this._clearSelection();
         this._draftBeforeEdit = { ...this._draft };
+        this._splitsBeforeEdit = this._blockSplits;
         this._editSessionId += 1;
         this._updateEditSession({
             origin: origin === null ? null : { startMs: editableStartMs, endMs: origin.endMs },
@@ -1868,7 +1875,9 @@ export class SchedulingEntityDayEditor extends LitElement {
      *
      * Every change replays from the pre-edit draft rather than patching the last
      * one, so dragging a block back and forth cannot leave a trail of slots
-     * behind it, and a block it passed over comes back once it has moved on.
+     * behind it, and a block it passed over comes back once it has moved on --
+     * with the edges it had, which pruning an intermediate placement would
+     * otherwise have worn away.
      * An action that is not one yet -- a target still being typed, or none --
      * places nothing: the range shows what it would be without the block.
      */
@@ -1880,6 +1889,7 @@ export class SchedulingEntityDayEditor extends LitElement {
 
         this._editing = session;
         const places = this._sessionPlaces(session);
+        this._blockSplits = this._splitsBeforeEdit;
         this._setDraft(places
             ? placeEntityScheduleManualRange({
                 slots: this._baselineSlots,

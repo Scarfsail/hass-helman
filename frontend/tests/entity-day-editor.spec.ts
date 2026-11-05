@@ -999,6 +999,29 @@ test.describe("entity day editor", () => {
         expect(await editingRange(page)).toBe(`${at("17:00")}|${at("21:00")}`);
     });
 
+    /**
+     * A block passing over an authored edge must not wear it away: every move
+     * replays from the state before the session, edges included, so the two
+     * blocks it held apart are still two once the block has moved on.
+     */
+    test("a block passing over an authored edge leaves it in place", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { offNeighbour: true });
+
+        await clickGapAt(page, at("19:00"));
+        await page.locator(".day-switcher").click();
+        expect(await readRanges(page)).toEqual(["05:00–07:00", "17:00–19:00", "19:00–20:00", "21:00–22:00"]);
+
+        // The "off" pulled back over the new block, then let go of it again.
+        await tapAt(page, at("21:30"));
+        const from = page.locator(".edit-panel select[data-from]");
+        await from.selectOption(String(at("19:00")));
+        expect(await readRanges(page)).toEqual(["05:00–07:00", "17:00–19:00", "19:00–22:00"]);
+        await from.selectOption(String(at("21:00")));
+
+        expect(await readRanges(page)).toEqual(["05:00–07:00", "17:00–19:00", "19:00–20:00", "21:00–22:00"]);
+    });
+
     test("clicking outside closes the panel and keeps the edit in the draft", async ({ page }) => {
         await loadCardBundle(page);
         await mountEditor(page);
