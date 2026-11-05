@@ -2257,6 +2257,7 @@ export class SchedulingEntityDayEditor extends LitElement {
         // to leave as a single patch, or one of the two edits is lost.
         const patches = buildEntityScheduleLanePatches({
             slots: this._baselineSlots,
+            latestSlots: this.slots,
             lanes: this._laneDrafts(),
             nowMs,
         });

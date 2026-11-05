@@ -474,6 +474,34 @@ test.describe("the override", () => {
         await expect(control(page)).toBeVisible();
     });
 
+    test("saving keeps another lane's change that arrived while the editor was open", async ({ page }) => {
+        await mount(page, { schedule: plan([["12:00", "12:30", { boiler: { on: true, setBy: "user" } }]]) });
+        await openControl(page);
+        await openOverride(page);
+        // Another client turns the boiler off at 12:15 and on at 12:30 while this editor is open.
+        await page.evaluate((schedule) => {
+            window.__schedule = schedule;
+            window.__fireDataChanged("schedule");
+        }, plan([
+            ["12:00", "12:15", { boiler: { on: true, setBy: "user" } }],
+            ["12:30", "12:45", { boiler: { on: true, setBy: "user" } }],
+        ]));
+        await flushDataChanged(page);
+        await expect(editor(page).locator("ha-dialog")).toBeVisible();
+        await expect.poll(() => editor(page).evaluate((el: any, id) => el.slots.some(
+            (slot: any) => slot.id === id && slot.assignments.boiler?.setBy === "user",
+        ), `${DAY}T12:30:00+00:00`)).toBe(true);
+        await overrideHour(page, "stop_export");
+        await save(page);
+        await expect.poll(() => setScheduleSlots(page).then((writes) => writes.length)).toBe(1);
+        expect(await setScheduleSlots(page)).toEqual([[
+            { id: `${DAY}T12:00:00+00:00`, controllables: { boiler: { on: true }, inverter: { kind: "stop_export" } } },
+            { id: `${DAY}T12:15:00+00:00`, controllables: { inverter: { kind: "stop_export" } } },
+            { id: `${DAY}T12:30:00+00:00`, controllables: { boiler: { on: true }, inverter: { kind: "stop_export" } } },
+            { id: `${DAY}T12:45:00+00:00`, controllables: { inverter: { kind: "stop_export" } } },
+        ]]);
+    });
+
     test("holding the automation's own action still takes the slots over", async ({ page }) => {
         await mount(page);
         await openControl(page);
