@@ -547,6 +547,27 @@ class ApplianceRuntimeOptimizerTests(unittest.TestCase):
         )
         self.assertIn(_slot_id(12, 0), _placed_slots(result, appliance.id))
 
+    def test_running_appliance_continues_into_the_next_equal_priced_slot(
+        self,
+    ) -> None:
+        # The running slot seeds adjacency: of the equal-priced 12:15 and 14:00,
+        # the one right after it is taken, so the run goes on unbroken.
+        appliance = _generic()
+        cfg = _config(appliance_id=appliance.id, min_hours_per_day=2 * ONE_SLOT_HOURS)
+        result = _runtime(appliance.id, cfg).optimize(
+            _make_snapshot(
+                appliance=appliance,
+                export_points=_export_points({_slot_id(12, 15), _slot_id(14, 0)}),
+                now=_at(12, 10),
+                appliance_active_by_id={appliance.id: True},
+            ),
+            cfg,
+        )
+        self.assertEqual(
+            set(_placed_slots(result, appliance.id)),
+            {_slot_id(12, 0), _slot_id(12, 15)},
+        )
+
     def test_promotion_displaces_the_marginal_slot_not_the_budget(self) -> None:
         # Promotion must not inflate the placement: the same number of slots is
         # placed, the last one above the cut simply loses its seat.
@@ -748,6 +769,27 @@ class ApplianceRuntimeOptimizerTests(unittest.TestCase):
             cfg,
         )
         self.assertEqual(set(_placed_slots(result, appliance.id)), {_slot_id(12, 0)})
+
+    def test_equal_prices_around_a_cheaper_block_place_one_run(self) -> None:
+        # 12:00-12:45 is the cheapest block, with equal-priced hours on both
+        # sides. Six slots needed: the two at 1.0 must grow the block into one
+        # run, 11:30-11:45, not 11:00/11:15 earliest-first — one start, one stop.
+        appliance = _generic()
+        cfg = _config(appliance_id=appliance.id, min_hours_per_day=1.5)
+        prices = {slot_id: 0.5 for slot_id in _hour_slots(12)} | {
+            slot_id: 1.0 for slot_id in _hour_slots(11, 13)
+        }
+        export_points = [
+            {**point, "value": prices.get(point["timestamp"], point["value"])}
+            for point in _export_points(set())
+        ]
+        result = _runtime(appliance.id, cfg).optimize(
+            _make_snapshot(appliance=appliance, export_points=export_points), cfg
+        )
+        self.assertEqual(
+            set(_placed_slots(result, appliance.id)),
+            _hour_slots(12) | {_slot_id(11, 30), _slot_id(11, 45)},
+        )
 
     def test_leaves_user_owned_appliance_slot_untouched(self) -> None:
         appliance = _generic()

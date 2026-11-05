@@ -74,6 +74,7 @@ from ..rails import (
     read_forecast_soc_at,
     slot_bucket_starts,
 )
+from ..slot_ranking import rank_slots_contiguous
 from ..trace import NULL_TRACE
 
 if TYPE_CHECKING:
@@ -368,15 +369,15 @@ def _resolve_day_hold(
         if parse_slot_id(slot_id) >= window_start
         and surplus_by_slot.get(slot_id, 0.0) > 0
     ]
-    # Cheapest first; ties go to the earlier slot, which banks the charge sooner
-    # and so leaves more of the day to recover from a short forecast. An unknown
-    # price sorts last: it is only ever charged into as a last resort.
-    ranking = sorted(
+    # Cheapest first. Among equal prices the slot adjacent to an already-picked
+    # slot wins first, keeping the charge one continuous run instead of flipping
+    # between charging and exporting; only then the earlier slot, which banks
+    # the charge sooner and leaves more of the day to recover from a short
+    # forecast. An unknown price sorts last: it is only ever charged into as a
+    # last resort.
+    ranking = rank_slots_contiguous(
         candidates,
-        key=lambda slot_id: (
-            price_by_slot.get(slot_id, float("inf")),
-            dt_util.as_utc(parse_slot_id(slot_id)),
-        ),
+        key=lambda slot_id: price_by_slot.get(slot_id, float("inf")),
     )
 
     charge_set: set[str] = set()
