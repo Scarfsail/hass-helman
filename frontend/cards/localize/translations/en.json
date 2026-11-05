@@ -801,6 +801,11 @@
       "tomorrow": "Tomorrow",
       "yesterday": "Yesterday"
     },
+    "window": {
+      "now": "Now",
+      "now_mark": "now",
+      "pan_hint": "Drag the axis, right-drag or use two fingers to move the window"
+    },
     "explanation": {
       "pipeline": {
         "label": "Automation pipeline",
@@ -861,8 +866,6 @@
       "from": "From",
       "to": "To",
       "save": "Save",
-      "previous_day": "Previous day",
-      "next_day": "Next day",
       "schedule_changed": "The schedule changed in the meantime. Saving overwrites the loaded changes for this device.",
       "save_failed": "Saving failed:",
       "save_elapsed": "The edited slots have already passed, so there is nothing to save.",

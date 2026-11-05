@@ -20,6 +20,7 @@ import type {
     EntityDayBandRangeChangeDetail,
     EntityDayBandRangePaintDetail,
     EntityDayBandSlotSelectDetail,
+    EntityDayBandWindowChangeDetail,
 } from "../components/scheduling-entity-day-band";
 import type {
     EntityScheduleAction,
@@ -37,7 +38,7 @@ import {
     areEntityScheduleLanesDirty,
     buildEntityScheduleBlocks,
     buildEntityScheduleBoundaryOptions,
-    buildEntityScheduleDays,
+    buildEntityScheduleHorizon,
     buildEntityScheduleLanePatches,
     freeEntityScheduleRange,
     isInverterScheduleTarget,
@@ -64,7 +65,14 @@ import {
 } from "../model/schedule-appliance-projection";
 import { getScheduleApplianceActionPresentation } from "../model/schedule-appliance-action-presentation";
 import { describeScheduleAppliance, type ScheduleApplianceMetadata } from "../model/schedule-appliance-metadata";
-import { formatScheduleTime } from "../model/schedule-time";
+import {
+    formatScheduleSpanTime,
+    formatScheduleTime,
+    formatScheduleWeekdayTime,
+    getScheduleNextLocalDayStartMs,
+    resolveScheduleSpanClock,
+    type ScheduleSpanClock,
+} from "../model/schedule-time";
 import type { SlotForecastPoint } from "../model/slot-forecast-model";
 import type {
     ScheduleApplianceAction,
@@ -77,6 +85,8 @@ import type { EntityScheduleActionChangeDetail } from "./scheduling-entity-actio
 
 const HOUR_MS = 60 * 60 * 1000;
 const DEFAULT_NEW_BLOCK_DURATION_MS = HOUR_MS;
+/** How much of the horizon the timeline shows at once. */
+const WINDOW_MS = 24 * HOUR_MS;
 
 /** The end picks under a manual block, as the node detail's override offers them. */
 type EndPick = "plus_1h" | "plus_3h" | "end_of_day" | "next_change";
@@ -110,7 +120,6 @@ export interface EntityDayEditorDraftSnapshot {
     splitsBeforeEdit: EntityScheduleBlockSplits;
     editing: EntityScheduleEditSession | null;
     selectedLaneKey: string | null;
-    dayIndex: number;
 }
 
 /** Shared empty set, so a lane with no authored edges allocates nothing. */
@@ -122,7 +131,13 @@ export interface EntityScheduleSaveDetail {
 }
 
 /**
- * The house's schedule, one day at a time, one entity at a time.
+ * The house's schedule, one entity at a time, in a 24-hour window that opens at
+ * now and slides as far as the schedule reaches.
+ *
+ * Nothing elapsed is drawn: the window starts at now, and history is what the
+ * node detail and the inspector are for. One span runs across every midnight
+ * the schedule does, so a run across midnight is one block, and the window is
+ * moved along it rather than switched between days.
  *
  * Every controllable entity gets a track on a shared time axis, because when to
  * run one thing is a question about what everything else is doing. Exactly one
@@ -135,18 +150,18 @@ export interface EntityScheduleSaveDetail {
  * range back to the automation. Automation blocks are never edited: the only
  * thing they offer is to be overridden.
  *
- * The whole day is drafted locally and written as a single batch on Save, so
+ * The whole schedule is drafted locally and written as a single batch on Save, so
  * moving three blocks around is one schedule write and one automation re-run
  * rather than three of each -- and edits to several entities still leave as one
  * write. Nothing is applied until Save, so Cancel is a plain close: there is
  * nothing to undo.
  *
  * **The same stack answers "why" as well as "what".** Explain mode keeps the
- * band and replaces everything under it: the lanes are split into the day's own
+ * band and replaces everything under it: the lanes are split into the window's
  * slots, pressing one names it, and the explanation for that slot is drawn
  * where the editor would be. It lives here rather than in a dialog of its own
  * because a dialog opened from inside this one does not present (#17), and
- * because the question is asked *of* the day on screen -- keeping the band
+ * because the question is asked *of* the hours on screen -- keeping the band
  * above the answer is what lets the next slot be one press away.
  */
 @customElement("scheduling-entity-day-editor")
@@ -178,24 +193,28 @@ export class SchedulingEntityDayEditor extends LitElement {
                 padding: 6px 2px;
             }
 
-            .day-switcher {
+            /* Now and Tomorrow on the left; the window's span and the mode
+               switch on the right. */
+            .window-row {
                 display: flex;
                 align-items: center;
-                gap: 6px;
+                gap: 6px 10px;
                 flex-wrap: wrap;
-                /* Room kept clear for the mode switch in the corner above it,
-                   which is out of the flow. */
-                padding-right: 180px;
             }
 
-            /* The corner of the dialog, over the day switcher's own row:
-               choosing what the dialog is *for* is a different kind of choice
-               from choosing which day it is about, and putting it in the row of
-               day chips would read as one more chip. */
+            .window-span {
+                margin-left: auto;
+                color: var(--secondary-text-color);
+                font-size: 0.78rem;
+                font-variant-numeric: tabular-nums;
+                white-space: nowrap;
+            }
+
+            /* The far end of the window row: choosing what the dialog is *for*
+               is a different kind of choice from choosing which hours it is
+               about, and putting it among the jump buttons would read as one
+               more of them. */
             .mode-switch {
-                position: absolute;
-                top: 4px;
-                right: 0;
                 display: flex;
                 gap: 0;
             }
@@ -231,14 +250,8 @@ export class SchedulingEntityDayEditor extends LitElement {
                 padding: 6px 2px;
             }
 
-            .day-chips {
-                display: flex;
-                gap: 6px;
-                flex-wrap: wrap;
-            }
-
-            .day-chip {
-                padding: 4px 10px;
+            .window-jump {
+                padding: 4px 12px;
                 border: 1px solid var(--divider-color);
                 border-radius: 999px;
                 background: var(--card-background-color);
@@ -248,19 +261,15 @@ export class SchedulingEntityDayEditor extends LitElement {
                 cursor: pointer;
             }
 
-            .day-chip.selected {
+            .window-jump[aria-pressed="true"] {
                 border-color: color-mix(in srgb, var(--primary-color) 44%, var(--divider-color));
                 background: color-mix(in srgb, var(--primary-color) 12%, var(--card-background-color));
                 color: var(--primary-color);
             }
 
-            .day-step {
-                display: inline-flex;
-                align-items: center;
-                justify-content: center;
-                width: 30px;
-                height: 30px;
-                padding: 0;
+            .window-jump:disabled {
+                cursor: default;
+                opacity: 0.5;
             }
 
             .stale-banner {
@@ -489,7 +498,7 @@ export class SchedulingEntityDayEditor extends LitElement {
     /** Every controllable entity with an authorable lane, in display order. */
     @property({ attribute: false }) public lanes: readonly EntityScheduleLane[] = [];
     @property({ attribute: false }) public slots: readonly ScheduleSlot[] = [];
-    /** The schedule's slot length, from the payload: the grid the days are cut on. */
+    /** The schedule's slot length, from the payload: the grid every edit snaps to. */
     @property({ type: Number }) public slotMinutes!: number;
     @property({ attribute: false }) public forecastPoints: ReadonlyMap<string, SlotForecastPoint> = new Map();
     /** Projected consumption and vehicle SoC, for the band's own figures. */
@@ -497,16 +506,6 @@ export class SchedulingEntityDayEditor extends LitElement {
         EMPTY_SCHEDULE_APPLIANCE_PROJECTION_INDEX;
     /** How the price is denominated, for the forecast rows' tooltips. */
     @property({ type: String }) public priceUnit: string | null = null;
-    @property({ type: String }) public currentDayKey: string | null = null;
-    /**
-     * The day to open on, when the host is already looking at one.
-     *
-     * A host showing tomorrow has answered the question this dialog would
-     * otherwise guess at, and guessing over the answer lands the user on today
-     * after they pressed something on tomorrow. Unset -- or naming a day the
-     * schedule does not reach -- leaves the choice to the usual heuristic.
-     */
-    @property({ type: String }) public initialDayKey: string | null = null;
     @property({ type: String }) public locale = "cs";
     @property({ type: String }) public timeZone = "UTC";
     @property({ type: Number }) public nowMs = Date.now();
@@ -548,7 +547,13 @@ export class SchedulingEntityDayEditor extends LitElement {
     @state() private _blockSplits: EntityScheduleBlockSplits = {};
     /** The lane being edited, or null when the user clicked away from all of them. */
     @state() private _selectedLaneKey: string | null = null;
-    @state() private _dayIndex = 0;
+    /**
+     * Where the window starts, or null to start at now and move with it.
+     *
+     * Not remembered across openings: every opening starts at now. Read
+     * through `_window`, which keeps it inside the horizon as the clock moves.
+     */
+    @state() private _viewStartMs: number | null = null;
     /** The manual block being placed, when one is selected. */
     @state() private _editing: EntityScheduleEditSession | null = null;
     /** The automation run selected instead, read only: all it offers is "override". */
@@ -576,6 +581,8 @@ export class SchedulingEntityDayEditor extends LitElement {
      * editor keeps this map for the current opening's rendering and errors.
      */
     @state() private _explanations: ReadonlyMap<string, ScheduleExplanationPayload | null> = new Map();
+    /** The window's days last asked about, so only a change of days asks again. */
+    private _explainedDayKeys = "";
     /** Lanes whose record could not be fetched, which is not the same as none. */
     @state() private _explanationFailures: ReadonlySet<string> = new Set();
     /** The parsed form of `_explanations`, rebuilt only when that map changes. */
@@ -588,11 +595,20 @@ export class SchedulingEntityDayEditor extends LitElement {
     private _explanationGeneration = 0;
     private _explanationStore: HelmanStore | null = null;
     private _unsubscribeExplanationInvalidation: (() => void) | null = null;
-    private _daysFor: {
-        slots: readonly ScheduleSlot[]; nowMs: number; timeZone: string;
-        locale: string; currentDayKey: string | null; slotMinutes: number;
+    private _horizonFor: {
+        slots: readonly ScheduleSlot[]; nowMs: number; slotMinutes: number; timeZone: string;
     } | null = null;
-    private _cachedDays: EntityScheduleDay[] = [];
+    private _cachedHorizon: EntityScheduleDay | null = null;
+    /** How the horizon's boundaries are named, settled with the horizon. */
+    private _horizonClock: ScheduleSpanClock | null = null;
+    /**
+     * The draft as it stood when the current press began, for a second finger
+     * to put back: a pan must not leave behind the paint the first finger
+     * started.
+     */
+    private _pressSnapshot: (EntityDayEditorDraftSnapshot & { selectedAutomation: EntityScheduleBlock | null }) | null = null;
+    /** The pointers down in the gesture the snapshot belongs to. */
+    private readonly _bandPointers = new Set<number>();
     private _blocksFor = new Map<string, {
         day: EntityScheduleDay; slots: readonly ScheduleSlot[]; target: EntityScheduleTarget;
         draft: EntityScheduleDraft; splits: ReadonlySet<number>; editing: EntityScheduleEditSession | null;
@@ -631,14 +647,12 @@ export class SchedulingEntityDayEditor extends LitElement {
             splitsBeforeEdit: this._splitsBeforeEdit,
             editing: this._editing,
             selectedLaneKey: this._selectedLaneKey,
-            dayIndex: this._dayIndex,
         };
     }
 
     public restoreDraftState(
         snapshot: EntityDayEditorDraftSnapshot,
         target: EntityScheduleTarget | null,
-        dayKey: string | null,
     ): void {
         this._baselineSlots = [...snapshot.baselineSlots];
         this._drafts = snapshot.drafts;
@@ -648,7 +662,7 @@ export class SchedulingEntityDayEditor extends LitElement {
         this._editing = target === snapshot.selectedLaneKey ? snapshot.editing : null;
         this._selectedAutomation = null;
         this._selectedLaneKey = target;
-        this._dayIndex = dayKey === null ? snapshot.dayIndex : this._resolveInitialDayIndex();
+        this._viewStartMs = null;
         this._restoredDraft = true;
         this.requestUpdate();
     }
@@ -673,6 +687,7 @@ export class SchedulingEntityDayEditor extends LitElement {
         this._unsubscribeExplanationInvalidation?.();
         this._unsubscribeExplanationInvalidation = null;
         this._explanationStore = null;
+        this._endBandGesture();
     }
 
     willUpdate(changedProperties: Map<string, unknown>): void {
@@ -686,6 +701,8 @@ export class SchedulingEntityDayEditor extends LitElement {
         } else if (this.open && (changedProperties.has("open") || changedProperties.has("target"))) {
             this._seedFromSlots();
         }
+
+        this._followWindowInExplain();
 
         if (changedProperties.has("_explanations")) {
             const parsed = new Map<string, ScheduleExplanationModel>();
@@ -715,18 +732,19 @@ export class SchedulingEntityDayEditor extends LitElement {
     }
 
     render() {
-        // Days and per-lane blocks are each derived from the whole slot array,
-        // so they are built once here and passed down rather than recomputed by
-        // every renderer that needs them -- during a drag this runs per frame.
-        const days = this._days();
-        const day = this._selectedDay(days);
+        // The horizon and per-lane blocks are each derived from the whole slot
+        // array, so they are built once here and passed down rather than
+        // recomputed by every renderer that needs them -- during a drag this
+        // runs per frame.
+        const day = this._horizon();
         if (this.lanes.length === 0 || day === null) {
             return nothing;
         }
 
+        const view = this._window(day);
         const explaining = this._mode === "explain";
         const bandLanes = explaining
-            ? this._explainableBandLanes(this._buildBandLanes(day), day)
+            ? this._explainableBandLanes(this._buildBandLanes(day), view)
             : this._buildBandLanes(day);
         const selectedLane = this._selectedLane;
         const selectedBandLane = bandLanes.find((lane) => lane.key === selectedLane?.key) ?? null;
@@ -764,8 +782,7 @@ export class SchedulingEntityDayEditor extends LitElement {
                     closed the panel it had just opened.
                 -->
                 <div class="dialog-content" @pointerdown=${this._handleContentPointerDown}>
-                    ${this._renderModeSwitch()}
-                    ${this._renderDaySwitcher(day, days)}
+                    ${this._renderWindowRow(day, view)}
                     ${this.scheduleChanged ? html`
                         <div class="stale-banner">
                             <ha-icon icon="mdi:alert-outline"></ha-icon>
@@ -782,6 +799,10 @@ export class SchedulingEntityDayEditor extends LitElement {
                         .hass=${this.hass}
                         .localize=${this.localize}
                         .day=${day}
+                        .windowStartMs=${view.startMs}
+                        .windowEndMs=${view.endMs}
+                        .pannable=${true}
+                        .windowAtNow=${view.startMs === this.nowMs}
                         .lanes=${bandLanes}
                         .selectedLaneKey=${explaining ? null : this._selectedLaneKey}
                         .forecastPoints=${this.forecastPoints}
@@ -805,13 +826,16 @@ export class SchedulingEntityDayEditor extends LitElement {
                         @entity-day-band-gap-select=${this._handleBandGapSelect}
                         @entity-day-band-range-change=${this._handleBandRangeChange}
                         @entity-day-band-slot-select=${this._handleBandSlotSelect}
+                        @pointerdown=${{ handleEvent: this._handleBandPressCapture, capture: true }}
+                        @entity-day-band-window-change=${this._handleBandWindowChange}
+                        @entity-day-band-gesture-cancel=${this._handleBandGestureCancel}
                     ></scheduling-entity-day-band>
 
                     ${explaining ? this._renderExplanation(day) : selectedLane === null ? html`
                         <div class="field-help select-hint">
                             ${this.localize("scheduling.entity_editor.select_entity")}
                         </div>
-                    ` : this._renderEditPanel(day, selectedLane, selectedBandLane)}
+                    ` : this._renderEditPanel(day, view, selectedLane, selectedBandLane)}
 
                     <!--
                         Last in the content, so a refused Save is next to the
@@ -861,38 +885,40 @@ export class SchedulingEntityDayEditor extends LitElement {
         `;
     }
 
-    private _renderDaySwitcher(day: EntityScheduleDay, days: readonly EntityScheduleDay[]) {
+    /**
+     * Now and Tomorrow, and the span the window shows.
+     *
+     * Two jumps rather than a day switcher: the window slides, so "which day"
+     * is not a question it asks -- these are the two places worth getting back
+     * to in one press. Each reads as pressed while the window is exactly there.
+     */
+    private _renderWindowRow(horizon: EntityScheduleDay, view: EntityScheduleRange) {
+        const tomorrowMs = this._clampViewStart(horizon, getScheduleNextLocalDayStartMs(this.nowMs, this.timeZone));
+        const atNow = view.startMs === this.nowMs;
         return html`
-            <div class="day-switcher">
+            <div class="window-row">
                 <button
-                    class="icon-button day-step"
+                    class="window-jump"
                     type="button"
-                    ?disabled=${this._dayIndex <= 0}
-                    aria-label=${this.localize("scheduling.entity_editor.previous_day")}
-                    @click=${() => this._selectDayIndex(this._dayIndex - 1)}
-                >
-                    <ha-icon icon="mdi:chevron-left"></ha-icon>
-                </button>
-                <div class="day-chips">
-                    ${days.map((candidate, index) => html`
-                        <button
-                            class=${`day-chip${candidate.dayKey === day.dayKey ? " selected" : ""}`}
-                            type="button"
-                            @click=${() => this._selectDayIndex(index)}
-                        >
-                            ${candidate.label}
-                        </button>
-                    `)}
-                </div>
+                    data-jump="now"
+                    aria-pressed=${atNow ? "true" : "false"}
+                    @click=${() => this._setViewStart(null)}
+                >${this.localize("scheduling.window.now")}</button>
                 <button
-                    class="icon-button day-step"
+                    class="window-jump"
                     type="button"
-                    ?disabled=${this._dayIndex >= days.length - 1}
-                    aria-label=${this.localize("scheduling.entity_editor.next_day")}
-                    @click=${() => this._selectDayIndex(this._dayIndex + 1)}
-                >
-                    <ha-icon icon="mdi:chevron-right"></ha-icon>
-                </button>
+                    data-jump="tomorrow"
+                    aria-pressed=${!atNow && view.startMs === tomorrowMs ? "true" : "false"}
+                    ?disabled=${tomorrowMs <= this.nowMs}
+                    @click=${() => this._setViewStart(tomorrowMs)}
+                >${this.localize("scheduling.day.tomorrow")}</button>
+                <span class="window-span">
+                    ${atNow
+                        ? this.localize("scheduling.window.now_mark")
+                        : formatScheduleWeekdayTime(view.startMs, this.locale, this.timeZone)}
+                    → ${formatScheduleWeekdayTime(view.endMs, this.locale, this.timeZone)}
+                </span>
+                ${this._renderModeSwitch()}
             </div>
         `;
     }
@@ -941,7 +967,9 @@ export class SchedulingEntityDayEditor extends LitElement {
             `;
         }
 
-        const key = this._explanationKey(selection.laneKey, day.dayKey);
+        // Records are kept per local day, so the slot's own day says which.
+        const dayKey = day.slots.find((slot) => slot.id === selection.slotId)?.dayKey ?? day.dayKey;
+        const key = this._explanationKey(selection.laneKey, dayKey);
         // An appliance lane's optimizers are titled by the appliance in the
         // config editor, and the lane already knows its name -- so the
         // explanation can name them the same way without asking the backend
@@ -970,6 +998,7 @@ export class SchedulingEntityDayEditor extends LitElement {
      */
     private _renderEditPanel(
         day: EntityScheduleDay,
+        view: EntityScheduleRange,
         lane: EntityScheduleLane,
         bandLane: EntityDayBandLane | null,
     ) {
@@ -980,8 +1009,8 @@ export class SchedulingEntityDayEditor extends LitElement {
                 ${editing !== null
                     ? this._renderManualPanel(day, lane, editing)
                     : automation !== null && bandLane !== null
-                        ? this._renderAutomationPanel(day, bandLane, automation)
-                        : this._renderNothingPanel(day, lane)}
+                        ? this._renderAutomationPanel(bandLane, automation)
+                        : this._renderNothingPanel(day, view, lane)}
             </div>
         `;
     }
@@ -1014,7 +1043,7 @@ export class SchedulingEntityDayEditor extends LitElement {
                         <select class="select-input" data-from @change=${this._handleStartChange}>
                             ${boundaries.slice(0, -1).map((ms) => html`
                                 <option value=${ms} ?selected=${ms === editing.startMs}>
-                                    ${this._formatBoundary(day, ms)}
+                                    ${this._formatBoundary(ms)}
                                 </option>
                             `)}
                         </select>
@@ -1024,7 +1053,7 @@ export class SchedulingEntityDayEditor extends LitElement {
                         <select class="select-input" data-to @change=${this._handleEndChange}>
                             ${ends.map((ms) => html`
                                 <option value=${ms} ?selected=${ms === editing.endMs}>
-                                    ${this._formatBoundary(day, ms)}
+                                    ${this._formatBoundary(ms)}
                                 </option>
                             `)}
                         </select>
@@ -1057,7 +1086,7 @@ export class SchedulingEntityDayEditor extends LitElement {
                                 <span>${this.localize(run.authorship === "user"
                                     ? "scheduling.authorship.set_by_user"
                                     : "scheduling.authorship.set_by_automation")}</span>
-                                <span>${this._formatBoundary(day, run.startMs)}–${this._formatBoundary(day, run.endMs)}</span>
+                                <span>${this._formatBoundary(run.startMs)}–${this._formatBoundary(run.endMs)}</span>
                             </span>
                         `)}
                     </div>
@@ -1077,13 +1106,13 @@ export class SchedulingEntityDayEditor extends LitElement {
         `;
     }
 
-    private _renderAutomationPanel(day: EntityScheduleDay, lane: EntityDayBandLane, block: EntityScheduleBlock) {
+    private _renderAutomationPanel(lane: EntityDayBandLane, block: EntityScheduleBlock) {
         return html`
             <div class="placement">
                 <div class="placement-row read-only">
                     <span class="authorship-badge automation">${this.localize("scheduling.entity_editor.automation")}</span>
                     <span class="placement-range">
-                        ${this._formatBoundary(day, block.startMs)} – ${this._formatBoundary(day, block.endMs)}
+                        ${this._formatBoundary(block.startMs)} – ${this._formatBoundary(block.endMs)}
                     </span>
                     <span class="placement-duration">${formatLaneRunHours(block.endMs - block.startMs, this.locale)}</span>
                     <button class="pill-button override placement-actions" type="button" data-override @click=${this._handleOverride}>
@@ -1099,11 +1128,17 @@ export class SchedulingEntityDayEditor extends LitElement {
     }
 
     /**
-     * Nothing selected: a manual block from the first slot that can still be
-     * written, one press away, and how to put one anywhere else.
+     * Nothing selected: a manual block from the window's left edge, one press
+     * away, and how to put one anywhere else. The edge is snapped down to its
+     * slot and held at the first slot that can still be written, so at now it
+     * is the slot running now.
      */
-    private _renderNothingPanel(day: EntityScheduleDay, lane: EntityScheduleLane) {
-        const fromMs = Math.max(day.startMs, day.editableFromMs);
+    private _renderNothingPanel(day: EntityScheduleDay, view: EntityScheduleRange, lane: EntityScheduleLane) {
+        const stepMs = day.slotMinutes * 60_000;
+        const fromMs = Math.max(
+            day.startMs + Math.floor((view.startMs - day.startMs) / stepMs) * stepMs,
+            day.editableFromMs,
+        );
         const ends = buildEntityScheduleBoundaryOptions({ day }).filter((ms) => ms > fromMs);
         const picks = this._endPicks(day, lane, fromMs, ends).filter(({ key }) => key !== "next_change");
         return html`
@@ -1133,9 +1168,10 @@ export class SchedulingEntityDayEditor extends LitElement {
 
     /**
      * Where a manual block starting at `startMs` could end, as the node
-     * detail's override offers it: an hour, three, the end of the day (its last
-     * writable boundary), and the next slot where the saved plan changes --
-     * each only when it is one of the ends the pickers offer.
+     * detail's override offers it: an hour, three, the end of the local day it
+     * starts on (its midnight, or the horizon's end when that comes first), and
+     * the next slot where the saved plan changes -- each only when it is one of
+     * the ends the pickers offer.
      */
     private _endPicks(
         day: EntityScheduleDay,
@@ -1152,7 +1188,7 @@ export class SchedulingEntityDayEditor extends LitElement {
         const candidates: [EndPick, number | undefined][] = [
             ["plus_1h", startMs + HOUR_MS],
             ["plus_3h", startMs + 3 * HOUR_MS],
-            ["end_of_day", ends[ends.length - 1]],
+            ["end_of_day", Math.min(getScheduleNextLocalDayStartMs(startMs, this.timeZone), ends[ends.length - 1] ?? startMs)],
             ["next_change", nextChange],
         ];
         return candidates
@@ -1305,75 +1341,86 @@ export class SchedulingEntityDayEditor extends LitElement {
         // the inverter first, that appliance would usually be the inverter. The
         // dialog stacks the whole day and asks which lane instead.
         this._selectedLaneKey = this.target;
-        this._dayIndex = this._resolveInitialDayIndex();
+        this._viewStartMs = null;
+    }
+
+    private _horizon(): EntityScheduleDay | null {
+        const previous = this._horizonFor;
+        if (previous && previous.slots === this._baselineSlots && previous.nowMs === this.nowMs
+            && previous.slotMinutes === this.slotMinutes && previous.timeZone === this.timeZone) {
+            return this._cachedHorizon;
+        }
+        this._horizonFor = {
+            slots: this._baselineSlots, nowMs: this.nowMs, slotMinutes: this.slotMinutes, timeZone: this.timeZone,
+        };
+        const horizon = this._cachedHorizon = buildEntityScheduleHorizon({
+            slots: this._baselineSlots,
+            slotMinutes: this.slotMinutes,
+            nowMs: this.nowMs,
+        });
+        this._horizonClock = horizon === null
+            ? null
+            : resolveScheduleSpanClock(horizon.startMs, horizon.endMs, this.timeZone);
+        return horizon;
     }
 
     /**
-     * The day worth opening on: whichever day the host was showing, or -- when
-     * it did not say -- the one holding the selected entity's next scheduled
-     * change, which is what the user tapped on to get here.
+     * The 24 hours on screen, or what is left of the horizon when that is less.
+     *
+     * Clamped here, on every read, rather than when the start was set: the
+     * clock moves under a window parked at a later hour, and a window that
+     * started at now keeps starting at now.
      */
-    private _resolveInitialDayIndex(): number {
-        const days = this._days();
-        const lane = this._selectedLane;
-        if (days.length === 0 || lane === null) {
-            return 0;
-        }
-
-        const hostDayIndex = this.initialDayKey === null
-            ? -1
-            : days.findIndex((day) => day.dayKey === this.initialDayKey);
-        if (hostDayIndex >= 0) {
-            return hostDayIndex;
-        }
-
-        const blocks = buildEntityScheduleBlocks({
-            slots: this._baselineSlots,
-            target: lane.target,
-            draft: {},
-            nowMs: this.nowMs,
-        });
-        const nextBlock = blocks.find((block) => block.endMs > this.nowMs);
-        const dayIndex = nextBlock === undefined
-            ? -1
-            : days.findIndex((day) => nextBlock.startMs < day.endMs && nextBlock.endMs > day.startMs);
-        if (dayIndex >= 0) {
-            return dayIndex;
-        }
-
-        const todayIndex = days.findIndex((day) => this.nowMs < day.endMs);
-        return todayIndex >= 0 ? todayIndex : 0;
+    private _window(horizon: EntityScheduleDay): EntityScheduleRange {
+        const startMs = this._clampViewStart(horizon, this._viewStartMs ?? this.nowMs);
+        return { startMs, endMs: Math.min(startMs + WINDOW_MS, horizon.endMs) };
     }
 
-    private _days(): EntityScheduleDay[] {
-        const previous = this._daysFor;
-        if (previous && previous.slots === this._baselineSlots && previous.nowMs === this.nowMs
-            && previous.timeZone === this.timeZone && previous.locale === this.locale
-            && previous.currentDayKey === this.currentDayKey && previous.slotMinutes === this.slotMinutes) {
-            return this._cachedDays;
-        }
-        this._daysFor = {
-            slots: this._baselineSlots, nowMs: this.nowMs, timeZone: this.timeZone,
-            locale: this.locale, currentDayKey: this.currentDayKey, slotMinutes: this.slotMinutes,
-        };
-        return this._cachedDays = buildEntityScheduleDays({
-            slots: this._baselineSlots,
-            slotMinutes: this.slotMinutes,
-            timeZone: this.timeZone,
-            locale: this.locale,
-            currentDayKey: this.currentDayKey,
-            todayLabel: this.localize("scheduling.day.today"),
-            tomorrowLabel: this.localize("scheduling.day.tomorrow"),
-            nowMs: this.nowMs,
-        });
+    /** Between now and the last start that still shows a whole window. */
+    private _clampViewStart(horizon: EntityScheduleDay, startMs: number): number {
+        return Math.max(Math.min(startMs, horizon.endMs - WINDOW_MS), this.nowMs);
     }
 
-    private _selectedDay(days: readonly EntityScheduleDay[] = this._days()): EntityScheduleDay | null {
-        if (days.length === 0) {
-            return null;
+    /** Move the window; null, or anything at or before now, means now. */
+    private _setViewStart(startMs: number | null): void {
+        const horizon = this._horizon();
+        if (horizon === null) {
+            return;
         }
 
-        return days[Math.min(Math.max(this._dayIndex, 0), days.length - 1)];
+        const clampedMs = startMs === null ? this.nowMs : this._clampViewStart(horizon, startMs);
+        this._viewStartMs = clampedMs <= this.nowMs ? null : clampedMs;
+    }
+
+    /**
+     * Keep Explain mode on the window as it moves, by a pan or by the clock:
+     * a pressed slot that has left it is let go of, and a day the window has
+     * reached is asked about -- once per change of days, not per move.
+     */
+    private _followWindowInExplain(): void {
+        if (!this.open || this._mode !== "explain") {
+            return;
+        }
+
+        const horizon = this._horizon();
+        if (horizon === null) {
+            return;
+        }
+
+        const view = this._window(horizon);
+        const selection = this._explainSelection;
+        if (selection !== null) {
+            const slot = horizon.slots.find((candidate) => candidate.id === selection.slotId);
+            if (slot === undefined || slot.endMs <= view.startMs || slot.startMs >= view.endMs) {
+                this._explainSelection = null;
+            }
+        }
+
+        const dayKeys = this._windowDayKeys(view).join(",");
+        if (dayKeys !== this._explainedDayKeys) {
+            this._explainedDayKeys = dayKeys;
+            this._requestExplanations();
+        }
     }
 
     private _dayBlocks(day: EntityScheduleDay, lane: EntityScheduleLane): EntityScheduleBlock[] {
@@ -1464,13 +1511,11 @@ export class SchedulingEntityDayEditor extends LitElement {
      * A start the session had to raise is the now-line rather than a decision:
      * editing a block that is already running opens a session over the part
      * still ahead, and splitting there would cut the running block in half on
-     * screen. It is the raising that says so, not the value -- on any day but
-     * today the editable boundary is just that day's midnight, and a block
-     * authored at the first slot of a later day is a decision like any other,
-     * with the run ending at that midnight for a neighbour.
+     * screen. It is the raising that says so, not the value: a block authored
+     * at the slot running now is a decision like any other.
      */
     private _sessionEdges(session: EntityScheduleEditSession): number[] {
-        const editableFromMs = this._selectedDay()?.editableFromMs ?? Number.NEGATIVE_INFINITY;
+        const editableFromMs = this._horizon()?.editableFromMs ?? Number.NEGATIVE_INFINITY;
         return session.startClamped && session.startMs <= editableFromMs
             ? [session.endMs]
             : [session.startMs, session.endMs];
@@ -1540,23 +1585,33 @@ export class SchedulingEntityDayEditor extends LitElement {
     }
 
     /**
-     * Ask for every lane's record for the day on screen.
+     * Ask for every lane's record for each day the window shows.
      *
      * Up front rather than on the first press, because the lane list itself is
      * an answer: a lane no optimizer touched has nothing to explain and does
      * not belong in this mode, and that cannot be known without the record.
      * One request per lane per day, ever -- the set outlives both the mode and
-     * the day, so walking back and forth across them is silent.
+     * the window, so sliding back and forth is silent.
      */
     private _requestExplanations(): void {
-        const day = this._selectedDay();
-        if (day === null) {
-            return;
+        for (const dayKey of this._windowDayKeys()) {
+            for (const lane of this.lanes) {
+                void this._loadExplanation(lane.key, dayKey);
+            }
+        }
+    }
+
+    /** The local days the window's slots fall on: the days records are kept by. */
+    private _windowDayKeys(view?: EntityScheduleRange): string[] {
+        const horizon = this._horizon();
+        if (horizon === null) {
+            return [];
         }
 
-        for (const lane of this.lanes) {
-            void this._loadExplanation(lane.key, day.dayKey);
-        }
+        const { startMs, endMs } = view ?? this._window(horizon);
+        return [...new Set(horizon.slots
+            .filter((slot) => slot.endMs > startMs && slot.startMs < endMs)
+            .map((slot) => slot.dayKey))];
     }
 
     private async _loadExplanation(laneKey: string, dayKey: string): Promise<void> {
@@ -1594,35 +1649,84 @@ export class SchedulingEntityDayEditor extends LitElement {
      */
     private _explainableBandLanes(
         lanes: readonly EntityDayBandLane[],
-        day: EntityScheduleDay,
+        view: EntityScheduleRange,
     ): EntityDayBandLane[] {
-        return lanes.filter((lane) => {
-            const key = this._explanationKey(lane.key, day.dayKey);
+        const dayKeys = this._windowDayKeys(view);
+        return lanes.filter((lane) => dayKeys.some((dayKey) => {
+            const key = this._explanationKey(lane.key, dayKey);
             const model = this._explanationModels.get(key);
             if (model === undefined) {
                 return !this._explanations.has(key);
             }
 
             return model.columns.some((column) => column.cells.some((cell) => cell.present));
-        });
+        }));
     }
 
-    private _selectDayIndex(index: number): void {
-        const days = this._days();
-        if (index < 0 || index >= days.length) {
+    /** The band asks for the window somewhere else; snapped to a slot unless that is now. */
+    private _handleBandWindowChange(event: CustomEvent<EntityDayBandWindowChangeDetail>): void {
+        event.stopPropagation();
+        const horizon = this._horizon();
+        if (horizon === null) {
             return;
         }
 
-        // The draft is keyed by slot id and spans every day, so switching days
-        // keeps unsaved work; only the selection is day-local.
-        this._clearSelection();
-        this._dayIndex = index;
-        // The selected slot belongs to the day it was pressed on, and so does
-        // every record: a new day is a new set of questions.
-        this._explainSelection = null;
-        if (this._mode === "explain") {
-            this._requestExplanations();
+        const stepMs = horizon.slotMinutes * 60_000;
+        this._setViewStart(
+            horizon.startMs + Math.round((event.detail.startMs - horizon.startMs) / stepMs) * stepMs,
+        );
+    }
+
+    /**
+     * Remember the draft at the press that starts a gesture, in case a second
+     * finger turns it into a pan. Kept until every pointer of that gesture is
+     * up, so a cancel can only ever put back the gesture it belongs to.
+     */
+    private readonly _handleBandPressCapture = (event: PointerEvent): void => {
+        if (this._pressSnapshot === null) {
+            this._pressSnapshot = { ...this.snapshotDraftState(), selectedAutomation: this._selectedAutomation };
         }
+        if (this._bandPointers.size === 0) {
+            window.addEventListener("pointerup", this._handleBandPressEnd, true);
+            window.addEventListener("pointercancel", this._handleBandPressEnd, true);
+        }
+        this._bandPointers.add(event.pointerId);
+    };
+
+    /** The last pointer of the gesture is up: its snapshot goes with it. */
+    private readonly _handleBandPressEnd = (event: PointerEvent): void => {
+        if (!this._bandPointers.delete(event.pointerId) || this._bandPointers.size > 0) {
+            return;
+        }
+
+        this._endBandGesture();
+    };
+
+    private _endBandGesture(): void {
+        this._bandPointers.clear();
+        this._pressSnapshot = null;
+        window.removeEventListener("pointerup", this._handleBandPressEnd, true);
+        window.removeEventListener("pointercancel", this._handleBandPressEnd, true);
+    }
+
+    /** A second finger turned the press into a pan: whatever it had started is undone. */
+    private _handleBandGestureCancel(event: Event): void {
+        event.stopPropagation();
+        const snapshot = this._pressSnapshot;
+        if (snapshot === null) {
+            return;
+        }
+
+        // Used once: the pan that follows belongs to the same gesture, but
+        // nothing it does is to be undone.
+        this._pressSnapshot = null;
+        this._drafts = snapshot.drafts;
+        this._blockSplits = snapshot.blockSplits;
+        this._draftBeforeEdit = snapshot.draftBeforeEdit;
+        this._splitsBeforeEdit = snapshot.splitsBeforeEdit;
+        this._editing = snapshot.editing;
+        this._selectedLaneKey = snapshot.selectedLaneKey;
+        this._selectedAutomation = snapshot.selectedAutomation;
     }
 
     /**
@@ -1632,7 +1736,7 @@ export class SchedulingEntityDayEditor extends LitElement {
     private _handleBandBlockSelect(event: CustomEvent<EntityDayBandBlockSelectDetail>): void {
         event.stopPropagation();
         this._selectLane(event.detail.laneKey);
-        const day = this._selectedDay();
+        const day = this._horizon();
         const lane = this._selectedLane;
         if (day === null || lane === null) {
             return;
@@ -1652,7 +1756,7 @@ export class SchedulingEntityDayEditor extends LitElement {
         const editing = this._editing;
         if (editing === null || !this._sessionPlaces(editing)
             || block.startMs >= editing.endMs || block.endMs <= editing.startMs) {
-            this._beginEdit(block, block.startMs, block.endMs, block.action);
+            this._beginEdit(block, block.startMs, block.endMs, block.action, block.continuesBefore);
         }
     }
 
@@ -1736,7 +1840,7 @@ export class SchedulingEntityDayEditor extends LitElement {
     private _handleBandGapSelect(event: CustomEvent<EntityDayBandGapSelectDetail>): void {
         event.stopPropagation();
         this._selectLane(event.detail.laneKey);
-        const day = this._selectedDay();
+        const day = this._horizon();
         const lane = this._selectedLane;
         if (day !== null && lane !== null) {
             // The default hour is cut short by the end of the free stretch: a
@@ -1778,18 +1882,18 @@ export class SchedulingEntityDayEditor extends LitElement {
     private _handleOverride(): void {
         const block = this._selectedAutomation;
         if (block !== null) {
-            this._beginEdit(null, block.startMs, block.endMs, block.action);
+            this._beginEdit(null, block.startMs, block.endMs, block.action, block.continuesBefore);
         }
     }
 
     /**
      * Move the block's start, dragging the end with it when it would overtake
      * it, so the block keeps its length instead of collapsing -- as far as the
-     * day's last boundary. Whatever it lands on is replaced, as a drag does.
+     * horizon's last boundary. Whatever it lands on is replaced, as a drag does.
      */
     private _handleStartChange(event: Event): void {
         const editing = this._editing;
-        const day = this._selectedDay();
+        const day = this._horizon();
         if (editing === null || day === null) {
             return;
         }
@@ -1836,15 +1940,18 @@ export class SchedulingEntityDayEditor extends LitElement {
      *
      * A block that is already running starts in the past; the session begins at
      * the first editable slot instead, so the pickers have that start to offer
-     * and the running part stays exactly as scheduled.
+     * and the running part stays exactly as scheduled. The horizon already
+     * cuts such a block at that slot, so a block that continues before it says
+     * the same as a start that had to be raised.
      */
     private _beginEdit(
         origin: EntityScheduleRange | null,
         startMs: number,
         endMs: number,
         action: EntityScheduleAction,
+        continuesBefore = false,
     ): void {
-        const day = this._selectedDay();
+        const day = this._horizon();
         if (day === null) {
             return;
         }
@@ -1867,7 +1974,7 @@ export class SchedulingEntityDayEditor extends LitElement {
             endMs,
             action: sanitizeEntityScheduleAction(action),
             valid: true,
-            startClamped: editableStartMs > startMs,
+            startClamped: editableStartMs > startMs || continuesBefore,
         });
     }
 
@@ -2019,11 +2126,17 @@ export class SchedulingEntityDayEditor extends LitElement {
         return { on: true };
     }
 
-    /** Midnight at the end of a day reads as 24:00, not as the next 00:00. */
-    private _formatBoundary(day: EntityScheduleDay, atMs: number): string {
-        return atMs === day.endMs && atMs !== day.startMs
-            ? "24:00"
-            : formatScheduleTime(atMs, this.locale, this.timeZone);
+    /**
+     * A boundary as the pickers and range labels say it: with its weekday when
+     * the horizon runs past a midnight, since the same hour then occurs twice,
+     * and the midnight closing its last day as 24:00.
+     */
+    private _formatBoundary(atMs: number): string {
+        this._horizon();
+        const clock = this._horizonClock;
+        return clock === null
+            ? formatScheduleTime(atMs, this.locale, this.timeZone)
+            : formatScheduleSpanTime(atMs, clock, this.locale, this.timeZone);
     }
 
     private _isDirty(nowMs: number = this.nowMs): boolean {

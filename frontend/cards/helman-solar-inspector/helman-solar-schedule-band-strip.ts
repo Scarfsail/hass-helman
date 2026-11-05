@@ -403,7 +403,7 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
             return;
         }
 
-        host.openFor(lane.target, this.date);
+        host.openFor(lane.target);
     }
 
     private _handleTimeHover = (event: CustomEvent<EntityDayBandTimeHoverDetail>): void => {

@@ -62,15 +62,21 @@ interface MountOptions {
      */
     authoring?: boolean;
     selectedBlock?: boolean;
+    /**
+     * The editor's shape: a span from midnight through the next day, a 24-hour
+     * window opening at now, and the gestures that move it.
+     */
+    pannable?: boolean;
 }
 
 async function mountBand(page: Page, options: MountOptions = {}): Promise<void> {
     await loadBundle(page, "scheduling-entity-day-band");
 
-    await page.evaluate(({ dayStartMs, nowMs, hourMs, windowStartMs, windowEndMs, windowed, highlight, live, slotGrid, slotPicks, twoLanes, selectedSlot, halfHourly, slotMinutes, gridTicks, axis, widthPx, authoring, selectedBlock }) => {
+    await page.evaluate(({ dayStartMs, nowMs, hourMs, windowStartMs, windowEndMs, windowed, highlight, live, slotGrid, slotPicks, twoLanes, selectedSlot, halfHourly, slotMinutes, gridTicks, axis, widthPx, authoring, selectedBlock, pannable }) => {
         const at = (hour: number) => dayStartMs + hour * hourMs;
         const stepMs = slotMinutes * 60_000;
-        const slots = Array.from({ length: (24 * hourMs) / stepMs }, (_, index) => ({
+        const spanHours = pannable ? 48 : 24;
+        const slots = Array.from({ length: (spanHours * hourMs) / stepMs }, (_, index) => ({
             id: new Date(dayStartMs + index * stepMs).toISOString(),
             index,
             startMs: dayStartMs + index * stepMs,
@@ -92,7 +98,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
             label: "today",
             slots,
             startMs: dayStartMs,
-            endMs: at(24),
+            endMs: at(spanHours),
             editableFromMs: nowMs,
             slotMinutes,
         };
@@ -184,6 +190,12 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
             band.windowStartMs = windowStartMs;
             band.windowEndMs = windowEndMs;
         }
+        if (pannable) {
+            band.pannable = true;
+            band.windowAtNow = true;
+            band.windowStartMs = nowMs;
+            band.windowEndMs = nowMs + 24 * hourMs;
+        }
         if (highlight) {
             band.highlightRanges = [
                 { startMs: at(12), endMs: at(13), kind: "selected" },
@@ -201,6 +213,8 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
             "entity-day-band-range-change",
             "entity-day-band-range-paint",
             "entity-day-band-deselect",
+            "entity-day-band-window-change",
+            "entity-day-band-gesture-cancel",
             "show-controllable-detail",
             "hass-more-info",
         ]) {
@@ -232,6 +246,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
         widthPx: options.widthPx ?? 1000,
         authoring: options.authoring ?? false,
         selectedBlock: options.selectedBlock ?? false,
+        pannable: options.pannable ?? false,
     });
     await page.waitForFunction(
         () => !!document.querySelector("scheduling-entity-day-band")?.shadowRoot?.querySelector(".track"),
@@ -790,5 +805,187 @@ test.describe("entity day band, authoring", () => {
             startMs: DAY_START_MS + 20 * HOUR_MS,
             limitMs: DAY_START_MS + 24 * HOUR_MS,
         }]);
+    });
+});
+
+/**
+ * The window is the host's, but the gestures that move it are the band's: it
+ * reports where it was asked to go, raw, and the host snaps and clamps it.
+ */
+test.describe("entity day band, panning", () => {
+    const mountPannable = (page: Page) => mountBand(page, { authoring: true, axis: true, slotGrid: true, pannable: true });
+
+    /** A moment's place on the boiler's track, in a window opening at now. */
+    async function trackX(page: Page, atMs: number): Promise<{ x: number; y: number; width: number }> {
+        return page.evaluate(({ ms, nowMs, hourMs }) => {
+            const band = document.querySelector("scheduling-entity-day-band")!;
+            const rect = band.shadowRoot!.querySelector('.lane[data-lane="boiler"] .track')!.getBoundingClientRect();
+            return {
+                x: rect.left + ((ms - nowMs) / (24 * hourMs)) * rect.width,
+                y: rect.top + rect.height / 2,
+                width: rect.width,
+            };
+        }, { ms: atMs, nowMs: NOW_MS, hourMs: HOUR_MS });
+    }
+
+    const windowChanges = async (page: Page) => (await readEvents(page))
+        .filter((event) => event.type === "entity-day-band-window-change")
+        .map((event) => event.detail.startMs as number);
+
+    test("dragging the axis asks for the window by the hours dragged", async ({ page }) => {
+        await mountPannable(page);
+
+        const axis = await page.evaluate(() => {
+            const rect = document.querySelector("scheduling-entity-day-band")!.shadowRoot!
+                .querySelector(".axis")!.getBoundingClientRect();
+            return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, width: rect.width };
+        });
+        await page.mouse.move(axis.x, axis.y);
+        await page.mouse.down();
+        // A quarter of the track to the left: six hours later.
+        await page.mouse.move(axis.x - axis.width / 4, axis.y, { steps: 4 });
+        await page.mouse.up();
+
+        const starts = await windowChanges(page);
+        expect(starts.length).toBeGreaterThan(0);
+        expect(Math.abs(starts.at(-1)! - (NOW_MS + 6 * HOUR_MS))).toBeLessThan(60_000);
+    });
+
+    test("a right-button drag on a lane pans and paints nothing", async ({ page }) => {
+        await mountPannable(page);
+
+        const from = await trackX(page, DAY_START_MS + 15 * HOUR_MS);
+        await page.mouse.move(from.x, from.y);
+        await page.mouse.down({ button: "right" });
+        await page.mouse.move(from.x - from.width / 8, from.y, { steps: 4 });
+        await page.mouse.up({ button: "right" });
+
+        const types = (await readEvents(page)).map((event) => event.type);
+        expect(types).toContain("entity-day-band-window-change");
+        expect(types).not.toContain("entity-day-band-range-paint");
+        expect(types).not.toContain("entity-day-band-gap-select");
+        expect(Math.abs((await windowChanges(page)).at(-1)! - (NOW_MS + 3 * HOUR_MS))).toBeLessThan(60_000);
+
+        // The menu that button would open has no place over the band.
+        const prevented = await page.evaluate(({ x, y }) => {
+            const band = document.querySelector("scheduling-entity-day-band")!;
+            const target = band.shadowRoot!.elementFromPoint(x, y)!;
+            const event = new MouseEvent("contextmenu", { bubbles: true, composed: true, cancelable: true });
+            target.dispatchEvent(event);
+            return event.defaultPrevented;
+        }, from);
+        expect(prevented).toBe(true);
+    });
+
+    test("a sideways wheel, or Shift with an upright one, slides the window", async ({ page }) => {
+        await mountPannable(page);
+
+        const at = await trackX(page, DAY_START_MS + 15 * HOUR_MS);
+        await page.mouse.move(at.x, at.y);
+        await page.mouse.wheel(at.width / 24, 0);
+        await expect.poll(async () => (await windowChanges(page)).length).toBe(1);
+
+        await page.keyboard.down("Shift");
+        await page.mouse.wheel(0, at.width / 24);
+        await page.keyboard.up("Shift");
+        // The notches add up: two of an hour each, two hours on.
+        await expect.poll(async () => (await windowChanges(page)).length).toBe(2);
+        expect(Math.abs((await windowChanges(page)).at(-1)! - (NOW_MS + 2 * HOUR_MS))).toBeLessThan(60_000);
+    });
+
+    test("two fingers pan by their midpoint, and drop what the first one started", async ({ page }) => {
+        await mountPannable(page);
+
+        const from = await trackX(page, DAY_START_MS + 19 * HOUR_MS + 30 * 60_000);
+        const to = await trackX(page, DAY_START_MS + 21 * HOUR_MS + 30 * 60_000);
+        await page.evaluate(({ from, to, hourPx }) => {
+            const band = document.querySelector("scheduling-entity-day-band")!;
+            const target = band.shadowRoot!.elementFromPoint(from.x, from.y)!;
+            const touch = (type: string, pointerId: number, x: number, on: EventTarget) => on.dispatchEvent(
+                new PointerEvent(type, {
+                    pointerId, pointerType: "touch", isPrimary: pointerId === 1, button: 0,
+                    clientX: x, clientY: from.y, bubbles: true, composed: true, cancelable: true,
+                }),
+            );
+            touch("pointerdown", 1, from.x, target);
+            touch("pointermove", 1, to.x, window);
+            touch("pointerdown", 2, to.x + 60, target);
+            touch("pointermove", 1, to.x - 2 * hourPx, window);
+            touch("pointermove", 2, to.x + 60 - 2 * hourPx, window);
+            touch("pointerup", 2, to.x + 60 - 2 * hourPx, window);
+            // The finger left behind moves nothing, and paints nothing.
+            touch("pointermove", 1, to.x - 8 * hourPx, window);
+            touch("pointerup", 1, to.x - 8 * hourPx, window);
+        }, { from, to, hourPx: from.width / 24 });
+
+        const events = (await readEvents(page)).filter((event) => event.type !== "entity-day-band-time-hover");
+        const types = events.map((event) => event.type);
+        // The first finger painted, the second called it off before the pan.
+        expect(types.indexOf("entity-day-band-range-paint")).toBeGreaterThanOrEqual(0);
+        expect(types.indexOf("entity-day-band-gesture-cancel")).toBeGreaterThan(types.lastIndexOf("entity-day-band-range-paint"));
+        const starts = await windowChanges(page);
+        // Each finger's move shifts the midpoint by one hour of the two.
+        expect(Math.abs(starts.at(-1)! - (NOW_MS + 2 * HOUR_MS))).toBeLessThan(60_000);
+        expect(types.lastIndexOf("entity-day-band-range-paint")).toBeLessThan(types.indexOf("entity-day-band-gesture-cancel"));
+    });
+
+    test("the axis names the midnight, rules it down the tracks, and opens at now", async ({ page }) => {
+        await mountPannable(page);
+        await page.evaluate(async () => {
+            const band = document.querySelector("scheduling-entity-day-band") as any;
+            band.localize = (key: string) => key === "scheduling.window.now_mark" ? "now" : key;
+            await band.updateComplete;
+        });
+
+        const axis = await page.evaluate(() => {
+            const root = document.querySelector("scheduling-entity-day-band")!.shadowRoot!;
+            const now = root.querySelector(".axis-now") as HTMLElement;
+            const hours = [...root.querySelectorAll(".axis-tick:not(.axis-now)")] as HTMLElement[];
+            return {
+                now: now.textContent?.replace(/\s+/g, " ").trim(),
+                midnights: [...root.querySelectorAll(".axis-tick.midnight")].map((tick) => tick.textContent?.trim()),
+                midnightLines: root.querySelectorAll(".lane .time-grid-line.midnight").length,
+                hourLabels: hours.map((tick) => tick.textContent?.trim()),
+                overlapping: hours.filter((tick) => tick.getBoundingClientRect().left < now.getBoundingClientRect().right).length,
+            };
+        });
+
+        // The band's locale is Czech: 2026-07-25 is a Saturday.
+        expect(axis.now).toBe("now 10:30");
+        expect(axis.midnights).toEqual(["so"]);
+        expect(axis.midnightLines).toBe(1);
+        // Clock hours carry on past midnight rather than counting on to 24.
+        expect(axis.hourLabels).toContain("01");
+        expect(axis.hourLabels).not.toContain("24");
+        expect(axis.overlapping).toBe(0);
+    });
+
+    test("the now label is the host's to ask for, not inferred from the start", async ({ page }) => {
+        await mountPannable(page);
+        const nowLabels = await page.evaluate(async () => {
+            const band = document.querySelector("scheduling-entity-day-band") as any;
+            // A window that merely starts at the same instant, as a run's would.
+            band.windowAtNow = false;
+            await band.updateComplete;
+            return band.shadowRoot.querySelectorAll(".axis-now").length;
+        });
+        expect(nowLabels).toBe(0);
+    });
+
+    test("a band that cannot pan ignores the gestures", async ({ page }) => {
+        await mountBand(page, { authoring: true, axis: true });
+
+        const point = await page.evaluate(() => {
+            const rect = document.querySelector("scheduling-entity-day-band")!.shadowRoot!
+                .querySelector('.lane[data-lane="boiler"] .track')!.getBoundingClientRect();
+            return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, width: rect.width };
+        });
+        await page.mouse.move(point.x, point.y);
+        await page.mouse.down({ button: "right" });
+        await page.mouse.move(point.x - point.width / 8, point.y, { steps: 4 });
+        await page.mouse.up({ button: "right" });
+        await page.mouse.wheel(100, 0);
+
+        expect(await windowChanges(page)).toEqual([]);
     });
 });

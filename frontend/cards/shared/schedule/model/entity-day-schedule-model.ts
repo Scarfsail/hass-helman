@@ -330,6 +330,45 @@ export function buildEntityScheduleDays({
 }
 
 /**
+ * Everything still ahead as one span: from the slot running now to the end of
+ * the last slot the schedule holds.
+ *
+ * Shaped as a day so the band, the boundary pickers and the block clipping take
+ * it unchanged -- but it is not one: it starts at the editable boundary rather
+ * than at a midnight, and runs across as many midnights as the schedule does,
+ * so a run across midnight is one block rather than two halves on two days.
+ * Nothing elapsed is in it; the editor is about what can still be changed.
+ */
+export function buildEntityScheduleHorizon({
+    slots,
+    slotMinutes,
+    nowMs,
+}: {
+    slots: readonly ScheduleSlot[];
+    slotMinutes: number;
+    nowMs: number;
+}): EntityScheduleDay | null {
+    const editableFromMs = _resolveEditableFromMs(slots, nowMs);
+    const ahead = [...slots]
+        .filter((slot) => slot.startMs >= editableFromMs)
+        .sort((left, right) => left.startMs - right.startMs);
+    const first = ahead[0];
+    if (first === undefined) {
+        return null;
+    }
+
+    return {
+        dayKey: first.dayKey,
+        label: "",
+        slots: ahead,
+        startMs: editableFromMs,
+        endMs: ahead[ahead.length - 1].endMs,
+        editableFromMs,
+        slotMinutes,
+    };
+}
+
+/**
  * The whole schedule as this entity's blocks, with the draft applied.
  *
  * Built across day boundaries and clipped afterwards, so a run that spans
