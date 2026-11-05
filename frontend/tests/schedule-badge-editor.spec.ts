@@ -360,6 +360,13 @@ test.describe("opening the day editor from a scheduling badge", () => {
         expect(opened.target).toBe("boiler");
     });
 
+    /** Select the boiler's first manual run on the band and delete it. */
+    async function deleteFirstBoilerRun(page: Page): Promise<void> {
+        await page.locator('scheduling-entity-day-band .lane[data-lane="boiler"] .segment.authorship-user')
+            .first().click();
+        await page.locator("scheduling-entity-day-editor .edit-panel [data-delete]").click();
+    }
+
     /**
      * A refused write keeps the day on screen -- correctly, since the draft is
      * the only copy of it. Without the reason on screen too that reads as a
@@ -383,8 +390,8 @@ test.describe("opening the day editor from a scheduling badge", () => {
             });
         });
 
-        // Clear the boiler's run, so there is a draft worth writing.
-        await page.locator(".block-row").first().locator("button").nth(1).click();
+        // Delete the boiler's run, so there is a draft worth writing.
+        await deleteFirstBoilerRun(page);
         await page.locator("ha-button[slot=primaryAction]").click();
 
         await expect(page.locator(".save-error")).toContainText(
@@ -405,7 +412,7 @@ test.describe("opening the day editor from a scheduling badge", () => {
         await pressBadge(page, "Boiler");
         const before = (await mockRequests(page)).length;
 
-        await page.locator(".block-row").first().locator("button").nth(1).click();
+        await deleteFirstBoilerRun(page);
         await page.locator("ha-button[slot=primaryAction]").click();
         await expect.poll(async () => (await editorState(page)).open).toBe(false);
 
@@ -434,7 +441,7 @@ test.describe("opening the day editor from a scheduling badge", () => {
         });
         const before = (await mockRequests(page)).length;
 
-        await page.locator(".block-row").first().locator("button").nth(1).click();
+        await deleteFirstBoilerRun(page);
         await page.locator("ha-button[slot=primaryAction]").click();
         await page.waitForFunction(() => typeof (window as any).__releaseWrite === "function");
         await page.evaluate(() => {

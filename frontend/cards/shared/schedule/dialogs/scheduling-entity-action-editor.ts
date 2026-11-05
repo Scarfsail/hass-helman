@@ -242,9 +242,7 @@ export class SchedulingEntityActionEditor extends LitElement {
      * put the block there.
      */
     private _authorshipSummary(): ScheduleActionAuthorshipSummary {
-        return summarizeScheduleAuthorship(
-            this.authorship === "mixed" ? ["user", "automation"] : [this.authorship],
-        );
+        return summarizeScheduleAuthorship([this.authorship]);
     }
 
     private _emitChange(action: EntityScheduleAction, valid: boolean): void {

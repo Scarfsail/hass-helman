@@ -7,6 +7,7 @@ import {
     buildElapsedScheduleSlots,
     buildEntityActualSegments,
     buildEntityScheduleBlocks,
+    buildEntityScheduleFreedRanges,
     isInverterScheduleTarget,
     selectEntityScheduleDayBlocks,
     type EntityActualSegment,
@@ -17,6 +18,7 @@ import {
     type EntityScheduleDay,
     type EntityScheduleDrafts,
     type EntityScheduleLane,
+    type EntityScheduleRange,
     type EntityScheduleTarget,
 } from "./entity-day-schedule-model";
 import { isScheduleInverterAction } from "../schedule-types";
@@ -176,6 +178,12 @@ export interface EntityDayBandLane {
      * rather than being smeared across the day around it.
      */
     blockVehicleSoc: ReadonlyMap<string, EntityDayBandBlockSoc>;
+    /**
+     * Saved manual stretches the draft gives back to the automation, clipped
+     * to the day: nothing is planned there until the automation re-plans it
+     * after Save, and the band says so rather than drawing a bare track.
+     */
+    freedRanges: readonly EntityScheduleRange[];
 }
 
 /** One charging run's projected charge, as the band needs to draw it. */
@@ -225,9 +233,12 @@ export function formatLaneRunRange(
     totalMs?: number,
 ): string {
     const format = (atMs: number): string => formatScheduleTime(atMs, locale, timeZone);
-    const hours = (totalMs ?? run.endMs - run.startMs) / 3_600_000;
-    const hoursLabel = `${hours.toLocaleString(locale, { maximumFractionDigits: 1 })} h`;
-    return `${format(run.startMs)}–${format(run.endMs)} (${hoursLabel})`;
+    return `${format(run.startMs)}–${format(run.endMs)} (${formatLaneRunHours(totalMs ?? run.endMs - run.startMs, locale)})`;
+}
+
+/** "2 h", "0,5 h": how long a run lasts, the way every summary of one says it. */
+export function formatLaneRunHours(durationMs: number, locale: string): string {
+    return `${(durationMs / 3_600_000).toLocaleString(locale, { maximumFractionDigits: 1 })} h`;
 }
 
 /**
@@ -299,6 +310,16 @@ export function buildEntityDayBandLanes({
                     blocks,
                     projectionIndex,
                 }),
+                freedRanges: buildEntityScheduleFreedRanges({
+                    slots,
+                    target: lane.target,
+                    draft: drafts[lane.key] ?? {},
+                })
+                    .filter((range) => range.startMs < day.endMs && range.endMs > day.startMs)
+                    .map((range) => ({
+                        startMs: Math.max(range.startMs, day.startMs),
+                        endMs: Math.min(range.endMs, day.endMs),
+                    })),
             };
         })
         .filter((lane) => !activeOnly || lane.blocks.length > 0 || lane.actualSegments.length > 0);
