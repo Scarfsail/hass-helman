@@ -124,6 +124,7 @@ import {
   type InspectorViewMode,
   type NavigationRange,
 } from "./inspector-navigation";
+import { isNarrowViewport } from "../shared/viewport";
 import { formatWh } from "./inspector-format";
 import { chartFrameStyles, panelStyles } from "./inspector-styles";
 import type { PanelContext } from "./panels/metrics";
@@ -134,17 +135,13 @@ import { formatSocRange, formatSpanMoney, renderSelectedBucket, renderSpanTotals
 /** Slot widths the header toggle and card config offer, in minutes. */
 const SLOT_SIZE_OPTIONS = [15, 30, 60] as const;
 
-/** Below this page width the chart opens at the coarser default. */
-const NARROW_VIEWPORT_PX = 768;
-
 /**
  * The slot width to open at when the card configures no explicit default: a
  * phone-width page opens at 60 minutes, anything wider (laptop) at 30. 15 is
  * never auto-chosen — it stays a deliberate pick on the header toggle.
  */
 function defaultSlotMinutesForViewport(): number {
-  const width = typeof window !== "undefined" ? window.innerWidth : 0;
-  return width > 0 && width < NARROW_VIEWPORT_PX ? 60 : 30;
+  return isNarrowViewport() ? 60 : 30;
 }
 
 const DEFAULT_HIDDEN_SERIES: readonly SeriesKey[] = ["raw"];

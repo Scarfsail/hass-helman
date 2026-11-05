@@ -83,11 +83,18 @@ import type {
 } from "../schedule-types";
 import { schedulingSharedStyles } from "../styles/scheduling-shared-styles";
 import type { EntityScheduleActionChangeDetail } from "./scheduling-entity-action-editor";
+import { isNarrowViewport } from "../../viewport";
 
 const HOUR_MS = 60 * 60 * 1000;
 const DEFAULT_NEW_BLOCK_DURATION_MS = HOUR_MS;
-/** How much of the horizon the timeline shows at once. */
-const WINDOW_MS = 24 * HOUR_MS;
+/** The window lengths the window row offers, in hours. */
+const WINDOW_HOUR_OPTIONS = [12, 24] as const;
+type WindowHours = (typeof WINDOW_HOUR_OPTIONS)[number];
+
+/** A phone fits half a day legibly; anything wider shows the whole day. */
+function defaultWindowHours(): WindowHours {
+    return isNarrowViewport() ? 12 : 24;
+}
 
 /** The end picks under a manual block, as the node detail's override offers them. */
 type EndPick = "plus_1h" | "plus_3h" | "end_of_day" | "next_change";
@@ -194,8 +201,8 @@ export class SchedulingEntityDayEditor extends LitElement {
                 padding: 6px 2px;
             }
 
-            /* Now and Tomorrow on the left; the window's span and the mode
-               switch on the right. */
+            /* Now and Tomorrow on the left; the window's span, its length
+               switch and the mode switch on the right. */
             .window-row {
                 display: flex;
                 align-items: center;
@@ -211,10 +218,9 @@ export class SchedulingEntityDayEditor extends LitElement {
                 white-space: nowrap;
             }
 
-            /* The far end of the window row: choosing what the dialog is *for*
-               is a different kind of choice from choosing which hours it is
-               about, and putting it among the jump buttons would read as one
-               more of them. */
+            /* A choice between two named options, at the far end of the window
+               row: the window's length, then what the dialog is *for*. Neither
+               is a jump, so neither sits among the jump buttons. */
             .mode-switch {
                 display: flex;
                 gap: 0;
@@ -575,6 +581,11 @@ export class SchedulingEntityDayEditor extends LitElement {
      * through `_window`, which keeps it inside the horizon as the clock moves.
      */
     @state() private _viewStartMs: number | null = null;
+    /**
+     * How many hours the window shows. Not remembered either: every opening
+     * starts at the length that fits the screen.
+     */
+    @state() private _windowHours: WindowHours = defaultWindowHours();
     /** The manual block being placed, when one is selected. */
     @state() private _editing: EntityScheduleEditSession | null = null;
     /** The automation run selected instead, read only: all it offers is "override". */
@@ -862,6 +873,7 @@ export class SchedulingEntityDayEditor extends LitElement {
                         .windowAtNow=${view.startMs === this.nowMs}
                         .lanes=${bandLanes}
                         .showLaneLabel=${!this.single}
+                        .labelColumn=${!this.single}
                         .selectedLaneKey=${explaining ? null : this._selectedLaneKey}
                         .forecastPoints=${this.forecastPoints}
                         .priceUnit=${this.priceUnit}
@@ -976,9 +988,23 @@ export class SchedulingEntityDayEditor extends LitElement {
                         : formatScheduleWeekdayTime(view.startMs, this.locale, this.timeZone)}
                     → ${formatScheduleWeekdayTime(view.endMs, this.locale, this.timeZone)}
                 </span>
+                ${this._renderWindowLengthSwitch()}
                 ${this._renderModeSwitch()}
             </div>
         `;
+    }
+
+    /**
+     * 12 h or 24 h. Dressed as the mode switch rather than given a look of its
+     * own: both are a choice between two named options.
+     */
+    private _renderWindowLengthSwitch() {
+        return this._renderSegmented(WINDOW_HOUR_OPTIONS.map((hours) => ({
+            label: this.localize(`scheduling.window.hours_${hours}`),
+            selected: this._windowHours === hours,
+            windowHours: hours,
+            pick: () => this._setWindowHours(hours),
+        })));
     }
 
     /**
@@ -991,17 +1017,37 @@ export class SchedulingEntityDayEditor extends LitElement {
      * explained.
      */
     private _renderModeSwitch() {
+        return this._renderSegmented((["edit", "explain"] as const).map((mode) => ({
+            label: this.localize(`scheduling.entity_editor.mode_${mode}`),
+            selected: this._mode === mode,
+            mode,
+            pick: () => this._setMode(mode),
+        })));
+    }
+
+    /**
+     * A row of named options, one of them pressed. Each option carries the
+     * data attribute that names it -- a mode or a window length.
+     */
+    private _renderSegmented(options: readonly {
+        label: string;
+        selected: boolean;
+        mode?: string;
+        windowHours?: number;
+        pick: () => void;
+    }[]) {
         return html`
             <div class="mode-switch" role="group">
-                ${(["edit", "explain"] as const).map((mode) => html`
+                ${options.map((option) => html`
                     <button
-                        class=${`mode-button${this._mode === mode ? " selected" : ""}`}
+                        class=${`mode-button${option.selected ? " selected" : ""}`}
                         type="button"
-                        data-mode=${mode}
-                        aria-pressed=${this._mode === mode}
-                        @click=${() => this._setMode(mode)}
+                        data-mode=${option.mode ?? nothing}
+                        data-window-hours=${option.windowHours ?? nothing}
+                        aria-pressed=${option.selected}
+                        @click=${option.pick}
                     >
-                        ${this.localize(`scheduling.entity_editor.mode_${mode}`)}
+                        ${option.label}
                     </button>
                 `)}
             </div>
@@ -1401,6 +1447,7 @@ export class SchedulingEntityDayEditor extends LitElement {
         // dialog stacks the whole day and asks which lane instead.
         this._selectedLaneKey = this.target;
         this._viewStartMs = null;
+        this._windowHours = defaultWindowHours();
     }
 
     private _horizon(): EntityScheduleDay | null {
@@ -1424,7 +1471,7 @@ export class SchedulingEntityDayEditor extends LitElement {
     }
 
     /**
-     * The 24 hours on screen, or what is left of the horizon when that is less.
+     * The window's hours on screen, or what is left of the horizon when that is less.
      *
      * Clamped here, on every read, rather than when the start was set: the
      * clock moves under a window parked at a later hour, and a window that
@@ -1432,12 +1479,18 @@ export class SchedulingEntityDayEditor extends LitElement {
      */
     private _window(horizon: EntityScheduleDay): EntityScheduleRange {
         const startMs = this._clampViewStart(horizon, this._viewStartMs ?? this.nowMs);
-        return { startMs, endMs: Math.min(startMs + WINDOW_MS, horizon.endMs) };
+        return { startMs, endMs: Math.min(startMs + this._windowHours * HOUR_MS, horizon.endMs) };
     }
 
     /** Between now and the last start that still shows a whole window. */
     private _clampViewStart(horizon: EntityScheduleDay, startMs: number): number {
-        return Math.max(Math.min(startMs, horizon.endMs - WINDOW_MS), this.nowMs);
+        return Math.max(Math.min(startMs, horizon.endMs - this._windowHours * HOUR_MS), this.nowMs);
+    }
+
+    /** Change the window's length from where it starts, kept inside the horizon. */
+    private _setWindowHours(hours: WindowHours): void {
+        this._windowHours = hours;
+        this._setViewStart(this._viewStartMs);
     }
 
     /** Move the window; null, or anything at or before now, means now. */

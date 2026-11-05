@@ -1970,6 +1970,80 @@ test.describe("entity day editor, window", () => {
         // 10:30 plus 2.4 hours, snapped to the nearest slot.
         expect((await readWindow(page)).startMs).toBe(at("13:00"));
     });
+
+    const windowHoursButton = (page: Page, hours: 12 | 24) => page.locator(`[data-window-hours="${hours}"]`);
+
+    test("a wide screen opens on 24 hours, a narrow one on 12", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page);
+        await expect(windowHoursButton(page, 24)).toHaveAttribute("aria-pressed", "true");
+        await expect(windowHoursButton(page, 12)).toHaveAttribute("aria-pressed", "false");
+
+        await page.evaluate(() => document.querySelector("scheduling-entity-day-editor")!.remove());
+        await page.setViewportSize({ width: 400, height: 800 });
+        await mountEditor(page);
+        expect(await readWindow(page)).toEqual({ startMs: NOW_MS, endMs: NOW_MS + 12 * HOUR_MS });
+        await expect(windowHoursButton(page, 12)).toHaveAttribute("aria-pressed", "true");
+        await expect(windowHoursButton(page, 24)).toHaveAttribute("aria-pressed", "false");
+    });
+
+    test("the toggle sets how many hours the band is handed", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page);
+
+        await windowHoursButton(page, 12).click();
+        expect(await readWindow(page)).toEqual({ startMs: NOW_MS, endMs: NOW_MS + 12 * HOUR_MS });
+        await expect(windowHoursButton(page, 12)).toHaveAttribute("aria-pressed", "true");
+
+        await windowHoursButton(page, 24).click();
+        expect(await readWindow(page)).toEqual({ startMs: NOW_MS, endMs: NOW_MS + 24 * HOUR_MS });
+    });
+
+    test("every opening starts on the screen's default again", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page);
+        await windowHoursButton(page, 12).click();
+
+        await page.evaluate(async () => {
+            const el = document.querySelector("scheduling-entity-day-editor") as any;
+            el.open = false;
+            await el.updateComplete;
+            el.open = true;
+            await el.updateComplete;
+        });
+
+        expect(await readWindow(page)).toEqual({ startMs: NOW_MS, endMs: NOW_MS + 24 * HOUR_MS });
+        await expect(windowHoursButton(page, 24)).toHaveAttribute("aria-pressed", "true");
+    });
+
+    test("lengthening a window parked near the horizon's end pulls its start back", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page);
+        await windowHoursButton(page, 12).click();
+        // The last start that still shows 12 hours: the horizon ends at day two's midnight.
+        await viewFrom(page, at("12:00", DAY_TWO));
+        expect(await readWindow(page)).toEqual({ startMs: at("12:00", DAY_TWO), endMs: at("00:00", DAY_TWO) + 24 * HOUR_MS });
+
+        await windowHoursButton(page, 24).click();
+        expect(await readWindow(page)).toEqual({ startMs: at("00:00", DAY_TWO), endMs: at("00:00", DAY_TWO) + 24 * HOUR_MS });
+    });
+
+    test("the stacked editor names its lanes in a column, a single-device one not at all", async ({ page }) => {
+        await loadCardBundle(page);
+        await mountEditor(page, { multiLane: true });
+        const labelColumn = () => page.evaluate(() => {
+            const el = document.querySelector("scheduling-entity-day-editor") as any;
+            return el.shadowRoot.querySelector("scheduling-entity-day-band").labelColumn as boolean;
+        });
+        expect(await labelColumn()).toBe(true);
+
+        await page.evaluate(async () => {
+            const el = document.querySelector("scheduling-entity-day-editor") as any;
+            el.single = true;
+            await el.updateComplete;
+        });
+        expect(await labelColumn()).toBe(false);
+    });
 });
 
 /**

@@ -26,9 +26,10 @@ interface MountOptions {
     /** Hand the band a state machine, so the lane label's icon goes live. */
     live?: boolean;
     /**
-     * Labels in their own column. The default here is `"track"`, which is what
-     * the day editor -- the production host that matters -- uses.
+     * Labels in their own column, as the day editor draws several lanes. Off
+     * by default: the in-track label is what the inspector strip keeps.
      */
+    labelColumn?: boolean;
     /** Draw the day's slots, as both of the editor's modes do. */
     slotGrid?: boolean;
     /** And let a press on one name it, as the editor's Explain mode does. */
@@ -72,7 +73,7 @@ interface MountOptions {
 async function mountBand(page: Page, options: MountOptions = {}): Promise<void> {
     await loadBundle(page, "scheduling-entity-day-band");
 
-    await page.evaluate(({ dayStartMs, nowMs, hourMs, windowStartMs, windowEndMs, windowed, highlight, live, slotGrid, slotPicks, twoLanes, selectedSlot, halfHourly, slotMinutes, gridTicks, axis, widthPx, authoring, selectedBlock, pannable }) => {
+    await page.evaluate(({ dayStartMs, nowMs, hourMs, windowStartMs, windowEndMs, windowed, highlight, live, slotGrid, slotPicks, twoLanes, selectedSlot, halfHourly, slotMinutes, gridTicks, axis, widthPx, authoring, selectedBlock, pannable, labelColumn }) => {
         const at = (hour: number) => dayStartMs + hour * hourMs;
         const stepMs = slotMinutes * 60_000;
         const spanHours = pannable ? 48 : 24;
@@ -175,6 +176,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
             : { laneKey: "boiler", slotId: new Date(at(selectedSlot)).toISOString() };
         band.showForecastRows = halfHourly;
         band.showAxis = axis;
+        band.labelColumn = labelColumn;
         if (halfHourly) {
             // 600 Wh in a half hour is 1.2 kWh over the hour it sits in.
             band.forecastPoints = new Map(slots.map((slot) => [
@@ -215,6 +217,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
             "entity-day-band-deselect",
             "entity-day-band-window-change",
             "entity-day-band-gesture-cancel",
+            "entity-day-band-context-select",
             "show-controllable-detail",
             "hass-more-info",
         ]) {
@@ -247,6 +250,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
         authoring: options.authoring ?? false,
         selectedBlock: options.selectedBlock ?? false,
         pannable: options.pannable ?? false,
+        labelColumn: options.labelColumn ?? false,
     });
     await page.waitForFunction(
         () => !!document.querySelector("scheduling-entity-day-band")?.shadowRoot?.querySelector(".track"),
@@ -449,6 +453,170 @@ test.describe("entity day band, read only", () => {
             .toMatchObject({ controllableId: "boiler", entityId: "switch.boiler" });
         expect(events.filter((event) => event.type === "hass-more-info")).toHaveLength(0);
         expect(events.filter((event) => event.type === "entity-day-band-lane-select")).toHaveLength(0);
+    });
+});
+
+/**
+ * Labels in a column of their own, as the day editor stacks several lanes.
+ *
+ * The point of the column is that a name never hides a run: every track, every
+ * chart row and the axis start where the names end. And the whole name is a
+ * press, meaning what the icon beside it means.
+ */
+test.describe("entity day band, label column", () => {
+    test("every track, chart row and the axis start after the names", async ({ page }) => {
+        await mountBand(page, { labelColumn: true, twoLanes: true, halfHourly: true, axis: true });
+
+        const rows = await page.evaluate(() => {
+            const root = document.querySelector("scheduling-entity-day-band")!.shadowRoot!;
+            const cells = [
+                ...root.querySelectorAll(".lane"),
+                ...root.querySelectorAll(".context-cell"),
+            ];
+            return {
+                cells: cells.map((cell) => ({
+                    labelRight: cell.querySelector(".track-label")!.getBoundingClientRect().right,
+                    trackLeft: cell.querySelector(".track, .context-row")!.getBoundingClientRect().left,
+                })),
+                axisLeft: root.querySelector(".axis")!.getBoundingClientRect().left,
+            };
+        });
+
+        // Two lanes and the solar, SoC and price rows.
+        expect(rows.cells).toHaveLength(5);
+        for (const cell of rows.cells) {
+            expect(cell.trackLeft).toBeGreaterThanOrEqual(cell.labelRight - 0.5);
+            expect(rows.axisLeft).toBeGreaterThanOrEqual(cell.labelRight - 0.5);
+        }
+    });
+
+    test("a name in the column is a plain cell that takes the pointer", async ({ page }) => {
+        await mountBand(page, { labelColumn: true });
+
+        const style = await page.locator("scheduling-entity-day-band").locator(".track-label")
+            .evaluate((element) => {
+                const computed = getComputedStyle(element);
+                return { pointerEvents: computed.pointerEvents, backgroundImage: computed.backgroundImage };
+            });
+        expect(style).toEqual({ pointerEvents: "auto", backgroundImage: "none" });
+    });
+
+    test("pressing the name asks about the entity, once", async ({ page }) => {
+        await mountBand(page, { labelColumn: true, live: true });
+
+        await page.locator("scheduling-entity-day-band").locator(".lane-name").click();
+
+        const events = await readEvents(page);
+        const details = events.filter((event) => event.type === "show-controllable-detail");
+        expect(details).toHaveLength(1);
+        expect(details[0].detail).toMatchObject({ controllableId: "boiler", entityId: "switch.boiler" });
+        expect(events.filter((event) => event.type === "entity-day-band-lane-select")).toHaveLength(0);
+    });
+
+    test("pressing the icon still asks once, not once for it and once for the name", async ({ page }) => {
+        await mountBand(page, { labelColumn: true, live: true });
+
+        await page.evaluate(() => {
+            document
+                .querySelector("scheduling-entity-day-band")!
+                .shadowRoot!.querySelector(".track-label state-badge")!
+                .dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
+        });
+
+        const events = await readEvents(page);
+        expect(events.filter((event) => event.type === "show-controllable-detail")).toHaveLength(1);
+    });
+
+    test("pressing a forecast row's caption still says none of the lanes", async ({ page }) => {
+        await mountBand(page, { labelColumn: true, halfHourly: true });
+
+        await page.locator("scheduling-entity-day-band").locator(".context-cell .track-label").first().click();
+
+        const events = await readEvents(page);
+        expect(events.filter((event) => event.type === "entity-day-band-context-select")).toHaveLength(1);
+    });
+
+    test("on a phone the name keeps some room and nothing in the column reaches the track", async ({ page }) => {
+        await page.setViewportSize({ width: 390, height: 800 });
+        await mountBand(page, { labelColumn: true, live: true, widthPx: 360 });
+        // The widest figure the column has to hold, beside an automation badge.
+        await page.evaluate(() => {
+            const band = document.querySelector("scheduling-entity-day-band") as unknown as Record<string, unknown>;
+            const [lane] = band.lanes as { blocks: { endMs: number }[] }[];
+            band.lanes = [{ ...lane, blocks: [{ ...lane.blocks[0], endMs: lane.blocks[0].endMs + 8.5 * 3_600_000 }] }];
+            band._automationCoverage = new Map();
+        });
+        const label = page.locator("scheduling-entity-day-band").locator(".lane .track-label");
+        await expect(label.locator(".automation-badge")).toHaveCount(1);
+        // The total gives way on a phone, so the name has the room.
+        await expect(label.locator(".lane-total")).toBeHidden();
+
+        const geometry = await label.evaluate((element) => {
+            const trackLeft = element.closest(".lane")!.querySelector(".track")!.getBoundingClientRect().left;
+            const parts = [element, ...element.querySelectorAll("state-badge, .lane-name, .automation-badge")];
+            return {
+                trackLeft,
+                rights: parts.map((part) => part.getBoundingClientRect().right),
+                nameWidth: element.querySelector(".lane-name")!.getBoundingClientRect().width,
+            };
+        });
+        for (const right of geometry.rights) {
+            expect(right).toBeLessThanOrEqual(geometry.trackLeft + 0.5);
+        }
+        expect(geometry.nameWidth).toBeGreaterThanOrEqual(40);
+    });
+
+    test("in a column the automation badges end every row alike, after the total", async ({ page }) => {
+        await page.setViewportSize({ width: 1000, height: 800 });
+        await mountBand(page, { labelColumn: true, live: true, twoLanes: true, widthPx: 360 });
+        // Different names and different totals, so only the layout can line the badges up.
+        await page.evaluate(() => {
+            const band = document.querySelector("scheduling-entity-day-band") as unknown as Record<string, unknown>;
+            const [boiler, pump] = band.lanes as { blocks: { endMs: number }[] }[];
+            band.lanes = [
+                boiler,
+                { ...pump, name: "Heat pump", blocks: [{ ...boiler.blocks[0], endMs: boiler.blocks[0].endMs + 3.5 * 3_600_000 }] },
+            ];
+            band._automationCoverage = new Map();
+        });
+        const labels = page.locator("scheduling-entity-day-band").locator(".lane .track-label");
+        await expect(labels.locator(".automation-badge")).toHaveCount(2);
+        await expect(labels.locator(".lane-total")).toHaveCount(2);
+
+        const rows = await labels.evaluateAll((elements) => elements.map((element) => {
+            const box = (selector: string) => element.querySelector(selector)!.getBoundingClientRect();
+            return {
+                cellRight: element.getBoundingClientRect().right,
+                badgeLeft: box(".automation-badge").left,
+                badgeRight: box(".automation-badge").right,
+                totalRight: box(".lane-total").right,
+            };
+        }));
+        expect(Math.abs(rows[0].badgeRight - rows[1].badgeRight)).toBeLessThanOrEqual(1);
+        for (const row of rows) {
+            // Flush with the column's right edge, less its 6px padding.
+            expect(row.cellRight - row.badgeRight).toBeLessThanOrEqual(8);
+            expect(row.totalRight).toBeLessThanOrEqual(row.badgeLeft + 0.5);
+        }
+    });
+
+    test("beside a flat icon the name selects the lane, as the icon does", async ({ page }) => {
+        await mountBand(page, { labelColumn: true });
+
+        const label = page.locator("scheduling-entity-day-band").locator(".track-label");
+        await label.locator(".lane-name").click();
+        // ha-icon is not in this bundle, so it has no box to press with the mouse.
+        await page.evaluate(() => {
+            document
+                .querySelector("scheduling-entity-day-band")!
+                .shadowRoot!.querySelector(".track-label ha-icon")!
+                .dispatchEvent(new MouseEvent("click", { bubbles: true, composed: true }));
+        });
+
+        const events = await readEvents(page);
+        expect(events.filter((event) => event.type === "entity-day-band-lane-select").map((event) => event.detail))
+            .toEqual([{ laneKey: "boiler" }, { laneKey: "boiler" }]);
+        expect(events.filter((event) => event.type === "show-controllable-detail")).toHaveLength(0);
     });
 });
 
@@ -763,6 +931,32 @@ test.describe("entity day band, authoring", () => {
             first: false,
         });
         expect(paints.filter((event) => event.detail.first)).toHaveLength(1);
+    });
+
+    test("a paint on a track inset by the label column lands on the same slots", async ({ page }) => {
+        await mountBand(page, { authoring: true, labelColumn: true });
+
+        await drag(page, 16.5, 19.5);
+
+        const paints = (await readEvents(page)).filter((event) => event.type === "entity-day-band-range-paint");
+        expect(paints.at(-1)!.detail).toEqual({
+            laneKey: "boiler",
+            startMs: DAY_START_MS + 16 * HOUR_MS,
+            endMs: DAY_START_MS + 20 * HOUR_MS,
+            first: false,
+        });
+    });
+
+    test("a manual block's drag on an inset track reshapes it by the hours dragged", async ({ page }) => {
+        await mountBand(page, { authoring: true, labelColumn: true });
+
+        await drag(page, 13, 17);
+
+        const changes = (await readEvents(page)).filter((event) => event.type === "entity-day-band-range-change");
+        expect(changes.at(-1)!.detail).toEqual({
+            startMs: DAY_START_MS + 16 * HOUR_MS,
+            endMs: DAY_START_MS + 18 * HOUR_MS,
+        });
     });
 
     test("a manual block's drag reshapes it, past whatever it crosses", async ({ page }) => {

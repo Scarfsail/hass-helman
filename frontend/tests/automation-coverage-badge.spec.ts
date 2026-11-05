@@ -58,6 +58,8 @@ interface MountOptions {
     nonAdmin?: boolean;
     /** Hold every coverage read open until a test releases it. */
     stallReads?: boolean;
+    /** Names in their own column, as the day editor stacks several lanes. */
+    labelColumn?: boolean;
 }
 
 async function mountBand(page: Page, options: MountOptions = {}): Promise<void> {
@@ -65,11 +67,12 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
         coverage = COVERAGE,
         nonAdmin = false,
         stallReads = false,
+        labelColumn = false,
     } = options;
 
     await loadBundle(page, "scheduling-entity-day-band");
 
-    await page.evaluate(({ dayStartMs, hourMs, config, coverage, nonAdmin, stallReads }) => {
+    await page.evaluate(({ dayStartMs, hourMs, config, coverage, nonAdmin, stallReads, labelColumn }) => {
         const calls: { type: string; config?: unknown }[] = [];
         const globals = window as unknown as Record<string, unknown>;
         globals.__calls = calls;
@@ -144,6 +147,7 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
         ];
         band.showForecastRows = false;
         band.showAxis = false;
+        band.labelColumn = labelColumn;
         band.nowMs = dayStartMs;
         band.hass = {
             language: "en",
@@ -189,11 +193,11 @@ async function mountBand(page: Page, options: MountOptions = {}): Promise<void> 
             ?.shadowRoot?.querySelectorAll("helman-optimizer-editor") ?? [])]
             .map((editor) => editor.shadowRoot!.querySelector(".summary-toggle ha-switch")!);
 
-        for (const type of ["entity-day-band-lane-select", "hass-more-info"]) {
+        for (const type of ["entity-day-band-lane-select", "hass-more-info", "show-controllable-detail"]) {
             band.addEventListener(type, () => events.push(type));
         }
         document.body.appendChild(band);
-    }, { dayStartMs: DAY_START_MS, hourMs: HOUR_MS, config: CONFIG, coverage, nonAdmin, stallReads });
+    }, { dayStartMs: DAY_START_MS, hourMs: HOUR_MS, config: CONFIG, coverage, nonAdmin, stallReads, labelColumn });
 
     if (stallReads) {
         // No read will land, so there is no badge to wait for.
@@ -295,6 +299,16 @@ test.describe("automation coverage on the schedule band", () => {
         await badge(page, "inverter").click();
 
         expect(await readEvents(page)).toEqual([]);
+    });
+
+    test("in a label column it stays its own control, not part of the name's press", async ({ page }) => {
+        await mountBand(page, { labelColumn: true });
+        // The inert badge too: it sits beside the name's press, not inside it.
+        await badge(page, "pump").click();
+        await badge(page, "inverter").click();
+
+        expect(await readEvents(page)).toEqual([]);
+        await expect(page.locator("helman-optimizer-edit-dialog")).toHaveCount(1);
     });
 
     test("a config saved elsewhere recolours the badge", async ({ page }) => {
