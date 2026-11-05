@@ -647,6 +647,8 @@
     "window": {
       "now": "Teď",
       "now_mark": "teď",
+      "hours_12": "12 h",
+      "hours_24": "24 h",
       "pan_hint": "Okno posunete tažením osy, pravým tlačítkem nebo dvěma prsty"
     },
     "badge": {

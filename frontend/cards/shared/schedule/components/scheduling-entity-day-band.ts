@@ -1,5 +1,5 @@
 import { pad2 } from "../../time/slot-time";
-import { LitElement, css, html, type PropertyValues } from "lit-element";
+import { LitElement, css, html, unsafeCSS, type PropertyValues } from "lit-element";
 import { customElement, property, state } from "lit/decorators.js";
 import { nothing } from "lit-html";
 import type { HomeAssistant } from "../../../../types/ha";
@@ -41,6 +41,7 @@ import { schedulingSharedStyles } from "../styles/scheduling-shared-styles";
 import { SLOT_GRID_LINE_OPACITY, slotGridTicks, type SlotGridTick } from "../../slot-gridlines";
 import { hourAnchorOffset, selectLabelledColumns } from "../../strip-value-labels";
 import "../../optimizer/helman-optimizer-edit-dialog";
+import { NARROW_VIEWPORT_PX } from "../../viewport";
 import {
     getLaneAutomationCoverage,
     getSharedAutomationCoverage,
@@ -273,12 +274,31 @@ export class SchedulingEntityDayBand extends LitElement {
                it can start at the host's own left edge -- a name is not a time,
                and on a narrow screen the gutter is the only room it has. */
             .band .track,
-            .band .context-row {
+            .band .context-row,
+            .band.label-column .axis {
                 margin-left: var(--entity-day-band-track-inset-start, 0px);
                 margin-right: var(--entity-day-band-track-inset-end, 0px);
             }
 
-            .band .lane {
+            /* A label column is that same start inset, taken by the band for
+               its own names: every track, chart row and the axis start after
+               it, so nothing schedulable is drawn under a name. */
+            .band.label-column {
+                --entity-day-band-track-inset-start: min(160px, 30%);
+            }
+
+            @media (max-width: ${unsafeCSS(NARROW_VIEWPORT_PX - 1)}px) {
+                .band.label-column {
+                    --entity-day-band-track-inset-start: 110px;
+                }
+
+                .band.label-column .lane-total {
+                    display: none;
+                }
+            }
+
+            .band .lane,
+            .band .context-cell {
                 display: block;
                 position: relative;
             }
@@ -614,7 +634,9 @@ export class SchedulingEntityDayBand extends LitElement {
 
             /* A chart row's name sits on the row's own colour, and reads as a
                caption rather than as a thing on the chart. */
-            .context-row .track-label {
+            .context-cell .track-label {
+                left: var(--entity-day-band-track-inset-start, 0px);
+                border-radius: 4px 0 0 4px;
                 letter-spacing: 0.04em;
                 text-transform: uppercase;
                 color: var(--secondary-text-color);
@@ -625,6 +647,48 @@ export class SchedulingEntityDayBand extends LitElement {
                     color-mix(in srgb, var(--secondary-background-color) 85%, transparent) 70%,
                     transparent 100%
                 );
+            }
+
+            /* In a label column the name is a cell of its own rather than an
+               overlay: nothing under it to keep readable, so no gradient, and
+               nothing under it to reach, so it takes the pointer itself. */
+            .band.label-column .track-label {
+                left: 0;
+                box-sizing: border-box;
+                width: var(--entity-day-band-track-inset-start);
+                max-width: none;
+                padding: 0 6px 0 2px;
+                overflow: hidden;
+                background: none;
+                pointer-events: auto;
+            }
+
+            /* A narrow container can still crowd the name out, so the total
+               gives way first; on a phone it is hidden altogether. */
+            .band.label-column .lane-total {
+                flex-shrink: 1;
+                min-width: 0;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+
+            /* Icon and name as one press: the whole name opens what the icon
+               opens. Never narrower than the icon and a few letters of the
+               name, which is what makes a stack of lanes readable. */
+            .lane-label {
+                display: flex;
+                flex: 1 1 auto;
+                align-items: center;
+                gap: 4px;
+                min-width: 44px;
+                padding: 0;
+                border: 0;
+                background: none;
+                color: inherit;
+                font: inherit;
+                text-align: start;
+                cursor: pointer;
             }
 
             /* One line of the time grid, ruled across every row alike: the
@@ -1122,6 +1186,7 @@ export class SchedulingEntityDayBand extends LitElement {
      * In-track labels are what a host with no room for a label column gets --
      * giving one up is what lets the tracks line up with a chart above.
      */
+    @property({ type: Boolean }) public labelColumn = false;
     /**
      * Draw the day's own slots on every lane and every forecast row.
      *
@@ -1475,6 +1540,7 @@ export class SchedulingEntityDayBand extends LitElement {
             hasSelection && !this.readonly ? "stack" : "",
             this.readonly ? "readonly" : "",
             this.pannable ? "pannable" : "",
+            this.labelColumn ? "label-column" : "",
         ].filter((value) => value.length > 0).join(" ");
         return html`
             <div
@@ -1625,7 +1691,11 @@ export class SchedulingEntityDayBand extends LitElement {
     }
 
     private _renderContextTrackLabel(labelKey: string) {
-        return html`<span class="track-label context">${this.localize(labelKey)}</span>`;
+        // In a label column the caption is beside its row, not over it, so it
+        // answers a press the way the row does.
+        return html`
+            <span class="track-label context" @pointerdown=${this._handleContextPointerDown}>${this.localize(labelKey)}</span>
+        `;
     }
 
     /**
@@ -1647,18 +1717,20 @@ export class SchedulingEntityDayBand extends LitElement {
 
         const anchors = new Map(columns.map(({ slot, socPct }) => [slot.id, { pct: socPct }]));
         return html`
-            <div class="context-row" @pointerdown=${this._handleContextPointerDown}>
-                <div class="plot">
-                    ${columns.map(({ slot, socPct, direction }) => html`
-                        <span
-                            class="context-bar soc"
-                            style=${`left: ${this._toPercent(slot.startMs)}%; width: ${this._toSlotWidthPercent(slot)}%; height: ${socPct}%; background: ${socColumnBackground(direction)}`}
-                        ></span>
-                    `)}
-                    ${this._renderSlotValues("battery", anchors)}
+            <div class="context-cell">
+                <div class="context-row" @pointerdown=${this._handleContextPointerDown}>
+                    <div class="plot">
+                        ${columns.map(({ slot, socPct, direction }) => html`
+                            <span
+                                class="context-bar soc"
+                                style=${`left: ${this._toPercent(slot.startMs)}%; width: ${this._toSlotWidthPercent(slot)}%; height: ${socPct}%; background: ${socColumnBackground(direction)}`}
+                            ></span>
+                        `)}
+                        ${this._renderSlotValues("battery", anchors)}
+                    </div>
+                    ${this._renderSlotHits("battery")}
+                    ${this._renderRowOverlays()}
                 </div>
-                ${this._renderSlotHits("battery")}
-                ${this._renderRowOverlays()}
                 ${this._renderContextTrackLabel("scheduling.forecast.battery_label")}
             </div>
         `;
@@ -1707,18 +1779,20 @@ export class SchedulingEntityDayBand extends LitElement {
         const anchors = new Map(values.map(({ slot, value }) =>
             [slot.id, { pct: this._toBarPct(value, maxWh) }]));
         return html`
-            <div class="context-row" @pointerdown=${this._handleContextPointerDown}>
-                <div class="plot">
-                    ${values.map(({ slot, value }) => value === 0 ? nothing : html`
-                        <span
-                            class="context-bar solar"
-                            style=${`left: ${this._toPercent(slot.startMs)}%; width: ${this._toSlotWidthPercent(slot)}%; height: ${this._toBarPct(value, maxWh)}%`}
-                        ></span>
-                    `)}
-                    ${this._renderSlotValues("solar", anchors)}
+            <div class="context-cell">
+                <div class="context-row" @pointerdown=${this._handleContextPointerDown}>
+                    <div class="plot">
+                        ${values.map(({ slot, value }) => value === 0 ? nothing : html`
+                            <span
+                                class="context-bar solar"
+                                style=${`left: ${this._toPercent(slot.startMs)}%; width: ${this._toSlotWidthPercent(slot)}%; height: ${this._toBarPct(value, maxWh)}%`}
+                            ></span>
+                        `)}
+                        ${this._renderSlotValues("solar", anchors)}
+                    </div>
+                    ${this._renderSlotHits("solar")}
+                    ${this._renderRowOverlays()}
                 </div>
-                ${this._renderSlotHits("solar")}
-                ${this._renderRowOverlays()}
                 ${this._renderContextTrackLabel("scheduling.forecast.solar_label")}
             </div>
         `;
@@ -1744,26 +1818,28 @@ export class SchedulingEntityDayBand extends LitElement {
                 : { pct: 50 + halfHeight(entry) },
         ]));
         return html`
-            <div class="context-row price" @pointerdown=${this._handleContextPointerDown}>
-                <div class="plot">
-                    <span class="zero-line"></span>
-                    ${values.map((entry) => {
-                        if (entry.value === 0) {
-                            return nothing;
-                        }
-
-                        const positive = entry.value > 0;
-                        return html`
-                            <span
-                                class=${`context-bar ${positive ? "price-positive" : "price-negative"}`}
-                                style=${`left: ${this._toPercent(entry.slot.startMs)}%; width: ${this._toSlotWidthPercent(entry.slot)}%; height: ${halfHeight(entry)}%`}
-                            ></span>
-                        `;
-                    })}
-                    ${this._renderSlotValues("price", anchors)}
+            <div class="context-cell">
+                <div class="context-row price" @pointerdown=${this._handleContextPointerDown}>
+                    <div class="plot">
+                        <span class="zero-line"></span>
+                        ${values.map((entry) => {
+                            if (entry.value === 0) {
+                                return nothing;
+                            }
+    
+                            const positive = entry.value > 0;
+                            return html`
+                                <span
+                                    class=${`context-bar ${positive ? "price-positive" : "price-negative"}`}
+                                    style=${`left: ${this._toPercent(entry.slot.startMs)}%; width: ${this._toSlotWidthPercent(entry.slot)}%; height: ${halfHeight(entry)}%`}
+                                ></span>
+                            `;
+                        })}
+                        ${this._renderSlotValues("price", anchors)}
+                    </div>
+                    ${this._renderSlotHits("price")}
+                    ${this._renderRowOverlays()}
                 </div>
-                ${this._renderSlotHits("price")}
-                ${this._renderRowOverlays()}
                 ${this._renderContextTrackLabel("scheduling.forecast.price_label")}
             </div>
         `;
@@ -1994,12 +2070,29 @@ export class SchedulingEntityDayBand extends LitElement {
      * itself and covers that much less of the day.
      */
     private _renderTrackLabel(lane: EntityDayBandLane) {
+        const stateObj = this.hass?.states?.[lane.entityId];
+        // The name means what the icon beside it means: the detail where the
+        // icon is a live badge, the lane where it is a flat icon.
+        const press = stateObj === undefined
+            ? (event: Event) => { event.stopPropagation(); this._emitLaneSelect(lane.key); }
+            : (event: Event) => this._handleLaneIconClick(event, lane);
+        const badge = this._renderAutomationBadge(lane);
+        const identity = html`
+            ${this._renderLaneIcon(lane, stateObj, press)}
+            ${this.labelColumn ? nothing : badge}
+            <span class="lane-name">${lane.name}</span>
+        `;
+        // In a label column icon and name are one press. The badge stays
+        // outside it: it is a control of its own, and a button cannot hold
+        // another. It comes last, after the total, so every lane's badge sits
+        // flush with the column's right edge and the badges line up vertically.
         return html`
             <span class="track-label">
-                ${this._renderLaneIcon(lane)}
-                ${this._renderAutomationBadge(lane)}
-                <span class="lane-name">${lane.name}</span>
-                ${this._renderLaneTotal(lane)}
+                ${this.labelColumn ? html`
+                    <button class="lane-label" type="button" @click=${press}>${identity}</button>
+                    ${this._renderLaneTotal(lane)}
+                    ${badge}
+                ` : html`${identity}${this._renderLaneTotal(lane)}`}
             </span>
         `;
     }
@@ -2012,20 +2105,18 @@ export class SchedulingEntityDayBand extends LitElement {
      * answer for falls back to the flat icon the lane carries, so no lane ever
      * loses its icon.
      */
-    private _renderLaneIcon(lane: EntityDayBandLane) {
-        const stateObj = this.hass?.states?.[lane.entityId];
+    private _renderLaneIcon(
+        lane: EntityDayBandLane,
+        stateObj: HomeAssistant["states"][string] | undefined,
+        press: (event: Event) => void,
+    ) {
         if (stateObj === undefined) {
             // The flat icon has no entity to ask about, so it keeps the meaning
             // the label around it has: pressing it names the lane. It used to
             // get that for free by sitting inside the name button, which it no
             // longer does -- and a dead icon in the label row is a target that
             // looks pressable and is not.
-            return html`
-                <ha-icon
-                    .icon=${lane.icon}
-                    @click=${() => this._emitLaneSelect(lane.key)}
-                ></ha-icon>
-            `;
+            return html`<ha-icon .icon=${lane.icon} @click=${press}></ha-icon>`;
         }
 
         return html`
@@ -2039,7 +2130,7 @@ export class SchedulingEntityDayBand extends LitElement {
                 .stateObj=${stateObj}
                 .stateColor=${true}
                 title=${lane.name}
-                @click=${(event: Event) => this._handleLaneIconClick(event, lane)}
+                @click=${press}
             ></state-badge>
         `;
     }

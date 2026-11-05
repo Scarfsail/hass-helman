@@ -782,6 +782,8 @@
     "window": {
       "now": "Now",
       "now_mark": "now",
+      "hours_12": "12 h",
+      "hours_24": "24 h",
       "pan_hint": "Drag the axis, right-drag or use two fingers to move the window"
     },
     "explanation": {
