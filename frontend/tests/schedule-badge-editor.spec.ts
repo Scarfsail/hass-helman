@@ -569,6 +569,26 @@ test.describe("opening the day editor from a scheduling badge", () => {
         expect(opened).toBe(false);
         expect((await editorState(page)).open).toBe(false);
     });
+
+    test("an open editor closes and releases the host when its horizon expires", async ({ page }) => {
+        await mount(page, [
+            { id: "s1", name: "Dishwasher", deferrable: true, controllableIds: ["dishwasher"] },
+            { id: "s2", name: "Boiler", deferrable: true, controllableIds: ["boiler"] },
+        ]);
+
+        const state = await page.evaluate(async () => {
+            const host = document.querySelector("scheduling-day-editor-host") as any;
+            host.openFor("boiler");
+            await host.updateComplete;
+            const wasOpen = host._editorMounted;
+            host._nowMs = Math.max(...host.dayView.slots.map((slot: { endMs: number }) => slot.endMs)) + 60_000;
+            await host.updateComplete;
+            await new Promise((resolve) => setTimeout(resolve, 50));
+            await host.updateComplete;
+            return { wasOpen, mounted: host._editorMounted, open: host._editorOpen };
+        });
+        expect(state).toEqual({ wasOpen: true, mounted: false, open: false });
+    });
 });
 
 declare global {

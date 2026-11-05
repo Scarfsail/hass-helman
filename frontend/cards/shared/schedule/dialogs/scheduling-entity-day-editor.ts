@@ -722,6 +722,16 @@ export class SchedulingEntityDayEditor extends LitElement {
             this._history.push();
         }
 
+        // The last slot ended while the editor was open: render() now returns
+        // nothing, which removes the dialog without it ever reporting itself
+        // closed -- so close through the normal path, or the host stays
+        // mounted and the history entry stays held. Only elapsed slots can be
+        // in the draft by now.
+        if (this.open && changedProperties.has("nowMs") && this.lanes.length > 0 && this._horizon() === null) {
+            this._close();
+            this._onClosed();
+        }
+
         // The banner sits at the end of the scrolling body while Save sits in
         // the pinned footer, so on a tall day it can appear below the fold --
         // leaving the press looking as unanswered as it did before there was a
