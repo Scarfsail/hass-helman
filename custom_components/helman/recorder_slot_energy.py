@@ -180,7 +180,7 @@ async def query_cumulative_slot_energy_changes(
             None,
             True,
         )
-        return _slot_energy_changes_from_states(
+        return energy_changes_at_boundaries(
             _states_for_entity(history, entity_id),
             default_unit=default_unit,
             utc_boundaries=plan.utc_boundaries,
@@ -268,7 +268,7 @@ async def query_cumulative_slot_energy_changes_for_windows(
             ]
             instants = [dt_util.as_utc(state.last_updated) for state in states]
             return {
-                index: _slot_energy_changes_from_states(
+                index: energy_changes_at_boundaries(
                     _states_within(
                         states,
                         instants,
@@ -452,7 +452,7 @@ def _states_for_entity(history: Any, entity_id: str) -> list[Any]:
     return (history or {}).get(entity_id) or (history or {}).get(entity_id.lower()) or []
 
 
-def _slot_energy_changes_from_states(
+def energy_changes_at_boundaries(
     states: list[Any],
     *,
     default_unit: str | None,
@@ -460,6 +460,15 @@ def _slot_energy_changes_from_states(
     staleness_limit: timedelta | None,
     liveness_instants: Sequence[datetime] | None = None,
 ) -> dict[datetime, float]:
+    """A cumulative meter's energy between consecutive ``utc_boundaries``, keyed by each interval's start.
+
+    The one boundary sampler: recorded ``states`` are parsed, unwrapped over
+    the whole read (resets and dips by the shared convention), and sampled at
+    each boundary with the carried reading's staleness judged. The boundaries
+    need not be a slot grid: the charging ledger hands it segment and hour
+    edges. An interval is missing when either end has no trusted sample, or
+    its delta is negative, so a gap is never a zero.
+    """
     observations = _build_unwrapped_energy_observations(
         _parse_energy_observations(states, default_unit=default_unit)
     )

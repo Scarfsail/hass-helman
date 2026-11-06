@@ -149,7 +149,7 @@ export type NodeDetailPayload = Api.InverterDetailPayload | Api.InverterTemperat
     | Api.SolarDetailPayload | Api.SolarProductionSectionPayload | Api.SolarPowerSectionPayload
     | Api.SolarDestinationsSectionPayload | Api.HouseDetailPayload | Api.HouseTodaySectionPayload
     | Api.HousePatternSectionPayload | Api.HouseRankingSectionPayload | Api.EvChargerDetailPayload | Api.EvChargerSegmentSectionPayload
-    | Api.EvChargerTodaySectionPayload;
+    | Api.EvChargerTodaySectionPayload | Api.EvChargerHistorySectionPayload;
 
 /** All request/response commands; subscribe_updates belongs to the shared feed. */
 export interface HelmanCommands {

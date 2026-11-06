@@ -2266,7 +2266,7 @@ def test_the_charger_overview_carries_config_and_telemetry_and_reads_no_report()
     assert entities["use_mode"] == "select.solax_ev_charger_charger_use_mode"
     # Unresolved telemetry stays a typed null, never dropped.
     assert "grid_power" in entities and entities["grid_power"] is None
-    assert payload["sections"] == ["today", "segment"]
+    assert payload["sections"] == ["today", "segment", "history"]
     # The segment start is a recorder read, so it is a section of its own.
     assert "chargingSince" not in payload
 
@@ -2375,6 +2375,8 @@ def test_a_custom_charger_keeps_its_config_backed_entities():
     assert payload["status"] is None
     assert set(payload["entities"]) == {"power", "energy_total", "charge_switch", "use_mode", "eco_gear"}
     assert payload["entities"]["power"] == EV_POWER
+    # No run mode to follow: no charging ledger.
+    assert payload["sections"] == ["today", "segment"]
 
 
 def test_the_segment_section_carries_todays_charging_stretches_from_midnight():

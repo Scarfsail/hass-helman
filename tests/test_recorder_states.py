@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import sys
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
-from custom_components.helman.recorder_states import numeric_timeline, read_states
+from custom_components.helman.recorder_states import _query_states_sync, numeric_timeline, read_states
 
 PRAGUE = ZoneInfo("Europe/Prague")
 
@@ -107,3 +108,14 @@ class RecorderStatesTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(res["sensor.TEST_ENTITY"], [st])
             self.assertEqual(res["sensor.missing"], [])
             self.assertTrue(captured_kwargs.get("include_start_time_state"))
+
+    def test_strict_query_raises_when_the_history_api_cannot_be_imported(self) -> None:
+        t1 = datetime(2026, 5, 10, 0, 0, tzinfo=PRAGUE)
+        t2 = datetime(2026, 5, 11, 0, 0, tzinfo=PRAGUE)
+        with patch.dict(sys.modules, {"homeassistant.components.recorder.history": None}):
+            with self.assertRaises(ImportError):
+                _query_states_sync(SimpleNamespace(), ["sensor.a"], t1, t2, True, True, strict=True)
+            self.assertEqual(
+                _query_states_sync(SimpleNamespace(), ["sensor.a"], t1, t2, True, True),
+                {"sensor.a": []},
+            )

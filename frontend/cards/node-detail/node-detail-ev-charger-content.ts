@@ -1,7 +1,7 @@
-import { formatKwh, formatPower } from "../shared/format";
+import { formatKwh, formatMoney, formatPower } from "../shared/format";
 import { SLOT_MS } from "../shared/time/slot-time";
 import { css, html, nothing } from "lit";
-import { customElement, property } from "lit/decorators.js";
+import { customElement, property, state } from "lit/decorators.js";
 import { fillTemplate } from "../localize/localize";
 import type {
     ApplianceProjectionsPayload,
@@ -9,6 +9,10 @@ import type {
     ApplianceVehicleDTO,
     EvChargerApplianceMetadataDTO,
     EvChargerDetailPayload,
+    EvChargerHistorySectionPayload,
+    EvChargerLedgerDTO,
+    EvChargingSegmentDTO,
+    EvLedgerMoneyDTO,
     EvChargerSegmentSectionPayload,
     EvChargerTodaySectionPayload,
     GetNodeDetailRequest,
@@ -21,7 +25,8 @@ import { getSharedHelmanStore } from "../shared/data/store";
 import { modeStripWindow, type ModeSegment } from "../shared/mode-strip";
 import { getScheduleReasonLabel } from "../shared/schedule/model/schedule-labels";
 import { getScheduleApplianceActionPresentation } from "../shared/schedule/model/schedule-appliance-action-presentation";
-import { resolveScheduleSlotBoundaries, type ScheduleSlotBoundary } from "../shared/schedule/model/schedule-time";
+import { formatScheduleDayLabel, resolveScheduleSlotBoundaries, type ScheduleSlotBoundary } from "../shared/schedule/model/schedule-time";
+import { todayKey } from "../shared/time/day-key";
 import { IDLE_W, NodeDetailContentBase } from "./node-detail-base";
 import { staleToday } from "./section-resource";
 import { readEnergyKWh, readingNumber } from "./node-detail-readings";
@@ -33,18 +38,23 @@ import type { DeviceDetailParams } from "./node-detail-types";
 import { deviceDirectControls, evCharging } from "./node-detail-utils";
 import { estimatedConsumerMix } from "./live-flows";
 import "./detail-headline";
+import "./help-tip";
 import "./flow-gauge";
 import "./switch-tile";
 import "./who-decides";
 import { boldTemplate } from "./detail-section";
 import { forecastWhen, holdAtSlots, renderForecastChart, stillAhead } from "./node-detail-forecast";
 import {
-    HistoryGraphResource, historyRow, historySummary, kwhText, renderShareBar, sectionNotReady, subTitle,
+    HistoryGraphResource, historyRow, historySummary, kwhText, renderShareBar, sectionNotReady, statTile, subTitle,
 } from "./node-detail-history";
 import type { DayLinePoint } from "../shared/day-line-chart";
 
 /** Two readings further apart than this were not taken together. */
 const COMPARABLE_MS = 30_000;
+/** How many of the newest charging segments are listed before "Show all". */
+const SEGMENTS_SHOWN = 5;
+/** Below this an amount of energy is nothing. */
+const EPSILON_KWH = 1e-6;
 
 /** A charge window: consecutive slots with the same charging action. */
 interface ChargeWindow {
@@ -118,6 +128,18 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         [data-car] .meter { position: relative; height: 10px; margin: 4px 0; border-radius: 5px; overflow: visible; }
         [data-car] .meter-fill { border-radius: 5px; background: var(--success-color, #43a047); }
         [data-limit-marker] { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--primary-text-color); }
+        .stat-tiles { margin: 10px 0; }
+        [data-ledger-day] { padding: 8px 0; border-bottom: 1px solid var(--divider-color); }
+        [data-ledger-day]:last-of-type { border-bottom: 0; }
+        .day-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 12px; font-size: 13px; }
+        .day-head .label { font-weight: 600; }
+        .day-head .value { font-weight: 400; color: var(--secondary-text-color); }
+        [data-segment] { display: grid; grid-template-columns: 7.5em minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 4px 0; font-size: 13px; }
+        [data-segment] .seg-kwh { text-align: end; font-variant-numeric: tabular-nums; }
+        .seg-track { min-width: 0; }
+        .seg-bar { display: block; min-width: 4px; box-sizing: border-box; }
+        .seg-bar.active { outline: 1.5px dashed var(--success-color, #43a047); outline-offset: 2px; border-radius: 4px; }
+        [data-estimates] .row .value { text-align: end; }
     `];
 
     protected readonly _node = "ev_charger" as const;
@@ -179,6 +201,18 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         fetch: () => this._readSection("today"),
         shown: () => this._overview.status === "ready",
     });
+    /**
+     * The charging ledger's last 30 days and newest segments, for the History
+     * header and body and Technical details: read once the overview offers it.
+     */
+    private readonly _history = this._section<EvChargerHistorySectionPayload>("history", {
+        fetch: () => this._readSection("history"),
+        shown: () => this._offers("history"),
+        rolling: true,
+    });
+    /** Whether every listed segment is shown, and whether the estimate's evidence is disclosed. */
+    @state() private _allSegments = false;
+    @state() private _estimatesOpen = false;
     /** HA's history graph of the charger's power over the last 24 hours, once History & statistics is open. */
     private readonly _chart = new HistoryGraphResource(this, () => [this._powerEntity()].filter((id): id is string => id !== null), () => this._historyOpen);
     /** The appliance answer the cars' entities were last announced for. */
@@ -204,7 +238,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         // Another charger in the same element: nothing shown is its.
         if (changed.has("deviceId") && changed.get("deviceId") !== undefined && this._started) {
             this._overview = { status: "loading" };
-            this._forecastOpen = this._historyOpen = this._technicalOpen = false;
+            this._forecastOpen = this._historyOpen = this._technicalOpen = this._allSegments = this._estimatesOpen = false;
             // The sections shown are read again in the update.
             for (const section of [...this._sections, this._chart]) section.drop();
             void this._loadOverview(true);
@@ -395,18 +429,181 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
 
     // History & statistics -----------------------------------------------------
 
-    /** What charged it today by source, with what the grid share cost, and its power over the last 24 hours. */
+    /**
+     * What charged it today, and with a charging ledger its last 30 days and
+     * newest segments, and its power over the last 24 hours. The header gives
+     * today's figure and, once the ledger landed, the 30 days'; until then, or
+     * when it failed, today's alone.
+     */
     protected _renderHistory(_overview: EvChargerDetailPayload) {
         const charger = this._today.payload?.charger ?? null;
-        const summary = historySummary(this._today, this.localize, charger
-            ? boldTemplate(this._h("ev_summary"), { kwh: kwhText(charger.kwh), pct: charger.kwh > 0 ? Math.round(charger.sources.solar / charger.kwh * 100) : 0 })
-            : null);
+        const ledger = this._ledger();
+        const summary = historySummary(this._today, this.localize, !charger ? null : ledger
+            ? boldTemplate(this._h("ev_summary_30d"), { today: kwhText(charger.kwh), days: kwhText(ledger.totals.kwh) })
+            : boldTemplate(this._h("ev_summary"), { kwh: kwhText(charger.kwh), pct: charger.kwh > 0 ? Math.round(charger.sources.solar / charger.kwh * 100) : 0 }));
         return this._historySection(summary, () => html`
             ${this._estimate() ? this._forecastPointer() : nothing}
-            ${subTitle(this._h("charged_today"))}
-            ${this._renderToday()}
+            ${this._offers("history") ? this._renderLedger() : this._renderChargedToday()}
             ${this._chart.render(this.localize)}
         `);
+    }
+
+    /** The ledger's answer, when it has one. */
+    private _ledger(): EvChargerLedgerDTO | null {
+        const payload = this._history.payload;
+        return payload && payload.unavailable === null ? payload : null;
+    }
+
+    private _renderChargedToday() {
+        return html`${subTitle(this._h("charged_today"))}${this._renderToday()}`;
+    }
+
+    /**
+     * The ledger's parts: the last 30 days and the newest segments. While it
+     * loads or after it failed, its note, and today's block as without one.
+     */
+    private _renderLedger() {
+        const notReady = sectionNotReady(this._history, this.localize);
+        if (notReady) return html`<div data-ledger-not-ready>${notReady}</div>${this._renderChargedToday()}`;
+        const ledger = this._ledger();
+        if (!ledger) return this._renderChargedToday();
+        if (!ledger.segments.length) return html`<p class="note" data-ledger-empty>${this._h("ev_no_segments")}</p>${this._renderChargedToday()}`;
+        return html`${this._renderWindow(ledger)}${this._renderSegments(ledger)}`;
+    }
+
+    /** "≈ 12 CZK", whole units from 10 up. */
+    private _money(amount: number, ledger: EvChargerLedgerDTO): string {
+        return `≈ ${formatMoney(amount, currencyFromPriceUnit(ledger.priceUnit), { precision: "compact" })}`;
+    }
+
+    /** A rate, "≈ 1.98 CZK". */
+    private _rate(rate: number, ledger: EvChargerLedgerDTO): string {
+        return `≈ ${formatMoney(rate, currencyFromPriceUnit(ledger.priceUnit))}`;
+    }
+
+    /** A money side as shown: its amount, naming its coverage when partly priced; `null` with nothing priced. */
+    private _moneyText(side: EvLedgerMoneyDTO, ledger: EvChargerLedgerDTO): string | null {
+        if (side.pricedKwh <= EPSILON_KWH) return null;
+        const money = this._money(Math.abs(side.amount), ledger);
+        const text = side.amount < -EPSILON_KWH ? fillTemplate(this._h("ev_paid_back"), { money }) : money;
+        return side.unpricedKwh > EPSILON_KWH
+            ? fillTemplate(this._h("ev_coverage"), { money: text, priced: formatKwh(side.pricedKwh), total: kwhText(side.pricedKwh + side.unpricedKwh) })
+            : text;
+    }
+
+    /** The last 30 days: the share bar, the four tiles, the battery and unknown rows, and how they are estimated. */
+    private _renderWindow(ledger: EvChargerLedgerDTO) {
+        const totals = ledger.totals;
+        const sources = totals.sources;
+        const share = (kwh: number) => `${kwhText(kwh)} · ${totals.kwh > 0 ? Math.round(kwh / totals.kwh * 100) : 0} %`;
+        const swatch = (node: string) => html`<span class="swatch-mark" style=${`color: var(--helman-${node})`}>■</span>`;
+        const perWeek = ledger.perWeek < 2 ? (Math.round(ledger.perWeek * 10) / 10).toString() : String(Math.round(ledger.perWeek));
+        const charged = [this._h("ev_charged"), ledger.paidPerKwh !== null ? fillTemplate(this._h("ev_per_kwh"), { money: this._rate(ledger.paidPerKwh, ledger) }) : null]
+            .filter(Boolean).join(" · ");
+        const forgone = this._moneyText(totals.solarForgone, ledger);
+        const gridPaid = this._moneyText(totals.gridPaid, ledger);
+        const unknownLabel = this._h("source_unknown_cap");
+        return html`
+            <div class="section-title" data-ledger-title>${ledger.coveredDays < 30 ? fillTemplate(this._h("ev_last_30_covered"), { days: ledger.coveredDays }) : this._h("ev_last_30")}<helman-help-tip .explanation=${this._h("ev_last_30_help")}></helman-help-tip></div>
+            <div data-ledger-window>
+                ${renderShareBar(this.localize, sources
+                    ? [{ node: "solar", kwh: sources.solar }, { node: "battery", kwh: sources.battery }, { node: "grid", kwh: sources.grid }, { node: "unknown", kwh: sources.unknown }]
+                    : [{ node: "unknown", kwh: totals.kwh }], unknownLabel)}
+                <div class="stat-tiles two" data-ledger-tiles>
+                    ${statTile(kwhText(totals.kwh), html`${charged}${ledger.per100km ? html`<br>${fillTemplate(this._h("ev_per_100km"), { money: this._rate(ledger.per100km.amount, ledger) })}` : nothing}`, "charged")}
+                    ${statTile(fillTemplate(this._h("ev_per_week"), { n: perWeek }), fillTemplate(this._h("ev_days"), { days: ledger.chargingDays, covered: ledger.coveredDays }), "how-often")}
+                    ${statTile(sources ? share(sources.solar) : "—", html`${swatch("solar")}${this._h("from_solar")}${forgone ? html`<br>${fillTemplate(this._h("ev_forgone"), { money: forgone })}` : nothing}`, "solar")}
+                    ${statTile(sources ? share(sources.grid) : "—", html`${swatch("grid")}${this._h("from_grid")}${gridPaid ? html`<br>${fillTemplate(this._h("ev_grid_paid"), { money: gridPaid })}${ledger.gridPricePerKwh !== null ? ` · ${this._rate(ledger.gridPricePerKwh, ledger)}/kWh` : ""}` : nothing}`, "grid")}
+                </div>
+                <div class="rows" data-ledger-sources>
+                    ${historyRow(html`${swatch("battery")}${this._h("from_battery_cap")}`, sources ? share(sources.battery) : "—", "ledger-battery")}
+                    ${sources && sources.unknown > EPSILON_KWH ? historyRow(html`<span class="swatch-mark" style="color: var(--helman-neutral-light)">■</span>${unknownLabel}`, share(sources.unknown), "ledger-unknown") : nothing}
+                </div>
+                <button class="link-button" data-estimates-toggle aria-expanded=${this._estimatesOpen ? "true" : "false"} aria-controls="ledger-estimates"
+                    @click=${() => { this._estimatesOpen = !this._estimatesOpen; }}>${this._h("ev_how")}</button>
+                ${this._estimatesOpen ? this._renderEstimates(ledger) : nothing}
+            </div>
+        `;
+    }
+
+    /** What the 30-day figures rest on, disclosed in place. */
+    private _renderEstimates(ledger: EvChargerLedgerDTO) {
+        const totals = ledger.totals;
+        const of = (part: number) => fillTemplate(this._h("ev_of"), { part: formatKwh(part), total: kwhText(totals.kwh) });
+        const per100 = ledger.per100km;
+        return html`<div class="rows" id="ledger-estimates" data-estimates>
+            ${historyRow(this._h("ev_how_energy"), this._h("ev_how_energy_value"), "how-energy")}
+            ${historyRow(this._h("ev_how_split"), this._h("ev_how_split_value"), "how-split")}
+            ${historyRow(this._h("ev_how_priced"), of(totals.paid.pricedKwh), "how-priced")}
+            ${historyRow(this._h("ev_how_known"), of(totals.knownKwh), "how-known")}
+            ${historyRow(this._h("ev_how_forgone"), this._h("ev_how_forgone_value"), "how-forgone")}
+            ${per100 ? historyRow(this._h("ev_how_per100"), fillTemplate(this._h("ev_how_per100_value"), { name: per100.vehicleName, value: per100.kwhPer100km.toFixed(1) }), "how-per100") : nothing}
+            <p class="note" data-estimates-note>${this._h("ev_how_note")}</p>
+        </div>`;
+    }
+
+    /**
+     * The newest segments, newest first, under their local start day: the
+     * first few, all on "Show all". Each bar is its kWh on one scale across
+     * the list, in parts by source; the one still charging is outlined.
+     */
+    private _renderSegments(ledger: EvChargerLedgerDTO) {
+        const segments = ledger.segments;
+        const scale = Math.max(...segments.map((segment) => segment.kwh), EPSILON_KWH);
+        const shown = this._allSegments ? segments : segments.slice(0, SEGMENTS_SHOWN);
+        const days = [...new Set(shown.map((segment) => segment.localDate))];
+        const zone = this._timeZone;
+        const label = (dayKey: string) => formatScheduleDayLabel({
+            dayKey, currentDayKey: todayKey(zone), locale: this._locale,
+            todayLabel: this.localize("scheduling.day.today"), tomorrowLabel: this.localize("scheduling.day.tomorrow"), yesterdayLabel: this.localize("scheduling.day.yesterday"),
+        });
+        return html`
+            ${subTitle(this._h("ev_segments"))}
+            <div data-ledger-segments>
+                ${days.map((day) => {
+                    const all = segments.filter((segment) => segment.localDate === day);
+                    return html`<div data-ledger-day=${day}>
+                        <div class="day-head"><span class="label">${label(day)}</span><span class="value" data-day-summary>${this._daySummary(all, ledger)}</span></div>
+                        ${shown.filter((segment) => segment.localDate === day).map((segment) => this._renderSegment(segment, scale))}
+                    </div>`;
+                })}
+            </div>
+            ${!this._allSegments && segments.length > SEGMENTS_SHOWN
+                ? html`<button class="link-button" data-show-all @click=${() => { this._allSegments = true; }}>${fillTemplate(this._h("ev_show_all"), { n: segments.length })}</button>`
+                : nothing}
+        `;
+    }
+
+    /** A day's kWh, solar share and paid cost, over the segments listed under it. */
+    private _daySummary(segments: EvChargingSegmentDTO[], ledger: EvChargerLedgerDTO): string {
+        const kwh = segments.reduce((sum, segment) => sum + segment.kwh, 0);
+        const attributed = segments.filter((segment) => segment.sources !== null);
+        const solar = attributed.reduce((sum, segment) => sum + segment.sources!.solar, 0);
+        const paid = this._moneyText(segments.reduce((sum, { paid: side }) => ({
+            amount: sum.amount + side.amount, pricedKwh: sum.pricedKwh + side.pricedKwh, unpricedKwh: sum.unpricedKwh + side.unpricedKwh,
+        }), { amount: 0, pricedKwh: 0, unpricedKwh: 0 }), ledger);
+        return [
+            kwhText(kwh),
+            attributed.length ? fillTemplate(this._h("ev_day_solar"), { pct: kwh > 0 ? Math.round(solar / kwh * 100) : 0 }) : this._h("ev_day_unknown"),
+            paid,
+        ].filter(Boolean).join(" · ");
+    }
+
+    /** One segment: its bounds, as recorded; its bar; its kWh, a lower bound where not all of it is known. */
+    private _renderSegment(segment: EvChargingSegmentDTO, scale: number) {
+        const from = segment.startKnown ? this._time(Date.parse(segment.start)) : "?";
+        const to = segment.status === "active" ? this._t("now") : segment.endKnown ? this._time(Date.parse(segment.end)) : "?";
+        const kwh = `${segment.kwhComplete ? "" : "≥ "}${formatKwh(segment.kwh)}`;
+        const sources = segment.sources;
+        const bar = renderShareBar(this.localize, sources
+            ? [{ node: "solar", kwh: sources.solar }, { node: "battery", kwh: sources.battery }, { node: "grid", kwh: sources.grid }, { node: "unknown", kwh: sources.unknown }]
+            : [{ node: "unknown", kwh: segment.kwh }], this._h("source_unknown_cap"));
+        return html`<div data-segment=${segment.id} data-status=${segment.status}
+            aria-label=${fillTemplate(this._h("ev_segment_label"), { from, to, kwh: `${kwh} kWh` })}>
+            <span class="seg-time">${from} – ${to}</span>
+            <span class="seg-track"><span class="seg-bar ${segment.status === "active" ? "active" : ""}" style=${`width: ${segment.kwh / scale * 100}%`}>${bar}</span></span>
+            <span class="seg-kwh">${kwh}</span>
+        </div>`;
     }
 
     private _renderToday() {
@@ -466,6 +663,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
             <div class="rows">
                 ${this._row(this._t("trust.fault"), fault ?? (this._faultKnown(overview) ? this._t("trust.no_fault") : this._t("unavailable")), "fault")}
             </div>
+            ${this._renderLedgerHealth()}
             ${subTitle(this._t("trust.comparison"))}
             <div class="rows">
                 ${comparison.kind === "compared" ? html`
@@ -473,6 +671,27 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
                     ${this._row(this._t("trust.phase_sum"), formatPower(comparison.phaseSumW).display + " · " + this._time(comparison.phasesAt), "phase-sum")}
                     ${this._row(this._t("trust.difference"), formatPower(Math.abs(comparison.differenceW)).display, "difference")}
                 ` : html`<p class="note" data-incomparable>${this._t(`trust.incomparable.${comparison.kind}`)}</p>`}
+            </div>
+        `;
+    }
+
+    /** The charging ledger's health: what it holds, how far backfill got and what it reads. */
+    private _renderLedgerHealth() {
+        const ledger = this._ledger();
+        if (!ledger) return nothing;
+        const health = ledger.health;
+        const t = (key: string) => this.localize(`node_detail.shared.technical.${key}`);
+        const when = (iso: string | null) => iso ? new Date(iso).toLocaleString(this._locale, { timeZone: this._timeZone, dateStyle: "medium", timeStyle: "short" }) : "—";
+        return html`
+            ${subTitle(t("ledger"))}
+            <div class="rows" data-ledger-health>
+                ${this._row(t("ledger_since"), when(health.recordedSince), "ledger-since")}
+                ${this._row(t("ledger_segments"), String(health.segmentsStored), "ledger-segments")}
+                ${this._row(t("ledger_backfill"), fillTemplate(t(`ledger_backfill_${health.backfill.status}`), { days: health.backfill.recoveredDays }), "ledger-backfill")}
+                ${this._row(t("ledger_settled"), when(health.settledThrough), "ledger-settled")}
+                ${this._row(t("ledger_run_mode"), health.runModeEntityId, "ledger-run-mode")}
+                ${this._row(t("ledger_meter"), health.meterEntityId ?? "—", "ledger-meter")}
+                ${health.error ? this._row(t("ledger_error"), t(`ledger_error_${health.error}`), "ledger-error") : nothing}
             </div>
         `;
     }

@@ -14,6 +14,8 @@ DAY_CONTEXT_STORAGE_KEY = f"{DOMAIN}.day_context"
 # *and* optimizer instance id. v1 records carry no optimizer key and are dropped
 # on load rather than migrated.
 DAY_CONTEXT_STORAGE_VERSION = 2
+EV_SESSIONS_STORAGE_KEY = f"{DOMAIN}.ev_sessions"
+EV_SESSIONS_STORAGE_VERSION = 1
 DAY_CLASSIFICATION_SURPLUS = "surplus"
 DAY_CLASSIFICATION_TIGHT = "tight"
 DAY_CLASSIFICATION_DEFICIT = "deficit"

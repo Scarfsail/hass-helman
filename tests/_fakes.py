@@ -23,6 +23,11 @@ class DummyStore:
         self._data = data
         self.saved = data
 
+    def async_delay_save(self, data_func: Any, delay: float = 0) -> None:
+        """Written at once: what a delayed save writes is what the test reads."""
+        self._data = data_func()
+        self.saved = self._data
+
 
 class FakeConnection:
     def __init__(self) -> None:

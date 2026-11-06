@@ -79,6 +79,7 @@ from .device_reports.dataset import (
 )
 from .device_reports.reports import ReportQuery, build_report
 from .entity import remove_stale_devices, remove_stale_entities
+from .ev_sessions.service import EvSessionService
 from .forecast.assembly import (
     build_automation_snapshot,
 )
@@ -345,6 +346,12 @@ class HelmanCoordinator:
             ),
             request_replan=self._automation_triggers.request_debounced,
         )
+        #: The EV charging ledger, its listeners and its store.
+        self.ev_sessions = EvSessionService(
+            hass,
+            read_config=lambda: self._active_config,
+            day_dataset=self.async_day_dataset,
+        )
 
     @property
     def config(self) -> dict:
@@ -532,6 +539,7 @@ class HelmanCoordinator:
             await self.schedule.cleanup_automation_owned_actions(
                 reference_time=reference_time,
             )
+        await self.ev_sessions.async_setup()
         self._schedule_startup_schedule_execution()
         self._schedule_startup_forecast_refresh()
 
@@ -713,20 +721,11 @@ class HelmanCoordinator:
         clamped to today. The dataset and the report are built on the executor:
         a year of hours is seconds of Python the event loop must not wait on.
         """
-        tree = await self.get_device_tree()
-        if find_house_node(tree) is None:
-            return {"unavailable": "no_house_node"}
+        resolved = await self._async_report_dataset(query)
+        if isinstance(resolved, str):
+            return {"unavailable": resolved}
+        dataset, now, price_config = resolved
         service = self._solar_inspector
-        meters = read_span_meters(self._active_config)
-        if meters.house is None:
-            return {"unavailable": "no_house_meter"}
-
-        local_tz = ZoneInfo(str(self._hass.config.time_zone))
-        now = dt_util.now().astimezone(local_tz)
-        price_config = self._get_grid_import_price_config()
-        dataset = await self._async_device_dataset(
-            tree, meters, query, local_tz=local_tz, now=now, price_config=price_config
-        )
         # Resolved per request, not cached with the dataset: both are cheap, and
         # the navigation range moves daily.
         floor = await service.async_history_floor(now)
@@ -744,6 +743,43 @@ class HelmanCoordinator:
                 },
             )
         )
+
+    async def _async_report_dataset(
+        self, query: ReportQuery
+    ) -> tuple[DeviceDataset, datetime, Any] | str:
+        """``(dataset, now, price config)`` for ``query``'s period, or why there is none."""
+        tree = await self.get_device_tree()
+        if find_house_node(tree) is None:
+            return "no_house_node"
+        meters = read_span_meters(self._active_config)
+        if meters.house is None:
+            return "no_house_meter"
+        local_tz = ZoneInfo(str(self._hass.config.time_zone))
+        now = dt_util.now().astimezone(local_tz)
+        price_config = self._get_grid_import_price_config()
+        dataset = await self._async_device_dataset(
+            tree, meters, query, local_tz=local_tz, now=now, price_config=price_config
+        )
+        return dataset, now, price_config
+
+    async def async_day_dataset(self, day: date) -> DeviceDataset | None:
+        """One local day's device dataset from the reports' cache; ``None`` without a house to attribute in."""
+        resolved = await self._async_report_dataset(
+            ReportQuery(start_date=day, end_date=day)
+        )
+        return None if isinstance(resolved, str) else resolved[0]
+
+    async def async_ev_history(self, device_id: str, now: datetime) -> dict[str, Any]:
+        """The EV detail's charging ledger figures for ``device_id``, with the price unit they are in."""
+        history = await self.ev_sessions.async_history(device_id, now)
+        if history.get("unavailable") is not None:
+            return history
+        price_unit = None
+        if self._solar_inspector is not None:
+            price_unit = await self._solar_inspector.async_resolve_span_currency(
+                self._get_grid_import_price_config()
+            )
+        return {**history, "priceUnit": price_unit}
 
     async def _async_device_dataset(
         self,
@@ -1488,6 +1524,7 @@ class HelmanCoordinator:
         await self._automation_triggers.async_shutdown()
         self.conditions.async_unload()
         await self.schedule.async_unload()
+        await self.ev_sessions.async_unload()
 
         self._async_add_entities = None
         self._dynamic_sensor_factories = {}

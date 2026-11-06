@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from ..consumption_forecast_profiles import HouseConsumptionProfile
@@ -18,3 +19,5 @@ class NodeDetailContext:
     device_report: Callable[[str, ReportQuery], Awaitable[dict[str, Any]]] | None
     house_profile: tuple[HouseConsumptionProfile | None, str | None]
     day_aggregates: Callable[[str], Awaitable[dict[str, Any]]] | None = None
+    #: The charging ledger's figures for an EV charger, by consumer id.
+    ev_history: Callable[[str, datetime], Awaitable[dict[str, Any]]] | None = None

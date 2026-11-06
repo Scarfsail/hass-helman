@@ -59,8 +59,12 @@ def _query_states_sync(
     include_start_state: bool,
     no_attributes: bool,
     recorder_instance: Any = None,
+    strict: bool = False,
 ) -> dict[str, list[Any]]:
-    """Query significant states on the recorder executor and handle lowercase key fallback."""
+    """Query significant states on the recorder executor and handle lowercase key fallback.
+
+    ``strict`` raises a failed query instead of answering it empty.
+    """
     get_sig_states = getattr(recorder_instance, "get_significant_states", None)
     if get_sig_states is None:
         try:
@@ -68,6 +72,8 @@ def _query_states_sync(
                 get_significant_states as get_sig_states,
             )
         except Exception:  # pragma: no cover
+            if strict:
+                raise
             return {eid: [] for eid in ids}
 
     try:
@@ -90,8 +96,12 @@ def _query_states_sync(
                 ids,
             ) or {}
         except Exception:
+            if strict:
+                raise
             return {eid: [] for eid in ids}
     except Exception:
+        if strict:
+            raise
         return {eid: [] for eid in ids}
 
     return {
@@ -108,12 +118,16 @@ async def read_states(
     *,
     include_start_state: bool = True,
     no_attributes: bool = True,
+    strict: bool = False,
 ) -> dict[str, list[Any]]:
     """Read recorder states for multiple entity IDs over [start, end].
 
     Handles import guards, running on the recorder executor, and lowercase-key
     fallbacks. Returns a dict mapping each requested entity ID to its list of states
     (empty list if absent or on query failure).
+
+    ``strict``: a failed read raises instead, for a caller that must never
+    take a failure for a stretch with nothing recorded (the charging ledger).
     """
     clean_ids = [eid for eid in dict.fromkeys(ids) if eid]
     if not clean_ids:
@@ -127,9 +141,13 @@ async def read_states(
 
         recorder = get_instance(hass)
     except Exception:  # pragma: no cover
+        if strict:
+            raise
         return {eid: [] for eid in clean_ids}
 
     if recorder is None:
+        if strict:
+            raise RuntimeError("The recorder is not running")
         return {eid: [] for eid in clean_ids}
 
     try:
@@ -142,7 +160,10 @@ async def read_states(
             include_start_state,
             no_attributes,
             recorder,
+            strict,
         )
     except Exception:
+        if strict:
+            raise
         _LOGGER.exception("Failed to read recorder states for: %s", ", ".join(clean_ids))
         return {eid: [] for eid in clean_ids}
