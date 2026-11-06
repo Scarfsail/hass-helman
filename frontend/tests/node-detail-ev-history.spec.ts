@@ -260,7 +260,7 @@ test("ev-charger last 30 days shows the share bar, the four tiles and the batter
     await expect(content(page).locator("[data-ledger-title]")).toContainText("Last 30 days");
     await expect(content(page).locator("[data-ledger-title] helman-help-tip")).toHaveCount(1);
     await expect(window30.locator("[data-share-bar] [data-share]")).toHaveCount(4);
-    await expect(window30.locator("[data-stat=charged]")).toHaveText(/215 kWh\s*charged · ≈ 1\.98 CZK per kWh\s*≈ 31\.28 CZK per 100 km/);
+    await expect(window30.locator("[data-stat=charged]")).toHaveText(/215 kWh\s*charged · ≈ 1\.98 CZK per kWh\s*≈ 31 CZK per 100 km/);
     await expect(window30.locator("[data-stat=how-often]")).toHaveText(/≈ 3× a week\s*charged on 13 of 30 days/);
     await expect(window30.locator("[data-stat=solar]")).toHaveText(/109 kWh · 51 %.*from solar.*≈ 142 CZK for 96 of 109 kWh not earned by selling it/s);
     await expect(window30.locator("[data-stat=grid]")).toHaveText(/82 kWh · 38 %.*from the grid.*paid ≈ 412 CZK for 79 of 82 kWh · ≈ 5\.22 CZK\/kWh/s);

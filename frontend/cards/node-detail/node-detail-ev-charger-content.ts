@@ -128,7 +128,8 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         [data-car] .meter { position: relative; height: 10px; margin: 4px 0; border-radius: 5px; overflow: visible; }
         [data-car] .meter-fill { border-radius: 5px; background: var(--success-color, #43a047); }
         [data-limit-marker] { position: absolute; top: -3px; bottom: -3px; width: 2px; margin-left: -1px; background: var(--primary-text-color); }
-        .stat-tiles { margin: 10px 0; }
+        [data-ledger-window] { display: flex; flex-direction: column; gap: 10px; }
+        [data-ledger-window] > .link-button, [data-show-all] { align-self: flex-start; }
         [data-ledger-day] { padding: 8px 0; border-bottom: 1px solid var(--divider-color); }
         [data-ledger-day]:last-of-type { border-bottom: 0; }
         .day-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 12px; font-size: 13px; }
@@ -510,7 +511,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
                     ? [{ node: "solar", kwh: sources.solar }, { node: "battery", kwh: sources.battery }, { node: "grid", kwh: sources.grid }, { node: "unknown", kwh: sources.unknown }]
                     : [{ node: "unknown", kwh: totals.kwh }], unknownLabel)}
                 <div class="stat-tiles two" data-ledger-tiles>
-                    ${statTile(kwhText(totals.kwh), html`${charged}${ledger.per100km ? html`<br>${fillTemplate(this._h("ev_per_100km"), { money: this._rate(ledger.per100km.amount, ledger) })}` : nothing}`, "charged")}
+                    ${statTile(kwhText(totals.kwh), html`${charged}${ledger.per100km ? html`<br>${fillTemplate(this._h("ev_per_100km"), { money: this._money(ledger.per100km.amount, ledger) })}` : nothing}`, "charged")}
                     ${statTile(fillTemplate(this._h("ev_per_week"), { n: perWeek }), fillTemplate(this._h("ev_days"), { days: ledger.chargingDays, covered: ledger.coveredDays }), "how-often")}
                     ${statTile(sources ? share(sources.solar) : "—", html`${swatch("solar")}${this._h("from_solar")}${forgone ? html`<br>${fillTemplate(this._h("ev_forgone"), { money: forgone })}` : nothing}`, "solar")}
                     ${statTile(sources ? share(sources.grid) : "—", html`${swatch("grid")}${this._h("from_grid")}${gridPaid ? html`<br>${fillTemplate(this._h("ev_grid_paid"), { money: gridPaid })}${ledger.gridPricePerKwh !== null ? ` · ${this._rate(ledger.gridPricePerKwh, ledger)}/kWh` : ""}` : nothing}`, "grid")}
