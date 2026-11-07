@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 from types import SimpleNamespace as NS
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -22,7 +22,6 @@ RUN_MODE = "sensor.solax_ev_charger_run_mode"
 METER = "sensor.solax_ev_charger_charge_added_total"
 POWER = "sensor.solax_ev_charger_charge_power_total"
 SOC = "sensor.kona_soc"
-CONSUMPTION = "sensor.kona_average_energy_consumption_kwh"
 
 LEDGER = {
     "unavailable": None,
@@ -54,7 +53,7 @@ def charger(*, profile=True, vehicles=1, power=True):
     return device
 
 
-def detail(section=None, *, device_id="garage-ev", device=None, history=None, states=None, registry=None, price_unit="CZK/kWh"):
+def detail(section=None, *, device_id="garage-ev", device=None, history=None, price_unit="CZK/kWh"):
     coordinator = make_coordinator()
     coordinator._active_config = {"devices": {"consumers": [device or charger(), {"id": "boiler", "kind": "generic"}]}}
     profile = PROFILES["solax_ev_charger"]
@@ -69,20 +68,12 @@ def detail(section=None, *, device_id="garage-ev", device=None, history=None, st
     )
     coordinator._solar_inspector = NS(async_resolve_span_currency=AsyncMock(return_value=price_unit))
     hass = hass_with_coordinator(coordinator)
-    hass.states = NS(get={RUN_MODE: FakeState("Charging"), **(states or {})}.get)
+    hass.states = NS(get={RUN_MODE: FakeState("Charging")}.get)
     connection = FakeConnection()
     msg = {"id": 7, "type": "helman/get_node_detail", "node": "ev_charger", "device_id": device_id}
     if section:
         msg["section"] = section
-    entries = registry or {}
-    fake_registry = NS(async_get=lambda entity_id: entries.get(entity_id))
-    with patch("homeassistant.helpers.entity_registry.async_get", return_value=fake_registry), patch(
-        "homeassistant.helpers.entity_registry.async_entries_for_device",
-        side_effect=lambda _registry, device_id: [
-            NS(entity_id=entity_id) for entity_id, entry in entries.items() if entry.device_id == device_id
-        ],
-    ):
-        asyncio.run(websockets_module.ws_get_node_detail.__wrapped__(hass, connection, msg))
+    asyncio.run(websockets_module.ws_get_node_detail.__wrapped__(hass, connection, msg))
     return connection, coordinator
 
 
@@ -127,8 +118,8 @@ def test_a_partial_ledger_is_served_with_its_price_unit_and_its_failure_named():
     assert payload["complete"] is False
     assert payload["health"] == {"error": "read_failed"}
     assert payload["totals"]["kwh"] == 12.0
-    # Nothing proves the car's consumption: no cost per 100 km, the rest usable.
-    assert payload["per100km"] is None
+    # The charger's figures alone: nothing of any car is read into them.
+    assert "per100km" not in payload
     device_id, now = coordinator.ev_sessions.async_history.call_args.args
     assert device_id == "garage-ev" and now.tzinfo is not None
 
@@ -137,53 +128,6 @@ def test_a_ledger_that_raises_is_an_internal_error():
     connection, _ = detail("history", history=AsyncMock(side_effect=RuntimeError("store broken")))
 
     assert [code for _id, code, _message in connection.errors] == ["internal_error"]
-
-
-def consumption(value="15.8", unit="kWh/100 km"):
-    return {CONSUMPTION: FakeState(value, attributes={"unit_of_measurement": unit})}
-
-
-CAR_REGISTRY = {SOC: NS(device_id="kona-car"), CONSUMPTION: NS(device_id="kona-car")}
-
-
-def test_the_cost_per_100_km_uses_the_one_cars_consumption_on_its_own_device():
-    payload = result(detail("history", states=consumption(), registry=CAR_REGISTRY)[0])
-
-    assert payload["per100km"] == {
-        "entityId": CONSUMPTION,
-        "kwhPer100km": 15.8,
-        "vehicleId": "car0",
-        "vehicleName": "Car 0",
-        "amount": pytest.approx(31.6),
-    }
-
-
-@pytest.mark.parametrize(
-    ("states", "registry", "device"),
-    [
-        # Not a finite positive reading.
-        (consumption("unknown"), CAR_REGISTRY, None),
-        (consumption("0"), CAR_REGISTRY, None),
-        # Not in kWh/100 km.
-        (consumption(unit="km"), CAR_REGISTRY, None),
-        # On another device than the car's SoC.
-        (consumption(), {SOC: NS(device_id="kona-car"), CONSUMPTION: NS(device_id="phone")}, None),
-        # Two cars: nothing says which one charged.
-        (consumption(), CAR_REGISTRY, charger(vehicles=2)),
-    ],
-    ids=["unknown", "zero", "unit", "other-device", "two-cars"],
-)
-def test_without_a_provable_consumption_there_is_no_cost_per_100_km(states, registry, device):
-    payload = result(detail("history", states=states, registry=registry, device=device)[0])
-
-    assert payload["per100km"] is None
-    assert payload["paidPerKwh"] == 2.0
-
-
-def test_without_a_priced_kwh_there_is_no_cost_per_100_km():
-    payload = result(detail("history", history={**LEDGER, "paidPerKwh": None}, states=consumption(), registry=CAR_REGISTRY)[0])
-
-    assert payload["per100km"] is None
 
 
 def test_without_a_ledger_the_section_is_not_loaded():

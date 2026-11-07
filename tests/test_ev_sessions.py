@@ -744,6 +744,24 @@ def test_forgone_export_value_stays_out_of_paid_and_every_rate():
     # Only the solar half is priced on paid (a known zero): the grid half is not.
     assert payload["paidPerKwh"] == pytest.approx(0.0)
     assert payload["gridPricePerKwh"] is None
+    # Its own rate: the value over the priced solar kWh.
+    assert payload["solarForgonePerKwh"] == pytest.approx(1.5)
+    # Virtually: paid (0) plus the solar's 4.5, over the 3 solar kWh paid prices.
+    assert payload["virtualPerKwh"] == pytest.approx(1.5)
+
+
+def test_the_virtual_cost_divides_only_by_kwh_priced_on_both_sides():
+    # Half solar, half grid, both hours import-priced; only 08:00 has an export price.
+    harness, _ = two_hours(import_rate={at(10, 8): 4.0, at(10, 9): 4.0}, export_rate={at(10, 8): 1.5})
+
+    payload = harness.history(at(10, 12))
+
+    totals = payload["totals"]
+    # Paid: 3 grid kWh at 4.0 over 6 kWh (solar free); 1 of the 3 solar kWh export-priced.
+    assert totals["solarForgone"] == pytest.approx({"amount": 1.5, "pricedKwh": 1.0, "unpricedKwh": 2.0})
+    # Virtual: 12 + 1.5 over the 6 kWh less the 2 solar kWh no export rate prices.
+    assert totals["virtual"] == pytest.approx({"amount": 13.5, "pricedKwh": 4.0, "unpricedKwh": 2.0})
+    assert payload["virtualPerKwh"] == pytest.approx(13.5 / 4)
 
 
 def test_battery_supply_takes_the_days_charge_origin():
@@ -756,6 +774,32 @@ def test_battery_supply_takes_the_days_charge_origin():
     assert totals["sources"]["battery"] == pytest.approx(6.0)
     assert totals["paid"] == pytest.approx({"amount": 9.0, "pricedKwh": 6.0, "unpricedKwh": 0.0})
     assert totals["gridPaid"]["amount"] == 0.0
+
+
+def test_the_batterys_paid_money_is_paid_less_the_grids():
+    # Each hour half battery, a quarter grid, a quarter solar; the battery's
+    # charge half from the grid at 3.0, half from solar.
+    mix = HourMix(solar=0.25, battery=0.5, grid=0.25, unattributed=0.0, ambiguous_kwh=0.0, mismatch_kwh=0.0)
+    origin = ChargeOrigin(charged_kwh=10.0, grid_recorded=0.5, solar_priced=0.5, unknown=0.0, paid_rate=3.0, forgone_rate=1.0)
+    harness, _ = two_hours(mix=mix, origin=origin, import_rate={at(10, 8): 4.0, at(10, 9): 4.0})
+
+    payload = harness.history(at(10, 12))
+
+    totals = payload["totals"]
+    # 1.5 grid kWh at 4.0; 3 battery kWh, half of them at 3.0.
+    assert totals["gridPaid"] == pytest.approx({"amount": 6.0, "pricedKwh": 1.5, "unpricedKwh": 0.0})
+    assert totals["batteryPaid"] == pytest.approx({"amount": 4.5, "pricedKwh": 3.0, "unpricedKwh": 0.0})
+    assert totals["paid"]["amount"] == pytest.approx(10.5)
+    assert payload["batteryPricePerKwh"] == pytest.approx(1.5)
+
+
+def test_without_battery_supply_the_battery_has_no_price():
+    harness, _ = two_hours(import_rate={at(10, 8): 4.0})
+
+    payload = harness.history(at(10, 12))
+
+    assert payload["totals"]["batteryPaid"] == pytest.approx({"amount": 0.0, "pricedKwh": 0.0, "unpricedKwh": 0.0})
+    assert payload["batteryPricePerKwh"] is None
 
 
 def test_a_negative_price_is_paid_back():
@@ -780,6 +824,9 @@ def test_unknown_source_hours_and_a_missing_house_dataset_keep_the_kwh():
     assert payload["totals"]["sources"] is None
     assert payload["totals"]["paid"] == {"amount": 0.0, "pricedKwh": 0.0, "unpricedKwh": pytest.approx(6.0)}
     assert payload["paidPerKwh"] is None
+    # The battery's side counts the unattributed kWh unpriced, as every side does.
+    assert payload["totals"]["batteryPaid"] == {"amount": 0.0, "pricedKwh": 0.0, "unpricedKwh": pytest.approx(6.0)}
+    assert payload["virtualPerKwh"] is None
 
 
 def test_delayed_compilation_is_attributed_again_then_kept_through_a_failed_read():
@@ -851,6 +898,7 @@ def test_a_segment_crossing_the_window_start_counts_only_its_in_window_hours():
     assert payload["segments"][0]["kwh"] == pytest.approx(3.0)
     # It started before the window: not one of its charging days.
     assert payload["chargingDays"] == 0
+    assert payload["secondsPerDay"] is None
 
 
 def test_charging_days_count_local_days_with_energy_by_segment_start():
@@ -877,6 +925,8 @@ def test_charging_days_count_local_days_with_energy_by_segment_start():
     assert payload["chargingDays"] == 2
     assert payload["coveredDays"] == 30
     assert payload["perWeek"] == pytest.approx(2 / 30 * 7)
+    # Four one-hour segments over two charging days.
+    assert payload["secondsPerDay"] == pytest.approx(2 * 3600)
 
 
 def test_per_week_counts_by_the_days_recorded_when_the_recorder_keeps_fewer_than_30():

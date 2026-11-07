@@ -1326,6 +1326,10 @@ export interface EvLedgerFiguresDTO {
     paid: EvLedgerMoneyDTO;
     forgone: EvLedgerMoneyDTO;
     gridPaid: EvLedgerMoneyDTO;
+    /** Of `paid`, the battery share's: `paid` less `gridPaid`, solar paying nothing. */
+    batteryPaid: EvLedgerMoneyDTO;
+    /** `paid` plus `solarForgone`, over the kWh priced on both sides: the cost had the direct solar been exported. */
+    virtual: EvLedgerMoneyDTO;
     solarForgone: EvLedgerMoneyDTO;
 }
 
@@ -1381,10 +1385,17 @@ export interface EvChargerLedgerDTO {
     coveredDays: number;
     /** Charging days over `coveredDays`, times 7. */
     perWeek: number;
+    /** The counted segments' charging time over the charging days; `null` without one. */
+    secondsPerDay: number | null;
+    /** Paid over priced charger kWh, the solar share free. */
     paidPerKwh: number | null;
     gridPricePerKwh: number | null;
-    /** The paid rate times the one car's current consumption; `null` when not provable. */
-    per100km: { entityId: string; kwhPer100km: number; vehicleId: string; vehicleName: string; amount: number } | null;
+    /** The battery's paid over its priced kWh, what charging it cost. */
+    batteryPricePerKwh: number | null;
+    /** Not earned by selling over the priced direct solar kWh. */
+    solarForgonePerKwh: number | null;
+    /** `totals.virtual`'s rate; `null` without any export-priced solar. */
+    virtualPerKwh: number | null;
     priceUnit: string | null;
     segments: EvChargingSegmentDTO[];
     complete: boolean;

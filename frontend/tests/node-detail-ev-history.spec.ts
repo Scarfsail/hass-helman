@@ -28,6 +28,8 @@ type Variant = {
     noHouse?: boolean;
     /** The ledger has recorded only this many of the 30 days. */
     coveredDays?: number;
+    /** Only the whole paid side is priced, and it was paid back: no source's money is. */
+    paidBackOnly?: boolean;
     /** Hold the overview's answer until `__releaseOverview()`. */
     holdOverview?: boolean;
     /** Hold garage-ev's ledger answer until `__releaseLedger()`. */
@@ -108,14 +110,14 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 id: start, start, end, localDate: start.slice(0, 10), startKnown: true, endKnown: true, status: "closed",
                 final: true, kwhComplete: true, kwh, sources, knownKwh: sources ? kwh : 0,
                 paid: v.noHouse ? money(0, 0, kwh) : money(kwh * 2, kwh), forgone: money(0, kwh), gridPaid: money(kwh * 2, kwh / 2),
-                solarForgone: money(kwh / 2, kwh / 2), ...extra,
+                batteryPaid: money(0, 0), solarForgone: money(kwh / 2, kwh / 2), virtual: money(kwh * 2.5, kwh), ...extra,
             };
         };
         const segments = v.empty ? [] : [
             segment("2026-10-21T11:20:00+00:00", "2026-10-21T12:00:00+00:00", 4.3, { status: "active", final: false }),
             segment("2026-10-21T08:00:00+00:00", "2026-10-21T09:30:00+00:00", 9.6),
             // A negative price: paid back.
-            segment("2026-10-20T22:00:00+00:00", "2026-10-21T02:10:00+00:00", 21.8, { paid: money(-5, 21.8), gridPaid: money(-5, 21.8) }),
+            segment("2026-10-20T22:00:00+00:00", "2026-10-21T02:10:00+00:00", 21.8, { paid: money(-5, 21.8), gridPaid: money(-5, 21.8), batteryPaid: money(0, 0) }),
             // Partly priced.
             segment("2026-10-19T11:05:00+00:00", "2026-10-19T15:40:00+00:00", 18.2, { paid: money(30, 15, 3.2) }),
             // The charger went offline: the end is not recorded, the kWh a lower bound.
@@ -132,13 +134,19 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             window: { start: "2026-09-21T12:00:00+00:00", end: "2026-10-21T12:00:00+00:00" },
             totals: {
                 kwh, sources: v.noHouse ? null : { solar: 109, battery: 17, grid: 82, unknown: 7 }, knownKwh: v.noHouse ? 0 : 208,
-                paid: v.noHouse ? money(0, 0, kwh) : money(412, 208.1, 6.9), forgone: money(142, 200, 15),
-                gridPaid: v.noHouse ? money(0, 0, kwh) : money(412, 79, 3), solarForgone: v.noHouse ? money(0, 0, kwh) : money(142, 96, 13),
+                paid: v.noHouse ? money(0, 0, kwh) : money(455, 208.1, 6.9), forgone: money(142, 200, 15),
+                gridPaid: v.noHouse ? money(0, 0, kwh) : money(412, 79, 3),
+                batteryPaid: v.noHouse ? money(0, 0, kwh) : money(43, 17), solarForgone: v.noHouse ? money(0, 0, kwh) : money(142, 96, 13),
+                virtual: v.noHouse ? money(0, 0, kwh) : money(597, 208.1, 6.9),
                 provisional: true,
+                ...(v.paidBackOnly ? {
+                    paid: money(-5, 215), gridPaid: money(0, 0, 82), batteryPaid: money(0, 0, 17), solarForgone: money(0, 0, 109), virtual: money(0, 0, 215),
+                } : {}),
             },
             chargingDays: 13, coveredDays: v.coveredDays ?? 30, perWeek: 13 / (v.coveredDays ?? 30) * 7,
-            paidPerKwh: v.noHouse ? null : 1.98, gridPricePerKwh: v.noHouse ? null : 5.22,
-            per100km: v.noHouse ? null : { entityId: "sensor.kona_consumption", kwhPer100km: 15.8, vehicleId: "kona", vehicleName: "Kona", amount: 31.28 },
+            secondsPerDay: 8100,
+            paidPerKwh: v.noHouse ? null : 2.19, gridPricePerKwh: v.noHouse ? null : 5.22, batteryPricePerKwh: v.noHouse ? null : 2.53, solarForgonePerKwh: v.noHouse ? null : 1.48, virtualPerKwh: v.noHouse || v.paidBackOnly ? null : 2.87,
+            ...(v.paidBackOnly ? { paidPerKwh: -0.02, gridPricePerKwh: null, batteryPricePerKwh: null, solarForgonePerKwh: null } : {}),
             priceUnit: "CZK/kWh",
             segments,
             complete: false,
@@ -252,22 +260,32 @@ test("ev-charger History header falls back to today's figure when the ledger fai
     await expect.poll(async () => (await historyReads(page)).length).toBeGreaterThan(before);
 });
 
-test("ev-charger last 30 days shows the share bar, the four tiles and the battery and unknown rows", async ({ page }) => {
+test("ev-charger last 30 days shows an energy and a money gauge with their totals and the rest under them", async ({ page }) => {
     await mount(page);
     await openCharger(page);
     await openHistory(page);
     const window30 = content(page).locator("[data-ledger-window]");
     await expect(content(page).locator("[data-ledger-title]")).toContainText("Last 30 days");
     await expect(content(page).locator("[data-ledger-title] helman-help-tip")).toHaveCount(1);
-    await expect(window30.locator("[data-share-bar] [data-share]")).toHaveCount(4);
-    await expect(window30.locator("[data-stat=charged]")).toHaveText(/215 kWh\s*charged · ≈ 1\.98 CZK per kWh\s*≈ 31 CZK per 100 km/);
-    await expect(window30.locator("[data-stat=how-often]")).toHaveText(/≈ 3× a week\s*charged on 13 of 30 days/);
-    await expect(window30.locator("[data-stat=solar]")).toHaveText(/109 kWh · 51 %.*from solar.*≈ 142 CZK for 96 of 109 kWh not earned by selling it/s);
-    await expect(window30.locator("[data-stat=grid]")).toHaveText(/82 kWh · 38 %.*from the grid.*paid ≈ 412 CZK for 79 of 82 kWh · ≈ 5\.22 CZK\/kWh/s);
-    await expect(window30.locator("[data-row=ledger-battery] .value")).toHaveText("17 kWh · 8 %");
+    // Two gauges as the live one's pills, each title with its total, in the live order.
+    await expect(window30.locator("[data-energy-title]")).toHaveText(/Energy\s*· 215 kWh/);
+    const energy = window30.locator("[data-energy] [data-source]");
+    await expect(energy).toHaveText([/109 kWh\s*51 %/, /17 kWh\s*8 %/, /82 kWh\s*38 %/]);
+    await expect(energy.nth(0)).toHaveAttribute("style", /--fill: 51%/);
+    // Each over all the charged energy: really paid, and virtually with the solar's export income.
+    await expect(window30.locator("[data-money-title]")).toHaveText(/Money\s*· paid ≈ 455 CZK · ≈ 2\.19 CZK\/kWh\s*· virtually ≈ 597 CZK · ≈ 2\.87 CZK\/kWh/);
+    const money = window30.locator("[data-money] [data-money-source]");
+    await expect(money).toHaveText([/≈ 142 CZK\s*≈ 1\.48 CZK\/kWh/, /≈ 43 CZK\s*≈ 2\.53 CZK\/kWh/, /≈ 412 CZK\s*≈ 5\.22 CZK\/kWh/]);
+    // Filled by the money's share: 142, 43 and 412 of 597.
+    await expect(money.nth(2)).toHaveAttribute("style", /--fill: 69%/);
+    // Solar's money was never paid: drawn apart, and named so.
+    await expect(money.nth(0)).toHaveClass(/missed/);
+    await expect(money.nth(0)).toHaveAttribute("title", /not sold/);
+    // Under them only what is not one source's.
+    await expect(window30.locator("[data-row]")).toHaveCount(3);
     await expect(window30.locator("[data-row=ledger-unknown] .value")).toHaveText("7.0 kWh · 3 %");
-    // Forgone export value is its own figure: never in the per-kWh or per-100-km figures.
-    await expect(window30.locator("[data-stat=charged]")).not.toContainText("142");
+    await expect(window30.locator("[data-row=how-often] .value")).toHaveText("≈ 3× a week · charged on 13 of 30 days");
+    await expect(window30.locator("[data-row=per-day] .value")).toHaveText("≈ 2 h 15 min");
 });
 
 test("ev-charger How these are estimated discloses its evidence in place, by keyboard", async ({ page }) => {
@@ -283,7 +301,8 @@ test("ev-charger How these are estimated discloses its evidence in place, by key
     const estimates = content(page).locator("[data-estimates]");
     await expect(estimates.locator("[data-row=how-priced] .value")).toHaveText("208 of 215 kWh");
     await expect(estimates.locator("[data-row=how-known] .value")).toHaveText("208 of 215 kWh");
-    await expect(estimates.locator("[data-row=how-per100] .value")).toHaveText("uses Kona's current 15.8 kWh/100 km");
+    await expect(estimates.locator("[data-row=how-paid] .value")).toContainText("solar is free here");
+    await expect(estimates.locator("[data-row=how-per100]")).toHaveCount(0);
     await expect(estimates.locator("[data-estimates-note]")).toContainText("not your bill");
     await expect(estimates.locator("[data-estimates-note]")).toContainText("A charging segment is a stretch where the charger draws more than 1 kW");
     await page.keyboard.press(" ");
@@ -358,7 +377,7 @@ test("ev-charger last 30 days names a shorter recorded coverage and counts by it
     await openCharger(page);
     await openHistory(page);
     await expect(content(page).locator("[data-ledger-title]")).toContainText("Last 30 days · recorded for 13");
-    await expect(content(page).locator("[data-ledger-window] [data-stat=how-often]")).toHaveText(/≈ 7× a week\s*charged on 13 of 13 days/);
+    await expect(content(page).locator("[data-ledger-window] [data-row=how-often] .value")).toHaveText("≈ 7× a week · charged on 13 of 13 days");
 });
 
 test("ev-charger without a house dataset shows the kWh and no source or money", async ({ page }) => {
@@ -366,11 +385,23 @@ test("ev-charger without a house dataset shows the kWh and no source or money", 
     await openCharger(page);
     await openHistory(page);
     const window30 = content(page).locator("[data-ledger-window]");
-    await expect(window30.locator("[data-stat=charged] .stat-value")).toHaveText("215 kWh");
-    await expect(window30.locator("[data-stat=charged] .stat-caption")).toHaveText("charged");
-    await expect(window30.locator("[data-stat=solar] .stat-value")).toHaveText("—");
-    await expect(window30.locator("[data-stat=grid] .stat-value")).toHaveText("—");
-    await expect(window30.locator("[data-share-bar] [data-share=unknown]")).toHaveCount(1);
+    await expect(window30.locator("[data-energy-title]")).toHaveText(/Energy\s*· 215 kWh/);
+    await expect(window30.locator("[data-row=ledger-unknown] .value")).toHaveText("215 kWh · 100 %");
+    // Every energy pill says its source is not known, none is filled, and there is no money.
+    await expect(window30.locator("[data-energy] [data-source]")).toHaveText(["—", "—", "—"]);
+    await expect(window30.locator("[data-ledger-sources] [data-active]")).toHaveCount(0);
+    await expect(window30.locator("[data-money]")).toHaveCount(0);
+});
+
+test("ev-charger keeps the money gauge for a paid total no source prices, and a total paid back says so", async ({ page }) => {
+    await mount(page, { paidBackOnly: true });
+    await openCharger(page);
+    await openHistory(page);
+    const window30 = content(page).locator("[data-ledger-window]");
+    await expect(window30.locator("[data-money-paid]")).toHaveText("· ≈ 5.0 CZK paid back · ≈ -0.02 CZK/kWh");
+    await expect(window30.locator("[data-money-virtual]")).toHaveCount(0);
+    await expect(window30.locator("[data-money] [data-money-source]")).toHaveText(["—", "—", "—"]);
+    await expect(window30.locator("[data-money] [data-active]")).toHaveCount(0);
 });
 
 test("ev-charger Custom charger without a run mode reads no ledger and keeps today's block", async ({ page }) => {
