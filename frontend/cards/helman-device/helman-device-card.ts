@@ -17,6 +17,7 @@ import {
     ENERGY_NODE_TYPES,
     availableFields,
     fieldEntityIds,
+    isConnected,
     isIdle,
     readField,
     resolveTarget,
@@ -86,6 +87,9 @@ export class HelmanDeviceCard extends LitElement implements LovelaceCard {
         .icon.active ha-icon {
             color: var(--state-active-color, var(--primary-color));
         }
+        .icon.connected ha-icon {
+            color: var(--success-color, #43a047);
+        }
         .info {
             min-width: 0;
             display: flex;
@@ -138,7 +142,7 @@ export class HelmanDeviceCard extends LitElement implements LovelaceCard {
     // What render draws, derived in willUpdate.
     private _name = "";
     private _line = "";
-    private _active = false;
+    private _tone: "active" | "connected" | "inactive" = "inactive";
 
     // 7. HA-specific setters
     public set hass(hass: HomeAssistant) {
@@ -237,7 +241,7 @@ export class HelmanDeviceCard extends LitElement implements LovelaceCard {
             : !parts.length && shown.some((field) => offered.includes(field)) ? localize("node_detail.shared.technical.unavailable")
             : parts.join(" · ");
         this._name = config.name || (target.kind === "node" ? localize(`node_detail.title.${target.node}`) : target.item.name);
-        this._active = !idle;
+        this._tone = !idle ? "active" : isConnected(target, ctx) ? "connected" : "inactive";
     }
 
     // 10. Render method
@@ -276,7 +280,7 @@ export class HelmanDeviceCard extends LitElement implements LovelaceCard {
         }
         return html`
             <ha-card role="button" tabindex="0" @click=${this._open} @keydown=${this._onKeydown}>
-                <div class=${this._active ? "icon active" : "icon"}>${this._renderIcon(target)}</div>
+                <div class=${this._tone === "inactive" ? "icon" : "icon " + this._tone}>${this._renderIcon(target)}</div>
                 <div class="info">
                     <span class="name">${this._name}</span>
                     <span class="line">${this._line}</span>

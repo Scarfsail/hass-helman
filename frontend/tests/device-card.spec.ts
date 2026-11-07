@@ -101,8 +101,11 @@ async function setup(page: Page): Promise<void> {
                     node: "ev_charger", deviceId: request.device_id, asOf: "2026-10-21T12:00:00+00:00", profile: null, sections: [],
                     entities: { power: "sensor.ev_power", run_mode: "select.ev_run_mode" },
                     // An unavailable run mode resolves no status, as the backend's run_mode_condition reads it.
-                    status: runMode === "unavailable" ? null
-                        : { kind: runMode === "charging" ? "charging" : "waiting", runMode, entityId: "select.ev_run_mode" },
+                    status: runMode === "unavailable" ? null : {
+                        kind: ({ available: "no_car", faulted: "fault", charging: "charging" } as Record<string, string>)[runMode] ?? "waiting",
+                        runMode,
+                        entityId: "select.ev_run_mode",
+                    },
                 };
             },
         });
@@ -156,6 +159,32 @@ test("an EV charger whose run mode resolved no status still reads it again when 
 
     await page.evaluate(() => window.__push({ "select.ev_run_mode": { state: "charging", attributes: {} } }));
     await expect(line(page)).toHaveText("charging now · 7.2 kW");
+});
+
+test("an EV charger's connection reads from the run mode, also while the charger is switched off", async ({ page }) => {
+    await setup(page);
+    await page.evaluate(() => window.__push({
+        "switch.ev_charge": { state: "off", attributes: {} },
+        "select.ev_run_mode": { state: "available", attributes: {} },
+    }));
+    await mount(page, { device: "sensor.ev_energy", fields: ["state", "connection"] });
+    await expect(line(page)).toHaveText("switched off · disconnected");
+
+    await page.evaluate(() => window.__push({ "select.ev_run_mode": { state: "preparing", attributes: {} } }));
+    await expect(line(page)).toHaveText("switched off · connected");
+
+    await page.evaluate(() => window.__push({
+        "switch.ev_charge": { state: "on", attributes: {} },
+        "select.ev_run_mode": { state: "charging", attributes: {} },
+    }));
+    await expect(line(page)).toHaveText("charging now · charging");
+});
+
+test("an EV charger's connection shows a faulted run mode as HA shows its state", async ({ page }) => {
+    await setup(page);
+    await page.evaluate(() => window.__push({ "select.ev_run_mode": { state: "faulted", attributes: {} } }));
+    await mount(page, { device: "sensor.ev_energy", fields: ["connection"] });
+    await expect(line(page)).toHaveText("faulted");
 });
 
 test("a climate device shows its mode, set temperature and power", async ({ page }) => {
@@ -296,6 +325,18 @@ test("the icon tint follows the device's state even when no field reads it", asy
     await expect(page.locator("helman-device-card .icon")).toHaveClass("icon");
 });
 
+test("an EV charger's icon tells a connected car apart from no car and from charging, with no field reading it", async ({ page }) => {
+    await setup(page);
+    await page.evaluate(() => window.__push({ "select.ev_run_mode": { state: "preparing", attributes: {} } }));
+    await mount(page, { device: "sensor.ev_energy", fields: ["power"] });
+    const icon = page.locator("helman-device-card .icon");
+    await expect(icon).toHaveClass("icon connected");
+    await page.evaluate(() => window.__push({ "select.ev_run_mode": { state: "charging", attributes: {} } }));
+    await expect(icon).toHaveClass("icon active");
+    await page.evaluate(() => window.__push({ "select.ev_run_mode": { state: "available", attributes: {} } }));
+    await expect(icon).toHaveClass("icon");
+});
+
 test("a hass push touching only unrelated entities does not re-render the tile", async ({ page }) => {
     await setup(page);
     await mount(page, { device: "sensor.boiler_energy", fields: ["state", "power"] });
@@ -347,6 +388,10 @@ test("the editor offers only the picked target's fields, and a new target drops 
 
     await editor.evaluate((element: any, config) => element.setConfig(config), config);
     await expect.poll(() => options("fields")).toEqual(["power", "energy_today"]);
+
+    await editor.evaluate((element: any) => element.setConfig({ type: "custom:helman-device-card", device: "sensor.ev_energy", fields: ["connection"] }));
+    await expect.poll(() => options("fields")).toEqual(["state", "connection", "power", "energy_today"]);
+    expect(await options("hide_when_idle")).toEqual(["connection"]);
 });
 
 test("the editor keeps the keys it does not own, and keeps the fields of a target it cannot find", async ({ page }) => {

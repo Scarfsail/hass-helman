@@ -18,7 +18,7 @@ import { deviceDirectControls, evChargerId, evCharging, powerEntity } from "../n
  */
 
 export const FIELD_IDS = [
-    "state", "power", "energy_today", "target_temperature", "current_temperature", "soc", "import_today", "export_today",
+    "state", "connection", "power", "energy_today", "target_temperature", "current_temperature", "soc", "import_today", "export_today",
 ] as const;
 export type FieldId = typeof FIELD_IDS[number];
 
@@ -77,6 +77,7 @@ export function availableFields(target: DeviceCardTarget): FieldId[] {
     const offered: Record<FieldId, boolean> = target.kind === "device"
         ? {
             state: stateEntityId(item) !== null || evChargerId(item) !== null,
+            connection: evChargerId(item) !== null,
             power: !!powerEntity(item),
             energy_today: !!item.energyEntityId,
             target_temperature: !!item.climateEntityId,
@@ -87,6 +88,7 @@ export function availableFields(target: DeviceCardTarget): FieldId[] {
         }
         : {
             state: false,
+            connection: false,
             power: true,
             energy_today: (target.node === "solar" || target.node === "house") && !!item.todayEnergyEntityId,
             target_temperature: false,
@@ -103,6 +105,7 @@ export function fieldEntityIds(target: DeviceCardTarget, field: FieldId, ev: EvC
     const { item } = target;
     switch (field) {
         case "state": return [stateEntityId(item), ev?.entities.run_mode, ev?.entities.power];
+        case "connection": return [ev?.entities.run_mode];
         case "power": return target.kind === "device" ? [powerEntity(item)] : [item.power?.entityId, item.powerSensorId];
         case "energy_today": return [target.kind === "device" ? item.energyEntityId : item.todayEnergyEntityId];
         case "target_temperature":
@@ -153,6 +156,20 @@ function stateText(target: DeviceCardTarget, ctx: FieldContext): string | null {
     return readingText(hass, entityId, (on) => localize(on ? "node_detail.shared.device_state_on" : "node_detail.shared.device_state_off"));
 }
 
+/** Whether a car is connected, read from the run mode alone (never the switch); otherwise the run mode as HA shows it. */
+function connectionText(ctx: FieldContext): string | null {
+    const { hass, localize, ev } = ctx;
+    if (!ev) return null;
+    switch (ev.status?.kind) {
+        case "charging": return localize("device_card.connection.charging");
+        case "waiting": return localize("device_card.connection.connected");
+        case "no_car": return localize("device_card.connection.disconnected");
+    }
+    const runMode = ev.entities.run_mode;
+    const stateObj = runMode ? hass.states[runMode] : undefined;
+    return stateObj && isReadableState(stateObj.state) ? hass.formatEntityState(stateObj) : null;
+}
+
 function kwhValue(kwh: number | null | undefined): FieldValue | null {
     return kwh === null || kwh === undefined ? null : { text: formatKwh(kwh), unit: "kWh" };
 }
@@ -171,6 +188,10 @@ export function readField(target: DeviceCardTarget, field: FieldId, ctx: FieldCo
     switch (field) {
         case "state": {
             const text = stateText(target, ctx);
+            return text === null ? null : { text, unit: "" };
+        }
+        case "connection": {
+            const text = connectionText(ctx);
             return text === null ? null : { text, unit: "" };
         }
         case "power": {
@@ -213,4 +234,9 @@ export function isIdle(target: DeviceCardTarget, ctx: FieldContext): boolean {
     }
     const watts = powerW(target, ctx);
     return watts === null || Math.abs(watts) <= IDLE_W;
+}
+
+/** Whether an EV charger has a car connected that is not charging, which tints its icon apart from no car. */
+export function isConnected(target: DeviceCardTarget, ctx: FieldContext): boolean {
+    return target.kind === "device" && evChargerId(target.item) !== null && ctx.ev?.status?.kind === "waiting";
 }
