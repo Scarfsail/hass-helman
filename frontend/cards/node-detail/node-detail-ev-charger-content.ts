@@ -690,7 +690,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
                 ${this._row(t("ledger_segments"), String(health.segmentsStored), "ledger-segments")}
                 ${this._row(t("ledger_backfill"), fillTemplate(t(`ledger_backfill_${health.backfill.status}`), { days: health.backfill.recoveredDays }), "ledger-backfill")}
                 ${this._row(t("ledger_settled"), when(health.settledThrough), "ledger-settled")}
-                ${this._row(t("ledger_run_mode"), health.runModeEntityId, "ledger-run-mode")}
+                ${this._row(t("ledger_power"), health.powerEntityId, "ledger-power")}
                 ${this._row(t("ledger_meter"), health.meterEntityId ?? "—", "ledger-meter")}
                 ${health.error ? this._row(t("ledger_error"), t(`ledger_error_${health.error}`), "ledger-error") : nothing}
             </div>

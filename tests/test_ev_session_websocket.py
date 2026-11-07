@@ -20,6 +20,7 @@ from tests._fakes import FakeConnection, FakeState, hass_with_coordinator, make_
 
 RUN_MODE = "sensor.solax_ev_charger_run_mode"
 METER = "sensor.solax_ev_charger_charge_added_total"
+POWER = "sensor.solax_ev_charger_charge_power_total"
 SOC = "sensor.kona_soc"
 CONSUMPTION = "sensor.kona_average_energy_consumption_kwh"
 
@@ -37,12 +38,12 @@ LEDGER = {
 }
 
 
-def charger(*, profile=True, vehicles=1):
+def charger(*, profile=True, vehicles=1, power=True):
     device = {
         "id": "garage-ev",
         "kind": "ev_charger",
         "name": "Garage EV",
-        "consumption": {"energy_entity_id": METER},
+        "consumption": {"energy_entity_id": METER, **({"power_entity_id": POWER} if power else {})},
         "vehicles": [
             {"id": f"car{index}", "name": f"Car {index}", "telemetry": {"soc_entity_id": SOC if index == 0 else f"sensor.car{index}_soc"}}
             for index in range(vehicles)
@@ -98,20 +99,22 @@ def test_the_history_section_validates_its_consumer(device_id):
     coordinator.ev_sessions.async_history.assert_not_called()
 
 
-def test_a_charger_with_a_run_mode_offers_the_ledger_and_a_custom_one_does_not():
+def test_a_charger_with_a_run_mode_and_a_power_entity_offers_the_ledger_and_a_custom_one_does_not():
     assert "history" in result(detail()[0])["sections"]
     assert "history" not in result(detail(device=charger(profile=False))[0])["sections"]
+    # The ledger follows the charge power: without one there is none.
+    assert "history" not in result(detail(device=charger(power=False))[0])["sections"]
 
 
 def test_a_charger_the_ledger_does_not_follow_has_no_figures():
-    payload = result(detail("history", history={"unavailable": "no_run_mode"})[0])
+    payload = result(detail("history", history={"unavailable": "not_tracked"})[0])
 
     assert payload == {
         "node": "ev_charger",
         "section": "history",
         "deviceId": "garage-ev",
         "asOf": payload["asOf"],
-        "unavailable": "no_run_mode",
+        "unavailable": "not_tracked",
     }
 
 

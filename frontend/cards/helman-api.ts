@@ -1332,8 +1332,8 @@ export interface EvLedgerFiguresDTO {
 }
 
 /**
- * One charging segment: a continuous recorded stretch of the charging run
- * mode, never a plug-in session. Bounds are UTC; `startKnown`/`endKnown` say
+ * One charging segment: a continuous recorded stretch in which the charger's
+ * charge power is above 1 kW, never a plug-in session. Bounds are UTC; `startKnown`/`endKnown` say
  * whether a recorded transition fixes them. `kwhComplete` false makes `kwh` a
  * lower bound.
  */
@@ -1356,7 +1356,7 @@ export interface EvLedgerHealthDTO {
     segmentsStored: number;
     backfill: { status: "running" | "done" | "failed"; recoveredDays: number };
     settledThrough: string;
-    runModeEntityId: string;
+    powerEntityId: string;
     meterEntityId: string | null;
     error: string | null;
 }

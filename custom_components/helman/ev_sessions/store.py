@@ -28,7 +28,7 @@ SAVE_DELAY_SECONDS = 10
 
 @dataclass
 class ChargerLedger:
-    """One charger's segments, and how far the run mode has been read."""
+    """One charger's segments, and how far the power has been read."""
 
     segments: list[Segment] = field(default_factory=list)
     #: The live read reached here: the next one starts a little before it.
@@ -42,7 +42,7 @@ class ChargerLedger:
     backfill_days: int = 0
     #: The last backfill chunk failed; it is read again, its cursor unmoved.
     backfill_failed: bool = False
-    #: The oldest local date the recorder still holds the run mode for, once probed.
+    #: The oldest local date the recorder still holds the power for, once probed.
     backfill_floor: date | None = None
 
 
@@ -90,9 +90,18 @@ def ledger_from_dict(raw: Any) -> ChargerLedger:
     )
 
 
+class _LedgerStore(storage.Store):
+    """Store that discards anything written by an older schema: backfill rebuilds it."""
+
+    async def _async_migrate_func(
+        self, old_major_version: int, old_minor_version: int, old_data: dict[str, Any]
+    ) -> dict[str, Any]:
+        return {}
+
+
 class EvSessionStore:
     def __init__(self, hass: HomeAssistant) -> None:
-        self._store = storage.Store(hass, EV_SESSIONS_STORAGE_VERSION, EV_SESSIONS_STORAGE_KEY)
+        self._store = _LedgerStore(hass, EV_SESSIONS_STORAGE_VERSION, EV_SESSIONS_STORAGE_KEY)
         self.chargers: dict[str, ChargerLedger] = {}
         self._dirty = False
 

@@ -1,19 +1,22 @@
-"""The charging ledger service: it follows each charger's run mode, recovers what the recorder retains, and keeps the segments.
+"""The charging ledger service: it follows each charger's charge power, recovers what the recorder retains, and keeps the segments.
 
 Constructed by the coordinator, set up in its ``async_setup`` and torn down in
 its ``async_unload``; it owns its listeners, its tasks and its store. Tracked
-are the configured EV chargers whose hardware profile resolves a ``run_mode``,
-by consumer id; a Custom charger has none, and no ledger.
+are the configured EV chargers whose hardware profile resolves a ``run_mode``
+and whose config names a ``consumption.power_entity_id``, by consumer id; a
+Custom charger has no run mode, and no ledger. The run mode only gates: the
+segments follow the power.
 
 **Reconciliation** is the one way anything is recorded, serialized by a lock
-and idempotent: the run mode's recorded states are read from a little before
+and idempotent: the power's recorded states are read from a little before
 where the last read reached (or from the start of the segment still charging),
-walked by :func:`~..node_details.ev_charger.charging_runs` and folded into the
-stored segments by :func:`~.ledger.merge_runs`. A run mode change, a periodic
-tick and the detail's own request each reconcile. A read that fails raises:
-nothing is recorded from it and its cursor does not move.
+walked by :func:`~..node_details.ev_charger.charging_runs` with
+:func:`~.ledger.charging_power` and folded into the stored segments by
+:func:`~.ledger.merge_runs`. A power change that crosses charging, standby or
+a gap, a periodic tick and the detail's own request each reconcile. A read
+that fails raises: nothing is recorded from it and its cursor does not move.
 
-**Backfill** reads the retained run mode history before the live reads began,
+**Backfill** reads the retained power history before the live reads began,
 one local day at a time, newest first, down to the oldest day the recorder
 holds; a failed day is read again on the next tick. A segment crossing a day
 boundary is one segment: the newer day's part is matched by overlap.
@@ -54,7 +57,7 @@ from ..controllables.spec import CONTROLLABLE_KIND_EV_CHARGER
 from ..device_reports.dataset import DeviceDataset
 from ..energy_unwrap import _TRANSIENT_REBOUND_WINDOW
 from ..node_details.day_stats import SEGMENT_MAX_GAP, with_live_state
-from ..node_details.ev_charger import charging_runs
+from ..node_details.ev_charger import ChargingPredicate, _device_entity, charging_runs
 from ..recorder_slot_energy import (
     _BOUNDARY_WRITE_SETTLE_WINDOW,
     _carry_staleness_limit,
@@ -65,6 +68,7 @@ from ..vendors import resolve_vendor_telemetry
 from .ledger import (
     Segment,
     attribute_slice,
+    charging_power,
     close_unseen,
     measured_slices,
     merge_runs,
@@ -89,14 +93,14 @@ _METER_LOOKBACK = _carry_staleness_limit(60)
 @dataclass(frozen=True)
 class TrackedCharger:
     consumer_id: str
-    run_mode_entity_id: str
+    #: The charge power the segments follow.
+    power_entity_id: str
     #: The cumulative consumption meter; ``None`` without one (no energy).
     meter_entity_id: str | None
-    conditions: Mapping[str, str]
 
 
 def tracked_chargers(config: Mapping[str, Any], telemetry: Mapping[str, Any]) -> dict[str, TrackedCharger]:
-    """The configured EV chargers whose profile resolves a run mode, by consumer id."""
+    """The configured EV chargers whose profile resolves a run mode and that name their power entity, by consumer id."""
     chargers = {}
     for device, _parent in iter_devices(config):
         if peek_controllable_kind(device) != CONTROLLABLE_KIND_EV_CHARGER:
@@ -104,12 +108,12 @@ def tracked_chargers(config: Mapping[str, Any], telemetry: Mapping[str, Any]) ->
         consumer_id = peek_controllable_id(device)
         device_telemetry = telemetry.get(consumer_id) if consumer_id else None
         run_mode = device_telemetry.entities.get("run_mode") if device_telemetry else None
-        if consumer_id and run_mode:
+        power = _device_entity(device, "consumption.power_entity_id")
+        if consumer_id and run_mode and power:
             chargers[consumer_id] = TrackedCharger(
                 consumer_id=consumer_id,
-                run_mode_entity_id=run_mode,
+                power_entity_id=power,
                 meter_entity_id=own_meter(device),
-                conditions=device_telemetry.profile.run_mode_conditions,
             )
     return chargers
 
@@ -131,7 +135,7 @@ class EvSessionService:
         self._unsubs: list[Callable[[], None]] = []
         self._tasks: set[asyncio.Task[Any]] = set()
         self._unloaded = False
-        #: A run mode change's reconciliation is running; another change asks for one more after it.
+        #: A power change's reconciliation is running; another change asks for one more after it.
         self._change_running = False
         self._change_again = False
         #: Why the last reconciliation or backfill of a charger fell short, by consumer id.
@@ -146,8 +150,8 @@ class EvSessionService:
         self._unsubs.append(
             async_track_state_change_event(
                 self._hass,
-                [charger.run_mode_entity_id for charger in self.chargers.values()],
-                self._on_run_mode_changed,
+                [charger.power_entity_id for charger in self.chargers.values()],
+                self._on_power_changed,
             )
         )
         self._unsubs.append(async_track_time_interval(self._hass, self._on_tick, RECONCILE_INTERVAL))
@@ -166,10 +170,10 @@ class EvSessionService:
         await self.store.async_flush()
 
     @callback
-    def _on_run_mode_changed(self, event: Any) -> None:
+    def _on_power_changed(self, event: Any) -> None:
         old, new = event.data.get("old_state"), event.data.get("new_state")
-        if old is not None and new is not None and old.state == new.state:
-            return  # attributes only
+        if old is not None and new is not None and charging_power(old) == charging_power(new):
+            return  # still charging, still standing by, or still a gap: nothing to fold
         if self._change_running:
             self._change_again = True
             return
@@ -177,7 +181,7 @@ class EvSessionService:
         self._spawn(self._async_reconcile_changes(), "reconcile")
 
     async def _async_reconcile_changes(self) -> None:
-        """Reconcile, once more if the run mode changed meanwhile."""
+        """Reconcile, once more if the power changed meanwhile."""
         try:
             while True:
                 self._change_again = False
@@ -218,7 +222,7 @@ class EvSessionService:
     # --- Reconciliation -------------------------------------------------------
 
     async def async_reconcile(self, consumer_id: str, now: datetime) -> None:
-        """Fold the run mode's states up to ``now`` into the ledger; raises when a read fails."""
+        """Fold the power's states up to ``now`` into the ledger; raises when a read fails."""
         charger = self.chargers[consumer_id]
         async with self._lock:
             ledger = self.store.ledger(consumer_id)
@@ -236,21 +240,21 @@ class EvSessionService:
             ledger.live_since = ledger.backfill_before = dt_util.as_utc(
                 dt_util.start_of_local_day(dt_util.as_local(now))
             )
-        entity_id = charger.run_mode_entity_id
+        entity_id = charger.power_entity_id
         active_starts = [
             segment.start
             for segment in ledger.segments
-            if segment.active and segment.run_mode_entity_id == entity_id
+            if segment.active and segment.power_entity_id == entity_id
         ]
         read_start = min([ledger.cursor or ledger.live_since, *active_starts]) - _READ_MARGIN
-        states = await self._run_mode_states(entity_id, read_start, now)
+        states, is_charging = await self._power_states(entity_id, read_start, now)
         states = with_live_state(self._hass, entity_id, states)
         landed = merge_runs(
             ledger.segments,
-            charging_runs(states, charger.conditions, now),
+            charging_runs(states, is_charging, now),
             read_end=now,
             live=True,
-            run_mode_entity_id=entity_id,
+            power_entity_id=entity_id,
             meter_entity_id=charger.meter_entity_id,
         )
         close_unseen(ledger.segments, landed=landed)
@@ -282,7 +286,7 @@ class EvSessionService:
         local_tz = dt_util.get_default_time_zone()
         if ledger.backfill_floor is None:
             floor = await query_oldest_state_date(
-                self._hass, charger.run_mode_entity_id, local_tz=local_tz
+                self._hass, charger.power_entity_id, local_tz=local_tz
             )
             if floor is None:
                 ledger.backfill_done = True
@@ -296,13 +300,15 @@ class EvSessionService:
             ledger.backfill_done = True
             return
         read_end = min(now, day_end + _READ_MARGIN)
-        states = await self._run_mode_states(charger.run_mode_entity_id, day_start - _READ_MARGIN, read_end)
+        states, is_charging = await self._power_states(
+            charger.power_entity_id, day_start - _READ_MARGIN, read_end
+        )
         landed = merge_runs(
             ledger.segments,
-            charging_runs(states, charger.conditions, read_end),
+            charging_runs(states, is_charging, read_end),
             read_end=read_end,
             live=False,
-            run_mode_entity_id=charger.run_mode_entity_id,
+            power_entity_id=charger.power_entity_id,
             meter_entity_id=charger.meter_entity_id,
         )
         # Only this day's segments are attributed: a day still unanswered is
@@ -312,11 +318,23 @@ class EvSessionService:
         ledger.backfill_days += 1
         ledger.backfill_failed = False
 
-    async def _run_mode_states(self, entity_id: str, start: datetime, end: datetime) -> list[Any]:
+    async def _power_states(
+        self, entity_id: str, start: datetime, end: datetime
+    ) -> tuple[list[Any], ChargingPredicate]:
+        """The power's recorded states over ``[start, end]``, and what each says, in its unit."""
+        live = self._hass.states.get(entity_id)
+        unit = None if live is None else live.attributes.get("unit_of_measurement")
         history = await read_states(
-            self._hass, [entity_id], start, end, include_start_state=True, no_attributes=True, strict=True
+            self._hass,
+            [entity_id],
+            start,
+            end,
+            include_start_state=True,
+            # Without a live unit, each state's own attributes carry it.
+            no_attributes=unit is not None,
+            strict=True,
         )
-        return history[entity_id]
+        return history[entity_id], lambda state: charging_power(state, unit)
 
     # --- Energy and attribution ----------------------------------------------
 
@@ -408,7 +426,7 @@ class EvSessionService:
         """
         charger = self.chargers.get(consumer_id)
         if charger is None:
-            return {"unavailable": "no_run_mode"}
+            return {"unavailable": "not_tracked"}
         now = dt_util.as_utc(now)
         self._errors.pop(consumer_id, None)
         try:
@@ -449,7 +467,7 @@ def _close_groups(segments: list[Segment]) -> list[list[Segment]]:
 
 
 def _recorded_since(ledger: ChargerLedger) -> datetime | None:
-    """Since when the ledger has read the run mode: backfill's reach, or its oldest segment."""
+    """Since when the ledger has read the power: backfill's reach, or its oldest segment."""
     starts = [segment.start for segment in ledger.segments]
     covered = [at for at in (ledger.backfill_before, *starts[:1]) if at is not None]
     return min(covered) if covered else None
@@ -472,7 +490,7 @@ def _health(charger: TrackedCharger, ledger: ChargerLedger, error: str | None, n
             "recoveredDays": ledger.backfill_days,
         },
         "settledThrough": (min(unsettled) if unsettled else ledger.cursor or now).isoformat(),
-        "runModeEntityId": charger.run_mode_entity_id,
+        "powerEntityId": charger.power_entity_id,
         "meterEntityId": charger.meter_entity_id,
         "error": error,
     }

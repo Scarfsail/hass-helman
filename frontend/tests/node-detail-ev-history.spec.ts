@@ -144,7 +144,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             complete: false,
             health: {
                 recordedSince: "2026-10-09T00:00:00+00:00", segmentsStored: 37, backfill: { status: "done", recoveredDays: 10 },
-                settledThrough: "2026-10-21T11:20:00+00:00", runModeEntityId: "sensor.ev_run_mode", meterEntityId: "sensor.ev_energy", error: null,
+                settledThrough: "2026-10-21T11:20:00+00:00", powerEntityId: "sensor.ev_power", meterEntityId: "sensor.ev_energy", error: null,
             },
         });
         const held = (name: string) => new Promise((resolve) => { (window as any)[name] = resolve; });
@@ -285,7 +285,7 @@ test("ev-charger How these are estimated discloses its evidence in place, by key
     await expect(estimates.locator("[data-row=how-known] .value")).toHaveText("208 of 215 kWh");
     await expect(estimates.locator("[data-row=how-per100] .value")).toHaveText("uses Kona's current 15.8 kWh/100 km");
     await expect(estimates.locator("[data-estimates-note]")).toContainText("not your bill");
-    await expect(estimates.locator("[data-estimates-note]")).toContainText("A charging segment is one stretch of charging");
+    await expect(estimates.locator("[data-estimates-note]")).toContainText("A charging segment is a stretch where the charger draws more than 1 kW");
     await page.keyboard.press(" ");
     await expect(toggle).toHaveAttribute("aria-expanded", "false");
     await expect(content(page).locator("[data-estimates]")).toHaveCount(0);
@@ -403,7 +403,7 @@ test("ev-charger Technical details shows the charging ledger's health", async ({
     const health = technical.locator("[data-ledger-health]");
     await expect(health.locator("[data-row=ledger-segments] .value")).toHaveText("37");
     await expect(health.locator("[data-row=ledger-backfill] .value")).toHaveText("done, 10 days read");
-    await expect(health.locator("[data-row=ledger-run-mode] .value")).toHaveText("sensor.ev_run_mode");
+    await expect(health.locator("[data-row=ledger-power] .value")).toHaveText("sensor.ev_power");
     await expect(health.locator("[data-row=ledger-meter] .value")).toHaveText("sensor.ev_energy");
     await expect(health.locator("[data-row=ledger-since] .value")).not.toHaveText("—");
     await expect(health.locator("[data-row=ledger-settled] .value")).not.toHaveText("—");

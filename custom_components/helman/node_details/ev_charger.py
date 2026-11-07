@@ -27,14 +27,16 @@ Three sections, each read when its question opens:
   ``charging``, today's recorded charging stretches, which the detail's
   charging strip draws on opening.
 - ``history``: the charging ledger's last 30 days and newest segments, with
-  its health, for a charger whose profile resolves a run mode; and the cost
-  per 100 km when the charger's one car proves its consumption reading.
+  its health, for a charger whose profile resolves a run mode and whose
+  config names its power entity; and the cost per 100 km when the charger's
+  one car proves its consumption reading. The ledger's segments follow the
+  charge power, not the run mode, so they need not match the charging strip.
 """
 
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -102,8 +104,13 @@ def build_ev_charger_overview(
         "sections": [
             "today",
             "segment",
-            # The ledger follows the run mode: a Custom charger has none.
-            *(["history"] if telemetry is not None and telemetry.entities.get("run_mode") else []),
+            # The ledger is offered where the profile resolves a run mode (a
+            # Custom charger has none) and follows the charge power.
+            *(
+                ["history"]
+                if telemetry is not None and telemetry.entities.get("run_mode") and entities["power"]
+                else []
+            ),
         ],
     }
 
@@ -222,7 +229,7 @@ async def _async_segment_section(
 
 @dataclass(frozen=True)
 class ChargingRun:
-    """One recorded charging stretch of the run mode, unclipped.
+    """One recorded charging stretch, unclipped.
 
     ``start_known`` is whether the stretch began at a recorded transition from
     a known other state: a charging state carried in at the start of the read,
@@ -245,7 +252,7 @@ async def _async_history_section(
 ) -> dict[str, Any]:
     """The charging ledger's figures, and the cost per 100 km where it can be told.
 
-    ``unavailable`` names why there are none: ``no_run_mode`` for a charger the
+    ``unavailable`` names why there are none: ``not_tracked`` for a charger the
     ledger does not follow, ``not_loaded`` without a ledger.
     """
     device_id = peek_controllable_id(device)
@@ -318,17 +325,31 @@ def vehicle_consumption(hass: Any, device: Mapping[str, Any]) -> dict[str, Any] 
     }
 
 
-def charging_runs(
-    states: Sequence[Any], conditions: Mapping[str, str], now: datetime
-) -> list[ChargingRun]:
-    """The recorded charging stretches of ``states``, the one walk of the run mode.
+#: Whether a recorded state is charging; ``None`` for a gap state.
+ChargingPredicate = Callable[[Any], bool | None]
 
+
+def run_mode_charging(conditions: Mapping[str, str]) -> ChargingPredicate:
+    """The run mode's charging predicate: ``unavailable`` and ``unknown`` are gaps."""
+    return lambda state: (
+        None if state.state in _GAP_STATES else conditions.get(state.state) == "charging"
+    )
+
+
+def charging_runs(
+    states: Sequence[Any], is_charging: ChargingPredicate, now: datetime
+) -> list[ChargingRun]:
+    """The recorded charging stretches of ``states``, the one walk of a charging state history.
+
+    ``is_charging`` says what a state is: charging, something else, or a gap
+    (``None``). The Schedule strip walks the run mode with
+    :func:`run_mode_charging`; the charging ledger walks the charge power.
     A stretch runs from a charging state to the next state that is something
-    else. A gap state (``unavailable``, ``unknown``) up to
-    :data:`SEGMENT_MAX_GAP` between two charging states does not break it, as
-    for the segment; any other gap ends the stretch where the gap began, so
-    only recorded charging is kept. The newest charging state runs to ``now``,
-    and is the one still going. Repeated identical states change nothing.
+    else. A gap state up to :data:`SEGMENT_MAX_GAP` between two charging
+    states does not break it, as for the segment; any other gap ends the
+    stretch where the gap began, so only recorded charging is kept. The newest
+    charging state runs to ``now``, and is the one still going. Consecutive
+    states the predicate reads alike change nothing.
     """
     ordered = sorted(states, key=lambda state: state.last_changed)
     runs: list[ChargingRun] = []
@@ -340,11 +361,11 @@ def charging_runs(
     last_charging: bool | None = None
     for state in ordered:
         at = state.last_changed
-        if state.state in _GAP_STATES:
+        charging = is_charging(state)
+        if charging is None:
             if gap_from is None:
                 gap_from = at
             continue
-        charging = conditions.get(state.state) == "charging"
         long_gap = gap_from is not None and at - gap_from > SEGMENT_MAX_GAP
         if since is not None:
             if gap_from is not None and (not charging or long_gap):
@@ -375,12 +396,11 @@ def charging_intervals(
 ) -> list[tuple[datetime, datetime, bool]]:
     """The recorded charging stretches over ``[start, now]``, clipped to it, each with whether it is still going.
 
-    The stretches are :func:`charging_runs`, the walk the charging ledger
-    keeps its segments by, so the two always agree.
+    The stretches are the run mode's :func:`charging_runs`.
     """
     return [
         (max(run.start, start), min(run.end, now), run.open)
-        for run in charging_runs(states, conditions, now)
+        for run in charging_runs(states, run_mode_charging(conditions), now)
         if run.end > start and run.start < now and min(run.end, now) > max(run.start, start)
     ]
 

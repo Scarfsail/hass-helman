@@ -1,9 +1,11 @@
 """The charging ledger's records, kept pure: segments, their hourly slices, and what each slice is attributed.
 
-A **segment** is one continuous recorded ``Charging`` stretch of a charger's
-run mode, as :func:`~..node_details.ev_charger.charging_runs` walks it: a pause
-followed by charging starts another, and nothing here says when a car was
-plugged in or out. Its bounds are UTC instants, each with whether a recorded
+A **segment** is one continuous recorded stretch in which the charger's
+charge power is above :data:`CHARGING_POWER_W`, as
+:func:`~..node_details.ev_charger.charging_runs` walks it with
+:func:`charging_power`: a dip to standby followed by charging starts another,
+and nothing here says when a car was plugged in or out. The run mode is not
+read: a charger can report ``Charging`` while it draws only standby watts. Its bounds are UTC instants, each with whether a recorded
 transition fixes it: a stretch carried in at the start of a read, or one cut
 by a long gap, keeps the instant it was last known charging, never an
 invented one.
@@ -26,6 +28,7 @@ answered for the slice's day.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -35,11 +38,30 @@ from homeassistant.util import dt as dt_util
 
 from ..device_reports.dataset import DeviceDataset, MoneySide, attribute_energy
 from ..node_details.ev_charger import ChargingRun
+from ..power_reading import power_unit_factor
 
 _HOUR = timedelta(hours=1)
+#: Above this charge power a charger is charging; at or below it it stands by.
+CHARGING_POWER_W = 1000.0
 #: The money sides a slice keeps, as ``Attribution`` names them.
 MONEY_SIDES = ("paid", "forgone", "grid_paid", "solar_forgone")
 SOURCES = ("solar", "battery", "grid", "unknown")
+
+
+def charging_power(state: Any, default_unit: str | None = None) -> bool | None:
+    """Whether a charge power state is charging; ``None`` for a gap (a non-numeric or unconvertible reading).
+
+    The state's own unit, else ``default_unit`` (a read without attributes).
+    """
+    attributes = getattr(state, "attributes", None) or {}
+    factor = power_unit_factor(attributes.get("unit_of_measurement", default_unit))
+    try:
+        value = float(state.state)
+    except (TypeError, ValueError):
+        return None
+    if factor is None or not math.isfinite(value):
+        return None
+    return value * factor > CHARGING_POWER_W
 
 
 @dataclass
@@ -66,10 +88,10 @@ class Segment:
     start_known: bool
     end_known: bool
     active: bool
-    #: The end of the newest run mode read that placed ``end``: only a read
+    #: The end of the newest power read that placed ``end``: only a read
     #: reaching as far moves it.
     seen_until: datetime
-    run_mode_entity_id: str
+    power_entity_id: str
     meter_entity_id: str | None
     #: Its energy can no longer move: it is never read again.
     energy_final: bool = False
@@ -96,12 +118,12 @@ def merge_runs(
     *,
     read_end: datetime,
     live: bool,
-    run_mode_entity_id: str,
+    power_entity_id: str,
     meter_entity_id: str | None,
 ) -> list[Segment]:
     """Fold one read's charging runs into ``segments``, in place; the segments the runs landed on.
 
-    A run overlapping or touching a stored segment of the same run mode is
+    A run overlapping or touching a stored segment of the same power entity is
     that segment again: its identity stays, an earlier start replaces a later
     one (in a live read only a recorded one: a start carried in at the read's
     start says only that it was charging by then, and would creep back a read
@@ -120,7 +142,7 @@ def merge_runs(
             (
                 segment
                 for segment in segments
-                if segment.run_mode_entity_id == run_mode_entity_id
+                if segment.power_entity_id == power_entity_id
                 and segment.start <= run.end
                 and run.start <= segment.end
             ),
@@ -135,7 +157,7 @@ def merge_runs(
                 end_known=end_known,
                 active=is_active,
                 seen_until=read_end,
-                run_mode_entity_id=run_mode_entity_id,
+                power_entity_id=power_entity_id,
                 meter_entity_id=meter_entity_id,
             )
             segments.append(segment)
@@ -163,7 +185,7 @@ def close_unseen(
 ) -> list[Segment]:
     """Close the active segments a live read should have seen and did not.
 
-    A segment of another run mode (the telemetry was rebound) is never
+    A segment of another power entity (the config was rebound) is never
     continued by this one's readings. Either way its end stays where it was
     last seen charging, not recorded.
     """
@@ -252,7 +274,7 @@ def segment_to_dict(segment: Segment) -> dict[str, Any]:
         "end_known": segment.end_known,
         "active": segment.active,
         "seen_until": _iso(segment.seen_until),
-        "run_mode_entity_id": segment.run_mode_entity_id,
+        "power_entity_id": segment.power_entity_id,
         "meter_entity_id": segment.meter_entity_id,
         "energy_final": segment.energy_final,
         "slices": [
@@ -278,7 +300,7 @@ def segment_from_dict(raw: Mapping[str, Any]) -> Segment:
         end_known=bool(raw["end_known"]),
         active=bool(raw["active"]),
         seen_until=_at(raw["seen_until"]),
-        run_mode_entity_id=str(raw["run_mode_entity_id"]),
+        power_entity_id=str(raw["power_entity_id"]),
         meter_entity_id=raw.get("meter_entity_id"),
         energy_final=bool(raw.get("energy_final")),
         slices=[
