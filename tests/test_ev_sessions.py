@@ -1,4 +1,4 @@
-"""The EV charging ledger (#428): detection, replay, boundary energy, the store, attribution and the 30-day view.
+"""The EV charging ledger (#428): detection, replay, boundary energy, the store, attribution and the segment list.
 
 The recorder is faked at ``read_states``, the ledger's one read: it answers the
 rows inside the window and, like the recorder's ``include_start_time_state``,
@@ -293,7 +293,6 @@ def test_two_segments_in_one_hour_count_only_their_own_energy():
     payload = harness.history(at(10, 12))
 
     assert [round(item["kwh"], 6) for item in payload["segments"]] == [2.0, 1.0]
-    assert payload["totals"]["kwh"] == pytest.approx(3.0)
     # The hardware's resetting session counter is never read.
     assert {entity_id for entity_id, *_ in harness.recorder.reads} == {POWER, METER}
 
@@ -327,7 +326,6 @@ def test_a_segment_is_split_at_hours_and_local_midnight_and_listed_under_its_sta
     ]
     assert [round(item.kwh, 6) for item in slices] == [1.0, 2.0, 1.0]
     assert payload["segments"][0]["localDate"] == "2026-10-09"
-    assert payload["chargingDays"] == 1
 
 
 def test_a_repeated_dst_hour_is_two_distinct_utc_slices():
@@ -380,7 +378,6 @@ def test_replaying_twice_restarting_during_charging_and_reloading_keep_identity_
     assert len(harness.segments) == 1
     assert first["segments"] == again["segments"]
     assert first["segments"][0]["status"] == "active"
-    assert first["totals"]["provisional"] is True
     segment_id = harness.segments[0].id
 
     # Home Assistant restarts at 09:00 and the charge ends at 10:00: the stored segment goes on.
@@ -391,8 +388,7 @@ def test_replaying_twice_restarting_during_charging_and_reloading_keep_identity_
     assert [segment.id for segment in restarted.segments] == [segment_id]
     assert payload["segments"] == replayed["segments"]
     assert payload["segments"][0]["status"] == "closed"
-    assert payload["totals"]["kwh"] == pytest.approx(6.0)
-    assert payload["totals"]["provisional"] is False
+    assert payload["segments"][0]["kwh"] == pytest.approx(6.0)
 
 
 def test_a_charge_carried_in_at_startup_is_partial_until_backfill_recovers_its_start():
@@ -498,7 +494,7 @@ def test_recorder_purge_keeps_settled_segments_as_they_were():
     after = harness.history(at(10, 13))
 
     assert after["segments"] == before["segments"]
-    assert after["totals"]["kwh"] == pytest.approx(6.0)
+    assert after["segments"][0]["kwh"] == pytest.approx(6.0)
     # A settled segment's meter is never read again.
     assert [read[0] for read in harness.recorder.reads[reads:]] == [POWER]
 
@@ -540,7 +536,7 @@ def test_a_failed_read_is_explicit_moves_no_cursor_and_keeps_what_is_stored():
     assert payload["complete"] is False
     assert payload["health"]["error"] == "read_failed"
     assert harness.service.store.ledger(CHARGER).cursor == cursor
-    assert payload["totals"]["kwh"] == pytest.approx(6.0)
+    assert payload["segments"][0]["kwh"] == pytest.approx(6.0)
 
 
 def test_backfill_asks_an_unanswered_days_house_dataset_once_not_after_every_day_read():
@@ -718,88 +714,43 @@ def two_hours(**dataset_kwargs):
     return harness, hours
 
 
-def test_rates_divide_by_priced_energy_and_partial_pricing_names_its_coverage():
+def test_a_segments_money_divides_by_priced_energy_and_partial_pricing_names_its_coverage():
     # Half solar, half grid; the 09:00 hour has no import price.
     harness, hours = two_hours(import_rate={at(10, 8): 4.0})
 
-    payload = harness.history(at(10, 12))
+    (segment,) = harness.history(at(10, 12))["segments"]
 
-    totals = payload["totals"]
-    assert totals["sources"] == pytest.approx({"solar": 3.0, "battery": 0.0, "grid": 3.0, "unknown": 0.0})
+    assert segment["sources"] == pytest.approx({"solar": 3.0, "battery": 0.0, "grid": 3.0, "unknown": 0.0})
     # Paid: 1 grid kWh at 4.0; solar is a known zero; 2 grid kWh are unpriced.
-    assert totals["paid"] == pytest.approx({"amount": 4.0, "pricedKwh": 4.0, "unpricedKwh": 2.0})
-    assert payload["paidPerKwh"] == pytest.approx(1.0)
-    assert totals["gridPaid"] == pytest.approx({"amount": 4.0, "pricedKwh": 1.0, "unpricedKwh": 2.0})
-    assert payload["gridPricePerKwh"] == pytest.approx(4.0)
+    assert segment["paid"] == pytest.approx({"amount": 4.0, "pricedKwh": 4.0, "unpricedKwh": 2.0})
+    assert segment["gridPaid"] == pytest.approx({"amount": 4.0, "pricedKwh": 1.0, "unpricedKwh": 2.0})
 
 
-def test_forgone_export_value_stays_out_of_paid_and_every_rate():
+def test_forgone_export_value_stays_out_of_paid():
     harness, _ = two_hours(import_rate={}, export_rate={at(10, 8): 1.5, at(10, 9): 1.5})
 
-    payload = harness.history(at(10, 12))
+    (segment,) = harness.history(at(10, 12))["segments"]
 
-    totals = payload["totals"]
-    assert totals["solarForgone"] == pytest.approx({"amount": 4.5, "pricedKwh": 3.0, "unpricedKwh": 0.0})
-    assert totals["paid"]["amount"] == 0.0
-    # Only the solar half is priced on paid (a known zero): the grid half is not.
-    assert payload["paidPerKwh"] == pytest.approx(0.0)
-    assert payload["gridPricePerKwh"] is None
-    # Its own rate: the value over the priced solar kWh.
-    assert payload["solarForgonePerKwh"] == pytest.approx(1.5)
+    assert segment["solarForgone"] == pytest.approx({"amount": 4.5, "pricedKwh": 3.0, "unpricedKwh": 0.0})
+    assert segment["paid"]["amount"] == 0.0
     # Virtually: paid (0) plus the solar's 4.5, over the 3 solar kWh paid prices.
-    assert payload["virtualPerKwh"] == pytest.approx(1.5)
+    assert segment["virtual"] == pytest.approx({"amount": 4.5, "pricedKwh": 3.0, "unpricedKwh": 3.0})
 
 
-def test_the_virtual_cost_divides_only_by_kwh_priced_on_both_sides():
-    # Half solar, half grid, both hours import-priced; only 08:00 has an export price.
-    harness, _ = two_hours(import_rate={at(10, 8): 4.0, at(10, 9): 4.0}, export_rate={at(10, 8): 1.5})
-
-    payload = harness.history(at(10, 12))
-
-    totals = payload["totals"]
-    # Paid: 3 grid kWh at 4.0 over 6 kWh (solar free); 1 of the 3 solar kWh export-priced.
-    assert totals["solarForgone"] == pytest.approx({"amount": 1.5, "pricedKwh": 1.0, "unpricedKwh": 2.0})
-    # Virtual: 12 + 1.5 over the 6 kWh less the 2 solar kWh no export rate prices.
-    assert totals["virtual"] == pytest.approx({"amount": 13.5, "pricedKwh": 4.0, "unpricedKwh": 2.0})
-    assert payload["virtualPerKwh"] == pytest.approx(13.5 / 4)
-
-
-def test_battery_supply_takes_the_days_charge_origin():
-    battery = HourMix(solar=0.0, battery=1.0, grid=0.0, unattributed=0.0, ambiguous_kwh=0.0, mismatch_kwh=0.0)
-    origin = ChargeOrigin(charged_kwh=10.0, grid_recorded=0.5, solar_priced=0.5, unknown=0.0, paid_rate=3.0, forgone_rate=1.0)
-    harness, _ = two_hours(mix=battery, origin=origin)
-
-    totals = harness.history(at(10, 12))["totals"]
-
-    assert totals["sources"]["battery"] == pytest.approx(6.0)
-    assert totals["paid"] == pytest.approx({"amount": 9.0, "pricedKwh": 6.0, "unpricedKwh": 0.0})
-    assert totals["gridPaid"]["amount"] == 0.0
-
-
-def test_the_batterys_paid_money_is_paid_less_the_grids():
+def test_battery_supply_takes_the_days_charge_origin_and_its_paid_money_is_paid_less_the_grids():
     # Each hour half battery, a quarter grid, a quarter solar; the battery's
     # charge half from the grid at 3.0, half from solar.
     mix = HourMix(solar=0.25, battery=0.5, grid=0.25, unattributed=0.0, ambiguous_kwh=0.0, mismatch_kwh=0.0)
     origin = ChargeOrigin(charged_kwh=10.0, grid_recorded=0.5, solar_priced=0.5, unknown=0.0, paid_rate=3.0, forgone_rate=1.0)
     harness, _ = two_hours(mix=mix, origin=origin, import_rate={at(10, 8): 4.0, at(10, 9): 4.0})
 
-    payload = harness.history(at(10, 12))
+    (segment,) = harness.history(at(10, 12))["segments"]
 
-    totals = payload["totals"]
+    assert segment["sources"]["battery"] == pytest.approx(3.0)
     # 1.5 grid kWh at 4.0; 3 battery kWh, half of them at 3.0.
-    assert totals["gridPaid"] == pytest.approx({"amount": 6.0, "pricedKwh": 1.5, "unpricedKwh": 0.0})
-    assert totals["batteryPaid"] == pytest.approx({"amount": 4.5, "pricedKwh": 3.0, "unpricedKwh": 0.0})
-    assert totals["paid"]["amount"] == pytest.approx(10.5)
-    assert payload["batteryPricePerKwh"] == pytest.approx(1.5)
-
-
-def test_without_battery_supply_the_battery_has_no_price():
-    harness, _ = two_hours(import_rate={at(10, 8): 4.0})
-
-    payload = harness.history(at(10, 12))
-
-    assert payload["totals"]["batteryPaid"] == pytest.approx({"amount": 0.0, "pricedKwh": 0.0, "unpricedKwh": 0.0})
-    assert payload["batteryPricePerKwh"] is None
+    assert segment["gridPaid"] == pytest.approx({"amount": 6.0, "pricedKwh": 1.5, "unpricedKwh": 0.0})
+    assert segment["batteryPaid"] == pytest.approx({"amount": 4.5, "pricedKwh": 3.0, "unpricedKwh": 0.0})
+    assert segment["paid"]["amount"] == pytest.approx(10.5)
 
 
 def test_a_negative_price_is_paid_back():
@@ -807,26 +758,24 @@ def test_a_negative_price_is_paid_back():
 
     payload = harness.history(at(10, 12))
 
-    assert payload["totals"]["gridPaid"]["amount"] == pytest.approx(-6.0)
+    assert payload["segments"][0]["gridPaid"]["amount"] == pytest.approx(-6.0)
     assert payload["segments"][0]["paid"]["amount"] == pytest.approx(-6.0)
 
 
 def test_unknown_source_hours_and_a_missing_house_dataset_keep_the_kwh():
     harness, _ = two_hours(mix={at(10, 8): HourMix(solar=1.0, battery=0.0, grid=0.0, unattributed=0.0, ambiguous_kwh=0.0, mismatch_kwh=0.0)})
-    totals = harness.history(at(10, 12))["totals"]
-    assert totals["sources"] == pytest.approx({"solar": 2.0, "battery": 0.0, "grid": 0.0, "unknown": 4.0})
-    assert totals["knownKwh"] == pytest.approx(2.0)
+    (segment,) = harness.history(at(10, 12))["segments"]
+    assert segment["sources"] == pytest.approx({"solar": 2.0, "battery": 0.0, "grid": 0.0, "unknown": 4.0})
+    assert segment["knownKwh"] == pytest.approx(2.0)
 
     states, energy = charging_history()
     no_house = Harness({POWER: states, METER: energy}, datasets={})
-    payload = no_house.history(at(10, 12))
-    assert payload["totals"]["kwh"] == pytest.approx(6.0)
-    assert payload["totals"]["sources"] is None
-    assert payload["totals"]["paid"] == {"amount": 0.0, "pricedKwh": 0.0, "unpricedKwh": pytest.approx(6.0)}
-    assert payload["paidPerKwh"] is None
+    (segment,) = no_house.history(at(10, 12))["segments"]
+    assert segment["kwh"] == pytest.approx(6.0)
+    assert segment["sources"] is None
+    assert segment["paid"] == {"amount": 0.0, "pricedKwh": 0.0, "unpricedKwh": pytest.approx(6.0)}
     # The battery's side counts the unattributed kWh unpriced, as every side does.
-    assert payload["totals"]["batteryPaid"] == {"amount": 0.0, "pricedKwh": 0.0, "unpricedKwh": pytest.approx(6.0)}
-    assert payload["virtualPerKwh"] is None
+    assert segment["batteryPaid"] == {"amount": 0.0, "pricedKwh": 0.0, "unpricedKwh": pytest.approx(6.0)}
 
 
 def test_delayed_compilation_is_attributed_again_then_kept_through_a_failed_read():
@@ -836,17 +785,17 @@ def test_delayed_compilation_is_attributed_again_then_kept_through_a_failed_read
     harness = Harness({POWER: states, METER: energy}, datasets=lambda day: answers["day"])
 
     first = harness.history(at(10, 12))
-    assert first["totals"]["sources"]["unknown"] == pytest.approx(6.0)
+    assert first["segments"][0]["sources"]["unknown"] == pytest.approx(6.0)
     assert first["complete"] is False
 
     answers["day"] = dataset(hours=hours)
     second = harness.history(at(10, 13))
-    assert second["totals"]["sources"]["solar"] == pytest.approx(3.0)
+    assert second["segments"][0]["sources"]["solar"] == pytest.approx(3.0)
     assert second["complete"] is True
 
     answers["day"] = RuntimeError("statistics down")
     third = harness.history(at(10, 14))
-    assert third["totals"] == second["totals"]
+    assert third["segments"] == second["segments"]
 
 
 def test_a_slice_just_after_local_midnight_is_attributed_from_its_hours_local_day():
@@ -862,13 +811,13 @@ def test_a_slice_just_after_local_midnight_is_attributed_from_its_hours_local_da
         },
     )
 
-    payload = harness.history(at(11, 12))
+    (segment,) = harness.history(at(11, 12))["segments"]
 
-    assert payload["totals"]["sources"]["unknown"] == pytest.approx(0.0)
-    assert payload["totals"]["sources"]["solar"] == pytest.approx(0.5)
+    assert segment["sources"]["unknown"] == pytest.approx(0.0)
+    assert segment["sources"]["solar"] == pytest.approx(0.5)
 
 
-def test_a_zero_energy_segment_is_listed_but_is_no_charging_day():
+def test_a_zero_energy_segment_is_listed():
     states = power((IDLE, at(10, 7)), (CHARGE, at(10, 8)), (IDLE, at(10, 8, 30)))
     energy = [row("20.0", at(10, 7), "kWh"), row("20.0", at(10, 8, 15), "kWh")]
     harness = Harness({POWER: states, METER: energy}, datasets={date(2026, 10, 10): dataset(hours=[at(10, 8)])})
@@ -876,77 +825,18 @@ def test_a_zero_energy_segment_is_listed_but_is_no_charging_day():
     payload = harness.history(at(10, 12))
 
     assert payload["segments"][0]["kwh"] == 0.0
-    assert payload["chargingDays"] == 0
-    assert payload["paidPerKwh"] is None
 
 
-# --- The 30-day window ------------------------------------------------------------------
+# --- The segment list ------------------------------------------------------------------
 
 
-def test_a_segment_crossing_the_window_start_counts_only_its_in_window_hours():
-    now = at(30, 12)
-    start = now - timedelta(days=30)  # 2026-09-30 12:00 UTC
-    states = power((IDLE, start - timedelta(hours=3)), (CHARGE, start - timedelta(hours=1)), (IDLE, start + timedelta(hours=2)))
-    energy = [row("0.0", start - timedelta(hours=3), "kWh"), *meter((start - timedelta(hours=1), 0.0), (start + timedelta(hours=2), 3.0))]
+def test_the_ledger_carries_no_30_day_summary():
+    states, energy = charging_history()
     harness = Harness({POWER: states, METER: energy})
-    harness.service.store.ledger(CHARGER).live_since = start - timedelta(days=1)
-
-    payload = harness.history(now)
-
-    assert payload["window"] == {"start": start.isoformat(), "end": now.isoformat()}
-    assert payload["totals"]["kwh"] == pytest.approx(2.0)
-    assert payload["segments"][0]["kwh"] == pytest.approx(3.0)
-    # It started before the window: not one of its charging days.
-    assert payload["chargingDays"] == 0
-    assert payload["secondsPerDay"] is None
-
-
-def test_charging_days_count_local_days_with_energy_by_segment_start():
-    states = power(
-        (IDLE, at(8, 5)),
-        (CHARGE, at(8, 6)), (STANDBY, at(8, 7)),
-        (CHARGE, at(8, 8)), (STANDBY, at(8, 9)),
-        (CHARGE, at(8, 10)), (IDLE, at(8, 11)),
-        (CHARGE, at(9, 6)), (IDLE, at(9, 7)),
-    )
-    energy = [row("0.0", at(8, 5), "kWh")]
-    total = 0.0
-    for begin in (at(8, 6), at(8, 8), at(8, 10), at(9, 6)):
-        energy += meter((begin, total), (begin + timedelta(hours=1), total + 1.0))
-        total += 1.0
-    harness = Harness({POWER: states, METER: energy})
-    ledger = harness.service.store.ledger(CHARGER)
-    ledger.live_since = at(7, 22)
-    ledger.backfill_before = at(10, 12) - timedelta(days=30)  # the whole window recorded
 
     payload = harness.history(at(10, 12))
 
-    assert len(payload["segments"]) == 4
-    assert payload["chargingDays"] == 2
-    assert payload["coveredDays"] == 30
-    assert payload["perWeek"] == pytest.approx(2 / 30 * 7)
-    # Four one-hour segments over two charging days.
-    assert payload["secondsPerDay"] == pytest.approx(2 * 3600)
-
-
-def test_per_week_counts_by_the_days_recorded_when_the_recorder_keeps_fewer_than_30():
-    # The recorder keeps ten local days (11–20 October) and the car charged on each.
-    changes = [(IDLE, at(10, 22))]
-    energy = [row("0.0", at(10, 22), "kWh")]
-    for day in range(11, 21):
-        changes += [(CHARGE, at(day, 6)), (IDLE, at(day, 7))]
-        energy += meter((at(day, 6), day - 11.0), (at(day, 7), day - 10.0))
-    harness = Harness({POWER: power(*changes), METER: energy})
-    now = at(20, 12)
-    harness.history(now)
-    harness.oldest = date(2026, 10, 11)
-    harness.backfill(now)
-
-    payload = harness.history(now)
-
-    assert payload["chargingDays"] == 10
-    assert payload["coveredDays"] == 10
-    assert payload["perWeek"] == pytest.approx(7.0)
+    assert set(payload) == {"unavailable", "segments", "complete", "health"}
 
 
 def test_the_newest_twenty_segments_are_listed_whatever_the_window():
@@ -960,4 +850,3 @@ def test_the_newest_twenty_segments_are_listed_whatever_the_window():
 
     assert len(harness.segments) == 22
     assert [item["start"] for item in payload["segments"]] == [at(day, 6, month=8).isoformat() for day in range(22, 2, -1)]
-    assert payload["totals"]["kwh"] == 0.0

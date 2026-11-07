@@ -26,7 +26,7 @@ Three sections, each read when its question opens:
   ``unavailable`` blip moves it too. From the same run mode history it carries
   ``charging``, today's recorded charging stretches, which the detail's
   charging strip draws on opening.
-- ``history``: the charging ledger's last 30 days and newest segments, with
+- ``history``: the charging ledger's newest segments, with
   its health, for a charger whose profile resolves a run mode and whose
   config names its power entity. It is the charger's alone: no car's
   consumption is read into it. The ledger's segments follow the

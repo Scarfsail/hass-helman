@@ -65,7 +65,8 @@ function dto(overrides: Partial<TreeItemDTO>) {
  *
  * `stats` is what `helman/get_device_stats` answers per device key; a key it
  * lacks has no record. The tree lists controllable ids only for a schedulable
- * device, so `schedulableBoiler` gives the boiler one.
+ * device, so `schedulableBoiler` gives the boiler one. `nodeHistory` is what
+ * `helman/get_node_history` answers for every node.
  */
 async function mountCard(
     page: Page,
@@ -76,6 +77,7 @@ async function mountCard(
     projections: Record<string, Array<[string, number]>> = {},
     generatedAt = "2026-10-21T12:00:00+00:00",
     admin = false,
+    nodeHistory: unknown = { unavailable: "no_house_node" },
 ): Promise<void> {
     await loadBundle(page, "helman-card");
     await installHaStubs(page);
@@ -127,10 +129,11 @@ async function mountCard(
     });
 
     await page.evaluate(
-        async ({ tree, today, lastHour, stats, energyUnit, projections, generatedAt, admin }) => {
+        async ({ tree, today, lastHour, stats, energyUnit, projections, generatedAt, admin, nodeHistory }) => {
             const state = (value: string, attributes: Record<string, unknown> = {}) => ({ state: value, attributes });
             (window as any).__statRequests = [];
             (window as any).__deviceStatsRequests = [];
+            (window as any).__nodeHistoryRequests = [];
             const hass = {
                 language: "en",
                 locale: { language: "en" },
@@ -161,6 +164,10 @@ async function mountCard(
                         (window as any).__deviceStatsRequests.push(msg.device_key);
                         return (stats as Record<string, unknown>)[msg.device_key] ?? null;
                     },
+                    "helman/get_node_history": async (msg: any) => {
+                        (window as any).__nodeHistoryRequests.push(msg.node_id);
+                        return nodeHistory;
+                    },
                     "helman/get_appliance_projections": async () => ({
                         generatedAt,
                         appliances: Object.fromEntries(Object.entries(projections).map(([id, points]) =>
@@ -178,7 +185,7 @@ async function mountCard(
             card.hass = hass;
             document.body.appendChild(card);
         },
-        { tree, today, lastHour: LAST_HOUR_KWH, stats, energyUnit, projections, generatedAt, admin },
+        { tree, today, lastHour: LAST_HOUR_KWH, stats, energyUnit, projections, generatedAt, admin, nodeHistory },
     );
 
     await expect.poll(() => rowNames(page)).toContain("Boiler");
@@ -340,7 +347,8 @@ test("device History header gives the learned average during a run, collapsed; t
     await mountCard(page, BOILER_STATS, true);
     await openDevice(page, "Boiler");
     const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
-    await expect(section.locator("[slot=summary]")).toHaveText("2.0 kW during a run");
+    // No node history here: the power alone.
+    await expect(section.locator("[slot=summary]")).toHaveText("2.0 kW while running");
     await expect(section.locator("[slot=summary] b")).toHaveText("2.0 kW");
     await expect(section.locator("[data-history-body]")).toHaveCount(0);
     expect(await page.evaluate(() => (window as any).__chartConfigs.length)).toBe(0);
@@ -348,6 +356,8 @@ test("device History header gives the learned average during a run, collapsed; t
     await expect(section.locator(".history-graph-stub")).toHaveCount(1);
     expect(await page.evaluate(() => (window as any).__chartConfigs)).toEqual([{ type: "history-graph", hours_to_show: 24, entities: ["sensor.boiler_power", "switch.boiler"] }]);
     await expect(section.locator(".section-title")).toHaveText(["Last 24 hours", "Typical, learned from the last 14 days"]);
+    // A node without a history renders no block.
+    await expect(section.locator("[data-node-history], [data-node-history-not-ready]")).toHaveCount(0);
     const tiles = section.locator("[data-typical] [data-stat]");
     await expect(tiles).toHaveCount(4);
     await expect(tiles.nth(0)).toContainText("4.1 kWh");
@@ -360,12 +370,157 @@ test("device History header gives the learned average during a run, collapsed; t
     await expect(tiles.nth(3)).toContainText("average during a run");
 });
 
+/** The boiler's last 30 days, as `helman/get_node_history` answers them. */
+function boilerHistory(overrides: Record<string, unknown> = {}) {
+    const money = (amount: number, pricedKwh: number, unpricedKwh = 0) => ({ amount, pricedKwh, unpricedKwh });
+    return {
+        id: "sensor.boiler_energy", label: "Boiler", icon: "mdi:water-boiler", estimated: false, unmeasured: false, kwh: 42.6,
+        coverage: 1, firstHour: "2026-09-22T00:00:00+00:00", startDate: "2026-09-22", endDate: "2026-10-21", priceUnit: "CZK/kWh", complete: false,
+        totals: {
+            kwh: 42.6, sources: { solar: 26, battery: 9.4, grid: 7.2, unknown: 0 }, knownKwh: 42.6,
+            paid: money(52, 42.6), forgone: money(46, 42.6), gridPaid: money(31, 7.2), batteryPaid: money(21, 9.4),
+            solarForgone: money(46, 26), virtual: money(98, 42.6),
+        },
+        paidPerKwh: 1.22, gridPricePerKwh: 4.31, batteryPricePerKwh: 2.23, solarForgonePerKwh: 1.77, virtualPerKwh: 2.3,
+        activeDays: 18, coveredDays: 30, perWeek: 4.2, kwhPerActiveDay: 2.4,
+        ...overrides,
+    };
+}
+
+test("device History header gives the running power and what an hour of it costs at the 30 days' paid rate, collapsed", async ({ page }) => {
+    await mountCard(page, BOILER_STATS, true, "kWh", TODAY_KWH, {}, "2026-10-21T12:00:00+00:00", false, boilerHistory());
+    await openDevice(page, "Boiler");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
+    // 1.96 kW × 1.22 CZK/kWh.
+    await expect(section.locator("[slot=summary]")).toHaveText("2.0 kW · ≈ 2.39 CZK/h while running");
+    await expect(section.locator("[slot=summary] b")).toHaveText("2.0 kW · ≈ 2.39 CZK/h");
+    await expect(section.locator("[data-history-body]")).toHaveCount(0);
+    expect(await page.evaluate(() => (window as any).__nodeHistoryRequests)).toEqual(["sensor.boiler_energy"]);
+});
+
+test("device History shows its last 30 days between the last 24 hours and the typical tiles", async ({ page }) => {
+    await mountCard(page, BOILER_STATS, true, "kWh", TODAY_KWH, {}, "2026-10-21T12:00:00+00:00", false, boilerHistory());
+    await openDevice(page, "Boiler");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
+    await section.locator("button").first().click();
+    const titles = section.locator(".section-title");
+    await expect(titles).toHaveCount(3);
+    await expect(titles.nth(0)).toHaveText("Last 24 hours");
+    await expect(titles.nth(1)).toContainText("Last 30 days");
+    await expect(titles.nth(1)).not.toContainText("data for");
+    await expect(titles.nth(2)).toHaveText("Typical, learned from the last 14 days");
+    const block = section.locator("[data-node-history]");
+    await expect(block.locator("[data-energy-title]")).toHaveText(/Energy\s*· 43 kWh/);
+    await expect(block.locator("[data-energy] [data-source]")).toHaveText([/26 kWh\s*61 %/, /9\.4 kWh\s*22 %/, /7\.2 kWh\s*17 %/]);
+    await expect(block.locator("[data-money-title]")).toHaveText(/Money\s*· paid ≈ 52 CZK · ≈ 1\.22 CZK\/kWh\s*· virtually ≈ 98 CZK · ≈ 2\.30 CZK\/kWh/);
+    await expect(block.locator("[data-money] [data-money-source]")).toHaveText([/≈ 46 CZK\s*≈ 1\.77 CZK\/kWh/, /≈ 21 CZK\s*≈ 2\.23 CZK\/kWh/, /≈ 31 CZK\s*≈ 4\.31 CZK\/kWh/]);
+    // Nothing of unknown source: just how often and per active day.
+    await expect(block.locator("[data-row]")).toHaveCount(2);
+    await expect(block.locator("[data-row=how-often] .value")).toHaveText("≈ 4× a week · on 18 of 30 days");
+    await expect(block.locator("[data-row=per-day] .value")).toHaveText("≈ 2.4 kWh");
+    await expect(block.locator("[data-estimates-toggle]")).toHaveText("How these are estimated");
+});
+
+test("device History names partial coverage in the title and hides virtually without export-priced solar", async ({ page }) => {
+    const history = boilerHistory({
+        coverage: 0.64, firstHour: "2026-10-03T00:00:00+00:00", coveredDays: 19, virtualPerKwh: null,
+    });
+    await mountCard(page, BOILER_STATS, true, "kWh", TODAY_KWH, {}, "2026-10-21T12:00:00+00:00", false, history);
+    await openDevice(page, "Boiler");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
+    await section.locator("button").first().click();
+    await expect(section.locator("[data-node-history-title]")).toContainText("Last 30 days · data for 19 days");
+    await expect(section.locator("[data-node-history-coverage]")).toHaveText("Data for 64 % of the period (from Oct 3)");
+    await expect(section.locator("[data-money-paid]")).toHaveCount(1);
+    await expect(section.locator("[data-money-virtual]")).toHaveCount(0);
+});
+
+test("device History notes gaps inside the period without dating them, and keeps the plain title with every day covered", async ({ page }) => {
+    // An eight-hour outage mid-period: every day still has data.
+    const history = boilerHistory({ coverage: 0.989 });
+    await mountCard(page, BOILER_STATS, true, "kWh", TODAY_KWH, {}, "2026-10-21T12:00:00+00:00", false, history);
+    await openDevice(page, "Boiler");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
+    await section.locator("button").first().click();
+    await expect(section.locator("[data-node-history-title]")).toContainText("Last 30 days");
+    await expect(section.locator("[data-node-history-title]")).not.toContainText("data for");
+    await expect(section.locator("[data-node-history-coverage]")).toHaveText("Data for 99 % of the period");
+});
+
+test("device History's explanation is every consumer's, without the EV charger's note", async ({ page }) => {
+    await mountCard(page, BOILER_STATS, true, "kWh", TODAY_KWH, {}, "2026-10-21T12:00:00+00:00", false, boilerHistory());
+    await openDevice(page, "Boiler");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
+    await section.locator("button").first().click();
+    await section.locator("[data-estimates-toggle]").click();
+    await expect(section.locator("[data-row=how-energy] .value")).not.toContainText("EV");
+    await expect(section.locator("[data-estimates-detail-note]")).toHaveCount(0);
+});
+
+test("device History header waits for the node history before naming the running power", async ({ page }) => {
+    await mountCard(page, BOILER_STATS, true, "kWh", TODAY_KWH, {}, "2026-10-21T12:00:00+00:00", false, boilerHistory());
+    // Hold the node history's answer.
+    await page.evaluate(() => {
+        const hass = (window as any).__hass;
+        const callWS = hass.callWS;
+        (window as any).__releaseNodeHistory = null;
+        hass.callWS = (msg: any) => msg.type === "helman/get_node_history"
+            ? new Promise((resolve) => { (window as any).__releaseNodeHistory = () => resolve(callWS(msg)); })
+            : callWS(msg);
+    });
+    await openDevice(page, "Boiler");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
+    await expect.poll(() => page.evaluate(() => (window as any).__deviceStatsRequests.length)).toBe(1);
+    await expect.poll(() => page.evaluate(() => typeof (window as any).__releaseNodeHistory)).toBe("function");
+    // Its own fallback header, not the power alone that the rate would then join.
+    await expect(section.locator("[slot=summary]")).toHaveText("Loading…");
+    await expect(section.locator("[slot=summary]")).not.toContainText("No figures");
+    await page.evaluate(() => (window as any).__releaseNodeHistory());
+    await expect(section.locator("[slot=summary]")).toHaveText("2.0 kW · ≈ 2.39 CZK/h while running");
+});
+
+/** Open the detail of the row whose item is `id`, whether or not it is a config device. */
+async function openNode(page: Page, id: string): Promise<void> {
+    await page.evaluate((id) => {
+        const row = (window as any).__deepAll(document, "helman-tree-item").find((candidate: any) => candidate.device?.id === id);
+        if (!row) throw new Error(`no row for ${id}`);
+        row.dispatchEvent(new CustomEvent("show-device-detail", { bubbles: true, composed: true, detail: { item: row.device } }));
+    }, id);
+}
+
+test("a node without learned stats heads its History with the last 30 days' kWh", async ({ page }) => {
+    await mountCard(page, {}, true, "kWh", TODAY_KWH, {}, "2026-10-21T12:00:00+00:00", false, boilerHistory());
+    await openNode(page, "house_unmeasured");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
+    await expect(section.locator("[slot=summary]")).toHaveText("43 kWh in the last 30 days");
+    await expect(section.locator("[slot=summary] b")).toHaveText("43 kWh");
+    expect(await page.evaluate(() => (window as any).__deviceStatsRequests)).toEqual([]);
+});
+
+test("a node with no chart, no stats and no node history has no History section", async ({ page }) => {
+    await mountCard(page);
+    await page.evaluate(() => { delete (window as any).loadCardHelpers; });
+    await openNode(page, "house_unmeasured");
+    await expect(page.locator("node-detail-device-content")).toBeVisible();
+    await expect.poll(() => page.evaluate(() => (window as any).__nodeHistoryRequests)).toEqual(["house_unmeasured"]);
+    await expect(page.locator("node-detail-device-content helman-detail-section[data-history]")).toHaveCount(0);
+});
+
+test("device History header keeps today's header without learned stats, even with a node history", async ({ page }) => {
+    await mountCard(page, {}, true, "kWh", TODAY_KWH, {}, "2026-10-21T12:00:00+00:00", false, boilerHistory());
+    await openDevice(page, "Boiler");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
+    await expect(section.locator("[slot=summary]")).toHaveText("No figures yet");
+    await section.locator("button").first().click();
+    await expect(section.locator("[data-node-history]")).toBeVisible();
+});
+
 test("device History falls back to the average while on without learned runs, and drops the running tile", async ({ page }) => {
     const { running_kw: _, ...stats } = BOILER_STATS["sensor.boiler_energy"];
     await mountCard(page, { "sensor.boiler_energy": stats }, true);
     await openDevice(page, "Boiler");
     const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
-    await expect(section.locator("[slot=summary]")).toHaveText("1.8 kW while on");
+    await expect(section.locator("[slot=summary]")).toHaveText("1.8 kW while running");
     await section.locator("button").first().click();
     await expect(section.locator("[data-typical] [data-stat]")).toHaveCount(3);
     await expect(section.locator("[data-typical] [data-stat=running]")).toHaveCount(0);
@@ -418,7 +573,7 @@ for (const [name, energy, power] of [
         expect(await page.evaluate(() => (window as any).__statRequests.map((msg: any) => msg.statistic_id))).toContain(energy);
         expect(await page.evaluate(() => (window as any).__deviceStatsRequests)).toEqual([energy]);
         const history = detail.locator("node-detail-device-content helman-detail-section[data-history]");
-        await expect(history.locator("[slot=summary]")).toHaveText("2.0 kW during a run");
+        await expect(history.locator("[slot=summary]")).toHaveText("2.0 kW while running");
         await history.locator("button").first().click();
         expect(await page.evaluate(() => (window as any).__chartConfigs[0].entities)).toContain(power);
         await expect(detail.locator("ha-button[data-settings]")).toHaveCount(1);

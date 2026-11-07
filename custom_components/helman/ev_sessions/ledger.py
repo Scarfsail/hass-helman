@@ -21,8 +21,8 @@ Each slice keeps what :func:`~..device_reports.dataset.attribute_energy` says
 of it in its hour of the house mix: the source split and four money sides,
 each as ``[amount, priced kWh, unpriced kWh]``. ``paid`` and ``forgone`` are the
 slice's whole kWh; ``grid_paid`` is the grid share at the hour's import rate
-and ``solar_forgone`` the direct solar share at its export rate; the 30-day
-summary derives the battery's paid side and the virtual cost from them. ``attribution`` is ``None`` until a house dataset has
+and ``solar_forgone`` the direct solar share at its export rate; the battery's
+paid side and the virtual cost are derived from them by ``Attribution``. ``attribution`` is ``None`` until a house dataset has
 answered for the slice's day.
 """
 

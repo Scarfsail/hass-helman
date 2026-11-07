@@ -107,6 +107,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     async_register_command(hass, ws_get_device_tree)
     async_register_command(hass, ws_get_forecast)
     async_register_command(hass, ws_get_device_stats)
+    async_register_command(hass, ws_get_node_history)
     async_register_command(hass, ws_get_device_report)
     async_register_command(hass, ws_get_node_detail)
     async_register_command(hass, ws_get_solar_bias_inspector)
@@ -691,6 +692,33 @@ def ws_get_device_stats(
     if coordinator is None:
         return
     connection.send_result(msg["id"], coordinator.get_device_stats(msg["device_key"]))
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): "helman/get_node_history",
+    vol.Required("node_id"): str,
+})
+@websocket_api.async_response
+async def ws_get_node_history(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """One house-subtree node's last 30 days of energy and money, or why there is none.
+
+    Not admin-gated: it carries only numbers, keyed by an id the card already
+    has, the same exposure as ``helman/get_device_stats``.
+    """
+    coordinator = get_coordinator(hass, connection, msg)
+    if coordinator is None:
+        return
+    try:
+        payload = await coordinator.async_node_history(msg["node_id"])
+    except Exception:
+        _LOGGER.exception("Unexpected node history failure")
+        connection.send_error(msg["id"], "internal_error", "Unexpected node history failure")
+        return
+    connection.send_result(msg["id"], payload)
 
 
 @websocket_api.websocket_command({

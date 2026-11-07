@@ -163,6 +163,7 @@ export interface HelmanCommands {
     "helman/get_device_tree": { req: Record<string, never>; res: Api.TreePayload };
     "helman/get_history": { req: Record<string, never>; res: Api.HistoryPayload };
     "helman/get_device_stats": { req: { device_key: string }; res: Api.DeviceStats | null };
+    "helman/get_node_history": { req: { node_id: string }; res: Api.NodeHistoryPayload };
     "helman/device_report": { req: Api.DeviceReportQuery & { report: string }; res: Api.RankingReportPayload | Api.OverTimeReportPayload | Api.DailyProfileReportPayload | Api.DeviceReportUnavailable };
     "helman/get_forecast": { req: Record<string, never>; res: Api.ForecastPayload };
     "helman/get_schedule": { req: Record<string, never>; res: Api.SchedulePayload };

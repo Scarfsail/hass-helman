@@ -11,14 +11,14 @@ import type { DeviceDetailParams } from "./node-detail-types";
 import { deviceControllableIds, deviceDirectControls, deviceEntities, powerEntity } from "./node-detail-utils";
 import { estimatedConsumerMix } from "./live-flows";
 import { isSwitchOn } from "../shared/config/devices";
-import { SectionResource } from "./section-resource";
-import type { ApplianceProjectionsPayload, ApplianceRuntimeDTO, DeviceStats, DeviceStatsSpread } from "../helman-api";
-import { callHelman } from "../shared/data/helman-commands";
+import { SectionResource, hassLocale, timeZone } from "./section-resource";
+import type { ApplianceProjectionsPayload, ApplianceRuntimeDTO, DeviceStats, DeviceStatsSpread, NodeHistoryPayload } from "../helman-api";
 import { deviceEnergyMeasures, readTodayKWh } from "../shared/devices/device-energy";
+import { consumerHistorySummary, deviceStatsSection, nodeHistory, nodeHistorySection, nodeHistoryStyles, renderNodeHistory } from "./node-history";
 import { ScheduleController } from "./schedule-controller";
 import { runtimeText, runtimeFor } from "./node-detail-schedule";
 import {
-    HistoryGraphResource, historyRow, historySummary, renderHistorySection, renderTechnicalSection, sectionNotReady, statTile, subTitle,
+    HistoryGraphResource, historyRow, historySummary, kwhText, renderHistorySection, renderTechnicalSection, sectionNotReady, statTile, subTitle,
 } from "./node-detail-history";
 import { getSharedHelmanStore } from "../shared/data/store";
 import { DataChangedController } from "../shared/data/data-changed";
@@ -41,7 +41,7 @@ import { nodeDetailQuestionStyles, nodeDetailSharedStyles } from "./node-detail-
 
 @customElement("node-detail-device-content")
 export class NodeDetailDeviceContent extends LitElement {
-    static styles = [helmanColorVars, nodeDetailSharedStyles, nodeDetailQuestionStyles, css`
+    static styles = [helmanColorVars, nodeDetailSharedStyles, nodeDetailQuestionStyles, nodeHistoryStyles, css`
         .icon { width: 64px; height: 64px; display: grid; place-items: center; }
         .icon ha-icon { --mdc-icon-size: 42px; }
         .climate-control { align-self: flex-start; border: 0; padding: 0; background: none; color: var(--primary-color); font: inherit; cursor: pointer; }
@@ -67,12 +67,12 @@ export class NodeDetailDeviceContent extends LitElement {
         keepOnError: false,
     });
     /** The learned usage record, for the History header: read on opening; `null` when there is none. */
-    private readonly _stats = new SectionResource<DeviceStats | null>(this, "stats", {
-        // The backend resolves a metered device's id to its meter.
-        fetch: () => callHelman(this.hass, "helman/get_device_stats", { device_key: this.params.item.deviceKey! }),
-        shown: () => !!this.params.item.deviceKey,
-        staleness: () => false,
-    });
+    private readonly _stats = new SectionResource<DeviceStats | null>(this, "stats", deviceStatsSection(this));
+    /**
+     * The last 30 days every consumer shows, read on opening: the History
+     * header needs its paid rate while the section is collapsed.
+     */
+    private readonly _period = new SectionResource<NodeHistoryPayload>(this, "period", nodeHistorySection(this, () => this._houseNode()));
     /** HA's history graph of the device's power and switch, once History & statistics is open. */
     private readonly _chart = new HistoryGraphResource(this, () => this._chartEntities(), () => this._historyOpen);
     /** The plan, for the executor's outcome in Technical details, followed once that is open. */
@@ -81,6 +81,7 @@ export class NodeDetailDeviceContent extends LitElement {
     @state() private _forecastOpen = false;
     @state() private _historyOpen = false;
     @state() private _technicalOpen = false;
+    @state() private _estimatesOpen = false;
     private _loadedItem?: TreeItem;
 
     constructor() {
@@ -91,11 +92,11 @@ export class NodeDetailDeviceContent extends LitElement {
         this._plan.reset();
         const item = this.params?.item;
         if (!item || !this.hass) return;
-        const sections = [this._energy, this._projection, this._stats];
+        const sections = [this._energy, this._projection, this._stats, this._period];
         if (item !== this._loadedItem) {
             this._loadedItem = item;
             for (const section of [...sections, this._chart]) section.drop();
-            this._forecastOpen = this._historyOpen = this._technicalOpen = false;
+            this._forecastOpen = this._historyOpen = this._technicalOpen = this._estimatesOpen = false;
         }
         for (const section of sections) section.sync();
         this._chart.follow(this.hass);
@@ -161,22 +162,40 @@ export class NodeDetailDeviceContent extends LitElement {
         ].filter((id): id is string => !!id);
     }
 
+    /** Whether the device is a consumer, a node of the house subtree, which has a last 30 days. */
+    private _houseNode(): boolean {
+        return !this.params.item.isSource;
+    }
+
     /**
-     * Its power and switch over the last 24 hours, and what it typically
-     * uses, as learned over its window. None for a device with neither.
+     * Its power and switch over the last 24 hours, its last 30 days, and what
+     * it typically uses, as learned over its window. None for a device with
+     * none of them, its last 30 days included once the dataset answers it has none.
      */
     private _renderHistory() {
-        if (!this._chart.available() && !this.params.item.deviceKey) return nothing;
-        const stats = this._stats.payload;
-        const measures = deviceEnergyMeasures(stats ?? undefined);
-        const h = (key: string) => this.localize(`node_detail.shared.history.${key}`);
-        const headline = measures.running !== undefined ? { key: "device_summary_running", watts: measures.running }
-            : measures.on !== undefined ? { key: "device_summary", watts: measures.on } : null;
-        const summary = historySummary(this._stats, this.localize, headline ? boldTemplate(h(headline.key), { kw: formatPower(headline.watts).display }) : null);
+        const item = this.params.item;
+        const noPeriod = !this._houseNode() || (this._period.state?.status === "ready" && !nodeHistory(this._period.payload));
+        if (!this._chart.available() && !item.deviceKey && noPeriod) return nothing;
+        const summary = consumerHistorySummary(this._stats.payload, this._period, this.localize)
+            ?? (item.deviceKey
+                ? historySummary(this._period.state?.status === "loading" ? this._period : this._stats, this.localize, null)
+                : this._periodSummary());
         return renderHistorySection(this.localize, summary, this._historyOpen, (open) => { this._historyOpen = open; }, () => html`
             ${this._chart.render(this.localize)}
-            ${this.params.item.deviceKey ? this._renderTypical() : nothing}
+            ${this._houseNode() ? renderNodeHistory(this._period, this.localize, {
+                locale: hassLocale(this.hass), timeZone: timeZone(this.hass), estimatesOpen: this._estimatesOpen,
+                toggleEstimates: () => { this._estimatesOpen = !this._estimatesOpen; },
+            }) : nothing}
+            ${item.deviceKey ? this._renderTypical() : nothing}
         `);
+    }
+
+    /** Without learned stats, the 30 days' kWh, "**3.2 kWh** in the last 30 days"; its loading or failure until then. */
+    private _periodSummary() {
+        const period = nodeHistory(this._period.payload);
+        return historySummary(this._period, this.localize, period
+            ? boldTemplate(this.localize("node_detail.shared.history.period_summary_kwh"), { kwh: kwhText(period.totals.kwh) })
+            : null);
     }
 
     /** A typical day, how often and how long it runs, and its average power during a run: 2×2 tiles. */

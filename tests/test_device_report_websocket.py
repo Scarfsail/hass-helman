@@ -526,6 +526,60 @@ class TestUnavailable(DeviceReportTestCase):
 
 
 
+class TestNodeHistory(DeviceReportTestCase):
+    """``helman/get_node_history``: the last 30 days of one node, from the reports' dataset."""
+
+    NOW = _local(2026, 9, 15, 14, 0)
+
+    async def node_history(self, node_id: str) -> dict:
+        connection = FakeConnection()
+        msg = {"id": 9, "type": "helman/get_node_history", "node_id": node_id}
+        with patch("homeassistant.util.dt.now", return_value=self.NOW):
+            await websockets_module.ws_get_node_history.__wrapped__(self.hass, connection, msg)
+        self.assertEqual(connection.errors, [])
+        return connection.results[0][1]
+
+    async def test_the_payload_covers_the_last_30_days_from_the_reports_cache(self):
+        self.recorder.hourly(HOUSE_METER, _local(2026, 9, 9, 23), _local(2026, 9, 10, 23))
+        self.recorder.hourly(WASHER, _local(2026, 9, 9, 23), _local(2026, 9, 10, 23))
+        payload = await self.node_history(WASHER)
+
+        self.assertEqual((payload["startDate"], payload["endDate"]), ("2026-08-17", "2026-09-15"))
+        self.assertEqual(payload["id"], WASHER)
+        self.assertEqual(payload["label"], "Washer")
+        self.assertEqual(payload["priceUnit"], "CZK")
+        self.assertEqual(payload["totals"]["kwh"], 24.0)
+        self.assertEqual(payload["activeDays"], 1)
+        self.assertEqual(payload["coveredDays"], 1)
+        # The same period as the card's last_30 preset: one dataset for both.
+        reads = len(self.recorder.calls)
+        await self.report(self.NOW, "2026-08-17", "2026-09-15")
+        self.assertEqual(len(self.recorder.calls), reads)
+
+    async def test_an_unknown_node(self):
+        payload = await self.node_history("sensor.nope")
+        self.assertEqual(payload, {"unavailable": "unknown_node"})
+
+    async def test_without_a_house_node(self):
+        self.coordinator._cached_tree = {"consumers": []}
+        payload = await self.node_history(WASHER)
+        self.assertEqual(payload, {"unavailable": "no_house_node"})
+        self.assertEqual(self.recorder.calls, [])
+
+    async def test_without_a_house_meter(self):
+        self.coordinator._active_config["energy_nodes"]["house"]["forecast"]["total_energy_entity_id"] = None
+        payload = await self.node_history(WASHER)
+        self.assertEqual(payload, {"unavailable": "no_house_meter"})
+        self.assertEqual(self.recorder.calls, [])
+
+    def test_the_node_id_is_required(self):
+        schema = websockets_module.ws_get_node_history._ws_schema
+        message = {"id": 1, "type": "helman/get_node_history"}
+        self.assertEqual(schema({**message, "node_id": WASHER})["node_id"], WASHER)
+        with self.assertRaises(vol.Invalid):
+            schema(dict(message))
+
+
 class TestTariffSampling(unittest.TestCase):
     def test_a_fractional_offset_hour_is_sampled_from_its_own_minute(self):
         from custom_components.helman.grid_price_forecast_builder import (

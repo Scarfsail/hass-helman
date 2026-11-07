@@ -550,6 +550,48 @@ class TestMoney(DatasetTestCase):
         self.assertAlmostEqual(split.forgone.known_amount, 0.2)
 
 
+class TestDerivedMoney(DatasetTestCase):
+    """``Attribution.battery_paid`` and ``Attribution.virtual``: the one place their formulas live."""
+
+    def test_the_batterys_paid_money_is_paid_less_the_grids(self):
+        # The battery charged half from the grid at 3.0, half from unpriced
+        # solar; hour 5 is a quarter grid, a quarter solar, half battery.
+        _, split = self.house_split(
+            {0: {"H": 0, "S": 2, "I": 2, "C": 4}, 5: {"H": 4, "I": 1, "S": 1, "D": 2}},
+            import_rate={0: 3.0, 5: 4.0},
+        )
+        side = split.battery_paid()
+        # Paid 4 (grid) + 3 (the battery's rated grid half): 7; the grid's own 4.
+        self.assertAlmostEqual(side.amount, 3.0)
+        # Paid prices 4 kWh: 1 grid, 1 solar, the battery's grid and solar halves.
+        self.assertAlmostEqual(side.priced_kwh, 2.0)
+        self.assertAlmostEqual(side.unpriced_kwh, 0.0)
+
+    def test_without_battery_supply_the_battery_has_no_price(self):
+        _, split = self.house_split({0: {"H": 2, "I": 1, "S": 1}}, import_rate={0: 4.0})
+        side = split.battery_paid()
+        self.assertEqual((side.amount, side.priced_kwh, side.unpriced_kwh), (0.0, 0.0, 0.0))
+
+    def test_unattributed_kwh_are_unpriced_on_both_derived_sides(self):
+        _, split = self.house_split({0: {"H": 1, "S": 3, "C": 1, "I": None}, 1: {"H": 1, "I": 1}})
+        self.assertAlmostEqual(split.battery_paid().unpriced_kwh, 1.0)
+        self.assertAlmostEqual(split.virtual().unpriced_kwh, 2.0)
+
+    def test_the_virtual_cost_divides_only_by_kwh_priced_on_both_sides(self):
+        # Half solar, half grid, both hours import-priced; only hour 0 has an export price.
+        _, split = self.house_split(
+            {0: {"H": 2, "I": 1, "S": 1}, 1: {"H": 2, "I": 1, "S": 1}},
+            import_rate={0: 4.0, 1: 4.0},
+            export_rate={0: 1.5},
+        )
+        side = split.virtual()
+        # Paid 8 plus the 1.5 export value of hour 0's solar kWh.
+        self.assertAlmostEqual(side.amount, 9.5)
+        # Paid prices all 4 kWh, less the 1 solar kWh no export rate prices.
+        self.assertAlmostEqual(side.priced_kwh, 3.0)
+        self.assertAlmostEqual(side.unpriced_kwh, 1.0)
+
+
 class TestRankingPayload(DatasetTestCase):
     def test_the_common_fields_and_completeness(self):
         span = history(
