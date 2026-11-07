@@ -648,6 +648,10 @@ class Attribution:
     unattributed: float = 0.0
     paid: MoneySide = field(default_factory=MoneySide)
     forgone: MoneySide = field(default_factory=MoneySide)
+    #: Of ``paid``, the grid share alone: its kWh at the hour's import rate.
+    grid_paid: MoneySide = field(default_factory=MoneySide)
+    #: Of ``forgone``, the direct solar share alone: its kWh at the hour's export rate.
+    solar_forgone: MoneySide = field(default_factory=MoneySide)
 
 
 def attribute_energy(dataset: DeviceDataset, kwh: dict[datetime, float]) -> Attribution:
@@ -683,18 +687,22 @@ def attribute_energy(dataset: DeviceDataset, kwh: dict[datetime, float]) -> Attr
         import_rate = dataset.import_rate.get(hour)
         if import_rate is not None:
             paid.price(grid, grid * import_rate)
+            result.grid_paid.price(grid, grid * import_rate)
             if dataset.import_rate_source.get(hour) == RATE_TARIFF:
                 paid.tariff_kwh += grid
         else:
             paid.unpriced_kwh += grid
+            result.grid_paid.unpriced_kwh += grid
         forgone.price(grid, 0.0)
 
         paid.price(solar, 0.0)
         export_rate = dataset.export_rate.get(hour)
         if export_rate is not None:
             forgone.price(solar, solar * export_rate)
+            result.solar_forgone.price(solar, solar * export_rate)
         else:
             forgone.unpriced_kwh += solar
+            result.solar_forgone.unpriced_kwh += solar
 
         paid.price(battery * rated_grid, battery * rated_grid * (origin.paid_rate or 0.0))
         paid.tariff_kwh += battery * origin.grid_tariff

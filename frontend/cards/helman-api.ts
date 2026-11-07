@@ -1308,6 +1308,91 @@ export interface EvChargerTodaySectionPayload {
     } | null;
 }
 
+/** One money figure of the charging ledger, with the kWh it priced and the kWh it could not. */
+export interface EvLedgerMoneyDTO {
+    amount: number;
+    pricedKwh: number;
+    unpricedKwh: number;
+}
+
+/**
+ * Charging ledger energy and its estimated attribution. `sources` is `null`
+ * when nothing of it could be attributed. `paid` and `forgone` are over all
+ * of its kWh; `gridPaid` is the grid share alone and `solarForgone` the direct
+ * solar share alone. Forgone export value is never part of paid.
+ */
+export interface EvLedgerFiguresDTO {
+    kwh: number;
+    sources: { solar: number; battery: number; grid: number; unknown: number } | null;
+    knownKwh: number;
+    paid: EvLedgerMoneyDTO;
+    forgone: EvLedgerMoneyDTO;
+    gridPaid: EvLedgerMoneyDTO;
+    solarForgone: EvLedgerMoneyDTO;
+}
+
+/**
+ * One charging segment: a continuous recorded stretch in which the charger's
+ * charge power is above 1 kW, never a plug-in session. Bounds are UTC; `startKnown`/`endKnown` say
+ * whether a recorded transition fixes them. `kwhComplete` false makes `kwh` a
+ * lower bound.
+ */
+export interface EvChargingSegmentDTO extends EvLedgerFiguresDTO {
+    id: string;
+    start: string;
+    end: string;
+    /** The local day it is listed under: its start's. */
+    localDate: string;
+    startKnown: boolean;
+    endKnown: boolean;
+    status: "active" | "closed";
+    final: boolean;
+    kwhComplete: boolean;
+}
+
+/** The charging ledger's health, for Technical details. */
+export interface EvLedgerHealthDTO {
+    recordedSince: string | null;
+    segmentsStored: number;
+    backfill: { status: "running" | "done" | "failed"; recoveredDays: number };
+    settledThrough: string;
+    powerEntityId: string;
+    meterEntityId: string | null;
+    error: string | null;
+}
+
+interface EvChargerHistorySectionBase {
+    node: "ev_charger";
+    section: "history";
+    deviceId: string;
+    asOf: string;
+}
+
+/** The charging ledger's last 30 days (sliding, UTC) and its newest 20 segments, or why there is none. */
+export type EvChargerHistorySectionPayload =
+    | (EvChargerHistorySectionBase & { unavailable: string })
+    | (EvChargerHistorySectionBase & EvChargerLedgerDTO);
+
+export interface EvChargerLedgerDTO {
+    unavailable: null;
+    window: { start: string; end: string };
+    /** `provisional`: the segment still charging is in it, as far as it was read. */
+    totals: EvLedgerFiguresDTO & { provisional: boolean };
+    chargingDays: number;
+    /** How many of the window's 30 days the ledger has recorded: fewer while backfill runs or the recorder keeps less. */
+    coveredDays: number;
+    /** Charging days over `coveredDays`, times 7. */
+    perWeek: number;
+    paidPerKwh: number | null;
+    gridPricePerKwh: number | null;
+    /** The paid rate times the one car's current consumption; `null` when not provable. */
+    per100km: { entityId: string; kwhPer100km: number; vehicleId: string; vehicleName: string; amount: number } | null;
+    priceUnit: string | null;
+    segments: EvChargingSegmentDTO[];
+    complete: boolean;
+    health: EvLedgerHealthDTO;
+}
+
 /**
  * One local day of grid detail money, projected from the inspector's span
  * aggregates. Each side is `null` where its money is unknown.

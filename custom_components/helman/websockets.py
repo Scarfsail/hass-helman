@@ -788,6 +788,7 @@ async def ws_get_node_detail(
                     if (inspector := getattr(coordinator, "solar_inspector", None)) is not None
                     else None
                 ),
+                ev_history=getattr(coordinator, "async_ev_history", None),
             ),
             node=msg["node"],
             device_id=msg.get("device_id"),

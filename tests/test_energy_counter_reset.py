@@ -69,7 +69,7 @@ _install_import_stubs()
 
 from custom_components.helman.energy_unwrap import unwrap_cumulative_energy_series  # noqa: E402
 from custom_components.helman.recorder_slot_energy import (  # noqa: E402
-    _slot_energy_changes_from_states,
+    energy_changes_at_boundaries,
 )
 
 
@@ -92,7 +92,7 @@ def _slot_energy(states: list[SimpleNamespace]) -> dict[datetime, float]:
     # not simulating a recorder gap. Staleness is exercised on its own in
     # test_recorder_carry_staleness.py, so it is switched off here to keep
     # this file about reset/dip detection only.
-    return _slot_energy_changes_from_states(
+    return energy_changes_at_boundaries(
         states,
         default_unit="kWh",
         utc_boundaries=_quarter_hour_boundaries(),
@@ -172,7 +172,7 @@ class ShallowDropTests(unittest.TestCase):
             (DAY + timedelta(hours=24, minutes=30)).astimezone(UTC),
         ]
 
-        by_slot = _slot_energy_changes_from_states(
+        by_slot = energy_changes_at_boundaries(
             states, default_unit="kWh", utc_boundaries=boundaries, staleness_limit=None
         )
 
