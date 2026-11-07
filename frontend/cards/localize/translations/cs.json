@@ -1375,6 +1375,7 @@
   "device_card": {
     "fields": {
       "state": "Stav",
+      "connection": "Připojení",
       "power": "Výkon",
       "energy_today": "Energie dnes",
       "target_temperature": "Nastavená teplota",
@@ -1382,6 +1383,11 @@
       "soc": "Stav nabití",
       "import_today": "Odběr dnes",
       "export_today": "Dodávka dnes"
+    },
+    "connection": {
+      "connected": "připojeno",
+      "disconnected": "odpojeno",
+      "charging": "nabíjí"
     },
     "idle": "v klidu",
     "waiting": "čeká",

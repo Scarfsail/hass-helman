@@ -1033,6 +1033,7 @@
   "device_card": {
     "fields": {
       "state": "State",
+      "connection": "Connection",
       "power": "Power",
       "energy_today": "Energy today",
       "target_temperature": "Set temperature",
@@ -1040,6 +1041,11 @@
       "soc": "State of charge",
       "import_today": "Imported today",
       "export_today": "Exported today"
+    },
+    "connection": {
+      "connected": "connected",
+      "disconnected": "disconnected",
+      "charging": "charging"
     },
     "idle": "idle",
     "waiting": "waiting",
