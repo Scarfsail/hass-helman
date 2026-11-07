@@ -244,7 +244,7 @@ test("a history_average device shows its estimate, else its configured fallback 
     page,
 }) => {
     await mountEditor(page);
-    await openTab(page, "Training");
+    await openTab(page, "Data and learning");
 
     // Schedulable: its average while switched on, which the scheduler projects with.
     expect(await energyValue(learnedCell(page, "Dishwasher"))).toEqual({
@@ -271,7 +271,7 @@ test("a history_average device shows its estimate, else its configured fallback 
 
 test("every other device shows what it learned, on the same scale", async ({ page }) => {
     await mountEditor(page);
-    await openTab(page, "Training");
+    await openTab(page, "Data and learning");
 
     // Not schedulable, without a power while active: its mean day over 24 hours, in orange.
     expect(await energyValue(learnedCell(page, "Fridge"))).toEqual({
@@ -319,7 +319,7 @@ test("every other device shows what it learned, on the same scale", async ({ pag
 
 test("every row's hover lists the same measures in the same order", async ({ page }) => {
     await mountEditor(page);
-    await openTab(page, "Training");
+    await openTab(page, "Data and learning");
 
     const values = page
         .locator("details.section-card", {
@@ -346,7 +346,7 @@ test("every row's hover lists the same measures in the same order", async ({ pag
 
 test("each device's settings show the same value as its table row", async ({ page }) => {
     await mountEditor(page);
-    await openTab(page, "Training");
+    await openTab(page, "Data and learning");
     // Each named by its headline: a configured figure is energy per hour switched on.
     const labels: Record<string, string> = {
         Dishwasher: "Average while switched on",

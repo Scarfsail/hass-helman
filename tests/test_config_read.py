@@ -80,5 +80,5 @@ def test_span_meters_normalizes_roles_and_solar_fallback():
         "sensor.charge",
         "sensor.discharge",
     )
-    config["training"] = {"solar_bias": {"total_energy_entity_id": "sensor.bias"}}
+    config["data_and_learning"] = {"solar_bias": {"total_energy_entity_id": "sensor.bias"}}
     assert read_span_meters(config).solar == "sensor.bias"

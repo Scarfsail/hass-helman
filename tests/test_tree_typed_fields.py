@@ -231,7 +231,7 @@ class TestMaxPowerDefaults(unittest.TestCase):
         self.assertEqual(CONFIG_FIELD_DEFAULTS["energy_nodes.battery.max_power"], BATTERY_DEFAULT_MAX_POWER_W)
         self.assertEqual(CONFIG_FIELD_DEFAULTS["energy_nodes.grid.max_power"], GRID_DEFAULT_MAX_POWER_W)
 
-    def test_the_history_bucket_default_comes_from_visualization(self):
+    def test_the_history_bucket_default_comes_from_recent_power_history(self):
         tree = _build(FULL)
         self.assertEqual(tree["uiConfig"]["history_bucket_duration"], 5)
 

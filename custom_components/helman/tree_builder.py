@@ -17,7 +17,7 @@ from .const import (
     SOLAR_DEFAULT_MAX_POWER_W,
 )
 from .node_details.solar import _positive
-from .visualization import read_visualization
+from .recent_power_history import read_recent_power_history
 from .controllables.config import (
     Device,
     device_groups,
@@ -278,13 +278,10 @@ class HelmanTreeBuilder:
         self._friendly_name = partial(entity_friendly_name, hass)
         self._config = config
 
-    def _visualization(self) -> dict:
-        return read_visualization(self._config)
-
     async def build(self, *, include_house_without_power: bool = False) -> DeviceTree:
         """Build the serializable tree together with its static runtime index."""
         energy_nodes = self._config.get("energy_nodes", {})
-        visualization = self._visualization()
+        recent_power_history = read_recent_power_history(self._config)
         groupings = read_groupings(self._config)
         groupings = groupings if isinstance(groupings, list) else []
 
@@ -377,11 +374,11 @@ class HelmanTreeBuilder:
             "consumptionTotalSensorId": CONSUMPTION_TOTAL_ENTITY_ID,
             "productionTotalSensorId": PRODUCTION_TOTAL_ENTITY_ID,
             "uiConfig": {
-                "show_empty_groups": visualization["show_empty_groups"],
-                "show_others_group": visualization["show_others_group"],
                 "device_groupings": groupings,
-                "history_buckets": visualization["history_buckets"],
-                "history_bucket_duration": visualization["history_bucket_duration"],
+                "history_buckets": recent_power_history["samples"],
+                "history_bucket_duration": recent_power_history[
+                    "sampling_interval_seconds"
+                ],
             },
         }
 

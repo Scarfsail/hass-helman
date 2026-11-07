@@ -18,11 +18,11 @@ from custom_components.helman.storage import HelmanStorage
 class ConfigValidationTests(unittest.TestCase):
     def test_bounded_unknown_keys_warn_without_blocking(self) -> None:
         config = _valid_config()
-        config["training"].update({"old_training": 1})
-        config["training"]["house_consumption"] = {"old_house": 1}
-        config["training"]["solar_bias"] = {}
-        config["training"]["solar_bias"].update({"clamp_mx": 2, "old_bias": 1})
-        config["training"]["solar_bias"]["slot_invalidation"] = {"old_slot": 1}
+        config["data_and_learning"].update({"old_training": 1})
+        config["data_and_learning"]["house_consumption"] = {"old_house": 1}
+        config["data_and_learning"]["solar_bias"] = {}
+        config["data_and_learning"]["solar_bias"].update({"clamp_mx": 2, "old_bias": 1})
+        config["data_and_learning"]["solar_bias"]["slot_invalidation"] = {"old_slot": 1}
         config["energy_nodes"]["battery"]["forecast"] = {"old_forecast": 1}
 
         report = validate_config_document(config)
@@ -31,20 +31,20 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(
             {(issue.path, issue.code) for issue in report.warnings},
             {
-                ("training.old_training", "unknown_key"),
-                ("training.house_consumption.old_house", "unknown_key"),
-                ("training.solar_bias.clamp_mx", "unknown_key"),
-                ("training.solar_bias.old_bias", "unknown_key"),
-                ("training.solar_bias.slot_invalidation.old_slot", "unknown_key"),
+                ("data_and_learning.old_training", "unknown_key"),
+                ("data_and_learning.house_consumption.old_house", "unknown_key"),
+                ("data_and_learning.solar_bias.clamp_mx", "unknown_key"),
+                ("data_and_learning.solar_bias.old_bias", "unknown_key"),
+                ("data_and_learning.solar_bias.slot_invalidation.old_slot", "unknown_key"),
                 ("energy_nodes.battery.forecast.old_forecast", "unknown_key"),
             },
         )
 
     def test_optional_reader_keys_are_not_unknown(self) -> None:
         config = _valid_config()
-        config["training"]["solar_bias"] = {}
-        config["training"]["solar_bias"]["total_energy_entity_id"] = "sensor.solar_total"
-        config["training"]["solar_bias"]["slot_invalidation"] = {
+        config["data_and_learning"]["solar_bias"] = {}
+        config["data_and_learning"]["solar_bias"]["total_energy_entity_id"] = "sensor.solar_total"
+        config["data_and_learning"]["solar_bias"]["slot_invalidation"] = {
             "data_glitch_max_slot_wh": 10,
         }
         config["energy_nodes"]["battery"]["forecast"] = {
@@ -75,7 +75,7 @@ class ConfigValidationTests(unittest.TestCase):
         for node in config["energy_nodes"].values():
             node.pop("entities", None)
         del config["energy_nodes"]["house"]["forecast"]["total_energy_entity_id"]
-        config.get("training", {}).get("solar_bias", {}).pop(
+        config.get("data_and_learning", {}).get("solar_bias", {}).pop(
             "total_energy_entity_id", None
         )
         config["energy_nodes"]["grid"]["max_allowed_export_power"] = 9900
@@ -981,14 +981,14 @@ class ConfigValidationTests(unittest.TestCase):
         for key in ("min_history_days", "training_window_days"):
             with self.subTest(key=key):
                 config = _valid_config()
-                config["training"]["house_consumption"][key] = 0
+                config["data_and_learning"]["house_consumption"][key] = 0
 
                 report = validate_config_document(config)
 
                 self.assertFalse(report.valid)
                 self.assertTrue(
                     any(
-                        issue.path == f"training.house_consumption.{key}"
+                        issue.path == f"data_and_learning.house_consumption.{key}"
                         and issue.code == "invalid_positive_int"
                         for issue in report.errors
                     )
@@ -999,15 +999,15 @@ class ConfigValidationTests(unittest.TestCase):
         # never be met: the house trainer would report insufficient_history on
         # every run for as long as the config stood.
         config = _valid_config()
-        config["training"]["house_consumption"]["training_window_days"] = 8
-        config["training"]["house_consumption"]["min_history_days"] = 30
+        config["data_and_learning"]["house_consumption"]["training_window_days"] = 8
+        config["data_and_learning"]["house_consumption"]["min_history_days"] = 30
 
         report = validate_config_document(config)
 
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "training.house_consumption.min_history_days"
+                issue.path == "data_and_learning.house_consumption.min_history_days"
                 and issue.code == "invalid_relation"
                 for issue in report.errors
             )
@@ -1016,8 +1016,8 @@ class ConfigValidationTests(unittest.TestCase):
     def test_a_minimum_equal_to_the_training_window_is_allowed(self) -> None:
         # Reachable, if only just: every day the window returns has to count.
         config = _valid_config()
-        config["training"]["house_consumption"]["training_window_days"] = 8
-        config["training"]["house_consumption"]["min_history_days"] = 8
+        config["data_and_learning"]["house_consumption"]["training_window_days"] = 8
+        config["data_and_learning"]["house_consumption"]["min_history_days"] = 8
 
         report = validate_config_document(config)
 
@@ -1027,8 +1027,8 @@ class ConfigValidationTests(unittest.TestCase):
         # A blank field takes the const.py default, and pairing a typed value
         # against a default the user never sees would be a confusing error.
         config = _valid_config()
-        config["training"]["house_consumption"]["min_history_days"] = 30
-        config["training"]["house_consumption"].pop("training_window_days", None)
+        config["data_and_learning"]["house_consumption"]["min_history_days"] = 30
+        config["data_and_learning"]["house_consumption"].pop("training_window_days", None)
 
         report = validate_config_document(config)
 
@@ -1214,19 +1214,107 @@ class ConfigValidationTests(unittest.TestCase):
             ["devices.consumers[0].vendor", "energy_nodes.inverter.vendor"],
         )
 
-    def test_top_level_card_key_is_refused_by_name(self) -> None:
+    def test_relocated_history_keys_are_refused_with_their_new_path(self) -> None:
+        for old_path, new_path in (
+            ("history_buckets", "data_and_learning.recent_power_history.samples"),
+            (
+                "history_bucket_duration",
+                "data_and_learning.recent_power_history.sampling_interval_seconds",
+            ),
+            (
+                "visualization.history_buckets",
+                "data_and_learning.recent_power_history.samples",
+            ),
+            (
+                "visualization.history_bucket_duration",
+                "data_and_learning.recent_power_history.sampling_interval_seconds",
+            ),
+        ):
+            with self.subTest(old_path=old_path):
+                config = _valid_config()
+                *parents, key = old_path.split(".")
+                container = config
+                for part in parents:
+                    container = container.setdefault(part, {})
+                container[key] = 60
+
+                report = validate_config_document(config)
+
+                issue = next(i for i in report.errors if i.path == old_path)
+                self.assertEqual(issue.code, "relocated_config_key")
+                self.assertIn(new_path, issue.message)
+
+    def test_display_flags_are_retired_to_the_lovelace_card(self) -> None:
+        for path in (
+            "show_empty_groups",
+            "show_others_group",
+            "visualization.show_empty_groups",
+            "visualization.show_others_group",
+        ):
+            with self.subTest(path=path):
+                config = _valid_config()
+                *parents, key = path.split(".")
+                container = config
+                for part in parents:
+                    container = container.setdefault(part, {})
+                container[key] = True
+
+                report = validate_config_document(config)
+
+                issue = next(i for i in report.errors if i.path == path)
+                self.assertEqual(issue.code, "retired_config_key")
+                self.assertIn("Lovelace card", issue.message)
+
+    def test_visualization_is_refused_naming_the_new_homes(self) -> None:
         config = _valid_config()
-        config["history_buckets"] = 60
+        config["visualization"] = {}
 
         report = validate_config_document(config)
 
-        self.assertFalse(report.valid)
-        self.assertTrue(
-            any(
-                issue.path == "history_buckets"
-                and issue.code == "relocated_config_key"
-                for issue in report.errors
-            )
+        self.assertEqual(
+            [(issue.path, issue.code) for issue in report.errors],
+            [("visualization", "relocated_config_key")],
+        )
+        self.assertIn(
+            "data_and_learning.recent_power_history", report.errors[0].message
+        )
+
+    def test_training_is_refused_with_its_new_name(self) -> None:
+        config = _valid_config()
+        config["training"] = config.pop("data_and_learning")
+
+        report = validate_config_document(config)
+
+        self.assertEqual(
+            [(issue.path, issue.code) for issue in report.errors],
+            [("training", "relocated_config_key")],
+        )
+        self.assertIn("data_and_learning", report.errors[0].message)
+
+    def test_recent_power_history_takes_positive_integers(self) -> None:
+        for key in ("sampling_interval_seconds", "samples"):
+            for bogus in (0, -1, 1.5, True, "5"):
+                with self.subTest(key=key, value=bogus):
+                    config = _valid_config()
+                    config["data_and_learning"]["recent_power_history"] = {key: bogus}
+
+                    report = validate_config_document(config)
+
+                    self.assertIn(
+                        f"data_and_learning.recent_power_history.{key}",
+                        [issue.path for issue in report.errors],
+                    )
+
+    def test_recent_power_history_warns_about_unknown_keys(self) -> None:
+        config = _valid_config()
+        config["data_and_learning"]["recent_power_history"] = {"buckets": 60}
+
+        report = validate_config_document(config)
+
+        self.assertTrue(report.valid)
+        self.assertIn(
+            ("data_and_learning.recent_power_history.buckets", "unknown_key"),
+            [(issue.path, issue.code) for issue in report.warnings],
         )
 
     def test_top_level_training_time_is_refused_by_name(self) -> None:
@@ -1246,7 +1334,7 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_training_time_valid_for_hhmm(self) -> None:
         config = _valid_config()
-        config.setdefault("training", {})["training_time"] = "03:00"
+        config.setdefault("data_and_learning", {})["training_time"] = "03:00"
 
         report = validate_config_document(config)
 
@@ -1254,25 +1342,25 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_training_time_invalid_for_bad_string(self) -> None:
         config = _valid_config()
-        config.setdefault("training", {})["training_time"] = "3am"
+        config.setdefault("data_and_learning", {})["training_time"] = "3am"
 
         report = validate_config_document(config)
 
         self.assertFalse(report.valid)
         self.assertTrue(
-            any(issue.path == "training.training_time" for issue in report.errors)
+            any(issue.path == "data_and_learning.training_time" for issue in report.errors)
         )
 
     def test_training_time_invalid_for_out_of_range_time(self) -> None:
         config = _valid_config()
-        config.setdefault("training", {})["training_time"] = "25:00"
+        config.setdefault("data_and_learning", {})["training_time"] = "25:00"
 
         report = validate_config_document(config)
 
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "training.training_time"
+                issue.path == "data_and_learning.training_time"
                 and issue.code == "invalid_value"
                 for issue in report.errors
             )
@@ -1308,9 +1396,13 @@ class ConfigValidationTests(unittest.TestCase):
                     for issue in report.errors
                     if issue.code == "relocated_config_key"
                 ]
-                # A label under the old top-level key is refused twice: once
-                # for the renamed key, once for the label's own new home.
-                renamed = ["power_devices"] if parents[:1] == ["power_devices"] else []
+                # A key under a renamed or retired top-level key is refused
+                # twice: once for that key, once for its own new home.
+                renamed = (
+                    parents[:1]
+                    if parents[:1] in (["power_devices"], ["visualization"])
+                    else []
+                )
                 self.assertEqual([issue.path for issue in issues], [*renamed, old_path])
                 self.assertIn(new_path, issues[-1].message)
 
@@ -1357,14 +1449,10 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_the_card_texts_are_retired(self) -> None:
         paths = [
-            f"{prefix}{key}"
-            for prefix in ("", "visualization.")
-            for key in (
-                "sources_title",
-                "consumers_title",
-                "groups_title",
-                "others_group_label",
-            )
+            "sources_title",
+            "consumers_title",
+            "groups_title",
+            "others_group_label",
         ] + [
             f"energy_nodes.{node}.{key}"
             for node in ("house", "solar", "battery", "grid")

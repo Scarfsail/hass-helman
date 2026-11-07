@@ -68,7 +68,7 @@ async function installFixture(page: Page, bucketSeconds: number): Promise<void> 
         consumers: [node("house", "sensor.house", null)],
         consumptionTotalSensorId: "sensor.consumption_total",
         productionTotalSensorId: "sensor.production_total",
-        uiConfig: { show_others_group: false, device_groupings: [], history_buckets: 3, history_bucket_duration: bucketSeconds },
+        uiConfig: { device_groupings: [], history_buckets: 3, history_bucket_duration: bucketSeconds },
     });
     await page.evaluate(({ bucket, treePayload }) => {
         let currentTree = treePayload;

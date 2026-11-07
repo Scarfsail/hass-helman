@@ -15,14 +15,14 @@ import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
  * freeze today's default into the document for good.
  *
  * Fields are found by their label, so the two chosen here are ones whose
- * wording is unique on the Training tab -- the training-window labels are
+ * wording is unique on the Data and learning tab -- the training-window labels are
  * deliberately shared between the solar bias and house consumption panels.
  */
 
 /** One solar bias field set, its neighbours and the training time left unset. */
 const STORED_CONFIG = configDoc({
 
-    training: {
+    data_and_learning: {
         solar_bias: {
             clamp_max: 2.5,
         },
@@ -31,15 +31,13 @@ const STORED_CONFIG = configDoc({
 
 /** What the backend serves for the paths this spec looks at. */
 const CONFIG_DEFAULTS = {
-    "visualization.history_buckets": 60,
-    "visualization.history_bucket_duration": 5,
-    "visualization.show_empty_groups": false,
-    "visualization.show_others_group": true,
-    "training.training_time": "03:00",
-    "training.solar_bias.clamp_min": 0.0,
-    "training.solar_bias.clamp_max": 3.0,
-    "training.solar_bias.enabled": true,
-    "training.solar_bias.aggregation_method": "ratio_of_sums",
+    "data_and_learning.recent_power_history.sampling_interval_seconds": 5,
+    "data_and_learning.recent_power_history.samples": 60,
+    "data_and_learning.training_time": "03:00",
+    "data_and_learning.solar_bias.clamp_min": 0.0,
+    "data_and_learning.solar_bias.clamp_max": 3.0,
+    "data_and_learning.solar_bias.enabled": true,
+    "data_and_learning.solar_bias.aggregation_method": "ratio_of_sums",
 };
 
 const CLAMP_MIN_LABEL = "Min forecast clamp";
@@ -47,6 +45,8 @@ const CLAMP_MAX_LABEL = "Max forecast clamp";
 const TRAINING_TIME_LABEL = "Training time (HH:MM)";
 const ENABLED_LABEL = "Enable bias correction";
 const AGGREGATION_LABEL = "Aggregation method";
+const SAMPLING_INTERVAL_LABEL = "Sampling interval (seconds)";
+const SAMPLES_LABEL = "Samples to keep";
 
 async function mountEditor(page: Page, config: unknown = STORED_CONFIG, holdValidation = false): Promise<void> {
     await loadBundle(page, "helman-config-editor-panel", EDITOR_BUNDLE);
@@ -58,10 +58,10 @@ async function mountEditor(page: Page, config: unknown = STORED_CONFIG, holdVali
         (window as unknown as Record<string, unknown>).__releaseValidation = () => releaseValidation?.();
         (window as unknown as Record<string, unknown>).__validationResolved = false;
         const warningsFor = (submitted: unknown) => {
-            const bias = (submitted as { training?: { solar_bias?: Record<string, unknown> } })
-                ?.training?.solar_bias;
+            const bias = (submitted as { data_and_learning?: { solar_bias?: Record<string, unknown> } })
+                ?.data_and_learning?.solar_bias;
             return bias && "clamp_mx" in bias
-                ? [{ section: "training", path: "training.solar_bias.clamp_mx",
+                ? [{ section: "data_and_learning", path: "data_and_learning.solar_bias.clamp_mx",
                      code: "unknown_key", message: "unrecognized key" }]
                 : [];
         };
@@ -116,14 +116,14 @@ async function mountEditor(page: Page, config: unknown = STORED_CONFIG, holdVali
         document.body.appendChild(element);
     }, { config: JSON.parse(JSON.stringify(config)), defaults: CONFIG_DEFAULTS, holdValidation });
 
-    // The Training tab's panels ship collapsed, and a collapsed <details>
+    // The Data and learning tab's panels ship collapsed, and a collapsed <details>
     // renders nothing to query.
     await expect
         .poll(async () =>
             page.evaluate(() => {
                 const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
                 const tab = Array.from(root?.querySelectorAll("button") ?? []).find(
-                    (button) => button.textContent?.trim().startsWith("Training"),
+                    (button) => button.textContent?.trim().startsWith("Data and learning"),
                 );
                 if (!tab) return false;
                 tab.click();
@@ -231,61 +231,92 @@ test("saving writes no placeholder into the document", async ({ page }) => {
 
     await expect.poll(async () => (await savedConfigs(page)).length).toBe(1);
     const saved = (await savedConfigs(page))[0] as {
-        training?: { training_time?: unknown; solar_bias?: Record<string, unknown> };
+        data_and_learning?: { training_time?: unknown; solar_bias?: Record<string, unknown> };
     };
-    expect(saved.training?.training_time).toBeUndefined();
-    expect(saved.training?.solar_bias).toEqual({ clamp_max: 2.5 });
+    expect(saved.data_and_learning?.training_time).toBeUndefined();
+    expect(saved.data_and_learning?.solar_bias).toEqual({ clamp_max: 2.5 });
     expect(saved).not.toHaveProperty("energy_nodes");
     expect(saved).not.toHaveProperty("devices");
     expect(saved).not.toHaveProperty("automation");
 });
 
-test("visualization controls show effective backend defaults without writing them", async ({ page }) => {
+/** The recent power history duration line, or null when none is shown. */
+function readDuration(page: Page): Promise<string | null> {
+    return page.evaluate(() =>
+        document.querySelector("helman-config-editor-panel")?.shadowRoot
+            ?.querySelector(".recent-power-history-duration")?.textContent?.trim() ?? null,
+    );
+}
+
+/** Type a value into the input under a field label and commit it. */
+async function fillField(page: Page, label: string, value: string): Promise<void> {
+    await page.evaluate(({ label, value }) => {
+        const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+        const field = Array.from(root?.querySelectorAll(".field") ?? []).find(
+            (candidate) => candidate.querySelector("label")?.textContent?.trim() === label,
+        );
+        const input = field?.querySelector("input") as HTMLInputElement;
+        input.value = value;
+        input.dispatchEvent(new Event("change"));
+    }, { label, value });
+}
+
+test("recent power history shows its defaults as placeholders without writing them", async ({ page }) => {
     await mountEditor(page);
-    await page.evaluate(() => {
-        const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
-        Array.from(root?.querySelectorAll("button") ?? [])
-            .find((button) => button.textContent?.trim() === "Helman card")?.click();
-        root?.querySelectorAll("details").forEach((section) => section.setAttribute("open", ""));
-    });
-    await expect.poll(async () => {
-        return page.evaluate(() => {
-            const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
-            return Array.from(root?.querySelectorAll("input[type=number]") ?? [])
-                .map((input) => (input as HTMLInputElement).value);
-        });
-    }).toEqual(["60", "5"]);
-    await page.evaluate(() => {
-        const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
-        Array.from(root?.querySelectorAll("button") ?? [])
-            .find((button) => button.textContent?.trim() === "Save and reload")?.click();
-    });
+
+    expect(await readField(page, SAMPLING_INTERVAL_LABEL)).toEqual({ value: "", placeholder: "5" });
+    expect(await readField(page, SAMPLES_LABEL)).toEqual({ value: "", placeholder: "60" });
+    expect(await readDuration(page)).toBe("Keeps the most recent 5 minutes of power readings.");
+
+    await page.locator("helman-config-editor-panel").getByRole("button", { name: "Save and reload" }).click();
     await expect.poll(async () => (await savedConfigs(page)).length).toBe(1);
-    expect((await savedConfigs(page))[0]).not.toHaveProperty("visualization");
+    expect((await savedConfigs(page))[0]).not.toHaveProperty("data_and_learning.recent_power_history");
+});
+
+test("the recent power history duration follows the draft", async ({ page }) => {
+    await mountEditor(page);
+
+    await fillField(page, SAMPLES_LABEL, "6");
+    await expect.poll(() => readDuration(page)).toBe("Keeps the most recent 30 seconds of power readings.");
+    await fillField(page, SAMPLES_LABEL, "30");
+    await expect.poll(() => readDuration(page)).toBe("Keeps the most recent 2 min 30 s of power readings.");
+    await fillField(page, SAMPLING_INTERVAL_LABEL, "10");
+    await expect.poll(() => readDuration(page)).toBe("Keeps the most recent 5 minutes of power readings.");
+    await fillField(page, SAMPLING_INTERVAL_LABEL, "5");
+    await fillField(page, SAMPLES_LABEL, "720");
+    await expect.poll(() => readDuration(page)).toBe("Keeps the most recent 1 hour of power readings.");
+    await fillField(page, SAMPLES_LABEL, "1080");
+    await expect.poll(() => readDuration(page)).toBe("Keeps the most recent 1 h 30 min of power readings.");
+    await fillField(page, SAMPLES_LABEL, "30");
+    await fillField(page, SAMPLING_INTERVAL_LABEL, "10");
+    await fillField(page, SAMPLING_INTERVAL_LABEL, "0");
+    await expect.poll(() => readDuration(page)).toBeNull();
+    await fillField(page, SAMPLING_INTERVAL_LABEL, "");
+    await expect.poll(() => readDuration(page)).toBe("Keeps the most recent 2 min 30 s of power readings.");
 });
 
 test("loaded unknown keys appear as warnings and clear on an edit", async ({ page }) => {
-    await mountEditor(page, configDoc({ training: { solar_bias: { clamp_mx: 2 } } }));
+    await mountEditor(page, configDoc({ data_and_learning: { solar_bias: { clamp_mx: 2 } } }));
     await expect.poll(async () => page.evaluate(() =>
         document.querySelector("helman-config-editor-panel")?.shadowRoot
             ?.querySelector(".issue-path")?.textContent?.trim(),
-    )).toBe("training.solar_bias.clamp_mx");
+    )).toBe("data_and_learning.solar_bias.clamp_mx");
     await page.locator("helman-config-editor-panel").getByRole("button", { name: "Validate" }).click();
     await expect.poll(async () => page.evaluate(() =>
         document.querySelector("helman-config-editor-panel")?.shadowRoot
             ?.querySelector(".issue-path")?.textContent?.trim(),
-    )).toBe("training.solar_bias.clamp_mx");
+    )).toBe("data_and_learning.solar_bias.clamp_mx");
     await page.locator("helman-config-editor-panel").getByRole("button", { name: "Save and reload" }).click();
     await expect.poll(async () => (await savedConfigs(page)).length).toBe(1);
     await expect.poll(async () => page.evaluate(() =>
         document.querySelector("helman-config-editor-panel")?.shadowRoot
             ?.querySelector(".issue-path")?.textContent?.trim(),
-    )).toBe("training.solar_bias.clamp_mx");
+    )).toBe("data_and_learning.solar_bias.clamp_mx");
     await page.evaluate(() => {
         const panel = document.querySelector("helman-config-editor-panel") as HTMLElement & {
             setValue: (path: string[], value: unknown) => void;
         };
-        panel.setValue(["training", "solar_bias", "clamp_min"], 0.5);
+        panel.setValue(["data_and_learning", "solar_bias", "clamp_min"], 0.5);
     });
     await expect.poll(async () => page.evaluate(() =>
         document.querySelector("helman-config-editor-panel")?.shadowRoot
@@ -294,12 +325,12 @@ test("loaded unknown keys appear as warnings and clear on an edit", async ({ pag
 });
 
 test("a late load warning cannot replace validation for a newer draft", async ({ page }) => {
-    await mountEditor(page, configDoc({ training: { solar_bias: { clamp_mx: 2 } } }), true);
+    await mountEditor(page, configDoc({ data_and_learning: { solar_bias: { clamp_mx: 2 } } }), true);
     await page.evaluate(() => {
         const panel = document.querySelector("helman-config-editor-panel") as HTMLElement & {
             setValue: (path: string[], value: unknown) => void;
         };
-        panel.setValue(["training", "solar_bias", "clamp_min"], 0.5);
+        panel.setValue(["data_and_learning", "solar_bias", "clamp_min"], 0.5);
         ((window as unknown as Record<string, unknown>).__releaseValidation as () => void)();
     });
     await expect.poll(async () => page.evaluate(() =>
@@ -311,24 +342,9 @@ test("a late load warning cannot replace validation for a newer draft", async ({
     )).toBe(true);
 });
 
-test("explicit zero and false remain visible as stored visualization values", async ({ page }) => {
-    await mountEditor(page, configDoc({ visualization: { history_buckets: 0, show_others_group: false } }));
-    await page.evaluate(() => {
-        const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
-        Array.from(root?.querySelectorAll("button") ?? [])
-            .find((button) => button.textContent?.trim() === "Helman card")?.click();
-        root?.querySelectorAll("details").forEach((section) => section.setAttribute("open", ""));
-    });
-    await expect.poll(async () => page.evaluate(() => {
-        const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
-        return Array.from(root?.querySelectorAll("input[type=number]") ?? [])
-            .map((input) => (input as HTMLInputElement).value);
-    })).toEqual(["0", "5"]);
-    const checked = await page.evaluate(() => {
-        const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
-        const formfield = Array.from(root?.querySelectorAll("ha-formfield") ?? [])
-            .find((field) => (field as HTMLElement & { label?: string }).label === "Show others group");
-        return (formfield?.querySelector("ha-switch") as HTMLElement & { checked?: boolean } | null)?.checked;
-    });
-    expect(checked).toBe(false);
+test("an explicit zero stays visible as a stored recent power history value", async ({ page }) => {
+    await mountEditor(page, configDoc({ data_and_learning: { recent_power_history: { samples: 0 } } }));
+
+    expect(await readField(page, SAMPLES_LABEL)).toEqual({ value: "0", placeholder: "60" });
+    expect(await readDuration(page)).toBeNull();
 });

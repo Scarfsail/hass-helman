@@ -101,7 +101,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 ],
             })],
             consumptionTotalSensorId: null, productionTotalSensorId: null,
-            uiConfig: { show_others_group: false, device_groupings: [], history_buckets: 3, history_bucket_duration: 5 },
+            uiConfig: { device_groupings: [], history_buckets: 3, history_bucket_duration: 5 },
         });
     await page.evaluate(({ v, tree, scheduleDefaults }) => {
         window.__deepAll = function deepAll(root: ParentNode, selector: string, out: Element[] = []) {

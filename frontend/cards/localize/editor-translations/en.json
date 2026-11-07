@@ -4,9 +4,8 @@
     "description": "Edit the stored Helman integration config, validate it in the backend, and save it without losing unsupported keys or future config branches.",
     "tabs": {
       "energy_nodes": "Energy nodes",
-      "training": "Training",
+      "data_and_learning": "Data and learning",
       "automation": "Automation",
-      "visualization": "Helman card",
       "devices": "Devices"
     },
     "actions": {
@@ -55,7 +54,6 @@
       "warnings": "Warnings"
     },
     "sections": {
-      "card_labels_and_history": "Card history and groups",
       "device_groupings": "Groupings and phases",
       "house": "House",
       "solar": "Solar",
@@ -73,10 +71,11 @@
       "eco_gears": "Eco gears",
       "vehicles": "Vehicles",
       "bias_correction_slot_invalidation": "Invalidate training slot data",
-      "training_settings": "Training settings",
+      "training_settings": "Training schedule and status",
       "house_consumption": "House consumption forecast",
       "solar_bias": "Solar forecast correction",
-      "appliance_energy": "Appliance energy",
+      "appliance_energy": "Device energy",
+      "recent_power_history": "Recent power history",
       "config": "Configuration",
       "diagnostics": "Diagnostics",
       "device_settings": "Device settings",
@@ -103,10 +102,12 @@
       "training_appliance_energy": "Device energy learns how every consumer device uses energy: its typical day, its runs and its power while running, shown in the device's detail on the card. A device on the history average strategy also learns how much it uses per hour it runs, and its forecast uses that figure. The meter, power sensor and lookback are set on each device in the Devices tab.",
       "training_settings_what": "Helman trains three models on your own recorded history: what the solar array really produces against the forecast, what the household consumes at each time of day, and how much each controllable appliance uses per hour it runs. Training runs once a day at the time set below, and every model can also be trained on demand. Everything the planner predicts rests on these, so a model that has not trained, or one with too little history, surfaces here rather than as a quietly wrong plan.",
       "training_solar_bias_slot_invalidation": "Not every recorded slot is honest evidence about the forecast. With a full battery and nothing being exported the inverter throttles the array, so production reads low although the forecast was right, and a meter glitch can spike or zero a single slot the same way. These thresholds decide which slots are thrown out before the fit, so the correction learns from the weather rather than from clipping and bad data.",
-      "solar_forecast_bias_correction": "Bias correction for this forecast is configured on the Training tab, under Solar forecast correction.",
+      "solar_forecast_bias_correction": "Bias correction for this forecast is configured on the Data and learning tab, under Solar forecast correction.",
       "devices": "Every energy-consuming device in the house, as a tree: a device can hold children that either have their own meter or draw from its meter. Schedulable devices are planned and run by Helman; the rest are only measured.",
       "inverter": "The battery inverter Helman drives. Pick its hardware profile first: the profile fills in the House, Solar, Battery and Grid entities below.",
-      "hardware_profile": "A hardware profile fills in the entities of this device itself, found by the vendor integration's own entity ids. The fields it provides are read-only elsewhere in the editor. Custom keeps every entity picked by hand."
+      "hardware_profile": "A hardware profile fills in the entities of this device itself, found by the vendor integration's own entity ids. The fields it provides are read-only elsewhere in the editor. Custom keeps every entity picked by hand.",
+      "recent_power_history": "Helman keeps a short, rolling history of power readings in memory. The Helman card draws each row's inline power bars from it, and the battery time-to-full and time-to-empty estimates average over it. It is separate from Home Assistant's recorded history used for reports, device details and training.\n\nThe sampling interval also sets how often Helman updates derived power values, including unmeasured consumption and shared power estimates.",
+      "recent_power_history_duration": "Keeps the most recent {duration} of power readings."
     },
     "empty": {
       "no_appliance_optimizers": "No appliance optimizers configured yet.",
@@ -162,11 +163,7 @@
       "appliance_table_note": "Every device shows kWh per hour while it is on. Green is learned from the hours its switch or climate entity shows it on. Orange is its mean day divided by 24, for a device without a running signal: an approximation. Blue is the configured hourly energy its forecast uses, a fixed device's figure or a learner's fallback until it has an estimate, with what it learned in parentheses. Hover a value for every measure. A device without a meter of its own splits its parent's meter with its siblings. The window is 30 days unless a device, or a history average device sharing its meter, sets another lookback. These settings live on the device in the Devices tab."
     },
     "fields": {
-      "history_buckets": "History buckets",
-      "history_bucket_duration": "History bucket duration",
       "power_sensor_name_cleaner_regex": "Device name cleaner regex",
-      "show_empty_groups": "Show empty groups",
-      "show_others_group": "Show others group",
       "training_time": "Training time (HH:MM)",
       "grouping_name": "Grouping name",
       "grouping_id": "Grouping id",
@@ -305,7 +302,9 @@
       "max_power": "Max power",
       "device_phase": "House phase",
       "solar_dip_floor_soc": "Solar dip floor SoC %",
-      "hold_reserve_in_expensive_windows": "Hold reserve in expensive windows"
+      "hold_reserve_in_expensive_windows": "Hold reserve in expensive windows",
+      "recent_power_history_sampling_interval_seconds": "Sampling interval (seconds)",
+      "recent_power_history_samples": "Samples to keep"
     },
     "entity_status": {
       "value": "{value} {unit}",
@@ -335,8 +334,6 @@
       "history_depth_split": "{raw_states} d raw states, {statistics} d statistics"
     },
     "helpers": {
-      "history_buckets": "How many history buckets Helman keeps for UI history.",
-      "history_bucket_duration": "Duration of one history bucket in hours.",
       "power_sensor_name_cleaner_regex": "Optional regex removed from an entity's name wherever a device without its own name is named from it.",
       "training_time": "Time of day (HH:MM in local time) when the nightly training batch runs.",
       "import_price_unit": "Example: CZK/kWh",
@@ -382,7 +379,9 @@
       "add_device_profile": "The profile provides its entities, so nothing is picked by hand. Its id is generated from the device's name once and never changes.",
       "add_child_device": "Pick a sensor for a child with its own meter, or the switch, light, fan, media player, cover or climate entity of a child that draws from this device's meter. Its id is generated from the entity once and never changes.",
       "device_phase": "Optional. The phase this device is wired to, as your house wiring says. The house detail estimates each phase's load from it. Only a top-level device or one under a three-phase device is wired individually; the rest follow the device above them.",
-      "device_phase_inherited": "Under a single-phase or unassigned device, this device is on that device's phase. Change the phase there."
+      "device_phase_inherited": "Under a single-phase or unassigned device, this device is on that device's phase. Change the phase there.",
+      "recent_power_history_sampling_interval_seconds": "How often Helman samples power readings, in seconds.",
+      "recent_power_history_samples": "How many samples Helman keeps in memory."
     },
     "messages": {
       "reloaded_config": "Reloaded the stored Helman config from the backend.",
@@ -499,8 +498,6 @@
     "help": {
       "aria_label": "Field help",
       "close": "Close",
-      "history_buckets": "Number of history slots Helman keeps in storage for the UI history chart. Each slot covers one bucket-duration period. If not set, a built-in default is used.",
-      "history_bucket_duration": "Duration of a single history bucket in hours. Determines how fine-grained the UI history chart is. If not set, a built-in default is used.",
       "power_sensor_name_cleaner_regex": "Optional Python regular expression removed from an entity's friendly name wherever a device without its own name is named from it: the Helman card, the inspector, the schedulable appliances and this editor all show the same cleaned name. Useful for stripping common prefixes or suffixes from entity names.",
       "training_time": "Time of day (HH:MM in local time) when Helman runs its nightly training batch — solar bias correction and the house consumption profile — typically during low-activity hours. These jobs read a lot of recorder history, so a quiet hour keeps them out of everything else's way.",
       "house_power_entity": "Real-time power consumption sensor for the whole house (W). Required for live power monitoring on the dashboard. Without it, house power data is not available.",
@@ -603,7 +600,9 @@
       "battery_max_power": "The most the battery charges or discharges at, in watts: the full scale of its power-flow lines on the cards. Leave empty for the default.",
       "grid_max_power": "The most the grid connection carries, in watts: the full scale of its power-flow lines on the cards. Leave empty for the default.",
       "battery_reserve_solar_dip_floor_soc": "Lowest SoC allowed inside an expensive window when the forecast says solar brings the battery back to the reserve before the window ends. A buffer in case the solar forecast is too optimistic. Empty uses this group’s reserve.",
-      "battery_reserve_hold_reserve_in_expensive_windows": "When the battery would still fall below the reserve (or the solar dip floor) inside an expensive window despite the cheap-window charge, stop discharging from that slot and import instead. Costs roughly the reserve energy at the expensive price; keeps it for a grid outage."
+      "battery_reserve_hold_reserve_in_expensive_windows": "When the battery would still fall below the reserve (or the solar dip floor) inside an expensive window despite the cheap-window charge, stop discharging from that slot and import instead. Costs roughly the reserve energy at the expensive price; keeps it for a grid outage.",
+      "recent_power_history_sampling_interval_seconds": "How often, in seconds, Helman takes a power reading for the recent power history. The history lives in memory only: it is not the recorder's retention and not the lookback any training uses. Unmeasured power is smoothed with a median over a fixed 15-second window, round(15 / interval) samples, so intervals above 10 seconds disable that smoothing. If not set, a built-in default is used.",
+      "recent_power_history_samples": "How many readings the recent power history keeps, in memory only. Together with the sampling interval it sets how far back the history reaches, shown below the fields. It is not the recorder's retention and not the lookback any training uses. If not set, a built-in default is used."
     },
     "device_filter": {
       "label": "Show devices",
@@ -731,7 +730,7 @@
     "jobs": {
       "solar_bias": "Solar bias",
       "house_consumption": "House consumption",
-      "appliance_energy": "Appliance energy"
+      "appliance_energy": "Device energy"
     },
     "did_not_run_reasons": {
       "training_in_progress": "another training run is already in progress",

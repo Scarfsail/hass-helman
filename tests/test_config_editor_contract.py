@@ -268,40 +268,40 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         resolved = read_bias_config({})
 
         self.assertEqual(
-            CONFIG_FIELD_DEFAULTS["training.training_time"],
+            CONFIG_FIELD_DEFAULTS["data_and_learning.training_time"],
             resolved.training_time,
         )
         self.assertEqual(
-            CONFIG_FIELD_DEFAULTS["training.solar_bias.min_history_days"],
+            CONFIG_FIELD_DEFAULTS["data_and_learning.solar_bias.min_history_days"],
             resolved.min_history_days,
         )
         self.assertEqual(
-            CONFIG_FIELD_DEFAULTS["training.solar_bias.min_valid_slot_days"],
+            CONFIG_FIELD_DEFAULTS["data_and_learning.solar_bias.min_valid_slot_days"],
             resolved.min_valid_slot_days,
         )
         self.assertEqual(
-            CONFIG_FIELD_DEFAULTS["training.solar_bias.clamp_min"],
+            CONFIG_FIELD_DEFAULTS["data_and_learning.solar_bias.clamp_min"],
             resolved.clamp_min,
         )
         self.assertEqual(
-            CONFIG_FIELD_DEFAULTS["training.solar_bias.clamp_max"],
+            CONFIG_FIELD_DEFAULTS["data_and_learning.solar_bias.clamp_max"],
             resolved.clamp_max,
         )
         self.assertEqual(
             CONFIG_FIELD_DEFAULTS[
-                "training.solar_bias.max_interpolated_consecutive_slots"
+                "data_and_learning.solar_bias.max_interpolated_consecutive_slots"
             ],
             resolved.max_interpolated_consecutive_slots,
         )
         self.assertEqual(
             CONFIG_FIELD_DEFAULTS[
-                "training.solar_bias.slot_invalidation.curtailment_max_export_w"
+                "data_and_learning.solar_bias.slot_invalidation.curtailment_max_export_w"
             ],
             resolved.slot_invalidation_curtailment_max_export_w,
         )
         self.assertEqual(
             CONFIG_FIELD_DEFAULTS[
-                "training.solar_bias.slot_invalidation."
+                "data_and_learning.solar_bias.slot_invalidation."
                 "curtailment_max_actual_forecast_ratio"
             ],
             resolved.slot_invalidation_curtailment_max_actual_forecast_ratio,
@@ -394,7 +394,7 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
                     "profile": {"id": "solax_inverter", "entry_id": "gone"},
                 }
             },
-            "training": {"solar_bias": {"total_energy_entity_id": "sensor.pv_total"}},
+            "data_and_learning": {"solar_bias": {"total_energy_entity_id": "sensor.pv_total"}},
         }
 
         await _save_config_handler(
@@ -479,7 +479,7 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
                 "inverter": {"profile": {"id": "solax_inverter", "entry_id": entry.entry_id}},
                 "grid": {"max_allowed_export_power": 9900},
             },
-            "training": {"solar_bias": {"slot_invalidation": {
+            "data_and_learning": {"solar_bias": {"slot_invalidation": {
                 "max_battery_soc_percent": 90,
             }}},
         }
@@ -508,11 +508,11 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
         hass = FakeHass(storage, config_entries=FakeConfigEntries(reload_result=False))
         connection = FakeConnection(is_admin=True)
         submitted = {
-            "visualization": {
-                "history_buckets": 60,
-                "history_bucket_duration": 8,
+            "data_and_learning": {"recent_power_history": {
+                "samples": 60,
+                "sampling_interval_seconds": 8,
                 "unknown_setting": "keep",
-            }
+            }}
         }
 
         await _save_config_handler(
@@ -521,15 +521,17 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
              "expected_revision": config_revision({})},
         )
 
-        canonical = self._stamped({"visualization": {
-            "history_bucket_duration": 8, "unknown_setting": "keep",
-        }})
+        canonical = self._stamped({"data_and_learning": {"recent_power_history": {
+            "sampling_interval_seconds": 8, "unknown_setting": "keep",
+        }}})
         result = connection.results[0][1]
         self.assertFalse(result["success"])
         self.assertEqual(result["config"], canonical)
         self.assertEqual(result["revision"], config_revision(canonical))
         storage._store.async_save.assert_awaited_once_with(canonical)
-        self.assertEqual(submitted["visualization"]["history_buckets"], 60)
+        self.assertEqual(
+            submitted["data_and_learning"]["recent_power_history"]["samples"], 60
+        )
 
         conflict = FakeConnection(is_admin=True)
         await _save_config_handler(

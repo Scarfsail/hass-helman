@@ -36,7 +36,7 @@ const BASE_CONFIG = configDoc({
       },
     ],
   },
-  training: {
+  data_and_learning: {
     house_consumption: { min_history_days: 14, training_window_days: 56 },
     solar_bias: { min_history_days: 10, max_training_window_days: 90 },
   },
@@ -190,7 +190,7 @@ test("F2: training appliance table device names become clickable after device tr
   );
 
   // Switch to the Training tab
-  await openTab(page, "Training");
+  await openTab(page, "Data and learning");
 
   // Wait for rows to exist
   const rows = applianceRows(page);

@@ -42,7 +42,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
     }
 
     // 3. Private properties & Host controller
-    private config!: HelmanCardConfig;
+    @state() private config!: HelmanCardConfig;
     private readonly _host = new EnergyCardHost(this, {
         whichNodesToWalk: (tree) => tree,
     });
@@ -160,6 +160,8 @@ export class HelmanCard extends LitElement implements LovelaceCard {
                         .sortChildrenByPower=${true}
                         .initial_show_only_top_children=${this.config?.collapsed_consumers_count ?? 3}
                         .uiConfig=${this._uiConfig}
+                        .showEmptyGroups=${this.config?.show_empty_groups ?? false}
+                        .showOthersGroup=${this.config?.show_others_group ?? true}
                     ></helman-house-devices-section>
                 </div>
             </ha-card>

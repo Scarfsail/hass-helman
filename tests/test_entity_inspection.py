@@ -387,7 +387,7 @@ SOLAR_HISTORY_PATH = (
     "forecast",
     "total_energy_entity_id",
 )
-BIAS_HISTORY_PATH = ("training", "solar_bias", "total_energy_entity_id")
+BIAS_HISTORY_PATH = ("data_and_learning", "solar_bias", "total_energy_entity_id")
 DAILY_HISTORY_PATH = (
     "energy_nodes",
     "solar",
@@ -475,7 +475,7 @@ def _history_config(
     # min_history_days lives at an absolute path since the v14 relocation --
     # no longer a sibling of the entity it governs.
     if min_history_days is not None:
-        config["training"] = {"house_consumption": {"min_history_days": min_history_days}}
+        config["data_and_learning"] = {"house_consumption": {"min_history_days": min_history_days}}
     return config
 
 
@@ -594,7 +594,7 @@ class TestHistoryDepth(_HistoryTestCase):
                     }
                 },
             },
-            "training": {"solar_bias": {"total_energy_entity_id": HOUSE_METER}},
+            "data_and_learning": {"solar_bias": {"total_energy_entity_id": HOUSE_METER}},
         }
         hass = _ProbingHass({HOUSE_METER: _State("1234.5", unit="kWh")})
         for path in (
@@ -609,7 +609,7 @@ class TestHistoryDepth(_HistoryTestCase):
                 self.assertIsNotNone(_fact(inspection, "history"))
 
     def test_the_bias_entity_is_judged_against_its_own_default(self):
-        config = {"training": {"solar_bias": {"total_energy_entity_id": HOUSE_METER}}}
+        config = {"data_and_learning": {"solar_bias": {"total_energy_entity_id": HOUSE_METER}}}
         hass = _ProbingHass({HOUSE_METER: _State("1234.5", unit="kWh")})
         _, inspection = self.inspect_twice(hass, config, BIAS_HISTORY_PATH)
         self.assertEqual(
@@ -738,7 +738,7 @@ class TestHistoryGovernedEntities(_HistoryTestCase):
     def test_share_energy_wildcard_reads_child_sensor_and_house_minimum(self):
         entity_id = "sensor.helman_share_energy_dishwasher"
         hass = _ProbingHass({entity_id: _State("1.0", unit="kWh")})
-        config = {"training": {"house_consumption": {"min_history_days": 12}}}
+        config = {"data_and_learning": {"house_consumption": {"min_history_days": 12}}}
 
         _, inspection = self.inspect_twice(
             hass, config, ("helman", "share_energy", "dishwasher")
@@ -798,7 +798,7 @@ class TestHistoryGovernedEntities(_HistoryTestCase):
             fact["params"]["required"], HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS
         )
         self.assertIn(
-            ["training", "house_consumption", "min_history_days"],
+            ["data_and_learning", "house_consumption", "min_history_days"],
             inspection["dependsOn"],
         )
 
@@ -912,7 +912,7 @@ class TestHistoryGovernedEntities(_HistoryTestCase):
         self.assertIsNotNone(fact)
         self.assertNotIn("required", fact["params"])
         self.assertNotIn(
-            ["training", "house_consumption", "min_history_days"],
+            ["data_and_learning", "house_consumption", "min_history_days"],
             inspection["dependsOn"],
         )
 
@@ -1032,7 +1032,7 @@ class TestHistoryDraftVersusSaved(_HistoryTestCase):
         hass = _ProbingHass({HOUSE_METER: _State("1234.5", unit="kWh")})
         inspect_target(hass, _history_config(), HOUSE_HISTORY_PATH)
         draft = _history_config()
-        draft["training"] = {"house_consumption": {"training_window_days": 90}}
+        draft["data_and_learning"] = {"house_consumption": {"training_window_days": 90}}
         [result] = inspect_targets(
             hass,
             draft,
@@ -1131,13 +1131,13 @@ class TestWhatARevertRestores(_HistoryTestCase):
         # here.
         hass = _ProbingHass({HOUSE_METER: _State("1234.5", unit="kWh")})
         draft = _history_config(min_history_days=30)
-        draft["training"]["house_consumption"]["training_window_days"] = 90
+        draft["data_and_learning"]["house_consumption"]["training_window_days"] = 90
         _, inspection = self.inspect_twice(hass, draft, HOUSE_HISTORY_PATH)
         self.assertEqual(
             inspection["dependsOn"],
             [
                 ["energy_nodes", "house", "forecast", "total_energy_entity_id"],
-                ["training", "house_consumption", "min_history_days"],
+                ["data_and_learning", "house_consumption", "min_history_days"],
             ],
         )
 
@@ -1165,7 +1165,7 @@ class TestWhatARevertRestores(_HistoryTestCase):
             [
                 ["energy_nodes", "grid", "entities", "power"],
                 ["energy_nodes", "grid", "entities", "power_polarity"],
-                ["training", "solar_bias", "min_history_days"],
+                ["data_and_learning", "solar_bias", "min_history_days"],
             ],
         )
 

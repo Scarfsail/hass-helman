@@ -48,20 +48,31 @@ const DEVICES = [
     { ...node("Unmeasured", 20), isUnmeasured: true },
 ];
 
-async function mountSection(page: Page, uiConfig: Record<string, unknown>): Promise<void> {
+/** The card's group visibility options, as `helman-card` passes them down. */
+interface GroupFlags {
+    showEmptyGroups?: boolean;
+    showOthersGroup?: boolean;
+}
+
+async function mountSection(
+    page: Page,
+    uiConfig: Record<string, unknown>,
+    flags: GroupFlags = {},
+): Promise<void> {
     await loadBundle(page, "helman-house-devices-section");
     await page.evaluate(
-        async ({ devices, uiConfig }) => {
+        async ({ devices, uiConfig, flags }) => {
             const el = document.createElement("helman-house-devices-section") as any;
             el.hass = { states: {}, language: "en", locale: { language: "en" } };
             el.devices = devices;
             el.historyBuckets = 3;
             el.historyBucketDuration = 1;
             el.uiConfig = uiConfig;
+            Object.assign(el, flags);
             document.body.appendChild(el);
             await el.updateComplete;
         },
-        { devices: DEVICES, uiConfig },
+        { devices: DEVICES, uiConfig, flags },
     );
 }
 
@@ -120,7 +131,7 @@ test("a grouping files devices under their group, the rest under Others", async 
 });
 
 test("empty groups and Others follow their settings", async ({ page }) => {
-    await mountSection(page, { device_groupings: GROUPINGS, show_empty_groups: true, show_others_group: false });
+    await mountSection(page, { device_groupings: GROUPINGS }, { showEmptyGroups: true, showOthersGroup: false });
 
     expect((await groupedBy(page, "Jističe")).map(({ name, power }) => [name, power])).toEqual([
         ["Technická FV (🔋T)", 1100],
@@ -138,7 +149,7 @@ test("a group whose id is others keeps apart from the Others group", async ({ pa
     const groupings = [
         { id: "breakers", name: "Jističe", groups: [{ id: "others", name: "Ostatní jističe", short_name: "O" }] },
     ];
-    await mountSection(page, { device_groupings: groupings, show_empty_groups: true });
+    await mountSection(page, { device_groupings: groupings }, { showEmptyGroups: true });
 
     expect((await groupedBy(page, "Jističe")).map(({ name }) => name)).toEqual(["Ostatní jističe (O)", "Others"]);
     const ids = await page.evaluate(() => {

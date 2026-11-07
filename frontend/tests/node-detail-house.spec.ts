@@ -92,7 +92,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             consumers: [{ ...item("house", "House", "sensor.house"), children: houseChildren }],
             consumptionTotalSensorId: null,
             productionTotalSensorId: null,
-            uiConfig: { show_others_group: false, device_groupings: [], history_buckets: 3, history_bucket_duration: 60 },
+            uiConfig: { device_groupings: [], history_buckets: 3, history_bucket_duration: 60 },
         });
     await page.evaluate(({ v, tree, forecastDefaults, scheduleDefaults }) => {
         const profile = v.profile !== false;

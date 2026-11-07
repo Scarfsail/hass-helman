@@ -73,7 +73,7 @@ const FULL_CARD_TREE = treePayload({
     consumers: [treeNode({ id: "house", displayName: "House", powerSensorId: "sensor.house" })],
     consumptionTotalSensorId: null,
     productionTotalSensorId: null,
-    uiConfig: { show_others_group: false, device_groupings: [], history_buckets: 3, history_bucket_duration: 5 },
+    uiConfig: { device_groupings: [], history_buckets: 3, history_bucket_duration: 5 },
 });
 
 interface Setup {
@@ -781,7 +781,7 @@ test.describe("Schedule lane icons in power card editor", () => {
         ],
         consumptionTotalSensorId: null,
         productionTotalSensorId: null,
-        uiConfig: { show_others_group: false, device_groupings: [], history_buckets: 3, history_bucket_duration: 5 },
+        uiConfig: { device_groupings: [], history_buckets: 3, history_bucket_duration: 5 },
     });
 
     const openDayEditor = async (page: Page, card: string) => {

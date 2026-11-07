@@ -56,7 +56,10 @@ from custom_components.helman.controllables.config import (
     share_energy_entity_id,
 )
 from custom_components.helman.storage import HelmanStorage
-from custom_components.helman.visualization import VISUALIZATION_DEFAULTS, read_visualization
+from custom_components.helman.recent_power_history import (
+    RECENT_POWER_HISTORY_DEFAULTS,
+    read_recent_power_history,
+)
 from custom_components.helman.training.appliance_energy import (
     ApplianceEnergyTrainingRequest,
     SharedMeter,
@@ -185,11 +188,11 @@ class MigrationValidationInvariantTests(unittest.TestCase):
     def test_current_document_with_valid_content_dropped_is_rejected(self) -> None:
         original = {
             "config_version": CONFIG_DOCUMENT_VERSION,
-            "visualization": {"history_buckets": 24},
+            "data_and_learning": {"recent_power_history": {"samples": 24}},
             "energy_nodes": {"grid": {"max_allowed_export_power": -1}},
         }
         migrated, _ids = migrate_config_document(original)
-        migrated.pop("visualization")
+        migrated.pop("data_and_learning")
 
         self.assertTrue(validate_config_document(original).errors)
         self.assertEqual(
@@ -732,16 +735,18 @@ class _Store:
         self.saved.append(payload)
 
 
-class CurrentVisualizationStorageTests(unittest.IsolatedAsyncioTestCase):
+class CurrentRecentPowerHistoryStorageTests(unittest.IsolatedAsyncioTestCase):
     async def test_current_load_keeps_document_sparse_and_save_compacts(self) -> None:
         original = {
             "config_version": CONFIG_DOCUMENT_VERSION,
             "energy_nodes": {},
-            "visualization": {
-                "history_buckets": 60,
-                "history_bucket_duration": 9,
-                "show_empty_groups": False,
-                "unknown_setting": "keep",
+            "data_and_learning": {
+                "training_time": "03:00",
+                "recent_power_history": {
+                    "samples": 60,
+                    "sampling_interval_seconds": 9,
+                    "unknown_setting": "keep",
+                },
             },
         }
         stor = HelmanStorage.__new__(HelmanStorage)
@@ -757,38 +762,111 @@ class CurrentVisualizationStorageTests(unittest.IsolatedAsyncioTestCase):
         expected = {
             "config_version": CONFIG_DOCUMENT_VERSION,
             "energy_nodes": {},
-            "visualization": {
-                "history_bucket_duration": 9,
-                "unknown_setting": "keep",
+            "data_and_learning": {
+                "training_time": "03:00",
+                "recent_power_history": {
+                    "sampling_interval_seconds": 9,
+                    "unknown_setting": "keep",
+                },
             },
         }
         self.assertEqual(stor.config, expected)
         self.assertEqual(stor._store.saved, [expected])
-        self.assertEqual(original["visualization"]["history_buckets"], 60)
+        self.assertEqual(
+            original["data_and_learning"]["recent_power_history"]["samples"], 60
+        )
 
         await stor.async_save(stor.config)
         self.assertEqual(stor._store.saved[-1], expected)
 
-        with patch.dict(VISUALIZATION_DEFAULTS, {"history_buckets": 75, "history_bucket_duration": 10}):
-            effective = read_visualization(stor.config)
-            self.assertEqual(effective["history_buckets"], 75)
-            self.assertEqual(effective["history_bucket_duration"], 9)
+        with patch.dict(
+            RECENT_POWER_HISTORY_DEFAULTS,
+            {"samples": 75, "sampling_interval_seconds": 10},
+        ):
+            effective = read_recent_power_history(stor.config)
+            self.assertEqual(effective["samples"], 75)
+            self.assertEqual(effective["sampling_interval_seconds"], 9)
 
     async def test_invalid_bool_cannot_be_compacted_as_numeric_default(self) -> None:
         stor = HelmanStorage.__new__(HelmanStorage)
         stor._store = _Store()
         with self.assertRaises(ValueError):
-            await stor.async_save({"energy_nodes": {}, "visualization": {"history_buckets": True}})
+            await stor.async_save({
+                "energy_nodes": {},
+                "data_and_learning": {"recent_power_history": {"samples": True}},
+            })
         self.assertEqual(stor._store.saved, [])
 
-    async def test_all_default_values_leave_no_visualization_mapping(self) -> None:
+    async def test_all_default_values_leave_no_recent_power_history_mapping(self) -> None:
         stor = HelmanStorage.__new__(HelmanStorage)
         stor._store = _Store()
         await stor.async_save({
             "energy_nodes": {},
-            "visualization": dict(VISUALIZATION_DEFAULTS),
+            "data_and_learning": {
+                "recent_power_history": dict(RECENT_POWER_HISTORY_DEFAULTS),
+            },
         })
         self.assertEqual(stor.config, {"energy_nodes": {}})
+
+
+class V31ToV32MigrationTests(unittest.TestCase):
+    """``training`` -> ``data_and_learning``; ``visualization`` is retired."""
+
+    TRAINING = {
+        "training_time": "04:30",
+        "house_consumption": {"min_history_days": 14, "training_window_days": 56},
+        "solar_bias": {
+            "min_history_days": 10,
+            "clamp_min": 0.0,
+            "max_training_window_days": 90,
+        },
+    }
+
+    def test_it_moves_training_and_the_history_settings(self) -> None:
+        migrated, _ids = migrate_config_document({
+            "config_version": 31,
+            "training": deepcopy(self.TRAINING),
+            "visualization": {
+                "history_buckets": 90,
+                "history_bucket_duration": 2,
+                "show_empty_groups": True,
+                "show_others_group": False,
+            },
+        })
+
+        self.assertEqual(
+            migrated,
+            {
+                "config_version": CONFIG_DOCUMENT_VERSION,
+                "data_and_learning": {
+                    **self.TRAINING,
+                    "recent_power_history": {
+                        "sampling_interval_seconds": 2,
+                        "samples": 90,
+                    },
+                },
+            },
+        )
+        self.assertEqual(validate_config_document(migrated).errors, [])
+
+    def test_display_flags_alone_leave_nothing_behind(self) -> None:
+        migrated, _ids = migrate_config_document({
+            "config_version": 31,
+            "visualization": {"show_empty_groups": True},
+        })
+
+        self.assertEqual(migrated, {"config_version": CONFIG_DOCUMENT_VERSION})
+
+    def test_history_settings_without_training(self) -> None:
+        migrated, _ids = migrate_config_document({
+            "config_version": 31,
+            "visualization": {"history_bucket_duration": 1},
+        })
+
+        self.assertEqual(
+            migrated["data_and_learning"],
+            {"recent_power_history": {"sampling_interval_seconds": 1}},
+        )
 
 
 class StoredV21LoadTests(unittest.TestCase):
@@ -847,8 +925,10 @@ class StoredV21LoadTests(unittest.TestCase):
             self.config["energy_nodes"]["house"],
             {"entities": {"power": "sensor.house_power"}},
         )
-        self.assertNotIn("power_sensor_name_cleaner_regex", self.config["visualization"])
-        self.assertEqual(self.config["visualization"]["history_buckets"], 90)
+        self.assertNotIn("visualization", self.config)
+        self.assertEqual(
+            self.config["data_and_learning"]["recent_power_history"], {"samples": 90}
+        )
         self.assertEqual(self.storage._store.saved, [self.config])
 
     def test_the_readers_find_the_moved_settings(self) -> None:

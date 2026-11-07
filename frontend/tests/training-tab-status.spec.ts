@@ -46,7 +46,7 @@ const CONFIG = configDoc({
             consumption: { energy_entity_id: "sensor.fridge_energy" },
         },
     ] },
-    training: {},
+    data_and_learning: {},
 });
 
 type Job = Record<string, unknown>;
@@ -149,7 +149,7 @@ async function mountEditor(
 }
 
 async function openTrainingTab(page: Page): Promise<void> {
-    await page.locator(".tabs button", { hasText: "Training" }).click();
+    await page.locator(".tabs button", { hasText: "Data and learning" }).click();
     await expect(page.locator("helman-training-job-status")).toHaveCount(3);
     // The tab's panels start collapsed; open them so their buttons are usable.
     await page.locator("details.section-card").evaluateAll((sections) =>
@@ -178,14 +178,14 @@ function formatted(page: Page, iso: string): Promise<string> {
     return page.evaluate((value) => new Date(value).toLocaleString("en"), iso);
 }
 
-test("one panel per job, in batch order", async ({ page }) => {
+test("one panel per job, in the tab's section order", async ({ page }) => {
     await mountEditor(page, status());
     await openTrainingTab(page);
 
     const ids = await page
         .locator("helman-training-job-status")
         .evaluateAll((elements) => elements.map((element) => element.getAttribute("data-job")));
-    expect(ids).toEqual(["solar_bias", "house_consumption", "appliance_energy"]);
+    expect(ids).toEqual(["house_consumption", "solar_bias", "appliance_energy"]);
     // And the panels read the fixture, not a loading placeholder.
     await expect(healthBadge(page, "solar_bias")).toHaveClass(/health-ok/);
 });
@@ -433,7 +433,7 @@ test("a resolved request with a failed outcome is shown as an error", async ({ p
     await expect(message).not.toContainText("Training finished");
 });
 
-test("the Training tab carries a badge for a failed job without being open", async ({ page }) => {
+test("the Data and learning tab carries a badge for a failed job without being open", async ({ page }) => {
     await mountEditor(
         page,
         status({
@@ -443,8 +443,8 @@ test("the Training tab carries a badge for a failed job without being open", asy
     );
 
     // The editor opens on Energy nodes; the badge reads the same poll anyway.
-    await expect(page.locator(".tabs button.active")).not.toContainText("Training");
-    const badge = page.locator(".tabs button", { hasText: "Training" }).locator(".tab-warning-dot");
+    await expect(page.locator(".tabs button.active")).not.toContainText("Data and learning");
+    const badge = page.locator(".tabs button", { hasText: "Data and learning" }).locator(".tab-warning-dot");
     await expect(badge).toBeVisible();
     await expect(badge).toHaveAttribute("aria-label", /2/);
 });
@@ -468,7 +468,7 @@ test("a degraded-only status puts no badge on the Training tab", async ({ page }
         )
         .toBe(true);
 
-    await expect(page.locator(".tabs button.active")).not.toContainText("Training");
+    await expect(page.locator(".tabs button.active")).not.toContainText("Data and learning");
     await expect(page.locator(".tab-warning-dot")).toHaveCount(0);
 });
 

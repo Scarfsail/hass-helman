@@ -917,7 +917,7 @@ test("switching a charger back to Custom writes what the profile provided, but i
 const INVERTER_ENTITIES: Record<string, string> = {
     "energy_nodes.solar.entities.power": "sensor.solax_pv_power_total",
     "energy_nodes.solar.entities.today_energy": "sensor.solax_today_s_solar_energy",
-    "training.solar_bias.total_energy_entity_id": "sensor.solax_total_solar_energy",
+    "data_and_learning.solar_bias.total_energy_entity_id": "sensor.solax_total_solar_energy",
     "energy_nodes.battery.entities.power": "sensor.solax_battery_power",
     "energy_nodes.battery.entities.capacity": "sensor.solax_battery_capacity",
     "energy_nodes.battery.entities.remaining_energy": "sensor.solax_remaining_battery_capacity",

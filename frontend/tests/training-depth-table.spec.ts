@@ -25,7 +25,7 @@ const ORIGIN = "http://helman.test";
 const CARD_MODULE_URL = "/helman_frontend/helman-card.js?v=9.9.9";
 
 const HOUSE_PATH = ["energy_nodes", "house", "forecast", "total_energy_entity_id"];
-const BIAS_PATH = ["training", "solar_bias", "total_energy_entity_id"];
+const BIAS_PATH = ["data_and_learning", "solar_bias", "total_energy_entity_id"];
 const GRID_PATH = ["energy_nodes", "grid", "entities", "power"];
 const BATTERY_PATH = ["energy_nodes", "battery", "entities", "capacity"];
 const CONTROLLABLE_PATH = ["devices", "consumers", 0, "consumption", "energy_entity_id"];
@@ -81,7 +81,7 @@ const CONFIG = configDoc({
             },
         },
     ] },
-    training: {
+    data_and_learning: {
         house_consumption: { min_history_days: 14, training_window_days: 56 },
         solar_bias: {
             min_history_days: 10,
@@ -230,7 +230,7 @@ async function mountEditor(
             page.evaluate(() => {
                 const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
                 const tab = Array.from(root?.querySelectorAll("button") ?? []).find(
-                    (button) => button.textContent?.trim() === "Training",
+                    (button) => button.textContent?.trim() === "Data and learning",
                 );
                 if (!tab) return false;
                 tab.click();
@@ -612,7 +612,7 @@ test("an appliance row judges depth against its own lookback", async ({ page }) 
 
     const houseRowWarns = await page.evaluate(() => {
         const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
-        const table = root?.querySelectorAll(".training-depth-table")[1];
+        const table = root?.querySelectorAll(".training-depth-table")[0];
         const row = Array.from(table?.querySelectorAll("tbody tr") ?? []).find((tr) =>
             tr.textContent?.includes("Dishwasher"),
         );

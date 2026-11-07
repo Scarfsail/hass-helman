@@ -24,14 +24,13 @@ from .const import (
     SOLAR_BIAS_DEFAULT_TRAINING_TIME,
     SOLAR_DEFAULT_MAX_POWER_W,
 )
-from .visualization import VISUALIZATION_DEFAULTS
+from .recent_power_history import RECENT_POWER_HISTORY_DEFAULTS
 
 #: What an unset optional config field is actually worth at runtime, keyed by
 #: its dotted path in the config document.
 #:
-#: The editor draws most of these as placeholders, while visualization fields
-#: display effective values in their controls. Values are imported
-#: from ``const.py`` rather than written out here: the reader and the hint have
+#: The editor draws these as placeholders. Values are imported from
+#: ``const.py`` rather than written out here: the reader and the hint have
 #: to be the same number, and the only way to guarantee that is to have one
 #: number.
 #:
@@ -43,40 +42,43 @@ from .visualization import VISUALIZATION_DEFAULTS
 #: but its control still has to *stand* on the default rather than on an empty
 #: value, so those paths belong here too and the editor reads them from here.
 CONFIG_FIELD_DEFAULTS: dict[str, object] = {
-    **{f"visualization.{key}": value for key, value in VISUALIZATION_DEFAULTS.items()},
+    **{
+        f"data_and_learning.recent_power_history.{key}": value
+        for key, value in RECENT_POWER_HISTORY_DEFAULTS.items()
+    },
     # ``training/batch.py`` schedules the nightly batch from what
     # ``read_bias_config`` resolves here.
-    "training.training_time": SOLAR_BIAS_DEFAULT_TRAINING_TIME,
+    "data_and_learning.training_time": SOLAR_BIAS_DEFAULT_TRAINING_TIME,
     # solar_bias_correction/models.py: read_bias_config
-    "training.solar_bias.min_history_days": SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS,
-    "training.solar_bias.max_training_window_days": (
+    "data_and_learning.solar_bias.min_history_days": SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS,
+    "data_and_learning.solar_bias.max_training_window_days": (
         SOLAR_BIAS_DEFAULT_MAX_TRAINING_WINDOW_DAYS
     ),
-    "training.solar_bias.min_valid_slot_days": SOLAR_BIAS_DEFAULT_MIN_VALID_SLOT_DAYS,
-    "training.solar_bias.enabled": SOLAR_BIAS_DEFAULT_ENABLED,
-    "training.solar_bias.aggregation_method": SOLAR_BIAS_DEFAULT_AGGREGATION_METHOD,
-    "training.solar_bias.clamp_min": SOLAR_BIAS_DEFAULT_CLAMP_MIN,
-    "training.solar_bias.clamp_max": SOLAR_BIAS_DEFAULT_CLAMP_MAX,
-    "training.solar_bias.max_interpolated_consecutive_slots": (
+    "data_and_learning.solar_bias.min_valid_slot_days": SOLAR_BIAS_DEFAULT_MIN_VALID_SLOT_DAYS,
+    "data_and_learning.solar_bias.enabled": SOLAR_BIAS_DEFAULT_ENABLED,
+    "data_and_learning.solar_bias.aggregation_method": SOLAR_BIAS_DEFAULT_AGGREGATION_METHOD,
+    "data_and_learning.solar_bias.clamp_min": SOLAR_BIAS_DEFAULT_CLAMP_MIN,
+    "data_and_learning.solar_bias.clamp_max": SOLAR_BIAS_DEFAULT_CLAMP_MAX,
+    "data_and_learning.solar_bias.max_interpolated_consecutive_slots": (
         SOLAR_BIAS_DEFAULT_MAX_INTERPOLATED_CONSECUTIVE_SLOTS
     ),
-    "training.solar_bias.slot_invalidation.curtailment_max_export_w": (
+    "data_and_learning.solar_bias.slot_invalidation.curtailment_max_export_w": (
         SOLAR_BIAS_DEFAULT_CURTAILMENT_MAX_EXPORT_W
     ),
-    "training.solar_bias.slot_invalidation.curtailment_max_actual_forecast_ratio": (
+    "data_and_learning.solar_bias.slot_invalidation.curtailment_max_actual_forecast_ratio": (
         SOLAR_BIAS_DEFAULT_CURTAILMENT_MAX_ACTUAL_FORECAST_RATIO
     ),
-    "training.solar_bias.slot_invalidation.data_glitch_min_neighbour_forecast_wh": (
+    "data_and_learning.solar_bias.slot_invalidation.data_glitch_min_neighbour_forecast_wh": (
         SOLAR_BIAS_DEFAULT_DATA_GLITCH_MIN_NEIGHBOUR_FORECAST_WH
     ),
-    "training.solar_bias.slot_invalidation.data_glitch_backfill_max_minutes": (
+    "data_and_learning.solar_bias.slot_invalidation.data_glitch_backfill_max_minutes": (
         SOLAR_BIAS_DEFAULT_DATA_GLITCH_BACKFILL_MAX_MINUTES
     ),
     # consumption_forecast_builder.py: read_house_training_window_config
-    "training.house_consumption.min_history_days": (
+    "data_and_learning.house_consumption.min_history_days": (
         HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS
     ),
-    "training.house_consumption.training_window_days": (
+    "data_and_learning.house_consumption.training_window_days": (
         HOUSE_FORECAST_DEFAULT_TRAINING_WINDOW_DAYS
     ),
     # battery_state.py: read_battery_forecast_settings

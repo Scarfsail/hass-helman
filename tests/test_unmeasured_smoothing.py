@@ -56,7 +56,7 @@ class _FakeStates:
 def _make_tracker(states: dict[str, str]):
     c = make_live_tracker(
         SimpleNamespace(states=_FakeStates(states)),
-        {"visualization": {"history_buckets": 60, "history_bucket_duration": 1}},
+        {"data_and_learning": {"recent_power_history": {"samples": 60, "sampling_interval_seconds": 1}}},
     )
     c._tree = TREE
     return c

@@ -77,7 +77,7 @@ const TREE = treePayload({
             device("Lamp", { switchEntityId: "switch.lamp" }),
         ],
     }],
-    uiConfig: { show_others_group: false, device_groupings: [], history_buckets: 3, history_bucket_duration: 60 },
+    uiConfig: { device_groupings: [], history_buckets: 3, history_bucket_duration: 60 },
 });
 
 const generic = (id: string, name: string) => ({

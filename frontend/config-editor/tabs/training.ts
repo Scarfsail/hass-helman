@@ -19,6 +19,7 @@ import {
   stringValue,
 } from "../../cards/shared/config/form-fields";
 import { configDefaultValue } from "../../cards/shared/config/config-defaults";
+import { formatSeconds } from "../../cards/shared/format";
 import { entityGroupKey, type EntityFact } from "../../cards/shared/config/entity-group";
 import { asJsonObject } from "../../cards/shared/config/config-document";
 import {
@@ -175,7 +176,7 @@ export class TrainingTabController implements ReactiveController {
    * Empty when this tab is not active.
    */
   extraTargets(): { key: string; path: PathSegment[]; always: boolean }[] {
-    if (this.host.activeTab !== "training") return [];
+    if (this.host.activeTab !== "data_and_learning") return [];
     const rows = [
       ...this.houseConsumptionDepthRows(),
       ...this.solarBiasDepthRows(),
@@ -299,7 +300,7 @@ export class TrainingTabController implements ReactiveController {
     return [
       {
         label: this.host._t("editor.training_depth.bias_meter"),
-        path: ["training", "solar_bias", "total_energy_entity_id"],
+        path: ["data_and_learning", "solar_bias", "total_energy_entity_id"],
         roleKey: "editor.training_depth.role_bias_meter",
       },
       {
@@ -857,12 +858,12 @@ export function renderTrainingTab(
           @helman-training-status-changed=${controller.handleTrainingStatusChanged}
         ></helman-training-status>
         ${host._renderSectionScope(
-          SECTION_SCOPE_IDS.training.settings,
+          SECTION_SCOPE_IDS.data_and_learning.training_settings,
           html`
             <div class="field-grid">
               ${renderOptionalTextField(
                 host,
-                ["training", "training_time"],
+                ["data_and_learning", "training_time"],
                 "editor.fields.training_time",
                 "editor.helpers.training_time",
                 "editor.help.training_time",
@@ -872,7 +873,43 @@ export function renderTrainingTab(
           { initialOpen: false },
         )}
       `,
-      { open: false, icon: TAB_ICONS.training },
+      { open: false, icon: TAB_ICONS.data_and_learning },
+    )}
+
+    ${renderTrainingJobSection(
+      host,
+      controller,
+      "house_consumption",
+      "editor.notes.training_house_consumption_what",
+      host._renderSectionScope(
+        SECTION_SCOPE_IDS.data_and_learning.house_consumption,
+        html`
+          <helman-info-callout
+            .hass=${host.hass}
+            .text=${host._t("editor.notes.training_house_consumption")}
+          ></helman-info-callout>
+          <div class="field-grid">
+            ${renderOptionalNumberField(
+              host,
+              ["data_and_learning", "house_consumption", "min_history_days"],
+              "editor.fields.house_consumption_min_history_days",
+              "editor.helpers.house_consumption_min_history_days",
+              "editor.help.house_consumption_min_history_days",
+            )}
+            ${renderOptionalNumberField(
+              host,
+              ["data_and_learning", "house_consumption", "training_window_days"],
+              "editor.fields.house_consumption_training_window_days",
+              "editor.helpers.house_consumption_training_window_days",
+              "editor.help.house_consumption_training_window_days",
+            )}
+          </div>
+        `,
+        { initialOpen: false },
+      ),
+      controller.houseConsumptionDepthRows(),
+      html`${renderInspectorCard(host, controller, "house")}`,
+      (open) => controller.handleInspectorDiagnosticsToggle("house", open),
     )}
 
     ${renderTrainingJobSection(
@@ -881,7 +918,7 @@ export function renderTrainingTab(
       "solar_bias",
       "editor.notes.training_solar_bias_what",
       host._renderSectionScope(
-        SECTION_SCOPE_IDS.training.solar_bias,
+        SECTION_SCOPE_IDS.data_and_learning.solar_bias,
         html`
           <helman-info-callout
             .hass=${host.hass}
@@ -890,21 +927,21 @@ export function renderTrainingTab(
           <div class="field-grid">
             ${renderOptionalNumberField(
               host,
-              ["training", "solar_bias", "min_history_days"],
+              ["data_and_learning", "solar_bias", "min_history_days"],
               "editor.fields.solar_bias_min_history_days",
               "editor.helpers.solar_bias_min_history_days",
               "editor.help.solar_bias_min_history_days",
             )}
             ${renderOptionalNumberField(
               host,
-              ["training", "solar_bias", "max_training_window_days"],
+              ["data_and_learning", "solar_bias", "max_training_window_days"],
               "editor.fields.solar_bias_max_training_window_days",
               "editor.helpers.solar_bias_max_training_window_days",
               "editor.help.solar_bias_max_training_window_days",
             )}
             ${renderOptionalNumberField(
               host,
-              ["training", "solar_bias", "min_valid_slot_days"],
+              ["data_and_learning", "solar_bias", "min_valid_slot_days"],
               "editor.fields.solar_bias_min_valid_slot_days",
               "editor.helpers.solar_bias_min_valid_slot_days",
               "editor.help.solar_bias_min_valid_slot_days",
@@ -914,28 +951,28 @@ export function renderTrainingTab(
           <div class="field-grid">
             ${renderBooleanField(
               host,
-              ["training", "solar_bias", "enabled"],
+              ["data_and_learning", "solar_bias", "enabled"],
               "editor.fields.bias_correction_enabled",
-              configDefaultValue(host.configDefaults, ["training", "solar_bias", "enabled"]) === true,
+              configDefaultValue(host.configDefaults, ["data_and_learning", "solar_bias", "enabled"]) === true,
               "editor.help.bias_correction_enabled",
             )}
             ${renderOptionalNumberField(
               host,
-              ["training", "solar_bias", "clamp_min"],
+              ["data_and_learning", "solar_bias", "clamp_min"],
               "editor.fields.bias_correction_clamp_min",
               undefined,
               "editor.help.bias_correction_clamp_min",
             )}
             ${renderOptionalNumberField(
               host,
-              ["training", "solar_bias", "clamp_max"],
+              ["data_and_learning", "solar_bias", "clamp_max"],
               "editor.fields.bias_correction_clamp_max",
               undefined,
               "editor.help.bias_correction_clamp_max",
             )}
             ${renderSelectFieldWithDefault(
               host,
-              ["training", "solar_bias", "aggregation_method"],
+              ["data_and_learning", "solar_bias", "aggregation_method"],
               "editor.fields.bias_correction_aggregation_method",
               [
                 {
@@ -955,7 +992,7 @@ export function renderTrainingTab(
               ],
               String(
                 configDefaultValue(host.configDefaults, [
-                  "training",
+                  "data_and_learning",
                   "solar_bias",
                   "aggregation_method",
                 ]) ?? "",
@@ -964,13 +1001,13 @@ export function renderTrainingTab(
             )}
             ${renderOptionalNumberField(
               host,
-              ["training", "solar_bias", "max_interpolated_consecutive_slots"],
+              ["data_and_learning", "solar_bias", "max_interpolated_consecutive_slots"],
               "editor.fields.bias_correction_max_interpolated_consecutive_slots",
               "editor.helpers.bias_correction_max_interpolated_consecutive_slots",
               "editor.help.bias_correction_max_interpolated_consecutive_slots",
             )}
             ${host._renderEntityGroup(
-              ["training", "solar_bias", "total_energy_entity_id"],
+              ["data_and_learning", "solar_bias", "total_energy_entity_id"],
               "editor.fields.bias_correction_total_energy_entity",
               {
                 includeDomains: ["sensor"],
@@ -981,7 +1018,7 @@ export function renderTrainingTab(
           </div>
 
           ${host._renderSectionScope(
-            SECTION_SCOPE_IDS.training.solar_bias_slot_invalidation,
+            SECTION_SCOPE_IDS.data_and_learning.solar_bias_slot_invalidation,
             html`
               <helman-info-callout
                 .hass=${host.hass}
@@ -990,7 +1027,7 @@ export function renderTrainingTab(
               <div class="field-grid">
                 ${renderOptionalNumberField(
                   host,
-                  ["training", "solar_bias", "slot_invalidation", "max_battery_soc_percent"],
+                  ["data_and_learning", "solar_bias", "slot_invalidation", "max_battery_soc_percent"],
                   "editor.fields.bias_correction_slot_invalidation_max_battery_soc_percent",
                   "editor.helpers.bias_correction_slot_invalidation_max_battery_soc_percent",
                   "editor.help.bias_correction_slot_invalidation_max_battery_soc_percent",
@@ -998,7 +1035,7 @@ export function renderTrainingTab(
                 )}
                 ${renderOptionalNumberField(
                   host,
-                  ["training", "solar_bias", "slot_invalidation", "curtailment_max_export_w"],
+                  ["data_and_learning", "solar_bias", "slot_invalidation", "curtailment_max_export_w"],
                   "editor.fields.bias_correction_slot_invalidation_curtailment_max_export_w",
                   "editor.helpers.bias_correction_slot_invalidation_curtailment_max_export_w",
                   "editor.help.bias_correction_slot_invalidation_curtailment_max_export_w",
@@ -1007,7 +1044,7 @@ export function renderTrainingTab(
                 ${renderOptionalNumberField(
                   host,
                   [
-                    "training",
+                    "data_and_learning",
                     "solar_bias",
                     "slot_invalidation",
                     "curtailment_max_actual_forecast_ratio",
@@ -1019,7 +1056,7 @@ export function renderTrainingTab(
                 )}
                 ${renderOptionalNumberField(
                   host,
-                  ["training", "solar_bias", "slot_invalidation", "data_glitch_max_slot_wh"],
+                  ["data_and_learning", "solar_bias", "slot_invalidation", "data_glitch_max_slot_wh"],
                   "editor.fields.bias_correction_slot_invalidation_data_glitch_max_slot_wh",
                   "editor.helpers.bias_correction_slot_invalidation_data_glitch_max_slot_wh",
                   "editor.help.bias_correction_slot_invalidation_data_glitch_max_slot_wh",
@@ -1028,7 +1065,7 @@ export function renderTrainingTab(
                 ${renderOptionalNumberField(
                   host,
                   [
-                    "training",
+                    "data_and_learning",
                     "solar_bias",
                     "slot_invalidation",
                     "data_glitch_min_neighbour_forecast_wh",
@@ -1040,7 +1077,7 @@ export function renderTrainingTab(
                 )}
                 ${renderOptionalNumberField(
                   host,
-                  ["training", "solar_bias", "slot_invalidation", "data_glitch_backfill_max_minutes"],
+                  ["data_and_learning", "solar_bias", "slot_invalidation", "data_glitch_backfill_max_minutes"],
                   "editor.fields.bias_correction_slot_invalidation_data_glitch_backfill_max_minutes",
                   "editor.helpers.bias_correction_slot_invalidation_data_glitch_backfill_max_minutes",
                   "editor.help.bias_correction_slot_invalidation_data_glitch_backfill_max_minutes",
@@ -1067,42 +1104,6 @@ export function renderTrainingTab(
     ${renderTrainingJobSection(
       host,
       controller,
-      "house_consumption",
-      "editor.notes.training_house_consumption_what",
-      host._renderSectionScope(
-        SECTION_SCOPE_IDS.training.house_consumption,
-        html`
-          <helman-info-callout
-            .hass=${host.hass}
-            .text=${host._t("editor.notes.training_house_consumption")}
-          ></helman-info-callout>
-          <div class="field-grid">
-            ${renderOptionalNumberField(
-              host,
-              ["training", "house_consumption", "min_history_days"],
-              "editor.fields.house_consumption_min_history_days",
-              "editor.helpers.house_consumption_min_history_days",
-              "editor.help.house_consumption_min_history_days",
-            )}
-            ${renderOptionalNumberField(
-              host,
-              ["training", "house_consumption", "training_window_days"],
-              "editor.fields.house_consumption_training_window_days",
-              "editor.helpers.house_consumption_training_window_days",
-              "editor.help.house_consumption_training_window_days",
-            )}
-          </div>
-        `,
-        { initialOpen: false },
-      ),
-      controller.houseConsumptionDepthRows(),
-      html`${renderInspectorCard(host, controller, "house")}`,
-      (open) => controller.handleInspectorDiagnosticsToggle("house", open),
-    )}
-
-    ${renderTrainingJobSection(
-      host,
-      controller,
       "appliance_energy",
       "editor.notes.training_appliance_energy",
       nothing,
@@ -1111,5 +1112,60 @@ export function renderTrainingTab(
       undefined,
       () => renderApplianceEnergyTable(host, controller, applianceDevices),
     )}
+
+    ${renderRecentPowerHistorySection(host)}
   `;
+}
+
+const RECENT_POWER_HISTORY_PATH = ["data_and_learning", "recent_power_history"];
+
+/**
+ * The live power sampling settings, with how much history they keep. The
+ * duration is computed from the effective values -- stored, else the backend
+ * default -- and left out while either draft value is not a positive integer.
+ */
+function renderRecentPowerHistorySection(host: HelmanConfigEditorPanel): TemplateResult {
+  const effective = (key: string): unknown => {
+    const path = [...RECENT_POWER_HISTORY_PATH, key];
+    return host.getValue(path) ?? configDefaultValue(host.configDefaults, path);
+  };
+  const interval = effective("sampling_interval_seconds");
+  const samples = effective("samples");
+  const valid = (value: unknown): value is number =>
+    typeof value === "number" && Number.isInteger(value) && value > 0;
+  return host._renderSectionScope(
+    SECTION_SCOPE_IDS.data_and_learning.recent_power_history,
+    html`
+      <helman-info-callout
+        .hass=${host.hass}
+        .text=${host._t("editor.notes.recent_power_history")}
+      ></helman-info-callout>
+      <div class="field-grid">
+        ${renderOptionalNumberField(
+          host,
+          [...RECENT_POWER_HISTORY_PATH, "sampling_interval_seconds"],
+          "editor.fields.recent_power_history_sampling_interval_seconds",
+          "editor.helpers.recent_power_history_sampling_interval_seconds",
+          "editor.help.recent_power_history_sampling_interval_seconds",
+          { min: 1, suffix: "s" },
+        )}
+        ${renderOptionalNumberField(
+          host,
+          [...RECENT_POWER_HISTORY_PATH, "samples"],
+          "editor.fields.recent_power_history_samples",
+          "editor.helpers.recent_power_history_samples",
+          "editor.help.recent_power_history_samples",
+          { min: 1 },
+        )}
+      </div>
+      ${valid(interval) && valid(samples)
+        ? html`<p class="inline-note recent-power-history-duration">
+            ${host._t("editor.notes.recent_power_history_duration", {
+              duration: formatSeconds(interval * samples, host.hass?.language),
+            })}
+          </p>`
+        : nothing}
+    `,
+    { initialOpen: false },
+  );
 }

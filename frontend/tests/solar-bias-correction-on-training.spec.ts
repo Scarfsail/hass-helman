@@ -22,7 +22,7 @@ const CONFIG = configDoc({
         },
     },
     devices: { consumers: [] },
-    training: {
+    data_and_learning: {
         solar_bias: {
             min_history_days: 10,
             enabled: false,
@@ -91,8 +91,8 @@ async function mountEditor(page: Page): Promise<void> {
                             valid: false,
                             errors: [
                                 {
-                                    section: "training",
-                                    path: "training.solar_bias.clamp_min",
+                                    section: "data_and_learning",
+                                    path: "data_and_learning.solar_bias.clamp_min",
                                     code: "out_of_range",
                                     message: "clamp_min is out of range",
                                 },
@@ -172,9 +172,9 @@ async function setNumber(page: Page, label: string, value: string): Promise<void
     }, value);
 }
 
-test("bias correction edited on Training saves under training.solar_bias", async ({ page }) => {
+test("bias correction edited on Data and learning saves under data_and_learning.solar_bias", async ({ page }) => {
     await mountEditor(page);
-    await openTab(page, "Training");
+    await openTab(page, "Data and learning");
     await openSection(page, "Solar forecast correction");
 
     // One scope owns the whole solar bias config: no separate correction card.
@@ -188,7 +188,7 @@ test("bias correction edited on Training saves under training.solar_bias", async
         has: page.locator("ha-formfield"),
     });
     await expect(enabled).toHaveCount(1);
-    // On a tab named Training the switch says it gates applying too.
+    // On a tab named Data and learning the switch says it gates applying too.
     await expect(enabled.locator(".help-btn")).toHaveCount(1);
     await enabled.locator("ha-switch").evaluate((element) => {
         (element as HTMLElement & { checked: boolean }).checked = true;
@@ -201,7 +201,7 @@ test("bias correction edited on Training saves under training.solar_bias", async
     await expect.poll(() => page.evaluate(() => (window as any).__saved.length)).toBe(1);
 
     const saved = await page.evaluate(() => (window as any).__saved[0]);
-    expect(saved.training.solar_bias).toEqual({
+    expect(saved.data_and_learning.solar_bias).toEqual({
         min_history_days: 10,
         enabled: true,
         clamp_min: 0.2,
@@ -233,7 +233,7 @@ test("Energy nodes -> Solar holds only its entities and forecast sources", async
         has: page.locator(".section-summary-label", { hasText: "Forecast" }),
     });
     await expect(forecast.locator(":scope > .section-content > .inline-note")).toContainText(
-        "Training tab",
+        "Data and learning tab",
     );
 });
 
@@ -253,23 +253,23 @@ test("the Solar bias panel's YAML view holds day counts and correction together"
     page,
 }) => {
     await mountEditor(page);
-    await openTab(page, "Training");
+    await openTab(page, "Data and learning");
     await openSection(page, "Solar forecast correction");
     await openCard(solarBiasConfig(page));
     await setMode(solarBiasConfig(page), "YAML");
 
     expect(await yamlValue(solarBiasConfig(page))).toEqual(
-        CONFIG.training.solar_bias,
+        CONFIG.data_and_learning.solar_bias,
     );
 });
 
 test("the Training tab's YAML view holds the correction settings", async ({ page }) => {
     await mountEditor(page);
-    await openTab(page, "Training");
+    await openTab(page, "Data and learning");
     await page.locator(".scope-toolbar .mode-toggle button", { hasText: "YAML" }).click();
 
     const value = (await yamlValue(page.locator(".tab-scope"))) as Record<string, any>;
-    expect(value.solar_bias).toEqual(CONFIG.training.solar_bias);
+    expect(value.solar_bias).toEqual(CONFIG.data_and_learning.solar_bias);
 });
 
 test("a validation issue on a bias field counts on the Training tab", async ({ page }) => {
@@ -277,6 +277,6 @@ test("a validation issue on a bias field counts on the Training tab", async ({ p
     await page.locator("button", { hasText: "Validate" }).click();
 
     const tab = (label: string) => page.locator(".tabs button", { hasText: label });
-    await expect(tab("Training").locator(".tab-count.errors")).toHaveText("1");
+    await expect(tab("Data and learning").locator(".tab-count.errors")).toHaveText("1");
     await expect(tab("Energy nodes").locator(".tab-count")).toHaveCount(0);
 });

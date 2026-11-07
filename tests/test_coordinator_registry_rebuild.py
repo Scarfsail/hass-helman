@@ -208,7 +208,7 @@ class LivePowerTrackerLifecycleTests(unittest.TestCase):
     def test_retracking_rearms_one_tick_and_unload_drops_everything(self) -> None:
         tracker = make_live_tracker(
             FakeHass(),
-            {"visualization": {"history_buckets": 5, "history_bucket_duration": 5}},
+            {"data_and_learning": {"recent_power_history": {"samples": 5, "sampling_interval_seconds": 5}}},
         )
         armed: list = []
         stopped: list = []

@@ -16,12 +16,16 @@
     "fields": {
       "card_size": "Velikost karty",
       "max_power": "Maximální výkon (W)",
-      "collapsed_consumers_count": "Počet zobrazených spotřebičů ve sbaleném stavu"
+      "collapsed_consumers_count": "Počet zobrazených spotřebičů ve sbaleném stavu",
+      "show_empty_groups": "Zobrazit prázdné skupiny",
+      "show_others_group": "Zobrazit skupinu Ostatní"
     },
     "helpers": {
       "card_size": "Počet řádků mřížky, které karta nahlásí rozvržení dashboardu",
       "max_power": "Omezuje škálu šipek toku výkonu; nechte prázdné pro automatické škálování",
-      "collapsed_consumers_count": "Počet spotřebičů domu zobrazených před tlačítkem „Více“; výchozí hodnota je 3"
+      "collapsed_consumers_count": "Počet spotřebičů domu zobrazených před tlačítkem „Více“; výchozí hodnota je 3",
+      "show_empty_groups": "Když je aktivní filtr „Seskupit podle“, zobrazí i skupiny bez zařízení",
+      "show_others_group": "Když je aktivní filtr „Seskupit podle“, zobrazí zařízení mimo všechny skupiny pod Ostatní"
     }
   },
   "node_detail": {

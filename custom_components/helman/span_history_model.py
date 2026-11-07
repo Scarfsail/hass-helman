@@ -134,7 +134,7 @@ def read_span_meters(config: dict[str, Any]) -> SpanMeters:
     grid = read_grid_entities(config)
     battery = read_battery_entities(config)
     # The bias meter overrides the documented solar-forecast meter fallback.
-    solar = get(config, "training.solar_bias.total_energy_entity_id") or get(
+    solar = get(config, "data_and_learning.solar_bias.total_energy_entity_id") or get(
         config, "energy_nodes.solar.forecast.total_energy_entity_id"
     )
     return SpanMeters(

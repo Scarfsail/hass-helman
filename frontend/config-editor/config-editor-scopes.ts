@@ -1,4 +1,4 @@
-import { mdiFilterRemoveOutline, mdiSineWave, mdiStethoscope } from "@mdi/js";
+import { mdiChartTimelineVariant, mdiFilterRemoveOutline, mdiSineWave, mdiStethoscope } from "@mdi/js";
 import {
   createDocumentScopeAdapter,
   createPathScopeAdapter,
@@ -11,19 +11,16 @@ import type { JsonArray, JsonObject } from "../cards/shared/config/types";
 export type EditorMode = "visual" | "yaml";
 export type TabId =
   | "energy_nodes"
-  | "training"
+  | "data_and_learning"
   | "automation"
-  | "devices"
-  | "visualization";
+  | "devices";
 
 export type ScopeId =
   | "document"
   | "tab:energy_nodes"
-  | "tab:training"
+  | "tab:data_and_learning"
   | "tab:automation"
   | "tab:devices"
-  | "tab:visualization"
-  | "section:visualization.card_labels_and_history"
   | "section:energy_nodes.inverter"
   | "section:energy_nodes.house"
   | "section:energy_nodes.house.forecast"
@@ -33,10 +30,11 @@ export type ScopeId =
   | "section:energy_nodes.battery.forecast"
   | "section:energy_nodes.grid"
   | "section:energy_nodes.grid.forecast"
-  | "section:training.settings"
-  | "section:training.house_consumption"
-  | "section:training.solar_bias"
-  | "section:training.solar_bias.slot_invalidation"
+  | "section:data_and_learning.training_settings"
+  | "section:data_and_learning.house_consumption"
+  | "section:data_and_learning.solar_bias"
+  | "section:data_and_learning.solar_bias.slot_invalidation"
+  | "section:data_and_learning.recent_power_history"
   | "section:automation.settings"
   | "section:automation.appliance_optimizer_pipeline"
   | "section:automation.system_optimizer_pipeline"
@@ -59,7 +57,7 @@ const CONFIGURATION_ICON = "M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3
 /** The Diagnostics panels, which are plain panels rather than scopes. */
 export const DIAGNOSTICS_ICON = mdiStethoscope;
 
-/** The Training tab's job panels; their Configuration scopes carry the cog. */
+/** The Data and learning tab's job panels; their Configuration scopes carry the cog. */
 export const TRAINING_JOB_ICONS: Record<"solar_bias" | "house_consumption" | "appliance_energy", string> = {
   solar_bias: "M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M10,16.5H14V18H10V16.5M10,11H14V15H10V11M12,5.5A1.5,1.5 0 0,1 13.5,7A1.5,1.5 0 0,1 12,8.5A1.5,1.5 0 0,1 10.5,7A1.5,1.5 0 0,1 12,5.5Z",
   house_consumption: "M10,20V14H14V20H19V12H22L12,3L2,12H5V20H10Z",
@@ -68,10 +66,9 @@ export const TRAINING_JOB_ICONS: Record<"solar_bias" | "house_consumption" | "ap
 
 export const TAB_ICONS: Record<TabId, string> = {
   energy_nodes: "M7,2V13H10V22L17,11H13L17,2H7Z",
-  training: "M12,3L1,9L12,15L21,10.09V17H23V9M5,13.18V17.18L12,21L19,17.18V13.18L12,17L5,13.18Z",
+  data_and_learning: "M12,3L1,9L12,15L21,10.09V17H23V9M5,13.18V17.18L12,21L19,17.18V13.18L12,17L5,13.18Z",
   automation: "M4,7H13V9H4V7M4,11H13V13H4V11M4,15H10V17H4V15M14.94,13.5L17,17.07L19.06,13.5L17,9.93L14.94,13.5M17,7C17.34,7 17.67,7.04 18,7.09L18.41,5.11H15.59L16,7.09C16.33,7.04 16.66,7 17,7M10.25,8.66L11.92,9.65C12.28,9.13 12.72,8.69 13.24,8.33L12.25,6.66L10.25,8.66M13.24,18.67C12.72,18.31 12.28,17.87 11.92,17.35L10.25,18.34L12.25,20.34L13.24,18.67M17,20C16.66,20 16.33,19.96 16,19.91L15.59,21.89H18.41L18,19.91C17.67,19.96 17.34,20 17,20M20.76,18.67L21.75,20.34L23.75,18.34L22.08,17.35C21.72,17.87 21.28,18.31 20.76,18.67M20.76,8.33C21.28,8.69 21.72,9.13 22.08,9.65L23.75,8.66L21.75,6.66L20.76,8.33Z",
   devices: "M5,3H19A2,2 0 0,1 21,5V19A2,2 0 0,1 19,21H5A2,2 0 0,1 3,19V5A2,2 0 0,1 5,3M7,7V9H17V7H7M7,11V13H17V11H7M7,15V17H14V15H7Z",
-  visualization: "M21,8V6H3V8H21M3,18H12V16H3V18M3,13H21V11H3V13Z",
 };
 
 /** One glyph for every device's `forecast` sub-panel. */
@@ -79,7 +76,6 @@ const FORECAST_ICON =
   "M16,11.78L20.24,4.45L21.97,5.45L16.74,14.5L10.23,10.27L5.46,19H22V21H2V3H4V17.54L9.5,8L16,11.78Z";
 
 export const SECTION_ICONS: Record<string, string> = {
-  "section:visualization.card_labels_and_history": "M14,17H7V15H14M17,13H7V11H17M17,9H7V7H17M19,3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5C21,3.89 20.1,3 19,3Z",
   "section:energy_nodes.inverter": mdiSineWave,
   "section:energy_nodes.house": "M10,20V14H14V20H19V12H22L12,3L2,12H5V20H10Z",
   "section:energy_nodes.house.forecast": FORECAST_ICON,
@@ -89,12 +85,13 @@ export const SECTION_ICONS: Record<string, string> = {
   "section:energy_nodes.battery.forecast": FORECAST_ICON,
   "section:energy_nodes.grid": "M20,14A2,2 0 0,1 22,16V20A2,2 0 0,1 20,22H4A2,2 0 0,1 2,20V16A2,2 0 0,1 4,14H11V12H9V10H11V8H9V6H11V4A2,2 0 0,1 13,4V6H15V8H13V10H15V12H13V14H20M4,16V20H20V16H4M6,17H8V19H6V17M9,17H11V19H9V17M12,17H14V19H12V17Z",
   "section:energy_nodes.grid.forecast": FORECAST_ICON,
-  "section:training.settings": CONFIGURATION_ICON,
-  "section:training.house_consumption": CONFIGURATION_ICON,
+  "section:data_and_learning.training_settings": CONFIGURATION_ICON,
+  "section:data_and_learning.house_consumption": CONFIGURATION_ICON,
   // What the panel does is drop slots from the training data, not explain
   // something: the info icon it carried read as a hint rather than a filter.
-  "section:training.solar_bias.slot_invalidation": mdiFilterRemoveOutline,
-  "section:training.solar_bias": CONFIGURATION_ICON,
+  "section:data_and_learning.solar_bias.slot_invalidation": mdiFilterRemoveOutline,
+  "section:data_and_learning.solar_bias": CONFIGURATION_ICON,
+  "section:data_and_learning.recent_power_history": mdiChartTimelineVariant,
   "section:automation.settings": "M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.95C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.68 16.04,18.34 16.56,17.95L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z",
   "section:automation.appliance_optimizer_pipeline": "M4,7H20V9H4V7M4,11H20V13H4V11M4,15H14V17H4V15",
   "section:automation.system_optimizer_pipeline": "M4,7H20V9H4V7M4,11H20V13H4V11M4,15H14V17H4V15",
@@ -107,14 +104,12 @@ export const TABS: Array<{ id: TabId; labelKey: string }> = [
   { id: "energy_nodes", labelKey: "editor.tabs.energy_nodes" },
   { id: "devices", labelKey: "editor.tabs.devices" },
   { id: "automation", labelKey: "editor.tabs.automation" },
-  { id: "training", labelKey: "editor.tabs.training" },
-  { id: "visualization", labelKey: "editor.tabs.visualization" },
+  { id: "data_and_learning", labelKey: "editor.tabs.data_and_learning" },
 ];
 
 export const TAB_SECTIONS: Record<string, TabId> = {
-  visualization: "visualization",
   energy_nodes: "energy_nodes",
-  training: "training",
+  data_and_learning: "data_and_learning",
   automation: "automation",
   devices: "devices",
   root: "energy_nodes",
@@ -124,16 +119,12 @@ export const DOCUMENT_SCOPE_ID = "document" as const;
 
 export const TAB_SCOPE_IDS = {
   energy_nodes: "tab:energy_nodes",
-  training: "tab:training",
+  data_and_learning: "tab:data_and_learning",
   automation: "tab:automation",
   devices: "tab:devices",
-  visualization: "tab:visualization",
 } as const satisfies Record<TabId, ScopeId>;
 
 export const SECTION_SCOPE_IDS = {
-  visualization: {
-    card_labels_and_history: "section:visualization.card_labels_and_history",
-  },
   energy_nodes: {
     inverter: "section:energy_nodes.inverter",
     house: "section:energy_nodes.house",
@@ -145,11 +136,12 @@ export const SECTION_SCOPE_IDS = {
     grid: "section:energy_nodes.grid",
     grid_forecast: "section:energy_nodes.grid.forecast",
   },
-  training: {
-    settings: "section:training.settings",
-    house_consumption: "section:training.house_consumption",
-    solar_bias: "section:training.solar_bias",
-    solar_bias_slot_invalidation: "section:training.solar_bias.slot_invalidation",
+  data_and_learning: {
+    training_settings: "section:data_and_learning.training_settings",
+    house_consumption: "section:data_and_learning.house_consumption",
+    solar_bias: "section:data_and_learning.solar_bias",
+    solar_bias_slot_invalidation: "section:data_and_learning.solar_bias.slot_invalidation",
+    recent_power_history: "section:data_and_learning.recent_power_history",
   },
   automation: {
     settings: "section:automation.settings",
@@ -163,23 +155,13 @@ export const SECTION_SCOPE_IDS = {
   },
 } as const;
 
-const CARD_LABELS_AND_HISTORY_KEYS = [
-  "history_buckets",
-  "history_bucket_duration",
-  "show_empty_groups",
-  "show_others_group",
-] as const;
-
 const EMPTY_OBJECT: JsonObject = {};
 const EMPTY_ARRAY: JsonArray = [];
 
-const CARD_LABELS_AND_HISTORY_MEMBERS = CARD_LABELS_AND_HISTORY_KEYS.map(
-  (key) => ({ yamlKey: key, documentPath: ["visualization", key] }),
-) satisfies ScopeProjectionMember[];
 const TRAINING_SETTINGS_MEMBERS = [
   {
     yamlKey: "training_time",
-    documentPath: ["training", "training_time"],
+    documentPath: ["data_and_learning", "training_time"],
   },
 ] satisfies ScopeProjectionMember[];
 const DEVICES_SETTINGS_MEMBERS = [
@@ -212,13 +194,13 @@ export const EDITOR_SCOPES = {
       rootKind: "object",
     }),
   },
-  [TAB_SCOPE_IDS.training]: {
-    id: TAB_SCOPE_IDS.training,
+  [TAB_SCOPE_IDS.data_and_learning]: {
+    id: TAB_SCOPE_IDS.data_and_learning,
     kind: "tab",
     parentId: DOCUMENT_SCOPE_ID,
-    tabId: "training",
-    labelKey: "editor.tabs.training",
-    adapter: createPathScopeAdapter(["training"], {
+    tabId: "data_and_learning",
+    labelKey: "editor.tabs.data_and_learning",
+    adapter: createPathScopeAdapter(["data_and_learning"], {
       emptyValue: EMPTY_OBJECT,
       rootKind: "object",
     }),
@@ -244,25 +226,6 @@ export const EDITOR_SCOPES = {
       emptyValue: EMPTY_OBJECT,
       rootKind: "object",
     }),
-  },
-  [TAB_SCOPE_IDS.visualization]: {
-    id: TAB_SCOPE_IDS.visualization,
-    kind: "tab",
-    parentId: DOCUMENT_SCOPE_ID,
-    tabId: "visualization",
-    labelKey: "editor.tabs.visualization",
-    adapter: createPathScopeAdapter(["visualization"], {
-      emptyValue: EMPTY_OBJECT,
-      rootKind: "object",
-    }),
-  },
-  [SECTION_SCOPE_IDS.visualization.card_labels_and_history]: {
-    id: SECTION_SCOPE_IDS.visualization.card_labels_and_history,
-    kind: "section",
-    parentId: TAB_SCOPE_IDS.visualization,
-    tabId: "visualization",
-    labelKey: "editor.sections.card_labels_and_history",
-    adapter: createProjectionScopeAdapter(CARD_LABELS_AND_HISTORY_MEMBERS),
   },
   [SECTION_SCOPE_IDS.energy_nodes.inverter]: {
     id: SECTION_SCOPE_IDS.energy_nodes.inverter,
@@ -363,43 +326,54 @@ export const EDITOR_SCOPES = {
       rootKind: "object",
     }),
   },
-  [SECTION_SCOPE_IDS.training.settings]: {
-    id: SECTION_SCOPE_IDS.training.settings,
+  [SECTION_SCOPE_IDS.data_and_learning.training_settings]: {
+    id: SECTION_SCOPE_IDS.data_and_learning.training_settings,
     kind: "section",
-    parentId: TAB_SCOPE_IDS.training,
-    tabId: "training",
+    parentId: TAB_SCOPE_IDS.data_and_learning,
+    tabId: "data_and_learning",
     labelKey: "editor.sections.config",
     adapter: createProjectionScopeAdapter(TRAINING_SETTINGS_MEMBERS),
   },
-  [SECTION_SCOPE_IDS.training.house_consumption]: {
-    id: SECTION_SCOPE_IDS.training.house_consumption,
+  [SECTION_SCOPE_IDS.data_and_learning.house_consumption]: {
+    id: SECTION_SCOPE_IDS.data_and_learning.house_consumption,
     kind: "section",
-    parentId: TAB_SCOPE_IDS.training,
-    tabId: "training",
+    parentId: TAB_SCOPE_IDS.data_and_learning,
+    tabId: "data_and_learning",
     labelKey: "editor.sections.config",
-    adapter: createPathScopeAdapter(["training", "house_consumption"], {
+    adapter: createPathScopeAdapter(["data_and_learning", "house_consumption"], {
       emptyValue: EMPTY_OBJECT,
       rootKind: "object",
     }),
   },
-  [SECTION_SCOPE_IDS.training.solar_bias]: {
-    id: SECTION_SCOPE_IDS.training.solar_bias,
+  [SECTION_SCOPE_IDS.data_and_learning.solar_bias]: {
+    id: SECTION_SCOPE_IDS.data_and_learning.solar_bias,
     kind: "section",
-    parentId: TAB_SCOPE_IDS.training,
-    tabId: "training",
+    parentId: TAB_SCOPE_IDS.data_and_learning,
+    tabId: "data_and_learning",
     labelKey: "editor.sections.config",
-    adapter: createPathScopeAdapter(["training", "solar_bias"], {
+    adapter: createPathScopeAdapter(["data_and_learning", "solar_bias"], {
       emptyValue: EMPTY_OBJECT,
       rootKind: "object",
     }),
   },
-  [SECTION_SCOPE_IDS.training.solar_bias_slot_invalidation]: {
-    id: SECTION_SCOPE_IDS.training.solar_bias_slot_invalidation,
+  [SECTION_SCOPE_IDS.data_and_learning.solar_bias_slot_invalidation]: {
+    id: SECTION_SCOPE_IDS.data_and_learning.solar_bias_slot_invalidation,
     kind: "section",
-    parentId: SECTION_SCOPE_IDS.training.solar_bias,
-    tabId: "training",
+    parentId: SECTION_SCOPE_IDS.data_and_learning.solar_bias,
+    tabId: "data_and_learning",
     labelKey: "editor.sections.bias_correction_slot_invalidation",
-    adapter: createPathScopeAdapter(["training", "solar_bias", "slot_invalidation"], {
+    adapter: createPathScopeAdapter(["data_and_learning", "solar_bias", "slot_invalidation"], {
+      emptyValue: EMPTY_OBJECT,
+      rootKind: "object",
+    }),
+  },
+  [SECTION_SCOPE_IDS.data_and_learning.recent_power_history]: {
+    id: SECTION_SCOPE_IDS.data_and_learning.recent_power_history,
+    kind: "section",
+    parentId: TAB_SCOPE_IDS.data_and_learning,
+    tabId: "data_and_learning",
+    labelKey: "editor.sections.recent_power_history",
+    adapter: createPathScopeAdapter(["data_and_learning", "recent_power_history"], {
       emptyValue: EMPTY_OBJECT,
       rootKind: "object",
     }),

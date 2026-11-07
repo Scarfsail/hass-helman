@@ -61,7 +61,7 @@ def _make_tracker(states: dict[str, str]):
     hass = FakeHass()
     hass.states = _FakeStates(states)
     c = make_live_tracker(
-        hass, {"visualization": {"history_buckets": 5, "history_bucket_duration": 1}}
+        hass, {"data_and_learning": {"recent_power_history": {"samples": 5, "sampling_interval_seconds": 1}}}
     )
     c._compute_derived_powers = lambda: ({}, {})
     c._compute_consumption_total = lambda: 1000.0

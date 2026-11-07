@@ -92,22 +92,43 @@ Top-level schema is `HelmanCardConfig`. Only `energy_nodes` is required; everyth
 - `type`: string — Must be `custom:helman-card`.
 - `max_power`: number — Scaling reference (W) for animated flow arrows. Defaults to a 3-phase 25A
   system: `25 * 230 * 3`.
+- `show_empty_groups`: boolean — While a "Group by" filter is active, also list the groups with no devices. Default: `false`.
+- `show_others_group`: boolean — While a "Group by" filter is active, list the devices outside every group under "Others". Default: `true`.
 
-**`visualization`**
-Everything the Helman card renders with. Under `visualization` since config version 18; the same
-keys used to sit at the top level, and a stored config is migrated on load.
+Each card carries its own group options, so two cards can show the same devices differently:
+
+```yaml
+- type: custom:helman-card
+- type: custom:helman-card
+  show_empty_groups: true
+  show_others_group: false
+```
+
+**Breaking change (config version 32):** `show_empty_groups` and `show_others_group` used to be Helman config keys under `visualization`. The upgrade discards the stored values and does not touch your dashboards: set any non-default value again on each card. The save refuses the old keys.
+
 Config version 27 dropped the panel texts and the energy node display names, which the card now localizes; a stored config is migrated on load and the old keys are refused on save.
-- `history_buckets`: number — Number of history samples to keep/render. Default: 60.
-- `history_bucket_duration`: number — Duration of each bucket in seconds (also the live update
-  interval). Default: 5.
-- `show_empty_groups` / `show_others_group`: control the "Others" group.
-  Defaults: `false`, `true`.
 
-The editor displays these effective values even when their keys are absent. On save,
-values matching the current defaults are omitted so they follow future defaults;
-explicit differing values remain overrides. A stored value matching today's default
-starts following defaults on its next save. Opening or restarting a current config
-does not add omitted values.
+**`data_and_learning`**
+The Helman config section edited on the config editor's Data and learning tab: when training runs (`training_time`), the house consumption and solar bias training settings (`house_consumption`, `solar_bias`) and the recent power history (`recent_power_history`). Config version 32 renamed it from `training` and moved the recent power history here from `visualization`, which it retired; a stored config is migrated on load and the old keys are refused on save.
+
+```yaml
+data_and_learning:
+  training_time: "03:00"
+  house_consumption:
+    min_history_days: 14
+    training_window_days: 56
+  solar_bias:
+    min_history_days: 10
+    max_training_window_days: 90
+  recent_power_history:
+    sampling_interval_seconds: 5
+    samples: 60
+```
+
+- `recent_power_history.sampling_interval_seconds`: number — How often, in seconds, Helman takes a power reading for the in-memory recent power history; it also paces the derived power values (unmeasured consumption, shared power estimates). Unmeasured power is smoothed with a median over a fixed 15 s window, so an interval above 10 s disables that smoothing. Default: 5.
+- `recent_power_history.samples`: number — How many readings the recent power history keeps. The Helman card draws each row's inline power bars from it, and the battery time-to-full and time-to-empty estimates average over it. Default: 60, which at the default interval is the last 5 minutes. It is not Home Assistant's recorded history.
+
+The editor shows these defaults as placeholders while their keys are absent. On save, values matching the current defaults are omitted so they follow future defaults; explicit differing values remain overrides. Opening or restarting a current config does not add omitted values.
 
 **`energy_nodes`**
 Defines the battery inverter and the entities for the four power endpoints. At least `house.entities.power` should be provided to
@@ -154,10 +175,9 @@ devices:
   consumers:
     - id: dishwasher
       groups: { location: kitchen }
-visualization:
-  show_empty_groups: false
-  show_others_group: true
 ```
+
+Whether empty groups and the "Others" group are listed is set on each card (`show_empty_groups`, `show_others_group`; see the card's options above).
 
 Groupings and their groups are edited in the "Device groupings" section of the config editor's Devices tab. A device is in a group only through its own `groups` entry; a child does not take its parent's group. That entry is set in two places. In the groupings section each group lists its consumers as chips, children included, followed by an "Unassigned" area with every consumer that has no group of its own, and dragging a chip into another group or into "Unassigned" sets or removes that device's `groups` entry and nothing else. In the device editor, on the Devices tab and in the card's device dialog, a consumer's collapsed "Groups" section lists its groups and has one picker per grouping, where "None" removes the entry. The order of devices inside a group is the device tree's and is not stored. Removing a group or a grouping there also removes it from every device. Any consumer may carry `groups`, children included. On the card, a child with no group of its own stays nested under its parent, wherever the parent is filed, while a child assigned to a different group than its parent is lifted out into that group with its own subtree, and the same applies to its descendants. Its power is taken out of every ancestor it was lifted from, so in the grouped view a parent row shows its reading minus its lifted children and the group totals add up to the house devices' total; the plain view still shows the raw reading. Validation refuses a `groups` entry naming an unknown grouping or group.
 
@@ -203,7 +223,7 @@ sequence:
 
 #### House consumption forecast
 Driven by the shared Helman config under `energy_nodes.house.forecast` for the entity, and under
-`training.house_consumption` for the history windows (not a Lovelace YAML option):
+`data_and_learning.house_consumption` for the history windows (not a Lovelace YAML option):
 
 ```yaml
 energy_nodes:
@@ -211,7 +231,7 @@ energy_nodes:
     forecast:
       total_energy_entity_id: sensor.house_energy_total
 
-training:
+data_and_learning:
   house_consumption:
     min_history_days: 14
     training_window_days: 42
@@ -219,9 +239,9 @@ training:
 
 - `energy_nodes.house.forecast.total_energy_entity_id`: required cumulative energy sensor used as
   the forecast source.
-- `training.house_consumption.min_history_days` (default 14): minimum history span (from the oldest
+- `data_and_learning.house_consumption.min_history_days` (default 14): minimum history span (from the oldest
   hourly statistics row) before charts can be shown.
-- `training.house_consumption.training_window_days` (default 56): Recorder lookback window; keep ≥
+- `data_and_learning.house_consumption.training_window_days` (default 56): Recorder lookback window; keep ≥
   `min_history_days`. This is the main driver of the nightly training cost — see
   [Scheduled work](#scheduled-work).
 
@@ -299,8 +319,8 @@ The mechanism, the trace codes and the config migration are documented in [docs/
   sensors feed the statistics used there.
 - House forecast not visible or only showing a status message: confirm
   `energy_nodes.house.forecast.total_energy_entity_id` is set,
-  `training.house_consumption.training_window_days` ≥
-  `training.house_consumption.min_history_days`, and Recorder has hourly statistics spanning at
+  `data_and_learning.house_consumption.training_window_days` ≥
+  `data_and_learning.house_consumption.min_history_days`, and Recorder has hourly statistics spanning at
   least `min_history_days` from the oldest available row.
 - Strange baseline/breakdown numbers: make sure each deferrable consumer is a non-overlapping
   sub-meter already included in the configured house total.
@@ -314,12 +334,12 @@ cost — useful if you are wondering what the integration is doing when you are 
 
 | # | Job | Runs on a timer | Also triggered by | Cost |
 |---|---|---|---|---|
-| 1 | **Power tick** | every `visualization.history_bucket_duration` s (default **5 s**) | device-tree invalidation (entity registry updates); a config save | Cheap |
+| 1 | **Power tick** | every `data_and_learning.recent_power_history.sampling_interval_seconds` s (default **5 s**) | device-tree invalidation (entity registry updates); a config save | Cheap |
 | 2 | **Schedule executor reconcile** | every **30 s** | startup; any schedule write; execution enable/disable; restore-normal-state; a config save | Cheap |
 | 3 | **Pre-execution reality check** | inside #2, so in practice every **30 s** | — | Cheap |
 | 4 | **Forecast rebuild** | **:00, :15, :30, :45** | startup; a config save; solar-bias trained/status events; a completed house-consumption fit from #6 | Moderate |
 | 5 | **Automation re-plan** | — | a successful #4 (0.5 s debounce, only when automation has enabled optimizers); a day-editor edit; execution enable; condition drift seen by #3; "run now" | Moderate |
-| 6 | **Nightly training batch** | daily at `training.training_time` (default **03:00**) | startup or a config save, when the stored profile is missing, no longer matches your config, or is over 48 h old; the manual "train now" button (solar bias only) | **Heavy — off-peak by design** |
+| 6 | **Nightly training batch** | daily at `data_and_learning.training_time` (default **03:00**) | startup or a config save, when the stored profile is missing, no longer matches your config, or is over 48 h old; the manual "train now" button (solar bias only) | **Heavy — off-peak by design** |
 | 7 | **Battery capacity forecast** | — (on demand, 300 s cache) | every card read, when its inputs have actually changed | Moderate |
 
 **Opening or refreshing a card never rebuilds the house or solar forecast.** Those are served from
@@ -367,7 +387,7 @@ question you are now asking; that resolves as soon as the rebuild finishes.
    runs three jobs one after another (never at the same time — they share Recorder's worker
    thread): solar bias correction, which learns how your forecast provider is systematically wrong
    for your roof; the house consumption profile, which fits an hour-of-week model over
-   `training.house_consumption.training_window_days` of history; and the device energy records, which learn every consumer device's usage — its typical day, its runs and its power while running, shown in the device detail — and from them how much each `history_average` appliance actually draws while it is running. See [docs/device-energy.md](docs/device-energy.md) for what each learned figure means and how it is calculated, with worked examples. All of it is stored, so
+   `data_and_learning.house_consumption.training_window_days` of history; and the device energy records, which learn every consumer device's usage — its typical day, its runs and its power while running, shown in the device detail — and from them how much each `history_average` appliance actually draws while it is running. See [docs/device-energy.md](docs/device-energy.md) for what each learned figure means and how it is calculated, with worked examples. All of it is stored, so
    a restart reuses it instead of recomputing. Changing a relevant setting recomputes immediately
    rather than waiting for the next night, so you see your change take effect.
 7. **Battery capacity forecast** — projects battery state of charge across the horizon: forecast
@@ -377,14 +397,14 @@ question you are now asking; that resolves as soon as the rebuild finishes.
 
 ### The knobs that scale the cost
 
-- `visualization.history_bucket_duration` (default 5 s) — how often job #1 samples. Lower means smoother bars and
+- `data_and_learning.recent_power_history.sampling_interval_seconds` (default 5 s) — how often job #1 samples. Lower means smoother bars and
   more work; it is the only job on a seconds-level cadence.
-- `training.training_time` (default `03:00`) — when the nightly batch runs. Pick a quiet hour: these jobs
+- `data_and_learning.training_time` (default `03:00`) — when the nightly batch runs. Pick a quiet hour: these jobs
   read a lot of Recorder history and you do not want them competing with anything.
-- `training.house_consumption.training_window_days` (default 56) — how much history the house
+- `data_and_learning.house_consumption.training_window_days` (default 56) — how much history the house
   consumption fit reads. This is the single biggest driver of job #6's cost. It has no effect on the
   per-quarter-hour work.
-- The number of consumer devices, and an appliance's `consumption.projection.lookback_days` (default 30). The device energy records read up to three Recorder queries per device: its energy meter, its power sensor (if it has one) and its switch/climate entity (if it has one). Each entity is read once, over the longest window any device needs it for. A `history_average` appliance reads over its `lookback_days`; every other device, and every shared meter without such an appliance, over the default 30 days. A power sensor that reports every few seconds is the heaviest of these reads. Like `training.house_consumption.training_window_days`, this is a **job #6** cost paid once a night, so it scales the nightly run rather than anything you wait for.
+- The number of consumer devices, and an appliance's `consumption.projection.lookback_days` (default 30). The device energy records read up to three Recorder queries per device: its energy meter, its power sensor (if it has one) and its switch/climate entity (if it has one). Each entity is read once, over the longest window any device needs it for. A `history_average` appliance reads over its `lookback_days`; every other device, and every shared meter without such an appliance, over the default 30 days. A power sensor that reports every few seconds is the heaviest of these reads. Like `data_and_learning.house_consumption.training_window_days`, this is a **job #6** cost paid once a night, so it scales the nightly run rather than anything you wait for.
 
 ### If Home Assistant feels sluggish
 
@@ -396,11 +416,11 @@ Recorder and statistics work on those same boundaries.
 
 Things worth checking, roughly in order:
 
-- **Is it 03:00 (or your `training.training_time`)?** That is job #6, and it is meant to be heavy. If it is
+- **Is it 03:00 (or your `data_and_learning.training_time`)?** That is job #6, and it is meant to be heavy. If it is
   landing at an awkward time, move it.
-- **A very large `training.house_consumption.training_window_days`** makes job #6 proportionally
+- **A very large `data_and_learning.house_consumption.training_window_days`** makes job #6 proportionally
   more expensive.
-- **A very low `visualization.history_bucket_duration`** makes job #1 run more often. It does no I/O, so this
+- **A very low `data_and_learning.recent_power_history.sampling_interval_seconds`** makes job #1 run more often. It does no I/O, so this
   costs CPU rather than Recorder time.
 - **Lots of deferrable consumers** — job #6 reads the training window once per consumer, so the
   nightly cost scales with how many you configure.

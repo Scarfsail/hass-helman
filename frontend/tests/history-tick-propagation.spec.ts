@@ -138,8 +138,8 @@ test.describe("history tick reaches the rendered bars", () => {
             el.historyRevision = 0;
             el.uiConfig = {
                 device_groupings: [{ id: "room", name: "Room", groups: [{ id: "kitchen", name: "Kitchen", short_name: "🍳" }] }],
-                show_others_group: false,
             };
+            el.showOthersGroup = false;
             document.body.appendChild(el);
             await el.updateComplete;
 

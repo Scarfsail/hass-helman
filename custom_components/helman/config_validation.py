@@ -58,15 +58,26 @@ from .vendors import PROFILE_KEY, PROFILES as VENDOR_PROFILES
 #: them is worse than telling them what it is called now.
 _RETIRED_CONFIG_KEYS = ("appliances", "scheduler", "controllables")
 
-#: The top-level keys config version 18 moved under ``visualization``, plus
-#: ``training_time``, which moved under ``training``. Same reasoning as
-#: ``_RETIRED_CONFIG_KEYS``: migration runs on load only, so the save path has
-#: to name the old spellings rather than ignore them.
-_RELOCATED_VISUALIZATION_KEYS = (
-    "history_buckets",
-    "history_bucket_duration",
-    "show_empty_groups",
-    "show_others_group",
+#: Where config version 32 moved the live-history settings, old dotted path to
+#: new, under both their v18 ``visualization`` home and their pre-v18 top-level
+#: spelling. Same reasoning as ``_RETIRED_CONFIG_KEYS``: migration runs on load
+#: only, so the save path has to name the old spellings rather than ignore them.
+_RELOCATED_RECENT_POWER_HISTORY_KEYS = {
+    f"{prefix}{old_key}": f"data_and_learning.recent_power_history.{new_key}"
+    for prefix in ("", "visualization.")
+    for old_key, new_key in (
+        ("history_bucket_duration", "sampling_interval_seconds"),
+        ("history_buckets", "samples"),
+    )
+}
+
+#: The group display flags config version 32 retired, at both their v18
+#: ``visualization`` home and their pre-v18 top-level spelling: each
+#: ``helman-card`` carries its own now.
+_RETIRED_DISPLAY_FLAGS = tuple(
+    f"{prefix}{key}"
+    for prefix in ("", "visualization.")
+    for key in ("show_empty_groups", "show_others_group")
 )
 
 _RETIRED_UI_TEXT_MESSAGE = "the card localizes this text; remove this key"
@@ -170,75 +181,63 @@ def validate_config_document(config: Mapping[str, Any] | None) -> ValidationRepo
         )
         return report
 
-    _validate_visualization_config(config, report)
+    _validate_retired_visualization(config, report)
     _validate_energy_nodes_config(config, report)
-    _validate_training_config(config, report)
+    _validate_data_and_learning_config(config, report)
     _validate_controllables_config(config, report)
     _validate_automation_config(config, report)
     return report
 
 
-def _validate_visualization_config(
+def _validate_retired_visualization(
     config: Mapping[str, Any],
     report: ValidationReport,
 ) -> None:
-    """Everything the Helman card renders with, under ``visualization`` since v18.
+    """Refuse ``visualization`` (retired in v32) and every spelling of its keys.
 
-    The save-side half of "load migrates, save refuses": the keys used to sit
-    at the top level, so a hand-edited document that still has them there is
-    named rather than silently ignored.
+    The save-side half of "load migrates, save refuses": a hand-edited
+    document that still has them is named rather than silently ignored.
     """
-    section = "visualization"
-
-    for retired_key in _RELOCATED_VISUALIZATION_KEYS:
-        if retired_key in config:
+    section = "data_and_learning"
+    if "visualization" in config:
+        report.add_error(
+            section=section,
+            path="visualization",
+            code="relocated_config_key",
+            message=(
+                "'visualization' was retired; the recent power history settings "
+                "moved under data_and_learning.recent_power_history, the group "
+                "display flags are set on each Helman card"
+            ),
+        )
+    for old_path, new_path in _RELOCATED_RECENT_POWER_HISTORY_KEYS.items():
+        if _has_dotted_path(config, old_path):
             report.add_error(
                 section=section,
-                path=retired_key,
+                path=old_path,
                 code="relocated_config_key",
+                message=f"{old_path!r} moved; write it as {new_path}",
+            )
+    for old_path in _RETIRED_DISPLAY_FLAGS:
+        if _has_dotted_path(config, old_path):
+            report.add_error(
+                section=section,
+                path=old_path,
+                code="retired_config_key",
                 message=(
-                    f"{retired_key!r} moved under 'visualization'; write it as "
-                    f"visualization.{retired_key}"
+                    f"{old_path!r} is no longer a config key; configure it on "
+                    "the Lovelace card"
                 ),
             )
     _report_retired_ui_texts(config, "", RETIRED_UI_TEXT_KEYS, section, report)
 
-    raw_visualization = config.get("visualization")
-    if raw_visualization is None:
-        return
-    visualization = _require_mapping(
-        raw_visualization, "visualization", section, report
-    )
-    if visualization is None:
-        return
 
-    _report_retired_ui_texts(
-        visualization, "visualization.", RETIRED_UI_TEXT_KEYS, section, report
-    )
-    _validate_optional_positive_int(
-        report,
-        section,
-        "visualization.history_buckets",
-        visualization.get("history_buckets"),
-    )
-    _validate_optional_positive_int(
-        report,
-        section,
-        "visualization.history_bucket_duration",
-        visualization.get("history_bucket_duration"),
-    )
-    _validate_optional_bool(
-        report,
-        section,
-        "visualization.show_empty_groups",
-        visualization.get("show_empty_groups"),
-    )
-    _validate_optional_bool(
-        report,
-        section,
-        "visualization.show_others_group",
-        visualization.get("show_others_group"),
-    )
+def _has_dotted_path(config: Mapping[str, Any], path: str) -> bool:
+    *parents, key = path.split(".")
+    container: Any = config
+    for part in parents:
+        container = container.get(part) if isinstance(container, Mapping) else None
+    return isinstance(container, Mapping) and key in container
 
 
 def _validate_energy_nodes_config(
@@ -365,84 +364,95 @@ def _report_retired_ui_texts(
             )
 
 
-def _validate_training_config(
+def _validate_data_and_learning_config(
     config: Mapping[str, Any],
     report: ValidationReport,
 ) -> None:
-    """The history-window settings (relocated here in v14) and, under
-    ``training.solar_bias``, the solar bias correction settings (v19).
+    """The history-window settings (relocated in v14), under
+    ``data_and_learning.solar_bias`` the solar bias correction settings (v19),
+    and under ``data_and_learning.recent_power_history`` the live power
+    sampling settings (v32).
 
     A peer of ``energy_nodes``, not nested under it -- these settings are
     read by several entities' history rather than owned by one, which is the
-    whole reason they moved. See ``_migrate_v13_to_v14`` for the load-side
-    counterpart; this is the save-side half of "load migrates, save refuses"
-    for their old paths.
+    whole reason they moved. The section was ``training`` until v32, which
+    renamed it after the editor tab; see ``_migrate_v31_to_v32`` for the
+    load-side counterpart. This is the save-side half of "load migrates, save
+    refuses" for their old paths.
     """
-    section = "training"
+    section = "data_and_learning"
+    if "training" in config:
+        report.add_error(
+            section=section,
+            path="training",
+            code="relocated_config_key",
+            message="'training' was renamed to 'data_and_learning'",
+        )
     if "training_time" in config:
         report.add_error(
             section=section,
             path="training_time",
             code="relocated_config_key",
             message=(
-                "'training_time' moved under 'training'; write it as "
-                "training.training_time"
+                "'training_time' moved under 'data_and_learning'; write it as "
+                "data_and_learning.training_time"
             ),
         )
 
-    raw_training = config.get("training")
-    if raw_training is None:
+    raw_section = config.get("data_and_learning")
+    if raw_section is None:
         return
-    training = _require_mapping(raw_training, "training", section, report)
-    if training is None:
+    data_and_learning = _require_mapping(raw_section, "data_and_learning", section, report)
+    if data_and_learning is None:
         return
-    _warn_unknown_keys(training, path="training", section=section,
-                       allowed={"training_time", "house_consumption", "solar_bias"}, report=report)
+    _warn_unknown_keys(data_and_learning, path="data_and_learning", section=section,
+                       allowed={"training_time", "house_consumption", "solar_bias",
+                                "recent_power_history"}, report=report)
 
-    _validate_training_time(training.get("training_time"), report)
+    _validate_training_time(data_and_learning.get("training_time"), report)
 
-    house_consumption = training.get("house_consumption")
+    house_consumption = data_and_learning.get("house_consumption")
     if house_consumption is not None:
         house_consumption_map = _require_mapping(
             house_consumption,
-            "training.house_consumption",
+            "data_and_learning.house_consumption",
             section,
             report,
         )
         if house_consumption_map is not None:
-            _warn_unknown_keys(house_consumption_map, path="training.house_consumption",
+            _warn_unknown_keys(house_consumption_map, path="data_and_learning.house_consumption",
                                section=section, allowed={"min_history_days", "training_window_days"}, report=report)
             _validate_optional_positive_int(
                 report,
                 section,
-                "training.house_consumption.min_history_days",
+                "data_and_learning.house_consumption.min_history_days",
                 house_consumption_map.get("min_history_days"),
             )
             _validate_optional_positive_int(
                 report,
                 section,
-                "training.house_consumption.training_window_days",
+                "data_and_learning.house_consumption.training_window_days",
                 house_consumption_map.get("training_window_days"),
             )
             _validate_window_covers_minimum(
                 report,
                 section,
                 minimum=house_consumption_map.get("min_history_days"),
-                minimum_path="training.house_consumption.min_history_days",
+                minimum_path="data_and_learning.house_consumption.min_history_days",
                 window=house_consumption_map.get("training_window_days"),
-                window_path="training.house_consumption.training_window_days",
+                window_path="data_and_learning.house_consumption.training_window_days",
             )
 
-    solar_bias = training.get("solar_bias")
+    solar_bias = data_and_learning.get("solar_bias")
     if solar_bias is not None:
         solar_bias_map = _require_mapping(
             solar_bias,
-            "training.solar_bias",
+            "data_and_learning.solar_bias",
             section,
             report,
         )
         if solar_bias_map is not None:
-            _warn_unknown_keys(solar_bias_map, path="training.solar_bias", section=section,
+            _warn_unknown_keys(solar_bias_map, path="data_and_learning.solar_bias", section=section,
                                allowed={"min_history_days", "max_training_window_days", "min_valid_slot_days",
                                         "enabled", "total_energy_entity_id", "clamp_min", "clamp_max",
                                         "aggregation_method", "max_interpolated_consecutive_slots",
@@ -455,7 +465,7 @@ def _validate_training_config(
                 value = solar_bias_map.get(key)
                 if value is None:
                     continue
-                path = f"training.solar_bias.{key}"
+                path = f"data_and_learning.solar_bias.{key}"
                 if isinstance(value, bool) or not isinstance(value, int) or not (
                     1 <= value <= 365
                 ):
@@ -469,11 +479,31 @@ def _validate_training_config(
                 report,
                 section,
                 minimum=solar_bias_map.get("min_history_days"),
-                minimum_path="training.solar_bias.min_history_days",
+                minimum_path="data_and_learning.solar_bias.min_history_days",
                 window=solar_bias_map.get("max_training_window_days"),
-                window_path="training.solar_bias.max_training_window_days",
+                window_path="data_and_learning.solar_bias.max_training_window_days",
             )
             _validate_solar_bias_correction(config, solar_bias_map, report)
+
+    recent_power_history = data_and_learning.get("recent_power_history")
+    if recent_power_history is not None:
+        history_map = _require_mapping(
+            recent_power_history,
+            "data_and_learning.recent_power_history",
+            section,
+            report,
+        )
+        if history_map is not None:
+            _warn_unknown_keys(history_map, path="data_and_learning.recent_power_history",
+                               section=section, allowed={"sampling_interval_seconds", "samples"},
+                               report=report)
+            for key in ("sampling_interval_seconds", "samples"):
+                _validate_optional_positive_int(
+                    report,
+                    section,
+                    f"data_and_learning.recent_power_history.{key}",
+                    history_map.get(key),
+                )
 
 
 def _validate_window_covers_minimum(
@@ -565,8 +595,8 @@ def _validate_house_config(raw_house: object, report: ValidationReport) -> None:
         forecast_map.get("total_energy_entity_id"),
     )
     for retired_key, new_path in (
-        ("min_history_days", "training.house_consumption.min_history_days"),
-        ("training_window_days", "training.house_consumption.training_window_days"),
+        ("min_history_days", "data_and_learning.house_consumption.min_history_days"),
+        ("training_window_days", "data_and_learning.house_consumption.training_window_days"),
     ):
         if retired_key in forecast_map:
             report.add_error(
@@ -648,7 +678,8 @@ def _validate_solar_config(
         forecast_map.get("daily_energy_entity_ids"),
     )
 
-    # The correction settings moved into training.solar_bias in v19 (see
+    # The correction settings moved into training.solar_bias in v19 (now
+    # data_and_learning.solar_bias) (see
     # ``_migrate_v18_to_v19``); load migrates, save refuses the old block.
     if "bias_correction" in forecast_map:
         report.add_error(
@@ -657,7 +688,7 @@ def _validate_solar_config(
             code="relocated_config_key",
             message=(
                 "'energy_nodes.solar.forecast.bias_correction' moved; write its "
-                "keys directly under training.solar_bias"
+                "keys directly under data_and_learning.solar_bias"
             ),
         )
 
@@ -667,9 +698,9 @@ def _validate_solar_bias_correction(
     bias_map: Mapping[str, Any],
     report: ValidationReport,
 ) -> None:
-    """The correction settings of ``training.solar_bias`` (flattened in v19)."""
-    section = "training"
-    base_path = "training.solar_bias"
+    """The correction settings of ``data_and_learning.solar_bias`` (flattened in v19)."""
+    section = "data_and_learning"
+    base_path = "data_and_learning.solar_bias"
     _validate_optional_bool(
         report, section, f"{base_path}.enabled", bias_map.get("enabled")
     )
@@ -1028,11 +1059,7 @@ def _validate_controllables_config(
             )
 
     for old_path, new_path in _RELOCATED_DEVICE_KEYS.items():
-        *parents, key = old_path.split(".")
-        container: Any = config
-        for part in parents:
-            container = container.get(part) if isinstance(container, Mapping) else None
-        if isinstance(container, Mapping) and key in container:
+        if _has_dotted_path(config, old_path):
             report.add_error(
                 section=section,
                 path=old_path,
@@ -2135,15 +2162,15 @@ _BATTERY_DEPENDENT_KINDS = frozenset({"charge_hold", "battery_reserve"})
 
 
 def _validate_training_time(value: object, report: ValidationReport) -> None:
-    """``training.training_time``: an HH:MM local-time string.
+    """``data_and_learning.training_time``: an HH:MM local-time string.
 
-    Under ``training`` since v18 — it schedules the whole nightly training
+    Under ``training`` since v18, ``data_and_learning`` since v32 — it schedules the whole nightly training
     batch, not just solar bias training.
     """
     if value is None:
         return
-    section = "training"
-    path = "training.training_time"
+    section = "data_and_learning"
+    path = "data_and_learning.training_time"
     if not _is_non_empty_string(value):
         report.add_error(
             section=section,
