@@ -111,8 +111,6 @@ export interface DeviceGrouping {
 }
 
 export interface HelmanUiConfig {
-    show_empty_groups?: boolean;
-    show_others_group?: boolean;
     device_groupings: DeviceGrouping[];
     history_buckets: number;
     history_bucket_duration: number;

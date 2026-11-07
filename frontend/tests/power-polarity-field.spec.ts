@@ -315,9 +315,9 @@ test("a value from another device's vocabulary shows the default", async ({ page
 test("the aggregation-method select is localized too", async ({ page }) => {
     // Same root cause, same file: its Czech strings had been written all along
     // and never rendered, because the lookup went to the backend namespace.
-    // Since #306 it sits with the rest of bias correction on the Training tab.
+    // Since #306 it sits with the rest of bias correction on the Data and learning tab.
     await mountEditor(page, "cs");
-    await page.locator(".tabs button", { hasText: "Trénování" }).click();
+    await page.locator(".tabs button", { hasText: "Data a učení" }).click();
     await expect(
         page.locator("select", { has: page.locator('option[value="ratio_of_sums"]') }),
     ).toHaveCount(1);

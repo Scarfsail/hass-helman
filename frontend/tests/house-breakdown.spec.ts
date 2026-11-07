@@ -552,7 +552,7 @@ test.describe("solar inspector house composition", () => {
                 ...remainder, id: "house", powerSensorId: "sensor.house_power",
                 isUnmeasured: false, children: [remainder],
             })],
-            uiConfig: { show_others_group: false, device_groupings: [], history_buckets: 3, history_bucket_duration: 5 },
+            uiConfig: { device_groupings: [], history_buckets: 3, history_bucket_duration: 5 },
         });
         const cardLabels = await page.evaluate(async (tree) => {
             const hass = {

@@ -39,7 +39,7 @@ SOLAX_ROWS = {
         "SolaX_today_s_solar_energy",
         "sensor.solax_today_s_solar_energy",
     ),
-    "training.solar_bias.total_energy_entity_id": (
+    "data_and_learning.solar_bias.total_energy_entity_id": (
         "SolaX_total_solar_energy",
         "sensor.solax_total_solar_energy",
     ),

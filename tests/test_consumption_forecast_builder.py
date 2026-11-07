@@ -133,7 +133,7 @@ class ConsumptionForecastBuilderTests(unittest.IsolatedAsyncioTestCase):
             },
             # Since the v14 relocation these two live at an absolute path, not
             # as siblings of the entity they govern.
-            "training": {
+            "data_and_learning": {
                 "house_consumption": {
                     "min_history_days": min_history_days,
                     "training_window_days": training_window_days,

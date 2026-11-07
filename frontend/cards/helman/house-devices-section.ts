@@ -18,6 +18,9 @@ export class HelmanHouseDevicesSection extends LitElement {
     @property({ type: Number }) public currentParentPower?: number;
     @property({ attribute: false }) public parentPowerHistory?: number[];
     @property({ attribute: false }) public uiConfig?: HelmanUiConfig;
+    /** The card's own group visibility options, resolved to their defaults. */
+    @property({ attribute: false }) public showEmptyGroups = false;
+    @property({ attribute: false }) public showOthersGroup = true;
 
     // Display options passthrough
     @property({ type: Boolean }) public devices_full_width: boolean = true;
@@ -46,16 +49,17 @@ export class HelmanHouseDevicesSection extends LitElement {
         }
 
         const devices = this.devices || [];
-        const ui = this.uiConfig;
         // The revision is part of the key because the group items hold *copies* of
         // their children's histories: a tick mutates the children in place and the
         // aggregate would otherwise keep painting the bucket it was built from.
-        const key = `${cat}|${devices.length}|${ui?.show_others_group ?? true}|${ui?.show_empty_groups ?? false}|${this.historyRevision ?? 0}`;
+        const key = `${cat}|${devices.length}|${this.showOthersGroup}|${this.showEmptyGroups}|${this.historyRevision ?? 0}`;
 
         const inputsChanged =
             changedProperties.has('devices') ||
             changedProperties.has('_activeCategory') ||
             changedProperties.has('uiConfig') ||
+            changedProperties.has('showEmptyGroups') ||
+            changedProperties.has('showOthersGroup') ||
             this._groupedKey !== key;
 
         if (!inputsChanged) return;
@@ -187,12 +191,12 @@ export class HelmanHouseDevicesSection extends LitElement {
         };
         const result: TreeItem[] = [];
         for (const group of groups.values()) {
-            if (group.children.length > 0 || this.uiConfig?.show_empty_groups) {
+            if (group.children.length > 0 || this.showEmptyGroups) {
                 aggregateGroup(group);
                 result.push(group);
             }
         }
-        if ((this.uiConfig?.show_others_group ?? true) && unmatched.length > 0) {
+        if (this.showOthersGroup && unmatched.length > 0) {
             const others = new TreeItem(`others:${groupingId}`, this._localize?.('house_section.others') ?? 'Others', null, null, this.historyBuckets);
             others.virtualType = 'others';
             others.groupingId = groupingId;

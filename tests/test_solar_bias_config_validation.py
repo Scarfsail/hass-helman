@@ -10,7 +10,7 @@ from custom_components.helman.config_validation import validate_config_document
 class SolarBiasConfigValidationTests(unittest.TestCase):
     def test_valid_full_config_passes(self) -> None:
         config = _valid_config()
-        config.setdefault("training", {})["solar_bias"] = {
+        config.setdefault("data_and_learning", {})["solar_bias"] = {
             "min_history_days": 10,
             "max_training_window_days": 90,
             "enabled": True,
@@ -23,7 +23,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
 
     def test_enabled_must_be_bool(self) -> None:
         config = _valid_config()
-        config.setdefault("training", {})["solar_bias"] = {
+        config.setdefault("data_and_learning", {})["solar_bias"] = {
             "enabled": "yes",
         }
 
@@ -31,7 +31,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "training.solar_bias.enabled"
+                issue.path == "data_and_learning.solar_bias.enabled"
                 for issue in report.errors
             )
         )
@@ -41,7 +41,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         # be fewer than the window fetched -- so a minimum above the window is
         # unreachable and would omit every slot on every run.
         config = _valid_config()
-        config["training"] = {
+        config["data_and_learning"] = {
             "solar_bias": {"min_history_days": 120, "max_training_window_days": 90}
         }
 
@@ -49,7 +49,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "training.solar_bias.min_history_days"
+                issue.path == "data_and_learning.solar_bias.min_history_days"
                 and issue.code == "invalid_relation"
                 for issue in report.errors
             )
@@ -57,13 +57,13 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
 
     def test_min_history_days_invalid_when_zero(self) -> None:
         config = _valid_config()
-        config["training"] = {"solar_bias": {"min_history_days": 0}}
+        config["data_and_learning"] = {"solar_bias": {"min_history_days": 0}}
 
         report = validate_config_document(config)
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "training.solar_bias.min_history_days"
+                issue.path == "data_and_learning.solar_bias.min_history_days"
                 and issue.code == "invalid_range"
                 for issue in report.errors
             )
@@ -71,13 +71,13 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
 
     def test_min_history_days_invalid_when_too_large(self) -> None:
         config = _valid_config()
-        config["training"] = {"solar_bias": {"min_history_days": 366}}
+        config["data_and_learning"] = {"solar_bias": {"min_history_days": 366}}
 
         report = validate_config_document(config)
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "training.solar_bias.min_history_days"
+                issue.path == "data_and_learning.solar_bias.min_history_days"
                 and issue.code == "invalid_range"
                 for issue in report.errors
             )
@@ -85,13 +85,13 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
 
     def test_max_training_window_days_invalid_when_zero(self) -> None:
         config = _valid_config()
-        config["training"] = {"solar_bias": {"max_training_window_days": 0}}
+        config["data_and_learning"] = {"solar_bias": {"max_training_window_days": 0}}
 
         report = validate_config_document(config)
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "training.solar_bias.max_training_window_days"
+                issue.path == "data_and_learning.solar_bias.max_training_window_days"
                 and issue.code == "invalid_range"
                 for issue in report.errors
             )
@@ -99,13 +99,13 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
 
     def test_max_training_window_days_invalid_when_too_large(self) -> None:
         config = _valid_config()
-        config["training"] = {"solar_bias": {"max_training_window_days": 366}}
+        config["data_and_learning"] = {"solar_bias": {"max_training_window_days": 366}}
 
         report = validate_config_document(config)
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "training.solar_bias.max_training_window_days"
+                issue.path == "data_and_learning.solar_bias.max_training_window_days"
                 and issue.code == "invalid_range"
                 for issue in report.errors
             )
@@ -113,13 +113,13 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
 
     def test_min_valid_slot_days_invalid_when_zero(self) -> None:
         config = _valid_config()
-        config["training"] = {"solar_bias": {"min_valid_slot_days": 0}}
+        config["data_and_learning"] = {"solar_bias": {"min_valid_slot_days": 0}}
 
         report = validate_config_document(config)
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "training.solar_bias.min_valid_slot_days"
+                issue.path == "data_and_learning.solar_bias.min_valid_slot_days"
                 and issue.code == "invalid_range"
                 for issue in report.errors
             )
@@ -127,7 +127,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
 
     def test_min_valid_slot_days_valid_when_positive(self) -> None:
         config = _valid_config()
-        config["training"] = {"solar_bias": {"min_valid_slot_days": 5}}
+        config["data_and_learning"] = {"solar_bias": {"min_valid_slot_days": 5}}
 
         report = validate_config_document(config)
         self.assertTrue(report.valid)
@@ -161,7 +161,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
                 )
                 self.assertTrue(
                     any(
-                        "training.solar_bias" in issue.message
+                        "data_and_learning.solar_bias" in issue.message
                         for issue in report.errors
                     )
                 )
@@ -171,7 +171,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         # editor now offers it as the field's hint, so a document that states
         # it has to save.
         config = _valid_config()
-        config.setdefault("training", {})["solar_bias"] = {
+        config.setdefault("data_and_learning", {})["solar_bias"] = {
             "clamp_min": 0.0,
         }
 
@@ -180,7 +180,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
 
     def test_clamp_min_invalid_when_negative(self) -> None:
         config = _valid_config()
-        config.setdefault("training", {})["solar_bias"] = {
+        config.setdefault("data_and_learning", {})["solar_bias"] = {
             "clamp_min": -0.1,
         }
 
@@ -188,14 +188,14 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "training.solar_bias.clamp_min"
+                issue.path == "data_and_learning.solar_bias.clamp_min"
                 for issue in report.errors
             )
         )
 
     def test_clamp_max_invalid_when_too_large(self) -> None:
         config = _valid_config()
-        config.setdefault("training", {})["solar_bias"] = {
+        config.setdefault("data_and_learning", {})["solar_bias"] = {
             "clamp_max": 11.0,
         }
 
@@ -203,14 +203,14 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "training.solar_bias.clamp_max"
+                issue.path == "data_and_learning.solar_bias.clamp_max"
                 for issue in report.errors
             )
         )
 
     def test_clamp_min_must_be_less_than_clamp_max(self) -> None:
         config = _valid_config()
-        config.setdefault("training", {})["solar_bias"] = {
+        config.setdefault("data_and_learning", {})["solar_bias"] = {
             "clamp_min": 1.0,
             "clamp_max": 1.0,
         }
@@ -219,21 +219,21 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path.startswith("training.solar_bias")
+                issue.path.startswith("data_and_learning.solar_bias")
                 for issue in report.errors
             )
         )
 
     def test_absence_of_correction_settings_is_valid(self) -> None:
         config = _valid_config()
-        config.get("training", {}).pop("solar_bias", None)
+        config.get("data_and_learning", {}).pop("solar_bias", None)
 
         report = validate_config_document(config)
         self.assertTrue(report.valid)
 
     def test_valid_slot_invalidation_config_passes(self) -> None:
         config = _valid_config()
-        config.setdefault("training", {})["solar_bias"] = {
+        config.setdefault("data_and_learning", {})["solar_bias"] = {
             "slot_invalidation": {
                 "max_battery_soc_percent": 87,
             }
@@ -250,7 +250,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         A stored document that still carries it must load, not error — the load
         migration is what removes it."""
         config = _valid_config()
-        config.setdefault("training", {})["solar_bias"] = {
+        config.setdefault("data_and_learning", {})["solar_bias"] = {
             "slot_invalidation": {
                 "max_battery_soc_percent": 87,
                 "export_enabled_entity_id": "switch.export_enabled",
@@ -264,7 +264,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
     def test_slot_invalidation_requires_grid_power_entity(self) -> None:
         config = _valid_config()
         config["energy_nodes"]["grid"]["entities"]["power"] = "   "
-        config.setdefault("training", {})["solar_bias"] = {
+        config.setdefault("data_and_learning", {})["solar_bias"] = {
             "slot_invalidation": {
                 "max_battery_soc_percent": 87,
             }
@@ -276,7 +276,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         self.assertTrue(
             any(
                 issue.path
-                == "training.solar_bias.slot_invalidation.max_battery_soc_percent"
+                == "data_and_learning.solar_bias.slot_invalidation.max_battery_soc_percent"
                 and issue.code == "missing_prerequisite"
                 for issue in report.errors
             )
@@ -284,7 +284,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
 
     def test_slot_invalidation_rejects_ratio_above_one(self) -> None:
         config = _valid_config()
-        config.setdefault("training", {})["solar_bias"] = {
+        config.setdefault("data_and_learning", {})["solar_bias"] = {
             "slot_invalidation": {
                 "max_battery_soc_percent": 87,
                 "curtailment_max_actual_forecast_ratio": 1.5,
@@ -297,7 +297,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         self.assertTrue(
             any(
                 issue.path
-                == "training.solar_bias.slot_invalidation.curtailment_max_actual_forecast_ratio"
+                == "data_and_learning.solar_bias.slot_invalidation.curtailment_max_actual_forecast_ratio"
                 and issue.code == "invalid_range"
                 for issue in report.errors
             )
@@ -305,7 +305,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
 
     def test_slot_invalidation_rejects_negative_export_deadband(self) -> None:
         config = _valid_config()
-        config.setdefault("training", {})["solar_bias"] = {
+        config.setdefault("data_and_learning", {})["solar_bias"] = {
             "slot_invalidation": {
                 "max_battery_soc_percent": 87,
                 "curtailment_max_export_w": -5,
@@ -318,7 +318,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         self.assertTrue(
             any(
                 issue.path
-                == "training.solar_bias.slot_invalidation.curtailment_max_export_w"
+                == "data_and_learning.solar_bias.slot_invalidation.curtailment_max_export_w"
                 and issue.code == "invalid_range"
                 for issue in report.errors
             )
@@ -326,7 +326,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
 
     def test_slot_invalidation_rejects_bool_soc_type(self) -> None:
         config = _valid_config()
-        config.setdefault("training", {})["solar_bias"] = {
+        config.setdefault("data_and_learning", {})["solar_bias"] = {
             "slot_invalidation": {
                 "max_battery_soc_percent": True,
             }
@@ -338,7 +338,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         self.assertTrue(
             any(
                 issue.path
-                == "training.solar_bias.slot_invalidation.max_battery_soc_percent"
+                == "data_and_learning.solar_bias.slot_invalidation.max_battery_soc_percent"
                 and issue.code == "invalid_type"
                 for issue in report.errors
             )
@@ -346,7 +346,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
 
     def test_slot_invalidation_rejects_soc_out_of_range(self) -> None:
         config = _valid_config()
-        config.setdefault("training", {})["solar_bias"] = {
+        config.setdefault("data_and_learning", {})["solar_bias"] = {
             "slot_invalidation": {
                 "max_battery_soc_percent": 0,
             }
@@ -358,7 +358,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         self.assertTrue(
             any(
                 issue.path
-                == "training.solar_bias.slot_invalidation.max_battery_soc_percent"
+                == "data_and_learning.solar_bias.slot_invalidation.max_battery_soc_percent"
                 and issue.code == "invalid_range"
                 for issue in report.errors
             )
@@ -367,7 +367,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
     def test_slot_invalidation_requires_battery_capacity_entity(self) -> None:
         config = _valid_config()
         config["energy_nodes"]["battery"]["entities"]["capacity"] = "   "
-        config.setdefault("training", {})["solar_bias"] = {
+        config.setdefault("data_and_learning", {})["solar_bias"] = {
             "slot_invalidation": {
                 "max_battery_soc_percent": 87,
             }
@@ -379,7 +379,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         self.assertTrue(
             any(
                 issue.path
-                == "training.solar_bias.slot_invalidation"
+                == "data_and_learning.solar_bias.slot_invalidation"
                 and issue.code == "missing_prerequisite"
                 for issue in report.errors
             )
@@ -388,7 +388,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
 
     def test_aggregation_method_invalid_type_rejected(self) -> None:
         config = _valid_config()
-        config.setdefault("training", {})["solar_bias"] = {
+        config.setdefault("data_and_learning", {})["solar_bias"] = {
             "aggregation_method": 42,
         }
 
@@ -396,7 +396,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "training.solar_bias.aggregation_method"
+                issue.path == "data_and_learning.solar_bias.aggregation_method"
                 and issue.code == "invalid_type"
                 for issue in report.errors
             )
@@ -404,7 +404,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
 
     def test_aggregation_method_unknown_value_rejected(self) -> None:
         config = _valid_config()
-        config.setdefault("training", {})["solar_bias"] = {
+        config.setdefault("data_and_learning", {})["solar_bias"] = {
             "aggregation_method": "mean_of_ratios",
         }
 
@@ -412,7 +412,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         self.assertFalse(report.valid)
         self.assertTrue(
             any(
-                issue.path == "training.solar_bias.aggregation_method"
+                issue.path == "data_and_learning.solar_bias.aggregation_method"
                 and issue.code == "invalid_choice"
                 for issue in report.errors
             )
@@ -422,7 +422,7 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
         for method in ("ratio_of_sums", "trimmed_mean"):
             with self.subTest(method=method):
                 config = _valid_config()
-                config.setdefault("training", {})["solar_bias"] = {
+                config.setdefault("data_and_learning", {})["solar_bias"] = {
                     "aggregation_method": method,
                 }
 
@@ -449,7 +449,7 @@ def test_bias_numeric_validation_codes_are_stable():
     ]
     for key, value, code in cases:
         config = _valid_config()
-        bias = config.setdefault("training", {}).setdefault("solar_bias", {})
+        bias = config.setdefault("data_and_learning", {}).setdefault("solar_bias", {})
         if "." in key:
             parent, leaf = key.split(".")
             bias[parent] = {leaf: value}
@@ -457,15 +457,15 @@ def test_bias_numeric_validation_codes_are_stable():
             bias[key] = value
         report = validate_config_document(config)
         assert any(
-            e.path == "training.solar_bias." + key and e.code == code
+            e.path == "data_and_learning.solar_bias." + key and e.code == code
             for e in report.errors
         ), (key, report.errors)
 
 
 def test_bias_total_energy_entity_id_is_validated():
     config = _valid_config()
-    config.setdefault("training", {})["solar_bias"] = {
+    config.setdefault("data_and_learning", {})["solar_bias"] = {
         "total_energy_entity_id": "invalid"
     }
     report = validate_config_document(config)
-    assert any(e.path == "training.solar_bias.total_energy_entity_id" and e.code == "invalid_entity_id" for e in report.errors)
+    assert any(e.path == "data_and_learning.solar_bias.total_energy_entity_id" and e.code == "invalid_entity_id" for e in report.errors)

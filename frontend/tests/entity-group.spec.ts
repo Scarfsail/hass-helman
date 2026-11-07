@@ -82,7 +82,7 @@ const HISTORY_CONFIG = {
             },
         },
     },
-    training: {
+    data_and_learning: {
         house_consumption: {
             min_history_days: 30,
             training_window_days: 60,
@@ -426,7 +426,7 @@ test("unmounting every group stops the polling", async ({ page }) => {
     await mountEditor(page);
     await waitForFacts(page);
 
-    await openTab(page, "Helman card");
+    await openTab(page, "Automation");
     await expect
         .poll(async () =>
             page.evaluate(() => {
@@ -502,7 +502,7 @@ test("a tab with no groups at all never asks", async ({ page }) => {
     // The early return has to survive the widened filter: nothing picked and
     // nothing saved means no call, not a call with an empty target list.
     await mountEditor(page, { config: configDoc({  }) });
-    await openTab(page, "Helman card");
+    await openTab(page, "Automation");
     await page.waitForTimeout(2500);
     expect(await requestCount(page)).toBe(0);
 });
@@ -657,7 +657,7 @@ test("the day-count settings render on the Training tab instead", async ({ page 
         config: HISTORY_CONFIG,
         factsByKey: { [HOUSE_KEY]: historyFacts(41, 30, "ok") },
     });
-    await openTab(page, "Training");
+    await openTab(page, "Data and learning");
 
     // Both labels are shared with the solar-bias section -- the assertion is
     // that no field carrying either one renders inside a group.
@@ -716,8 +716,8 @@ test("a revert restores what the reading was made of, and nothing else", async (
     // so it can never cause the revert control to appear, and pressing that
     // control must not reset it. The editor cannot know which is which: it
     // reverts exactly the paths the backend reported in `dependsOn`.
-    const MIN_DAYS_PATH = ["training", "house_consumption", "min_history_days"];
-    const WINDOW_PATH = ["training", "house_consumption", "training_window_days"];
+    const MIN_DAYS_PATH = ["data_and_learning", "house_consumption", "min_history_days"];
+    const WINDOW_PATH = ["data_and_learning", "house_consumption", "training_window_days"];
     await mountEditor(page, {
         config: HISTORY_CONFIG,
         withSaved: true,
@@ -768,7 +768,7 @@ test("a revert restores what the reading was made of, and nothing else", async (
         .poll(async () =>
             page.evaluate(() => {
                 const editor = document.querySelector("helman-config-editor-panel") as any;
-                return editor.getValue(["training", "house_consumption"]);
+                return editor.getValue(["data_and_learning", "house_consumption"]);
             }),
         )
         .toEqual({

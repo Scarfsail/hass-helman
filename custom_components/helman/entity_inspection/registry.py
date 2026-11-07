@@ -57,7 +57,7 @@ Evaluator = Callable[[InspectionRequest], Inspection]
 #: The history entries carry the *requirement* each entity is judged against --
 #: an absolute path to the setting, and what the runtime falls back to when the
 #: draft leaves it blank. That pairing is the registry's business precisely
-#: because it is a statement of meaning: the same top-level ``training`` group
+#: because it is a statement of meaning: the same top-level ``data_and_learning`` group
 #: also carries a training window and (for solar bias) a valid-slot minimum,
 #: and those are settings of the *trainer* rather than requirements on this
 #: one entity's history, so nothing here consults them.
@@ -100,20 +100,20 @@ SOLAR_FORECAST_CURRENT_INSPECTION_PATH = "helman.solar_forecast_current"
 EVALUATORS: dict[str, Evaluator] = {
     "energy_nodes.grid.entities.power": history_aware(
         evaluate_power_entity,
-        ("training", "solar_bias", "min_history_days"),
+        ("data_and_learning", "solar_bias", "min_history_days"),
         SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS,
     ),
     "energy_nodes.*.entities.power": evaluate_power_entity,
     "energy_nodes.battery.entities.capacity": history_evaluator(
-        ("training", "solar_bias", "min_history_days"),
+        ("data_and_learning", "solar_bias", "min_history_days"),
         SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS,
     ),
     "energy_nodes.house.forecast.total_energy_entity_id": history_evaluator(
-        ("training", "house_consumption", "min_history_days"),
+        ("data_and_learning", "house_consumption", "min_history_days"),
         HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
     ),
     "devices.consumers.*.consumption.energy_entity_id": history_evaluator(
-        ("training", "house_consumption", "min_history_days"),
+        ("data_and_learning", "house_consumption", "min_history_days"),
         HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
         governs=_meter_feeds_the_house_trainer,
     ),
@@ -130,9 +130,9 @@ EVALUATORS: dict[str, Evaluator] = {
     "devices.consumers.*.controls.climate.entity_id": history_aware(evaluate_entity_value),
     "devices.consumers.*.controls.charge.entity_id": history_aware(evaluate_entity_value),
     "energy_nodes.solar.forecast.total_energy_entity_id": history_evaluator(),
-    "training.solar_bias.total_energy_entity_id": (
+    "data_and_learning.solar_bias.total_energy_entity_id": (
         history_evaluator(
-            ("training", "solar_bias", "min_history_days"),
+            ("data_and_learning", "solar_bias", "min_history_days"),
             SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS,
         )
     ),
@@ -149,12 +149,12 @@ EVALUATORS: dict[str, Evaluator] = {
     # it is judged against the same minimum the production meter is.
     SOLAR_FORECAST_CURRENT_INSPECTION_PATH: fixed_entity_history_evaluator(
         SOLAR_FORECAST_CURRENT_ENTITY,
-        ("training", "solar_bias", "min_history_days"),
+        ("data_and_learning", "solar_bias", "min_history_days"),
         SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS,
     ),
     "helman.share_energy.*": fixed_entity_history_evaluator(
         lambda request: share_energy_entity_id(request.wildcards[0]),
-        ("training", "house_consumption", "min_history_days"),
+        ("data_and_learning", "house_consumption", "min_history_days"),
         HOUSE_FORECAST_DEFAULT_MIN_HISTORY_DAYS,
     ),
 }

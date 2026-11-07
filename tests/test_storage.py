@@ -55,7 +55,7 @@ def _ha_dependencies(monkeypatch):
 
 from custom_components.helman.const import CONFIG_DOCUMENT_VERSION
 from custom_components.helman.storage import HelmanStorage
-from custom_components.helman.visualization import read_visualization
+from custom_components.helman.recent_power_history import read_recent_power_history
 
 
 class _FakeStore:
@@ -100,27 +100,29 @@ def _load(document: dict | None) -> HelmanStorage:
     return storage
 
 
-def test_a_partial_visualization_resolves_omitted_defaults_without_storing_them() -> None:
+def test_a_partial_recent_power_history_resolves_omitted_defaults_without_storing_them() -> None:
     # Regression (PR #302 review): readers must agree on omitted values without
     # materializing defaults in the revision-bearing stored document.
+    stored = {"recent_power_history": {"samples": 90}}
     storage = _load(
-        {"config_version": CONFIG_DOCUMENT_VERSION, "visualization": {"history_buckets": 90}}
+        {"config_version": CONFIG_DOCUMENT_VERSION, "data_and_learning": stored}
     )
 
-    assert storage.config["visualization"] == {"history_buckets": 90}
-    visualization = read_visualization(storage.config)
-    assert visualization["history_buckets"] == 90
-    assert visualization["history_bucket_duration"] == 5
-    assert visualization["show_empty_groups"] is False
-    assert visualization["show_others_group"] is True
-    assert "power_sensor_name_cleaner_regex" not in visualization
+    assert storage.config["data_and_learning"] == stored
+    assert read_recent_power_history(storage.config) == {
+        "samples": 90,
+        "sampling_interval_seconds": 5,
+    }
 
 
 def test_a_relocated_v17_value_still_beats_the_defaults() -> None:
     storage = _load({"config_version": 17, "history_bucket_duration": 2})
 
-    assert storage.config["visualization"]["history_bucket_duration"] == 2
+    assert storage.config["data_and_learning"]["recent_power_history"] == {
+        "sampling_interval_seconds": 2
+    }
     assert "history_bucket_duration" not in storage.config
+    assert "visualization" not in storage.config
 
 
 def test_an_upgrade_turns_ha_labels_into_device_groups() -> None:
@@ -144,7 +146,7 @@ def test_an_upgrade_turns_ha_labels_into_device_groups() -> None:
         ],
         "consumers": [{**oven, "groups": {"rooms": "kitchen"}}],
     }
-    assert "device_label_text" not in storage.config["visualization"]
+    assert "visualization" not in storage.config
     assert storage.config["devices"] == expected
     assert storage._store.saved[-1]["devices"] == expected
 

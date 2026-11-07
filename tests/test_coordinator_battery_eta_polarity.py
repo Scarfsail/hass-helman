@@ -55,7 +55,7 @@ def _make_tracker(battery_power: str, polarity: str | None):
     c = make_live_tracker(
         hass,
         {
-            "visualization": {"history_buckets": 5, "history_bucket_duration": 1},
+            "data_and_learning": {"recent_power_history": {"samples": 5, "sampling_interval_seconds": 1}},
             "energy_nodes": {"battery": {"entities": entities}},
         },
     )

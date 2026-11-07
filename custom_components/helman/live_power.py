@@ -43,7 +43,7 @@ from .power_reading import power_unit_factor
 from .shared_meter_split import split_own_power
 from .tree_builder import TreeIndex
 from .vendors import INVERTER_TELEMETRY_KEY, DeviceTelemetry, resolve_vendor_telemetry
-from .visualization import read_visualization
+from .recent_power_history import read_recent_power_history
 
 _LOGGER = logging.getLogger(__name__)
 # How far back the unmeasured remainder looks when smoothing away meter skew.
@@ -142,12 +142,12 @@ class LivePowerTracker:
         self._vendor_telemetry = resolve_vendor_telemetry(self._hass, self._read_config())
         self._inverter_telemetry = self._vendor_telemetry.get(INVERTER_TELEMETRY_KEY)
 
-    def _visualization_config(self) -> dict[str, Any]:
-        return read_visualization(self._read_config())
+    def _recent_power_history_config(self) -> dict[str, Any]:
+        return read_recent_power_history(self._read_config())
 
     def _init_buffers(self, tree: dict, index: TreeIndex) -> None:
         """Initialize rolling deques, retaining history for surviving sensors."""
-        history_buckets: int = self._visualization_config()["history_buckets"]
+        history_buckets: int = self._recent_power_history_config()["samples"]
         previous_history = self._power_history
         previous_unmeasured = self._unmeasured_raw_history
         previous_unmeasured_ids = self._unmeasured_entity_id_map
@@ -219,7 +219,7 @@ class LivePowerTracker:
         """Start the periodic tick using HA's time-interval tracker."""
         if self._unloaded or self._unsub_tick is not None:
             return
-        bucket_duration: int = self._visualization_config()["history_bucket_duration"]
+        bucket_duration: int = self._recent_power_history_config()["sampling_interval_seconds"]
         self._tick_seconds = float(bucket_duration)
         if self._energy_since is None:
             self._energy_since = dt_util.utcnow()
@@ -587,7 +587,7 @@ class LivePowerTracker:
         Taking the median first lets the symmetric skew cancel out; a house
         whose circuits genuinely account for everything still settles on 0.
         """
-        bucket_duration = self._visualization_config()["history_bucket_duration"] or 1
+        bucket_duration = self._recent_power_history_config()["sampling_interval_seconds"] or 1
         maxlen = max(1, round(_UNMEASURED_SMOOTHING_WINDOW_S / bucket_duration))
         window = self._unmeasured_raw_history.get(node_id)
         if window is None or window.maxlen != maxlen:

@@ -120,7 +120,6 @@ async function mountCard(
         consumptionTotalSensorId: null,
         productionTotalSensorId: null,
         uiConfig: {
-            show_others_group: true,
             device_groupings: [{ id: "room", name: "Room", groups: [{ id: "kitchen", name: "Kitchen", short_name: "K" }] }],
             history_buckets: 3,
             history_bucket_duration: 5,

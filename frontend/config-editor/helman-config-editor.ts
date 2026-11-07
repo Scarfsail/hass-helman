@@ -77,10 +77,6 @@ import type { ScopeAdapterValidationError } from "./config-scope-adapters";
 import type { HomeAssistant } from "../types/ha";
 import { configEditorStyles } from "./styles";
 import {
-  VisualizationTabController,
-  renderVisualizationTab,
-} from "./tabs/visualization";
-import {
   EnergyNodesTabController,
   renderEnergyNodesTab,
 } from "./tabs/energy-nodes";
@@ -183,7 +179,6 @@ export class HelmanConfigEditorPanel
 
   // --- Tab controllers -----------------------------------------------------
 
-  public readonly _visualizationTab = new VisualizationTabController(this);
   public readonly _energyNodesTab = new EnergyNodesTabController(this);
   public readonly _trainingTab = new TrainingTabController(this);
   public readonly _automationTab = new AutomationTabController(this);
@@ -515,19 +510,19 @@ export class HelmanConfigEditorPanel
                 this._activeTab = tab.id;
                 // No event announces a run starting elsewhere, so the tab
                 // asks once on opening rather than showing a stale state.
-                if (tab.id === "training") void this._trainingTab.loadTrainingStatus();
-                // The training tab's depth table and the devices tab's
+                if (tab.id === "data_and_learning") void this._trainingTab.loadTrainingStatus();
+                // The data and learning tab's depth table and the devices tab's
                 // name and icon placeholders ask about paths no mounted
                 // `helman-entity-group` announces -- nothing else triggers a
                 // poll on a plain tab switch, so this one does.
-                if (tab.id === "training" || tab.id === "devices") {
+                if (tab.id === "data_and_learning" || tab.id === "devices") {
                   this._inspections.request();
                 }
               }}
             >
               ${renderSvgIcon(TAB_ICONS[tab.id], "tab-icon")}
               <span>${this._t(tab.labelKey)}</span>
-              ${tab.id === "training" ? renderTrainingBadge(this, this._trainingTab) : nothing}
+              ${tab.id === "data_and_learning" ? renderTrainingBadge(this, this._trainingTab) : nothing}
               ${counts.errors > 0
                 ? html`<span class="tab-count errors">${counts.errors}</span>`
                 : counts.warnings > 0
@@ -544,19 +539,14 @@ export class HelmanConfigEditorPanel
 
   private _renderActiveTab(): TemplateResult {
     switch (this._activeTab) {
-      case "visualization":
-        return this._renderTabScope(
-          TAB_SCOPE_IDS.visualization,
-          renderVisualizationTab(this, this._visualizationTab),
-        );
       case "energy_nodes":
         return this._renderTabScope(
           TAB_SCOPE_IDS.energy_nodes,
           renderEnergyNodesTab(this, this._energyNodesTab),
         );
-      case "training":
+      case "data_and_learning":
         return this._renderTabScope(
-          TAB_SCOPE_IDS.training,
+          TAB_SCOPE_IDS.data_and_learning,
           renderTrainingTab(this, this._trainingTab),
         );
       case "automation":
@@ -1047,10 +1037,9 @@ export class HelmanConfigEditorPanel
   private _buildTabIssueCounts(): Record<TabId, { errors: number; warnings: number }> {
     const counts: Record<TabId, { errors: number; warnings: number }> = {
       energy_nodes: { errors: 0, warnings: 0 },
-      training: { errors: 0, warnings: 0 },
+      data_and_learning: { errors: 0, warnings: 0 },
       automation: { errors: 0, warnings: 0 },
       devices: { errors: 0, warnings: 0 },
-      visualization: { errors: 0, warnings: 0 },
     };
 
     if (this._validation) {

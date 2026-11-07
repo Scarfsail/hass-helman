@@ -69,3 +69,24 @@ export function formatMinutes(minutes: number): string {
     const hours = Math.floor(total / 60);
     return hours > 0 ? `${hours} h ${total % 60} min` : `${total} min`;
 }
+
+/**
+ * Seconds as "30 seconds", "2 min 30 s", "5 minutes", "1 h 30 min" or "2 hours":
+ * a whole unit is spelled out in the locale, a mixed one keeps the compact
+ * form. From an hour up the seconds are dropped (rounded to the minute).
+ */
+export function formatSeconds(seconds: number, locale?: string): string {
+    const total = Math.round(seconds);
+    const minutes = Math.floor(total / 60);
+    const rest = total % 60;
+    const long = (value: number, unit: "second" | "minute" | "hour") =>
+        new Intl.NumberFormat(locale, { style: "unit", unit, unitDisplay: "long" }).format(value);
+    if (total >= 3600) {
+        const wholeMinutes = Math.round(total / 60);
+        const hours = Math.floor(wholeMinutes / 60);
+        const left = wholeMinutes % 60;
+        return left === 0 ? long(hours, "hour") : `${hours} h ${left} min`;
+    }
+    if (minutes === 0) return long(rest, "second");
+    return rest === 0 ? long(minutes, "minute") : `${minutes} min ${rest} s`;
+}

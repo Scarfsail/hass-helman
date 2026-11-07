@@ -314,12 +314,6 @@ def make_optimization_context(
 
 def _valid_config() -> dict:
     return {
-        "visualization": {
-            "show_empty_groups": False,
-            "show_others_group": True,
-            "history_buckets": 60,
-            "history_bucket_duration": 5,
-        },
         "energy_nodes": {
             "inverter": _inverter_controllable(),
             "house": {
@@ -372,10 +366,14 @@ def _valid_config() -> dict:
                 },
             },
         },
-        "training": {
+        "data_and_learning": {
             "house_consumption": {
                 "min_history_days": 14,
                 "training_window_days": 56,
+            },
+            "recent_power_history": {
+                "sampling_interval_seconds": 5,
+                "samples": 60,
             },
         },
         "devices": {"name_cleaner_regex": r"\s+", "groupings": [
@@ -566,7 +564,7 @@ KITCHEN_REMAINDER_KWH = 0.3
 def kitchen_config() -> dict:
     """The kitchen circuit and its meterless dishwasher, under the house."""
     return {
-        "visualization": {"history_buckets": 60, "history_bucket_duration": 1},
+        "data_and_learning": {"recent_power_history": {"samples": 60, "sampling_interval_seconds": 1}},
         "energy_nodes": {"house": {"entities": {"power": "sensor.house_power"}}},
         "devices": {
             "consumers": [
@@ -751,7 +749,7 @@ def _bias_service_config(
         battery_entities.update(min_soc=soc_bounds[0], max_soc=soc_bounds[1])
     return {
         "devices": {"consumers": devices},
-        "training": {
+        "data_and_learning": {
             "solar_bias": {"total_energy_entity_id": cfg.total_energy_entity_id}
         },
         "energy_nodes": {

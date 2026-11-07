@@ -23,7 +23,7 @@ import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
  * promises nothing is missed.
  */
 
-const TABS = ["Energy nodes", "Devices", "Automation", "Training", "Helman card"];
+const TABS = ["Energy nodes", "Devices", "Automation", "Data and learning"];
 
 /**
  * Enough optimizer schema for the Automation tab to render something.
@@ -98,7 +98,7 @@ const CONFIG = configDoc({
             forecast: { sell_price_entity_id: "sensor.sell_price" },
         },
     },
-    training: {
+    data_and_learning: {
         house_consumption: { min_history_days: 30 },
         solar_bias: { total_energy_entity_id: "sensor.solar_bias_energy" },
     },
@@ -365,7 +365,7 @@ test("a group in a nested shadow root is seen by the collector and the guard", a
     // future bare picker would pass the check above in silence -- and #165 is
     // about to claim its view shows every entity.
     await mountEditor(page);
-    await openTab(page, "Helman card");
+    await openTab(page, "Automation");
 
     await page.evaluate((path) => {
         const panel = document.querySelector("helman-config-editor-panel") as any;

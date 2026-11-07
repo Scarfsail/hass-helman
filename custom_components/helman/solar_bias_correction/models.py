@@ -619,10 +619,10 @@ def _read_number(raw_value: Any, default: float | None) -> float | None:
 
 def read_bias_config(config: dict[str, Any]) -> BiasConfig:
     forecast = read_mapping(config_value(config, "energy_nodes.solar.forecast"))
-    # Every solar bias setting lives under ``training.solar_bias`` since the
-    # v19 relocation -- read on load, so what arrives here has already been
+    # Every solar bias setting lives under ``data_and_learning.solar_bias`` (the
+    # v19 relocation, renamed in v32) -- read on load, so what arrives here has already been
     # migrated; no legacy path or alias handling is needed at this layer.
-    training = read_mapping(config.get("training"))
+    training = read_mapping(config.get("data_and_learning"))
     bias = read_mapping(training.get("solar_bias"))
 
     enabled = bias.get("enabled", SOLAR_BIAS_DEFAULT_ENABLED)
@@ -635,7 +635,7 @@ def read_bias_config(config: dict[str, Any]) -> BiasConfig:
             SOLAR_BIAS_DEFAULT_MAX_TRAINING_WINDOW_DAYS,
         )
     )
-    # Under ``training`` since v18 — the schedule drives the whole nightly
+    # Section-level since v18 — the schedule drives the whole nightly
     # training batch.
     training_time = training.get("training_time", SOLAR_BIAS_DEFAULT_TRAINING_TIME)
     clamp_min = _read_number(bias.get("clamp_min"), SOLAR_BIAS_DEFAULT_CLAMP_MIN)

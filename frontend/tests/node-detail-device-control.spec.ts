@@ -84,7 +84,7 @@ const TREE = treePayload({
     })],
     consumptionTotalSensorId: null,
     productionTotalSensorId: null,
-    uiConfig: { show_others_group: false, device_groupings: [], history_buckets: 3, history_bucket_duration: 5 },
+    uiConfig: { device_groupings: [], history_buckets: 3, history_bucket_duration: 5 },
 });
 
 const generic = (id: string, name: string, supportsAuthoring = true) => ({

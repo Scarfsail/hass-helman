@@ -86,7 +86,7 @@ def build_solar_overview(
     entities["power"] = node_entity(solar, "power")
     entities["today_energy"] = node_entity(solar, "today_energy")
     entities["today_export"] = node_entity(grid, "today_export")
-    training = config.get("training") if isinstance(config, Mapping) else None
+    training = config.get("data_and_learning") if isinstance(config, Mapping) else None
     solar_bias = training.get("solar_bias") if isinstance(training, Mapping) else None
     lifetime = solar_bias.get("total_energy_entity_id") if isinstance(solar_bias, Mapping) else None
     entities["lifetime_energy"] = lifetime if isinstance(lifetime, str) and lifetime else None

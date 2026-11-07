@@ -56,7 +56,7 @@ PROFILE = VendorProfile(
             "sensor",
             "{name}_today_s_solar_energy",
         ),
-        "training.solar_bias.total_energy_entity_id": (
+        "data_and_learning.solar_bias.total_energy_entity_id": (
             "sensor",
             "{name}_total_solar_energy",
         ),

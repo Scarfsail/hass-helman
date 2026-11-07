@@ -792,12 +792,16 @@
     "fields": {
       "card_size": "Card size",
       "max_power": "Max power (W)",
-      "collapsed_consumers_count": "Collapsed consumers count"
+      "collapsed_consumers_count": "Collapsed consumers count",
+      "show_empty_groups": "Show empty groups",
+      "show_others_group": "Show others group"
     },
     "helpers": {
       "card_size": "Number of grid rows this card reports to the dashboard layout",
       "max_power": "Caps the power-flow arrow scale; leave empty to auto-scale",
-      "collapsed_consumers_count": "Number of house consumers shown before \"Show more\"; defaults to 3"
+      "collapsed_consumers_count": "Number of house consumers shown before \"Show more\"; defaults to 3",
+      "show_empty_groups": "While a \"Group by\" filter is active, also list groups with no devices",
+      "show_others_group": "While a \"Group by\" filter is active, list devices outside every group under Others"
     }
   },
   "forecast_health": {

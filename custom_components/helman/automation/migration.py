@@ -1673,6 +1673,39 @@ def _migrate_v30_to_v31(document: dict[str, Any]) -> tuple[dict[str, Any], list[
     )
 
 
+#: Where v32 moves the two live-history settings out of ``visualization``.
+_RECENT_POWER_HISTORY_KEYS = {
+    "history_bucket_duration": "sampling_interval_seconds",
+    "history_buckets": "samples",
+}
+
+
+def _migrate_v31_to_v32(document: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """``training`` -> ``data_and_learning``; ``visualization`` is retired.
+
+    The top-level keys follow the editor tabs. ``training`` moves verbatim, the
+    two live-history settings move under
+    ``data_and_learning.recent_power_history`` with their new names, and the
+    card display flags are dropped: they are set on each Lovelace card now.
+    """
+    data_and_learning = document.pop("training", None)
+    data_and_learning = (
+        dict(data_and_learning) if isinstance(data_and_learning, Mapping) else {}
+    )
+    visualization = document.pop("visualization", None)
+    if isinstance(visualization, Mapping):
+        recent = {
+            new_key: visualization[old_key]
+            for old_key, new_key in _RECENT_POWER_HISTORY_KEYS.items()
+            if old_key in visualization
+        }
+        if recent:
+            data_and_learning["recent_power_history"] = recent
+    if data_and_learning:
+        document["data_and_learning"] = data_and_learning
+    return (document, [])
+
+
 #: ``battery_reserve`` params that became qualifiers of ``reserve_floor_soc``.
 _BATTERY_RESERVE_QUALIFIERS = ("solar_dip_floor_soc", "hold_reserve_in_expensive_windows")
 
@@ -1781,6 +1814,7 @@ _MIGRATIONS = {
     28: _migrate_v28_to_v29,
     29: _migrate_v29_to_v30,
     30: _migrate_v30_to_v31,
+    31: _migrate_v31_to_v32,
 }
 
 

@@ -62,7 +62,7 @@ def test_read_bias_config_parses_max_interpolated_consecutive_slots():
     from custom_components.helman.solar_bias_correction.models import read_bias_config
 
     cfg = read_bias_config(
-        {"training": {"solar_bias": {"max_interpolated_consecutive_slots": 4}}}
+        {"data_and_learning": {"solar_bias": {"max_interpolated_consecutive_slots": 4}}}
     )
     assert cfg.max_interpolated_consecutive_slots == 4
 
@@ -1240,7 +1240,7 @@ def test_fingerprint_tracks_effective_invalidation_inputs():
             "min_soc": "number.min", "max_soc": "number.max"}},
         "grid": {"entities": {"power": "sensor.grid"}},
         "solar": {"max_power": 5000}},
-        "training": {"solar_bias": {"slot_invalidation": {"max_battery_soc_percent": 90}}}}
+        "data_and_learning": {"solar_bias": {"slot_invalidation": {"max_battery_soc_percent": 90}}}}
     def fingerprint(value):
         return trainer.compute_fingerprint(read_bias_config(value))
     baseline = fingerprint(config)
@@ -1249,7 +1249,7 @@ def test_fingerprint_tracks_effective_invalidation_inputs():
         (("energy_nodes", "grid", "entities", "power"), "sensor.other_grid"),
         (("energy_nodes", "grid", "entities", "power_polarity"), "positive_is_import"),
         (("energy_nodes", "solar", "max_power"), 6000),
-        (("training", "solar_bias", "max_training_window_days"), 45),
+        (("data_and_learning", "solar_bias", "max_training_window_days"), 45),
     ]:
         changed = deepcopy(config)
         target = changed
@@ -1258,15 +1258,15 @@ def test_fingerprint_tracks_effective_invalidation_inputs():
         target[path[-1]] = value
         assert fingerprint(changed) != baseline, path
 
-    config["training"]["solar_bias"]["slot_invalidation"] = {"data_glitch_max_slot_wh": 1000}
+    config["data_and_learning"]["solar_bias"]["slot_invalidation"] = {"data_glitch_max_slot_wh": 1000}
     baseline = fingerprint(config)
     config["energy_nodes"]["battery"]["entities"]["capacity"] = "sensor.unused"
     config["energy_nodes"]["grid"]["entities"] = {
         "power": "sensor.unused", "power_polarity": "positive_is_import"
     }
     config["energy_nodes"]["solar"]["max_power"] = 8000
-    config["training"]["solar_bias"]["enabled"] = not read_bias_config(config).enabled
-    config["training"]["training_time"] = "03:47:00"
+    config["data_and_learning"]["solar_bias"]["enabled"] = not read_bias_config(config).enabled
+    config["data_and_learning"]["training_time"] = "03:47:00"
     assert fingerprint(config) == baseline
 
 
@@ -1275,7 +1275,7 @@ def test_bias_soc_snapshot_requires_canonical_battery_entity_config():
 
     config = {
         "energy_nodes": {"battery": {"entities": {"capacity": "sensor.soc"}}},
-        "training": {"solar_bias": {"slot_invalidation": {"max_battery_soc_percent": 90}}},
+        "data_and_learning": {"solar_bias": {"slot_invalidation": {"max_battery_soc_percent": 90}}},
     }
     assert read_bias_config(config).battery_soc_entity_id is None
     config["energy_nodes"]["battery"]["entities"].update(

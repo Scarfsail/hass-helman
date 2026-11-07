@@ -45,11 +45,11 @@ _LOGGER = logging.getLogger(__name__)
 def read_house_training_window_config(config: dict[str, Any]) -> tuple[int, int]:
     """``(min_history_days, training_window_days)`` for the house trainer.
 
-    Read from ``training.house_consumption``, the one place these settings
+    Read from ``data_and_learning.house_consumption``, the one place these settings
     live since the v14 relocation. Shared by the builder's live payload and
     the coordinator's training request so the two readers cannot drift apart.
     """
-    training = read_mapping(config.get("training"))
+    training = read_mapping(config.get("data_and_learning"))
     house_consumption = read_mapping(
         training.get("house_consumption")
     )

@@ -140,7 +140,7 @@ async function mountEditor(page: Page, options: { cardUrl?: string } = {}): Prom
         const panel = document.querySelector("helman-config-editor-panel") as HTMLElement &
             { _activeTab: string; requestUpdate: () => void; updateComplete: Promise<unknown> };
         await panel.updateComplete;
-        panel._activeTab = "training";
+        panel._activeTab = "data_and_learning";
         panel.requestUpdate();
         await panel.updateComplete;
     });

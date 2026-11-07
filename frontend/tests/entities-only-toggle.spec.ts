@@ -58,7 +58,7 @@ const CONFIG = configDoc({
             forecast: { sell_price_entity_id: "sensor.sell_price", import_price_unit: "CZK" },
         },
     },
-    training: {
+    data_and_learning: {
         solar_bias: {
             enabled: true,
             total_energy_entity_id: "sensor.solar_bias_energy",
@@ -399,7 +399,7 @@ test.describe("entities-only toggle", () => {
         // sits inside the Solar bias panel (#312), beside the bias meter it
         // shares a parent with -- so the same rule has to drop the one and keep
         // the section that holds the other.
-        await openTab(page, "Training");
+        await openTab(page, "Data and learning");
         const trainingSections = await page.evaluate(() => {
             const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
             return (window as any)
@@ -483,7 +483,7 @@ test.describe("entities-only toggle", () => {
 
         // The toggle goes on somewhere else, so this tab is not the one that
         // was on screen when the snapshot would have been taken.
-        await openTab(page, "Helman card");
+        await openTab(page, "Automation");
         await setEntitiesOnly(page, true);
         await openTab(page, "Devices");
         expect((await readCardOpenState(page)).every(([, open]) => open)).toBe(true);

@@ -108,7 +108,7 @@ def history_evaluator(
     says how much history this entity is expected to have. It used to be a key
     resolved as a sibling of the entity, back when every requirement lived in
     the same group as the entity it governed; the v14 relocation moved the
-    settings to a top-level ``training`` section, so the registry now names
+    settings to a top-level ``data_and_learning`` section, so the registry now names
     where they live instead of leaving this module to infer it.
     ``default_required_days`` is what the runtime uses when that setting is
     absent, so an untouched draft is judged against the threshold that will
@@ -190,7 +190,7 @@ def history_aware(
     A power device's power sensor already has an evaluator -- :func:`.power.
     evaluate_power_entity` reads it, resolves its polarity and says which way
     it is flowing -- and that reading is worth keeping even for an entity a
-    ``training`` window also governs (the grid meter feeds curtailment
+    ``data_and_learning`` window also governs (the grid meter feeds curtailment
     detection, for instance). Rerunning :func:`history_evaluator`'s own state
     read on top would just be a second, disagreeing opinion about the same
     entity, so this wraps the existing evaluator instead: run it, then append

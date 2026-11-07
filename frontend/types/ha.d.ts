@@ -65,8 +65,10 @@ export interface NodeInfo {
   type?: "trigger" | "condition" | "action" | "chooseOption";
 }
 
-/** `components/ha-form/types.ts`: the selector schema, with the number selector helman uses. */
+/** `components/ha-form/types.ts`: the selector schema, with the number and boolean selectors helman uses. */
 export interface HaFormSchema {
   name: string;
-  selector: { number: { min?: number; mode?: "box" | "slider" } };
+  selector:
+    | { number: { min?: number; mode?: "box" | "slider" } }
+    | { boolean: Record<string, never> };
 }

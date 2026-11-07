@@ -124,7 +124,7 @@ export function cardTree(gridSign: 1 | -1 = -1): TreePayload {
     return treePayload({
         sources: [node("solar", "sensor.solar", "solar"), node("grid", "sensor.grid", "grid"), node("battery", "sensor.battery", "battery")],
         consumers: [node("house", "sensor.house", null)],
-        uiConfig: { show_others_group: false, device_groupings: [], history_buckets: 3, history_bucket_duration: 60 },
+        uiConfig: { device_groupings: [], history_buckets: 3, history_bucket_duration: 60 },
     });
 }
 

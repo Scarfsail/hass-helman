@@ -54,6 +54,7 @@ export class HelmanInfoCallout extends LitElement {
 
     .text {
       margin: 0;
+      white-space: pre-line;
     }
 
     .text.clamped {

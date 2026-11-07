@@ -47,7 +47,7 @@ declare global {
         __saveConflicts: boolean;
         __holdSave: boolean;
         __releaseSave: () => void;
-        __compactVisualization: boolean;
+        __compactRecentPowerHistory: boolean;
         __releaseLoadValidation: () => void;
         __validationCalls: () => number;
         __loadValidationFinished: () => boolean;
@@ -71,7 +71,7 @@ async function mountEditor(page: Page, legacyBackend = false, holdLoadValidation
             window.__saveValid = true;
             window.__saveConflicts = false;
             window.__holdSave = false;
-            window.__compactVisualization = false;
+            window.__compactRecentPowerHistory = false;
             let validationCalls = 0;
             window.__validationCalls = () => validationCalls;
             let loadValidationFinished = false;
@@ -116,12 +116,12 @@ async function mountEditor(page: Page, legacyBackend = false, holdLoadValidation
                             await new Promise<void>((resolve) => { releaseLoadValidation = resolve; });
                             loadValidationFinished = true;
                             return { valid: true, errors: [], warnings: [{
-                                section: "training", path: "training.solar_bias.old_key",
+                                section: "data_and_learning", path: "data_and_learning.solar_bias.old_key",
                                 code: "unknown_key", message: "Old load warning",
                             }] };
                         }
                         return { valid: true, errors: [], warnings: [{
-                            section: "training", path: "training.solar_bias.manual_key",
+                            section: "data_and_learning", path: "data_and_learning.solar_bias.manual_key",
                             code: "unknown_key", message: "New manual warning",
                         }] };
                     },
@@ -152,19 +152,19 @@ async function mountEditor(page: Page, legacyBackend = false, holdLoadValidation
                         const valid = window.__saveValid;
                         if (valid) {
                             stored = { ...(request.config as Record<string, unknown>), config_version: 29 };
-                            if (window.__compactVisualization) {
+                            if (window.__compactRecentPowerHistory) {
                                 const compacted = { ...(stored as Record<string, unknown>) };
-                                delete compacted.visualization;
+                                delete compacted.data_and_learning;
                                 stored = compacted;
                             }
                             queueMicrotask(() => {
-                                window.__fireDataChanged("config", window.__compactVisualization
+                                window.__fireDataChanged("config", window.__compactRecentPowerHistory
                                     ? window.__configRevision(stored) : JSON.stringify(stored));
                             });
                         }
                         return {
                             success: valid && succeeded,
-                            ...(window.__compactVisualization && valid
+                            ...(window.__compactRecentPowerHistory && valid
                                 ? { config: stored, revision: window.__configRevision(stored) } : {}),
                             validation: { valid, errors: [], warnings: [] },
                             reloadStarted: true,
@@ -346,11 +346,11 @@ test("a landed save whose reload failed does not report its own write as an exte
 test("a compacted save rebases the draft and revision after reload failure", async ({ page }) => {
     await mountEditor(page);
     await page.evaluate(() => {
-        window.__compactVisualization = true;
+        window.__compactRecentPowerHistory = true;
         const panel = document.querySelector("helman-config-editor-panel") as HTMLElement & {
             setValue: (path: string[], value: unknown) => void;
         };
-        panel.setValue(["visualization", "history_buckets"], 60);
+        panel.setValue(["data_and_learning", "recent_power_history", "samples"], 60);
         window.__saveSucceeds = false;
     });
     await page.locator("helman-config-editor-panel").getByRole("button", { name: "Save and reload" }).click();
@@ -364,7 +364,7 @@ test("a compacted save rebases the draft and revision after reload failure", asy
         return { config: panel.config, savedConfig: panel.savedConfig };
     });
     expect(state.config).toEqual(state.savedConfig);
-    expect(state.config).not.toHaveProperty("visualization");
+    expect(state.config).not.toHaveProperty("data_and_learning");
 });
 
 test("a rejected save keeps the unsaved draft dirty", async ({ page }) => {

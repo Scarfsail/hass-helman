@@ -1300,7 +1300,7 @@ def solar_config(*, profile=True, max_power=11600, polarity=None):
         entities["power_polarity"] = polarity
     cfg["energy_nodes"]["solar"] = {"entities": entities, "max_power": max_power}
     cfg["energy_nodes"]["grid"]["entities"] = {"today_export": "sensor.today_export"}
-    cfg["training"] = {"solar_bias": {"total_energy_entity_id": "sensor.solar_total"}}
+    cfg["data_and_learning"] = {"solar_bias": {"total_energy_entity_id": "sensor.solar_total"}}
     return cfg
 
 

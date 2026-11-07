@@ -348,10 +348,10 @@ class TrainingTimePromotionTests(unittest.TestCase):
         migrated, ids = self._migrate_from_v5(self._bias_document(training_time="04:30"))
 
         # v19 flattened the rest of the block into ``training.solar_bias``.
-        bias = migrated["training"]["solar_bias"]
+        bias = migrated["data_and_learning"]["solar_bias"]
         self.assertNotIn("training_time", bias)
         # v6 promoted it to the top level; v18 moved it on under ``training``.
-        self.assertEqual(migrated["training"]["training_time"], "04:30")
+        self.assertEqual(migrated["data_and_learning"]["training_time"], "04:30")
         self.assertEqual(bias["enabled"], True)
         self.assertEqual(ids, [])
 
@@ -361,15 +361,15 @@ class TrainingTimePromotionTests(unittest.TestCase):
 
         migrated, _ids = self._migrate_from_v5(document)
 
-        self.assertEqual(migrated["training"]["training_time"], "02:15")
-        self.assertNotIn("training_time", migrated["training"]["solar_bias"])
+        self.assertEqual(migrated["data_and_learning"]["training_time"], "02:15")
+        self.assertNotIn("training_time", migrated["data_and_learning"]["solar_bias"])
 
     def test_a_document_without_the_bias_key_is_untouched(self) -> None:
         migrated, _ids = self._migrate_from_v5(self._bias_document())
 
         self.assertNotIn("training_time", migrated)
         # Only v19's flattened bias block lands under ``training``.
-        self.assertEqual(migrated["training"], {"solar_bias": {"enabled": True}})
+        self.assertEqual(migrated["data_and_learning"], {"solar_bias": {"enabled": True}})
 
     def test_a_v5_document_without_automation_is_migrated_and_stamped(self) -> None:
         document = self._bias_document(training_time="04:30")
@@ -380,7 +380,7 @@ class TrainingTimePromotionTests(unittest.TestCase):
 
         self.assertNotIn("automation", migrated)
         self.assertEqual(migrated["config_version"], CONFIG_DOCUMENT_VERSION)
-        self.assertEqual(migrated["training"]["training_time"], "04:30")
+        self.assertEqual(migrated["data_and_learning"]["training_time"], "04:30")
 
     def test_a_v1_document_carries_the_key_through_every_step(self) -> None:
         document = {
@@ -390,7 +390,7 @@ class TrainingTimePromotionTests(unittest.TestCase):
 
         migrated, ids = migrate_config_document(document)
 
-        self.assertEqual(migrated["training"]["training_time"], "04:30")
+        self.assertEqual(migrated["data_and_learning"]["training_time"], "04:30")
         # The optimizer ids from the v1 step survive a later step that moves none.
         self.assertEqual(ids, ["e"])
 
@@ -1151,7 +1151,7 @@ class ExportEnabledEntityRetirementTests(unittest.TestCase):
         }
         migrated, _ids = migrate_config_document(document)
         # v19 flattened the block into ``training.solar_bias``.
-        return migrated["training"]["solar_bias"]
+        return migrated["data_and_learning"]["solar_bias"]
 
     @staticmethod
     def _migrate_from_v11_document(slot_invalidation):
@@ -1198,7 +1198,7 @@ class ExportEnabledEntityRetirementTests(unittest.TestCase):
         # composing this v11 step with the later one is exactly what
         # test_stored_config_migration.py exercises against the real store.
         self.assertEqual(
-            migrated["training"]["solar_bias"]["min_history_days"], 10
+            migrated["data_and_learning"]["solar_bias"]["min_history_days"], 10
         )
 
     def test_a_document_without_the_block_survives(self) -> None:
@@ -1289,7 +1289,7 @@ class TrainingSectionRelocationTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            migrated["training"]["house_consumption"],
+            migrated["data_and_learning"]["house_consumption"],
             {"min_history_days": 21, "training_window_days": 70},
         )
         self.assertEqual(
@@ -1321,7 +1321,7 @@ class TrainingSectionRelocationTests(unittest.TestCase):
 
         # v19 then flattens the rest of the block in beside them.
         self.assertEqual(
-            migrated["training"]["solar_bias"],
+            migrated["data_and_learning"]["solar_bias"],
             {
                 "min_history_days": 12,
                 "max_training_window_days": 80,
@@ -1347,7 +1347,7 @@ class TrainingSectionRelocationTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            migrated["training"]["solar_bias"], {"max_training_window_days": 45}
+            migrated["data_and_learning"]["solar_bias"], {"max_training_window_days": 45}
         )
 
     def test_max_training_window_days_wins_over_the_legacy_alias(self) -> None:
@@ -1365,14 +1365,14 @@ class TrainingSectionRelocationTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            migrated["training"]["solar_bias"], {"max_training_window_days": 60}
+            migrated["data_and_learning"]["solar_bias"], {"max_training_window_days": 60}
         )
 
     def test_a_document_with_neither_block_survives(self) -> None:
         migrated = self._migrate_from_v13({})
 
         self.assertEqual(migrated["config_version"], CONFIG_DOCUMENT_VERSION)
-        self.assertNotIn("training", migrated)
+        self.assertNotIn("data_and_learning", migrated)
 
     def test_an_untouched_forecast_map_keeps_its_other_keys(self) -> None:
         migrated = self._migrate_from_v13(
@@ -1389,7 +1389,7 @@ class TrainingSectionRelocationTests(unittest.TestCase):
             migrated["energy_nodes"]["house"]["forecast"],
             {"total_energy_entity_id": "sensor.house_energy_total"},
         )
-        self.assertNotIn("training", migrated)
+        self.assertNotIn("data_and_learning", migrated)
 
     def test_migrating_to_the_current_version_covers_this_step(self) -> None:
         migrated, _ids = migrate_config_document(_document())
@@ -1659,12 +1659,17 @@ class VisualizationRelocationTests(unittest.TestCase):
         migrated, ids = self._migrate_from_v17(dict(document))
 
         # v22 moves the regex on to the ``devices`` section, v26 turns the
-        # label texts into its groupings, and v27 drops the card texts.
+        # label texts into its groupings, v27 drops the card texts, and v32
+        # moves the history settings on and drops the display flags.
         regex = document.pop("power_sensor_name_cleaner_regex")
         document.pop("device_label_text")
         for key in ("sources_title", "consumers_title", "groups_title", "others_group_label"):
             document.pop(key)
-        self.assertEqual(migrated["visualization"], document)
+        self.assertNotIn("visualization", migrated)
+        self.assertEqual(
+            migrated["data_and_learning"],
+            {"recent_power_history": {"sampling_interval_seconds": 10, "samples": 90}},
+        )
         self.assertEqual(
             migrated["devices"],
             {
@@ -1691,7 +1696,9 @@ class VisualizationRelocationTests(unittest.TestCase):
             {"history_buckets": 90, "visualization": {"history_buckets": 60}}
         )
 
-        self.assertEqual(migrated["visualization"]["history_buckets"], 90)
+        self.assertEqual(
+            migrated["data_and_learning"]["recent_power_history"]["samples"], 90
+        )
 
     def test_training_time_moves_under_training(self) -> None:
         migrated, _ids = self._migrate_from_v17(
@@ -1700,7 +1707,7 @@ class VisualizationRelocationTests(unittest.TestCase):
 
         self.assertNotIn("training_time", migrated)
         self.assertEqual(
-            migrated["training"], {"solar_bias": {}, "training_time": "04:30"}
+            migrated["data_and_learning"], {"solar_bias": {}, "training_time": "04:30"}
         )
 
     def test_an_authored_training_time_wins(self) -> None:
@@ -1708,14 +1715,14 @@ class VisualizationRelocationTests(unittest.TestCase):
             {"training_time": "04:30", "training": {"training_time": "02:15"}}
         )
 
-        self.assertEqual(migrated["training"]["training_time"], "02:15")
+        self.assertEqual(migrated["data_and_learning"]["training_time"], "02:15")
         self.assertNotIn("training_time", migrated)
 
     def test_a_document_with_none_of_the_keys_grows_neither_section(self) -> None:
         migrated, _ids = self._migrate_from_v17({"power_devices": {}})
 
         self.assertNotIn("visualization", migrated)
-        self.assertNotIn("training", migrated)
+        self.assertNotIn("data_and_learning", migrated)
 
 
 class SolarBiasCorrectionFlatteningTests(unittest.TestCase):
@@ -1753,7 +1760,7 @@ class SolarBiasCorrectionFlatteningTests(unittest.TestCase):
 
         self.assertEqual(migrated["config_version"], CONFIG_DOCUMENT_VERSION)
         self.assertEqual(
-            migrated["training"]["solar_bias"],
+            migrated["data_and_learning"]["solar_bias"],
             {**self._FULL_BLOCK, "min_history_days": 12},
         )
         self.assertEqual(
@@ -1768,7 +1775,7 @@ class SolarBiasCorrectionFlatteningTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            migrated["training"],
+            migrated["data_and_learning"],
             {
                 "solar_bias": {"enabled": False, "clamp_max": 2.5},
                 "training_time": "04:30",
@@ -1786,7 +1793,7 @@ class SolarBiasCorrectionFlatteningTests(unittest.TestCase):
             {
                 "config_version": CONFIG_DOCUMENT_VERSION,
                 "energy_nodes": {"solar": {"forecast": forecast}},
-                "training": training,
+                "data_and_learning": training,
             },
         )
 
@@ -1799,7 +1806,7 @@ class SolarBiasCorrectionFlatteningTests(unittest.TestCase):
             migrated["energy_nodes"]["solar"]["forecast"],
             {"daily_energy_entity_ids": ["sensor.solar_day_0"]},
         )
-        self.assertNotIn("training", migrated)
+        self.assertNotIn("data_and_learning", migrated)
 
     def test_a_v13_document_runs_through_v14_and_v19(self) -> None:
         migrated, _ids = migrate_config_document(
@@ -1821,7 +1828,7 @@ class SolarBiasCorrectionFlatteningTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            migrated["training"]["solar_bias"],
+            migrated["data_and_learning"]["solar_bias"],
             {
                 "min_history_days": 12,
                 "max_training_window_days": 45,
@@ -2066,7 +2073,9 @@ class DevicesSectionMigrationTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(migrated["visualization"], {"history_buckets": 90})
+        self.assertEqual(
+            migrated["data_and_learning"], {"recent_power_history": {"samples": 90}}
+        )
         self.assertEqual(
             migrated["devices"],
             {"name_cleaner_regex": " Power$", "consumers": [self.WASHER]},
@@ -2116,9 +2125,8 @@ class DevicesSectionMigrationTests(unittest.TestCase):
         )
 
         self.assertEqual(migrated["devices"], {"oops": True})
-        self.assertEqual(
-            migrated["visualization"], {"power_sensor_name_cleaner_regex": " Power$"}
-        )
+        # v32 retires ``visualization`` whole, the unmoved regex with it.
+        self.assertNotIn("visualization", migrated)
 
     def test_a_null_devices_value_counts_as_absent(self) -> None:
         migrated = self._migrate_from_v21(
@@ -2129,7 +2137,7 @@ class DevicesSectionMigrationTests(unittest.TestCase):
         )
 
         self.assertEqual(migrated["devices"], {"name_cleaner_regex": " Power$"})
-        self.assertEqual(migrated["visualization"], {})
+        self.assertNotIn("visualization", migrated)
 
 
 class RegistryBackfillMigrationTests(unittest.TestCase):
@@ -2570,7 +2578,10 @@ class DeviceGroupingsMigrationTests(unittest.TestCase):
 
         self.assertEqual(migrated["config_version"], CONFIG_DOCUMENT_VERSION)
         self.assertEqual(migrated["devices"], {"groupings": self.GROUPINGS})
-        self.assertEqual(migrated["visualization"], {"history_buckets": 90})
+        self.assertNotIn("visualization", migrated)
+        self.assertEqual(
+            migrated["data_and_learning"], {"recent_power_history": {"samples": 90}}
+        )
 
     def test_membership_is_the_first_matching_label_per_category(self) -> None:
         devices = self._migrate_from_v25(self.LABEL_TEXT, self._devices())["devices"]
@@ -2603,7 +2614,7 @@ class DeviceGroupingsMigrationTests(unittest.TestCase):
         self.assertFalse(
             any("groups" in device for device in _all_devices(migrated))
         )
-        self.assertNotIn("device_label_text", migrated["visualization"])
+        self.assertNotIn("visualization", migrated)
 
     def test_colliding_and_emoji_only_names_get_distinct_ids(self) -> None:
         migrated = self._migrate_from_v25(
@@ -2630,7 +2641,7 @@ class DeviceGroupingsMigrationTests(unittest.TestCase):
         self.assertEqual(
             migrated["devices"], {"consumers": self._devices()["consumers"]}
         )
-        self.assertNotIn("device_label_text", migrated["visualization"])
+        self.assertNotIn("visualization", migrated)
         self.assertEqual(self.requests, [])
 
     def test_a_devices_value_that_is_not_an_object_is_left_for_the_validator(
@@ -2645,9 +2656,8 @@ class DeviceGroupingsMigrationTests(unittest.TestCase):
         )
 
         self.assertEqual(migrated["devices"], ["oops"])
-        self.assertEqual(
-            migrated["visualization"], {"device_label_text": self.LABEL_TEXT}
-        )
+        # v32 retires ``visualization`` whole, the unconverted texts with it.
+        self.assertNotIn("visualization", migrated)
 
 
 
@@ -2681,7 +2691,7 @@ class CardTextRetirementMigrationTests(unittest.TestCase):
             migrated,
             {
                 "config_version": CONFIG_DOCUMENT_VERSION,
-                "visualization": {"history_buckets": 90, "show_others_group": False},
+                "data_and_learning": {"recent_power_history": {"samples": 90}},
                 "energy_nodes": {
                     node: {"entities": {"power": f"sensor.{node}_power"}}
                     for node in ("house", "solar", "battery", "grid")

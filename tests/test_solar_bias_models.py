@@ -42,7 +42,7 @@ def test_read_nested_config():
                 }
             }
         },
-        "training": {
+        "data_and_learning": {
             "training_time": "04:00",
             "solar_bias": {
                 "enabled": False,
@@ -77,7 +77,7 @@ def test_reads_total_energy_entity_from_the_solar_bias_training_config():
                 }
             }
         },
-        "training": {
+        "data_and_learning": {
             "solar_bias": {"total_energy_entity_id": "sensor.bias_total"},
         },
     }
@@ -88,7 +88,7 @@ def test_reads_total_energy_entity_from_the_solar_bias_training_config():
 
 
 def test_training_time_is_read_from_the_training_block():
-    bias = read_bias_config({"training": {"training_time": "05:15"}})
+    bias = read_bias_config({"data_and_learning": {"training_time": "05:15"}})
 
     assert bias.training_time == "05:15"
 
@@ -97,7 +97,7 @@ def test_a_training_time_under_solar_bias_means_nothing():
     # Every document is migrated on load, so ``training.solar_bias`` never
     # carries a schedule; the key is not read there.
     config = {
-        "training": {
+        "data_and_learning": {
             "training_time": "05:15",
             "solar_bias": {"training_time": "04:00"},
         },
@@ -114,7 +114,7 @@ def test_max_training_window_days_is_read_from_the_training_section():
     # by `_migrate_v13_to_v14` on load, so read_bias_config never sees it --
     # see tests/test_automation_migration.py::TrainingSectionRelocationTests
     # for the alias-collapsing behaviour itself.
-    config = {"training": {"solar_bias": {"max_training_window_days": 30}}}
+    config = {"data_and_learning": {"solar_bias": {"max_training_window_days": 30}}}
 
     bias = read_bias_config(config)
 
@@ -129,7 +129,7 @@ def test_a_non_mapping_training_section_falls_back_to_the_defaults():
     # runs unguarded from `HelmanCoordinator.async_setup` -- so a null or
     # scalar section must not take the whole integration down with it.
     for raw_training in (None, "nonsense", []):
-        bias = read_bias_config({"training": raw_training})
+        bias = read_bias_config({"data_and_learning": raw_training})
 
         assert bias.min_history_days == const.SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS
         assert (
@@ -142,13 +142,13 @@ def test_a_non_mapping_training_section_falls_back_to_the_defaults():
 def test_a_non_mapping_solar_bias_subsection_falls_back_to_the_defaults():
     import custom_components.helman.const as const
 
-    bias = read_bias_config({"training": {"solar_bias": None}})
+    bias = read_bias_config({"data_and_learning": {"solar_bias": None}})
 
     assert bias.min_history_days == const.SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS
 
 
 def test_slot_invalidation_fields_default_when_absent():
-    config = {"training": {"solar_bias": {}}}
+    config = {"data_and_learning": {"solar_bias": {}}}
 
     bias = read_bias_config(config)
 
@@ -159,7 +159,7 @@ def test_slot_invalidation_fields_default_when_absent():
 
 def test_slot_invalidation_fields_are_parsed_when_present():
     config = {
-        "training": {
+        "data_and_learning": {
             "solar_bias": {
                 "slot_invalidation": {
                     "max_battery_soc_percent": 87,
@@ -327,7 +327,7 @@ def test_house_breakdown_payload_carries_the_controllable_ids():
 
 
 def test_read_bias_config_passes_explicit_aggregation_method():
-    config = {"training": {"solar_bias": {"aggregation_method": "trimmed_mean"}}}
+    config = {"data_and_learning": {"solar_bias": {"aggregation_method": "trimmed_mean"}}}
 
     bias = read_bias_config(config)
 

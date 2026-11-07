@@ -33,7 +33,7 @@ async function mountCard(page: Page): Promise<void> {
         consumers: [dto({ id: "house", displayName: "House", powerSensorId: "sensor.house" })],
         consumptionTotalSensorId: null,
         productionTotalSensorId: null,
-        uiConfig: { show_others_group: false, device_groupings: [], history_buckets: 3, history_bucket_duration: 5 },
+        uiConfig: { device_groupings: [], history_buckets: 3, history_bucket_duration: 5 },
     });
 
     await page.evaluate(async (tree) => {

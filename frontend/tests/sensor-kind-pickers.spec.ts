@@ -44,7 +44,7 @@ const CONFIG = configDoc({
             forecast: { sell_price_entity_id: "sensor.sell_price" },
         },
     },
-    training: { solar_bias: { total_energy_entity_id: "sensor.solar_bias_energy" } },
+    data_and_learning: { solar_bias: { total_energy_entity_id: "sensor.solar_bias_energy" } },
     devices: {
         consumers: [
             {
@@ -200,7 +200,7 @@ test("each sensor picker offers only its kind, matched by device class or unit",
     await mountEditor(page);
     const pickers = {
         ...(await groupPickers(page, "Energy nodes")),
-        ...(await groupPickers(page, "Training")),
+        ...(await groupPickers(page, "Data and learning")),
         ...(await groupPickers(page, "Devices")),
     };
 
@@ -219,7 +219,7 @@ test("each sensor picker offers only its kind, matched by device class or unit",
         "energy_nodes.grid.entities.power": "power",
         // Price sensors have no reliable class, and their unit is a currency.
         "energy_nodes.grid.forecast.sell_price_entity_id": "none",
-        "training.solar_bias.total_energy_entity_id": "energy",
+        "data_and_learning.solar_bias.total_energy_entity_id": "energy",
         "devices.consumers.0.consumption.energy_entity_id": "energy",
         "devices.consumers.0.consumption.power_entity_id": "power",
         "devices.consumers.1.consumption.energy_entity_id": "energy",

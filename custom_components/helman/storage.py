@@ -13,7 +13,7 @@ from .automation.migration import (
     migrate_config_document,
     needs_migration,
 )
-from .visualization import compact_visualization
+from .recent_power_history import compact_recent_power_history
 from .config_validation import validate_config_document
 from .const import (
     CONFIG_DOCUMENT_VERSION,
@@ -189,7 +189,7 @@ class HelmanStorage:
         )
         if not validation.valid:
             raise ValueError("Cannot save invalid Helman config")
-        canonical = compact_visualization(new_config)
+        canonical = compact_recent_power_history(new_config)
         self._config = canonical
         await self._store.async_save(canonical)
 

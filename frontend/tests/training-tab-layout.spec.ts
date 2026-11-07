@@ -3,7 +3,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
 
 /**
- * The Training tab's one panel shape (issue #313).
+ * The Data and learning tab's one panel shape (issue #313).
  *
  * Every job panel reads, in order: the explanation, the status, a collapsed
  * Configuration scope and a collapsed Diagnostics panel. Health shows once,
@@ -33,7 +33,7 @@ const CONFIG = configDoc({
             },
         },
     ] },
-    training: {
+    data_and_learning: {
         solar_bias: { total_energy_entity_id: "sensor.solar_bias_energy" },
     },
 });
@@ -123,7 +123,7 @@ async function mountEditor(page: Page): Promise<void> {
     );
 
     await expect(page.locator(".tabs button").first()).toBeVisible();
-    await page.locator(".tabs button", { hasText: "Training" }).click();
+    await page.locator(".tabs button", { hasText: "Data and learning" }).click();
     await expect(page.locator("helman-training-job-status")).toHaveCount(3);
 }
 
@@ -148,7 +148,7 @@ function subPanel(page: Page, parent: string, label: string) {
 const JOB_PANELS = {
     solar_bias: "Solar forecast correction",
     house_consumption: "House consumption forecast",
-    appliance_energy: "Appliance energy",
+    appliance_energy: "Device energy",
 } as const;
 
 /** The direct children of a panel's content, as tag or `label (open|closed)`. */
@@ -191,10 +191,58 @@ test("(a) each job panel is explanation, status, Configuration, Diagnostics", as
     }
 });
 
+test("the tabs follow the document's top-level keys, and the sections their agreed order", async ({
+    page,
+}) => {
+    await mountEditor(page);
+
+    await expect(page.locator(".tabs button")).toHaveText([
+        "Energy nodes",
+        "Devices",
+        "Automation",
+        "Data and learning",
+    ]);
+    const sections = await page
+        .locator(".tab-body > details.section-card > summary .section-summary-label")
+        .allTextContents();
+    expect(sections.map((label) => label.trim())).toEqual([
+        "Training schedule and status",
+        JOB_PANELS.house_consumption,
+        JOB_PANELS.solar_bias,
+        JOB_PANELS.appliance_energy,
+        "Recent power history",
+    ]);
+    // A settings scope of its own: a YAML toggle in its header, and it is last.
+    await expect(
+        parentPanel(page, "Recent power history").locator(":scope > summary .mode-toggle"),
+    ).toHaveCount(1);
+});
+
+test("each tab's YAML shows exactly its own top-level key", async ({ page }) => {
+    await mountEditor(page);
+    await page.evaluate(() => {
+        if (!customElements.get("ha-yaml-editor")) customElements.define("ha-yaml-editor", class extends HTMLElement {});
+    });
+
+    for (const [tab, key] of [
+        ["Energy nodes", "energy_nodes"],
+        ["Devices", "devices"],
+        ["Automation", "automation"],
+        ["Data and learning", "data_and_learning"],
+    ] as const) {
+        await page.locator(".tabs button", { hasText: tab }).click();
+        await page.locator(".scope-toolbar .mode-toggle button", { hasText: "YAML" }).click();
+        await expect
+            .poll(() => page.locator(".tab-scope ha-yaml-editor").evaluate((editor: any) => editor.defaultValue))
+            .toEqual((CONFIG as Record<string, unknown>)[key] ?? {});
+        await page.locator(".scope-toolbar .mode-toggle button", { hasText: "Visual" }).click();
+    }
+});
+
 test("(b) a YAML toggle only on Configuration scopes", async ({ page }) => {
     await mountEditor(page);
 
-    for (const label of [...Object.values(JOB_PANELS), "Training settings"]) {
+    for (const label of [...Object.values(JOB_PANELS), "Training schedule and status"]) {
         await expect(parentPanel(page, label)).toHaveCount(1);
         await expect(parentPanel(page, label).locator(":scope > summary .mode-toggle")).toHaveCount(0);
     }
@@ -203,7 +251,7 @@ test("(b) a YAML toggle only on Configuration scopes", async ({ page }) => {
         await expect(diagnostics).toHaveCount(1);
         await expect(diagnostics.locator(":scope > summary .mode-toggle")).toHaveCount(0);
     }
-    for (const label of [JOB_PANELS.solar_bias, JOB_PANELS.house_consumption, "Training settings"]) {
+    for (const label of [JOB_PANELS.solar_bias, JOB_PANELS.house_consumption, "Training schedule and status"]) {
         const configuration = subPanel(page, label, "Configuration");
         await expect(configuration).toHaveCount(1);
         await expect(configuration.locator(":scope > summary .mode-toggle")).toHaveCount(1);

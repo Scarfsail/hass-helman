@@ -18,7 +18,12 @@ const SCHEMA: readonly HaFormSchema[] = [
         name: "collapsed_consumers_count",
         selector: { number: { min: 0, mode: "box" } },
     },
+    { name: "show_empty_groups", selector: { boolean: {} } },
+    { name: "show_others_group", selector: { boolean: {} } },
 ] as const;
+
+/** What the card renders an unset flag as, so the form shows the same. */
+const FLAG_DEFAULTS = { show_empty_groups: false, show_others_group: true };
 
 @customElement("helman-card-editor")
 export class HelmanCardEditor extends LitElement implements LovelaceCardEditor {
@@ -41,7 +46,7 @@ export class HelmanCardEditor extends LitElement implements LovelaceCardEditor {
         return html`
             <ha-form
                 .hass=${this._hass}
-                .data=${this._config}
+                .data=${{ ...FLAG_DEFAULTS, ...this._config }}
                 .schema=${SCHEMA}
                 .computeLabel=${this._computeLabel}
                 .computeHelper=${this._computeHelper}

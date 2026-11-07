@@ -89,7 +89,7 @@ def _make_tracker(
     weights: dict[str, float | None] | None = None,
 ):
     config = {
-        "visualization": {"history_buckets": 60, "history_bucket_duration": 1},
+        "data_and_learning": {"recent_power_history": {"samples": 60, "sampling_interval_seconds": 1}},
         "energy_nodes": {"house": {"entities": {"power": HOUSE}}},
         "devices": {
             "consumers": _devices(
