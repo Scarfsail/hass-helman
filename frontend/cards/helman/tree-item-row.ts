@@ -11,6 +11,14 @@ import { showDeviceDetailEvent } from "./tree-item-icon";
 import "./tree-item-power-display";
 import "./tree-item-info";
 
+/** The house's Untracked remainder: `{house id}_unmeasured`, as the backend names it. A breaker's remainder opens nothing. */
+const HOUSE_UNMEASURED_ID = "house_unmeasured";
+
+/** A config device, or the house's Untracked remainder, opens a detail from its name. */
+function opensDetail(item: TreeItem): boolean {
+    return !!item.deviceKey || (item.isUnmeasured && item.id === HOUSE_UNMEASURED_ID);
+}
+
 @customElement("helman-tree-item")
 export class HelmanTreeItem extends LitElement {
     @property({ attribute: false }) public hass!: HomeAssistant;
@@ -72,9 +80,9 @@ export class HelmanTreeItem extends LitElement {
         this._toggleChildren();
     }
 
-    /** A config device opens its detail; anything else keeps toggling its children. */
+    /** A config device or the house's Untracked remainder opens its detail; anything else keeps toggling its children. */
     private _onNameClick() {
-        if (!this.device.deviceKey) {
+        if (!opensDetail(this.device)) {
             this._toggleChildren();
             return;
         }
@@ -289,7 +297,7 @@ export class HelmanTreeItem extends LitElement {
                                 @show-more-info=${(e: CustomEvent) => this._showMoreInfo(e.detail.entityId)}
                             ></helman-tree-item-icon>
                             ${indicator ? html`<span class="childrenToggle" @click=${this._onChevronClick}>${indicator}</span>` : nothing}
-                            <div class="deviceName ${hasChildren ? 'has-children' : ''} ${device.deviceKey ? 'is-device' : ''}" @click=${this._onNameClick}>${device.displayName || device.name}</div>
+                            <div class="deviceName ${hasChildren ? 'has-children' : ''} ${opensDetail(device) ? 'is-device' : ''}" @click=${this._onNameClick}>${device.displayName || device.name}</div>
                             ${this.centreContent ? html`<div class="centre">${this.centreContent}</div>` : nothing}
                             <helman-tree-item-power-display
                                 .powerValue=${this.device.powerValue ?? 0}

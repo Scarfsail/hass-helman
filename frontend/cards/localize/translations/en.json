@@ -320,7 +320,7 @@
         "device_run": "a typical run ≈ {kwh} kWh",
         "device_running": "average during a run",
         "device_no_stats": "Not enough history learned yet.",
-        "period_while_running": "{figure} while running",
+        "period_while_running": "{figure} while running",
         "ev_summary": "{kwh} today · {pct} % solar",
         "charged_today": "Charged today",
         "from_solar_cap": "From solar",

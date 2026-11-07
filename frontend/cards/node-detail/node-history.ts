@@ -47,9 +47,9 @@ export function deviceStatsSection(host: DetailHost): SectionOptions<DeviceStats
     };
 }
 
-/** The node history's answer, when it has one. */
+/** The node history's answer, when it has one: a period without energy has none. */
 export function nodeHistory(payload: NodeHistoryPayload | null | undefined): NodeHistoryDTO | null {
-    return payload && payload.unavailable === undefined ? payload : null;
+    return payload && payload.unavailable === undefined && payload.totals.kwh > EPSILON_KWH ? payload : null;
 }
 
 /** The gauges' styles, on top of the live gauge's pills. */
@@ -146,7 +146,7 @@ export function renderNodeHistory(
     const totals = period.totals;
     const sources = totals.sources;
     const pct = (kwh: number) => totals.kwh > 0 ? Math.round(kwh / totals.kwh * 100) : 0;
-    const perWeek = period.perWeek < 2 ? (Math.round(period.perWeek * 10) / 10).toString() : String(Math.round(period.perWeek));
+    const perWeek = period.perWeek.toFixed(1);
     const unknownKwh = sources ? sources.unknown : totals.kwh;
     const periodDays = Math.round((Date.parse(period.endDate) - Date.parse(period.startDate)) / 86_400_000) + 1;
     const fewerDays = period.coveredDays < periodDays;
@@ -178,17 +178,17 @@ export function renderNodeHistory(
     `;
 }
 
-/** The kWh by source: each pill its kWh and share, "—" while no source is known. */
+/** The kWh by source: each pill its kWh, the title's unit, and share, "—" while no source is known; an estimated node's total is "≈". */
 function renderEnergyGauge(period: NodeHistoryDTO, localize: LocalizeFunction) {
     const totals = period.totals;
     const sources = totals.sources;
-    return html`<div class="gauge-title" data-energy-title>${h(localize, "period_gauge_energy")}<span class="gauge-total">· ${kwhText(totals.kwh)}</span></div>
+    return html`<div class="gauge-title" data-energy-title>${h(localize, "period_gauge_energy")}<span class="gauge-total">· ${period.estimated ? "≈ " : ""}${kwhText(totals.kwh)}</span></div>
         <div class="pills" data-energy>${SOURCE_NODES.map((node) => {
             const kwh = sources ? sources[node] : null;
             const pct = kwh !== null && kwh > EPSILON_KWH && totals.kwh > 0 ? Math.max(1, Math.round(kwh / totals.kwh * 100)) : 0;
             return html`<div class="pill" data-source=${node} ?data-active=${pct > 0} style=${`--node: var(--helman-${node}); --fill: ${pct}%`}
                 title=${localize(`node_detail.title.${node}`)}>
-                <ha-icon icon=${nodeIcon(node)}></ha-icon><span class="gauge-figure">${kwh === null ? "—" : kwhText(kwh)}${pct > 0 ? html` <span class="percent">${pct} %</span>` : nothing}</span>
+                <ha-icon icon=${nodeIcon(node)}></ha-icon><span class="gauge-figure">${kwh === null ? "—" : formatKwh(Math.abs(kwh))}${pct > 0 ? html` <span class="percent">${pct} %</span>` : nothing}</span>
             </div>`;
         })}</div>`;
 }

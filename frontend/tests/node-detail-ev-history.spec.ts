@@ -309,7 +309,7 @@ test("ev-charger last 30 days shows an energy and a money gauge with their total
     // Two gauges as the live one's pills, each title with its total, in the live order.
     await expect(window30.locator("[data-energy-title]")).toHaveText(/Energy\s*· 215 kWh/);
     const energy = window30.locator("[data-energy] [data-source]");
-    await expect(energy).toHaveText([/109 kWh\s*51 %/, /17 kWh\s*8 %/, /82 kWh\s*38 %/]);
+    await expect(energy).toHaveText([/^\s*109\s*51 %\s*$/, /^\s*17\s*8 %\s*$/, /^\s*82\s*38 %\s*$/]);
     await expect(energy.nth(0)).toHaveAttribute("style", /--fill: 51%/);
     // Each over all the charged energy: really paid, and virtually with the solar's export income.
     await expect(window30.locator("[data-money-title]")).toHaveText(/Money\s*· paid ≈ 455 CZK · ≈ 2\.19 CZK\/kWh\s*· virtually ≈ 597 CZK · ≈ 2\.87 CZK\/kWh/);
@@ -323,7 +323,7 @@ test("ev-charger last 30 days shows an energy and a money gauge with their total
     // Under them only what is not one source's, how often and per active day: the rows every consumer shows.
     await expect(window30.locator("[data-row]")).toHaveCount(3);
     await expect(window30.locator("[data-row=source-unknown] .value")).toHaveText("7.0 kWh · 3 %");
-    await expect(window30.locator("[data-row=how-often] .value")).toHaveText("≈ 3× a week · on 13 of 30 days");
+    await expect(window30.locator("[data-row=how-often] .value")).toHaveText("≈ 3.0× a week · on 13 of 30 days");
     await expect(window30.locator("[data-row=per-day] .value")).toHaveText("≈ 17 kWh");
     // Then the ledger's segments.
     await expect(content(page).locator("[data-ledger-segments]")).toBeVisible();
@@ -422,7 +422,7 @@ test("ev-charger last 30 days names a shorter coverage, its first day, and count
     await openHistory(page);
     await expect(content(page).locator("[data-node-history-title]")).toContainText("Last 30 days · data for 13 days");
     await expect(content(page).locator("[data-node-history-coverage]")).toHaveText("Data for 43 % of the period (from 9 Oct)");
-    await expect(content(page).locator("[data-node-history] [data-row=how-often] .value")).toHaveText("≈ 7× a week · on 13 of 13 days");
+    await expect(content(page).locator("[data-node-history] [data-row=how-often] .value")).toHaveText("≈ 7.0× a week · on 13 of 13 days");
 });
 
 test("ev-charger without a house dataset shows the kWh and no source or money", async ({ page }) => {

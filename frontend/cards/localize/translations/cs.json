@@ -224,7 +224,7 @@
         "device_run": "běžný běh ≈ {kwh} kWh",
         "device_running": "průměr během běhu",
         "device_no_stats": "Zatím není naučeno dost historie.",
-        "period_while_running": "{figure} za běhu",
+        "period_while_running": "{figure} za běhu",
         "ev_summary": "{kwh} dnes · {pct} % ze slunce",
         "charged_today": "Nabito dnes",
         "from_solar_cap": "Ze slunce",

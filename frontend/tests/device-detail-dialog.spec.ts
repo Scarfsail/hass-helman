@@ -13,8 +13,9 @@ import type { TreeItemDTO } from "../cards/helman-api";
  * The name used to toggle the box's children; that job moved to a chevron in
  * front of it, so the name is free to open one dialog per config device: its
  * live power and switch, the energy its own meter counted today and in the last
- * hour, and HA's history graph. Rows that are not devices -- virtual label
- * groups, the unmeasured remainder -- keep toggling and open nothing.
+ * hour, and HA's history graph. The house's Untracked remainder opens its
+ * detail too; other rows -- virtual label groups, a breaker's remainder --
+ * keep toggling and open nothing.
  *
  * Home Assistant's own pieces are stubbed at the edge: `callWS` answers the
  * recorder's statistics, `window.loadCardHelpers` hands back an element that
@@ -411,12 +412,12 @@ test("device History shows its last 30 days between the last 24 hours and the ty
     await expect(titles.nth(2)).toHaveText("Typical, learned from the last 14 days");
     const block = section.locator("[data-node-history]");
     await expect(block.locator("[data-energy-title]")).toHaveText(/Energy\s*· 43 kWh/);
-    await expect(block.locator("[data-energy] [data-source]")).toHaveText([/26 kWh\s*61 %/, /9\.4 kWh\s*22 %/, /7\.2 kWh\s*17 %/]);
+    await expect(block.locator("[data-energy] [data-source]")).toHaveText([/^\s*26\s*61 %\s*$/, /^\s*9\.4\s*22 %\s*$/, /^\s*7\.2\s*17 %\s*$/]);
     await expect(block.locator("[data-money-title]")).toHaveText(/Money\s*· paid ≈ 52 CZK · ≈ 1\.22 CZK\/kWh\s*· virtually ≈ 98 CZK · ≈ 2\.30 CZK\/kWh/);
     await expect(block.locator("[data-money] [data-money-source]")).toHaveText([/≈ 46 CZK\s*≈ 1\.77 CZK\/kWh/, /≈ 21 CZK\s*≈ 2\.23 CZK\/kWh/, /≈ 31 CZK\s*≈ 4\.31 CZK\/kWh/]);
     // Nothing of unknown source: just how often and per active day.
     await expect(block.locator("[data-row]")).toHaveCount(2);
-    await expect(block.locator("[data-row=how-often] .value")).toHaveText("≈ 4× a week · on 18 of 30 days");
+    await expect(block.locator("[data-row=how-often] .value")).toHaveText("≈ 4.2× a week · on 18 of 30 days");
     await expect(block.locator("[data-row=per-day] .value")).toHaveText("≈ 2.4 kWh");
     await expect(block.locator("[data-estimates-toggle]")).toHaveText("How these are estimated");
 });
@@ -504,6 +505,52 @@ test("a node with no chart, no stats and no node history has no History section"
     await expect(page.locator("node-detail-device-content")).toBeVisible();
     await expect.poll(() => page.evaluate(() => (window as any).__nodeHistoryRequests)).toEqual(["house_unmeasured"]);
     await expect(page.locator("node-detail-device-content helman-detail-section[data-history]")).toHaveCount(0);
+});
+
+test("the Untracked remainder's name opens its detail with its last 30 days", async ({ page }) => {
+    await mountCard(page, {}, true, "kWh", TODAY_KWH, {}, "2026-10-21T12:00:00+00:00", false, boilerHistory({ id: "house_unmeasured", unmeasured: true }));
+    await expect.poll(() => rowNames(page)).toContain("👻 Untracked consumption");
+    await openDevice(page, "👻 Untracked consumption");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
+    await expect(section.locator("[slot=summary]")).toHaveText("43 kWh in the last 30 days");
+    expect(await page.evaluate(() => (window as any).__nodeHistoryRequests)).toEqual(["house_unmeasured"]);
+});
+
+/** A node with no energy in the period, as the backend answers it: one covered day, nothing else. */
+function emptyHistory() {
+    return boilerHistory({
+        kwh: 0, coverage: 0, firstHour: null, coveredDays: 1, activeDays: 0, perWeek: 0, kwhPerActiveDay: null,
+        totals: { ...boilerHistory().totals, kwh: 0, sources: null, knownKwh: 0 },
+    });
+}
+
+test("a period without energy reads as no node history: the power alone and no block", async ({ page }) => {
+    await mountCard(page, BOILER_STATS, true, "kWh", TODAY_KWH, {}, "2026-10-21T12:00:00+00:00", false, emptyHistory());
+    await openDevice(page, "Boiler");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
+    // The power alone, no rate from an empty period.
+    await expect(section.locator("[slot=summary]")).toHaveText("2.0 kW while running");
+    await section.locator("button").first().click();
+    await expect(section.locator("[data-history-body]")).toBeVisible();
+    await expect(section.locator("[data-node-history-title]")).toHaveCount(0);
+    await expect(section.locator("[data-node-history]")).toHaveCount(0);
+});
+
+test("a node with no chart, no stats and a period without energy has no History section", async ({ page }) => {
+    await mountCard(page, {}, false, "kWh", TODAY_KWH, {}, "2026-10-21T12:00:00+00:00", false, emptyHistory());
+    await page.evaluate(() => { delete (window as any).loadCardHelpers; });
+    await openNode(page, "house_unmeasured");
+    await expect(page.locator("node-detail-device-content")).toBeVisible();
+    await expect.poll(() => page.evaluate(() => (window as any).__nodeHistoryRequests)).toEqual(["house_unmeasured"]);
+    await expect(page.locator("node-detail-device-content helman-detail-section[data-history]")).toHaveCount(0);
+});
+
+test("an estimated node marks its 30 days' energy total as approximate", async ({ page }) => {
+    await mountCard(page, BOILER_STATS, true, "kWh", TODAY_KWH, {}, "2026-10-21T12:00:00+00:00", false, boilerHistory({ estimated: true }));
+    await openDevice(page, "Boiler");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
+    await section.locator("button").first().click();
+    await expect(section.locator("[data-energy-title]")).toHaveText(/Energy\s*· ≈ 43 kWh/);
 });
 
 test("device History header keeps today's header without learned stats, even with a node history", async ({ page }) => {
