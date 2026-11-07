@@ -25,13 +25,7 @@ SOC = "sensor.kona_soc"
 
 LEDGER = {
     "unavailable": None,
-    "window": {"start": "2026-10-10T12:00:00+00:00", "end": "2026-11-09T12:00:00+00:00"},
-    "totals": {"kwh": 12.0, "provisional": False},
-    "chargingDays": 3,
-    "perWeek": 0.7,
-    "paidPerKwh": 2.0,
-    "gridPricePerKwh": 5.0,
-    "segments": [],
+    "segments": [{"id": "s1", "kwh": 12.0}],
     "complete": False,
     "health": {"error": "read_failed"},
 }
@@ -117,7 +111,8 @@ def test_a_partial_ledger_is_served_with_its_price_unit_and_its_failure_named():
     assert payload["priceUnit"] == "CZK/kWh"
     assert payload["complete"] is False
     assert payload["health"] == {"error": "read_failed"}
-    assert payload["totals"]["kwh"] == 12.0
+    assert payload["segments"] == [{"id": "s1", "kwh": 12.0}]
+    assert "totals" not in payload
     # The charger's figures alone: nothing of any car is read into them.
     assert "per100km" not in payload
     device_id, now = coordinator.ev_sessions.async_history.call_args.args

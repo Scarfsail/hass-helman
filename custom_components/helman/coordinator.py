@@ -77,6 +77,7 @@ from .device_reports.dataset import (
     dataset_statistic_ids,
     find_house_node,
 )
+from .device_reports.node_history import build_node_history, hour_floor_kwh
 from .device_reports.reports import ReportQuery, build_report
 from .entity import remove_stale_devices, remove_stale_entities
 from .ev_sessions.service import EvSessionService
@@ -741,6 +742,31 @@ class HelmanCoordinator:
                     "minDate": floor.isoformat(),
                     "maxDate": now.date().isoformat(),
                 },
+            )
+        )
+
+    async def async_node_history(self, node_id: str) -> dict[str, Any]:
+        """One house-subtree node's last 30 days, or why there is none.
+
+        The period is the device-reports card's ``last_30`` preset, so the
+        dataset comes from the same cache; the hourly floor is the node's
+        kind's (:data:`~.device_reports.node_history.HOUR_FLOOR_KWH`).
+        """
+        today = dt_util.now().astimezone(ZoneInfo(str(self._hass.config.time_zone))).date()
+        resolved = await self._async_report_dataset(
+            ReportQuery(start_date=today - timedelta(days=29), end_date=today)
+        )
+        if isinstance(resolved, str):
+            return {"unavailable": resolved}
+        dataset, _now, price_config = resolved
+        price_unit = await self._solar_inspector.async_resolve_span_currency(price_config)
+        return await self._hass.async_add_executor_job(
+            functools.partial(
+                build_node_history,
+                dataset,
+                node_id,
+                hour_floor_kwh=hour_floor_kwh(await self.get_device_tree(), node_id),
+                price_unit=price_unit,
             )
         )
 

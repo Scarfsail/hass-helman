@@ -1306,31 +1306,74 @@ export interface EvChargerTodaySectionPayload {
     } | null;
 }
 
-/** One money figure of the charging ledger, with the kWh it priced and the kWh it could not. */
-export interface EvLedgerMoneyDTO {
-    amount: number;
+/** One money figure, with the kWh it priced and the kWh it could not; a node history's `amount` is `null` with nothing priced. */
+export interface MoneySideDTO {
+    amount: number | null;
     pricedKwh: number;
     unpricedKwh: number;
 }
 
 /**
- * Charging ledger energy and its estimated attribution. `sources` is `null`
- * when nothing of it could be attributed. `paid` and `forgone` are over all
- * of its kWh; `gridPaid` is the grid share alone and `solarForgone` the direct
- * solar share alone. Forgone export value is never part of paid.
+ * Energy and its estimated attribution. `sources` is `null` when nothing of
+ * it could be attributed. `paid` and `forgone` are over all of its kWh;
+ * `gridPaid` is the grid share alone and `solarForgone` the direct solar
+ * share alone. Forgone export value is never part of paid.
  */
-export interface EvLedgerFiguresDTO {
+export interface EnergyFiguresDTO {
     kwh: number;
     sources: { solar: number; battery: number; grid: number; unknown: number } | null;
     knownKwh: number;
-    paid: EvLedgerMoneyDTO;
-    forgone: EvLedgerMoneyDTO;
-    gridPaid: EvLedgerMoneyDTO;
+    paid: MoneySideDTO;
+    forgone: MoneySideDTO;
+    gridPaid: MoneySideDTO;
     /** Of `paid`, the battery share's: `paid` less `gridPaid`, solar paying nothing. */
-    batteryPaid: EvLedgerMoneyDTO;
+    batteryPaid: MoneySideDTO;
     /** `paid` plus `solarForgone`, over the kWh priced on both sides: the cost had the direct solar been exported. */
-    virtual: EvLedgerMoneyDTO;
-    solarForgone: EvLedgerMoneyDTO;
+    virtual: MoneySideDTO;
+    solarForgone: MoneySideDTO;
+}
+
+/**
+ * One house-subtree node's last 30 local days (`helman/get_node_history`),
+ * from the device-reports dataset, or why there is none. Hours under the
+ * node's kind's floor (0.1 kWh for an EV charger) are left out of `totals`;
+ * `kwh` and `coverage` are the node's whole meter.
+ */
+export type NodeHistoryPayload = NodeHistoryDTO | { unavailable: string };
+
+export interface NodeHistoryDTO {
+    unavailable?: undefined;
+    id: string;
+    label: string;
+    icon: string | null;
+    estimated: boolean;
+    unmeasured: boolean;
+    kwh: number;
+    /** Covered hours over the period's elapsed hours, 0..1. */
+    coverage: number;
+    /** The first covered hour, local ISO; `null` without one. */
+    firstHour: string | null;
+    startDate: string;
+    endDate: string;
+    priceUnit: string | null;
+    complete: boolean;
+    totals: EnergyFiguresDTO;
+    /** Paid over priced kWh, the solar share free. */
+    paidPerKwh: number | null;
+    gridPricePerKwh: number | null;
+    /** The battery's paid over its priced kWh, what charging it cost. */
+    batteryPricePerKwh: number | null;
+    /** Not earned by selling over the priced direct solar kWh. */
+    solarForgonePerKwh: number | null;
+    /** `totals.virtual`'s rate; `null` without any export-priced solar. */
+    virtualPerKwh: number | null;
+    /** Local days whose kWh exceeds 0.05. */
+    activeDays: number;
+    /** Local days with any data, at least 1. */
+    coveredDays: number;
+    /** Active days over covered days, times 7. */
+    perWeek: number;
+    kwhPerActiveDay: number | null;
 }
 
 /**
@@ -1339,7 +1382,7 @@ export interface EvLedgerFiguresDTO {
  * whether a recorded transition fixes them. `kwhComplete` false makes `kwh` a
  * lower bound.
  */
-export interface EvChargingSegmentDTO extends EvLedgerFiguresDTO {
+export interface EvChargingSegmentDTO extends EnergyFiguresDTO {
     id: string;
     start: string;
     end: string;
@@ -1370,34 +1413,16 @@ interface EvChargerHistorySectionBase {
     asOf: string;
 }
 
-/** The charging ledger's last 30 days (sliding, UTC) and its newest 20 segments, or why there is none. */
+/** The charging ledger's newest 20 segments, or why there is none. */
 export type EvChargerHistorySectionPayload =
     | (EvChargerHistorySectionBase & { unavailable: string })
     | (EvChargerHistorySectionBase & EvChargerLedgerDTO);
 
 export interface EvChargerLedgerDTO {
     unavailable: null;
-    window: { start: string; end: string };
-    /** `provisional`: the segment still charging is in it, as far as it was read. */
-    totals: EvLedgerFiguresDTO & { provisional: boolean };
-    chargingDays: number;
-    /** How many of the window's 30 days the ledger has recorded: fewer while backfill runs or the recorder keeps less. */
-    coveredDays: number;
-    /** Charging days over `coveredDays`, times 7. */
-    perWeek: number;
-    /** The counted segments' charging time over the charging days; `null` without one. */
-    secondsPerDay: number | null;
-    /** Paid over priced charger kWh, the solar share free. */
-    paidPerKwh: number | null;
-    gridPricePerKwh: number | null;
-    /** The battery's paid over its priced kWh, what charging it cost. */
-    batteryPricePerKwh: number | null;
-    /** Not earned by selling over the priced direct solar kWh. */
-    solarForgonePerKwh: number | null;
-    /** `totals.virtual`'s rate; `null` without any export-priced solar. */
-    virtualPerKwh: number | null;
     priceUnit: string | null;
     segments: EvChargingSegmentDTO[];
+    /** Every returned segment closed and settled, and the last read did not fail. */
     complete: boolean;
     health: EvLedgerHealthDTO;
 }

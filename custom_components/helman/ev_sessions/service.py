@@ -75,7 +75,7 @@ from .ledger import (
     slice_boundaries,
 )
 from .store import ChargerLedger, EvSessionStore
-from .summary import WINDOW, recent_segments, window_summary
+from .summary import recent_segments
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -419,7 +419,7 @@ class EvSessionService:
     # --- The detail -----------------------------------------------------------
 
     async def async_history(self, consumer_id: str, now: datetime) -> dict[str, Any]:
-        """The detail's ledger figures: the last 30 days, the newest segments and the ledger's health.
+        """The detail's ledger figures: the newest segments and the ledger's health.
 
         Reconciled first; when that fails, what is stored is answered with
         ``complete`` false and the failure named in ``health``.
@@ -434,23 +434,13 @@ class EvSessionService:
         except Exception:
             _LOGGER.warning("Charging ledger: reading %s failed", consumer_id, exc_info=True)
         ledger = self.store.ledger(consumer_id)
-        local_tz = dt_util.get_default_time_zone()
-        summary = window_summary(
-            ledger.segments, now=now, local_tz=local_tz, recorded_since=_recorded_since(ledger)
-        )
-        in_window = [segment for segment in ledger.segments if segment.end >= now - WINDOW]
+        segments = recent_segments(ledger.segments, local_tz=dt_util.get_default_time_zone())
         error = self._errors.get(consumer_id)
         return {
             "unavailable": None,
-            **summary,
-            "segments": recent_segments(ledger.segments, local_tz=local_tz),
+            "segments": segments,
             "complete": error is None
-            and all(
-                not segment.active
-                and segment.energy_final
-                and all(item.final for item in segment.slices)
-                for segment in in_window
-            ),
+            and all(segment["status"] == "closed" and segment["final"] for segment in segments),
             "health": _health(charger, ledger, error, now),
         }
 

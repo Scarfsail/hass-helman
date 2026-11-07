@@ -653,6 +653,37 @@ class Attribution:
     #: Of ``forgone``, the direct solar share alone: its kWh at the hour's export rate.
     solar_forgone: MoneySide = field(default_factory=MoneySide)
 
+    @property
+    def total(self) -> float:
+        return self.solar + self.battery + self.grid + self.unattributed
+
+    def battery_paid(self) -> MoneySide:
+        """The battery share's paid side: paid less the grid's, its priced kWh less the grid's and the free solar's.
+
+        Unpriced, like every side, includes the unattributed kWh.
+        """
+        priced = max(0.0, self.paid.priced_kwh - self.grid_paid.priced_kwh - self.solar)
+        return MoneySide(
+            amount=self.paid.amount - self.grid_paid.amount,
+            priced_kwh=priced,
+            unpriced_kwh=max(0.0, self.battery - priced) + self.unattributed,
+        )
+
+    def virtual(self) -> MoneySide:
+        """Paid plus the direct solar's export value: the cost had that solar been exported instead.
+
+        Priced on the kWh paid prices less the solar kWh no export rate
+        prices, so each kWh it divides by is priced on both sides. Only the
+        direct solar counts, as on ``solar_forgone``; the battery's solar
+        share stays free.
+        """
+        priced = max(0.0, self.paid.priced_kwh - (self.solar - self.solar_forgone.priced_kwh))
+        return MoneySide(
+            amount=self.paid.amount + self.solar_forgone.amount,
+            priced_kwh=priced,
+            unpriced_kwh=max(0.0, self.total - priced),
+        )
+
 
 def attribute_energy(dataset: DeviceDataset, kwh: dict[datetime, float]) -> Attribution:
     """Split ``kwh`` hour by hour in the house's mix, and price both sides.
