@@ -28,14 +28,13 @@ Three sections, each read when its question opens:
   charging strip draws on opening.
 - ``history``: the charging ledger's last 30 days and newest segments, with
   its health, for a charger whose profile resolves a run mode and whose
-  config names its power entity; and the cost per 100 km when the charger's
-  one car proves its consumption reading. The ledger's segments follow the
+  config names its power entity. It is the charger's alone: no car's
+  consumption is read into it. The ledger's segments follow the
   charge power, not the run mode, so they need not match the charging strip.
 """
 
 from __future__ import annotations
 
-import math
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -250,7 +249,7 @@ class ChargingRun:
 async def _async_history_section(
     hass: Any, ctx: NodeDetailContext, now: datetime, device: Mapping[str, Any]
 ) -> dict[str, Any]:
-    """The charging ledger's figures, and the cost per 100 km where it can be told.
+    """The charging ledger's figures.
 
     ``unavailable`` names why there are none: ``not_tracked`` for a charger the
     ledger does not follow, ``not_loaded`` without a ledger.
@@ -267,62 +266,7 @@ async def _async_history_section(
     history = await ctx.ev_history(device_id, now)
     if history.get("unavailable") is not None:
         return {**payload, "unavailable": history["unavailable"]}
-    consumption = vehicle_consumption(hass, device)
-    rate = history.get("paidPerKwh")
-    return {
-        **payload,
-        **history,
-        "per100km": (
-            None
-            if consumption is None or rate is None
-            else {**consumption, "amount": rate * consumption["kwhPer100km"]}
-        ),
-    }
-
-
-#: The unit a car's average consumption is read in, as normalized.
-_PER_100_KM = "kwh/100km"
-
-
-def vehicle_consumption(hass: Any, device: Mapping[str, Any]) -> dict[str, Any] | None:
-    """The charger's car's current average consumption, when it can be proved to be its.
-
-    Only with exactly one car configured: with several, nothing says which one
-    charged. The reading is the one sensor in kWh/100 km on the car's SoC
-    entity's registry device, finite and positive; anything else is none.
-    """
-    from homeassistant.helpers import entity_registry as er
-
-    vehicles = device.get("vehicles")
-    if not isinstance(vehicles, list) or len(vehicles) != 1 or not isinstance(vehicles[0], Mapping):
-        return None
-    vehicle = vehicles[0]
-    soc_entity_id = config_value(vehicle, "telemetry.soc_entity_id")
-    registry = er.async_get(hass)
-    soc_entry = registry.async_get(soc_entity_id) if isinstance(soc_entity_id, str) else None
-    if soc_entry is None or soc_entry.device_id is None:
-        return None
-    readings = []
-    for entry in er.async_entries_for_device(registry, soc_entry.device_id):
-        state = hass.states.get(entry.entity_id)
-        unit = state.attributes.get("unit_of_measurement") if state is not None else None
-        if not isinstance(unit, str) or unit.lower().replace(" ", "") != _PER_100_KM:
-            continue
-        try:
-            value = float(state.state)
-        except (TypeError, ValueError):
-            continue
-        if math.isfinite(value) and value > 0:
-            readings.append((entry.entity_id, value))
-    if len(readings) != 1:
-        return None
-    entity_id, value = readings[0]
-    return {
-        "entityId": entity_id,
-        "kwhPer100km": value,
-        "vehicleId": vehicle.get("id"),
-        "vehicleName": vehicle.get("name"),
-    }
+    return {**payload, **history}
 
 
 #: Whether a recorded state is charging; ``None`` for a gap state.

@@ -39,13 +39,13 @@ import { deviceDirectControls, evCharging } from "./node-detail-utils";
 import { estimatedConsumerMix } from "./live-flows";
 import "./detail-headline";
 import "./help-tip";
-import "./flow-gauge";
+import { SOURCE_NODES, gaugePillStyles, nodeIcon } from "./flow-gauge";
 import "./switch-tile";
 import "./who-decides";
 import { boldTemplate } from "./detail-section";
 import { forecastWhen, holdAtSlots, renderForecastChart, stillAhead } from "./node-detail-forecast";
 import {
-    HistoryGraphResource, historyRow, historySummary, kwhText, renderShareBar, sectionNotReady, statTile, subTitle,
+    HistoryGraphResource, historyRow, historySummary, kwhText, renderShareBar, sectionNotReady, subTitle,
 } from "./node-detail-history";
 import type { DayLinePoint } from "../shared/day-line-chart";
 
@@ -123,7 +123,25 @@ type Completion =
  */
 @customElement("node-detail-ev-charger-content")
 export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerDetailPayload> {
-    static styles = [helmanColorVars, nodeDetailSharedStyles, nodeDetailQuestionStyles, nodeDetailPictureStyles, css`
+    static styles = [helmanColorVars, nodeDetailSharedStyles, nodeDetailQuestionStyles, nodeDetailPictureStyles, gaugePillStyles, css`
+        /* The 30 days' energy and money gauges, one under the other. */
+        .gauges { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 12px; }
+        .gauges .money-title { margin-top: 6px; }
+        /* The label is the live gauge's title; its totals keep their units' case. */
+        .gauges .gauge-title { flex-wrap: wrap; gap: 0 6px; }
+        .gauge-total { text-transform: none; letter-spacing: normal; font-weight: 500; }
+        /* The money pills hold a second line, its amount per kWh. */
+        .pill.tall { height: auto; flex-direction: column; gap: 0; padding: 5px 8px; line-height: 1.35; }
+        .pill.tall .line { display: flex; align-items: center; gap: 6px; max-width: 100%; }
+        .pill.tall .rate { font-size: 11px; font-weight: 400; opacity: 0.75; }
+        /* Solar's money was never paid: the export income not earned, striped. */
+        .pill.missed::before { background: repeating-linear-gradient(135deg,
+            color-mix(in srgb, var(--node) 50%, transparent) 0 2px, color-mix(in srgb, var(--node) 22%, transparent) 2px 8px); }
+        /* Its text stays legible over the stripes, in either theme. */
+        .pill.missed > * { text-shadow: 0 0 3px var(--card-background-color, var(--primary-background-color)),
+            0 0 1px var(--card-background-color, var(--primary-background-color)); }
+        /* The glow says "flowing now": a period's figures do not glow. */
+        .gauges .pill[data-active] { animation: none; box-shadow: none; }
         .ok { color: var(--success-color, #43a047); }
         [data-car] .meter { position: relative; height: 10px; margin: 4px 0; border-radius: 5px; overflow: visible; }
         [data-car] .meter-fill { border-radius: 5px; background: var(--success-color, #43a047); }
@@ -482,43 +500,43 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         return `≈ ${formatMoney(rate, currencyFromPriceUnit(ledger.priceUnit))}`;
     }
 
-    /** A money side as shown: its amount, naming its coverage when partly priced; `null` with nothing priced. */
-    private _moneyText(side: EvLedgerMoneyDTO, ledger: EvChargerLedgerDTO): string | null {
+    /**
+     * A money side as shown: its amount, naming its coverage when partly
+     * priced unless `coverage` is off; `null` with nothing priced.
+     */
+    private _moneyText(side: EvLedgerMoneyDTO, ledger: EvChargerLedgerDTO, coverage = true): string | null {
         if (side.pricedKwh <= EPSILON_KWH) return null;
         const money = this._money(Math.abs(side.amount), ledger);
         const text = side.amount < -EPSILON_KWH ? fillTemplate(this._h("ev_paid_back"), { money }) : money;
-        return side.unpricedKwh > EPSILON_KWH
+        return coverage && side.unpricedKwh > EPSILON_KWH
             ? fillTemplate(this._h("ev_coverage"), { money: text, priced: formatKwh(side.pricedKwh), total: kwhText(side.pricedKwh + side.unpricedKwh) })
             : text;
     }
 
-    /** The last 30 days: the share bar, the four tiles, the battery and unknown rows, and how they are estimated. */
+    /**
+     * The last 30 days: two gauges drawn as the live one's pills, in its
+     * order (solar, battery, grid). Energy fills each pill to its share of
+     * the kWh, money to its share of the money; solar's money is the export
+     * income not earned, striped apart from what was paid. Each gauge's title
+     * carries its total; under them only what is not one source's.
+     */
     private _renderWindow(ledger: EvChargerLedgerDTO) {
         const totals = ledger.totals;
         const sources = totals.sources;
-        const share = (kwh: number) => `${kwhText(kwh)} · ${totals.kwh > 0 ? Math.round(kwh / totals.kwh * 100) : 0} %`;
-        const swatch = (node: string) => html`<span class="swatch-mark" style=${`color: var(--helman-${node})`}>■</span>`;
+        const pct = (kwh: number) => totals.kwh > 0 ? Math.round(kwh / totals.kwh * 100) : 0;
         const perWeek = ledger.perWeek < 2 ? (Math.round(ledger.perWeek * 10) / 10).toString() : String(Math.round(ledger.perWeek));
-        const charged = [this._h("ev_charged"), ledger.paidPerKwh !== null ? fillTemplate(this._h("ev_per_kwh"), { money: this._rate(ledger.paidPerKwh, ledger) }) : null]
-            .filter(Boolean).join(" · ");
-        const forgone = this._moneyText(totals.solarForgone, ledger);
-        const gridPaid = this._moneyText(totals.gridPaid, ledger);
-        const unknownLabel = this._h("source_unknown_cap");
+        const unknownKwh = sources ? sources.unknown : totals.kwh;
         return html`
             <div class="section-title" data-ledger-title>${ledger.coveredDays < 30 ? fillTemplate(this._h("ev_last_30_covered"), { days: ledger.coveredDays }) : this._h("ev_last_30")}<helman-help-tip .explanation=${this._h("ev_last_30_help")}></helman-help-tip></div>
             <div data-ledger-window>
-                ${renderShareBar(this.localize, sources
-                    ? [{ node: "solar", kwh: sources.solar }, { node: "battery", kwh: sources.battery }, { node: "grid", kwh: sources.grid }, { node: "unknown", kwh: sources.unknown }]
-                    : [{ node: "unknown", kwh: totals.kwh }], unknownLabel)}
-                <div class="stat-tiles two" data-ledger-tiles>
-                    ${statTile(kwhText(totals.kwh), html`${charged}${ledger.per100km ? html`<br>${fillTemplate(this._h("ev_per_100km"), { money: this._money(ledger.per100km.amount, ledger) })}` : nothing}`, "charged")}
-                    ${statTile(fillTemplate(this._h("ev_per_week"), { n: perWeek }), fillTemplate(this._h("ev_days"), { days: ledger.chargingDays, covered: ledger.coveredDays }), "how-often")}
-                    ${statTile(sources ? share(sources.solar) : "—", html`${swatch("solar")}${this._h("from_solar")}${forgone ? html`<br>${fillTemplate(this._h("ev_forgone"), { money: forgone })}` : nothing}`, "solar")}
-                    ${statTile(sources ? share(sources.grid) : "—", html`${swatch("grid")}${this._h("from_grid")}${gridPaid ? html`<br>${fillTemplate(this._h("ev_grid_paid"), { money: gridPaid })}${ledger.gridPricePerKwh !== null ? ` · ${this._rate(ledger.gridPricePerKwh, ledger)}/kWh` : ""}` : nothing}`, "grid")}
+                <div class="gauges" data-ledger-sources>
+                    ${this._renderEnergyGauge(ledger)}
+                    ${this._renderMoneyGauge(ledger)}
                 </div>
-                <div class="rows" data-ledger-sources>
-                    ${historyRow(html`${swatch("battery")}${this._h("from_battery_cap")}`, sources ? share(sources.battery) : "—", "ledger-battery")}
-                    ${sources && sources.unknown > EPSILON_KWH ? historyRow(html`<span class="swatch-mark" style="color: var(--helman-neutral-light)">■</span>${unknownLabel}`, share(sources.unknown), "ledger-unknown") : nothing}
+                <div class="rows" data-ledger-summary>
+                    ${unknownKwh > EPSILON_KWH ? historyRow(this._h("source_unknown_cap"), `${kwhText(unknownKwh)} · ${pct(unknownKwh)} %`, "ledger-unknown") : nothing}
+                    ${historyRow(this._h("ev_row_often"), `${fillTemplate(this._h("ev_per_week"), { n: perWeek })} · ${fillTemplate(this._h("ev_days"), { days: ledger.chargingDays, covered: ledger.coveredDays })}`, "how-often")}
+                    ${ledger.secondsPerDay !== null ? historyRow(this._h("ev_row_per_day"), `≈ ${this._duration(Math.round(ledger.secondsPerDay / 60))}`, "per-day") : nothing}
                 </div>
                 <button class="link-button" data-estimates-toggle aria-expanded=${this._estimatesOpen ? "true" : "false"} aria-controls="ledger-estimates"
                     @click=${() => { this._estimatesOpen = !this._estimatesOpen; }}>${this._h("ev_how")}</button>
@@ -527,18 +545,67 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         `;
     }
 
+    /** The charged kWh by source: each pill its kWh and share, "—" while no source is known. */
+    private _renderEnergyGauge(ledger: EvChargerLedgerDTO) {
+        const totals = ledger.totals;
+        const sources = totals.sources;
+        return html`<div class="gauge-title" data-energy-title>${this._h("ev_gauge_energy")}<span class="gauge-total">· ${kwhText(totals.kwh)}</span></div>
+            <div class="pills" data-energy>${SOURCE_NODES.map((node) => {
+                const kwh = sources ? sources[node] : null;
+                const pct = kwh !== null && kwh > EPSILON_KWH && totals.kwh > 0 ? Math.max(1, Math.round(kwh / totals.kwh * 100)) : 0;
+                return html`<div class="pill" data-source=${node} ?data-active=${pct > 0} style=${`--node: var(--helman-${node}); --fill: ${pct}%`}
+                    title=${this.localize(`node_detail.title.${node}`)}>
+                    <ha-icon icon=${nodeIcon(node)}></ha-icon><span class="gauge-figure">${kwh === null ? "—" : kwhText(kwh)}${pct > 0 ? html` <span class="percent">${pct} %</span>` : nothing}</span>
+                </div>`;
+            })}</div>`;
+    }
+
+    /**
+     * The money by source: solar's export income not earned, the battery's
+     * and the grid's paid, each pill filled to its share of the three and
+     * holding its amount and that per kWh. Nothing with none of them priced.
+     */
+    private _renderMoneyGauge(ledger: EvChargerLedgerDTO) {
+        const totals = ledger.totals;
+        const parts = [
+            { node: "solar" as const, side: totals.solarForgone, rate: ledger.solarForgonePerKwh, hint: this._h("ev_money_solar_hint") },
+            { node: "battery" as const, side: totals.batteryPaid, rate: ledger.batteryPricePerKwh, hint: this.localize("node_detail.title.battery") },
+            { node: "grid" as const, side: totals.gridPaid, rate: ledger.gridPricePerKwh, hint: this.localize("node_detail.title.grid") },
+        ].map((part) => ({ ...part, text: this._moneyText(part.side, ledger, false) }));
+        // The title's totals, each over the charged kWh it prices: what was paid (solar free), and
+        // virtually, paid plus the direct solar's export income not earned.
+        const paid = this._moneyText(totals.paid, ledger, false);
+        if (!paid && parts.every((part) => part.text === null)) return nothing;
+        const total = parts.reduce((sum, part) => sum + Math.max(0, part.side.amount), 0);
+        const perKwh = (rate: number | null) => rate !== null ? ` · ${this._rate(rate, ledger)}/kWh` : "";
+        // Paid back says so itself: it is not "paid".
+        const paidText = paid && totals.paid.amount < -EPSILON_KWH ? paid : paid && fillTemplate(this._h("ev_gauge_paid"), { money: paid });
+        const virtual = ledger.virtualPerKwh !== null ? this._moneyText(totals.virtual, ledger, false) : null;
+        return html`<div class="gauge-title money-title" data-money-title>${this._h("ev_gauge_money")}
+                ${paidText ? html`<span class="gauge-total" data-money-paid>· ${paidText}${perKwh(ledger.paidPerKwh)}</span>` : nothing}
+                ${virtual ? html`<span class="gauge-total" data-money-virtual title=${this._h("ev_gauge_virtual_hint")}>· ${fillTemplate(this._h("ev_gauge_virtual"), { money: virtual })}${perKwh(ledger.virtualPerKwh)}</span>` : nothing}
+            </div>
+            <div class="pills" data-money>${parts.map(({ node, side, rate, hint, text }) => {
+                const pct = text !== null && side.amount > EPSILON_KWH && total > 0 ? Math.max(1, Math.round(side.amount / total * 100)) : 0;
+                return html`<div class="pill tall ${node === "solar" ? "missed" : ""}" data-money-source=${node} ?data-active=${pct > 0}
+                    style=${`--node: var(--helman-${node}); --fill: ${pct}%`} title=${hint} role="group" aria-label=${hint}>
+                    <span class="line"><ha-icon icon=${nodeIcon(node)}></ha-icon><span class="gauge-figure">${text ?? "—"}</span></span>
+                    ${text !== null && rate !== null ? html`<span class="line rate">${this._rate(rate, ledger)}/kWh</span>` : nothing}
+                </div>`;
+            })}</div>`;
+    }
+
     /** What the 30-day figures rest on, disclosed in place. */
     private _renderEstimates(ledger: EvChargerLedgerDTO) {
         const totals = ledger.totals;
         const of = (part: number) => fillTemplate(this._h("ev_of"), { part: formatKwh(part), total: kwhText(totals.kwh) });
-        const per100 = ledger.per100km;
         return html`<div class="rows" id="ledger-estimates" data-estimates>
             ${historyRow(this._h("ev_how_energy"), this._h("ev_how_energy_value"), "how-energy")}
             ${historyRow(this._h("ev_how_split"), this._h("ev_how_split_value"), "how-split")}
+            ${historyRow(this._h("ev_how_paid"), this._h("ev_how_paid_value"), "how-paid")}
             ${historyRow(this._h("ev_how_priced"), of(totals.paid.pricedKwh), "how-priced")}
             ${historyRow(this._h("ev_how_known"), of(totals.knownKwh), "how-known")}
             ${historyRow(this._h("ev_how_forgone"), this._h("ev_how_forgone_value"), "how-forgone")}
-            ${per100 ? historyRow(this._h("ev_how_per100"), fillTemplate(this._h("ev_how_per100_value"), { name: per100.vehicleName, value: per100.kwhPer100km.toFixed(1) }), "how-per100") : nothing}
             <p class="note" data-estimates-note>${this._h("ev_how_note")}</p>
         </div>`;
     }
