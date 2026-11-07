@@ -802,6 +802,25 @@ def test_delayed_compilation_is_attributed_again_then_kept_through_a_failed_read
     assert third["totals"] == second["totals"]
 
 
+def test_a_slice_just_after_local_midnight_is_attributed_from_its_hours_local_day():
+    # 00:15 Kolkata on the 11th is 18:45 UTC on the 10th: its hour 18:00 UTC belongs to the 10th's dataset.
+    dt_util.set_default_time_zone(ZoneInfo("Asia/Kolkata"))
+    states = power((IDLE, at(10, 17)), (CHARGE, at(10, 18, 45)), (IDLE, at(10, 19, 15)))
+    energy = [row("20.0", at(10, 17), "kWh"), *meter((at(10, 18, 45), 20.0), (at(10, 19, 15), 21.0))]
+    harness = Harness(
+        {POWER: states, METER: energy},
+        datasets={
+            date(2026, 10, 10): dataset(hours=[at(10, 18)]),
+            date(2026, 10, 11): dataset(hours=[at(10, 19)]),
+        },
+    )
+
+    payload = harness.history(at(11, 12))
+
+    assert payload["totals"]["sources"]["unknown"] == pytest.approx(0.0)
+    assert payload["totals"]["sources"]["solar"] == pytest.approx(0.5)
+
+
 def test_a_zero_energy_segment_is_listed_but_is_no_charging_day():
     states = power((IDLE, at(10, 7)), (CHARGE, at(10, 8)), (IDLE, at(10, 8, 30)))
     energy = [row("20.0", at(10, 7), "kWh"), row("20.0", at(10, 8, 15), "kWh")]

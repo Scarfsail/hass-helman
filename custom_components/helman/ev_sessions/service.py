@@ -399,7 +399,7 @@ class EvSessionService:
                     # Nothing to attribute: once the energy is final, it stays missing.
                     item.final = segment.energy_final
                     continue
-                by_day.setdefault(item.start.astimezone(local_tz).date(), []).append((segment, item))
+                by_day.setdefault(item.hour.astimezone(local_tz).date(), []).append((segment, item))
         for day, items in sorted(by_day.items(), reverse=True):
             try:
                 dataset = await self._day_dataset(day)

@@ -11,10 +11,10 @@ by a long gap, keeps the instant it was last known charging, never an
 invented one.
 
 Its energy is the charger's cumulative meter between its bounds, split into
-**slices** at every UTC hour boundary inside it; in a zone with a whole-hour
-UTC offset local midnights fall on hour boundaries, so a slice never spans two
-local days (in a half-hour offset zone one does), and a repeated or skipped
-DST hour is its own UTC hour. A slice's ``kwh`` is ``None`` where the meter
+**slices** at every UTC hour boundary inside it; a slice is attributed from
+the dataset of the local day of its UTC hour (in a half-hour offset zone that
+is not the local day it starts in), and a repeated or skipped DST hour is its
+own UTC hour. A slice's ``kwh`` is ``None`` where the meter
 has no trusted reading at either end: a gap, never a zero.
 
 Each slice keeps what :func:`~..device_reports.dataset.attribute_energy` says
