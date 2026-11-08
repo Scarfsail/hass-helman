@@ -219,11 +219,13 @@ export class NodeDetailDeviceContent extends LitElement {
      */
     private _renderForecast(ids: readonly string[]) {
         const projection = this._projection.state;
-        if (projection?.status === "error") {
-            return renderForecastSection(this.localize, this.localize("node_detail.forecast_failed"), this._forecastOpen, (open) => { this._forecastOpen = open; },
-                () => html`<button class="link-button" @click=${() => this._projection.load()}>${this.localize("node_detail.shared.forecast.retry")}</button>`);
-        }
         const context = forecastChartContext(this.hass, this.localize);
+        if (projection?.status === "error") {
+            // The recorded power does not depend on the plan: it stays, beside the failure and its retry.
+            return renderForecastSection(this.localize, this.localize("node_detail.forecast_failed"), this._forecastOpen, (open) => { this._forecastOpen = open; }, () => html`
+                ${powerEntity(this.params.item) ? renderDevicePowerChart(context, this._powerHistory.payload ?? [], [], this._chartEntities()) : nothing}
+                <button class="link-button" @click=${() => this._projection.load()}>${this.localize("node_detail.shared.forecast.retry")}</button>`);
+        }
         const slots = projectedSlots(this._projection.payload, ids, context.now, modeStripWindow(context.now, context.timeZone).end);
         if (!slots.length && !powerEntity(this.params.item)) return nothing;
         return renderForecastSection(this.localize, deviceForecastSummary(slots, projection?.status === "ready", this.localize),

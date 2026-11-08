@@ -311,12 +311,14 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
      */
     protected _renderForecast() {
         const projection = this._projection.state;
+        const power = this._powerEntity();
         if (projection?.status === "error") {
+            // The recorded power does not depend on the plan: it stays, beside the failure and its retry.
             return this._forecastSection(this._t("plan.projection_failed"), () => html`
+                ${power ? renderDevicePowerChart(this._chartContext, this._powerHistory.payload ?? [], [], [power]) : nothing}
                 <button class="link-button" @click=${() => this._projection.load()}>${this._t("retry")}</button>`);
         }
         const estimate = this._estimate();
-        const power = this._powerEntity();
         if (!estimate && !power) return nothing;
         const context = this._chartContext;
         const slots = projectedSlots(this._projection.payload, [this.deviceId], context.now, modeStripWindow(context.now, context.timeZone).end);

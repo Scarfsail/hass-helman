@@ -172,11 +172,13 @@ async function mountCard(
                         (window as any).__nodeHistoryMessages.push(msg);
                         return nodeHistory;
                     },
-                    "helman/get_appliance_projections": async () => ({
+                    "helman/get_appliance_projections": async () => {
+                        if ((window as any).__projectionDown) throw new Error("projection down");
+                        return {
                         generatedAt,
                         appliances: Object.fromEntries(Object.entries(projections).map(([id, points]) =>
                             [id, { series: points.map(([slotId, energyKwh]) => ({ slotId, energyKwh })) }])),
-                    }),
+                    }; },
                     "history/history_during_period": async (msg: any) => {
                         (window as any).__historyRequests.push(msg);
                         return (window as any).__powerHistory ?? {};
@@ -398,6 +400,21 @@ test("device without projected energy still shows its Forecast, with nothing pla
     expect(await chart.evaluate((element: any) => element.series.map((series: { key: string }) => series.key))).toEqual(["actual"]);
     const help = await section.locator("helman-help-tip").evaluate((tip: any) => tip.explanation);
     expect(help).toBe("The solid line is the power measured since midnight, averaged over each 15 minutes.");
+});
+
+test("device Forecast keeps the actual power beside the failure when the projection fails", async ({ page }) => {
+    await installFixedClock(page);
+    await mountCard(page, {}, true);
+    await page.evaluate(() => { (window as any).__projectionDown = true; });
+    await seedPowerHistory(page);
+    await openDevice(page, "Boiler");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-forecast]");
+    await expect(section.locator("[slot=summary]")).not.toHaveText("Nothing planned");
+    await section.locator("button").first().click();
+    await expect(section.locator("button.link-button", { hasText: "Retry" })).toHaveCount(1);
+    const chart = section.locator("helman-day-line-chart");
+    await expect(chart.locator("path.line")).toHaveCount(1);
+    expect(await chart.evaluate((element: any) => element.series.map((series: { key: string }) => series.key))).toEqual(["actual"]);
 });
 
 test("device Forecast's chart opens HA's history of its power and switch", async ({ page }) => {

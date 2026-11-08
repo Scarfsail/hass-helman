@@ -524,6 +524,19 @@ test("charger without a projection for its car still shows its power in Forecast
     await expect(chart.locator("path.line.dashed")).toHaveCount(0);
 });
 
+test("charger Forecast keeps its actual power beside the failure when the projection fails", async ({ page }) => {
+    await mount(page, { projectionFails: true });
+    await openDevice(page, "Garage EV");
+    const section = forecastSection(page);
+    await expect(section.locator("[slot=summary]")).not.toHaveText("Nothing planned");
+    await section.locator("button").first().click();
+    await expect(section.locator("button.link-button", { hasText: "Try again" })).toHaveCount(1);
+    const chart = section.locator("helman-day-line-chart");
+    await expect(chart).toHaveCount(1);
+    await expect(chart.locator("path.line")).toHaveCount(1);
+    await expect(chart.locator("path.line.dashed")).toHaveCount(0);
+});
+
 for (const [index, chart, entity] of [[0, "power", "sensor.ev_power"], [1, "SoC", "sensor.kona_soc"]] as const) {
     test(`charger Forecast's ${chart} chart opens HA's history of ${entity}`, async ({ page }) => {
         await onDashboard(page);
