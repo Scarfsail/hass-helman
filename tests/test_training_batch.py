@@ -6,6 +6,8 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+from homeassistant.core import HassJobType, get_hassjob_callable_job_type
+
 
 REFERENCE_TIME = datetime.fromisoformat("2026-08-02T03:00:00+02:00")
 
@@ -590,6 +592,9 @@ class TrainingBatchTests(unittest.IsolatedAsyncioTestCase):
             batch_module.async_track_time_change = original
 
         self.assertEqual(captured["kwargs"], {"hour": 3, "minute": 15, "second": 0})
+        self.assertIs(
+            get_hassjob_callable_job_type(captured["callback"]), HassJobType.Callback
+        )
         captured["callback"](None)
         self.assertEqual(len(created), 1)
         created[0].close()

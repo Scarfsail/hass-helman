@@ -5,7 +5,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import async_track_time_change
 
 from .appliance_energy import ApplianceEnergyTrainingJob
@@ -71,6 +71,7 @@ class TrainingBatch:
         hour, minute = parse_training_time(training_time)
         self.training_time = training_time
 
+        @callback
         def _run_batch(*_args) -> None:
             self._create_task(self.async_run(reason="scheduled"))
 
