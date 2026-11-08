@@ -33,8 +33,8 @@ type DetailHost = { hass: HomeAssistant; params: DeviceDetailParams };
 
 /**
  * The node's figures over `period()`, read while `shown` and afresh once
- * another period is picked; a period still running is re-read as it rolls,
- * one ended before today never.
+ * another period is picked; a payload not yet complete is re-read as it rolls,
+ * a complete one never.
  */
 export function nodeHistorySection(host: DetailHost, shown: () => boolean, period: () => HistoryPeriod): SectionOptions<NodeHistoryPayload> {
     return {
@@ -44,7 +44,7 @@ export function nodeHistorySection(host: DetailHost, shown: () => boolean, perio
         },
         shown,
         rolling: true,
-        staleness: (_payload, requestedAt) => period().end_date >= todayKey(timeZone(host.hass)) && Date.now() - requestedAt > TODAY_REFRESH_MS,
+        staleness: (payload, requestedAt) => !(payload && !("unavailable" in payload) && payload.complete) && Date.now() - requestedAt > TODAY_REFRESH_MS,
         key: () => `${period().start_date}/${period().end_date}`,
     };
 }
