@@ -2,21 +2,25 @@ import { html, type TemplateResult } from "lit";
 import type { ApplianceProjectionsPayload } from "../helman-api";
 import type { HomeAssistant } from "../../types/ha";
 import { fillTemplate, type LocalizeFunction } from "../localize/localize";
+import { formatKwh, formatPower } from "../shared/format";
+import { powerUnitFactor } from "../shared/power-reading";
 import { formatScheduleTime, getScheduleSlotStartMs } from "../shared/schedule/model/schedule-time";
 import { modeStripWindow } from "../shared/mode-strip";
 import { SLOT_MS } from "../shared/time/slot-time";
 import type { DayLineMarker, DayLinePoint, DayLineReference, DayLineSeries, DayLineSpan } from "../shared/day-line-chart";
 import { dayKey, todayAndTomorrow } from "./node-detail-schedule";
-import { hassLocale, timeZone } from "./section-resource";
+import { hassLocale, timeZone, type SectionHost, type SectionOptions } from "./section-resource";
 import "../shared/day-line-chart";
-import { renderSummarySection } from "./detail-section";
+import { boldTemplate, renderSummarySection } from "./detail-section";
 import { renderShowMore } from "./node-detail-history";
 import "./help-tip";
 
 /**
  * What every node's Forecast section shares: the section around a summary,
  * one chart over today 00:00 → tomorrow noon (the Schedule strip's window)
- * titled with its help, and the appliances' projected energy grouped into runs.
+ * titled with its help, an entity's recorded readings and their slot means,
+ * a consumer's actual and planned power, and the appliances' projected energy
+ * grouped into runs.
  */
 
 const HOUR_MS = 3_600_000;
@@ -111,6 +115,123 @@ export function holdAtSlots(readings: readonly DayLinePoint[], start: number, en
         if (value !== null) points.push({ t, v: value });
     }
     return points;
+}
+
+/** An entity's readings in HA's history from `start` to `end`, in time order; a state that is not a number reads `NaN`. */
+export async function readEntityReadings(hass: HomeAssistant, entityId: string, start: number, end: number): Promise<DayLinePoint[]> {
+    const result = await hass.callWS<Record<string, Array<{ s: string; lu: number }>>>({
+        type: "history/history_during_period", start_time: new Date(start).toISOString(), end_time: new Date(end).toISOString(),
+        entity_ids: [entityId], minimal_response: true, no_attributes: true, significant_changes_only: false,
+    });
+    return (result?.[entityId] ?? [])
+        .map((state) => ({ t: state.lu * 1000, v: Number(state.s) }));
+}
+
+/**
+ * Readings in time order as the time-weighted mean of each slot from `start`
+ * to the slot in progress at `end`, each reading held until the next: a short
+ * run counts for its share of the slot, where a value held at the boundary
+ * would miss it. A reading that is not a number ends the one before it: a
+ * slot with no reading in force has none, one partly covered the mean of
+ * what is.
+ */
+export function slotMeans(readings: readonly DayLinePoint[], start: number, end: number): DayLinePoint[] {
+    const points: DayLinePoint[] = [];
+    let index = 0;
+    let value: number | null = null;
+    for (let t = start; t < end; t += SLOT_MS) {
+        const slotEnd = Math.min(t + SLOT_MS, end);
+        let at = t;
+        let area = 0;
+        let known = 0;
+        while (at < slotEnd) {
+            while (index < readings.length && readings[index].t <= at) {
+                const reading = readings[index++].v;
+                value = Number.isFinite(reading) ? reading : null;
+            }
+            const until = index < readings.length ? Math.min(readings[index].t, slotEnd) : slotEnd;
+            if (value !== null) {
+                area += value * (until - at);
+                known += until - at;
+            }
+            at = until;
+        }
+        if (known > 0) points.push({ t, v: area / known });
+    }
+    return points;
+}
+
+/**
+ * A power entity's mean power in each slot since midnight, kW, read while
+ * `shown` and the entity is there; re-read once per slot. A unit not known
+ * draws nothing.
+ */
+export function powerHistorySection(host: SectionHost, entityId: () => string | null | undefined, shown: () => boolean): SectionOptions<DayLinePoint[]> {
+    return {
+        fetch: async () => {
+            const id = entityId()!;
+            const factor = powerUnitFactor(host.hass, id);
+            if (factor === null) return [];
+            const now = Date.now();
+            const { start } = modeStripWindow(now, timeZone(host.hass));
+            return slotMeans(await readEntityReadings(host.hass, id, start, now), start, now)
+                .map((point) => ({ t: point.t, v: point.v * factor / 1000 }));
+        },
+        shown: () => shown() && !!entityId(),
+        key: () => entityId() ?? "",
+        staleness: (_payload, requestedAt) => requestedAt < Math.floor(Date.now() / SLOT_MS) * SLOT_MS,
+    };
+}
+
+/**
+ * A consumer's power today → tomorrow noon: the `actual` slot means since
+ * midnight solid, and the power the plan's `slots` draw dashed, off between
+ * its runs; no actual line without a power entity, no planned line without a
+ * plan. Its Show more opens `entities`.
+ */
+export function renderDevicePowerChart(context: ForecastChartContext, actual: DayLinePoint[] | null, slots: readonly ProjectedSlot[], entities: string[]): TemplateResult {
+    const forecast = (key: string) => context.localize(`node_detail.shared.forecast.${key}`);
+    const first = Math.floor(context.now / SLOT_MS) * SLOT_MS;
+    const end = modeStripWindow(context.now, context.timeZone).end;
+    const bySlot = new Map(slots.map((slot) => [slot.startMs, slot.kwh]));
+    // The slots hold only what is still ahead of the slot in progress.
+    const power = (startMs: number, kwh: number) => {
+        const share = remainingShare(startMs, context.now);
+        return share > 0 ? slotKw(kwh / share) : 0;
+    };
+    const series: DayLineSeries[] = [];
+    const help: string[] = [];
+    if (actual) {
+        series.push({ key: "actual", label: forecast("actual"), color: "var(--helman-house)", points: actual });
+        help.push(forecast("device_help_actual"));
+    }
+    if (slots.length) {
+        const planned: DayLinePoint[] = [];
+        // Off between the runs is planned too: zero, not a gap.
+        for (let t = first; t < end; t += SLOT_MS) planned.push({ t, v: power(t, bySlot.get(t) ?? 0) });
+        const kw = Math.max(...slots.map((slot) => power(slot.startMs, slot.kwh)));
+        series.push({ key: "planned", label: forecast("planned"), color: "var(--helman-house)", points: planned, dashed: true });
+        help.push(fillTemplate(forecast("device_help"), { kw: formatPower(kw * 1000).display }));
+    }
+    return renderForecastChart(context, {
+        title: forecast("device_chart"),
+        help: help.join(" "),
+        series,
+        step: true,
+        formatValue: (value) => formatPower(value * 1000).display,
+        entities,
+    });
+}
+
+/**
+ * A consumer's Forecast summary: what its plan's `slots` still draw to
+ * tomorrow noon, or, once the plan is `read`, that nothing is planned; none
+ * while it is still read.
+ */
+export function deviceForecastSummary(slots: readonly ProjectedSlot[], read: boolean, localize: LocalizeFunction): TemplateResult | string {
+    if (!slots.length) return read ? localize("node_detail.shared.forecast.nothing_planned") : "";
+    const total = slots.reduce((sum, slot) => sum + slot.kwh, 0);
+    return boldTemplate(localize("node_detail.shared.forecast.device_summary"), { kwh: `≈ ${formatKwh(total)} kWh` });
 }
 
 /** A slot's energy, kWh, as its average power, kW: over a standard slot unless the backend gives its `hours`. */

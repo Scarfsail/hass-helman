@@ -2,7 +2,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import type { HomeAssistant } from "../../types/ha";
 import type { LocalizeFunction } from "../localize/localize";
 import { formatKwh } from "../shared/format";
-import { SectionResource, type SectionHost } from "./section-resource";
+import type { SectionResource } from "./section-resource";
 import { renderSummarySection } from "./detail-section";
 import { subTitle } from "./node-detail-readings";
 
@@ -11,9 +11,8 @@ export { subTitle };
 /**
  * What every node's History & statistics and Technical details sections
  * share: the sections around their bodies, the "today by source" share bar,
- * a statistics tile, a section's loading or failed state, HA's own
- * history graph for "the last 24 hours", and the "Show more" link from a
- * chart to HA's history page.
+ * a statistics tile, a section's loading or failed state, and the "Show more"
+ * link from a chart to HA's history page.
  */
 
 const DAY_MS = 86_400_000;
@@ -122,52 +121,4 @@ export function sectionNotReady(section: SectionResource<unknown>, localize: Loc
         `;
     }
     return null;
-}
-
-export type HistoryGraphCard = HTMLElement & { hass?: HomeAssistant };
-
-/** HA's own history graph of `entities` over the last 24 hours. */
-export async function createHistoryGraph(hass: HomeAssistant, entities: string[]): Promise<HistoryGraphCard> {
-    const helpers = await (window as unknown as { loadCardHelpers: () => Promise<{ createCardElement: (config: unknown) => HTMLElement }> }).loadCardHelpers();
-    const chart = helpers.createCardElement({ type: "history-graph", hours_to_show: 24, entities }) as HistoryGraphCard;
-    chart.hass = hass;
-    return chart;
-}
-
-/** Whether HA's card helpers are there to build a history graph with. */
-export function canCreateHistoryGraph(): boolean {
-    return typeof (window as unknown as { loadCardHelpers?: unknown }).loadCardHelpers === "function";
-}
-
-/**
- * HA's history graph of `entities()` over the last 24 hours, built once
- * `open()` holds and kept as built while it stays open: it is no section of
- * the detail's, so a data change neither rebuilds nor re-reads it.
- */
-export class HistoryGraphResource extends SectionResource<HistoryGraphCard> {
-    constructor(host: SectionHost, private readonly _entities: () => string[], open: () => boolean) {
-        super(host, "chart", {
-            fetch: () => createHistoryGraph(host.hass, this._entities()),
-            shown: () => open() && this.available(),
-            staleness: () => false,
-        });
-    }
-
-    /** Whether there is something to draw and HA's card helpers to draw it with. */
-    available(): boolean {
-        return this._entities().length > 0 && canCreateHistoryGraph();
-    }
-
-    /** Build or drop the graph as shown, and hand it HA's latest state. */
-    follow(hass: HomeAssistant): void {
-        this.sync();
-        const chart = this.payload;
-        if (chart && chart.hass !== hass) chart.hass = hass;
-    }
-
-    /** "Last 24 hours" and the graph with its Show more, or its loading or failure; none without one to draw. */
-    render(localize: LocalizeFunction): TemplateResult | typeof nothing {
-        if (!this.available()) return nothing;
-        return html`${subTitle(localize("node_detail.shared.history.last_24h"))}${sectionNotReady(this, localize) ?? html`${this.payload}${renderShowMore(this._entities(), localize)}`}`;
-    }
 }
