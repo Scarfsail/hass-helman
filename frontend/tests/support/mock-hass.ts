@@ -171,7 +171,6 @@ export async function installMockHass(page: Page): Promise<void> {
                     if (node === "battery" && section === "charge") return { ...empty, charge: null };
                     if (node === "house" && section === "today") return { ...empty, house: null, independence: null, selfConsumption: null, consumers: null };
                     if (node === "solar" && section === "destinations") return { ...empty, destinations: null, charge: null };
-                    if (node === "ev_charger" && section === "today") return { ...empty, deviceId: request.device_id, charger: null };
                     if (node === "ev_charger" && section === "segment") return { node, section, deviceId: request.device_id, asOf, period, chargingSince: null, charging: null };
                     throw new Error(`The ${String(node)} detail has no section '${String(section)}'`);
                 }

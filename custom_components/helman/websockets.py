@@ -4,10 +4,8 @@ Casing: a stored document -- the config, a device's stored usage record -- passe
 """
 
 from __future__ import annotations
-from datetime import date
 import logging
 from typing import TYPE_CHECKING
-from zoneinfo import ZoneInfo
 import voluptuous as vol
 from homeassistant.components import websocket_api
 from homeassistant.core import HomeAssistant, callback
@@ -23,11 +21,11 @@ from .automation.spec import OPTIMIZER_SPECS
 from .controllables.spec import appliance_controllable_kinds
 from .config_defaults import CONFIG_FIELD_DEFAULTS
 from .config_validation import ValidationReport, validate_config_document
-from .device_reports.reports import MAX_REPORT_DAYS, REPORTS, ReportQuery
+from .device_reports.reports import REPORTS, ReportQuery
 from .span_buckets import BUCKETS
 from .entity_inspection import inspect_targets
 from .node_details import NodeDetailContext, NodeDetailError, async_get_node_detail
-from .ws_common import get_coordinator, map_errors, validate_dates
+from .ws_common import get_coordinator, map_errors, validate_dates, validate_report_dates
 from .solar_bias_correction.websocket import (
     ws_get_solar_bias_day_aggregates,
     ws_get_solar_bias_inspector,
@@ -697,6 +695,8 @@ def ws_get_device_stats(
 @websocket_api.websocket_command({
     vol.Required("type"): "helman/get_node_history",
     vol.Required("node_id"): str,
+    vol.Optional("start_date"): str,
+    vol.Optional("end_date"): str,
 })
 @websocket_api.async_response
 async def ws_get_node_history(
@@ -704,16 +704,24 @@ async def ws_get_node_history(
     connection: websocket_api.ActiveConnection,
     msg: dict,
 ) -> None:
-    """One house-subtree node's last 30 days of energy and money, or why there is none.
+    """One house-subtree node's energy and money over a period, or why there is none.
 
     Not admin-gated: it carries only numbers, keyed by an id the card already
     has, the same exposure as ``helman/get_device_stats``.
     """
+    dates = validate_report_dates(hass, connection, msg, optional=True)
+    if dates is None:
+        return
+    start_date, end_date = dates
+
     coordinator = get_coordinator(hass, connection, msg)
     if coordinator is None:
         return
     try:
-        payload = await coordinator.async_node_history(msg["node_id"])
+        payload = await coordinator.async_node_history(
+            msg["node_id"],
+            ReportQuery(start_date=start_date, end_date=end_date),
+        )
     except Exception:
         _LOGGER.exception("Unexpected node history failure")
         connection.send_error(msg["id"], "internal_error", "Unexpected node history failure")
@@ -746,23 +754,10 @@ async def ws_get_device_report(
     Not admin-gated: it carries only numbers, the same exposure as
     ``helman/get_device_stats``.
     """
-    raw_start = msg.get("start_date")
-    raw_end = msg.get("end_date")
-    if not validate_dates(connection, msg, raw_start, raw_end):
+    dates = validate_report_dates(hass, connection, msg)
+    if dates is None:
         return
-    today = dt_util.now().astimezone(ZoneInfo(str(hass.config.time_zone))).date()
-    start_date = date.fromisoformat(raw_start)
-    end_date = min(date.fromisoformat(raw_end), today)
-    if start_date > end_date:
-        connection.send_error(
-            msg["id"], "invalid_date", "start_date must not be after end_date or today"
-        )
-        return
-    if (end_date - start_date).days + 1 > MAX_REPORT_DAYS:
-        connection.send_error(
-            msg["id"], "invalid_date", f"A report covers at most {MAX_REPORT_DAYS} days"
-        )
-        return
+    start_date, end_date = dates
 
     coordinator = get_coordinator(hass, connection, msg)
     if coordinator is None:

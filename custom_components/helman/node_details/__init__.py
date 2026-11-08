@@ -77,7 +77,7 @@ NODE_DETAILS: dict[str, NodeDetail] = {
     "ev_charger": NodeDetail(
         overview=build_ev_charger_overview,
         section=async_ev_charger_section,
-        sections=frozenset({"today", "segment", "history"}),
+        sections=frozenset({"segment", "history"}),
         device_kind=CONTROLLABLE_KIND_EV_CHARGER,
     ),
 }

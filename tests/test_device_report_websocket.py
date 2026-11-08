@@ -527,15 +527,27 @@ class TestUnavailable(DeviceReportTestCase):
 
 
 class TestNodeHistory(DeviceReportTestCase):
-    """``helman/get_node_history``: the last 30 days of one node, from the reports' dataset."""
+    """``helman/get_node_history``: one node's history over a period, from the reports' dataset."""
 
     NOW = _local(2026, 9, 15, 14, 0)
 
-    async def node_history(self, node_id: str) -> dict:
+    async def request_node_history(
+        self, node_id: str, start_date: str | None = None, end_date: str | None = None
+    ) -> FakeConnection:
         connection = FakeConnection()
-        msg = {"id": 9, "type": "helman/get_node_history", "node_id": node_id}
+        msg: dict = {"id": 9, "type": "helman/get_node_history", "node_id": node_id}
+        if start_date is not None:
+            msg["start_date"] = start_date
+        if end_date is not None:
+            msg["end_date"] = end_date
         with patch("homeassistant.util.dt.now", return_value=self.NOW):
             await websockets_module.ws_get_node_history.__wrapped__(self.hass, connection, msg)
+        return connection
+
+    async def node_history(
+        self, node_id: str, start_date: str | None = None, end_date: str | None = None
+    ) -> dict:
+        connection = await self.request_node_history(node_id, start_date, end_date)
         self.assertEqual(connection.errors, [])
         return connection.results[0][1]
 
@@ -551,10 +563,40 @@ class TestNodeHistory(DeviceReportTestCase):
         self.assertEqual(payload["totals"]["kwh"], 24.0)
         self.assertEqual(payload["activeDays"], 1)
         self.assertEqual(payload["coveredDays"], 1)
+        self.assertEqual(payload["navigationRange"], {"minDate": "2026-01-01", "maxDate": "2026-09-15"})
         # The same period as the card's last_30 preset: one dataset for both.
         reads = len(self.recorder.calls)
         await self.report(self.NOW, "2026-08-17", "2026-09-15")
         self.assertEqual(len(self.recorder.calls), reads)
+
+    async def test_with_dates(self):
+        self.recorder.hourly(HOUSE_METER, _local(2026, 9, 9, 23), _local(2026, 9, 10, 23))
+        self.recorder.hourly(WASHER, _local(2026, 9, 9, 23), _local(2026, 9, 10, 23))
+        payload = await self.node_history(WASHER, "2026-09-01", "2026-09-10")
+        self.assertEqual((payload["startDate"], payload["endDate"]), ("2026-09-01", "2026-09-10"))
+        self.assertEqual(payload["navigationRange"], {"minDate": "2026-01-01", "maxDate": "2026-09-15"})
+
+    async def test_a_future_end_date_is_clamped_to_today(self):
+        payload = await self.node_history(WASHER, "2026-09-10", "2026-12-31")
+        self.assertEqual(payload["endDate"], "2026-09-15")
+
+    async def test_start_after_end_is_rejected(self):
+        connection = await self.request_node_history(WASHER, "2026-09-10", "2026-09-01")
+        self.assertEqual(connection.errors[0][1], "invalid_date")
+
+    async def test_more_than_366_days_is_rejected(self):
+        connection = await self.request_node_history(WASHER, "2025-01-01", "2026-01-02")
+        self.assertEqual(connection.errors[0][1], "invalid_date")
+
+    async def test_start_without_end_is_rejected(self):
+        connection = await self.request_node_history(WASHER, start_date="2026-09-01")
+        self.assertEqual(connection.errors[0][1], "invalid_date")
+
+    async def test_bad_dates_are_rejected(self):
+        for start, end in (("2026-13-01", "2026-09-01"), ("20260901", "2026-09-02")):
+            with self.subTest(start=start):
+                connection = await self.request_node_history(WASHER, start, end)
+                self.assertEqual(connection.errors[0][1], "invalid_date")
 
     async def test_an_unknown_node(self):
         payload = await self.node_history("sensor.nope")

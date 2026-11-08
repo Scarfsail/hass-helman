@@ -135,6 +135,7 @@ async function mountCard(
             (window as any).__statRequests = [];
             (window as any).__deviceStatsRequests = [];
             (window as any).__nodeHistoryRequests = [];
+            (window as any).__nodeHistoryMessages = [];
             const hass = {
                 language: "en",
                 locale: { language: "en" },
@@ -167,6 +168,7 @@ async function mountCard(
                     },
                     "helman/get_node_history": async (msg: any) => {
                         (window as any).__nodeHistoryRequests.push(msg.node_id);
+                        (window as any).__nodeHistoryMessages.push(msg);
                         return nodeHistory;
                     },
                     "helman/get_appliance_projections": async () => ({
@@ -344,7 +346,7 @@ const BOILER_STATS = {
     },
 };
 
-test("device History header gives the learned average during a run, collapsed; the body has the last 24 hours and the typical tiles", async ({ page }) => {
+test("device History header gives the learned average during a run, collapsed; the body has the last 24 hours", async ({ page }) => {
     await mountCard(page, BOILER_STATS, true);
     await openDevice(page, "Boiler");
     const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
@@ -356,19 +358,11 @@ test("device History header gives the learned average during a run, collapsed; t
     await section.locator("button").first().click();
     await expect(section.locator(".history-graph-stub")).toHaveCount(1);
     expect(await page.evaluate(() => (window as any).__chartConfigs)).toEqual([{ type: "history-graph", hours_to_show: 24, entities: ["sensor.boiler_power", "switch.boiler"] }]);
-    await expect(section.locator(".section-title")).toHaveText(["Last 24 hours", "Typical, learned from the last 14 days"]);
-    // A node without a history renders no block.
+    // A node without a history renders no block, only what it learned.
     await expect(section.locator("[data-node-history], [data-node-history-not-ready]")).toHaveCount(0);
-    const tiles = section.locator("[data-typical] [data-stat]");
-    await expect(tiles).toHaveCount(4);
-    await expect(tiles.nth(0)).toContainText("4.1 kWh");
-    await expect(tiles.nth(0)).toContainText("a typical day (1.2–6.8 kWh)");
-    await expect(tiles.nth(1)).toContainText("2 runs");
-    await expect(tiles.nth(1)).toContainText("a typical day (1–3 runs)");
-    await expect(tiles.nth(2)).toContainText("1 h 45 min");
-    await expect(tiles.nth(2)).toContainText("a typical run ≈ 3.4 kWh");
-    await expect(tiles.nth(3)).toContainText("2.0 kW");
-    await expect(tiles.nth(3)).toContainText("average during a run");
+    await expect(section.locator(".section-title")).toHaveText([/^In period/, "Last 24 hours"]);
+    await expect(section.locator("[data-node-history-summary] [data-row]")).toHaveCount(4);
+    await expect(section.locator("[data-row=day] .value")).toHaveText(/^\s*4\.1 kWh \(1\.2–6\.8\)\s*typical\s*$/);
 });
 
 /** The boiler's last 30 days, as `helman/get_node_history` answers them. */
@@ -377,6 +371,7 @@ function boilerHistory(overrides: Record<string, unknown> = {}) {
     return {
         id: "sensor.boiler_energy", label: "Boiler", icon: "mdi:water-boiler", estimated: false, unmeasured: false, kwh: 42.6,
         coverage: 1, firstHour: "2026-09-22T00:00:00+00:00", startDate: "2026-09-22", endDate: "2026-10-21", priceUnit: "CZK/kWh", complete: false,
+        navigationRange: { minDate: "2026-08-01", maxDate: "2026-10-21" },
         totals: {
             kwh: 42.6, sources: { solar: 26, battery: 9.4, grid: 7.2, unknown: 0 }, knownKwh: 42.6,
             paid: money(52, 42.6), forgone: money(46, 42.6), gridPaid: money(31, 7.2), batteryPaid: money(21, 9.4),
@@ -399,30 +394,165 @@ test("device History header gives the running power and what an hour of it costs
     expect(await page.evaluate(() => (window as any).__nodeHistoryRequests)).toEqual(["sensor.boiler_energy"]);
 });
 
-test("device History shows its last 30 days between the last 24 hours and the typical tiles", async ({ page }) => {
+test("device History shows period figures with obvykle lines and the 24 hours graph", async ({ page }) => {
+    await installFixedClock(page);
     await mountCard(page, BOILER_STATS, true, "kWh", TODAY_KWH, {}, "2026-10-21T12:00:00+00:00", false, boilerHistory());
     await openDevice(page, "Boiler");
     const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
     await section.locator("button").first().click();
-    const titles = section.locator(".section-title");
-    await expect(titles).toHaveCount(3);
-    await expect(titles.nth(0)).toHaveText("Last 24 hours");
-    await expect(titles.nth(1)).toContainText("Last 30 days");
-    await expect(titles.nth(1)).not.toContainText("data for");
-    await expect(titles.nth(2)).toHaveText("Typical, learned from the last 14 days");
+
+    // The picker sits at the top of the history block
+    const picker = section.locator("helman-history-period-picker");
+    await expect(picker).toBeVisible();
+    await expect(picker.locator("button[data-preset=last_30]")).toHaveClass(/selected/);
+
     const block = section.locator("[data-node-history]");
     await expect(block.locator("[data-energy-title]")).toHaveText(/Energy\s*· 43 kWh/);
     await expect(block.locator("[data-energy] [data-source]")).toHaveText([/^\s*26\s*61 %\s*$/, /^\s*9\.4\s*22 %\s*$/, /^\s*7\.2\s*17 %\s*$/]);
     await expect(block.locator("[data-money-title]")).toHaveText(/Money\s*· paid ≈ 52 CZK · ≈ 1\.22 CZK\/kWh\s*· virtually ≈ 98 CZK · ≈ 2\.30 CZK\/kWh/);
     await expect(block.locator("[data-money] [data-money-source]")).toHaveText([/≈ 46 CZK\s*≈ 1\.77 CZK\/kWh/, /≈ 21 CZK\s*≈ 2\.23 CZK\/kWh/, /≈ 31 CZK\s*≈ 4\.31 CZK\/kWh/]);
-    // Nothing of unknown source: just how often and per active day.
-    await expect(block.locator("[data-row]")).toHaveCount(2);
-    await expect(block.locator("[data-row=how-often] .value")).toHaveText("≈ 4.2× a week · on 18 of 30 days");
+
+    // The rows, "In period", with what was learned at the far end.
+    await expect(block.locator("[data-rows-title]")).toHaveText(/^In period\s*typical · learned from 14 days$/);
+    await expect(block.locator("[data-rows-title] .aside")).toHaveText("typical · learned from 14 days");
+
+    // Each learned figure on the row measuring the same quantity: under the
+    // period's own value, or as the value itself captioned "typical".
+    const rows = block.locator("[data-node-history-summary] [data-row]");
+    await expect(rows).toHaveCount(6);
+    const typical = (row: string) => block.locator(`[data-row=${row}] [data-typical]`);
+    await expect(block.locator("[data-row=day] .value")).toContainText("1.4 kWh");
+    await expect(typical("day")).toHaveText("typical 4.1 kWh (1.2–6.8)");
     await expect(block.locator("[data-row=per-day] .value")).toHaveText("≈ 2.4 kWh");
+    await expect(block.locator("[data-row=how-often] .value")).toHaveText("≈ 4.2× a week · on 18 of 30 days");
+    await expect(block.locator("[data-row=runs] .value")).toContainText("2 (1–3)");
+    await expect(typical("runs")).toHaveText("typical");
+    await expect(block.locator("[data-row=run] .value")).toContainText("1 h 45 min · ≈ 3.4 kWh");
+    await expect(typical("run")).toHaveText("typical");
+    await expect(block.locator("[data-row=running] .value")).toContainText("2.0 kW");
+    await expect(typical("running")).toHaveText("typical");
+
     await expect(block.locator("[data-estimates-toggle]")).toHaveText("How these are estimated");
+
+    // The 24 h graph sits last in the History body.
+    await expect(section.locator(".section-title")).toHaveText([/^In period/, "Last 24 hours"]);
+    await expect(section.locator(".history-graph-stub")).toHaveCount(1);
+});
+
+test("period picker in device History selects shortcuts, steps ranges, opens custom inputs, and resets on reopen", async ({ page }) => {
+    await installFixedClock(page);
+    await mountCard(page, BOILER_STATS, true, "kWh", TODAY_KWH, {}, "2026-10-21T12:00:00+00:00", false, boilerHistory());
+    await openDevice(page, "Boiler");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
+    await section.locator("button").first().click();
+
+    // 1. The detail opens on last_30
+    const picker = section.locator("helman-history-period-picker");
+    await expect(picker.locator("button[data-preset=last_30]")).toHaveClass(/selected/);
+    await expect(picker.locator("[data-primary-date]")).toHaveText("September 22 – October 21, 2026");
+    await expect(picker.locator("[data-node-history-title] helman-help-tip")).toHaveCount(1);
+    await expect(picker.locator("[data-step-next]")).toBeDisabled();
+
+    // 2. Tapping Yesterday requests yesterday..yesterday
+    await picker.locator("button[data-preset=yesterday]").click();
+    await expect.poll(() => page.evaluate(() => (window as any).__nodeHistoryMessages.slice(-1)[0])).toEqual(
+        expect.objectContaining({ node_id: "sensor.boiler_energy", start_date: "2026-10-20", end_date: "2026-10-20" })
+    );
+    await expect(picker.locator("button[data-preset=yesterday]")).toHaveClass(/selected/);
+    await expect(picker.locator("[data-primary-date]")).toHaveText("Tuesday, October 20, 2026");
+
+    // 3. ‹ on last_7 requests the previous 7 days, and › is disabled on the current period
+    await picker.locator("button[data-preset=last_7]").click();
+    await expect.poll(() => page.evaluate(() => (window as any).__nodeHistoryMessages.slice(-1)[0])).toEqual(
+        expect.objectContaining({ node_id: "sensor.boiler_energy", start_date: "2026-10-15", end_date: "2026-10-21" })
+    );
+    await expect(picker.locator("[data-step-next]")).toBeDisabled();
+    await expect(picker.locator("[data-step-prev]")).toBeEnabled();
+
+    // Tap ‹: requests previous 7 days (2026-10-08 .. 2026-10-14)
+    await picker.locator("[data-step-prev]").click();
+    await expect.poll(() => page.evaluate(() => (window as any).__nodeHistoryMessages.slice(-1)[0])).toEqual(
+        expect.objectContaining({ node_id: "sensor.boiler_energy", start_date: "2026-10-08", end_date: "2026-10-14" })
+    );
+    // Shortcut chip stays highlighted
+    await expect(picker.locator("button[data-preset=last_7]")).toHaveClass(/selected/);
+    // › is now enabled
+    await expect(picker.locator("[data-step-next]")).toBeEnabled();
+
+    // 4. Custom inputs carry navigationRange as min/max
+    await picker.locator("button[data-preset=custom]").click();
+    const startInput = picker.locator("input[data-custom-start]");
+    const endInput = picker.locator("input[data-custom-end]");
+    await expect(startInput).toHaveAttribute("min", "2026-08-01");
+    await expect(startInput).toHaveValue("2026-10-08");
+    await expect(endInput).toHaveAttribute("max", "2026-10-21");
+    await endInput.fill("2026-10-10");
+    await expect.poll(() => page.evaluate(() => (window as any).__nodeHistoryMessages.slice(-1)[0])).toEqual(
+        expect.objectContaining({ start_date: "2026-10-08", end_date: "2026-10-10" })
+    );
+    await expect(picker.locator("button[data-preset=custom]")).toHaveClass(/selected/);
+    // A typed start after the end moves the end along; a typed period over 366 days ends 366 days on.
+    await startInput.fill("2026-10-15");
+    await expect.poll(() => page.evaluate(() => (window as any).__nodeHistoryMessages.slice(-1)[0])).toEqual(
+        expect.objectContaining({ start_date: "2026-10-15", end_date: "2026-10-15" })
+    );
+    await startInput.fill("2025-01-01");
+    await expect.poll(() => page.evaluate(() => (window as any).__nodeHistoryMessages.slice(-1)[0])).toEqual(
+        expect.objectContaining({ start_date: "2025-01-01", end_date: "2026-01-01" })
+    );
+    await endInput.fill("2024-06-01");
+    await expect.poll(() => page.evaluate(() => (window as any).__nodeHistoryMessages.slice(-1)[0])).toEqual(
+        expect.objectContaining({ start_date: "2024-06-01", end_date: "2024-06-01" })
+    );
+    // A typed date after today is today.
+    await endInput.fill("2027-01-01");
+    await expect.poll(() => page.evaluate(() => (window as any).__nodeHistoryMessages.slice(-1)[0])).toEqual(
+        expect.objectContaining({ start_date: "2025-10-21", end_date: "2026-10-21" })
+    );
+
+    // 5. Reopening resets to last_30
+    await page.locator("node-detail-dialog [data-dialog='close']").click();
+    await openDevice(page, "Boiler");
+    await section.locator("button").first().click();
+    await expect(picker.locator("button[data-preset=last_30]")).toHaveClass(/selected/);
+    await expect.poll(() => page.evaluate(() => (window as any).__nodeHistoryMessages.slice(-1)[0])).toEqual(
+        expect.objectContaining({ start_date: "2026-09-22", end_date: "2026-10-21" })
+    );
+});
+
+test("a picked period shows its loading note, not the figures of the period before, until it answers", async ({ page }) => {
+    await installFixedClock(page);
+    await mountCard(page, BOILER_STATS, true, "kWh", TODAY_KWH, {}, "2026-10-21T12:00:00+00:00", false, boilerHistory());
+    await openDevice(page, "Boiler");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
+    await section.locator("button").first().click();
+    await expect(section.locator("[data-gauges]")).toBeVisible();
+    // Hold the next node history answer.
+    await page.evaluate(() => {
+        const hass = (window as any).__hass;
+        const callWS = hass.callWS;
+        hass.callWS = (msg: any) => msg.type === "helman/get_node_history"
+            ? new Promise((resolve) => { (window as any).__releaseNodeHistory = () => resolve(callWS(msg)); })
+            : callWS(msg);
+    });
+    const picker = section.locator("helman-history-period-picker");
+    await picker.locator("button[data-preset=last_7]").click();
+    await expect(section.locator("[data-node-history-not-ready] [data-history-loading]")).toBeVisible();
+    await expect(section.locator("[data-gauges]")).toHaveCount(0);
+    // The learned figures stay, and the header keeps the power without the rate.
+    await expect(section.locator("[data-row=running] .value")).toContainText("2.0 kW");
+    await expect(section.locator("[data-row=how-often]")).toHaveCount(0);
+    await expect(section.locator("[slot=summary]")).toHaveText("2.0 kW while running");
+    // The picker stays, on the period asked for.
+    await expect(picker.locator("button[data-preset=last_7]")).toHaveClass(/selected/);
+    await expect.poll(() => page.evaluate(() => typeof (window as any).__releaseNodeHistory)).toBe("function");
+    await page.evaluate(() => (window as any).__releaseNodeHistory());
+    await expect(section.locator("[data-gauges]")).toBeVisible();
+    await expect(section.locator("[data-node-history-not-ready]")).toHaveCount(0);
 });
 
 test("device History names partial coverage in the title and hides virtually without export-priced solar", async ({ page }) => {
+    await installFixedClock(page);
     const history = boilerHistory({
         coverage: 0.64, firstHour: "2026-10-03T00:00:00+00:00", coveredDays: 19, virtualPerKwh: null,
     });
@@ -430,21 +560,22 @@ test("device History names partial coverage in the title and hides virtually wit
     await openDevice(page, "Boiler");
     const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
     await section.locator("button").first().click();
-    await expect(section.locator("[data-node-history-title]")).toContainText("Last 30 days · data for 19 days");
+    await expect(section.locator("[data-node-history-title]")).toContainText("data for 19 days");
     await expect(section.locator("[data-node-history-coverage]")).toHaveText("Data for 64 % of the period (from Oct 3)");
     await expect(section.locator("[data-money-paid]")).toHaveCount(1);
     await expect(section.locator("[data-money-virtual]")).toHaveCount(0);
 });
 
 test("device History notes gaps inside the period without dating them, and keeps the plain title with every day covered", async ({ page }) => {
+    await installFixedClock(page);
     // An eight-hour outage mid-period: every day still has data.
     const history = boilerHistory({ coverage: 0.989 });
     await mountCard(page, BOILER_STATS, true, "kWh", TODAY_KWH, {}, "2026-10-21T12:00:00+00:00", false, history);
     await openDevice(page, "Boiler");
     const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
     await section.locator("button").first().click();
-    await expect(section.locator("[data-node-history-title]")).toContainText("Last 30 days");
-    await expect(section.locator("[data-node-history-title]")).not.toContainText("data for");
+    await expect(section.locator("[data-primary-date]")).toHaveText("September 22 – October 21, 2026");
+    await expect(section.locator("[data-subtitle]")).toHaveCount(0);
     await expect(section.locator("[data-node-history-coverage]")).toHaveText("Data for 99 % of the period");
 });
 
@@ -458,7 +589,7 @@ test("device History's explanation is every consumer's, without the EV charger's
     await expect(section.locator("[data-estimates-detail-note]")).toHaveCount(0);
 });
 
-test("device History header waits for the node history before naming the running power", async ({ page }) => {
+test("device History header names the running power while the node history loads, its rate once it answers", async ({ page }) => {
     await mountCard(page, BOILER_STATS, true, "kWh", TODAY_KWH, {}, "2026-10-21T12:00:00+00:00", false, boilerHistory());
     // Hold the node history's answer.
     await page.evaluate(() => {
@@ -473,9 +604,7 @@ test("device History header waits for the node history before naming the running
     const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
     await expect.poll(() => page.evaluate(() => (window as any).__deviceStatsRequests.length)).toBe(1);
     await expect.poll(() => page.evaluate(() => typeof (window as any).__releaseNodeHistory)).toBe("function");
-    // Its own fallback header, not the power alone that the rate would then join.
-    await expect(section.locator("[slot=summary]")).toHaveText("Loading…");
-    await expect(section.locator("[slot=summary]")).not.toContainText("No figures");
+    await expect(section.locator("[slot=summary]")).toHaveText("2.0 kW while running");
     await page.evaluate(() => (window as any).__releaseNodeHistory());
     await expect(section.locator("[slot=summary]")).toHaveText("2.0 kW · ≈ 2.39 CZK/h while running");
 });
@@ -489,11 +618,12 @@ async function openNode(page: Page, id: string): Promise<void> {
     }, id);
 }
 
-test("a node without learned stats heads its History with the last 30 days' kWh", async ({ page }) => {
+test("a node without learned stats heads its History with the period's kWh", async ({ page }) => {
+    await installFixedClock(page);
     await mountCard(page, {}, true, "kWh", TODAY_KWH, {}, "2026-10-21T12:00:00+00:00", false, boilerHistory());
     await openNode(page, "house_unmeasured");
     const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
-    await expect(section.locator("[slot=summary]")).toHaveText("43 kWh in the last 30 days");
+    await expect(section.locator("[slot=summary]")).toHaveText("43 kWh for September 22 – October 21");
     await expect(section.locator("[slot=summary] b")).toHaveText("43 kWh");
     expect(await page.evaluate(() => (window as any).__deviceStatsRequests)).toEqual([]);
 });
@@ -507,12 +637,23 @@ test("a node with no chart, no stats and no node history has no History section"
     await expect(page.locator("node-detail-device-content helman-detail-section[data-history]")).toHaveCount(0);
 });
 
-test("the Untracked remainder's name opens its detail with its last 30 days", async ({ page }) => {
+test("a device with no chart, no learned record and no node history has no History section", async ({ page }) => {
+    await mountCard(page);
+    await page.evaluate(() => { delete (window as any).loadCardHelpers; });
+    await openDevice(page, "Boiler");
+    await expect(page.locator("node-detail-device-content")).toBeVisible();
+    await expect.poll(() => page.evaluate(() => (window as any).__deviceStatsRequests)).toEqual(["sensor.boiler_energy"]);
+    await expect.poll(() => page.evaluate(() => (window as any).__nodeHistoryRequests)).toEqual(["sensor.boiler_energy"]);
+    await expect(page.locator("node-detail-device-content helman-detail-section[data-history]")).toHaveCount(0);
+});
+
+test("the Untracked remainder's name opens its detail with its period", async ({ page }) => {
+    await installFixedClock(page);
     await mountCard(page, {}, true, "kWh", TODAY_KWH, {}, "2026-10-21T12:00:00+00:00", false, boilerHistory({ id: "house_unmeasured", unmeasured: true }));
     await expect.poll(() => rowNames(page)).toContain("👻 Untracked consumption");
     await openDevice(page, "👻 Untracked consumption");
     const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
-    await expect(section.locator("[slot=summary]")).toHaveText("43 kWh in the last 30 days");
+    await expect(section.locator("[slot=summary]")).toHaveText("43 kWh for September 22 – October 21");
     expect(await page.evaluate(() => (window as any).__nodeHistoryRequests)).toEqual(["house_unmeasured"]);
 });
 
@@ -524,25 +665,33 @@ function emptyHistory() {
     });
 }
 
-test("a period without energy reads as no node history: the power alone and no block", async ({ page }) => {
+test("a period without energy keeps the picker with its note: the power alone and no figures", async ({ page }) => {
     await mountCard(page, BOILER_STATS, true, "kWh", TODAY_KWH, {}, "2026-10-21T12:00:00+00:00", false, emptyHistory());
     await openDevice(page, "Boiler");
     const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
     // The power alone, no rate from an empty period.
     await expect(section.locator("[slot=summary]")).toHaveText("2.0 kW while running");
     await section.locator("button").first().click();
-    await expect(section.locator("[data-history-body]")).toBeVisible();
-    await expect(section.locator("[data-node-history-title]")).toHaveCount(0);
-    await expect(section.locator("[data-node-history]")).toHaveCount(0);
+    // The picker stays, so another period can be picked.
+    await expect(section.locator("helman-history-period-picker")).toBeVisible();
+    await expect(section.locator("[data-node-history-empty]")).toHaveText("No figures yet");
+    await expect(section.locator("[data-gauges]")).toHaveCount(0);
+    // No covered days to name, but what it learned stays, the day's typical as its value.
+    await expect(section.locator("[data-subtitle]")).toHaveCount(0);
+    await expect(section.locator("[data-node-history-summary] [data-row]")).toHaveCount(4);
+    await expect(section.locator("[data-row=day] .value")).toHaveText(/^\s*4\.1 kWh \(1\.2–6\.8\)\s*typical\s*$/);
+    await expect(section.locator("[data-row=runs] [data-typical]")).toHaveText("typical");
 });
 
-test("a node with no chart, no stats and a period without energy has no History section", async ({ page }) => {
+test("a node with no chart, no stats and a period without energy keeps its History section for the picker", async ({ page }) => {
     await mountCard(page, {}, false, "kWh", TODAY_KWH, {}, "2026-10-21T12:00:00+00:00", false, emptyHistory());
     await page.evaluate(() => { delete (window as any).loadCardHelpers; });
     await openNode(page, "house_unmeasured");
-    await expect(page.locator("node-detail-device-content")).toBeVisible();
-    await expect.poll(() => page.evaluate(() => (window as any).__nodeHistoryRequests)).toEqual(["house_unmeasured"]);
-    await expect(page.locator("node-detail-device-content helman-detail-section[data-history]")).toHaveCount(0);
+    const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
+    await expect(section.locator("[slot=summary]")).toHaveText("No figures yet");
+    await section.locator("button").first().click();
+    await expect(section.locator("helman-history-period-picker")).toBeVisible();
+    await expect(section.locator("[data-node-history-empty]")).toHaveText("No figures yet");
 });
 
 test("an estimated node marks its 30 days' energy total as approximate", async ({ page }) => {
@@ -554,6 +703,7 @@ test("an estimated node marks its 30 days' energy total as approximate", async (
 });
 
 test("device History header keeps today's header without learned stats, even with a node history", async ({ page }) => {
+    await installFixedClock(page);
     await mountCard(page, {}, true, "kWh", TODAY_KWH, {}, "2026-10-21T12:00:00+00:00", false, boilerHistory());
     await openDevice(page, "Boiler");
     const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
@@ -562,26 +712,26 @@ test("device History header keeps today's header without learned stats, even wit
     await expect(section.locator("[data-node-history]")).toBeVisible();
 });
 
-test("device History falls back to the average while on without learned runs, and drops the running tile", async ({ page }) => {
+test("device History falls back to the average while on without learned runs, and drops the running row", async ({ page }) => {
+    await installFixedClock(page);
     const { running_kw: _, ...stats } = BOILER_STATS["sensor.boiler_energy"];
-    await mountCard(page, { "sensor.boiler_energy": stats }, true);
+    await mountCard(page, { "sensor.boiler_energy": stats }, true, "kWh", TODAY_KWH, {}, "2026-10-21T12:00:00+00:00", false, boilerHistory());
     await openDevice(page, "Boiler");
     const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
-    await expect(section.locator("[slot=summary]")).toHaveText("1.8 kW while running");
+    await expect(section.locator("[slot=summary]")).toHaveText(/1\.8 kW( · ≈ 2\.20 CZK\/h)? while\s*running/);
     await section.locator("button").first().click();
-    await expect(section.locator("[data-typical] [data-stat]")).toHaveCount(3);
-    await expect(section.locator("[data-typical] [data-stat=running]")).toHaveCount(0);
+    await expect(section.locator("[data-row=running]")).toHaveCount(0);
 });
 
-test("device History without a power figure says it has none yet, and drops the running tile", async ({ page }) => {
+test("device History without a power figure says it has none yet, and drops the running row", async ({ page }) => {
+    await installFixedClock(page);
     const { running_kw: _, on_kwh_per_hour: __, ...stats } = BOILER_STATS["sensor.boiler_energy"];
-    await mountCard(page, { "sensor.boiler_energy": stats }, true);
+    await mountCard(page, { "sensor.boiler_energy": stats }, true, "kWh", TODAY_KWH, {}, "2026-10-21T12:00:00+00:00", false, boilerHistory());
     await openDevice(page, "Boiler");
     const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
     await expect(section.locator("[slot=summary]")).toHaveText("No figures yet");
     await section.locator("button").first().click();
-    await expect(section.locator("[data-typical] [data-stat]")).toHaveCount(3);
-    await expect(section.locator("[data-typical] [data-stat=running]")).toHaveCount(0);
+    await expect(section.locator("[data-row=running]")).toHaveCount(0);
 });
 
 test("device History's last 24 hours open HA's history of the same entities", async ({ page }) => {
@@ -627,15 +777,15 @@ for (const [name, energy, power] of [
     });
 }
 
-test("device runs tile keeps the plain caption for stats learned before the daily run range", async ({ page }) => {
+test("device runs row keeps the plain value for stats learned before the daily run range", async ({ page }) => {
+    await installFixedClock(page);
     const { daily_runs: _, ...stats } = BOILER_STATS["sensor.boiler_energy"];
-    await mountCard(page, { "sensor.boiler_energy": stats }, true);
+    await mountCard(page, { "sensor.boiler_energy": stats }, true, "kWh", TODAY_KWH, {}, "2026-10-21T12:00:00+00:00", false, boilerHistory());
     await openDevice(page, "Boiler");
     const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
     await section.locator("button").first().click();
-    const runs = section.locator("[data-typical] [data-stat]").nth(1);
-    await expect(runs).toContainText("2 runs");
-    await expect(runs).toContainText("a typical day");
+    const runs = section.locator("[data-row=runs] .value");
+    await expect(runs).toHaveText(/^2\s*typical$/);
     await expect(runs).not.toContainText("(");
 });
 

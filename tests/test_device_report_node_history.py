@@ -40,7 +40,11 @@ def days(span, count: int):
 class NodeHistoryTestCase(DatasetTestCase):
     def payload(self, dataset, node_id, *, floor: float = 0.0, price_unit: str | None = "CZK"):
         return node_history.build_node_history(
-            dataset, node_id, hour_floor_kwh=floor, price_unit=price_unit
+            dataset,
+            node_id,
+            hour_floor_kwh=floor,
+            price_unit=price_unit,
+            navigation_range={"minDate": "2026-01-01", "maxDate": "2026-09-10"},
         )
 
 

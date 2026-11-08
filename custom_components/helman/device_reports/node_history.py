@@ -1,4 +1,4 @@
-"""The last 30 days of one house-subtree node, as every consumer's detail shows them.
+"""One house-subtree node's energy and money, as every consumer's detail shows them.
 
 Pure: built on the device dataset the reports share, so a node's history is
 the same hourly kWh, source mix and money the device reports read. One node,
@@ -52,7 +52,12 @@ def _rate(side: MoneySide) -> float | None:
 
 
 def build_node_history(
-    dataset: DeviceDataset, node_id: str, *, hour_floor_kwh: float, price_unit: str | None
+    dataset: DeviceDataset,
+    node_id: str,
+    *,
+    hour_floor_kwh: float,
+    price_unit: str | None,
+    navigation_range: dict[str, str],
 ) -> dict[str, Any]:
     """``node_id``'s kWh, sources, money and how often it ran, over the dataset's period.
 
@@ -84,6 +89,7 @@ def build_node_history(
         "endDate": dataset.hours[-1].astimezone(dataset.local_tz).date().isoformat(),
         "priceUnit": price_unit,
         "complete": dataset.complete,
+        "navigationRange": navigation_range,
         "totals": {
             "kwh": _round_kwh(total),
             # ``None`` when nothing at all is attributed: the source is unknown, not zero.

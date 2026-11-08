@@ -2266,7 +2266,7 @@ def test_the_charger_overview_carries_config_and_telemetry_and_reads_no_report()
     assert entities["use_mode"] == "select.solax_ev_charger_charger_use_mode"
     # Unresolved telemetry stays a typed null, never dropped.
     assert "grid_power" in entities and entities["grid_power"] is None
-    assert payload["sections"] == ["today", "segment", "history"]
+    assert payload["sections"] == ["segment", "history"]
     # The segment start is a recorder read, so it is a section of its own.
     assert "chargingSince" not in payload
 
@@ -2376,7 +2376,7 @@ def test_a_custom_charger_keeps_its_config_backed_entities():
     assert set(payload["entities"]) == {"power", "energy_total", "charge_switch", "use_mode", "eco_gear"}
     assert payload["entities"]["power"] == EV_POWER
     # No run mode to follow: no charging ledger.
-    assert payload["sections"] == ["today", "segment"]
+    assert payload["sections"] == ["segment"]
 
 
 def test_the_segment_section_carries_todays_charging_stretches_from_midnight():
@@ -2498,55 +2498,15 @@ def ev_ranking():
     }
 
 
-def test_todays_attribution_is_the_chargers_ranking_node_over_the_local_day():
-    payload, reports = ev_detail(section="today", report=ev_ranking())
-
-    [(name, query)] = reports
-    assert name == "ranking"
-    # Whole local dates: today so far, never the charging session.
-    assert (query.start_date, query.end_date) == (date(2026, 10, 10), date(2026, 10, 10))
-    assert payload["period"] == {
-        "start": "2026-10-10T00:00:00+02:00",
-        "end": "2026-10-11T00:00:00+02:00",
-    }
-    assert payload["asOf"] == "2026-10-10T13:55:00+02:00"
-    charger = payload["charger"]
-    assert charger["kwh"] == 6.4
-    assert charger["sources"]["grid"] == 1.8
-    assert charger["money"]["paid"] == 7.2
-    assert charger["money"]["forgone"] == 4.8
-    assert payload["priceUnit"] == "CZK/kWh"
-    assert payload["unavailable"] is None
-
-
-def test_a_meterless_charger_is_found_by_its_share_energy_sensor_in_the_ranking():
-    report = ev_ranking()
-    report["nodes"][1]["id"] = "sensor.helman_share_energy_garage_ev"
-    payload, _ = ev_detail(section="today", report=report, cfg=ev_config(meter=False))
-
-    assert payload["charger"]["kwh"] == 6.4
-
-
-@pytest.mark.parametrize(
-    ("report", "reason"),
-    [
-        ({"unavailable": "no_house_meter"}, "no_house_meter"),
-        (
-            {"priceUnit": None, "asOf": "2026-10-10T13:55:00+02:00", "nodes": [{"id": "house", "kwh": 1.0}]},
-            "no_charger_node",
-        ),
-    ],
-)
-def test_today_without_this_chargers_node_is_unavailable(report, reason):
-    payload, _ = ev_detail(section="today", report=report)
-
-    assert payload["charger"] is None
-    assert payload["unavailable"] == reason
-
-
 def test_the_charger_refuses_a_section_it_does_not_answer():
     with pytest.raises(NodeDetailError) as raised:
         ev_detail(section="voltage")
+    assert raised.value.code == "unknown_section"
+
+
+def test_the_charger_refuses_today_section():
+    with pytest.raises(NodeDetailError) as raised:
+        ev_detail(section="today")
     assert raised.value.code == "unknown_section"
 
 
@@ -2556,9 +2516,8 @@ def test_the_charger_refuses_a_section_it_does_not_answer():
         lambda: battery_detail(section="charge", report=ranking())[0],
         lambda: solar_detail(section="destinations", report=ranking())[0],
         lambda: house_detail(section="today", report=ranking())[0],
-        lambda: ev_detail(section="today", report=ev_ranking())[0],
     ],
-    ids=["battery", "solar", "house", "ev_charger"],
+    ids=["battery", "solar", "house"],
 )
 def test_every_section_built_on_a_report_names_its_price_unit_and_stamp(build):
     payload = build()
