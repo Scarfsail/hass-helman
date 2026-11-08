@@ -5,19 +5,22 @@ import { fillTemplate, type LocalizeFunction } from "../localize/localize";
 import { currencyFromPriceUnit } from "../helman-solar-inspector/money-model";
 import { callHelman } from "../shared/data/helman-commands";
 import { deviceEnergyMeasures } from "../shared/devices/device-energy";
-import { formatKwh, formatMoney, formatPower } from "../shared/format";
+import { formatKwh, formatMinutes, formatMoney, formatPower } from "../shared/format";
+import { addDays, todayKey } from "../shared/time/day-key";
 import { boldTemplate } from "./detail-section";
 import { SOURCE_NODES, gaugePillStyles, nodeIcon } from "./flow-gauge";
-import { historyRow, kwhText, sectionNotReady } from "./node-detail-history";
+import { formatPeriod, type HistoryPeriod } from "./history-period-picker";
+import { historyRow, historySummary, kwhText, sectionNotReady } from "./node-detail-history";
 import type { DeviceDetailParams } from "./node-detail-types";
-import type { SectionOptions, SectionResource } from "./section-resource";
+import { TODAY_REFRESH_MS, hassLocale, timeZone, type SectionOptions, type SectionResource } from "./section-resource";
 import "./help-tip";
 
 /**
- * Every consumer's "Last 30 days" in History & statistics: one house-subtree
- * node's energy and money gauges, how often it ran and its kWh per active day,
- * from `helman/get_node_history`, and the History header's running power with
- * what an hour of it costs. One block for every node, the EV charger included.
+ * Every consumer's History & statistics over the period picked in it: one
+ * house-subtree node's energy and money gauges, how often it ran and its kWh
+ * per day beside what it learned is typical, from `helman/get_node_history`,
+ * and the History header's running power with what an hour of it costs. One
+ * block for every node, the EV charger included.
  */
 
 /** Below this an amount of energy is nothing. */
@@ -28,12 +31,21 @@ const FULL_COVERAGE = 0.99;
 /** What a detail's sections are read for: its item, through `hass`. */
 type DetailHost = { hass: HomeAssistant; params: DeviceDetailParams };
 
-/** The node's last 30 days, a rolling section read while `shown`. */
-export function nodeHistorySection(host: DetailHost, shown: () => boolean): SectionOptions<NodeHistoryPayload> {
+/**
+ * The node's figures over `period()`, read while `shown` and afresh once
+ * another period is picked; a payload not yet complete is re-read as it rolls,
+ * a complete one never.
+ */
+export function nodeHistorySection(host: DetailHost, shown: () => boolean, period: () => HistoryPeriod): SectionOptions<NodeHistoryPayload> {
     return {
-        fetch: () => callHelman(host.hass, "helman/get_node_history", { node_id: host.params.item.id }),
+        fetch: () => {
+            const { start_date, end_date } = period();
+            return callHelman(host.hass, "helman/get_node_history", { node_id: host.params.item.id, start_date, end_date });
+        },
         shown,
         rolling: true,
+        staleness: (payload, requestedAt) => !(payload && !("unavailable" in payload) && payload.complete) && Date.now() - requestedAt > TODAY_REFRESH_MS,
+        key: () => `${period().start_date}/${period().end_date}`,
     };
 }
 
@@ -56,7 +68,7 @@ export function nodeHistory(payload: NodeHistoryPayload | null | undefined): Nod
 export const nodeHistoryStyles = [gaugePillStyles, css`
     [data-node-history] { display: flex; flex-direction: column; gap: 10px; }
     [data-node-history] > .link-button { align-self: flex-start; }
-    /* The 30 days' energy and money gauges, one under the other. */
+    /* The period's energy and money gauges, one under the other. */
     .gauges { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 12px; }
     .gauges .money-title { margin-top: 6px; }
     /* The label is the live gauge's title; its totals keep their units' case. */
@@ -75,6 +87,11 @@ export const nodeHistoryStyles = [gaugePillStyles, css`
     /* The glow says "flowing now": a period's figures do not glow. */
     .gauges .pill[data-active] { animation: none; box-shadow: none; }
     [data-estimates] .row .value { text-align: end; }
+    /* What the learned figures are, at the far end of the rows' title, in plain case. */
+    .section-title .aside { margin-left: auto; text-transform: none; letter-spacing: normal; font-weight: 400; }
+    /* A row's value over its typical line. */
+    [data-node-history-summary] .row .value { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
+    [data-node-history-summary] .row .typical { font-size: 0.8rem; color: var(--secondary-text-color); }
 `];
 
 const h = (localize: LocalizeFunction, key: string) => localize(`node_detail.shared.history.${key}`);
@@ -105,17 +122,16 @@ export function moneyText(side: MoneySideDTO, priceUnit: string | null, localize
 
 /**
  * The History header every consumer shares: its learned power while running
- * and what an hour of it costs at the last 30 days' paid rate, "**2.1 kW ·
- * ≈ 2.56 CZK/h** while running", or the power alone without a rate or
- * once the node history failed; `null` without a learned power or while the
- * node history has no answer yet, for the detail's own header.
+ * and what an hour of it costs at the picked period's paid rate, "**2.1 kW ·
+ * ≈ 2.56 CZK/h** while running", or the power alone without a rate, while
+ * the node history loads or once it failed; `null` without a learned power
+ * or while the node history is not read, for the detail's own header.
  */
 export function consumerHistorySummary(stats: DeviceStats | null | undefined, history: SectionResource<NodeHistoryPayload>, localize: LocalizeFunction): TemplateResult | null {
     const measures = deviceEnergyMeasures(stats ?? undefined);
     const watts = measures.running ?? measures.on;
     if (watts === undefined) return null;
-    const status = history.state?.status;
-    if (status !== "ready" && status !== "error") return null;
+    if (history.state === null) return null;
     const kw = formatPower(watts).display;
     const period = nodeHistory(history.payload);
     const perKwh = period?.paidPerKwh ?? null;
@@ -126,39 +142,68 @@ export function consumerHistorySummary(stats: DeviceStats | null | undefined, hi
 }
 
 /**
- * The last 30 days: two gauges drawn as the live one's pills, in its
- * order (solar, battery, grid). Energy fills each pill to its share of
- * the kWh, money to its share of the money; solar's money is the export
- * income not earned, striped apart from what was paid. Each gauge's title
- * carries its total; under them only what is not one source's, how often it
- * ran and its kWh per active day. Its loading or failure while it has no
- * answer; nothing when the node has no history.
+ * The History header without a learned power: the period's kWh, naming the
+ * period, "**0.4 kWh** yesterday" or "**3.2 kWh** for October 10 – November 8";
+ * its loading or failure until then.
+ */
+export function consumerHistoryFallback(history: SectionResource<NodeHistoryPayload>, localize: LocalizeFunction, hass: HomeAssistant): TemplateResult | string {
+    const period = nodeHistory(history.payload);
+    if (!period) return historySummary(history, localize, null);
+    const today = todayKey(timeZone(hass));
+    const day = period.startDate === period.endDate ? period.startDate : null;
+    const template = day === today ? h(localize, "period_summary_today")
+        : day === addDays(today, -1) ? h(localize, "period_summary_yesterday")
+        : fillTemplate(h(localize, "period_summary_kwh"), {
+            period: formatPeriod({ start_date: period.startDate, end_date: period.endDate }, hassLocale(hass), true),
+        });
+    return boldTemplate(template, { kwh: kwhText(period.totals.kwh) });
+}
+
+/**
+ * The History body: the period picker, then the period's two gauges drawn
+ * as the live one's pills, in its order (solar, battery, grid), its rows
+ * beside what was learned typical, and what the figures rest on. While the
+ * period loads or after it failed, the picker and its note, never another
+ * period's figures; for a period without energy, the picker and "No figures
+ * yet"; then the learned figures alone, which are all a node without history
+ * or not read shows.
  */
 export function renderNodeHistory(
     section: SectionResource<NodeHistoryPayload>,
+    stats: DeviceStats | null | undefined,
     localize: LocalizeFunction,
-    options: { locale: string; timeZone: string; estimatesOpen: boolean; toggleEstimates: () => void; note?: string },
+    options: {
+        hass: HomeAssistant;
+        period: HistoryPeriod;
+        onPeriodChange: (period: HistoryPeriod) => void;
+        estimatesOpen: boolean;
+        toggleEstimates: () => void;
+        note?: string;
+    },
 ): TemplateResult | typeof nothing {
+    const payload = section.payload;
+    // A node not read, or without history, has only what it learned.
+    if (section.state === null || (payload && payload.unavailable !== undefined)) return renderRows(null, stats, localize);
     const notReady = sectionNotReady(section, localize);
-    if (notReady) return html`<div data-node-history-not-ready>${notReady}</div>`;
-    const period = nodeHistory(section.payload);
-    if (!period) return nothing;
-    const totals = period.totals;
-    const sources = totals.sources;
-    const pct = (kwh: number) => totals.kwh > 0 ? Math.round(kwh / totals.kwh * 100) : 0;
-    const perWeek = period.perWeek.toFixed(1);
-    const unknownKwh = sources ? sources.unknown : totals.kwh;
-    const periodDays = Math.round((Date.parse(period.endDate) - Date.parse(period.startDate)) / 86_400_000) + 1;
-    const fewerDays = period.coveredDays < periodDays;
+    const period = nodeHistory(payload);
+    const picker = html`<helman-history-period-picker .hass=${options.hass} .localize=${localize} .period=${options.period}
+        .navigationRange=${payload?.navigationRange} .coveredDays=${period?.coveredDays}
+        @period-change=${(event: CustomEvent<HistoryPeriod>) => options.onPeriodChange(event.detail)}></helman-history-period-picker>`;
+    if (!period) {
+        return html`<div data-node-history>${picker}<div data-node-history-not-ready>${notReady ?? html`<p class="note" data-node-history-empty>${h(localize, "no_figures")}</p>`}</div>
+            ${renderRows(null, stats, localize)}</div>`;
+    }
+
     const partial = period.coverage < FULL_COVERAGE;
     // A late first hour dates the gap; otherwise the gaps are inside the period.
     const since = partial && period.firstHour && period.firstHour.slice(0, 10) > period.startDate
-        ? new Date(period.firstHour).toLocaleDateString(options.locale, { day: "numeric", month: "short", timeZone: options.timeZone })
+        ? new Date(period.firstHour).toLocaleDateString(hassLocale(options.hass), { day: "numeric", month: "short", timeZone: timeZone(options.hass) })
         : null;
     const pctCovered = Math.round(period.coverage * 100);
+
     return html`
-        <div class="section-title" data-node-history-title>${fewerDays ? fillTemplate(h(localize, "period_last_30_covered"), { days: period.coveredDays }) : h(localize, "period_last_30")}<helman-help-tip .explanation=${h(localize, "period_last_30_help")}></helman-help-tip></div>
         <div data-node-history>
+            ${picker}
             ${partial ? html`<p class="note" data-node-history-coverage>${since
                 ? fillTemplate(h(localize, "period_coverage_note"), { pct: pctCovered, date: since })
                 : fillTemplate(h(localize, "period_coverage_note_gaps"), { pct: pctCovered })}</p>` : nothing}
@@ -166,14 +211,46 @@ export function renderNodeHistory(
                 ${renderEnergyGauge(period, localize)}
                 ${renderMoneyGauge(period, localize)}
             </div>
-            <div class="rows" data-node-history-summary>
-                ${unknownKwh > EPSILON_KWH ? historyRow(h(localize, "source_unknown_cap"), `${kwhText(unknownKwh)} · ${pct(unknownKwh)} %`, "source-unknown") : nothing}
-                ${historyRow(h(localize, "period_row_often"), `${fillTemplate(h(localize, "period_per_week"), { n: perWeek })} · ${fillTemplate(h(localize, "period_days"), { days: period.activeDays, covered: period.coveredDays })}`, "how-often")}
-                ${period.kwhPerActiveDay !== null ? historyRow(h(localize, "period_row_per_day"), `≈ ${kwhText(period.kwhPerActiveDay)}`, "per-day") : nothing}
-            </div>
+            ${renderRows(period, stats, localize)}
             <button class="link-button" data-estimates-toggle aria-expanded=${options.estimatesOpen ? "true" : "false"} aria-controls="node-history-estimates"
                 @click=${options.toggleEstimates}>${h(localize, "period_how")}</button>
             ${options.estimatesOpen ? renderEstimates(period, localize, options.note) : nothing}
+        </div>
+    `;
+}
+
+/**
+ * The rows: the period's figures, each beside the learned figure measuring
+ * the same quantity, and the learned figures the period has none for as
+ * their value. Without the period's figures, the learned ones alone; nothing
+ * without either.
+ */
+function renderRows(period: NodeHistoryDTO | null, stats: DeviceStats | null | undefined, localize: LocalizeFunction) {
+    if (!period && !stats) return nothing;
+    const typical = h(localize, "period_typical");
+    const withTypical = (value: unknown, line: unknown) => html`<span>${value}</span><span class="typical" data-typical>${line}</span>`;
+    const day = stats?.daily_kwh;
+    const runs = stats?.runs_per_day;
+    const run = stats?.run_minutes && stats.run_kwh ? { minutes: stats.run_minutes.median, kwh: stats.run_kwh.median } : null;
+    const running = deviceEnergyMeasures(stats ?? undefined).running;
+    const aside = day ? fillTemplate(h(localize, "period_stats_aside"), { days: day.days }) : stats ? h(localize, "period_stats_aside_undated") : null;
+    const typicalDay = day ? `${kwhText(day.median)} (${formatKwh(day.min)}–${formatKwh(day.max)})` : null;
+    const totals = period?.totals;
+    const unknownKwh = totals ? (totals.sources ? totals.sources.unknown : totals.kwh) : 0;
+    const perDay = period ? kwhText(period.totals.kwh / period.coveredDays) : null;
+    const dayValue = perDay !== null && typicalDay ? withTypical(perDay, `${typical} ${typicalDay}`)
+        : perDay ?? (typicalDay ? withTypical(typicalDay, typical) : null);
+    return html`
+        <div class="section-title" data-rows-title>${h(localize, "period_rows_title")}${aside ? html`<span class="aside">${aside}</span>` : nothing}</div>
+        <div class="rows" data-node-history-summary>
+            ${dayValue !== null ? historyRow(h(localize, "period_row_day"), dayValue, "day") : nothing}
+            ${period && period.kwhPerActiveDay !== null ? historyRow(h(localize, "period_row_per_day"), `≈ ${kwhText(period.kwhPerActiveDay)}`, "per-day") : nothing}
+            ${period ? historyRow(h(localize, "period_row_often"), `${fillTemplate(h(localize, "period_per_week"), { n: period.perWeek.toFixed(1) })} · ${fillTemplate(h(localize, "period_days"), { days: period.activeDays, covered: period.coveredDays })}`, "how-often") : nothing}
+            ${typeof runs === "number" ? historyRow(h(localize, "period_row_runs"), withTypical(
+                `${Math.round(runs * 10) / 10}${stats?.daily_runs ? ` (${stats.daily_runs.min}–${stats.daily_runs.max})` : ""}`, typical), "runs") : nothing}
+            ${run ? historyRow(h(localize, "period_row_run"), withTypical(`${formatMinutes(run.minutes)} · ≈ ${kwhText(run.kwh)}`, typical), "run") : nothing}
+            ${running !== undefined ? historyRow(h(localize, "period_row_running"), withTypical(formatPower(running).display, typical), "running") : nothing}
+            ${totals && unknownKwh > EPSILON_KWH ? historyRow(h(localize, "source_unknown_cap"), `${kwhText(unknownKwh)} · ${Math.round(unknownKwh / totals.kwh * 100)} %`, "source-unknown") : nothing}
         </div>
     `;
 }
@@ -230,7 +307,7 @@ function renderMoneyGauge(period: NodeHistoryDTO, localize: LocalizeFunction) {
         })}</div>`;
 }
 
-/** What the 30-day figures rest on, disclosed in place. */
+/** What the figures rest on, disclosed in place. */
 function renderEstimates(period: NodeHistoryDTO, localize: LocalizeFunction, note: string | undefined) {
     const totals = period.totals;
     const of = (part: number) => fillTemplate(h(localize, "period_of"), { part: formatKwh(part), total: kwhText(totals.kwh) });

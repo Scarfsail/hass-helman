@@ -1287,25 +1287,6 @@ export interface EvChargerSegmentSectionPayload {
     charging: Array<{ start: string; end: string; open: boolean }> | null;
 }
 
-/** Today's sources and attributed money of one charger, from the ranking report: today, not the session. */
-export interface EvChargerTodaySectionPayload {
-    node: "ev_charger";
-    section: "today";
-    deviceId: string;
-    asOf: string;
-    period: { start: string; end: string };
-    priceUnit: string | null;
-    complete: boolean;
-    unavailable: string | null;
-    charger: {
-        kwh: number;
-        coverage: number;
-        estimated: boolean;
-        sources: { solar: number; battery: number; grid: number; unattributed: number };
-        money: HouseMoneyDTO;
-    } | null;
-}
-
 /** One money figure, with the kWh it priced and the kWh it could not; a node history's `amount` is `null` with nothing priced. */
 export interface MoneySideDTO {
     amount: number | null;
@@ -1334,7 +1315,7 @@ export interface EnergyFiguresDTO {
 }
 
 /**
- * One house-subtree node's last 30 local days (`helman/get_node_history`),
+ * One house-subtree node's energy and money (`helman/get_node_history`),
  * from the device-reports dataset, or why there is none. Hours under the
  * node's kind's floor (0.1 kWh for an EV charger) are left out of `totals`;
  * `kwh` and `coverage` are the node's whole meter.
@@ -1357,6 +1338,7 @@ export interface NodeHistoryDTO {
     endDate: string;
     priceUnit: string | null;
     complete: boolean;
+    navigationRange: { minDate: string; maxDate: string };
     totals: EnergyFiguresDTO;
     /** Paid over priced kWh, the solar share free. */
     paidPerKwh: number | null;

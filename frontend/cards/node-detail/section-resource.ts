@@ -36,6 +36,8 @@ export interface SectionOptions<T> {
     keepOnError?: boolean;
     /** Called as each read is sent, to stamp what it was read under. */
     onRequest?: () => void;
+    /** What the section is read for: once it is not what the figures shown were read for, they are dropped and read afresh. */
+    key?: () => string;
 }
 
 /** HA's time zone, which "today" is judged in. */
@@ -81,6 +83,8 @@ export class SectionResource<T> {
     private _pending = false;
     /** `requestedAt` as of the last read that answered: what a cancel restores. */
     private _settledAt = 0;
+    /** The key the figures shown, or the read in flight, were read for. */
+    private _key?: string;
 
     constructor(private readonly _host: SectionHost, readonly name: string, private readonly _options: SectionOptions<T>) {}
 
@@ -95,6 +99,7 @@ export class SectionResource<T> {
             this._set({ status: "loading" });
         }
         this.requestedAt = Date.now();
+        this._key = this._options.key?.();
         this._pending = true;
         this._options.onRequest?.();
         try {
@@ -111,13 +116,16 @@ export class SectionResource<T> {
     }
 
     /**
-     * Read a shown section that has nothing yet or is stale, while the page
-     * is visible. A hidden one is dropped.
+     * Read a shown section that has nothing yet, is read for another key or
+     * is stale, while the page is visible. A hidden one is dropped.
      */
     sync(): void {
         if (!this._options.shown()) {
             this.drop();
-        } else if (this.state === null) {
+            return;
+        }
+        if (this._options.key && this._options.key() !== this._key) this.drop();
+        if (this.state === null) {
             void this.load();
         } else if (this.state.status !== "loading" && !document.hidden) {
             // A failed read is retried once it is as stale as figures read then would be.

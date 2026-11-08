@@ -4,21 +4,23 @@ import type { HomeAssistant } from "../../types/ha";
 import type { LocalizeFunction } from "../localize/localize";
 import { fillTemplate } from "../localize/localize";
 import type { TreeItem } from "../shared/data/tree-item";
-import { formatKwh, formatMinutes, formatPower } from "../shared/format";
+import { formatKwh, formatPower } from "../shared/format";
 import { readPowerW } from "../shared/power-reading";
 import { dispatchWatchedEntities } from "../shared/hass-change";
 import type { DeviceDetailParams } from "./node-detail-types";
 import { deviceControllableIds, deviceDirectControls, deviceEntities, powerEntity } from "./node-detail-utils";
 import { estimatedConsumerMix } from "./live-flows";
 import { isSwitchOn } from "../shared/config/devices";
-import { SectionResource, hassLocale, timeZone } from "./section-resource";
-import type { ApplianceProjectionsPayload, ApplianceRuntimeDTO, DeviceStats, DeviceStatsSpread, NodeHistoryPayload } from "../helman-api";
-import { deviceEnergyMeasures, readTodayKWh } from "../shared/devices/device-energy";
-import { consumerHistorySummary, deviceStatsSection, nodeHistory, nodeHistorySection, nodeHistoryStyles, renderNodeHistory } from "./node-history";
+import { SectionResource, timeZone } from "./section-resource";
+import type { ApplianceProjectionsPayload, ApplianceRuntimeDTO, DeviceStats, NodeHistoryPayload } from "../helman-api";
+import { readTodayKWh } from "../shared/devices/device-energy";
+import { consumerHistoryFallback, consumerHistorySummary, deviceStatsSection, nodeHistorySection, nodeHistoryStyles, renderNodeHistory } from "./node-history";
+import { defaultPeriod, type HistoryPeriod } from "./history-period-picker";
+import { todayKey } from "../shared/time/day-key";
 import { ScheduleController } from "./schedule-controller";
 import { runtimeText, runtimeFor } from "./node-detail-schedule";
 import {
-    HistoryGraphResource, historyRow, historySummary, kwhText, renderHistorySection, renderTechnicalSection, sectionNotReady, statTile, subTitle,
+    HistoryGraphResource, historyRow, historySummary, renderHistorySection, renderTechnicalSection, sectionNotReady,
 } from "./node-detail-history";
 import { getSharedHelmanStore } from "../shared/data/store";
 import { DataChangedController } from "../shared/data/data-changed";
@@ -69,15 +71,17 @@ export class NodeDetailDeviceContent extends LitElement {
     /** The learned usage record, for the History header: read on opening; `null` when there is none. */
     private readonly _stats = new SectionResource<DeviceStats | null>(this, "stats", deviceStatsSection(this));
     /**
-     * The last 30 days every consumer shows, read on opening: the History
+     * The picked period every consumer shows, read on opening: the History
      * header needs its paid rate while the section is collapsed.
      */
-    private readonly _period = new SectionResource<NodeHistoryPayload>(this, "period", nodeHistorySection(this, () => this._houseNode()));
+    private readonly _period = new SectionResource<NodeHistoryPayload>(this, "period", nodeHistorySection(this, () => this._houseNode(), () => this._historyPeriod));
     /** HA's history graph of the device's power and switch, once History & statistics is open. */
     private readonly _chart = new HistoryGraphResource(this, () => this._chartEntities(), () => this._historyOpen);
     /** The plan, for the executor's outcome in Technical details, followed once that is open. */
     private readonly _plan = new ScheduleController(this, () => []);
     private _planStarted = false;
+    /** The period History shows, the last 30 days on opening. */
+    @state() private _historyPeriod!: HistoryPeriod;
     @state() private _forecastOpen = false;
     @state() private _historyOpen = false;
     @state() private _technicalOpen = false;
@@ -95,6 +99,7 @@ export class NodeDetailDeviceContent extends LitElement {
         const sections = [this._energy, this._projection, this._stats, this._period];
         if (item !== this._loadedItem) {
             this._loadedItem = item;
+            this._historyPeriod = defaultPeriod(todayKey(timeZone(this.hass)));
             for (const section of [...sections, this._chart]) section.drop();
             this._forecastOpen = this._historyOpen = this._technicalOpen = this._estimatesOpen = false;
         }
@@ -168,56 +173,29 @@ export class NodeDetailDeviceContent extends LitElement {
     }
 
     /**
-     * Its power and switch over the last 24 hours, its last 30 days, and what
-     * it typically uses, as learned over its window. None for a device with
-     * none of them, its last 30 days included once the dataset answers it has none.
+     * Its picked period, with what it learned is typical, and its power and
+     * switch over the last 24 hours. None for a device with none of them,
+     * its period included once the dataset answers it has no history, its
+     * stats once they answer it has no record.
      */
     private _renderHistory() {
         const item = this.params.item;
-        const noPeriod = !this._houseNode() || (this._period.state?.status === "ready" && !nodeHistory(this._period.payload));
-        if (!this._chart.available() && !item.deviceKey && noPeriod) return nothing;
+        const noPeriod = !this._houseNode() || this._period.payload?.unavailable !== undefined;
+        // A device key without a learned record has no stats; one still read or failed says so.
+        const noStats = !item.deviceKey || (this._stats.state?.status === "ready" && !this._stats.payload);
+        if (!this._chart.available() && noStats && noPeriod) return nothing;
         const summary = consumerHistorySummary(this._stats.payload, this._period, this.localize)
             ?? (item.deviceKey
                 ? historySummary(this._period.state?.status === "loading" ? this._period : this._stats, this.localize, null)
-                : this._periodSummary());
+                : consumerHistoryFallback(this._period, this.localize, this.hass));
         return renderHistorySection(this.localize, summary, this._historyOpen, (open) => { this._historyOpen = open; }, () => html`
+            ${renderNodeHistory(this._period, this._stats.payload, this.localize, {
+                hass: this.hass, period: this._historyPeriod, onPeriodChange: (period) => { this._historyPeriod = period; },
+                estimatesOpen: this._estimatesOpen, toggleEstimates: () => { this._estimatesOpen = !this._estimatesOpen; },
+            })}
+            ${noPeriod && !noStats ? sectionNotReady(this._stats, this.localize) ?? nothing : nothing}
             ${this._chart.render(this.localize)}
-            ${this._houseNode() ? renderNodeHistory(this._period, this.localize, {
-                locale: hassLocale(this.hass), timeZone: timeZone(this.hass), estimatesOpen: this._estimatesOpen,
-                toggleEstimates: () => { this._estimatesOpen = !this._estimatesOpen; },
-            }) : nothing}
-            ${item.deviceKey ? this._renderTypical() : nothing}
         `);
-    }
-
-    /** Without learned stats, the 30 days' kWh, "**3.2 kWh** in the last 30 days"; its loading or failure until then. */
-    private _periodSummary() {
-        const period = nodeHistory(this._period.payload);
-        return historySummary(this._period, this.localize, period
-            ? boldTemplate(this.localize("node_detail.shared.history.period_summary_kwh"), { kwh: kwhText(period.totals.kwh) })
-            : null);
-    }
-
-    /** A typical day, how often and how long it runs, and its average power during a run: 2×2 tiles. */
-    private _renderTypical() {
-        const notReady = sectionNotReady(this._stats, this.localize);
-        if (notReady) return notReady;
-        const stats = this._stats.payload;
-        const h = (key: string) => this.localize(`node_detail.shared.history.${key}`);
-        if (!stats) return html`<p class="note" data-no-stats>${h("device_no_stats")}</p>`;
-        const range = (spread: Pick<DeviceStatsSpread, "min" | "max">, digits: number) => `${spread.min.toFixed(digits)}–${spread.max.toFixed(digits)}`;
-        const day = stats.daily_kwh;
-        const running = deviceEnergyMeasures(stats).running;
-        const run = stats.run_minutes && stats.run_kwh ? { minutes: stats.run_minutes.median, kwh: stats.run_kwh.median } : null;
-        return html`
-            ${subTitle(day ? fillTemplate(h("device_typical"), { days: day.days }) : h("device_typical_undated"))}
-            <div class="stat-tiles two" data-typical>
-                ${day ? statTile(`${formatKwh(day.median)} kWh`, fillTemplate(h("device_day"), { range: range(day, 1) }), "day") : nothing}
-                ${typeof stats.runs_per_day === "number" ? statTile(fillTemplate(h("device_runs"), { n: Math.round(stats.runs_per_day * 10) / 10 }), stats.daily_runs ? fillTemplate(h("device_runs_range"), { range: range(stats.daily_runs, 0) }) : h("device_runs_caption"), "runs") : nothing}
-                ${run ? statTile(formatMinutes(run.minutes), fillTemplate(h("device_run"), { kwh: formatKwh(run.kwh) }), "run") : nothing}
-                ${running !== undefined ? statTile(formatPower(running).display, h("device_running"), "running") : nothing}
-            </div>
-        `;
     }
 
     /** The executor's outcome for each of its lanes in the slot in progress, and the entities it is read and switched through. */

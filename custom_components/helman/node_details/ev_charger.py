@@ -44,11 +44,9 @@ from homeassistant.util import dt as dt_util
 
 from ..config_path import get as config_value
 
-from ..controllables.config import device_energy_entity, peek_controllable_id
-from .battery import today_ranking_report
+from ..controllables.config import peek_controllable_id
 from .context import NodeDetailContext
 from .day_stats import SEGMENT_MAX_GAP, async_state_history, day_window, with_live_state
-from .house import ranking_money
 from .inverter import run_mode_condition
 
 #: How far back the charging segment's start is looked for.
@@ -101,7 +99,6 @@ def build_ev_charger_overview(
         "entities": entities,
         "status": run_mode_condition(hass, telemetry),
         "sections": [
-            "today",
             "segment",
             # The ledger is offered where the profile resolves a run mode (a
             # Custom charger has none) and follows the charge power.
@@ -122,60 +119,12 @@ async def async_ev_charger_section(
     device: Mapping[str, Any],
     parent: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    """The charging segment's start, or today's sources and attributed money.
-
-    ``today`` is from the ranking report, over whole local dates: today so
-    far, not the charging session. ``charger`` is ``None`` with an
-    ``unavailable`` reason when the report cannot be built or has no node for
-    this charger.
-    """
+    """The charging segment's start, or the charging ledger's health and segments."""
     if section == "segment":
         return await _async_segment_section(hass, ctx, now, device)
     if section == "history":
         return await _async_history_section(hass, ctx, now, device)
-    local_now = dt_util.as_local(now)
-    start, end = day_window(local_now)
-    payload: dict[str, Any] = {
-        "node": "ev_charger",
-        "section": section,
-        "deviceId": peek_controllable_id(device),
-        "asOf": local_now.isoformat(),
-        "period": {
-            "start": dt_util.as_local(start).isoformat(),
-            "end": dt_util.as_local(end).isoformat(),
-        },
-        "priceUnit": None,
-        "complete": False,
-        "unavailable": None,
-        "charger": None,
-    }
-    report = await today_ranking_report(ctx, local_now)
-    if "unavailable" in report:
-        return {**payload, "unavailable": report["unavailable"]}
-    # The device tree, and so the report, names a device by its energy entity.
-    node_id = device_energy_entity(device, parent)
-    node = next(
-        (node for node in report.get("nodes") or [] if node.get("id") == node_id), None
-    )
-    base = {
-        **payload,
-        # The report's dataset can be a few minutes older than the request.
-        "asOf": report["asOf"],
-        "priceUnit": report.get("priceUnit"),
-        "complete": bool(report.get("complete")),
-    }
-    if node is None:
-        return {**base, "unavailable": "no_charger_node"}
-    return {
-        **base,
-        "charger": {
-            "kwh": max(0.0, float(node.get("kwh") or 0.0)),
-            "coverage": node.get("coverage", 0.0),
-            "estimated": bool(node.get("estimated")),
-            "sources": node.get("sources") or {},
-            "money": ranking_money(node),
-        },
-    }
+    raise ValueError(f"unknown ev_charger section: {section!r}")
 
 
 async def _async_segment_section(

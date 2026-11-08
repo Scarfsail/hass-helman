@@ -28,6 +28,7 @@ import { DEVICE_REPORTS, type DeviceReportEntry } from "./report-registry";
 import {
     DEFAULT_PERIOD_PRESET,
     PERIOD_PRESETS,
+    periodBarStyles,
     presetQuery,
     type PeriodPreset,
 } from "./report-period";
@@ -129,34 +130,8 @@ export class HelmanDeviceReportShell extends LitElement {
     private _pendingCustom: { start?: string | null; end?: string | null } = {};
     private _tooltip = new HoverTooltipController(this);
 
-    static styles = [hoverTooltipStyles, css`
+    static styles = [hoverTooltipStyles, periodBarStyles, css`
         :host { display: block; }
-        .bar {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 4px;
-            align-items: center;
-            margin-bottom: 8px;
-        }
-        .bar button {
-            font: inherit;
-            font-size: 0.8rem;
-            padding: 3px 8px;
-            border-radius: 12px;
-            border: 1px solid var(--divider-color, #ccc);
-            background: transparent;
-            color: var(--primary-text-color);
-            cursor: pointer;
-        }
-        .bar button.selected {
-            background: var(--primary-color);
-            border-color: var(--primary-color);
-            color: var(--text-primary-color, #fff);
-        }
-        .custom input {
-            font: inherit;
-            font-size: 0.8rem;
-        }
         .tabs button { border-radius: 4px; }
         .status {
             font-size: 0.75rem;

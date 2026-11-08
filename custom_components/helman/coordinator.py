@@ -726,11 +726,7 @@ class HelmanCoordinator:
         if isinstance(resolved, str):
             return {"unavailable": resolved}
         dataset, now, price_config = resolved
-        service = self._solar_inspector
-        # Resolved per request, not cached with the dataset: both are cheap, and
-        # the navigation range moves daily.
-        floor = await service.async_history_floor(now)
-        price_unit = await service.async_resolve_span_currency(price_config)
+        price_unit, navigation_range = await self._async_report_bounds(now, price_config)
         return await self._hass.async_add_executor_job(
             functools.partial(
                 build_report,
@@ -738,28 +734,23 @@ class HelmanCoordinator:
                 dataset,
                 query,
                 price_unit=price_unit,
-                navigation_range={
-                    "minDate": floor.isoformat(),
-                    "maxDate": now.date().isoformat(),
-                },
+                navigation_range=navigation_range,
             )
         )
 
-    async def async_node_history(self, node_id: str) -> dict[str, Any]:
-        """One house-subtree node's last 30 days, or why there is none.
+    async def async_node_history(
+        self, node_id: str, query: ReportQuery
+    ) -> dict[str, Any]:
+        """One house-subtree node's history over query, or why there is none.
 
-        The period is the device-reports card's ``last_30`` preset, so the
-        dataset comes from the same cache; the hourly floor is the node's
+        The dataset comes from the reports cache; the hourly floor is the node's
         kind's (:data:`~.device_reports.node_history.HOUR_FLOOR_KWH`).
         """
-        today = dt_util.now().astimezone(ZoneInfo(str(self._hass.config.time_zone))).date()
-        resolved = await self._async_report_dataset(
-            ReportQuery(start_date=today - timedelta(days=29), end_date=today)
-        )
+        resolved = await self._async_report_dataset(query)
         if isinstance(resolved, str):
             return {"unavailable": resolved}
-        dataset, _now, price_config = resolved
-        price_unit = await self._solar_inspector.async_resolve_span_currency(price_config)
+        dataset, now, price_config = resolved
+        price_unit, navigation_range = await self._async_report_bounds(now, price_config)
         return await self._hass.async_add_executor_job(
             functools.partial(
                 build_node_history,
@@ -767,8 +758,20 @@ class HelmanCoordinator:
                 node_id,
                 hour_floor_kwh=hour_floor_kwh(await self.get_device_tree(), node_id),
                 price_unit=price_unit,
+                navigation_range=navigation_range,
             )
         )
+
+    async def _async_report_bounds(
+        self, now: datetime, price_config: Any
+    ) -> tuple[str | None, dict[str, str]]:
+        """A report's price unit and ``navigationRange``: the history floor .. today."""
+        service = self._solar_inspector
+        # Resolved per request, not cached with the dataset: both are cheap, and
+        # the navigation range moves daily.
+        floor = await service.async_history_floor(now)
+        price_unit = await service.async_resolve_span_currency(price_config)
+        return price_unit, {"minDate": floor.isoformat(), "maxDate": now.date().isoformat()}
 
     async def _async_report_dataset(
         self, query: ReportQuery

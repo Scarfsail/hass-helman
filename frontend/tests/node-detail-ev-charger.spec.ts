@@ -8,7 +8,7 @@ import { test, expect, type Page } from "@playwright/test";
  *
  * Mounted on the real `helman-card` against a fake backend that answers the
  * device tree, the appliance roster, `helman/get_node_detail` (the charger's
- * overview and its today and segment sections), the schedule and the
+ * overview and its segment section), the schedule and the
  * appliance projection.
  * What is pinned is the routing (an EV charger by its configured appliance
  * kind, every other device on the generic detail), the pictured overview
@@ -60,7 +60,6 @@ type Variant = {
     noPhase3?: boolean;
     /** The viewer is not an admin. */
     nonAdmin?: boolean;
-    todayFails?: boolean;
     /** The boiler's user action from 12:00 to 13:00, another lane's override. */
     userBoiler?: boolean;
     evNode?: "meterless" | "missing_kind" | "multiple";
@@ -180,7 +179,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             profile: profile ? { id: "solax_ev_charger", label: "SolaX EV charger" } : null,
             entities,
             status: profile && kinds[runMode] ? { kind: kinds[runMode], runMode, entityId: "sensor.ev_run_mode" } : null,
-            sections: ["today", "segment"],
+            sections: ["segment"],
         };
         for (const [id, state] of Object.entries(states)) (state as any).entity_id = id;
         // Charged 08:00–09:30 this morning, and charging again since 11:20 while it charges now.
@@ -194,15 +193,20 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 ...(charging ? [{ start: "2026-10-21T11:20:00+00:00", end: "2026-10-21T12:00:00+00:00", open: true }] : []),
             ],
         };
-        const today = {
-            node: "ev_charger", section: "today", deviceId: "garage-ev", asOf: "2026-10-21T11:55:00+00:00",
-            period: { start: "2026-10-21T00:00:00+00:00", end: "2026-10-22T00:00:00+00:00" },
-            priceUnit: "CZK/kWh", complete: false, unavailable: null,
-            charger: {
-                kwh: 6.4, coverage: 0.95, estimated: false,
-                sources: { solar: 4.0, battery: 0.4, grid: 1.8, unattributed: 0.2 },
-                money: { paid: 7.2, paidPricedKwh: 1.8, paidUnpricedKwh: 0, forgone: 4.8, forgonePricedKwh: 4.0, forgoneUnpricedKwh: 0 },
+        // The default 30 days of the charger's own energy, as `helman/get_node_history` serves it.
+        const money = (amount: number, pricedKwh: number, unpricedKwh = 0) => ({ amount, pricedKwh, unpricedKwh });
+        const nodeHistory = {
+            id: "sensor.ev_energy", label: "Garage EV", icon: null, estimated: false, unmeasured: false, kwh: 216,
+            coverage: 1, firstHour: "2026-09-22T00:00:00+00:00",
+            startDate: "2026-09-22", endDate: "2026-10-21", priceUnit: "CZK/kWh", complete: false,
+            navigationRange: { minDate: "2026-08-01", maxDate: "2026-10-21" },
+            totals: {
+                kwh: 215, sources: { solar: 109, battery: 17, grid: 82, unknown: 7 }, knownKwh: 208,
+                paid: money(455, 208.1, 6.9), forgone: money(142, 200, 15), gridPaid: money(412, 79, 3),
+                batteryPaid: money(43, 17), solarForgone: money(142, 96, 13), virtual: money(597, 208.1, 6.9),
             },
+            activeDays: 13, coveredDays: 30, perWeek: 3, kwhPerActiveDay: 16.5,
+            paidPerKwh: 2.19, gridPricePerKwh: 5.22, batteryPricePerKwh: 2.53, solarForgonePerKwh: 1.48, virtualPerKwh: 2.87,
         };
         const vehicle = (id: string, name: string, limit: boolean) => ({
             id, name,
@@ -273,7 +277,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             appliances: v.projectionEmpty ? {} : { "garage-ev": { series } },
         };
         window.__EvChargerHass = window.__configureNodeDetail({
-            states, tree, overviews: { ev_charger: overview }, sections: { ev_charger: { today, segment } }, schedule,
+            states, tree, overviews: { ev_charger: overview }, sections: { ev_charger: { segment } }, schedule,
             timeZone: v.timeZone,
             hass: { user: { is_admin: !v.nonAdmin } },
             replies: {
@@ -283,6 +287,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                     if (v.projectionFails || (window as any).__projectionDown) throw new Error("projection down");
                     return projection;
                 },
+                "helman/get_node_history": nodeHistory,
                 "recorder/statistic_during_period": { change: 1 },
                 // The car's SoC this morning, as HA's recorder has it.
                 "history/history_during_period": { "sensor.kona_soc": [
@@ -298,9 +303,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                         throw new Error("detail down");
                     if (msg.section === "segment")
                         return segment;
-                    if (msg.section === "today" && (v.todayFails || (window as any).__todayDown))
-                        throw new Error("today down");
-                    return msg.section ? today : overview;
+                    return overview;
                 },
             },
         });
@@ -504,11 +507,11 @@ test("ev-charger History has no Forecast pointer without a projection for its ca
     await mount(page, { projectionEmpty: true });
     await openDevice(page, "Garage EV");
     await content(page).locator("helman-detail-section[data-history] button").first().click();
-    await expect(content(page).locator("[data-share-bar]")).toHaveCount(1);
+    await expect(content(page).locator("[data-node-history]")).toBeVisible();
     await expect(content(page).locator("[data-forecast-pointer]")).toHaveCount(0);
 });
 
-test("ev-charger History header gives today's charge and its solar share, collapsed; the body splits it by source and draws the last 24 hours", async ({ page }) => {
+test("ev-charger History header without learned stats gives the period's kWh, collapsed; the body draws the last 24 hours and has no by-source block", async ({ page }) => {
     await mount(page);
     await page.evaluate(() => {
         (window as any).__chartConfigs = [];
@@ -521,30 +524,14 @@ test("ev-charger History header gives today's charge and its solar share, collap
     });
     await openDevice(page, "Garage EV");
     const section = content(page).locator("helman-detail-section[data-history]");
-    await expect(section.locator("[slot=summary]")).toHaveText("6.4 kWh today · 63 % solar");
-    await expect(section.locator("[slot=summary] b")).toHaveText(["6.4 kWh", "63"]);
+    await expect(section.locator("[slot=summary]")).toContainText(/^215 kWh for /);
+    await expect(section.locator("[slot=summary] b")).toHaveText(["215 kWh"]);
     await expect(section.locator("[data-history-body]")).toHaveCount(0);
     await section.locator("button").first().click();
-    await expect(section.locator("[data-share-bar] [data-share]")).toHaveCount(4);
-    await expect(section.locator("[data-share-bar]")).toHaveAttribute("aria-label", "Solar 63 %, Battery 6 %, Grid 28 %, Source unknown 3 %");
-    expect(await section.locator("[data-share=solar]").evaluate((element) => getComputedStyle(element).backgroundColor))
-        .toBe(await section.locator("[data-share-bar]").evaluate((element) => {
-            const probe = document.createElement("span");
-            probe.style.background = "var(--helman-solar)";
-            element.appendChild(probe);
-            const color = getComputedStyle(probe).backgroundColor;
-            probe.remove();
-            return color;
-        }));
-    await expect(section.locator("[data-row=from-solar] .value")).toHaveText("4.0 kWh");
-    await expect(section.locator("[data-row=from-battery] .value")).toContainText("kWh");
-    await expect(section.locator("[data-row=from-grid] .value")).toContainText("1.8 kWh · paid ≈");
-    await expect(section.locator("[data-row=from-unknown] .value")).toHaveText("0.20 kWh");
-    // The rows add up to the header's figure, and the bar's solar share is the header's.
-    const rows = await section.locator("[data-sources] .value").allTextContents();
-    expect(rows.reduce((sum, text) => sum + parseFloat(text), 0)).toBeCloseTo(6.4, 5);
-    const width = (selector: string) => section.locator(selector).evaluate((element) => element.getBoundingClientRect().width);
-    expect(await width("[data-share=solar]") / await width("[data-share-bar]")).toBeCloseTo(4.0 / 6.4, 1);
+    await expect(section.locator("[data-node-history]")).toBeVisible();
+    await expect(section.locator("[data-share-bar]")).toHaveCount(0);
+    await expect(section.locator("[data-sources]")).toHaveCount(0);
+    await expect(section.locator("[data-row=from-solar]")).toHaveCount(0);
     await expect(section.locator(".history-graph-stub")).toHaveCount(1);
     expect(await page.evaluate(() => (window as any).__chartConfigs)).toEqual([{ type: "history-graph", hours_to_show: 24, entities: ["sensor.ev_power"] }]);
 });

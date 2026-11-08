@@ -4,18 +4,17 @@ import type { TreeItemDTO } from "../cards/helman-api";
 import { test, expect, type Page } from "@playwright/test";
 
 /**
- * The EV charger's History & statistics: the last 30 days every consumer
- * shows (#741, from `helman/get_node_history`), the charging ledger's newest
- * segments (#428) and the ledger's health.
+ * The EV charger's History & statistics: the picked period every consumer
+ * shows (#741, #744, from `helman/get_node_history`) and the charging
+ * ledger's health in Technical details (#428).
  *
  * Mounted on the real `helman-card` like `node-detail-ev-charger.spec.ts`,
- * against a fake backend answering the charger's overview, its `today`,
- * `segment` and `history` sections, its node history and its learned usage.
- * Pinned: the ledger is read only once the overview offers it and its body
- * only while History is open; the header's running power and cost per hour
- * and its fallback to today's figure; the gauges and rows; the segment list
- * and its states; the estimate's disclosure; failure, empty and Custom
- * charger states; and that a ledger answer for another charger is never shown.
+ * against a fake backend answering the charger's overview, its `segment` and
+ * `history` sections, its node history and its learned usage. Pinned: no
+ * segment list and no "Charged today"; the header's running power and cost
+ * per hour and its fallback to the period's kWh; the period picker; the
+ * gauges and rows; the estimate's disclosure; failure and Custom charger
+ * states; and the ledger's health.
  *
  * The clock is fixed at 12:00 UTC on Wednesday 21 October 2026, HA in UTC.
  */
@@ -24,8 +23,6 @@ type Variant = {
     /** A Custom charger: no profile, no run mode, no ledger offered. */
     custom?: boolean;
     historyFails?: boolean;
-    /** The ledger has recorded nothing yet. */
-    empty?: boolean;
     /** No house dataset: nothing attributed. */
     noHouse?: boolean;
     /** The node history has data for only this many of the 30 days. */
@@ -34,10 +31,6 @@ type Variant = {
     noStats?: boolean;
     /** Only the whole paid side is priced, and it was paid back: no source's money is. */
     paidBackOnly?: boolean;
-    /** Hold the overview's answer until `__releaseOverview()`. */
-    holdOverview?: boolean;
-    /** Hold garage-ev's ledger answer until `__releaseLedger()`. */
-    holdLedger?: boolean;
     /** Hold the node history's answer until `__releaseNodeHistory()`. */
     holdNodeHistory?: boolean;
 };
@@ -45,8 +38,6 @@ type Variant = {
 declare global {
     interface Window {
         __deepAll: (root: ParentNode, selector: string, out?: Element[]) => Element[];
-        __releaseOverview: () => void;
-        __releaseLedger: () => void;
         __releaseNodeHistory: () => void;
     }
 }
@@ -93,18 +84,8 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 ...(v.custom ? {} : { run_mode: "sensor.ev_run_mode", session_energy: "sensor.ev_session_energy" }),
             },
             status: v.custom ? null : { kind: "charging", runMode: "Charging", entityId: "sensor.ev_run_mode" },
-            sections: v.custom ? ["today", "segment"] : ["today", "segment", "history"],
+            sections: v.custom ? ["segment"] : ["segment", "history"],
         });
-        const today = {
-            node: "ev_charger", section: "today", deviceId: "garage-ev", asOf: "2026-10-21T11:55:00+00:00",
-            period: { start: "2026-10-21T00:00:00+00:00", end: "2026-10-22T00:00:00+00:00" },
-            priceUnit: "CZK/kWh", complete: false, unavailable: null,
-            charger: {
-                kwh: 6.4, coverage: 0.95, estimated: false,
-                sources: { solar: 4.0, battery: 0.4, grid: 1.8, unattributed: 0.2 },
-                money: { paid: 7.2, paidPricedKwh: 1.8, paidUnpricedKwh: 0, forgone: 4.8, forgonePricedKwh: 4.0, forgoneUnpricedKwh: 0 },
-            },
-        };
         const segmentSection = {
             node: "ev_charger", section: "segment", deviceId: "garage-ev", asOf: "2026-10-21T12:00:00+00:00",
             period: { start: "2026-10-21T00:00:00+00:00", end: "2026-10-22T00:00:00+00:00" },
@@ -120,7 +101,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 batteryPaid: money(0, 0), solarForgone: money(kwh / 2, kwh / 2), virtual: money(kwh * 2.5, kwh), ...extra,
             };
         };
-        const segments = v.empty ? [] : [
+        const segments = [
             segment("2026-10-21T11:20:00+00:00", "2026-10-21T12:00:00+00:00", 4.3, { status: "active", final: false }),
             segment("2026-10-21T08:00:00+00:00", "2026-10-21T09:30:00+00:00", 9.6),
             // A negative price: paid back.
@@ -141,6 +122,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             coverage: v.coveredDays ? v.coveredDays / 30 : 1,
             firstHour: v.coveredDays ? "2026-10-09T00:00:00+00:00" : "2026-09-22T00:00:00+00:00",
             startDate: "2026-09-22", endDate: "2026-10-21", priceUnit: "CZK/kWh", complete: false,
+            navigationRange: { minDate: "2026-08-01", maxDate: "2026-10-21" },
             totals: {
                 kwh: 215, sources: v.noHouse ? null : { solar: 109, battery: 17, grid: 82, unknown: 7 }, knownKwh: v.noHouse ? 0 : 208,
                 paid: v.noHouse ? money(0, 0, 215) : money(455, 208.1, 6.9), forgone: money(142, 200, 15),
@@ -166,8 +148,6 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             },
         });
         const held = (name: string) => new Promise((resolve) => { (window as any)[name] = resolve; });
-        const overviewHeld = v.holdOverview ? held("__releaseOverview") : null;
-        const ledgerHeld = v.holdLedger ? held("__releaseLedger") : null;
         const nodeHistoryHeld = v.holdNodeHistory ? held("__releaseNodeHistory") : null;
         const appliances = {
             appliances: [{
@@ -190,17 +170,10 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 "helman/get_device_stats": v.noStats ? null : { running_kw: 11 },
                 "helman/get_node_detail": async (msg: { section?: string; device_id?: string }) => {
                     const deviceId = msg.device_id ?? "garage-ev";
-                    if (!msg.section) {
-                        if (overviewHeld) await overviewHeld;
-                        return overview(deviceId);
-                    }
-                    if (msg.section === "today") return { ...today, deviceId };
+                    if (!msg.section) return overview(deviceId);
                     if (msg.section === "segment") return { ...segmentSection, deviceId };
                     if (msg.section === "history") {
-                        if (v.historyFails || (window as any).__ledgerDown) throw new Error("ledger down");
-                        if (deviceId === "garage-ev" && ledgerHeld) {
-                            await ledgerHeld;
-                        }
+                        if (v.historyFails) throw new Error("ledger down");
                         return ledger(deviceId);
                     }
                     throw new Error(`no section ${msg.section}`);
@@ -234,20 +207,15 @@ async function openHistory(page: Page): Promise<void> {
     await historyToggle(page).click();
 }
 
-test("ev-charger ledger is read only once the overview is ready, and its body renders only while History is open", async ({ page }) => {
-    await mount(page, { holdOverview: true });
+test("ev-charger detail has no segment list and no today block in History", async ({ page }) => {
+    await mount(page);
     await openCharger(page);
-    await page.waitForTimeout(200);
-    expect(await historyReads(page)).toEqual([]);
-
-    await page.evaluate(() => window.__releaseOverview());
-    await expect.poll(() => historyReads(page)).toEqual(["garage-ev"]);
-    await expect(content(page).locator("[data-ledger-segments]")).toHaveCount(0);
-
     await openHistory(page);
-    await expect(content(page).locator("[data-ledger-segments]")).toBeVisible();
-    await historyToggle(page).click();
     await expect(content(page).locator("[data-ledger-segments]")).toHaveCount(0);
+    await expect(content(page).locator("[data-sources]")).toHaveCount(0);
+    await expect(content(page).locator("[data-node-history]")).toBeVisible();
+    // Nothing asks for today's figures of the charger any more.
+    expect(await page.evaluate(() => window.__NodeDetailRequests.filter((r) => r.type === "helman/get_node_detail" && r.section === "today"))).toEqual([]);
 });
 
 test("ev-charger History header gives the learned running power and what an hour of it costs, read on opening", async ({ page }) => {
@@ -261,40 +229,31 @@ test("ev-charger History header gives the learned running power and what an hour
     expect(await periodReads(page)).toEqual(["sensor.ev_energy"]);
 });
 
-test("ev-charger History header gives the power alone without a price, and today's figure without a learned power", async ({ page }) => {
+test("ev-charger History header gives the power alone without a price, and period figure without a learned power", async ({ page }) => {
     await mount(page, { noHouse: true });
     await openCharger(page);
     await expect(history(page).locator("[slot=summary]")).toHaveText("11.0 kW while running");
 
     await mount(page, { noStats: true });
     await openCharger(page);
-    await expect(history(page).locator("[slot=summary]")).toHaveText("6.4 kWh today · 63 % solar");
+    await expect(history(page).locator("[slot=summary]")).toHaveText("215 kWh for 22 September – 21 October");
 });
 
-test("ev-charger History header keeps today's figure until the node history answers", async ({ page }) => {
+test("ev-charger History header names the running power while the node history loads, its rate once it answers", async ({ page }) => {
     await mount(page, { holdNodeHistory: true });
     await openCharger(page);
     await expect.poll(() => periodReads(page)).toEqual(["sensor.ev_energy"]);
-    await expect(history(page).locator("[slot=summary]")).toHaveText("6.4 kWh today · 63 % solar");
+    await expect(history(page).locator("[slot=summary]")).toHaveText("11.0 kW while running");
     await page.evaluate(() => window.__releaseNodeHistory());
     await expect(history(page).locator("[slot=summary]")).toHaveText("11.0 kW · ≈ 24.09 CZK/h while running");
 });
 
-test("ev-charger ledger failure leaves the header and the last 30 days, with the failure and retry in the body", async ({ page }) => {
+test("ev-charger ledger failure does not affect the History section", async ({ page }) => {
     await mount(page, { historyFails: true });
     await openCharger(page);
     await expect(history(page).locator("[slot=summary]")).toHaveText("11.0 kW · ≈ 24.09 CZK/h while running");
     await openHistory(page);
     await expect(content(page).locator("[data-node-history]")).toBeVisible();
-    const notReady = content(page).locator("[data-ledger-not-ready]");
-    await expect(notReady.locator("[data-history-failed]")).toBeVisible();
-    // Today's block is unaffected.
-    await expect(content(page).locator("[data-sources] [data-row=from-solar] .value")).toHaveText("4.0 kWh");
-
-    // Retry asks again.
-    const before = (await historyReads(page)).length;
-    await notReady.locator("button").click();
-    await expect.poll(async () => (await historyReads(page)).length).toBeGreaterThan(before);
 });
 
 test("ev-charger last 30 days shows an energy and a money gauge with their totals and the rest under them", async ({ page }) => {
@@ -302,8 +261,8 @@ test("ev-charger last 30 days shows an energy and a money gauge with their total
     await openCharger(page);
     await openHistory(page);
     const window30 = content(page).locator("[data-node-history]");
-    await expect(content(page).locator("[data-node-history-title]")).toContainText("Last 30 days");
-    await expect(content(page).locator("[data-node-history-title]")).not.toContainText("data for");
+    await expect(content(page).locator("[data-primary-date]")).toHaveText("22 September – 21 October 2026");
+    await expect(content(page).locator("[data-subtitle]")).toHaveCount(0);
     await expect(content(page).locator("[data-node-history-title] helman-help-tip")).toHaveCount(1);
     await expect(window30.locator("[data-node-history-coverage]")).toHaveCount(0);
     // Two gauges as the live one's pills, each title with its total, in the live order.
@@ -320,13 +279,16 @@ test("ev-charger last 30 days shows an energy and a money gauge with their total
     // Solar's money was never paid: drawn apart, and named so.
     await expect(money.nth(0)).toHaveClass(/missed/);
     await expect(money.nth(0)).toHaveAttribute("title", /not sold/);
-    // Under them only what is not one source's, how often and per active day: the rows every consumer shows.
-    await expect(window30.locator("[data-row]")).toHaveCount(3);
-    await expect(window30.locator("[data-row=source-unknown] .value")).toHaveText("7.0 kWh · 3 %");
-    await expect(window30.locator("[data-row=how-often] .value")).toHaveText("≈ 3.0× a week · on 13 of 30 days");
+    // Under them rows: day, per-day, how-often, running, source-unknown
+    const rows = window30.locator("[data-node-history-summary] [data-row]");
+    await expect(rows).toHaveCount(5);
+    await expect(window30.locator("[data-row=day] .value")).toHaveText("7.2 kWh");
     await expect(window30.locator("[data-row=per-day] .value")).toHaveText("≈ 17 kWh");
-    // Then the ledger's segments.
-    await expect(content(page).locator("[data-ledger-segments]")).toBeVisible();
+    await expect(window30.locator("[data-row=how-often] .value")).toHaveText("≈ 3.0× a week · on 13 of 30 days");
+    await expect(window30.locator("[data-row=running] .value")).toHaveText(/^11\.0 kW\s*typical$/);
+    await expect(window30.locator("[data-row=source-unknown] .value")).toHaveText("7.0 kWh · 3 %");
+    // No segment list
+    await expect(content(page).locator("[data-ledger-segments]")).toHaveCount(0);
 });
 
 test("ev-charger How these are estimated discloses its evidence in place, by keyboard", async ({ page }) => {
@@ -345,82 +307,41 @@ test("ev-charger How these are estimated discloses its evidence in place, by key
     await expect(estimates.locator("[data-row=how-paid] .value")).toContainText("solar is free here");
     await expect(estimates.locator("[data-row=how-per100]")).toHaveCount(0);
     await expect(estimates.locator("[data-estimates-note]")).toContainText("not your bill");
-    // The charger's own note: its standby floor and what a charging segment is.
+    // The charger's own note: its standby floor and without segment sentence.
     await expect(estimates.locator("[data-row=how-energy] .value")).not.toContainText("0.1 kWh");
     await expect(estimates.locator("[data-estimates-detail-note]")).toContainText("under 0.1 kWh are standby");
-    await expect(estimates.locator("[data-estimates-detail-note]")).toContainText("a pause starts a new one");
+    await expect(estimates.locator("[data-estimates-detail-note]")).not.toContainText("a pause starts a new one");
     await page.keyboard.press(" ");
     await expect(toggle).toHaveAttribute("aria-expanded", "false");
     await expect(content(page).locator("[data-estimates]")).toHaveCount(0);
 });
 
-test("ev-charger lists the newest segments by local start day, five first and all twenty on Show all", async ({ page }) => {
+test("ev-charger period picker switches period and updates node history", async ({ page }) => {
     await mount(page);
     await openCharger(page);
     await openHistory(page);
-    const list = content(page).locator("[data-ledger-segments]");
-    await expect(list.locator("[data-segment]")).toHaveCount(5);
-    const days = list.locator("[data-ledger-day]");
-    await expect(days.first().locator(".day-head .label")).toHaveText("Today");
-    await expect(days.first().locator("[data-day-summary]")).toHaveText("14 kWh · 50 % solar · ≈ 28 CZK");
-    // A segment crossing midnight is listed under its start day.
-    await expect(days.nth(1).locator(".day-head .label")).toHaveText("Yesterday");
-    await expect(days.nth(1).locator("[data-segment]")).toHaveCount(1);
-    const show = content(page).locator("[data-show-all]");
-    await expect(show).toHaveText("Show all 20");
-    await show.click();
-    await expect(list.locator("[data-segment]")).toHaveCount(20);
-    await expect(content(page).locator("[data-show-all]")).toHaveCount(0);
-    // One scale across the list: the largest segment's bar is the longest.
-    const widths = await list.locator(".seg-bar").evaluateAll((bars) => bars.map((bar) => bar.getBoundingClientRect().width));
-    expect(Math.max(...widths)).toBe(widths[2]);
-});
+    const picker = content(page).locator("helman-history-period-picker");
+    await expect(picker.locator("button[data-preset=last_30]")).toHaveClass(/selected/);
+    await picker.locator("button[data-preset=yesterday]").click();
+    await expect(picker.locator("button[data-preset=yesterday]")).toHaveClass(/selected/);
+    await expect.poll(() => page.evaluate(() => window.__NodeDetailRequests.filter((r) => r.type === "helman/get_node_history").at(-1)))
+        .toEqual(expect.objectContaining({ node_id: "sensor.ev_energy", start_date: "2026-10-20", end_date: "2026-10-20" }));
+    await expect(picker.locator("[data-primary-date]")).toHaveText("Tuesday, 20 October 2026");
 
-test("ev-charger segment rows say what is not recorded, what is provisional, paid back and partly priced", async ({ page }) => {
-    await mount(page);
+    // Reopening resets to the last 30 days and reads them again.
+    await page.locator("node-detail-dialog [data-dialog='close']").click();
     await openCharger(page);
     await openHistory(page);
-    await content(page).locator("[data-show-all]").click();
-    const row = (start: string) => content(page).locator(`[data-segment="${start}"]`);
-    const active = row("2026-10-21T11:20:00+00:00");
-    await expect(active.locator(".seg-time")).toHaveText("11:20 – now");
-    await expect(active).toHaveAttribute("data-status", "active");
-    await expect(active.locator(".seg-bar.active")).toHaveCount(1);
-    await expect(row("2026-10-19T13:00:00+00:00").locator(".seg-time")).toHaveText("13:00 – ?");
-    await expect(row("2026-10-19T13:00:00+00:00").locator(".seg-kwh")).toHaveText("≥ 3.2");
-    const unknown = row("2026-10-17T05:00:00+00:00");
-    await expect(unknown.locator(".seg-time")).toHaveText("? – 07:10");
-    await expect(unknown.locator("[data-share]")).toHaveCount(1);
-    await expect(unknown.locator("[data-share=unknown]")).toHaveCount(1);
-    await expect(content(page).locator('[data-ledger-day="2026-10-20"] [data-day-summary]')).toContainText("≈ 5.0 CZK paid back");
-    await expect(content(page).locator('[data-ledger-day="2026-10-19"] [data-day-summary]')).toContainText("≈ 36 CZK for 18 of 21 kWh");
-    await expect(content(page).locator('[data-ledger-day="2026-10-17"] [data-day-summary]')).toContainText("source unknown");
-});
-
-test("ev-charger labels ledger rows as charging segments and keeps the Overview's hardware session apart", async ({ page }) => {
-    await mount(page);
-    await openCharger(page);
-    await expect(content(page).locator("helman-detail-headline")).toContainText("added this session");
-    await openHistory(page);
-    await expect(content(page).locator("[data-ledger-segments] [data-segment]").first())
-        .toHaveAttribute("aria-label", "Charging segment 11:20 – now, 4.3 kWh");
-    await expect(content(page).locator("[data-node-history]")).not.toContainText("session");
-});
-
-test("ev-charger with nothing recorded yet says so and keeps today's block", async ({ page }) => {
-    await mount(page, { empty: true });
-    await openCharger(page);
-    await openHistory(page);
-    await expect(content(page).locator("[data-ledger-empty]")).toHaveText("No charging recorded yet.");
-    await expect(content(page).locator("[data-sources]")).toBeVisible();
-    await expect(content(page).locator("[data-ledger-segments]")).toHaveCount(0);
+    await expect(picker.locator("button[data-preset=last_30]")).toHaveClass(/selected/);
+    await expect.poll(() => page.evaluate(() => window.__NodeDetailRequests.filter((r) => r.type === "helman/get_node_history").at(-1)))
+        .toEqual(expect.objectContaining({ start_date: "2026-09-22", end_date: "2026-10-21" }));
 });
 
 test("ev-charger last 30 days names a shorter coverage, its first day, and counts by it", async ({ page }) => {
     await mount(page, { coveredDays: 13 });
     await openCharger(page);
     await openHistory(page);
-    await expect(content(page).locator("[data-node-history-title]")).toContainText("Last 30 days · data for 13 days");
+    await expect(content(page).locator("[data-node-history-title]")).toContainText("data for 13 days");
     await expect(content(page).locator("[data-node-history-coverage]")).toHaveText("Data for 43 % of the period (from 9 Oct)");
     await expect(content(page).locator("[data-node-history] [data-row=how-often] .value")).toHaveText("≈ 7.0× a week · on 13 of 13 days");
 });
@@ -449,36 +370,24 @@ test("ev-charger keeps the money gauge for a paid total no source prices, and a 
     await expect(window30.locator("[data-money] [data-active]")).toHaveCount(0);
 });
 
-test("ev-charger Custom charger without a run mode reads no ledger, keeps today's block and still shows its last 30 days", async ({ page }) => {
+test("ev-charger Custom charger without a run mode reads no ledger, keeps no today block and still shows its period figures", async ({ page }) => {
     await mount(page, { custom: true, noStats: true });
     await openCharger(page);
-    await expect(history(page).locator("[slot=summary]")).toHaveText("6.4 kWh today · 63 % solar");
+    await expect(history(page).locator("[slot=summary]")).toHaveText("215 kWh for 22 September – 21 October");
     await openHistory(page);
-    await expect(content(page).locator("[data-sources]")).toBeVisible();
     await expect(content(page).locator("[data-node-history]")).toBeVisible();
-    await expect(content(page).locator("[data-ledger-not-ready], [data-ledger-segments]")).toHaveCount(0);
+    await expect(content(page).locator("[data-sources], [data-ledger-segments]")).toHaveCount(0);
     expect(await historyReads(page)).toEqual([]);
 });
 
-test("ev-charger never shows a ledger answer meant for the charger it switched away from", async ({ page }) => {
-    await mount(page, { holdLedger: true });
-    await openCharger(page);
-    await expect.poll(() => historyReads(page)).toEqual(["garage-ev"]);
-
-    await content(page).evaluate((element: any) => { element.deviceId = "other-ev"; });
-    await openHistory(page);
-    const segments = content(page).locator("[data-ledger-segments] [data-segment]");
-    await expect(segments).toHaveCount(1);
-    await page.evaluate(() => window.__releaseLedger());
-    await page.waitForTimeout(300);
-    await expect(segments).toHaveCount(1);
-});
-
-test("ev-charger Technical details shows the charging ledger's health", async ({ page }) => {
+test("ev-charger Technical details shows the charging ledger's health, read once it opens", async ({ page }) => {
     await mount(page);
     await openCharger(page);
+    await expect(history(page).locator("[slot=summary]")).toHaveText("11.0 kW · ≈ 24.09 CZK/h while running");
+    expect(await historyReads(page)).toEqual([]);
     const technical = content(page).locator("helman-detail-section[data-technical]");
     await technical.locator("button").first().click();
+    await expect.poll(() => historyReads(page)).toEqual(["garage-ev"]);
     const health = technical.locator("[data-ledger-health]");
     await expect(health.locator("[data-row=ledger-segments] .value")).toHaveText("37");
     await expect(health.locator("[data-row=ledger-backfill] .value")).toHaveText("done, 10 days read");
