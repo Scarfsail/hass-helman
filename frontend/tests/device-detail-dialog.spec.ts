@@ -13,14 +13,14 @@ import type { TreeItemDTO } from "../cards/helman-api";
  * The name used to toggle the box's children; that job moved to a chevron in
  * front of it, so the name is free to open one dialog per config device: its
  * live power and switch, the energy its own meter counted today and in the last
- * hour, and HA's history graph. The house's Untracked remainder opens its
+ * hour, and its power today in Forecast. The house's Untracked remainder opens its
  * detail too; other rows -- virtual label groups, a breaker's remainder --
  * keep toggling and open nothing.
  *
  * Home Assistant's own pieces are stubbed at the edge: `callWS` answers the
- * recorder's statistics, `window.loadCardHelpers` hands back an element that
- * records the history-graph config it was built with, and `ha-dialog` only
- * shows its content while open.
+ * recorder's statistics and `window.__powerHistory` as HA's history of an
+ * entity, `window.loadCardHelpers` hands back an element that records any card
+ * config it was built with, and `ha-dialog` only shows its content while open.
  */
 
 const TODAY_KWH = 1.25;
@@ -136,6 +136,7 @@ async function mountCard(
             (window as any).__deviceStatsRequests = [];
             (window as any).__nodeHistoryRequests = [];
             (window as any).__nodeHistoryMessages = [];
+            (window as any).__historyRequests = [];
             const hass = {
                 language: "en",
                 locale: { language: "en" },
@@ -176,6 +177,10 @@ async function mountCard(
                         appliances: Object.fromEntries(Object.entries(projections).map(([id, points]) =>
                             [id, { series: points.map(([slotId, energyKwh]) => ({ slotId, energyKwh })) }])),
                     }),
+                    "history/history_during_period": async (msg: any) => {
+                        (window as any).__historyRequests.push(msg);
+                        return (window as any).__powerHistory ?? {};
+                    },
                     "recorder/statistic_during_period": async (msg: any) => {
                         (window as any).__statRequests.push(msg);
                         return { change: msg.calendar ? today : lastHour };
@@ -303,7 +308,7 @@ test("device Forecast normalises the slot in progress by what was left of it", a
     const section = page.locator("node-detail-device-content helman-detail-section[data-forecast]");
     await section.locator("button").first().click();
     const power = await section.locator("helman-day-line-chart").evaluate((chart: any) =>
-        chart.series[0].points.slice(0, 2).map((point: { v: number }) => Math.round(point.v * 1000) / 1000));
+        chart.series.find((series: { key: string }) => series.key === "planned").points.slice(0, 2).map((point: { v: number }) => Math.round(point.v * 1000) / 1000));
     expect(power).toEqual([3, 3]);
     expect(await section.locator("helman-help-tip").evaluate((tip: any) => tip.explanation)).toContain("learned 3.0 kW");
 });
@@ -323,13 +328,86 @@ test("device Forecast drops what ran in the slot in progress since the projectio
     await expect(section.locator("[data-run]")).toContainText("≈ 0.67 kWh");
 });
 
-test("device without projected energy has no Forecast section", async ({ page }) => {
-    await mountCard(page, {}, true);
+/** The boiler's power this morning, W, as HA's recorder has it: `[time, state]` from 10:50 on. */
+const BOILER_POWER: Array<[string, string]> = [
+    ["10:50", "1000"], ["11:00", "0"], ["11:05", "2000"], ["11:08", "unavailable"], ["11:08", "0"], ["12:04", "3000"],
+];
+
+async function seedPowerHistory(page: Page, readings = BOILER_POWER): Promise<void> {
+    await page.evaluate((readings) => {
+        (window as any).__powerHistory = { "sensor.boiler_power": readings.map(([time, s]) => ({ s, lu: Date.parse(`2026-10-21T${time}:00Z`) / 1000 })) };
+    }, readings);
+}
+
+test("device Forecast draws the actual power since midnight as each slot's time-weighted mean, against the plan", async ({ page }) => {
+    await installFixedClock(page);
+    await page.clock.setFixedTime(new Date("2026-10-21T12:10:00Z"));
+    await mountCard(page, {}, true, "kWh", TODAY_KWH, { boiler: [["2026-10-21T12:15:00+00:00", 0.5]] }, "2026-10-21T12:10:00+00:00");
+    await seedPowerHistory(page);
     await openDevice(page, "Boiler");
-    await expect(page.locator("node-detail-device-content [data-overview]")).toBeVisible();
-    await expect.poll(() => page.evaluate(() => (window as any).__deepAll(document, "node-detail-device-content").length)).toBe(1);
-    await page.waitForTimeout(300);
-    await expect(page.locator("node-detail-device-content helman-detail-section[data-forecast]")).toHaveCount(0);
+    const section = page.locator("node-detail-device-content helman-detail-section[data-forecast]");
+    await section.locator("button").first().click();
+    const chart = section.locator("helman-day-line-chart");
+    await expect(chart.locator("path.line")).toHaveCount(2);
+    await expect(chart.locator("path.line.dashed")).toHaveCount(1);
+    const at = (time: string) => Date.parse(`2026-10-21T${time}:00Z`);
+    // Nothing known before 10:50; the 11:00 slot's 3 minutes at 2 kW are 0.4 kW;
+    // off without a reading of its own until 12:04, then 3 kW for 6 of the 10 minutes so far.
+    await expect.poll(() => chart.evaluate((element: any) => element.series.find((series: { key: string }) => series.key === "actual").points
+        .map((point: { t: number; v: number }) => [point.t, Math.round(point.v * 1000) / 1000]))).toEqual([
+        [at("10:45"), 1], [at("11:00"), 0.4], [at("11:15"), 0], [at("11:30"), 0], [at("11:45"), 0], [at("12:00"), 1.8],
+    ]);
+    expect(await page.evaluate(() => (window as any).__historyRequests)).toEqual([{
+        type: "history/history_during_period", start_time: "2026-10-21T00:00:00.000Z", end_time: "2026-10-21T12:10:00.000Z",
+        entity_ids: ["sensor.boiler_power"], minimal_response: true, no_attributes: true, significant_changes_only: false,
+    }]);
+    const help = await section.locator("helman-help-tip").evaluate((tip: any) => tip.explanation);
+    expect(help).toContain("The solid line is the power measured since midnight");
+    expect(help).toContain("The dashed line is estimated from the planned runs");
+});
+
+test("device Forecast leaves a gap where its power sensor was unavailable, not its last reading", async ({ page }) => {
+    await installFixedClock(page);
+    await page.clock.setFixedTime(new Date("2026-10-21T12:10:00Z"));
+    await mountCard(page, {}, true);
+    await seedPowerHistory(page, [["10:50", "1000"], ["11:05", "2000"], ["11:08", "unavailable"], ["12:04", "3000"]]);
+    await openDevice(page, "Boiler");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-forecast]");
+    await section.locator("button").first().click();
+    const chart = section.locator("helman-day-line-chart");
+    const at = (time: string) => Date.parse(`2026-10-21T${time}:00Z`);
+    // The 11:00 slot averages its 8 minutes known; 11:15–11:45 have none; 12:00 its 6 minutes at 3 kW.
+    await expect.poll(() => chart.evaluate((element: any) => element.series.find((series: { key: string }) => series.key === "actual").points
+        .map((point: { t: number; v: number }) => [point.t, Math.round(point.v * 1000) / 1000]))).toEqual([
+        [at("10:45"), 1], [at("11:00"), 1.375], [at("12:00"), 3],
+    ]);
+});
+
+test("device without projected energy still shows its Forecast, with nothing planned and its actual power alone", async ({ page }) => {
+    await installFixedClock(page);
+    await mountCard(page, {}, true);
+    await seedPowerHistory(page);
+    await openDevice(page, "Boiler");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-forecast]");
+    await expect(section.locator("[slot=summary]")).toHaveText("Nothing planned");
+    await section.locator("button").first().click();
+    const chart = section.locator("helman-day-line-chart");
+    await expect(chart.locator("path.line")).toHaveCount(1);
+    await expect(chart.locator("path.line.dashed")).toHaveCount(0);
+    await expect(section.locator("[data-run]")).toHaveCount(0);
+    expect(await chart.evaluate((element: any) => element.series.map((series: { key: string }) => series.key))).toEqual(["actual"]);
+    const help = await section.locator("helman-help-tip").evaluate((tip: any) => tip.explanation);
+    expect(help).toBe("The solid line is the power measured since midnight, averaged over each 15 minutes.");
+});
+
+test("device Forecast's chart opens HA's history of its power and switch", async ({ page }) => {
+    await onDashboard(page);
+    await installFixedClock(page);
+    await mountCard(page, BOILER_STATS, true);
+    await openDevice(page, "Boiler");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-forecast]");
+    await section.locator("button").first().click();
+    await expectShowMore(page, section.locator("[data-show-more]"), ["sensor.boiler_power", "switch.boiler"]);
 });
 
 // History & statistics, Technical details ------------------------------------------
@@ -346,7 +424,7 @@ const BOILER_STATS = {
     },
 };
 
-test("device History header gives the learned average during a run, collapsed; the body has the last 24 hours", async ({ page }) => {
+test("device History header gives the learned average during a run, collapsed; the body has no history graph", async ({ page }) => {
     await mountCard(page, BOILER_STATS, true);
     await openDevice(page, "Boiler");
     const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
@@ -356,11 +434,11 @@ test("device History header gives the learned average during a run, collapsed; t
     await expect(section.locator("[data-history-body]")).toHaveCount(0);
     expect(await page.evaluate(() => (window as any).__chartConfigs.length)).toBe(0);
     await section.locator("button").first().click();
-    await expect(section.locator(".history-graph-stub")).toHaveCount(1);
-    expect(await page.evaluate(() => (window as any).__chartConfigs)).toEqual([{ type: "history-graph", hours_to_show: 24, entities: ["sensor.boiler_power", "switch.boiler"] }]);
     // A node without a history renders no block, only what it learned.
     await expect(section.locator("[data-node-history], [data-node-history-not-ready]")).toHaveCount(0);
-    await expect(section.locator(".section-title")).toHaveText([/^In period/, "Last 24 hours"]);
+    await expect(section.locator(".section-title")).toHaveText([/^In period/]);
+    await expect(section.locator(".history-graph-stub, helman-day-line-chart")).toHaveCount(0);
+    expect(await page.evaluate(() => (window as any).__chartConfigs)).toEqual([]);
     await expect(section.locator("[data-node-history-summary] [data-row]")).toHaveCount(4);
     await expect(section.locator("[data-row=day] .value")).toHaveText(/^\s*4\.1 kWh \(1\.2–6\.8\)\s*typical\s*$/);
 });
@@ -394,7 +472,7 @@ test("device History header gives the running power and what an hour of it costs
     expect(await page.evaluate(() => (window as any).__nodeHistoryRequests)).toEqual(["sensor.boiler_energy"]);
 });
 
-test("device History shows period figures with obvykle lines and the 24 hours graph", async ({ page }) => {
+test("device History shows period figures with obvykle lines and no history graph", async ({ page }) => {
     await installFixedClock(page);
     await mountCard(page, BOILER_STATS, true, "kWh", TODAY_KWH, {}, "2026-10-21T12:00:00+00:00", false, boilerHistory());
     await openDevice(page, "Boiler");
@@ -434,9 +512,10 @@ test("device History shows period figures with obvykle lines and the 24 hours gr
 
     await expect(block.locator("[data-estimates-toggle]")).toHaveText("How these are estimated");
 
-    // The 24 h graph sits last in the History body.
-    await expect(section.locator(".section-title")).toHaveText([/^In period/, "Last 24 hours"]);
-    await expect(section.locator(".history-graph-stub")).toHaveCount(1);
+    // HA's 24 h graph has moved to Forecast as the actual power.
+    await expect(section.locator(".section-title")).toHaveText([/^In period/]);
+    await expect(section.locator(".history-graph-stub")).toHaveCount(0);
+    expect(await page.evaluate(() => (window as any).__chartConfigs)).toEqual([]);
 });
 
 test("period picker in device History selects shortcuts, steps ranges, opens custom inputs, and resets on reopen", async ({ page }) => {
@@ -628,18 +707,16 @@ test("a node without learned stats heads its History with the period's kWh", asy
     expect(await page.evaluate(() => (window as any).__deviceStatsRequests)).toEqual([]);
 });
 
-test("a node with no chart, no stats and no node history has no History section", async ({ page }) => {
+test("a node with no stats and no node history has no History section", async ({ page }) => {
     await mountCard(page);
-    await page.evaluate(() => { delete (window as any).loadCardHelpers; });
     await openNode(page, "house_unmeasured");
     await expect(page.locator("node-detail-device-content")).toBeVisible();
     await expect.poll(() => page.evaluate(() => (window as any).__nodeHistoryRequests)).toEqual(["house_unmeasured"]);
     await expect(page.locator("node-detail-device-content helman-detail-section[data-history]")).toHaveCount(0);
 });
 
-test("a device with no chart, no learned record and no node history has no History section", async ({ page }) => {
+test("a device with no learned record and no node history has no History section", async ({ page }) => {
     await mountCard(page);
-    await page.evaluate(() => { delete (window as any).loadCardHelpers; });
     await openDevice(page, "Boiler");
     await expect(page.locator("node-detail-device-content")).toBeVisible();
     await expect.poll(() => page.evaluate(() => (window as any).__deviceStatsRequests)).toEqual(["sensor.boiler_energy"]);
@@ -683,9 +760,8 @@ test("a period without energy keeps the picker with its note: the power alone an
     await expect(section.locator("[data-row=runs] [data-typical]")).toHaveText("typical");
 });
 
-test("a node with no chart, no stats and a period without energy keeps its History section for the picker", async ({ page }) => {
+test("a node with no stats and a period without energy keeps its History section for the picker", async ({ page }) => {
     await mountCard(page, {}, false, "kWh", TODAY_KWH, {}, "2026-10-21T12:00:00+00:00", false, emptyHistory());
-    await page.evaluate(() => { delete (window as any).loadCardHelpers; });
     await openNode(page, "house_unmeasured");
     const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
     await expect(section.locator("[slot=summary]")).toHaveText("No figures yet");
@@ -734,18 +810,6 @@ test("device History without a power figure says it has none yet, and drops the 
     await expect(section.locator("[data-row=running]")).toHaveCount(0);
 });
 
-test("device History's last 24 hours open HA's history of the same entities", async ({ page }) => {
-    await onDashboard(page);
-    await installFixedClock(page);
-    await mountCard(page, BOILER_STATS, true);
-    await openDevice(page, "Boiler");
-    const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
-    await section.locator("button").first().click();
-    await expect(section.locator(".history-graph-stub")).toHaveCount(1);
-    await expect(section.locator("[data-forecast-pointer]")).toHaveCount(0);
-    await expectShowMore(page, section.locator("[data-show-more]"), ["sensor.boiler_power", "switch.boiler"]);
-});
-
 // A meterless child's row is a device row like any other: its energy and power
 // are its share sensors, and its record and Settings are keyed by the former.
 for (const [name, energy, power] of [
@@ -771,8 +835,8 @@ for (const [name, energy, power] of [
         expect(await page.evaluate(() => (window as any).__deviceStatsRequests)).toEqual([energy]);
         const history = detail.locator("node-detail-device-content helman-detail-section[data-history]");
         await expect(history.locator("[slot=summary]")).toHaveText("2.0 kW while running");
-        await history.locator("button").first().click();
-        expect(await page.evaluate(() => (window as any).__chartConfigs[0].entities)).toContain(power);
+        await detail.locator("node-detail-device-content helman-detail-section[data-forecast] button").first().click();
+        await expect.poll(() => page.evaluate(() => (window as any).__historyRequests.map((msg: any) => msg.entity_ids))).toEqual([[power]]);
         await expect(detail.locator("ha-button[data-settings]")).toHaveCount(1);
     });
 }
@@ -861,7 +925,7 @@ test("a state change in Home Assistant updates the entity reading live while the
 test("device Technical details is not rendered for a non-admin", async ({ page }) => {
     await mountCard(page, {}, true);
     await openDevice(page, "Boiler");
-    await expect(page.locator("node-detail-device-content helman-detail-section[data-history]")).toHaveCount(1);
+    await expect(page.locator("node-detail-device-content helman-detail-section[data-forecast]")).toHaveCount(1);
     await expect(page.locator("node-detail-device-content helman-detail-section[data-technical]")).toHaveCount(0);
 });
 
@@ -874,15 +938,16 @@ async function sectionBottomBorders(page: Page): Promise<Record<string, string>>
             getComputedStyle(element).borderBottomWidth])));
 }
 
-for (const [label, schedulable, projections, admin, borders] of [
-    ["History & statistics, without a Schedule", false, {}, false, { detail: "0px", history: "1px" }],
-    ["History & statistics after the Schedule", true, {}, false, { detail: "0px", schedule: "0px", history: "1px" }],
-    ["History & statistics after the Forecast", true, { boiler: [["2026-10-21T12:00:00+00:00", 0.5]] }, false, { detail: "0px", schedule: "0px", forecast: "0px", history: "1px" }],
-    ["Technical details for an admin", true, {}, true, { detail: "0px", schedule: "0px", history: "0px", technical: "1px" }],
+// Without a learned record or a node history the boiler has no History, and its power entity keeps its Forecast.
+for (const [label, stats, schedulable, projections, admin, borders] of [
+    ["Forecast, without a Schedule", {}, false, {}, false, { detail: "0px", forecast: "1px" }],
+    ["Forecast after the Schedule", {}, true, {}, false, { detail: "0px", schedule: "0px", forecast: "1px" }],
+    ["History & statistics after the Forecast", BOILER_STATS, true, { boiler: [["2026-10-21T12:00:00+00:00", 0.5]] }, false, { detail: "0px", schedule: "0px", forecast: "0px", history: "1px" }],
+    ["Technical details for an admin", BOILER_STATS, true, {}, true, { detail: "0px", schedule: "0px", forecast: "0px", history: "0px", technical: "1px" }],
 ] as const) {
     test(`the last section, ${label}, and only it is closed off from the footer`, async ({ page }) => {
         await installFixedClock(page);
-        await mountCard(page, {}, schedulable, "kWh", TODAY_KWH, projections as Record<string, Array<[string, number]>>, "2026-10-21T12:00:00+00:00", admin);
+        await mountCard(page, stats, schedulable, "kWh", TODAY_KWH, projections as Record<string, Array<[string, number]>>, "2026-10-21T12:00:00+00:00", admin);
         await page.evaluate(() => document.body.style.setProperty("--divider-color", "#d4d4d8"));
         await openDevice(page, "Boiler");
         await expect.poll(() => sectionBottomBorders(page)).toEqual(borders);

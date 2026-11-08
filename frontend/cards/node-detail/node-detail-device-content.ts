@@ -19,18 +19,16 @@ import { defaultPeriod, type HistoryPeriod } from "./history-period-picker";
 import { todayKey } from "../shared/time/day-key";
 import { ScheduleController } from "./schedule-controller";
 import { runtimeText, runtimeFor } from "./node-detail-schedule";
-import {
-    HistoryGraphResource, historyRow, historySummary, renderHistorySection, renderTechnicalSection, sectionNotReady,
-} from "./node-detail-history";
+import { historyRow, historySummary, renderHistorySection, renderTechnicalSection, sectionNotReady } from "./node-detail-history";
 import { getSharedHelmanStore } from "../shared/data/store";
 import { DataChangedController } from "../shared/data/data-changed";
 import { SLOT_MS } from "../shared/time/slot-time";
-import { boldTemplate } from "./detail-section";
 import { helmanColorVars } from "../color-vars";
 import {
-    forecastChartContext, forecastWhen, projectedRuns, projectedSlots, remainingShare, renderForecastChart, renderForecastSection, slotKw,
+    deviceForecastSummary, forecastChartContext, forecastWhen, powerHistorySection, projectedRuns, projectedSlots, renderDevicePowerChart, renderForecastSection,
     type ForecastChartContext, type ProjectedSlot,
 } from "./node-detail-forecast";
+import type { DayLinePoint } from "../shared/day-line-chart";
 import { modeStripWindow } from "../shared/mode-strip";
 import "./detail-headline";
 import "./flow-gauge";
@@ -75,8 +73,9 @@ export class NodeDetailDeviceContent extends LitElement {
      * header needs its paid rate while the section is collapsed.
      */
     private readonly _period = new SectionResource<NodeHistoryPayload>(this, "period", nodeHistorySection(this, () => this._houseNode(), () => this._historyPeriod));
-    /** HA's history graph of the device's power and switch, once History & statistics is open. */
-    private readonly _chart = new HistoryGraphResource(this, () => this._chartEntities(), () => this._historyOpen);
+    /** The power entity's mean power per slot since midnight, for the Forecast chart, while that is open. */
+    private readonly _powerHistory = new SectionResource<DayLinePoint[]>(this, "power-history",
+        powerHistorySection(this, () => powerEntity(this.params.item), () => this._forecastOpen));
     /** The plan, for the executor's outcome in Technical details, followed once that is open. */
     private readonly _plan = new ScheduleController(this, () => []);
     private _planStarted = false;
@@ -96,15 +95,14 @@ export class NodeDetailDeviceContent extends LitElement {
         this._plan.reset();
         const item = this.params?.item;
         if (!item || !this.hass) return;
-        const sections = [this._energy, this._projection, this._stats, this._period];
+        const sections = [this._energy, this._projection, this._stats, this._period, this._powerHistory];
         if (item !== this._loadedItem) {
             this._loadedItem = item;
             this._historyPeriod = defaultPeriod(todayKey(timeZone(this.hass)));
-            for (const section of [...sections, this._chart]) section.drop();
+            for (const section of sections) section.drop();
             this._forecastOpen = this._historyOpen = this._technicalOpen = this._estimatesOpen = false;
         }
         for (const section of sections) section.sync();
-        this._chart.follow(this.hass);
         if (this._technicalOpen && !this._planStarted) {
             this._planStarted = true;
             this._plan.start(this.hass);
@@ -156,7 +154,7 @@ export class NodeDetailDeviceContent extends LitElement {
         ${renderTechnicalSection(this.hass, this.localize, this._technicalOpen, (open) => { this._technicalOpen = open; }, () => this._renderTechnical(ids))}`;
     }
 
-    /** The power sensor and the switch, which HA's history graph draws. */
+    /** The power sensor and the switch, whose history the Forecast chart's Show more opens. */
     private _chartEntities(): string[] {
         const item = this.params.item;
         const direct = deviceDirectControls(item);
@@ -173,17 +171,16 @@ export class NodeDetailDeviceContent extends LitElement {
     }
 
     /**
-     * Its picked period, with what it learned is typical, and its power and
-     * switch over the last 24 hours. None for a device with none of them,
-     * its period included once the dataset answers it has no history, its
-     * stats once they answer it has no record.
+     * Its picked period, with what it learned is typical. None for a device
+     * with neither: its period once the dataset answers it has no history,
+     * its stats once they answer it has no record.
      */
     private _renderHistory() {
         const item = this.params.item;
         const noPeriod = !this._houseNode() || this._period.payload?.unavailable !== undefined;
         // A device key without a learned record has no stats; one still read or failed says so.
         const noStats = !item.deviceKey || (this._stats.state?.status === "ready" && !this._stats.payload);
-        if (!this._chart.available() && noStats && noPeriod) return nothing;
+        if (noStats && noPeriod) return nothing;
         const summary = consumerHistorySummary(this._stats.payload, this._period, this.localize)
             ?? (item.deviceKey
                 ? historySummary(this._period.state?.status === "loading" ? this._period : this._stats, this.localize, null)
@@ -194,7 +191,6 @@ export class NodeDetailDeviceContent extends LitElement {
                 estimatesOpen: this._estimatesOpen, toggleEstimates: () => { this._estimatesOpen = !this._estimatesOpen; },
             })}
             ${noPeriod && !noStats ? sectionNotReady(this._stats, this.localize) ?? nothing : nothing}
-            ${this._chart.render(this.localize)}
         `);
     }
 
@@ -217,9 +213,9 @@ export class NodeDetailDeviceContent extends LitElement {
     }
 
     /**
-     * What the plan's runs are projected to use until tomorrow noon: the
-     * summary, a chart of the planned power and one row per run. None for a
-     * device without projected energy.
+     * Its power today and what the plan's runs are projected to use until
+     * tomorrow noon: the summary, a chart of the actual and planned power and
+     * one row per run. None for a device with neither a plan nor a power entity.
      */
     private _renderForecast(ids: readonly string[]) {
         const projection = this._projection.state;
@@ -229,37 +225,16 @@ export class NodeDetailDeviceContent extends LitElement {
         }
         const context = forecastChartContext(this.hass, this.localize);
         const slots = projectedSlots(this._projection.payload, ids, context.now, modeStripWindow(context.now, context.timeZone).end);
-        if (!slots.length) return nothing;
-        const total = slots.reduce((sum, slot) => sum + slot.kwh, 0);
-        return renderForecastSection(this.localize,
-            boldTemplate(this.localize("node_detail.shared.forecast.device_summary"), { kwh: `≈ ${formatKwh(total)} kWh` }),
+        if (!slots.length && !powerEntity(this.params.item)) return nothing;
+        return renderForecastSection(this.localize, deviceForecastSummary(slots, projection?.status === "ready", this.localize),
             this._forecastOpen, (open) => { this._forecastOpen = open; }, () => this._renderForecastBody(slots, context));
     }
 
     private _renderForecastBody(slots: ProjectedSlot[], context: ForecastChartContext) {
-        const first = Math.floor(context.now / SLOT_MS) * SLOT_MS;
-        const end = modeStripWindow(context.now, context.timeZone).end;
-        const bySlot = new Map(slots.map((slot) => [slot.startMs, slot.kwh]));
-        const points = [];
-        // Off between the runs is planned too: zero, not a gap.
-        // The slots hold only what is still ahead of the slot in progress.
-        const power = (startMs: number, kwh: number) => {
-            const share = remainingShare(startMs, context.now);
-            return share > 0 ? slotKw(kwh / share) : 0;
-        };
-        for (let t = first; t < end; t += SLOT_MS) points.push({ t, v: power(t, bySlot.get(t) ?? 0) });
-        const kw = Math.max(...slots.map((slot) => power(slot.startMs, slot.kwh)));
-        const runs = projectedRuns(slots);
         return html`
-            ${renderForecastChart(context, {
-                title: this.localize("node_detail.shared.forecast.device_chart"),
-                help: fillTemplate(this.localize("node_detail.shared.forecast.device_help"), { kw: formatPower(kw * 1000).display }),
-                series: [{ key: "planned", label: this.localize("node_detail.shared.forecast.planned"), color: "var(--helman-house)", points, dashed: true }],
-                step: true,
-                formatValue: (value) => formatPower(value * 1000).display,
-            })}
+            ${renderDevicePowerChart(context, powerEntity(this.params.item) ? this._powerHistory.payload ?? [] : null, slots, this._chartEntities())}
             <div class="rows">
-                ${runs.map((run) => html`<div class="row" data-run><span class="label">${forecastWhen(run.startMs, context, run.endMs)}</span>
+                ${projectedRuns(slots).map((run) => html`<div class="row" data-run><span class="label">${forecastWhen(run.startMs, context, run.endMs)}</span>
                     <span class="value">≈ ${formatKwh(run.kwh)} kWh</span></div>`)}
             </div>
         `;

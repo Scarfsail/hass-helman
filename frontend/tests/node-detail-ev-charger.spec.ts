@@ -289,10 +289,15 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 },
                 "helman/get_node_history": nodeHistory,
                 "recorder/statistic_during_period": { change: 1 },
-                // The car's SoC this morning, as HA's recorder has it.
-                "history/history_during_period": { "sensor.kona_soc": [
-                    { s: "45", lu: Date.parse("2026-10-21T00:00:00Z") / 1000 }, { s: "50", lu: Date.parse("2026-10-21T09:10:00Z") / 1000 },
-                ] },
+                // The car's SoC and the charger's power this morning, as HA's recorder has them.
+                "history/history_during_period": {
+                    "sensor.kona_soc": [
+                        { s: "45", lu: Date.parse("2026-10-21T00:00:00Z") / 1000 }, { s: "50", lu: Date.parse("2026-10-21T09:10:00Z") / 1000 },
+                    ],
+                    "sensor.ev_power": [
+                        { s: "0", lu: Date.parse("2026-10-21T00:00:00Z") / 1000 }, { s: "6400", lu: Date.parse("2026-10-21T11:20:00Z") / 1000 },
+                    ],
+                },
                 "helman/get_node_detail": async (msg: {
                     type: string;
                     node?: string;
@@ -448,10 +453,44 @@ test("charger Forecast header names the shortfall when the plan does not reach t
     await section.locator("button").first().click();
     await expect(section.locator("[data-row=end-of-plan] .value")).toHaveText("70 %, 6.4 kWh short");
     await expect(section.locator("[data-row=candidate] .value")).toHaveText("Likely, 22:00–02:00");
-    const chart = section.locator("helman-day-line-chart");
+    // The charger's power first, then the car's charge.
+    const charts = section.locator("helman-day-line-chart");
+    await expect(charts).toHaveCount(2);
+    await expect(section.locator("[data-chart-title]")).toHaveText([/^Power · today → tomorrow noon/, /^Car charge · planned/]);
+    await expect(charts.nth(1).locator("path.line")).toHaveCount(2);
+    await expect(charts.nth(1).locator("path.line.dashed")).toHaveCount(1);
+    await expect(charts.nth(1).locator(".reference-label")).toHaveText("limit 80 %");
+});
+
+test("charger Forecast draws its actual power since midnight against its planned charging", async ({ page }) => {
+    await mount(page);
+    await openDevice(page, "Garage EV");
+    const section = forecastSection(page);
+    await section.locator("button").first().click();
+    const chart = section.locator("helman-day-line-chart").first();
     await expect(chart.locator("path.line")).toHaveCount(2);
     await expect(chart.locator("path.line.dashed")).toHaveCount(1);
-    await expect(chart.locator(".reference-label")).toHaveText("limit 80 %");
+    const series = (key: string): Promise<Array<[string, number]>> => chart.evaluate((element: any, key) => element.series.find((series: { key: string }) => series.key === key).points
+        .map((point: { t: number; v: number }) => [new Date(point.t).toISOString().slice(11, 16), Math.round(point.v * 1000) / 1000]), key);
+    // 6.4 kW from 11:20: a third of the 11:15 slot, the whole 11:30 and 11:45 slots; the slot in progress has not started.
+    await expect.poll(async () => (await series("actual")).slice(-3)).toEqual([["11:15", 4.267], ["11:30", 6.4], ["11:45", 6.4]]);
+    expect((await series("actual"))[0]).toEqual(["00:00", 0]);
+    // 1.6 kWh a slot is 6.4 kW until 14:00, then off.
+    expect((await series("planned")).slice(0, 1)).toEqual([["12:00", 6.4]]);
+    expect((await series("planned")).find(([time]) => time === "14:00")).toEqual(["14:00", 0]);
+});
+
+test("charger Forecast without a car estimate shows the power chart alone, with a consumer's summary", async ({ page }) => {
+    // No charge limit: no estimate for the Kona, but the charger's plan stands,
+    // 8 × 1.6 kWh to 14:00 and the candidate's 16 × 2 kWh tonight, as a device's plan counts them.
+    await mount(page, { limit: null });
+    await openDevice(page, "Garage EV");
+    const section = forecastSection(page);
+    await expect(section.locator("[slot=summary]")).toHaveText("≈ 45 kWh more by noon tomorrow");
+    await section.locator("button").first().click();
+    await expect(section.locator("helman-day-line-chart")).toHaveCount(1);
+    await expect(section.locator("[data-chart-title]")).toHaveText([/^Power · today → tomorrow noon/]);
+    await expect(section.locator("[data-row=end-of-plan]")).toHaveCount(0);
 });
 
 test("charger Forecast counts only what is left of the slot in progress", async ({ page }) => {
@@ -473,22 +512,29 @@ test("charger Forecast header confirms the limit is reached, and the candidate s
     await expect(section.locator("[data-row=candidate] .value")).toHaveText("No, stays a candidate");
 });
 
-test("charger shows no Forecast without a projection for its car", async ({ page }) => {
+test("charger without a projection for its car still shows its power in Forecast, with nothing planned", async ({ page }) => {
     await mount(page, { projectionEmpty: true });
     await openDevice(page, "Garage EV");
-    await expect(content(page).locator("[data-overview]")).toBeVisible();
-    await page.waitForTimeout(300);
-    await expect(forecastSection(page)).toHaveCount(0);
+    const section = forecastSection(page);
+    await expect(section.locator("[slot=summary]")).toHaveText("Nothing planned");
+    await section.locator("button").first().click();
+    const chart = section.locator("helman-day-line-chart");
+    await expect(chart).toHaveCount(1);
+    await expect(chart.locator("path.line")).toHaveCount(1);
+    await expect(chart.locator("path.line.dashed")).toHaveCount(0);
 });
 
-test("charger Forecast chart opens HA's history of the car's SoC", async ({ page }) => {
-    await onDashboard(page);
-    await mount(page);
-    await openDevice(page, "Garage EV");
-    const section = forecastSection(page);
-    await section.locator("button").first().click();
-    await expectShowMore(page, section.locator("[data-show-more]"), ["sensor.kona_soc"]);
-});
+for (const [index, chart, entity] of [[0, "power", "sensor.ev_power"], [1, "SoC", "sensor.kona_soc"]] as const) {
+    test(`charger Forecast's ${chart} chart opens HA's history of ${entity}`, async ({ page }) => {
+        await onDashboard(page);
+        await mount(page);
+        await openDevice(page, "Garage EV");
+        const section = forecastSection(page);
+        await section.locator("button").first().click();
+        await expect(section.locator("[data-show-more]")).toHaveCount(2);
+        await expectShowMore(page, section.locator("[data-show-more]").nth(index), [entity]);
+    });
+}
 
 // History & statistics, Technical details -------------------------------------
 
@@ -500,7 +546,7 @@ test("ev-charger History starts with a pointer that opens the Forecast chart", a
     const pointer = history.locator("[data-history-body] > :first-child");
     await expect(pointer).toHaveAttribute("data-forecast-pointer", "");
     await pointer.click();
-    await expect(forecastSection(page).locator("helman-day-line-chart[data-forecast-chart]")).toBeInViewport();
+    await expect(forecastSection(page).locator("helman-day-line-chart[data-forecast-chart]").first()).toBeInViewport();
 });
 
 test("ev-charger History has no Forecast pointer without a projection for its car", async ({ page }) => {
@@ -511,15 +557,13 @@ test("ev-charger History has no Forecast pointer without a projection for its ca
     await expect(content(page).locator("[data-forecast-pointer]")).toHaveCount(0);
 });
 
-test("ev-charger History header without learned stats gives the period's kWh, collapsed; the body draws the last 24 hours and has no by-source block", async ({ page }) => {
+test("ev-charger History header without learned stats gives the period's kWh, collapsed; the body has no history graph and no by-source block", async ({ page }) => {
     await mount(page);
     await page.evaluate(() => {
         (window as any).__chartConfigs = [];
         (window as any).loadCardHelpers = async () => ({ createCardElement: (config: unknown) => {
             (window as any).__chartConfigs.push(config);
-            const element = document.createElement("div");
-            element.className = "history-graph-stub";
-            return element;
+            return document.createElement("div");
         } });
     });
     await openDevice(page, "Garage EV");
@@ -532,31 +576,8 @@ test("ev-charger History header without learned stats gives the period's kWh, co
     await expect(section.locator("[data-share-bar]")).toHaveCount(0);
     await expect(section.locator("[data-sources]")).toHaveCount(0);
     await expect(section.locator("[data-row=from-solar]")).toHaveCount(0);
-    await expect(section.locator(".history-graph-stub")).toHaveCount(1);
-    expect(await page.evaluate(() => (window as any).__chartConfigs)).toEqual([{ type: "history-graph", hours_to_show: 24, entities: ["sensor.ev_power"] }]);
-});
-
-test("ev-charger History keeps its last-24-hours graph across a data change", async ({ page }) => {
-    await mount(page);
-    await page.evaluate(() => {
-        (window as any).__chartConfigs = [];
-        (window as any).loadCardHelpers = async () => ({ createCardElement: (config: unknown) => {
-            (window as any).__chartConfigs.push(config);
-            const element = document.createElement("div");
-            element.className = "history-graph-stub";
-            return element;
-        } });
-    });
-    await openDevice(page, "Garage EV");
-    const section = content(page).locator("helman-detail-section[data-history]");
-    await section.locator("button").first().click();
-    await expect(section.locator(".history-graph-stub")).toHaveCount(1);
-    await section.locator(".history-graph-stub").evaluate((element) => { (element as any).__marked = true; });
-    await page.evaluate(() => window.__fireDataChanged("schedule"));
-    await page.waitForTimeout(300);
-    await expect(section.locator(".history-graph-stub")).toHaveCount(1);
-    expect(await section.locator(".history-graph-stub").evaluate((element) => (element as any).__marked === true)).toBe(true);
-    expect(await page.evaluate(() => (window as any).__chartConfigs.length)).toBe(1);
+    await expect(section.locator("helman-day-line-chart")).toHaveCount(0);
+    expect(await page.evaluate(() => (window as any).__chartConfigs)).toEqual([]);
 });
 
 test("ev-charger Technical details shows execution, the window, the projection, the link and the phase comparison to an admin", async ({ page }) => {

@@ -42,8 +42,10 @@ import { defaultPeriod, type HistoryPeriod } from "./history-period-picker";
 import "./switch-tile";
 import "./who-decides";
 import { boldTemplate } from "./detail-section";
-import { forecastWhen, holdAtSlots, renderForecastChart, stillAhead } from "./node-detail-forecast";
-import { HistoryGraphResource, subTitle } from "./node-detail-history";
+import {
+    deviceForecastSummary, forecastWhen, holdAtSlots, powerHistorySection, projectedSlots, readEntityReadings, renderDevicePowerChart, renderForecastChart, stillAhead,
+} from "./node-detail-forecast";
+import { subTitle } from "./node-detail-history";
 import type { DayLinePoint } from "../shared/day-line-chart";
 
 /** Two readings further apart than this were not taken together. */
@@ -190,8 +192,8 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
     @state() private _historyPeriod!: HistoryPeriod;
     /** Whether the estimate's evidence is disclosed. */
     @state() private _estimatesOpen = false;
-    /** HA's history graph of the charger's power over the last 24 hours, once History & statistics is open. */
-    private readonly _chart = new HistoryGraphResource(this, () => [this._powerEntity()].filter((id): id is string => id !== null), () => this._historyOpen);
+    /** The charger's mean power per slot since midnight, for the Forecast chart, while that is open. */
+    private readonly _powerHistory = this._section<DayLinePoint[]>("power-history", powerHistorySection(this, () => this._powerEntity(), () => this._forecastOpen));
     /** The appliance answer the cars' entities were last announced for. */
     private _announcedAppliance: unknown = null;
     /** The run mode today's charging was read under; a new one re-reads it. */
@@ -218,20 +220,15 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
             this._historyPeriod = defaultPeriod(todayKey(this._timeZone));
             this._forecastOpen = this._historyOpen = this._technicalOpen = this._estimatesOpen = false;
             // The sections shown are read again in the update.
-            for (const section of [...this._sections, this._chart]) section.drop();
+            for (const section of this._sections) section.drop();
             void this._loadOverview(true);
         }
         super.willUpdate(changed);
-        if (this._started) this._chart.follow(this.hass);
     }
 
     protected _start(): void {
         this._historyPeriod = defaultPeriod(todayKey(this._timeZone));
         super._start();
-    }
-
-    protected _stop(): void {
-        this._chart.cancel();
     }
 
     protected updated(changed: Map<string, unknown>): void {
@@ -306,9 +303,11 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
     // Forecast ----------------------------------------------------------------
 
     /**
-     * Whether the plan brings the selected car to its limit: the completion
-     * the plan answer estimates, its SoC path after the recorded SoC today,
-     * and whether a candidate window would be needed. None without an estimate.
+     * The charger's power today against the plan, and whether the plan brings
+     * the selected car to its limit: the completion the plan answer estimates,
+     * its SoC path after the recorded SoC today, and whether a candidate window
+     * would be needed. Without an estimate, a consumer's summary and the power
+     * alone; none without a power entity either.
      */
     protected _renderForecast() {
         const projection = this._projection.state;
@@ -317,16 +316,23 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
                 <button class="link-button" @click=${() => this._projection.load()}>${this._t("retry")}</button>`);
         }
         const estimate = this._estimate();
-        if (!estimate) return nothing;
+        const power = this._powerEntity();
+        if (!estimate && !power) return nothing;
+        const context = this._chartContext;
+        const slots = projectedSlots(this._projection.payload, [this.deviceId], context.now, modeStripWindow(context.now, context.timeZone).end);
+        const body = () => html`
+            ${power ? renderDevicePowerChart(context, this._powerHistory.payload ?? [], slots, [power]) : nothing}
+            ${estimate ? this._renderForecastBody(estimate.car, estimate.completion) : nothing}
+        `;
+        if (!estimate) return this._forecastSection(deviceForecastSummary(slots, projection?.status === "ready", this.localize), body);
         const { car, completion } = estimate;
         const limit = this._percent(car.limit!);
         const reached = completion.reachMs !== null;
         const forecast = (key: string) => this.localize(`node_detail.shared.forecast.${key}`);
-        const context = this._chartContext;
         const summary = reached
             ? html`${boldTemplate(forecast("ev_reaches"), { limit, time: forecastWhen(completion.reachMs!, context) })} <span class="ok">✓</span>`
             : boldTemplate(forecast("ev_short"), { kwh: `${formatKwh(completion.shortfallKwh)} kWh`, limit, time: completion.endMs === null ? "?" : forecastWhen(completion.endMs, context) });
-        return this._forecastSection(summary, () => this._renderForecastBody(car, completion));
+        return this._forecastSection(summary, body);
     }
 
     /** The selected car and the plan's completion estimate for it, which the Forecast chart draws; `null` without one. */
@@ -380,16 +386,10 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
     private async _readSocHistory(): Promise<DayLinePoint[]> {
         const selection = this._selection();
         if (selection.kind !== "selected") return [];
-        const entityId = selection.car.vehicle.telemetry.socEntityId;
         const now = Date.now();
         const { start } = modeStripWindow(now, this._timeZone);
-        const result = await this.hass.callWS<Record<string, Array<{ s: string; lu: number }>>>({
-            type: "history/history_during_period", start_time: new Date(start).toISOString(), end_time: new Date(now).toISOString(),
-            entity_ids: [entityId], minimal_response: true, no_attributes: true, significant_changes_only: false,
-        });
-        const readings = (result?.[entityId] ?? [])
-            .map((state) => ({ t: state.lu * 1000, v: Number(state.s) }))
-            .filter((reading) => Number.isFinite(reading.v) && reading.v >= 0 && reading.v <= 100);
+        const readings = (await readEntityReadings(this.hass, selection.car.vehicle.telemetry.socEntityId, start, now))
+            .filter((reading) => reading.v >= 0 && reading.v <= 100);
         return holdAtSlots(readings, start, now);
     }
 
@@ -413,9 +413,9 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
     // History & statistics -----------------------------------------------------
 
     /**
-     * Its picked period, with what it learned is typical, and its power over
-     * the last 24 hours. The header is every consumer's running power and its
-     * cost per hour; without a learned power, the period's kWh.
+     * Its picked period, with what it learned is typical. The header is every
+     * consumer's running power and its cost per hour; without a learned power,
+     * the period's kWh.
      */
     protected _renderHistory(_overview: EvChargerDetailPayload) {
         const summary = consumerHistorySummary(this._stats.payload, this._period, this.localize)
@@ -427,7 +427,6 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
                 estimatesOpen: this._estimatesOpen, toggleEstimates: () => { this._estimatesOpen = !this._estimatesOpen; },
                 note: this._h("period_how_ev_note"),
             })}
-            ${this._chart.render(this.localize)}
         `);
     }
 

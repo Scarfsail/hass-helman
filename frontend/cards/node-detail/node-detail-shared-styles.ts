@@ -134,12 +134,6 @@ export const nodeDetailSharedStyles = css`
         line-height: 1.45;
         color: var(--secondary-text-color);
     }
-    /* HA's history graph sits on the section, not in a card of its own. */
-    hui-history-graph-card {
-        --ha-card-background: transparent;
-        --ha-card-border-width: 0;
-        --ha-card-box-shadow: none;
-    }
     .share-bar {
         display: flex;
         gap: 2px;
