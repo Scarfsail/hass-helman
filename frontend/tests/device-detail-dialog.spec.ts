@@ -460,6 +460,14 @@ test("device History header gives the learned average during a run, collapsed; t
     await expect(section.locator("[data-row=day] .value")).toHaveText(/^\s*4\.1 kWh \(1\.2–6\.8\)\s*typical\s*$/);
 });
 
+/** `count` buckets of the boiler's mix, each `kwh`, starting at the ones `starts` names. */
+function boilerSeries(starts: string[], kwh: number) {
+    return starts.map((start) => ({ start, kwh, solar: kwh * 0.61, battery: kwh * 0.22, grid: kwh * 0.17, unknown: 0 }));
+}
+
+/** The 30 local days from 22 Sep 2026. */
+const BOILER_DAYS = Array.from({ length: 30 }, (_, index) => new Date(Date.UTC(2026, 8, 22 + index)).toISOString().slice(0, 10));
+
 /** The boiler's last 30 days, as `helman/get_node_history` answers them. */
 function boilerHistory(overrides: Record<string, unknown> = {}) {
     const money = (amount: number, pricedKwh: number, unpricedKwh = 0) => ({ amount, pricedKwh, unpricedKwh });
@@ -467,6 +475,7 @@ function boilerHistory(overrides: Record<string, unknown> = {}) {
         id: "sensor.boiler_energy", label: "Boiler", icon: "mdi:water-boiler", estimated: false, unmeasured: false, kwh: 42.6,
         coverage: 1, firstHour: "2026-09-22T00:00:00+00:00", startDate: "2026-09-22", endDate: "2026-10-21", priceUnit: "CZK/kWh", complete: false,
         navigationRange: { minDate: "2026-08-01", maxDate: "2026-10-21" },
+        bucket: "day", series: boilerSeries(BOILER_DAYS, 1.42),
         totals: {
             kwh: 42.6, sources: { solar: 26, battery: 9.4, grid: 7.2, unknown: 0 }, knownKwh: 42.6,
             paid: money(52, 42.6), forgone: money(46, 42.6), gridPaid: money(31, 7.2), batteryPaid: money(21, 9.4),
@@ -533,6 +542,104 @@ test("device History shows period figures with obvykle lines and no history grap
     await expect(section.locator(".section-title")).toHaveText([/^In period/]);
     await expect(section.locator(".history-graph-stub")).toHaveCount(0);
     expect(await page.evaluate(() => (window as any).__chartConfigs)).toEqual([]);
+});
+
+test("device History charts the period's kWh by day between the gauges and the rows, a bar's popup naming its day", async ({ page }) => {
+    await installFixedClock(page);
+    await mountCard(page, BOILER_STATS, true, "kWh", TODAY_KWH, {}, "2026-10-21T12:00:00+00:00", false, boilerHistory());
+    await openDevice(page, "Boiler");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
+    await section.locator("button").first().click();
+
+    const chart = section.locator("helman-node-history-chart");
+    await expect(chart.locator("[data-period-chart-caption]")).toHaveText("kWh by day");
+    await expect(chart.locator("[data-bar]")).toHaveCount(30);
+    await expect(chart.locator("[data-period-chart-axis] span")).toHaveText(["9/22", "10/6", "10/21"]);
+    // Between the gauges and the rows.
+    const order = await page.evaluate(() => {
+        const block = (window as any).__deepAll(document, "[data-node-history]")[0] as HTMLElement;
+        return Array.from(block.children).map((child) => child.matches("[data-gauges]") ? "gauges" : child.matches("[data-period-chart]") ? "chart"
+            : child.matches("[data-rows-title]") ? "rows" : null).filter(Boolean);
+    });
+    expect(order).toEqual(["gauges", "chart", "rows"]);
+    // Every source the bars stack, solar at the bottom.
+    await expect(chart.locator("helman-power-history-bars path")).toHaveCount(3);
+
+    // Scrolled there first: a scroll closes the popup.
+    await chart.locator("[data-bar='2026-10-06']").scrollIntoViewIfNeeded();
+    await chart.locator("[data-bar='2026-10-06']").hover();
+    const popup = chart.locator(".hover-tooltip");
+    await expect(popup.locator(".hover-tooltip-title")).toHaveText("Tue, 10/6");
+    await expect(popup).toContainText("Total");
+    await expect(popup).toContainText("1.4 kWh");
+    await expect(popup).toContainText("Solar");
+});
+
+test("device History charts a single day by hour, with hour labels", async ({ page }) => {
+    await installFixedClock(page);
+    await mountCard(page, BOILER_STATS, true, "kWh", TODAY_KWH, {}, "2026-10-21T12:00:00+00:00", false, boilerHistory());
+    const hours = Array.from({ length: 24 }, (_, hour) => `2026-10-20T${String(hour).padStart(2, "0")}:00:00+00:00`);
+    const yesterday = boilerHistory({
+        startDate: "2026-10-20", endDate: "2026-10-20", kwh: 2.4, coveredDays: 1, activeDays: 1, perWeek: 7, kwhPerActiveDay: 2.4,
+        bucket: "hour", series: [...boilerSeries(hours.slice(0, 8), 0), ...boilerSeries(hours.slice(8, 9), 2.4), ...boilerSeries(hours.slice(9), 0)],
+    });
+    // A single day is answered by the hour.
+    await page.evaluate((yesterday) => {
+        const hass = (window as any).__hass;
+        const callWS = hass.callWS;
+        hass.callWS = (msg: any) => msg.type === "helman/get_node_history" && msg.start_date === msg.end_date ? Promise.resolve(yesterday) : callWS(msg);
+    }, yesterday);
+    await openDevice(page, "Boiler");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
+    await section.locator("button").first().click();
+    await section.locator("helman-history-period-picker button[data-preset=yesterday]").click();
+
+    const chart = section.locator("helman-node-history-chart");
+    await expect(chart.locator("[data-period-chart-caption]")).toHaveText("kWh by hour");
+    await expect(chart.locator("[data-bar]")).toHaveCount(24);
+    await expect(chart.locator("[data-period-chart-axis] span")).toHaveText(["00:00", "11:00", "23:00"]);
+
+    // Scrolled there first: a scroll closes the popup.
+    await chart.locator("[data-bar='2026-10-20T08:00:00+00:00']").scrollIntoViewIfNeeded();
+    await chart.locator("[data-bar='2026-10-20T08:00:00+00:00']").hover();
+    const popup = chart.locator(".hover-tooltip");
+    await expect(popup.locator(".hover-tooltip-title")).toHaveText("08:00 – 09:00");
+    await expect(popup).toContainText("2.4 kWh");
+});
+
+test("device History names a fall-back day's two 02:00 hours by their real start and end", async ({ page }) => {
+    await installFixedClock(page);
+    await mountCard(page, BOILER_STATS, true, "kWh", TODAY_KWH, {}, "2026-10-21T12:00:00+00:00", false, boilerHistory());
+    // 25 Oct 2026 in Prague: 02:00 CEST, then 02:00 CET again an hour later.
+    const hours = [
+        ...[0, 1, 2].map((hour) => `2026-10-25T0${hour}:00:00+02:00`),
+        ...Array.from({ length: 22 }, (_, index) => `2026-10-25T${String(index + 2).padStart(2, "0")}:00:00+01:00`),
+    ];
+    const fallBack = boilerHistory({
+        startDate: "2026-10-25", endDate: "2026-10-25", kwh: 2.5, coveredDays: 1, activeDays: 1, perWeek: 7, kwhPerActiveDay: 2.5,
+        bucket: "hour", series: boilerSeries(hours, 0.1),
+    });
+    await page.evaluate((fallBack) => {
+        const hass = (window as any).__hass;
+        hass.config.time_zone = "Europe/Prague";
+        const callWS = hass.callWS;
+        hass.callWS = (msg: any) => msg.type === "helman/get_node_history" && msg.start_date === msg.end_date ? Promise.resolve(fallBack) : callWS(msg);
+    }, fallBack);
+    await openDevice(page, "Boiler");
+    const section = page.locator("node-detail-device-content helman-detail-section[data-history]");
+    await section.locator("button").first().click();
+    await section.locator("helman-history-period-picker button[data-preset=yesterday]").click();
+
+    const chart = section.locator("helman-node-history-chart");
+    await expect(chart.locator("[data-bar]")).toHaveCount(25);
+    const popupTitle = async (start: string) => {
+        await chart.locator(`[data-bar='${start}']`).scrollIntoViewIfNeeded();
+        await chart.locator(`[data-bar='${start}']`).hover();
+        return chart.locator(".hover-tooltip .hover-tooltip-title");
+    };
+    await expect(await popupTitle("2026-10-25T02:00:00+02:00")).toHaveText("02:00 – 02:00");
+    await expect(await popupTitle("2026-10-25T02:00:00+01:00")).toHaveText("02:00 – 03:00");
+    await expect(await popupTitle("2026-10-25T23:00:00+01:00")).toHaveText("23:00 – 24:00");
 });
 
 test("period picker in device History selects shortcuts, steps ranges, opens custom inputs, and resets on reopen", async ({ page }) => {

@@ -102,6 +102,9 @@ export function renderShareBar(localize: LocalizeFunction, parts: ReadonlyArray<
 }
 
 /** "1.2 kWh". */
+/** Below this an amount of energy is nothing. */
+export const EPSILON_KWH = 1e-6;
+
 export function kwhText(kwh: number): string {
     return `${formatKwh(Math.abs(kwh))} kWh`;
 }

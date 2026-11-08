@@ -283,6 +283,8 @@
         "period_gauge_virtual": "virtuálně {money}",
         "period_gauge_virtual_hint": "Kdyby se slunce prodalo: zaplacené plus příjem z výkupu, o který jste přišli",
         "period_money_solar_hint": "Neprodané slunce: příjem z výkupu, o který jste přišli",
+        "period_chart_hour": "kWh po hodinách",
+        "period_chart_day": "kWh po dnech",
         "period_rows_title": "V období",
         "period_stats_aside": "obvykle · naučeno za {days} dní",
         "period_stats_aside_undated": "obvykle · naučeno",

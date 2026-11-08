@@ -9,7 +9,7 @@ from __future__ import annotations
 import dataclasses
 import importlib
 import unittest
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 node_history = importlib.import_module("custom_components.helman.device_reports.node_history")
 from tests._fakes import (  # noqa: E402
@@ -20,6 +20,7 @@ from tests._fakes import (  # noqa: E402
     KITCHEN_OWN_KW,
 )
 from tests.test_device_report_dataset import (  # noqa: E402
+    PRAGUE,
     START,
     WASHER,
     DatasetTestCase,
@@ -119,6 +120,72 @@ class TestDays(NodeHistoryTestCase):
         self.assertEqual(payload["kwhPerActiveDay"], 4.0)
         self.assertEqual(payload["startDate"], "2026-09-01")
         self.assertEqual(payload["endDate"], "2026-09-02")
+
+
+class TestSeries(NodeHistoryTestCase):
+    def assert_sums_to_totals(self, payload):
+        totals = payload["totals"]
+        self.assertAlmostEqual(sum(point["kwh"] for point in payload["series"]), totals["kwh"], places=2)
+        for source in ("solar", "battery", "grid", "unknown"):
+            self.assertAlmostEqual(
+                sum(point[source] for point in payload["series"]), totals["sources"][source], places=2
+            )
+
+    def test_a_one_day_period_has_an_hour_per_bucket(self):
+        # Hour 8 half solar, hour 9 all grid, hour 10 no mix, hour 11 standby under the floor.
+        dataset = self.build(
+            tree(metered(EV)),
+            history(
+                {index: {"H": 1, "I": 1} for index in range(24)}
+                | {8: {"H": 3, "I": 1.5, "S": 1.5}, 9: {"H": 4, "I": 4}, 10: {"H": 1, "I": None}},
+                devices={EV: {8: 3.0, 9: 4.0, 10: 1.0, 11: 0.05}},
+            ),
+        )
+        payload = self.payload(dataset, EV, floor=0.1)
+        series = payload["series"]
+        self.assertEqual(payload["bucket"], "hour")
+        self.assertEqual(len(series), 24)
+        self.assertEqual(series[0]["start"], "2026-09-01T00:00:00+02:00")
+        self.assertEqual(series[23]["start"], "2026-09-01T23:00:00+02:00")
+        self.assertEqual(
+            series[8], {"start": "2026-09-01T08:00:00+02:00", "kwh": 3.0, "solar": 1.5, "battery": 0.0, "grid": 1.5, "unknown": 0.0}
+        )
+        self.assertEqual(series[9]["grid"], 4.0)
+        self.assertEqual(series[10]["unknown"], 1.0)
+        self.assertEqual(series[11]["kwh"], 0.0)
+        self.assertEqual(series[0], {**series[11], "start": "2026-09-01T00:00:00+02:00"})
+        self.assert_sums_to_totals(payload)
+
+    def test_a_dst_day_has_25_hours(self):
+        # 25 Oct 2026: Prague falls back from CEST to CET.
+        day = datetime(2026, 10, 25, tzinfo=PRAGUE)
+        span = dataclasses.replace(history({}), local_start=day, local_end=day + timedelta(days=1))
+        payload = self.payload(self.build(tree(metered(WASHER)), span, now=day + timedelta(days=2)), WASHER)
+        self.assertEqual(payload["bucket"], "hour")
+        self.assertEqual(len(payload["series"]), 25)
+        self.assertEqual(payload["series"][2]["start"], "2026-10-25T02:00:00+02:00")
+        self.assertEqual(payload["series"][3]["start"], "2026-10-25T02:00:00+01:00")
+
+    def test_a_30_day_period_has_a_local_day_per_bucket(self):
+        # The washer runs on days 0 and 3 (hour 1 local is still 31 Aug in UTC), idles 0.04 kWh on day 5.
+        washer = {1: 2.0, 3 * 24 + 10: 3.0, 5 * 24 + 10: 0.04}
+        flows = {index: {"H": 5, "I": 5} for index in range(30 * 24)} | {1: {"H": 5, "I": 3, "S": 2}}
+        dataset = self.build(
+            tree(metered(WASHER)),
+            days(history(flows, devices={WASHER: washer}), 30),
+            now=START + timedelta(days=31),
+        )
+        payload = self.payload(dataset, WASHER)
+        series = payload["series"]
+        self.assertEqual(payload["bucket"], "day")
+        self.assertEqual(len(series), 30)
+        self.assertEqual([point["start"] for point in series[:2]], ["2026-09-01", "2026-09-02"])
+        self.assertEqual(series[-1]["start"], "2026-09-30")
+        self.assertEqual(series[0], {"start": "2026-09-01", "kwh": 2.0, "solar": 0.8, "battery": 0.0, "grid": 1.2, "unknown": 0.0})
+        self.assertEqual(series[3]["grid"], 3.0)
+        self.assertEqual(series[5]["kwh"], 0.04)
+        self.assertEqual(series[1], {"start": "2026-09-02", "kwh": 0.0, "solar": 0.0, "battery": 0.0, "grid": 0.0, "unknown": 0.0})
+        self.assert_sums_to_totals(payload)
 
 
 class TestMoney(NodeHistoryTestCase):
