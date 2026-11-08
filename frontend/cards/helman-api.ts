@@ -1322,6 +1322,17 @@ export interface EnergyFiguresDTO {
  */
 export type NodeHistoryPayload = NodeHistoryDTO | { unavailable: string };
 
+/** One bucket of a node history's series: its kWh, by source. */
+export interface NodeHistorySeriesPointDTO {
+    /** The bucket's local start: an ISO date-time for an hour, an ISO date for a day. */
+    start: string;
+    kwh: number;
+    solar: number;
+    battery: number;
+    grid: number;
+    unknown: number;
+}
+
 export interface NodeHistoryDTO {
     unavailable?: undefined;
     id: string;
@@ -1339,6 +1350,10 @@ export interface NodeHistoryDTO {
     priceUnit: string | null;
     complete: boolean;
     navigationRange: { minDate: string; maxDate: string };
+    /** An hour per bucket for a one-day period, a local day otherwise. */
+    bucket: "hour" | "day";
+    /** Every bucket of the period in time order, zero where nothing ran; it sums to `totals`. */
+    series: NodeHistorySeriesPointDTO[];
     totals: EnergyFiguresDTO;
     /** Paid over priced kWh, the solar share free. */
     paidPerKwh: number | null;

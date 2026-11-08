@@ -10,10 +10,11 @@ import { addDays, todayKey } from "../shared/time/day-key";
 import { boldTemplate } from "./detail-section";
 import { SOURCE_NODES, gaugePillStyles, nodeIcon } from "./flow-gauge";
 import { formatPeriod, type HistoryPeriod } from "./history-period-picker";
-import { historyRow, historySummary, kwhText, sectionNotReady } from "./node-detail-history";
+import { EPSILON_KWH, historyRow, historySummary, kwhText, sectionNotReady } from "./node-detail-history";
 import type { DeviceDetailParams } from "./node-detail-types";
 import { TODAY_REFRESH_MS, hassLocale, timeZone, type SectionOptions, type SectionResource } from "./section-resource";
 import "./help-tip";
+import "./node-history-chart";
 
 /**
  * Every consumer's History & statistics over the period picked in it: one
@@ -23,8 +24,6 @@ import "./help-tip";
  * block for every node, the EV charger included.
  */
 
-/** Below this an amount of energy is nothing. */
-const EPSILON_KWH = 1e-6;
 /** Under this share of the period covered, a note names the share. */
 const FULL_COVERAGE = 0.99;
 
@@ -161,7 +160,8 @@ export function consumerHistoryFallback(history: SectionResource<NodeHistoryPayl
 
 /**
  * The History body: the period picker, then the period's two gauges drawn
- * as the live one's pills, in its order (solar, battery, grid), its rows
+ * as the live one's pills, in its order (solar, battery, grid), its kWh
+ * per hour or day as source-stacked bars, its rows
  * beside what was learned typical, and what the figures rest on. While the
  * period loads or after it failed, the picker and its note, never another
  * period's figures; for a period without energy, the picker and "No figures
@@ -211,6 +211,7 @@ export function renderNodeHistory(
                 ${renderEnergyGauge(period, localize)}
                 ${renderMoneyGauge(period, localize)}
             </div>
+            <helman-node-history-chart data-period-chart .history=${period} .localize=${localize} .locale=${hassLocale(options.hass)} .timeZone=${timeZone(options.hass)}></helman-node-history-chart>
             ${renderRows(period, stats, localize)}
             <button class="link-button" data-estimates-toggle aria-expanded=${options.estimatesOpen ? "true" : "false"} aria-controls="node-history-estimates"
                 @click=${options.toggleEstimates}>${h(localize, "period_how")}</button>

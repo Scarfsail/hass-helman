@@ -379,6 +379,8 @@
         "period_gauge_virtual": "virtually {money}",
         "period_gauge_virtual_hint": "Had the solar been exported instead: what was paid plus the export income it would have earned",
         "period_money_solar_hint": "Solar not sold: the export income it would have earned",
+        "period_chart_hour": "kWh by hour",
+        "period_chart_day": "kWh by day",
         "period_rows_title": "In period",
         "period_stats_aside": "typical · learned from {days} days",
         "period_stats_aside_undated": "typical · learned",

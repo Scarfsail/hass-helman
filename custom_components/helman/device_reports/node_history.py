@@ -10,10 +10,11 @@ per-kind difference is :data:`HOUR_FLOOR_KWH`.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from ..controllables.kinds import CONTROLLABLE_KIND_EV_CHARGER
+from ..span_buckets import period_buckets
 from .dataset import DeviceDataset, MoneySide, attribute_energy, find_house_node
 from .reports import _money_side, _node_fields, _round_kwh, _round_rate
 
@@ -51,6 +52,36 @@ def _rate(side: MoneySide) -> float | None:
     return _round_rate(side.amount / side.priced_kwh) if side.priced_kwh > _EPSILON_KWH else None
 
 
+def _series(dataset: DeviceDataset, kwh: dict[datetime, float]) -> tuple[str, list[dict[str, Any]]]:
+    """``kwh`` per hour of a one-day period, or per local day of a longer one, by source.
+
+    Every bucket of the period is there, zero where nothing ran, each
+    attributed on its own hours so the buckets sum to the totals.
+    """
+    days = period_buckets(dataset.local_start, dataset.local_end, "day", dataset.now)
+    if len(days) == 1:
+        bucket = "hour"
+        spans = [(hour.astimezone(dataset.local_tz).isoformat(), [hour]) for hour in dataset.hours]
+    else:
+        bucket = "day"
+        spans = [(day.start_date.isoformat(), day.hours) for day in days]
+    series = []
+    for start, hours in spans:
+        bucket_kwh = {hour: kwh[hour] for hour in hours if hour in kwh}
+        attribution = attribute_energy(dataset, bucket_kwh)
+        series.append(
+            {
+                "start": start,
+                "kwh": _round_kwh(sum(bucket_kwh.values())),
+                "solar": _round_kwh(attribution.solar),
+                "battery": _round_kwh(attribution.battery),
+                "grid": _round_kwh(attribution.grid),
+                "unknown": _round_kwh(attribution.unattributed),
+            }
+        )
+    return bucket, series
+
+
 def build_node_history(
     dataset: DeviceDataset,
     node_id: str,
@@ -59,7 +90,7 @@ def build_node_history(
     price_unit: str | None,
     navigation_range: dict[str, str],
 ) -> dict[str, Any]:
-    """``node_id``'s kWh, sources, money and how often it ran, over the dataset's period.
+    """``node_id``'s kWh, sources, money and how often it ran, over the dataset's period and per bucket of it.
 
     Hours below ``hour_floor_kwh`` are dropped before anything is summed.
     """
@@ -83,6 +114,7 @@ def build_node_history(
 
     battery_paid = attribution.battery_paid()
     virtual = attribution.virtual()
+    bucket, series = _series(dataset, kwh)
     return {
         **_node_fields(dataset, node),
         "startDate": dataset.local_start.date().isoformat(),
@@ -90,6 +122,8 @@ def build_node_history(
         "priceUnit": price_unit,
         "complete": dataset.complete,
         "navigationRange": navigation_range,
+        "bucket": bucket,
+        "series": series,
         "totals": {
             "kwh": _round_kwh(total),
             # ``None`` when nothing at all is attributed: the source is unknown, not zero.

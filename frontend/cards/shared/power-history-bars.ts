@@ -74,6 +74,8 @@ export class HelmanPowerHistoryBars extends LitElement {
      * omit it and keep being dirty-checked by identity.
      */
     @property({ type: Number }) public historyRevision?: number;
+    /** The gap left between neighbouring bars, as a share of a bucket's width; 0 joins them. */
+    @property({ type: Number }) public barGap = 0;
 
     @state() private _paths: ColorPath[] = [];
     @state() private _bucketCount = 0;
@@ -83,7 +85,8 @@ export class HelmanPowerHistoryBars extends LitElement {
             && !changedProperties.has('maxHistoryPower')
             && !changedProperties.has('sourceHistory')
             && !changedProperties.has('historyBarColor')
-            && !changedProperties.has('historyRevision')) {
+            && !changedProperties.has('historyRevision')
+            && !changedProperties.has('barGap')) {
             return;
         }
 
@@ -91,6 +94,8 @@ export class HelmanPowerHistoryBars extends LitElement {
         const max = this.maxHistoryPower;
         const sourcePerBucket = this.sourceHistory;
         const fallbackColor = this.historyBarColor;
+        const inset = round(this.barGap / 2);
+        const width = round(1 - this.barGap);
 
         // One rectangle per segment, appended to the subpath bucket for its colour.
         // Colours come from a small fixed palette, so this is a handful of paths.
@@ -101,7 +106,7 @@ export class HelmanPowerHistoryBars extends LitElement {
                 parts = [];
                 byColor.set(color, parts);
             }
-            parts.push(`M${x} ${round(y)}h1v${round(height)}h-1z`);
+            parts.push(`M${x + inset} ${round(y)}h${width}v${round(height)}h-${width}z`);
         };
 
         for (let i = 0; i < hist.length; i++) {

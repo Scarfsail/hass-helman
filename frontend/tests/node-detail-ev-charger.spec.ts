@@ -200,6 +200,10 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             coverage: 1, firstHour: "2026-09-22T00:00:00+00:00",
             startDate: "2026-09-22", endDate: "2026-10-21", priceUnit: "CZK/kWh", complete: false,
             navigationRange: { minDate: "2026-08-01", maxDate: "2026-10-21" },
+            bucket: "day",
+            series: Array.from({ length: 30 }, (_, index) => ({
+                start: new Date(Date.UTC(2026, 8, 22 + index)).toISOString().slice(0, 10), kwh: 7.2, solar: 3.6, battery: 0.6, grid: 2.8, unknown: 0.2,
+            })),
             totals: {
                 kwh: 215, sources: { solar: 109, battery: 17, grid: 82, unknown: 7 }, knownKwh: 208,
                 paid: money(455, 208.1, 6.9), forgone: money(142, 200, 15), gridPaid: money(412, 79, 3),
