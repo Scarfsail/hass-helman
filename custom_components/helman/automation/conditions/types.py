@@ -637,12 +637,25 @@ CONDITION_TYPES: dict[str, ConditionType] = {
         # slot on their own, so they draw no block.
         #
         # Absent dip floor means the reserve floor applies; absent hold means
-        # off. Neither carries a default, so nothing is stamped onto a group the
-        # user never wrote.
+        # off; absent buffer means 0, so the charge is sized to the bare
+        # reserve. None carries a default, so nothing is stamped onto a group
+        # the user never wrote.
+        #
+        # The buffer is percentage points of planning headroom over the
+        # reserve, not a state of charge, hence `F.percent` like
+        # `self_sustainability_margin_pct`. It lifts only the sizing of the
+        # cheap-band charge; discharge still runs down to the reserve.
         ConditionType(
             key="solar_dip_floor_soc",
             scope=Scope.RUN,
             field=F.soc("solar_dip_floor_soc", required=False),
+            build_mask=_all_slots_mask,
+            qualifier=True,
+        ),
+        ConditionType(
+            key="expensive_window_buffer_pct",
+            scope=Scope.RUN,
+            field=F.percent("expensive_window_buffer_pct", required=False),
             build_mask=_all_slots_mask,
             qualifier=True,
         ),

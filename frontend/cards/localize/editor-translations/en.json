@@ -307,6 +307,7 @@
       "max_power": "Max power",
       "device_phase": "House phase",
       "solar_dip_floor_soc": "Solar dip floor SoC %",
+      "expensive_window_buffer_pct": "Expensive-window buffer %",
       "hold_reserve_in_expensive_windows": "Hold reserve in expensive windows",
       "recent_power_history_sampling_interval_seconds": "Sampling interval (seconds)",
       "recent_power_history_samples": "Samples to keep"
@@ -606,7 +607,8 @@
       "solar_max_power": "The most the solar array produces, in watts. It scales the solar power-flow lines on the cards, and also sets the solar-bias data-glitch cap and the maximum shown in the solar detail. Leave empty to keep those two off; the cards then scale to the default.",
       "battery_max_power": "The most the battery charges or discharges at, in watts: the full scale of its power-flow lines on the cards. Leave empty for the default.",
       "grid_max_power": "The most the grid connection carries, in watts: the full scale of its power-flow lines on the cards. Leave empty for the default.",
-      "battery_reserve_solar_dip_floor_soc": "Lowest SoC allowed inside an expensive window when the forecast says solar brings the battery back to the reserve before the window ends. A buffer in case the solar forecast is too optimistic. Empty uses this group’s reserve.",
+      "battery_reserve_solar_dip_floor_soc": "Lowest SoC allowed inside an expensive window when the forecast says solar brings the battery back to the reserve before the window ends. A buffer in case the solar forecast is too optimistic. Empty uses this group’s reserve plus the expensive-window buffer (if set).",
+      "battery_reserve_expensive_window_buffer_pct": "Percentage points charged above the reserve before an expensive window, as headroom in case the forecast is too optimistic. The battery still discharges down to the reserve inside the window. Does not raise the solar dip floor. Empty means no buffer.",
       "battery_reserve_hold_reserve_in_expensive_windows": "When the battery would still fall below the reserve (or the solar dip floor) inside an expensive window despite the cheap-window charge, stop discharging from that slot and import instead. Costs roughly the reserve energy at the expensive price; keeps it for a grid outage.",
       "battery_hold_while_ev_charging_ev_chargers": "The EV charger (the wallbox, not a car) whose charging holds the battery: while any listed charger charges, the inverter stops discharging and the house and the car draw from the grid instead. Future slots follow the schedule, whoever set it. The current slot follows the charger's real draw (above 1 kW): a charge started by hand holds the battery, a scheduled one that is not drawing does not. Each charger needs its own power sensor (its consumption power entity); an estimated share is not enough. When another inverter optimizer acts on the same slot, the lower one in the list wins: put this above Battery reserve and a reserve grid charge replaces the hold where both act, put it below and the hold replaces the charge.",
       "battery_hold_while_ev_charging_sensor_grace_seconds": "How long a charger still counts as charging after its power drops or its sensor becomes unavailable, measured from the moment it stopped, and how long the last solar reading is kept through a sensor outage. Rides through short dips without switching the inverter. A release takes effect within this time plus up to 30 s.",

@@ -169,12 +169,17 @@ def _make_snapshot(
     )
 
 
-def _make_config(*, reserve_floor_soc: int = 30) -> OptimizerInstanceConfig:
+def _make_config(
+    *, reserve_floor_soc: int = 30, buffer: float | None = None
+) -> OptimizerInstanceConfig:
     return make_optimizer_config(
         id="grid-bridge-charge",
         kind="battery_reserve",
         params={},
-        conditions=[{"reserve_floor_soc": reserve_floor_soc}],
+        conditions=[
+            {"reserve_floor_soc": reserve_floor_soc}
+            | ({} if buffer is None else {"expensive_window_buffer_pct": buffer})
+        ],
     )
 
 
@@ -240,13 +245,13 @@ class BatteryReserveOptimizerTests(unittest.TestCase):
         self.assertTrue(raised.exception.path.endswith("conditions[1].solar_dip_floor_soc"))
 
     def test_reserve_qualifiers_are_not_params(self) -> None:
-        for key, value in (("solar_dip_floor_soc", 12), ("hold_reserve_in_expensive_windows", True)):
+        for key, value in (("solar_dip_floor_soc", 12), ("expensive_window_buffer_pct", 10), ("hold_reserve_in_expensive_windows", True)):
             with self.subTest(key=key), self.assertRaises(AutomationConfigError) as raised:
                 make_optimizer_config(id="reserve", kind="battery_reserve",
                     params={key: value}, conditions=[{"reserve_floor_soc": 20}])
             self.assertEqual(raised.exception.code, "unknown_key")
 
-    def _solar_morning(self, *, dip_floor=None, minimum=15, recovery=True, rail=False):
+    def _solar_morning(self, *, dip_floor=None, minimum=15, recovery=True, rail=False, buffer=None):
         bands = (
             ImportBand(level="cheap", start=_at(5), end=_at(6)),
             ImportBand(level="expensive", start=_at(6), end=_at(12)),
@@ -267,7 +272,8 @@ class BatteryReserveOptimizerTests(unittest.TestCase):
         snapshot = _with_real_battery(snapshot, soc=initial, battery_max_soc=100)
         config = make_optimizer_config(id="reserve", kind="battery_reserve",
             conditions=[{"reserve_floor_soc": 20}
-                | ({} if dip_floor is None else {"solar_dip_floor_soc": dip_floor})])
+                | ({} if dip_floor is None else {"solar_dip_floor_soc": dip_floor})
+                | ({} if buffer is None else {"expensive_window_buffer_pct": buffer})])
         if rail:
             with patch(
                 "custom_components.helman.automation.optimizers.self_sustainability.build_horizon_simulator",
@@ -299,6 +305,43 @@ class BatteryReserveOptimizerTests(unittest.TestCase):
         self.assertEqual(result.slots, {})
         result, _ = self._solar_morning(rail=True)
         self.assertTrue(_charge_slots(result))
+
+    def test_expensive_window_buffer_raises_the_target_on_both_paths(self) -> None:
+        for rail in (True, False):
+            with self.subTest(rail=rail):
+                bare, _ = self._solar_morning(rail=rail)
+                buffered, trace = self._solar_morning(rail=rail, buffer=10)
+                self.assertEqual(set(_charge_slots(bare).values()), {30})
+                self.assertEqual(set(_charge_slots(buffered).values()), {40})
+                gates = [_gate(slot, "charge_needed") for slot in _slots_by_id(trace).values()]
+                self.assertTrue(all(gate["params"]["expensiveWindowBufferPct"] == 10 for gate in gates if gate))
+
+    def test_buffer_only_miss_reads_the_reserve_floor_covered(self) -> None:
+        # Minimum 25 %: above the 20 % reserve, below reserve + 10 pp buffer.
+        # The buffer still sizes a charge, but the floor node is not breached.
+        for rail in (True, False):
+            with self.subTest(rail=rail):
+                result, trace = self._solar_morning(minimum=25, rail=rail, buffer=10)
+                self.assertTrue(_charge_slots(result))
+                slot = _slots_by_id(trace)[_slot_id(5, 45)]
+                self.assertEqual(_gate(slot, "charge_needed")["state"], "true")
+                floor = _node(slot, "reserve_floor_soc")
+                self.assertEqual(floor["state"], "false")
+                self.assertEqual(floor.get("actual"), 25.0)
+
+    def test_expensive_window_buffer_does_not_lift_the_solar_dip_floor(self) -> None:
+        for rail in (True, False):
+            with self.subTest(rail=rail):
+                result, _ = self._solar_morning(dip_floor=12, rail=rail, buffer=10)
+                self.assertEqual(result.slots, {})
+
+    def test_absent_and_zero_buffer_plan_alike(self) -> None:
+        for rail in (True, False):
+            with self.subTest(rail=rail):
+                absent, _ = self._solar_morning(rail=rail)
+                zero, _ = self._solar_morning(rail=rail, buffer=0)
+                self.assertTrue(absent.slots)
+                self.assertEqual(zero.slots, absent.slots)
 
     def test_charge_start_margin_slots_defaults_and_rejects_invalid_values(self) -> None:
         defaulted = make_optimizer_config(
@@ -1103,7 +1146,7 @@ class BatteryReserveCheapWindowFloorTests(unittest.TestCase):
         self.assertFalse(observation.bridge_written)
         gate = _gate(_slots_by_id(trace)[_id(_at(22))], "charge_needed")
         self.assertEqual(gate["state"], "false")
-        self.assertEqual(gate["params"], {"goalSoc": 10.0, "solarDipFloorSoc": None, "projectedWindowMinSoc": 10.0})
+        self.assertEqual(gate["params"], {"goalSoc": 10.0, "solarDipFloorSoc": None, "expensiveWindowBufferPct": None, "projectedWindowMinSoc": 10.0})
 
     def test_f_keeps_the_floor_even_when_the_expensive_window_is_covered(self) -> None:
         # Entered at 15 %; a light night and early sun carry the window well
@@ -1183,6 +1226,56 @@ class BatteryReserveCheapWindowFloorTests(unittest.TestCase):
             {"floorSoc": 20, "entrySoc": 25.0},
         )
 
+    def test_k_buffer_bridges_a_window_the_bare_reserve_covers(self) -> None:
+        # Entered at 69 %, the minimum before the sun is 25 % at 07:45: above
+        # the 20 % reserve, below reserve + a 10 pp buffer.  The last five
+        # cheap slots are held to keep 30 %.
+        bare, bare_trace = self._run_overnight(soc=69.0, solar=_sunny)
+        zero, _ = self._run_overnight(
+            soc=69.0, solar=_sunny, conditions={"expensive_window_buffer_pct": 0}
+        )
+        result, trace = self._run_overnight(
+            soc=69.0, solar=_sunny, conditions={"expensive_window_buffer_pct": 10}
+        )
+
+        self.assertEqual(bare.slots, {})
+        self.assertEqual(zero.slots, {})
+        self.assertFalse(bare_trace.reserve_floor_observations[0].bridge_written)
+        self.assertEqual(_charge_slots(result), {})
+        self.assertEqual(_holds(result), _ids_between(_tomorrow(4, 45), _tomorrow(6)))
+        params = _gate(_slots_by_id(trace)[_id(_tomorrow(5, 45))], "charge_needed")["params"]
+        self.assertEqual(params["goalSoc"], 30)
+        self.assertEqual(params["expensiveWindowBufferPct"], 10)
+        self.assertEqual(params["projectedWindowMinSoc"], 30.0)
+        # A buffer-only miss: the 20 % reserve itself is never breached.
+        self.assertEqual(
+            _node(_slots_by_id(trace)[_id(_tomorrow(5, 45))], "reserve_floor_soc")["state"],
+            "false",
+        )
+        (observation,) = trace.reserve_floor_observations
+        self.assertEqual(observation.reserve_floor_soc, 20)
+        self.assertTrue(observation.bridge_written)
+        assert_trace_contract(self, trace)
+
+    def test_l_buffer_leaves_the_cheap_band_floor_at_the_reserve(self) -> None:
+        # Row A with a 10 pp buffer: the band is still restored to 20 %, only
+        # the pre-solar top-up aims at 30 %.
+        result, trace = self._run_overnight(
+            soc=19.0, solar=_sunny, conditions={"expensive_window_buffer_pct": 10}
+        )
+
+        charged = _charge_slots(result)
+        self.assertEqual(charged.pop(_id(_at(22))), 20)
+        self.assertEqual(set(charged.values()), {38})
+        slots = _slots_by_id(trace)
+        self.assertEqual(
+            _gate(slots[_id(_at(22))], "cheap_window_floor")["params"],
+            {"floorSoc": 20, "entrySoc": 15.0},
+        )
+        self.assertEqual(
+            _gate(slots[_id(_tomorrow(5, 45))], "charge_needed")["params"]["goalSoc"], 30
+        )
+
     def test_h_leaves_a_cheap_band_without_expensive_band_alone(self) -> None:
         bands = (
             ImportBand(level="cheap", start=_at(22), end=_tomorrow(6)),
@@ -1226,6 +1319,7 @@ class BatteryReserveCheapWindowFloorTests(unittest.TestCase):
         now: datetime = _at(21),
         battery_max_soc: float = 100.0,
         bands: tuple[ImportBand, ...] = _OVERNIGHT_BANDS,
+        conditions: dict | None = None,
     ):
         """The overnight bands on the real simulator, starting at ``soc``.
 
@@ -1258,7 +1352,11 @@ class BatteryReserveCheapWindowFloorTests(unittest.TestCase):
             soc=soc,
             battery_max_soc=battery_max_soc,
         )
-        config = _make_config(reserve_floor_soc=20)
+        config = make_optimizer_config(
+            id="grid-bridge-charge",
+            kind="battery_reserve",
+            conditions=[{"reserve_floor_soc": 20} | (conditions or {})],
+        )
         return run_optimizer_with_trace(
             build_battery_reserve_optimizer(config),
             snapshot,
@@ -1430,7 +1528,7 @@ from automation_trace_contract import trace_rows_payload
 
 
 class ExpensiveReserveHoldTests(unittest.TestCase):
-    def _run(self, *, hold=True, solar=False, user=False, simulator=True, initial=22, cheap=False, end=10):
+    def _run(self, *, hold=True, solar=False, user=False, simulator=True, initial=22, cheap=False, end=10, buffer=None):
         series = []
         for index in range(48 * 4):
             at = _at(6 if cheap else 8) + timedelta(minutes=15 * index)
@@ -1448,7 +1546,8 @@ class ExpensiveReserveHoldTests(unittest.TestCase):
         snapshot = _with_real_battery(snapshot, soc=initial, battery_max_soc=100)
         config = make_optimizer_config(id="reserve", kind="battery_reserve",
             conditions=[{"reserve_floor_soc": 20, "hold_reserve_in_expensive_windows": hold,
-                          "solar_dip_floor_soc": 12}])
+                          "solar_dip_floor_soc": 12}
+                | ({} if buffer is None else {"expensive_window_buffer_pct": buffer})])
         if not simulator:
             with patch("custom_components.helman.automation.optimizers.self_sustainability.build_horizon_simulator", return_value=None):
                 return run_optimizer_with_trace(build_battery_reserve_optimizer(config), snapshot, config, reference_time=_at(6 if cheap else 8))
@@ -1480,6 +1579,12 @@ class ExpensiveReserveHoldTests(unittest.TestCase):
 
     def test_covered_window_has_no_hold(self):
         self.assertEqual(self._run(initial=80)[0].slots, {})
+
+    def test_buffer_does_not_raise_the_hold(self):
+        # 42 % drains to 22 % inside the window: below reserve + buffer, never
+        # below the reserve, so nothing holds.
+        self.assertEqual(self._run(initial=42, buffer=10)[0].slots, {})
+        self.assertEqual(self._run(initial=30, buffer=10)[0].slots, self._run(initial=30)[0].slots)
 
     def test_user_owned_expensive_slot_is_preserved(self):
         result, _ = self._run(user=True)

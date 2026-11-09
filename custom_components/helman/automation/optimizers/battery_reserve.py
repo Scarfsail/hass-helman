@@ -337,6 +337,12 @@ class BatteryReserveOptimizer:
             format_slot_id(expensive_band.end),
         ]
         floor = resolved.condition_value("reserve_floor_soc")
+        # Planning headroom over the reserve, for sizing only: the holds and the
+        # cheap-band floor keep the configured reserve.  Absent reads as 0.  An
+        # absent dip floor falls back to the buffered reserve: without one,
+        # every bucket requires the reserve.
+        buffer = resolved.condition_value("expensive_window_buffer_pct") or 0
+        dip_floor = resolved.condition_value("solar_dip_floor_soc", floor + buffer)
         group_index = resolved.group.index
 
         # #274 (P0 of #270): one raw observation per evaluated expensive
@@ -393,12 +399,28 @@ class BatteryReserveOptimizer:
             expensive_band.start,
             expensive_band.end,
             floor,
-            resolved.condition_value("solar_dip_floor_soc", floor),
+            dip_floor,
+            buffer=buffer,
         )
+        # Sizing aims at the buffer, but the floor node reports the reserve
+        # itself: a window that misses only the buffer is still covered.
+        floor_dip = dip
+        if buffer:
+            floor_dip = -_window_slack(
+                dict(soc_by_bucket),
+                expensive_band.start,
+                expensive_band.end,
+                floor,
+                resolved.condition_value("solar_dip_floor_soc", floor),
+            )
         covered = _FloorResolution(
             STATE_FALSE, floor, round(window_min_soc, 1), group_index
         )
-        breached = _FloorResolution(STATE_TRUE, floor, None, group_index)
+        resolution = (
+            covered
+            if floor_dip <= 0
+            else _FloorResolution(STATE_TRUE, floor, None, group_index)
+        )
         # Decided before the rail shortcuts below: the rail is clamped at the
         # battery's min SoC and says nothing about the cheap band itself, so a
         # covered window can still be entered below the floor, and a battery
@@ -414,7 +436,9 @@ class BatteryReserveOptimizer:
             live_soc=live_soc,
             window_min_soc=window_min_soc,
             soc_known=soc_known,
-            floor=covered if dip <= 0 else breached,
+            floor=resolution,
+            buffer=buffer,
+            dip_floor=dip_floor,
             emit=emit,
             simulator=simulator,
             planned_actions=planned_actions,
@@ -436,7 +460,7 @@ class BatteryReserveOptimizer:
             emit.window_unknown(
                 cheap_slots,
                 expensive_window=expensive_window,
-                floor=breached,
+                floor=resolution,
             )
             return
         raw_target = window_start_soc + dip
@@ -459,13 +483,16 @@ class BatteryReserveOptimizer:
             emit.window_unknown(
                 cheap_slots,
                 expensive_window=expensive_window,
-                floor=breached,
+                floor=resolution,
             )
             return
         soc_gap = target - cheap_start_soc
         charge_needed_params = {
             "targetSoc": round(target, 1),
             "solarDipFloorSoc": resolved.condition_value("solar_dip_floor_soc"),
+            "expensiveWindowBufferPct": resolved.condition_value(
+                "expensive_window_buffer_pct"
+            ),
             "cheapStartSoc": round(cheap_start_soc, 1),
         }
         required_energy_kwh = (
@@ -494,7 +521,7 @@ class BatteryReserveOptimizer:
                         role="veto",
                     ),
                 ],
-                floor=breached,
+                floor=resolution,
             )
             return
 
@@ -529,7 +556,7 @@ class BatteryReserveOptimizer:
                     *window_gates,
                     _Gate(GATE_SLOT_AVAILABLE, STATE_FALSE, {}, role="veto"),
                 ],
-                floor=breached,
+                floor=resolution,
             )
 
         chosen = ranked[:slots_needed]
@@ -569,7 +596,7 @@ class BatteryReserveOptimizer:
                 emit.cheaper_slot_chosen(
                     slot_id,
                     gates=_rank_gates(index, price, made_the_cut=False),
-                    floor=breached,
+                    floor=resolution,
                 )
                 continue
             writer.set(
@@ -581,7 +608,7 @@ class BatteryReserveOptimizer:
             emit.applied(
                 slot_id,
                 gates=_rank_gates(index, price, made_the_cut=True),
-                floor=breached,
+                floor=resolution,
             )
 
     def _plan_simulated_window(
@@ -597,6 +624,8 @@ class BatteryReserveOptimizer:
         window_min_soc: float,
         soc_known: "_Gate",
         floor: "_FloorResolution",
+        buffer: float,
+        dip_floor: float,
         emit: "_BatteryReserveEmission",
         simulator,
         planned_actions: dict[datetime, ScheduleAction],
@@ -700,7 +729,8 @@ class BatteryReserveOptimizer:
                     boundary,
                     window_end,
                     floor_soc,
-                    resolved.condition_value("solar_dip_floor_soc", floor_soc),
+                    dip_floor,
+                    buffer=buffer,
                 ),
                 window_min_raw,
             )
@@ -877,8 +907,11 @@ class BatteryReserveOptimizer:
                         GATE_CHARGE_NEEDED,
                         STATE_FALSE,
                         {
-                            "goalSoc": round(floor_soc + goal, 1),
+                            "goalSoc": round(floor_soc + buffer + goal, 1),
                             "solarDipFloorSoc": resolved.condition_value("solar_dip_floor_soc"),
+                            "expensiveWindowBufferPct": resolved.condition_value(
+                                "expensive_window_buffer_pct"
+                            ),
                             "projectedWindowMinSoc": round(window_min_raw, 1),
                         },
                         role="veto",
@@ -950,8 +983,11 @@ class BatteryReserveOptimizer:
                 GATE_CHARGE_NEEDED,
                 STATE_TRUE,
                 {
-                    "goalSoc": round(floor_soc + goal, 1),
+                    "goalSoc": round(floor_soc + buffer + goal, 1),
                     "solarDipFloorSoc": resolved.condition_value("solar_dip_floor_soc"),
+                    "expensiveWindowBufferPct": resolved.condition_value(
+                        "expensive_window_buffer_pct"
+                    ),
                     "projectedWindowMinSoc": round(window_min_raw, 1),
                     "forcedChargeSlots": len(charge_set),
                     "chargeStartMarginSlots": margin,
@@ -1286,8 +1322,15 @@ def _required_soc(
     window_end: datetime,
     reserve: float,
     dip_floor: float,
+    *,
+    buffer: float = 0.0,
 ) -> dict[datetime, float]:
-    """Allow a lower minimum only before a later recovery in this window."""
+    """Allow a lower minimum only before a later recovery in this window.
+
+    ``buffer`` lifts only the buckets that require the reserve; recovery is
+    still judged against the unbuffered reserve, and the dip floor stays as
+    configured.
+    """
     start, end = dt_util.as_utc(window_start), dt_util.as_utc(window_end)
     buckets = sorted(
         (bucket for bucket in trajectory if start <= dt_util.as_utc(bucket) < end),
@@ -1297,7 +1340,7 @@ def _required_soc(
     recovered = False
     required = {}
     for bucket in buckets:
-        required[bucket] = dip_floor if recovered else reserve
+        required[bucket] = dip_floor if recovered else reserve + buffer
         recovered = recovered or trajectory[bucket] >= reserve
     return required
 
@@ -1308,8 +1351,12 @@ def _window_slack(
     window_end: datetime,
     reserve: float,
     dip_floor: float,
+    *,
+    buffer: float = 0.0,
 ) -> float:
-    required = _required_soc(trajectory, window_start, window_end, reserve, dip_floor)
+    required = _required_soc(
+        trajectory, window_start, window_end, reserve, dip_floor, buffer=buffer
+    )
     return min(trajectory[bucket] - value for bucket, value in required.items())
 
 

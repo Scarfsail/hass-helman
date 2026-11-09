@@ -335,6 +335,7 @@ OPTIMIZER_SPECS: dict[str, OptimizerSpec] = {
             condition_types=(
                 "reserve_floor_soc",
                 "solar_dip_floor_soc",
+                "expensive_window_buffer_pct",
                 "hold_reserve_in_expensive_windows",
             ),
             validate=_validate_battery_reserve,
