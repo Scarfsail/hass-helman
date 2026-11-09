@@ -753,16 +753,18 @@ export class HelmanOptimizerEditor
     }
 
     /**
-     * The `requires_appliance` picker: the draft's *other* appliances.
+     * A picker of the draft's *other* controllables of the given kinds: the
+     * `requires_appliance` provider, and each `ev_chargers` row.
      *
      * Built from ``buildControllableSelectionState`` — the target picker's own
      * helper — so the two read one list and cannot disagree about what exists.
      * Three differences from the target picker, all deliberate:
      *
-     * Filtered by ``applianceKinds`` from the schema document rather than by
-     * this optimizer kind's ``controllableKinds``. A provider is anything with
-     * a schedule action that can read as "running", which is every appliance
-     * kind; ``controllableKinds`` answers a narrower question — what this
+     * Filtered by ``controllableKinds``, ``applianceKinds`` from the schema
+     * document unless the caller narrows it, rather than by this optimizer
+     * kind's own ``controllableKinds``. A provider is anything with a schedule
+     * action that can read as "running", which is every appliance kind; the
+     * kind's ``controllableKinds`` answers a narrower question — what this
      * optimizer may *drive* — and would hide a charger the backend accepts.
      *
      * The optimizer's own targets -- every member of a group, not just the
@@ -775,11 +777,16 @@ export class HelmanOptimizerEditor
      * ``selectionDisabled`` is not honoured. It means "cannot be a *target*
      * until the live climate modes load", which has no bearing on being a
      * provider, so these options carry the plain label and stay selectable.
+     *
+     * ``excludeIds`` drops ids taken elsewhere -- another ``ev_chargers`` row --
+     * except the picker's own stored value.
      */
-    renderApplianceDependencyPicker(
+    renderControllablePicker(
         path: PathSegment[],
         labelKey: string,
         helpKey: string,
+        controllableKinds: string[] = this.schema?.applianceKinds ?? [],
+        excludeIds: ReadonlySet<string> = new Set(),
     ): TemplateResult {
         const stored = stringValue(this.getValue(path));
         const kind = stringValue(this.getValue([...this._basePath, "kind"]));
@@ -795,10 +802,14 @@ export class HelmanOptimizerEditor
             this.config,
             this.applianceMetadata,
             stored,
-            this.schema?.applianceKinds ?? [],
+            controllableKinds,
         );
         const options = selectionState.options
-            .filter((option) => !ownTargetIds.has(option.id))
+            .filter(
+                (option) =>
+                    !ownTargetIds.has(option.id) &&
+                    (option.id === stored || !excludeIds.has(option.id)),
+            )
             .map((option) => ({
                 value: option.id,
                 label: this._controllableOptionLabel(option),

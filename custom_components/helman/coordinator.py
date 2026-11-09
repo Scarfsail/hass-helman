@@ -28,6 +28,7 @@ from .appliances.projection_response import ApplianceProjectionsResponseDict
 from .appliances.registry_holder import AppliancesRegistryHolder
 from .automation.compute_inputs import ComputeInputs
 from .automation.condition_evaluator import ConditionEvaluator
+from .automation.ev_hold_watcher import EvHoldWatcher
 from .automation.config import (
     AutomationConfig,
     AutomationConfigError,
@@ -270,6 +271,14 @@ class HelmanCoordinator:
             create_task=self._create_task,
             run_callback=self._async_run_automation_trigger_request,
         )
+        #: The EV battery hold's live charger and solar state; re-plans when
+        #: the current slot's hold decision flips.
+        self.ev_hold = EvHoldWatcher(
+            hass,
+            read_config=lambda: self._active_config,
+            read_automation_config=self._automation_config_or_disabled,
+            request_replan=self._automation_triggers.request_debounced,
+        )
         self._appliances_registry = AppliancesRegistryHolder(
             self._hass, lambda: self._active_config
         )
@@ -346,6 +355,7 @@ class HelmanCoordinator:
                 self._hass, self._forecast_published_signal, reason
             ),
             request_replan=self._automation_triggers.request_debounced,
+            ev_hold=self.ev_hold,
         )
         #: The EV charging ledger, its listeners and its store.
         self.ev_sessions = EvSessionService(
@@ -408,6 +418,7 @@ class HelmanCoordinator:
                 result.snapshot.context.now,
                 result.snapshot.context.condition_met_by_optimizer_id,
             )
+            self.ev_hold.record_plan(result.snapshot)
         # Fired even when the merged result equalled the stored document and no
         # write happened: the explanation book and the derived forecasts still
         # moved, and the inspector draws those.
@@ -541,6 +552,7 @@ class HelmanCoordinator:
                 reference_time=reference_time,
             )
         await self.ev_sessions.async_setup()
+        await self.ev_hold.async_setup()
         self._schedule_startup_schedule_execution()
         self._schedule_startup_forecast_refresh()
 
@@ -1310,20 +1322,28 @@ class HelmanCoordinator:
     ) -> AutomationRunResult:
         from .automation.pipeline import AutomationRunner
 
-        result = await AutomationRunner(
-            automation_config=self._automation_config_or_disabled(),
-            schedule=self.schedule,
-            forecast=self.forecast,
-            recorder=self,
-            build_snapshot=functools.partial(
-                build_automation_snapshot,
-                config=self._active_config,
-            ),
-            read_control_config=self._read_schedule_control_config,
-            run_in_executor=self._hass.async_add_executor_job,
-        ).run(reference_time=reference_time, run_reason=reason)
-        self._record_automation_run(result)
-        return result
+        recorded = False
+        try:
+            result = await AutomationRunner(
+                automation_config=self._automation_config_or_disabled(),
+                schedule=self.schedule,
+                forecast=self.forecast,
+                recorder=self,
+                build_snapshot=functools.partial(
+                    build_automation_snapshot,
+                    config=self._active_config,
+                ),
+                read_control_config=self._read_schedule_control_config,
+                run_in_executor=self._hass.async_add_executor_job,
+            ).run(reference_time=reference_time, run_reason=reason)
+            self._record_automation_run(result)
+            recorded = result.ran_automation and result.snapshot is not None
+            return result
+        finally:
+            # After every run, successful or failed: a live change that landed
+            # while a recorded run computed is re-planned from here; a failed
+            # run is retried by the next executor tick.
+            await self.ev_hold.async_check_after_run(dt_util.now(), recorded=recorded)
 
     async def _async_run_automation_trigger_request(
         self,
@@ -1480,7 +1500,12 @@ class HelmanCoordinator:
         and tell the executor to skip this cycle — the re-plan reconciles the
         executor again, and by then the plan is fresh so it executes as-is. No
         per-slot gating; execution always trusts the plan's condition_met.
+
+        Every tick first re-decides the EV battery hold against live state,
+        outside the freshness gate: its comparison is exact, and the tick is
+        what notices a sensor grace period running out.
         """
+        await self.ev_hold.async_evaluate(reference_time)
         if not self.conditions.plan_is_stale(reference_time):
             return False
         try:
@@ -1554,6 +1579,7 @@ class HelmanCoordinator:
         self.conditions.async_unload()
         await self.schedule.async_unload()
         await self.ev_sessions.async_unload()
+        self.ev_hold.async_unload()
 
         self._async_add_entities = None
         self._dynamic_sensor_factories = {}

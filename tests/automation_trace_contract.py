@@ -27,6 +27,7 @@ CONTRACT_TESTED_KINDS: frozenset[str] = frozenset(
         "charge_hold",
         "battery_reserve",
         "appliance_runtime",
+        "battery_hold_while_ev_charging",
     }
 )
 

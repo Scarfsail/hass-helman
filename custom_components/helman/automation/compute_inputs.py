@@ -49,6 +49,25 @@ class CustomConditionGroupResult:
 
 
 @dataclass(frozen=True)
+class EvHoldLiveState:
+    """What is physically happening now, for the current slot of an EV battery hold.
+
+    Built by :meth:`..ev_hold_watcher.EvHoldWatcher.snapshot` with the sensor
+    grace period already applied, so a short dip or outage reads as no change.
+    The current slot reads only this, never the schedule or the forecast.
+    """
+
+    #: Whether each tracked charger counts as charging, grace included.
+    charging_by_charger_id: dict[str, bool] = field(default_factory=dict)
+    #: Live solar power in W, the last known value within the grace period;
+    #: ``None`` when unknown.
+    solar_w: float | None = None
+    #: The chargers that count as charging only because their grace period has
+    #: not run out. Explanation only: the decision reads ``charging_by_charger_id``.
+    in_grace_charger_ids: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
 class ComputeInputs:
     """Immutable snapshot of the I/O-derived inputs a forecast rebuild needs.
 
@@ -84,6 +103,9 @@ class ComputeInputs:
     # by ``appliance_runtime`` to keep an in-flight run in the plan; see
     # ``OptimizationContext.appliance_active_by_id``.
     appliance_active_by_id: dict[str, bool] = field(default_factory=dict)
+    # The EV battery hold's live charger and solar readings at the moment the
+    # run started. See ``OptimizationContext.ev_hold_live``.
+    ev_hold_live: EvHoldLiveState = field(default_factory=EvHoldLiveState)
 
     @property
     def condition_met_by_optimizer_id(self) -> dict[str, tuple[bool, ...]]:

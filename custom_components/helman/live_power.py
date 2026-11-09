@@ -39,7 +39,7 @@ from .controllables.config import (
 )
 from .node_details.inverter import run_mode_condition
 from .power_polarity import is_power_inverted, watts_for_value_type
-from .power_reading import power_unit_factor
+from .power_reading import state_watts
 from .shared_meter_split import split_own_power
 from .tree_builder import TreeIndex
 from .vendors import INVERTER_TELEMETRY_KEY, DeviceTelemetry, resolve_vendor_telemetry
@@ -361,15 +361,7 @@ class LivePowerTracker:
         """Read a power sensor's current value; ``None`` when missing or unavailable."""
         if not entity_id:
             return None
-        state = self._hass.states.get(entity_id)
-        if state is None or state.state in ("unavailable", "unknown", "none"):
-            return None
-        try:
-            raw = float(state.state)
-        except ValueError:
-            return None
-        factor = power_unit_factor(getattr(state, "attributes", {}).get("unit_of_measurement"))
-        return None if factor is None else watts_for_value_type(raw * factor, value_type)
+        return state_watts(self._hass.states.get(entity_id), value_type)
 
     def _read_battery_state(self):
         entity_config = read_battery_entity_config(self._read_config())

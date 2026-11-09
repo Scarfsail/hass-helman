@@ -345,6 +345,35 @@ OPTIMIZER_SPECS: dict[str, OptimizerSpec] = {
                 "conditions": [{"reserve_floor_soc": 30}],
             },
         ),
+        OptimizerSpec(
+            kind="battery_hold_while_ev_charging",
+            target=_INVERTER_TARGET,
+            params=(
+                # The chargers, never a vehicle: nothing reliably says which car
+                # is plugged in, and both the schedule and the power sensor
+                # belong to the charger.
+                F.obj_list(
+                    "ev_chargers",
+                    F.string("controllable_id"),
+                    overridable=False,
+                ),
+                # Describes the sensors rather than a per-slot policy, so no
+                # group may override it — and the watcher never resolves params.
+                F.non_negative_int(
+                    "sensor_grace_seconds", default=60, overridable=False
+                ),
+            ),
+            condition_types=("when_solar_below_w",),
+            param_scope=Scope.SLOT,
+            new_draft={
+                "target": {"controllable_id": CONTROLLABLE_ID_INVERTER},
+                "params": {
+                    "ev_chargers": [{"controllable_id": ""}],
+                    "sensor_grace_seconds": 60,
+                },
+                "conditions": [{}],
+            },
+        ),
     )
 }
 

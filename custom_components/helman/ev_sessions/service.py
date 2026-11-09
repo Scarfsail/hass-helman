@@ -52,12 +52,11 @@ from homeassistant.helpers.event import (
 from homeassistant.helpers.start import async_at_started
 from homeassistant.util import dt as dt_util
 
-from ..controllables.config import iter_devices, own_meter, peek_controllable_id, peek_controllable_kind
-from ..controllables.spec import CONTROLLABLE_KIND_EV_CHARGER
+from ..controllables.config import ev_charger_power_entity_ids, iter_devices, own_meter, peek_controllable_id
 from ..device_reports.dataset import DeviceDataset
 from ..energy_unwrap import _TRANSIENT_REBOUND_WINDOW
 from ..node_details.day_stats import SEGMENT_MAX_GAP, with_live_state
-from ..node_details.ev_charger import ChargingPredicate, _device_entity, charging_runs
+from ..node_details.ev_charger import ChargingPredicate, charging_runs
 from ..recorder_slot_energy import (
     _BOUNDARY_WRITE_SETTLE_WINDOW,
     _carry_staleness_limit,
@@ -101,15 +100,14 @@ class TrackedCharger:
 
 def tracked_chargers(config: Mapping[str, Any], telemetry: Mapping[str, Any]) -> dict[str, TrackedCharger]:
     """The configured EV chargers whose profile resolves a run mode and that name their power entity, by consumer id."""
+    power_by_id = ev_charger_power_entity_ids(config)
     chargers = {}
     for device, _parent in iter_devices(config):
-        if peek_controllable_kind(device) != CONTROLLABLE_KIND_EV_CHARGER:
-            continue
         consumer_id = peek_controllable_id(device)
-        device_telemetry = telemetry.get(consumer_id) if consumer_id else None
+        power = power_by_id.get(consumer_id) if consumer_id else None
+        device_telemetry = telemetry.get(consumer_id) if power else None
         run_mode = device_telemetry.entities.get("run_mode") if device_telemetry else None
-        power = _device_entity(device, "consumption.power_entity_id")
-        if consumer_id and run_mode and power:
+        if power and run_mode:
             chargers[consumer_id] = TrackedCharger(
                 consumer_id=consumer_id,
                 power_entity_id=power,

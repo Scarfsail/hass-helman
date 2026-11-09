@@ -218,7 +218,12 @@ CONTROLLABLE_SPECS: dict[str, ControllableSpec] = {
             action_from_state=inverter_action_from_state,
             resting_state_attr="normal_option",
             default_name="Inverter",
-            optimizer_kinds=("charge_hold", "export_price", "battery_reserve"),
+            optimizer_kinds=(
+                "charge_hold",
+                "export_price",
+                "battery_reserve",
+                "battery_hold_while_ev_charging",
+            ),
         ),
         ControllableSpec(
             kind=CONTROLLABLE_KIND_CLIMATE,

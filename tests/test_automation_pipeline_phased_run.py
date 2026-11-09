@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from automation_pipeline_support import *
+from automation_config_builders import make_optimizer_config
 from custom_components.helman.scheduling.schedule import SlotAction
 
 
@@ -566,3 +567,129 @@ class ApplianceGroupExpansionTests(unittest.TestCase):
         self.assertEqual(slots[CURRENT_SLOT_ID], {"ac-living": self.ACTION})
 
 from automation_trace_contract import trace_rows_payload
+
+
+class EvHoldPrecedenceTests(unittest.TestCase):
+    """#753: list order alone decides an inverter slot two system optimizers write.
+
+    The hold and ``export_price`` run for real; ``battery_reserve`` is a stand-in
+    that writes a grid charge into the current slot and records what it saw.
+    """
+
+    NEXT_SLOT_ID = "2026-03-20T21:15:00+01:00"
+    RESERVE_CHARGE = {
+        "kind": "charge_to_target_soc",
+        "targetSoc": 80,
+        "setBy": "automation",
+        "optimizer": "battery_reserve",
+    }
+
+    def _hold(self):
+        return make_optimizer_config(
+            id="ev-hold",
+            kind="battery_hold_while_ev_charging",
+            params={"ev_chargers": [{"controllable_id": "ev_a"}]},
+            conditions=[{}],
+        )
+
+    def _export(self):
+        return make_optimizer_config(
+            id="export", kind="export_price", conditions=[{"when_price_below": 0}]
+        )
+
+    def _reserve(self):
+        return make_optimizer_config(
+            id="reserve", kind="battery_reserve", conditions=[{"reserve_floor_soc": 30}]
+        )
+
+    def _snapshot(self, document: ScheduleDocument) -> OptimizationSnapshot:
+        from custom_components.helman.automation.compute_inputs import EvHoldLiveState
+
+        return OptimizationSnapshot(
+            schedule=document,
+            adjusted_house_forecast={},
+            battery_forecast={"status": "available", "series": []},
+            grid_forecast={},
+            context=make_optimization_context(
+                now=REFERENCE_TIME,
+                # Negative export price now: `export_price` stops the export.
+                export_price_forecast={"currentPrice": -1.0, "points": []},
+                appliance_registry=AppliancesRuntimeRegistry(
+                    appliances=(SimpleNamespace(id="ev_a", kind="ev_charger"),)
+                ),
+                ev_hold_live=EvHoldLiveState(charging_by_charger_id={"ev_a": True}),
+            ),
+        )
+
+    def _run(self, *system_optimizers, slots: dict | None = None) -> tuple[dict, list]:
+        reserve_saw: list[dict] = []
+        real_build = pipeline_module.build_optimizer
+
+        def _reserve_optimize(snapshot, config, trace=None):
+            reserve_saw.append(schedule_document_to_dict(snapshot.schedule)["slots"])
+            slots = deepcopy(snapshot.schedule.slots)
+            slots.setdefault(CURRENT_SLOT_ID, {})["inverter"] = SlotAction(
+                payload={"kind": "charge_to_target_soc", "targetSoc": 80},
+                set_by="automation",
+                optimizer="battery_reserve",
+            )
+            return ScheduleDocument(execution_enabled=True, slots=slots)
+
+        def _build(config, **kwargs):
+            if config.kind == "battery_reserve":
+                return SimpleNamespace(optimize=Mock(side_effect=_reserve_optimize))
+            return real_build(config, **kwargs)
+
+        document = ScheduleDocument(execution_enabled=True, slots=slots or {})
+        with patch.object(pipeline_module, "build_optimizer", side_effect=_build):
+            result = pipeline_module.run_optimizer_loop_pure(
+                appliance_optimizers=(),
+                system_optimizers=system_optimizers,
+                schedule_document=document,
+                initial_snapshot=self._snapshot(document),
+                reference_time=REFERENCE_TIME,
+                control_config=ScheduleControlConfig(
+                    mode_entity_id="select.inverter_mode",
+                    options={"normal": "normal", "stop_export": "stop_export"},
+                ),
+                appliance_registry=AppliancesRuntimeRegistry(),
+                build_snapshot=self._snapshot,
+            )
+        return schedule_document_to_dict(result.working_schedule_document)["slots"], reserve_saw
+
+    def _inverter(self, slots: dict, slot_id: str = CURRENT_SLOT_ID) -> dict | None:
+        return slots.get(slot_id, {}).get("inverter")
+
+    def test_a_user_owned_slot_is_untouched(self) -> None:
+        user = {"kind": "normal", "setBy": "user"}
+        slots, _saw = self._run(self._hold(), slots={CURRENT_SLOT_ID: {"inverter": user}})
+        self.assertEqual(self._inverter(slots), user)
+
+    def test_hold_above_the_reserve_loses_the_slot_and_the_reserve_sees_the_hold(
+        self,
+    ) -> None:
+        slots, reserve_saw = self._run(self._hold(), self._reserve())
+        self.assertEqual(self._inverter(slots), self.RESERVE_CHARGE)
+        self.assertEqual(
+            reserve_saw[0][CURRENT_SLOT_ID]["inverter"]["kind"], "stop_discharging"
+        )
+
+    def test_hold_below_the_reserve_wins_the_slot(self) -> None:
+        slots, _saw = self._run(self._reserve(), self._hold())
+        self.assertEqual(self._inverter(slots)["kind"], "stop_discharging")
+
+    def test_the_lower_of_hold_and_export_price_wins(self) -> None:
+        slots, _saw = self._run(self._export(), self._hold())
+        self.assertEqual(self._inverter(slots)["kind"], "stop_discharging")
+        slots, _saw = self._run(self._hold(), self._export())
+        self.assertEqual(self._inverter(slots)["kind"], "stop_export")
+
+    def test_a_slot_no_earlier_optimizer_wrote_is_written_by_the_hold(self) -> None:
+        slots, _saw = self._run(
+            self._export(),
+            self._hold(),
+            slots={self.NEXT_SLOT_ID: {"ev_a": {"charge": True, "setBy": "user"}}},
+        )
+        self.assertEqual(
+            self._inverter(slots, self.NEXT_SLOT_ID)["kind"], "stop_discharging"
+        )

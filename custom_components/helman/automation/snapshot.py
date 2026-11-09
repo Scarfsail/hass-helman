@@ -11,7 +11,11 @@ from ..scheduling.schedule import (
 
 if TYPE_CHECKING:
     from ..battery_state import BatteryForecastSettings, BatteryLiveState
-    from .compute_inputs import ComputeInputs, CustomConditionGroupResult
+    from .compute_inputs import (
+        ComputeInputs,
+        CustomConditionGroupResult,
+        EvHoldLiveState,
+    )
     from .input_bundle import AutomationInputBundle
     from ..scheduling.forecast_overlay import ScheduleForecastOverlay
     from .day_context import DayContext
@@ -122,6 +126,16 @@ class OptimizationContext:
         in-flight run out of its own plan can decline to.
         """
         return self.live.appliance_active_by_id
+
+    @property
+    def ev_hold_live(self) -> "EvHoldLiveState":
+        """Live charger draw and solar power for the current slot of an EV hold.
+
+        Like :attr:`appliance_active_by_id`, the one input the plan cannot
+        supply: the current slot follows what the charger and the panels are
+        doing, not what the schedule said they would.
+        """
+        return self.live.ev_hold_live
 
 
 def _w_to_kw(value_w: float | None) -> float | None:

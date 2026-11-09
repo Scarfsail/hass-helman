@@ -1,5 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 
+import { renderRemoveButton } from "../config/sortable-list";
 import type { JsonObject, PathSegment } from "../config/types";
 import {
     fieldHelpKey,
@@ -110,6 +111,11 @@ export function renderSchemaField(
     if (field.type === "boolean") {
         return renderBooleanField(host, path, labelKey, helpKey, field);
     }
+    // Keyed by field, like `requires_appliance` among the conditions: the rows
+    // pick from the draft's EV chargers, which no field facet can express.
+    if (field.key === "ev_chargers") {
+        return renderControllableRows(host, field, path, labelKey, helpKey, ["ev_charger"]);
+    }
     if (field.type === "day_classifications") {
         return host.renderDayClassificationField(path, labelKey, helpKey);
     }
@@ -136,6 +142,66 @@ export function renderSchemaField(
         field.type === "integer" ? "1" : "any",
         helpKey,
     );
+}
+
+/**
+ * An `object_list` of `{controllable_id}` rows, one shared picker per row.
+ *
+ * The rows are a set, not a priority order, so they are not draggable; the
+ * last row cannot be removed below the field's `minItems`.
+ */
+function renderControllableRows(
+    host: OptimizerEditorHost,
+    field: SchemaField,
+    path: PathSegment[],
+    labelKey: string,
+    helpKey: string,
+    controllableKinds: string[],
+): TemplateResult {
+    const value = host.getValue(path);
+    const rows = Array.isArray(value) ? value : [];
+    return html`
+        <div class="field controllable-targets">
+            <div class="controllable-target-rows">
+                ${rows.map(
+                    (_row, rowIndex) => html`
+                        <div class="controllable-target-row">
+                            ${host.renderControllablePicker(
+                                [...path, rowIndex, "controllable_id"],
+                                labelKey,
+                                helpKey,
+                                controllableKinds,
+                                // A charger already chosen in another row would
+                                // be rejected as a duplicate.
+                                new Set(
+                                    rows
+                                        .filter((_other, index) => index !== rowIndex)
+                                        .map((other) => other?.controllable_id),
+                                ),
+                            )}
+                            <div class="list-actions">
+                                ${renderRemoveButton(host, {
+                                    onRemove: () =>
+                                        host.setValue(
+                                            path,
+                                            rows.filter((_item, index) => index !== rowIndex),
+                                        ),
+                                    disabled: rows.length <= (field.minItems ?? 0),
+                                })}
+                            </div>
+                        </div>
+                    `,
+                )}
+            </div>
+            <button
+                type="button"
+                class="add-button"
+                @click=${() => host.setValue(path, [...rows, { controllable_id: "" }])}
+            >
+                ${host.t(`editor.actions.add_${field.key}`)}
+            </button>
+        </div>
+    `;
 }
 
 /**
