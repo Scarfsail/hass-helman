@@ -37,6 +37,7 @@ from custom_components.helman.automation.conditions import (  # noqa: E402
     build_eligibility,
     build_group_explanations,
 )
+from custom_components.helman.automation.fields import AutomationConfigError  # noqa: E402
 from custom_components.helman.automation.conditions.types import (  # noqa: E402
     ConditionRailsUnavailable,
     Scope,
@@ -750,7 +751,7 @@ class GroupExplanationTests(unittest.TestCase):
         )
 
     def test_reserve_qualifiers_get_no_column_or_node(self) -> None:
-        """The dip floor and hold switch qualify `reserve_floor_soc`; only it is drawn."""
+        """The dip floor, buffer and hold switch qualify `reserve_floor_soc`; only it is drawn."""
         config = make_optimizer_config(
             id="reserve",
             kind="battery_reserve",
@@ -758,6 +759,7 @@ class GroupExplanationTests(unittest.TestCase):
                 {
                     "reserve_floor_soc": 20,
                     "solar_dip_floor_soc": 12,
+                    "expensive_window_buffer_pct": 10,
                     "hold_reserve_in_expensive_windows": True,
                 }
             ],
@@ -765,9 +767,35 @@ class GroupExplanationTests(unittest.TestCase):
         explanations = self._explanations(_snapshot(prices=_PRICES), config)
 
         self.assertEqual(
+            config.conditions[0].condition_values["expensive_window_buffer_pct"],
+            10.0,
+        )
+        self.assertEqual(
             [node.key for node in explanations[SLOT_0][0].conditions],
             ["reserve_floor_soc"],
         )
+
+    def test_expensive_window_buffer_is_optional_and_bounded(self) -> None:
+        absent = make_optimizer_config(
+            id="reserve", kind="battery_reserve", conditions=[{"reserve_floor_soc": 20}]
+        )
+        self.assertNotIn(
+            "expensive_window_buffer_pct", absent.conditions[0].condition_values
+        )
+        for value in (-1, 101):
+            with self.subTest(value=value), self.assertRaises(
+                AutomationConfigError
+            ) as raised:
+                make_optimizer_config(
+                    id="reserve",
+                    kind="battery_reserve",
+                    conditions=[
+                        {"reserve_floor_soc": 20, "expensive_window_buffer_pct": value}
+                    ],
+                )
+            self.assertTrue(
+                raised.exception.path.endswith("expensive_window_buffer_pct")
+            )
 
     def test_condition_scope_is_carried_onto_the_node(self) -> None:
         config = make_appliance_member_config(
