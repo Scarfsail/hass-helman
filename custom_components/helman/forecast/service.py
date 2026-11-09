@@ -37,6 +37,7 @@ from ..automation.compute_inputs import (
     CustomConditionGroupResult,
 )
 from ..automation.condition_evaluator import ConditionEvaluator
+from ..automation.ev_hold_watcher import EvHoldWatcher
 from ..automation.config import (
     AutomationConfig,
     read_automation_config,
@@ -459,6 +460,7 @@ class ForecastService:
         bias_provider: Callable[[], SolarBiasCorrectionService | None],
         publish: Callable[[str], None],
         request_replan: Callable[..., Coroutine[Any, Any, None]],
+        ev_hold: EvHoldWatcher,
     ) -> None:
         self._hass = hass
         self._storage = storage
@@ -474,6 +476,7 @@ class ForecastService:
         self._bias_provider = bias_provider
         self._publish = publish
         self._request_replan = request_replan
+        self._ev_hold = ev_hold
         self._unloaded = False
         self._cached_forecast: dict | None = None
         self._grid_import_price_current: float | None = None
@@ -1796,6 +1799,7 @@ class ForecastService:
             ),
             custom_condition_results_by_optimizer_id=custom_condition_results,
             appliance_active_by_id=self._read_appliance_active_by_id(),
+            ev_hold_live=self._ev_hold.snapshot(started_at),
         )
 
     def _read_appliance_active_by_id(self) -> dict[str, bool]:

@@ -245,6 +245,7 @@ def make_optimization_context(
     condition_met_by_optimizer_id: dict[str, tuple[bool, ...]] | None = None,
     custom_condition_results_by_optimizer_id: dict | None = None,
     appliance_active_by_id: dict[str, bool] | None = None,
+    ev_hold_live: Any = None,
 ):
     """An ``OptimizationContext`` from the flat fields an optimizer reads.
 
@@ -259,6 +260,7 @@ def make_optimization_context(
     from custom_components.helman.automation.compute_inputs import (
         ComputeInputs,
         CustomConditionGroupResult,
+        EvHoldLiveState,
     )
     from custom_components.helman.automation.input_bundle import AutomationInputBundle
     from custom_components.helman.automation.snapshot import OptimizationContext
@@ -296,6 +298,7 @@ def make_optimization_context(
             appliances_registry=appliance_registry,
             custom_condition_results_by_optimizer_id=custom_results,
             appliance_active_by_id=appliance_active_by_id or {},
+            ev_hold_live=ev_hold_live or EvHoldLiveState(),
         ),
         battery=BatteryForecastSettings(
             charge_efficiency=battery_charge_efficiency,
@@ -855,3 +858,122 @@ class FakeInspectorLiveSources:
             return res or {}
         return target or {}
 
+
+
+#: The entities ``ev_hold_config`` names.
+EV_HOLD_SOLAR = "sensor.solar_power"
+
+
+def ev_charger_power_entity(charger_id: str) -> str:
+    return f"sensor.{charger_id}_power"
+
+
+def ev_hold_config(
+    *,
+    chargers: tuple[str, ...] = ("ev_a",),
+    sensor_grace_seconds: int = 60,
+    conditions: list[dict] | None = None,
+) -> dict:
+    """A config with measured EV chargers, a solar power sensor and one EV hold."""
+    return {
+        "energy_nodes": {"solar": {"entities": {"power": EV_HOLD_SOLAR}}},
+        "devices": {
+            "consumers": [
+                {
+                    "id": charger_id,
+                    "kind": "ev_charger",
+                    "consumption": {"power_entity_id": ev_charger_power_entity(charger_id)},
+                }
+                for charger_id in chargers
+            ]
+        },
+        "automation": {
+            "system_optimizers": [
+                {
+                    "id": "ev-hold",
+                    "kind": "battery_hold_while_ev_charging",
+                    "params": {
+                        "ev_chargers": [{"controllable_id": charger_id} for charger_id in chargers],
+                        "sensor_grace_seconds": sensor_grace_seconds,
+                    },
+                    "conditions": conditions or [{}],
+                }
+            ]
+        },
+    }
+
+
+def power_state(value: Any, when: datetime, unit: str = "W") -> SimpleNamespace:
+    """A power sensor's state as Home Assistant reports it."""
+    return SimpleNamespace(
+        state=str(value), attributes={"unit_of_measurement": unit}, last_updated=when
+    )
+
+
+class EvHoldHarness:
+    """An ``EvHoldWatcher`` over a fake ``hass``, recording its listeners and re-plan requests.
+
+    ``request_replan`` defaults to appending each request's reason to
+    ``requests``; pass the trigger coordinator's to see real coalescing.
+    """
+
+    def __init__(
+        self,
+        config: dict,
+        states: dict[str, FakeState] | None = None,
+        *,
+        request_replan: Any = None,
+    ) -> None:
+        from custom_components.helman.automation.config import read_automation_config
+        from custom_components.helman.automation.ev_hold_watcher import EvHoldWatcher
+
+        self.config = config
+        self.hass = FakeHass(states)
+        self.requests: list[str] = []
+        self.tracked: list[list[str]] = []
+        self.removed: list[list[str]] = []
+        self.watcher = EvHoldWatcher(
+            self.hass,
+            read_config=lambda: self.config,
+            read_automation_config=lambda: read_automation_config(self.config),
+            request_replan=request_replan or self._request,
+        )
+
+    async def _request(self, *, reason: str) -> None:
+        self.requests.append(reason)
+
+    def _track(self, _hass: Any, entity_ids: list[str], _action: Any):
+        self.tracked.append(list(entity_ids))
+        return lambda: self.removed.append(list(entity_ids))
+
+    async def setup(self) -> None:
+        from unittest.mock import patch
+
+        from custom_components.helman.automation import ev_hold_watcher
+
+        with patch.object(
+            ev_hold_watcher, "async_track_state_change_event", side_effect=self._track
+        ):
+            await self.watcher.async_setup()
+
+    async def event(self, entity_id: str, value: Any, when: datetime, unit: str = "W") -> None:
+        """A state change, and a turn of the loop for the request it may start."""
+        self.watcher._on_state_changed(
+            SimpleNamespace(
+                data={"entity_id": entity_id, "new_state": power_state(value, when, unit)}
+            )
+        )
+        await asyncio.sleep(0)
+
+    def publish(self, live: Any, condition_met: tuple[bool, ...] | None = None) -> None:
+        """Record a successful run that read ``live`` as its inputs."""
+        self.watcher.record_plan(
+            SimpleNamespace(
+                context=SimpleNamespace(
+                    ev_hold_live=live,
+                    condition_met_by_optimizer_id=(
+                        {} if condition_met is None else {"ev-hold": condition_met}
+                    ),
+                )
+            )
+        )

@@ -25,6 +25,8 @@ from ...const import (
     FORECAST_CANONICAL_GRANULARITY_MINUTES,
 )
 from ...scheduling.schedule import (
+    build_horizon_start,
+    format_slot_id,
     iter_horizon_slot_ids,
     parse_slot_id,
 )
@@ -37,6 +39,7 @@ from ..rails import (
     read_optional_float,
     read_planned_appliance_slot_ids,
     read_soc_by_bucket_covering_horizon,
+    read_solar_w_by_bucket,
     read_when_active_hourly_energy_kwh,
     slot_bucket_starts,
     slot_solar_coverage_pct,
@@ -422,6 +425,47 @@ def _min_solar_coverage_mask(inputs: MaskInputs) -> MaskResult:
     return MaskResult(mask=frozenset(eligible), actuals_by_slot=actuals)
 
 
+def solar_passes(threshold_w: float | None, solar_w: float | None) -> bool:
+    """Whether solar is low enough for a ``when_solar_below_w`` threshold.
+
+    No threshold reads no solar at all, and unknown solar passes: the hold this
+    gates protects the battery, so not knowing the sun is a reason to hold, not
+    a reason to drain. Shared by the mask and the EV hold's live decision, so
+    the two cannot read a threshold differently.
+    """
+    return threshold_w is None or solar_w is None or solar_w < threshold_w
+
+
+def _solar_below_mask(inputs: MaskInputs) -> MaskResult:
+    """Slots whose solar power stays below the threshold.
+
+    Future slots read the forecast's average solar power per bucket, and the
+    worst (sunniest) bucket decides, as in :func:`_min_soc_mask`. The current
+    slot reads live solar instead (``ev_hold_live.solar_w``, grace already
+    applied) and never falls back to the forecast. A missing bucket and unknown
+    live solar are ``None``, which passes (:func:`solar_passes`).
+    """
+    snapshot = inputs.snapshot
+    solar_w_by_bucket = read_solar_w_by_bucket(snapshot)
+    current_slot_id = format_slot_id(build_horizon_start(snapshot.context.now))
+    threshold = inputs.value
+    eligible: set[str] = set()
+    actuals: dict[str, Any] = {}
+    for slot_id in inputs.horizon_slot_ids:
+        if slot_id == current_slot_id:
+            solar_w = snapshot.context.ev_hold_live.solar_w
+        else:
+            readings = [
+                solar_w_by_bucket.get(bucket_start)
+                for bucket_start in slot_bucket_starts(slot_id)
+            ]
+            solar_w = None if None in readings else max(readings)
+        if solar_passes(threshold, solar_w):
+            eligible.add(slot_id)
+        actuals[slot_id] = solar_w
+    return MaskResult(mask=frozenset(eligible), actuals_by_slot=actuals)
+
+
 def _requires_appliance_mask(inputs: MaskInputs) -> frozenset[str]:
     """Slots where the appliance this one depends on is planned to run.
 
@@ -520,6 +564,16 @@ CONDITION_TYPES: dict[str, ConditionType] = {
             field=F.percent("min_solar_coverage_pct", required=False),
             build_mask=_min_solar_coverage_mask,
             operator="≥",
+        ),
+        # Optional and without a default: absent reads no solar at all. A
+        # slot-scoped mask that reads live solar for the current slot; see
+        # `_solar_below_mask`.
+        ConditionType(
+            key="when_solar_below_w",
+            scope=Scope.SLOT,
+            field=F.positive_number("when_solar_below_w", required=False),
+            build_mask=_solar_below_mask,
+            operator="<",
         ),
         # Self-gating, and for a sharper reason than `reserve_floor_soc`: this
         # condition *couples slots*. Placing at 09:00 changes whether 20:00 is

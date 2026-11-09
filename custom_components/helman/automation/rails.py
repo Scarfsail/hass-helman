@@ -12,6 +12,7 @@ Nothing here validates config; see :mod:`.fields` for that.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -359,6 +360,30 @@ def slot_solar_coverage_pct(
     return None if worst_ratio is None else worst_ratio * 100
 
 
+def _iter_solar_points(
+    snapshot: "OptimizationSnapshot",
+) -> Iterator[tuple[dict[str, Any], datetime, float, float]]:
+    """``(point, timestamp, solarKwh, duration in hours)`` per battery-forecast point.
+
+    Points without a timestamp or ``solarKwh`` are skipped; a missing or
+    non-positive ``durationHours`` falls back to the canonical granularity.
+    """
+    raw_series = snapshot.battery_forecast.get("series")
+    if not isinstance(raw_series, list):
+        return
+    for point in raw_series:
+        if not isinstance(point, dict):
+            continue
+        timestamp = parse_timestamp(point.get("timestamp"))
+        solar_kwh = read_optional_float(point.get("solarKwh"))
+        if timestamp is None or solar_kwh is None:
+            continue
+        duration_hours = read_optional_float(point.get("durationHours"))
+        if duration_hours is None or duration_hours <= 0:
+            duration_hours = FORECAST_CANONICAL_GRANULARITY_MINUTES / 60
+        yield point, timestamp, solar_kwh, duration_hours
+
+
 def read_clipped_surplus_by_bucket(
     snapshot: "OptimizationSnapshot",
     *,
@@ -369,27 +394,30 @@ def read_clipped_surplus_by_bucket(
     What the battery could actually absorb from each bucket's surplus — the
     figure charge_hold sizes its hold against.
     """
-    raw_series = snapshot.battery_forecast.get("series")
-    if not isinstance(raw_series, list):
-        return []
-
     surplus_by_bucket: list[tuple[datetime, float]] = []
-    for point in raw_series:
-        if not isinstance(point, dict):
-            continue
-        timestamp = parse_timestamp(point.get("timestamp"))
-        solar_kwh = read_optional_float(point.get("solarKwh"))
+    for point, timestamp, solar_kwh, duration_hours in _iter_solar_points(snapshot):
         house_kwh = read_optional_float(point.get("baselineHouseKwh"))
-        if timestamp is None or solar_kwh is None or house_kwh is None:
+        if house_kwh is None:
             continue
-        duration_hours = read_optional_float(point.get("durationHours"))
-        if duration_hours is None or duration_hours <= 0:
-            duration_hours = FORECAST_CANONICAL_GRANULARITY_MINUTES / 60
         raw_surplus = max(0.0, solar_kwh - house_kwh)
         surplus_by_bucket.append(
             (timestamp, min(raw_surplus, max_charge_power_kw * duration_hours))
         )
     return surplus_by_bucket
+
+
+def read_solar_w_by_bucket(snapshot: "OptimizationSnapshot") -> dict[datetime, float]:
+    """``{bucket_start: average solar power in W}`` from the battery forecast.
+
+    ``solarKwh`` over the bucket's duration. Keyed by canonical bucket start,
+    as in :func:`read_available_surplus_by_bucket`: the first point is stamped
+    with the run instant, not its bucket's start. A bucket the series does not
+    carry is absent.
+    """
+    return {
+        canonical_bucket_start(timestamp): solar_kwh / duration_hours * 1000
+        for _point, timestamp, solar_kwh, duration_hours in _iter_solar_points(snapshot)
+    }
 
 
 def read_forecast_soc_at(

@@ -464,6 +464,137 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(len(report.errors), 1)
         self.assertEqual(report.errors[0].code, "unknown_controllable")
 
+    # --- battery_hold_while_ev_charging -----------------------------------
+
+    def _ev_hold_config(self, *charger_ids: str) -> dict:
+        """The valid config's Custom charger, given its own power sensor, and one hold."""
+        config = _valid_config()
+        charger = config["devices"]["consumers"][0]
+        charger["consumption"]["power_entity_id"] = "sensor.ev_power"
+        self.assertNotIn("profile", charger)
+        config["automation"] = {
+            "enabled": True,
+            "system_optimizers": [
+                {
+                    "id": "ev-hold",
+                    "kind": "battery_hold_while_ev_charging",
+                    "params": {
+                        "ev_chargers": [
+                            {"controllable_id": charger_id} for charger_id in charger_ids
+                        ]
+                    },
+                    "conditions": [{"when_solar_below_w": 500}],
+                }
+            ],
+        }
+        return config
+
+    def test_ev_hold_accepts_a_custom_charger_with_its_own_power_sensor(self) -> None:
+        report = validate_config_document(self._ev_hold_config("garage-ev"))
+
+        self.assertTrue(report.valid, report.errors)
+
+    def test_ev_hold_rejects_chargers_it_cannot_follow(self) -> None:
+        path = "automation.system_optimizers[0].params.ev_chargers"
+        cases = {
+            "unknown": (("nope",), "unknown_controllable", f"{path}[0].controllable_id"),
+            "not a charger": (("inverter",), "not_an_ev_charger", f"{path}[0].controllable_id"),
+            "duplicate": (
+                ("garage-ev", "garage-ev"),
+                "duplicate_controllable",
+                f"{path}[1].controllable_id",
+            ),
+        }
+        for name, (charger_ids, code, error_path) in cases.items():
+            with self.subTest(name):
+                report = validate_config_document(self._ev_hold_config(*charger_ids))
+                self.assertEqual(
+                    [(issue.code, issue.path) for issue in report.errors],
+                    [(code, error_path)],
+                )
+
+    def test_ev_hold_requires_the_chargers_own_power_sensor(self) -> None:
+        config = self._ev_hold_config("garage-ev")
+        del config["devices"]["consumers"][0]["consumption"]["power_entity_id"]
+
+        report = validate_config_document(config)
+
+        self.assertEqual(
+            [(issue.code, issue.path) for issue in report.errors],
+            [
+                (
+                    "ev_charger_power_sensor_required",
+                    "automation.system_optimizers[0].params.ev_chargers[0].controllable_id",
+                )
+            ],
+        )
+        self.assertIn("power sensor", report.errors[0].message)
+
+    def test_ev_hold_solar_threshold_requires_a_live_solar_power_sensor(self) -> None:
+        with_sensor = self._ev_hold_config("garage-ev")
+        self.assertEqual(
+            with_sensor["energy_nodes"]["solar"]["entities"]["power"], "sensor.solar_power"
+        )
+        self.assertTrue(validate_config_document(with_sensor).valid)
+
+        config = self._ev_hold_config("garage-ev")
+        del config["energy_nodes"]["solar"]["entities"]["power"]
+
+        report = validate_config_document(config)
+
+        self.assertIn(
+            (
+                "solar_power_entity_required",
+                "automation.system_optimizers[0].conditions[0].when_solar_below_w",
+            ),
+            [(issue.code, issue.path) for issue in report.errors],
+        )
+
+        # Without a threshold there is nothing for the sensor to feed.
+        config["automation"]["system_optimizers"][0]["conditions"] = [{}]
+        self.assertNotIn(
+            "solar_power_entity_required",
+            [issue.code for issue in validate_config_document(config).errors],
+        )
+
+    def test_ev_charger_power_lookup_takes_only_a_measured_power_sensor(self) -> None:
+        from custom_components.helman.controllables.config import (
+            ev_charger_power_entity_ids,
+        )
+
+        config = {
+            "devices": {
+                "consumers": [
+                    {
+                        "id": "garage-ev",
+                        "kind": "ev_charger",
+                        "consumption": {"power_entity_id": "sensor.ev_power"},
+                    },
+                    {"id": "no-power-ev", "kind": "ev_charger", "consumption": {}},
+                    {
+                        "id": "sub-board",
+                        "consumption": {"energy_entity_id": "sensor.board_energy"},
+                        "children": [
+                            # No meter of its own: its power is an estimate.
+                            {
+                                "id": "shared-ev",
+                                "kind": "ev_charger",
+                                "consumption": {"power_entity_id": "sensor.shared_power"},
+                            },
+                        ],
+                    },
+                    {
+                        "id": "boiler",
+                        "consumption": {"power_entity_id": "sensor.boiler_power"},
+                    },
+                ]
+            }
+        }
+
+        self.assertEqual(
+            ev_charger_power_entity_ids(config), {"garage-ev": "sensor.ev_power"}
+        )
+
     # --- requires_appliance ---------------------------------------------
 
     @staticmethod

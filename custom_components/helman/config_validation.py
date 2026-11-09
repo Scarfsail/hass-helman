@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .automation.config import AutomationConfigError, read_automation_config
+from .automation.ev_hold_watcher import solar_power_entity_id
 from .automation.optimizer import build_optimizer
 from .automation.spec import OPTIMIZER_SPECS
 from .appliances.config import (
@@ -22,6 +23,7 @@ from .controllables.config import (
     CONTROLLABLE_ID_INVERTER,
     DEVICE_PHASES,
     device_children,
+    ev_charger_power_entity_ids,
     find_inverter_device,
     is_schedulable,
     iter_device_paths,
@@ -36,6 +38,7 @@ from .controllables.config import (
     SWITCH_CONTROL_DOMAINS,
 )
 from .controllables.spec import (
+    CONTROLLABLE_KIND_EV_CHARGER,
     CONTROLLABLE_KIND_INVERTER,
     KNOWN_CONTROLLABLE_KINDS,
     appliance_controllable_kinds,
@@ -1786,6 +1789,7 @@ def _validate_automation_config(
     battery_issue = describe_battery_entity_config_issue(config)
     controllable_kinds_by_id = read_controllable_kinds_by_id(config)
     schedulable_ids = read_schedulable_ids(config)
+    ev_charger_power_ids = ev_charger_power_entity_ids(config)
     # `enabled_*_optimizers` drops the disabled ones, so its index is not the
     # index the path has to address — and the two differ exactly when a
     # disabled optimizer exists, which is when
@@ -1840,6 +1844,18 @@ def _validate_automation_config(
                 # Building would fail again on the same id, in the appliance
                 # registry's words this time. One finding per fault.
                 continue
+
+            if optimizer.kind == "battery_hold_while_ev_charging":
+                _validate_ev_chargers(
+                    optimizer,
+                    controllable_kinds_by_id=controllable_kinds_by_id,
+                    ev_charger_power_ids=ev_charger_power_ids,
+                    path=path,
+                    report=report,
+                )
+                _validate_solar_threshold_sensor(
+                    optimizer, config=config, path=path, report=report
+                )
 
             _validate_requires_appliance(
                 optimizer,
@@ -2025,6 +2041,85 @@ def _validate_requires_appliance(
                     "manually."
                 ),
             )
+
+
+def _validate_ev_chargers(
+    optimizer: Any,
+    *,
+    controllable_kinds_by_id: Mapping[str, str],
+    ev_charger_power_ids: Mapping[str, str],
+    path: str,
+    report: ValidationReport,
+) -> None:
+    """Does every listed charger exist, once, with a power sensor of its own?
+
+    The current slot follows the charger's measured draw, so a charger without
+    its own ``consumption.power_entity_id`` -- none at all, or only Helman's
+    estimated share of a parent's meter -- could never show a manual start.
+    """
+    seen: set[str] = set()
+    for charger_index, charger in enumerate(optimizer.params["ev_chargers"]):
+        controllable_id = charger["controllable_id"]
+        charger_path = f"{path}.params.ev_chargers[{charger_index}].controllable_id"
+        kind = controllable_kinds_by_id.get(controllable_id)
+        if controllable_id in seen:
+            code, message = "duplicate_controllable", "is listed more than once"
+        elif kind is None:
+            code, message = "unknown_controllable", "is not configured"
+        elif kind != CONTROLLABLE_KIND_EV_CHARGER:
+            code, message = "not_an_ev_charger", f"is a {kind!r}, not an EV charger"
+        elif controllable_id not in ev_charger_power_ids:
+            code, message = (
+                "ev_charger_power_sensor_required",
+                "has no measured power sensor of its own; it needs a "
+                "consumption.power_entity_id and, under a parent device, an "
+                "energy meter of its own -- a charger whose consumption is "
+                "estimated from its parent's meter cannot show a charge",
+            )
+        else:
+            code = None
+        seen.add(controllable_id)
+        if code is None:
+            continue
+        report.add_error(
+            section="automation",
+            path=charger_path,
+            code=code,
+            message=(
+                f"optimizer {optimizer.id!r} holds the battery for EV charger "
+                f"{controllable_id!r}, which {message}"
+            ),
+        )
+
+
+def _validate_solar_threshold_sensor(
+    optimizer: Any,
+    *,
+    config: Mapping[str, Any],
+    path: str,
+    report: ValidationReport,
+) -> None:
+    """Does a ``when_solar_below_w`` threshold have a live solar sensor to read?
+
+    The current slot's solar check reads the live solar power only, and an
+    unknown reading holds -- so without the sensor the threshold would hold
+    the current slot in full sun.
+    """
+    if solar_power_entity_id(config) is not None:
+        return
+    for group_index, group in enumerate(optimizer.conditions):
+        if group.condition_values.get("when_solar_below_w") is None:
+            continue
+        report.add_error(
+            section="automation",
+            path=f"{path}.conditions[{group_index}].when_solar_below_w",
+            code="solar_power_entity_required",
+            message=(
+                f"optimizer {optimizer.id!r} holds the battery only below a "
+                "solar power threshold, which needs a live solar power sensor "
+                "at energy_nodes.solar.entities.power"
+            ),
+        )
 
 
 def _validate_optimizer_target(

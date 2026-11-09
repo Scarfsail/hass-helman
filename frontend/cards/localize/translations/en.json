@@ -848,10 +848,13 @@
         "current": "selected optimizer runs here"
       },
       "condition": {
-        "reserve_hold": "Reserve hold"
+        "reserve_hold": "Reserve hold",
+        "when_solar_below_w": "Solar below limit",
+        "ev_charging": "EV charging"
       },
       "condition_detail": {
-        "reserve_hold": "Stops discharging when the cheap-window plan still leaves the battery below its required minimum; imports instead to preserve the outage reserve."
+        "reserve_hold": "Stops discharging when the cheap-window plan still leaves the battery below its required minimum; imports instead to preserve the outage reserve.",
+        "ev_charging": "Whether a selected charger charges in this slot: the plan for future slots, the charger's real draw (above 1 kW, with the sensor grace period) for the current one."
       }
     },
     "forecast": {

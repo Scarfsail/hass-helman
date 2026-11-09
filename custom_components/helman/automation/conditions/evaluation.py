@@ -225,7 +225,7 @@ def build_eligibility(
 ) -> Eligibility:
     """Evaluate every group's mask and fold them into one :class:`Eligibility`."""
     slot_ids = horizon_slot_ids(snapshot)
-    custom_met_by_group = _custom_met_by_group(snapshot, config)
+    custom_met = custom_met_by_group(snapshot, config)
 
     groups: list[GroupResolution] = []
     for group in config.conditions:
@@ -253,7 +253,7 @@ def build_eligibility(
                 name=group.name,
                 params=group.params,
                 condition_values=dict(group.condition_values),
-                custom_met=custom_met_by_group[group.index],
+                custom_met=custom_met[group.index],
                 system_mask=system_mask,
                 masks_by_key=masks_by_key,
                 actuals_by_key=actuals_by_key,
@@ -424,7 +424,7 @@ def build_group_explanations(
     return explanations
 
 
-def _custom_met_by_group(
+def custom_met_by_group(
     snapshot: "OptimizationSnapshot",
     config: "OptimizerInstanceConfig",
 ) -> tuple[bool, ...]:

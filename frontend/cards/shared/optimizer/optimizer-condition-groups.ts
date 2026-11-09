@@ -277,7 +277,7 @@ function renderConditionWidget(
     // facet can express. Without it the string field would fall through to the
     // number input below and render as a box its value cannot be typed into.
     if (condition.key === "requires_appliance") {
-        return host.renderApplianceDependencyPicker(path, labelKey, helpKey);
+        return host.renderControllablePicker(path, labelKey, helpKey);
     }
     // Dispatch on `choices` before type, because a choices field is a picker
     // whatever it is made of — a string-valued condition would otherwise fall

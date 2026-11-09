@@ -166,13 +166,17 @@ export interface OptimizerEditorHost {
         labelKey: string,
         helpKey: string,
     ): TemplateResult;
-    /** The `requires_appliance` picker: the other appliances in the draft.
-     * A host method for the same reason the target picker is one — the options
-     * come from the draft document, which a static schema cannot carry. */
-    renderApplianceDependencyPicker(
+    /** A picker of the other controllables in the draft, of `controllableKinds`
+     * (the appliance kinds when omitted): the `requires_appliance` provider and
+     * the `ev_chargers` rows. A host method for the same reason the target
+     * picker is one — the options come from the draft document, which a static
+     * schema cannot carry. */
+    renderControllablePicker(
         path: PathSegment[],
         labelKey: string,
         helpKey: string,
+        controllableKinds?: string[],
+        excludeIds?: ReadonlySet<string>,
     ): TemplateResult;
     /** The target picker, which needs draft and live state the schema cannot carry. */
     renderControllableTargetFields(

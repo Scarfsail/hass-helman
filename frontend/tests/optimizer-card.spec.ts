@@ -792,3 +792,112 @@ test.describe("an optimizer's YAML mode", () => {
         await expect(panel.locator(".yaml-surface")).toHaveCount(0);
     });
 });
+
+test.describe("battery hold while EV charging", () => {
+    /** The kind as the backend serves it. */
+    const HOLD_SCHEMA = {
+        version: 2,
+        applianceKinds: ["climate", "ev_charger", "generic"],
+        kinds: [
+            {
+                kind: "battery_hold_while_ev_charging",
+                target: [{ key: "controllable_id", type: "string", default: "inverter" }],
+                params: [
+                    {
+                        key: "ev_chargers",
+                        type: "object_list",
+                        minItems: 1,
+                        overridable: false,
+                        fields: [{ key: "controllable_id", type: "string" }],
+                    },
+                    {
+                        key: "sensor_grace_seconds",
+                        type: "integer",
+                        default: 60,
+                        minimum: 0,
+                        overridable: false,
+                    },
+                ],
+                conditionTypes: [
+                    {
+                        key: "when_solar_below_w",
+                        scope: "slot",
+                        field: {
+                            key: "when_solar_below_w",
+                            type: "number",
+                            required: false,
+                            minimum: 0,
+                            minimumExclusive: true,
+                        },
+                    },
+                ],
+                controllableKinds: ["inverter"],
+                bucket: "system",
+                newDraft: {
+                    target: { controllable_id: "inverter" },
+                    params: { ev_chargers: [{ controllable_id: "" }] },
+                    conditions: [{}],
+                },
+            },
+        ],
+    };
+    const HOLD_CONFIG = {
+        energy_nodes: { inverter: { controls: {} } },
+        devices: {
+            consumers: [
+                { kind: "ev_charger", schedulable: true, id: "garage-ev", name: "Garage EV" },
+                { kind: "ev_charger", schedulable: true, id: "drive-ev", name: "Drive EV" },
+                { kind: "generic", schedulable: true, id: "boiler", name: "Boiler" },
+            ],
+        },
+        automation: {
+            enabled: true,
+            system_optimizers: [
+                {
+                    id: "ev-hold",
+                    kind: "battery_hold_while_ev_charging",
+                    enabled: true,
+                    params: { ev_chargers: [{ controllable_id: "garage-ev" }] },
+                    conditions: [{ when_solar_below_w: 500 }],
+                },
+            ],
+        },
+    };
+
+    test("each charger row offers only the draft's EV chargers", async ({ page }) => {
+        const panel = await mountEditor(page, HOLD_CONFIG, HOLD_SCHEMA);
+        const card = await openCard(panel);
+        const rows = card.locator(".controllable-targets .controllable-target-row");
+
+        await expect(rows).toHaveCount(1);
+        const picker = rows.first().locator("select");
+        await expect(picker.locator("option")).toHaveText([
+            "",
+            /Garage EV/,
+            /Drive EV/,
+        ]);
+        await expect(picker).toHaveValue("garage-ev");
+        // The last row cannot go: the reader needs at least one charger.
+        await expect(rows.first().locator("button.danger")).toBeDisabled();
+
+        await card.getByRole("button", { name: "+ EV charger" }).click();
+        await expect(rows).toHaveCount(2);
+        // A charger chosen in another row is not offered again: the backend
+        // would reject it as listed twice.
+        await expect(rows.nth(1).locator("select option")).toHaveText(["", /Drive EV/]);
+        await rows.nth(1).locator("select").selectOption("drive-ev");
+        await expect(rows.nth(1).locator("select")).toHaveValue("drive-ev");
+        await expect(picker.locator("option")).toHaveText(["", /Garage EV/]);
+        await expect(rows.first().locator("button.danger")).toBeEnabled();
+    });
+
+    test("the system section states that the lower optimizer wins", async ({ page }) => {
+        const panel = await mountEditor(page, HOLD_CONFIG, HOLD_SCHEMA);
+
+        await expect(
+            panel.getByText(
+                "Runs top to bottom. When two optimizers act on the same inverter slot, the lower one wins; a slot you set by hand is never changed.",
+            ),
+        ).toBeVisible();
+    });
+});

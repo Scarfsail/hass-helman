@@ -308,6 +308,26 @@ def device_power_entity(device: Device, parent: Device | None) -> str | None:
     return share_power_entity_id(device_id) if device_id is not None else None
 
 
+def ev_charger_power_entity_ids(config: Mapping[str, Any] | None) -> dict[str, str]:
+    """``{controllable_id: power entity}`` for every EV charger with its own measured power.
+
+    Its configured ``consumption.power_entity_id`` only: an estimated charger's
+    share sensor is Helman's guess at a split, and cannot tell a charge
+    starting from its parent's meter moving.
+    """
+    chargers: dict[str, str] = {}
+    for device, parent in iter_devices(config):
+        if peek_controllable_kind(device) != CONTROLLABLE_KIND_EV_CHARGER:
+            continue
+        controllable_id = peek_controllable_id(device)
+        if controllable_id is None or is_estimated(device, parent):
+            continue
+        power = device_power_entity(device, parent)
+        if power is not None:
+            chargers[controllable_id] = power
+    return chargers
+
+
 def running_signal(device: Device) -> tuple[str, str] | None:
     """``(entity id, "switch" | "climate" | "cover")`` telling when this device runs.
 

@@ -2045,6 +2045,240 @@ class ScheduleExecutionResponsivenessTests(unittest.IsolatedAsyncioTestCase):
 
 
 
+class EvHoldExecutionTests(unittest.IsolatedAsyncioTestCase):
+    """#753 end to end: charger power -> watcher -> re-plan -> executor.
+
+    The real watcher, trigger coordinator, runner, hold optimizer, schedule
+    store and executor; only the forecast is left out (an empty input bundle
+    and a snapshot built straight from the run's live inputs).
+    """
+
+    MODE = "input_select.fv_mode"
+    POWER = "sensor.ev_power"
+
+    async def asyncSetUp(self) -> None:
+        from datetime import timedelta
+
+        import homeassistant.util.dt as dt_util
+
+        from custom_components.helman.automation import ev_hold_watcher
+        from custom_components.helman.automation.input_bundle import AutomationInputBundle
+        from custom_components.helman.automation.snapshot import (
+            OptimizationContext,
+            OptimizationSnapshot,
+        )
+        from custom_components.helman.battery_state import BatteryForecastSettings
+        from _fakes import _inverter_controllable
+
+        self.timedelta = timedelta
+        self.clock = REFERENCE_TIME
+        charger = _valid_appliances_config()["devices"]["consumers"][0]
+        charger["consumption"] = {"power_entity_id": self.POWER}
+        config = {
+            "energy_nodes": {"inverter": _inverter_controllable()},
+            "devices": {"consumers": [charger]},
+            "automation": {
+                "enabled": True,
+                "system_optimizers": [
+                    {
+                        "id": "ev-hold",
+                        "kind": "battery_hold_while_ev_charging",
+                        "params": {
+                            "ev_chargers": [{"controllable_id": "garage-ev"}],
+                            "sensor_grace_seconds": 60,
+                        },
+                        "conditions": [{}],
+                    }
+                ],
+            },
+        }
+        self.storage = FakeStorage(
+            schedule_document={
+                "executionEnabled": True,
+                "slotMinutes": SCHEDULE_SLOT_MINUTES,
+                "slots": {},
+            },
+            config=config,
+        )
+        self.hass = FakeHass(
+            {
+                self.MODE: FakeState(
+                    "Normal",
+                    attributes={
+                        "options": list(
+                            _inverter_controllable()["controls"]["mode"]["options"].values()
+                        )
+                    },
+                ),
+                self.POWER: FakeState("0", attributes={"unit_of_measurement": "W"}),
+                "switch.ev_nabijeni": FakeState("off"),
+                "select.solax_ev_charger_charger_use_mode": FakeState(
+                    "Fast", attributes={"options": ["Fast", "ECO"]}
+                ),
+            }
+        )
+        record_call = self.hass.services.async_call
+
+        async def async_call(domain, service, data, **kwargs):
+            # The mode select follows the option it was set to, as a real one does.
+            await record_call(domain, service, data, **kwargs)
+            if service == "select_option":
+                self.hass.states._states[data["entity_id"]].state = data["option"]
+
+        self.hass.services.async_call = async_call
+
+        async def run_inline(func, *args):
+            return func(*args)
+
+        self.hass.async_add_executor_job = run_inline
+        self.coordinator = make_coordinator(_hass=self.hass, _storage=self.storage)
+        self.coordinator._appliances_registry.current = build_appliances_runtime_registry(
+            config
+        )
+        self.coordinator._automation_triggers._debounce_seconds = 0
+        self.coordinator.async_load_day_context_bands = AsyncMock(return_value={})
+        self.coordinator.async_persist_day_context_bands = AsyncMock()
+        self.coordinator.forecast.get_automation_input_bundle = lambda: AutomationInputBundle(
+            original_house_forecast={},
+            solar_forecast={},
+            grid_price_forecast={},
+            when_active_hourly_energy_kwh_by_appliance_id={},
+        )
+
+        def build_snapshot(
+            *, config, control_config, appliances_registry, schedule_document,
+            input_bundle, reference_time, compute_inputs, day_contexts=None,
+        ):
+            return OptimizationSnapshot(
+                schedule=schedule_document,
+                adjusted_house_forecast={"status": "available", "series": []},
+                battery_forecast={"status": "available", "series": []},
+                grid_forecast={"status": "available", "series": []},
+                context=OptimizationContext(
+                    now=reference_time,
+                    inputs=input_bundle,
+                    live=compute_inputs,
+                    battery=BatteryForecastSettings(1.0, 1.0, None, None),
+                    appliance_registry=appliances_registry,
+                    day_contexts=day_contexts or {},
+                ),
+            )
+
+        self.watched = []
+        self.patches = [
+            patch.object(dt_util, "now", lambda time_zone=None: self.clock),
+            patch.object(coordinator_module, "build_automation_snapshot", build_snapshot),
+            patch(
+                "homeassistant.helpers.entity_registry.async_get",
+                return_value=types.SimpleNamespace(
+                    async_get_entity_id=lambda domain, platform, unique_id: None
+                ),
+            ),
+        ]
+        for active in self.patches:
+            active.start()
+        with patch.object(
+            ev_hold_watcher,
+            "async_track_state_change_event",
+            side_effect=lambda hass, entity_ids, action: (
+                self.watched.append(action) or (lambda: None)
+            ),
+        ):
+            await self.coordinator.ev_hold.async_setup()
+
+        self.executor = schedule_executor_module.ScheduleExecutor(
+            self.hass,
+            self.coordinator._schedule_executor._dependencies,
+            now=lambda: self.clock,
+        )
+        self.coordinator._schedule_executor = self.executor
+        with patch.object(
+            schedule_executor_module,
+            "async_track_time_interval",
+            return_value=lambda: None,
+        ):
+            await self.executor.async_start()
+
+    async def asyncTearDown(self) -> None:
+        await self.coordinator._automation_triggers.async_shutdown()
+        await self.executor.async_unload()
+        for active in self.patches:
+            active.stop()
+
+    async def _settle(self) -> None:
+        for _ in range(20):
+            await asyncio.sleep(0.01)
+
+    async def _power(self, watts: str, *, after_seconds: int = 0) -> None:
+        """The charger's power reading changes, and everything it sets off runs."""
+        self.clock = self.clock + self.timedelta(seconds=after_seconds)
+        state = FakeState(watts, attributes={"unit_of_measurement": "W"})
+        state.last_updated = self.clock
+        self.hass.states._states[self.POWER] = state
+        self.watched[0](types.SimpleNamespace(data={"entity_id": self.POWER, "new_state": state}))
+        await self._settle()
+
+    async def _tick(self, *, after_seconds: int) -> None:
+        self.clock = self.clock + self.timedelta(seconds=after_seconds)
+        await self.executor.async_reconcile_and_wait(reason="tick")
+        await self._settle()
+
+    def _inverter_options(self) -> list[str]:
+        return [
+            data["option"]
+            for domain, _service, data in self.hass.services.calls
+            if domain == "input_select" and data["entity_id"] == self.MODE
+        ]
+
+    async def _start(self) -> None:
+        await self.coordinator.run_automation(reason="startup")
+        await self._tick(after_seconds=0)
+
+    async def test_a_scheduled_night_charge_holds_while_drawing_and_then_releases(
+        self,
+    ) -> None:
+        await self.coordinator.set_schedule(
+            slots=[
+                ScheduleSlot(
+                    id=CURRENT_SLOT_ID,
+                    controllables={
+                        "garage-ev": {"charge": True, "vehicleId": "kona", "useMode": "Fast"}
+                    },
+                )
+            ],
+            reference_time=REFERENCE_TIME,
+        )
+        await self._start()
+        # Scheduled, but not drawing yet: the battery is not held.
+        self.assertNotIn("Stop discharging", self._inverter_options())
+
+        await self._power("7000", after_seconds=10)
+        self.assertEqual(self._inverter_options()[-1], "Stop discharging")
+
+        await self._power("0", after_seconds=30)
+        await self._tick(after_seconds=30)
+        self.assertEqual(self._inverter_options()[-1], "Stop discharging")
+        await self._tick(after_seconds=31)
+        self.assertEqual(self._inverter_options()[-1], "Normal")
+
+    async def test_a_manual_unscheduled_charge_holds_and_releases(self) -> None:
+        await self._start()
+
+        await self._power("7400", after_seconds=10)
+        self.assertEqual(self._inverter_options()[-1], "Stop discharging")
+        self.assertEqual(
+            self.storage.schedule_document["slots"][CURRENT_SLOT_ID]["inverter"]["kind"],
+            "stop_discharging",
+        )
+
+        await self._power("unavailable", after_seconds=60)
+        await self._tick(after_seconds=61)
+        self.assertEqual(self._inverter_options()[-1], "Normal")
+        self.assertNotIn(
+            "inverter", self.storage.schedule_document["slots"].get(CURRENT_SLOT_ID, {})
+        )
+
+
 class SolaxProfileScheduleExecutionTests(unittest.IsolatedAsyncioTestCase):
     """With the SolaX inverter profile, the executor drives Helman's own select.
 

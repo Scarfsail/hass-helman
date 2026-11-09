@@ -369,7 +369,12 @@ export function renderOptimizerBucketSection(
     ${host._renderSectionScope(
       scopeId,
       html`
-        <p class="inline-note">${host._t(noteKey)}</p>
+        <p class="inline-note">
+          ${bucket === "system_optimizers"
+            ? html`<strong>${host._t("editor.helpers.system_optimizer_order")}</strong><br />`
+            : nothing}
+          ${host._t(noteKey)}
+        </p>
         ${renderSortableList({
           items: optimizers,
           containerClass: "list-stack",

@@ -83,7 +83,7 @@ export const optimizerCardStyles = css`
         background: var(--secondary-background-color, rgba(255, 255, 255, 0.04));
     }
 
-    .controllable-target-row > .field-compact {
+    .controllable-target-row > .field {
         flex: 1 1 200px;
         min-width: 150px;
     }
