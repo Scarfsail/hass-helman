@@ -839,6 +839,7 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             effective_variant="adjusted",
             adjusted_points=adjusted_points,
             explainability=None,
+            live_day_ratio=None,
         )
         coordinator._solar_bias_service = SimpleNamespace(
             build_adjustment_result=Mock(return_value=bias_result)
@@ -866,6 +867,102 @@ class CoordinatorSolarForecastCacheTests(unittest.IsolatedAsyncioTestCase):
             snapshot["biasCorrection"]["effectiveVariant"],
             "adjusted",
         )
+
+
+    async def test_canonical_snapshot_scales_todays_remaining_slots_by_the_live_day_ratio(
+        self,
+    ) -> None:
+        coordinator_module = self._load_coordinator_module()
+        models = importlib.import_module(
+            "custom_components.helman.solar_bias_correction.models"
+        )
+        service_mod = importlib.import_module(
+            "custom_components.helman.solar_bias_correction.service"
+        )
+        coordinator = make_coordinator()
+        coordinator._hass = FakeHass()
+        coordinator.forecast._hass = coordinator._hass
+        coordinator._active_config = {}
+
+        cfg = models.read_bias_config({})
+        service = service_mod.SolarBiasCorrectionService(
+            SimpleNamespace(bus=SimpleNamespace(async_fire=Mock())),
+            SimpleNamespace(),
+            cfg,
+        )
+        service._profile = models.SolarBiasProfile(factors={}, omitted_slots=[])
+        service._metadata = service._build_default_metadata(
+            last_outcome="profile_trained"
+        )
+        coordinator._solar_bias_service = service
+
+        # REFERENCE_TIME is 21:16: four evening slots, the first two elapsed
+        # at half their forecast -- half the day's energy, so fully trusted.
+        raw_points = [
+            {"timestamp": f"2026-03-20T{hhmm}:00+01:00", "value": 100.0}
+            for hhmm in ("20:45", "21:00", "21:15", "21:30")
+        ] + [{"timestamp": "2026-03-21T10:00:00+01:00", "value": 100.0}]
+        actual_history = [
+            {"timestamp": f"2026-03-20T{hhmm}:00+01:00", "value": 50.0}
+            for hhmm in ("20:45", "21:00")
+        ]
+
+        with patch.object(
+            coordinator_module,
+            "build_solar_forecast_response",
+            return_value={"status": "available", "points": raw_points},
+            create=True,
+        ):
+            snapshot = coordinator.forecast._build_canonical_solar_forecast(
+                {
+                    "status": "available",
+                    "points": raw_points,
+                    "actualHistory": actual_history,
+                },
+                reference_time=REFERENCE_TIME,
+            )
+
+        self.assertEqual(
+            [p["value"] for p in snapshot["correctedPoints"]],
+            [100.0, 100.0, 50.0, 50.0, 100.0],
+        )
+        self.assertEqual(snapshot["rawPoints"], raw_points)
+        self.assertEqual(
+            snapshot["biasCorrection"]["liveDayRatio"],
+            {
+                "ratio": 0.5,
+                "appliedRatio": 0.5,
+                "weight": 1.0,
+                "factor": 0.5,
+                "elapsedShare": 0.5,
+            },
+        )
+
+    async def test_a_snapshot_from_an_earlier_day_reports_no_live_day_ratio(
+        self,
+    ) -> None:
+        coordinator = make_coordinator()
+        live = {"ratio": 0.5, "appliedRatio": 0.5, "weight": 1.0, "factor": 0.5}
+        snapshot = {
+            "status": "available",
+            "generatedAt": "2026-03-20T23:45:00+01:00",
+            "points": [],
+            "biasCorrection": {"status": "applied", "liveDayRatio": live},
+        }
+        coordinator.forecast._cached_solar_forecast = snapshot
+
+        same_day = await coordinator.forecast.canonical_solar_forecast(
+            reference_time=datetime.fromisoformat("2026-03-20T23:55:00+01:00")
+        )
+        next_day = await coordinator.forecast.canonical_solar_forecast(
+            reference_time=datetime.fromisoformat("2026-03-21T00:10:00+01:00")
+        )
+
+        self.assertEqual(same_day["biasCorrection"]["liveDayRatio"], live)
+        self.assertIsNone(next_day["biasCorrection"]["liveDayRatio"])
+        self.assertEqual(next_day["biasCorrection"]["status"], "applied")
+        # The cache itself keeps the ratio; only the read withholds it.
+        self.assertEqual(snapshot["biasCorrection"]["liveDayRatio"], live)
 
 
 class DegradedSolarRebuildTests(unittest.IsolatedAsyncioTestCase):

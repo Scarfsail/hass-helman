@@ -266,3 +266,11 @@ SOLAR_BIAS_DEFAULT_CURTAILMENT_MAX_ACTUAL_FORECAST_RATIO = 0.8
 # gap a backfilled meter reading still counts.
 SOLAR_BIAS_DEFAULT_DATA_GLITCH_MIN_NEIGHBOUR_FORECAST_WH = 200.0
 SOLAR_BIAS_DEFAULT_DATA_GLITCH_BACKFILL_MAX_MINUTES = 120
+
+# Live day ratio: how much of today's corrected forecast energy must lie in
+# elapsed slots before today's realized ratio is trusted in full, and the
+# bounds that ratio is clamped to before it scales the rest of today.
+SOLAR_BIAS_DEFAULT_LIVE_DAY_RATIO_ENABLED = True
+SOLAR_BIAS_DEFAULT_LIVE_DAY_RATIO_FULL_CONFIDENCE_SHARE = 0.5
+SOLAR_BIAS_DEFAULT_LIVE_DAY_RATIO_MIN_RATIO = 0.3
+SOLAR_BIAS_DEFAULT_LIVE_DAY_RATIO_MAX_RATIO = 2.0

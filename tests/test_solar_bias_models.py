@@ -332,3 +332,60 @@ def test_read_bias_config_passes_explicit_aggregation_method():
     bias = read_bias_config(config)
 
     assert bias.aggregation_method == "trimmed_mean"
+
+
+def test_live_day_ratio_fields_default_when_absent():
+    import custom_components.helman.const as const
+
+    bias = read_bias_config({"data_and_learning": {"solar_bias": {}}})
+
+    assert bias.live_day_ratio_enabled is const.SOLAR_BIAS_DEFAULT_LIVE_DAY_RATIO_ENABLED
+    assert bias.live_day_ratio_full_confidence_share == 0.5
+    assert bias.live_day_ratio_min_ratio == 0.3
+    assert bias.live_day_ratio_max_ratio == 2.0
+
+
+def test_live_day_ratio_fields_are_parsed_when_present():
+    bias = read_bias_config(
+        {
+            "data_and_learning": {
+                "solar_bias": {
+                    "live_day_ratio": {
+                        "enabled": False,
+                        "full_confidence_share": 0.3,
+                        "min_ratio": 0.2,
+                        "max_ratio": 3,
+                    }
+                }
+            }
+        }
+    )
+
+    assert bias.live_day_ratio_enabled is False
+    assert bias.live_day_ratio_full_confidence_share == 0.3
+    assert bias.live_day_ratio_min_ratio == 0.2
+    assert bias.live_day_ratio_max_ratio == 3.0
+
+
+def test_live_day_ratio_settings_do_not_change_the_training_fingerprint():
+    from custom_components.helman.solar_bias_correction.trainer import (
+        compute_fingerprint,
+    )
+
+    default = read_bias_config({})
+    overridden = read_bias_config(
+        {
+            "data_and_learning": {
+                "solar_bias": {
+                    "live_day_ratio": {
+                        "enabled": False,
+                        "full_confidence_share": 0.3,
+                        "min_ratio": 0.2,
+                        "max_ratio": 3,
+                    }
+                }
+            }
+        }
+    )
+
+    assert compute_fingerprint(overridden) == compute_fingerprint(default)

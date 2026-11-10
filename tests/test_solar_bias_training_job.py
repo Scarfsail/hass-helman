@@ -133,7 +133,7 @@ class CoordinatorSolarBiasCallbackTests(unittest.IsolatedAsyncioTestCase):
 
         async def _fake_run_forecast_refresh(*, reason: str, reference_time=None) -> None:
             refresh_calls.append(reason)
-            coordinator._solar_bias_service.build_adjustment_result([], dt_util.now())
+            coordinator._solar_bias_service.build_adjustment_result([], dt_util.now(), [])
 
         coordinator.forecast._async_run_forecast_refresh = _fake_run_forecast_refresh
 
@@ -212,7 +212,7 @@ class CoordinatorSolarBiasCallbackTests(unittest.IsolatedAsyncioTestCase):
         )
         await service.async_setup()
 
-        service.build_adjustment_result([], dt_util.now())
+        service.build_adjustment_result([], dt_util.now(), [])
 
         on_status_changed.assert_not_called()
 

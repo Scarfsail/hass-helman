@@ -386,6 +386,17 @@ export interface SolarBiasCorrectionDTO {
         usableDays: number;
         droppedDays: number;
     };
+    /** How today has produced so far against the corrected forecast; null when it does not apply. */
+    liveDayRatio: LiveDayRatioDTO | null;
+}
+
+/** Today's live day ratio: the rest of today is scaled by `factor` = `appliedRatio` ^ `weight`. */
+export interface LiveDayRatioDTO {
+    ratio: number;
+    appliedRatio: number;
+    weight: number;
+    factor: number;
+    elapsedShare: number;
 }
 
 export function getEffectiveSolarForecastPoints(

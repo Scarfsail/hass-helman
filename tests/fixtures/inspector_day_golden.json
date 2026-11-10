@@ -189,6 +189,7 @@
     "hasProfile": true
   },
   "priceUnit": null,
+  "liveDayRatio": null,
   "batterySocBounds": [],
   "trainingExplainability": null
 }

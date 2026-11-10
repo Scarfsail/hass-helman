@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
@@ -9,6 +10,8 @@ from _fakes import DummyStore as _DummyStore
 
 models = importlib.import_module("custom_components.helman.solar_bias_correction.models")
 service_mod = importlib.import_module("custom_components.helman.solar_bias_correction.service")
+
+NOW = datetime.fromisoformat("2026-04-24T10:00:00+02:00")
 
 
 @pytest.fixture(autouse=True)
@@ -32,6 +35,7 @@ def _stub_training_inputs(monkeypatch):
 def _make_cfg(
     *,
     slot_invalidation_max_battery_soc_percent: float | None = None,
+    live_day_ratio_enabled: bool = True,
 ) -> models.BiasConfig:
     return models.BiasConfig(
         enabled=True,
@@ -46,6 +50,7 @@ def _make_cfg(
             slot_invalidation_max_battery_soc_percent
         ),
         max_training_window_days=90,
+        live_day_ratio_enabled=live_day_ratio_enabled,
     )
 
 
@@ -83,13 +88,77 @@ def test_training_failed_with_preserved_profile_keeps_adjusted_variant():
 
     result = service.build_adjustment_result(
         [{"timestamp": "2026-04-24T12:00:00+02:00", "value": 10.0}],
-        None,
+        NOW,
+        [],
     )
 
     assert result.status == "training_failed"
     assert result.effective_variant == "adjusted"
     assert result.adjusted_points[0]["value"] == 20.0
     assert result.explainability.error == "boom"
+
+
+_LIVE_RAW = [
+    {"timestamp": f"2026-04-24T{hhmm}:00+02:00", "value": 10.0}
+    for hhmm in ("09:00", "09:15", "10:00", "10:15")
+]
+# Half of the day's forecast has elapsed at half the forecast.
+_LIVE_ACTUAL = [
+    {"timestamp": f"2026-04-24T{hhmm}:00+02:00", "value": 5.0}
+    for hhmm in ("09:00", "09:15")
+]
+
+
+def _make_applied_service(cfg: models.BiasConfig, *, last_outcome="profile_trained"):
+    service = service_mod.SolarBiasCorrectionService(_make_hass(), _DummyStore(), cfg)
+    service._profile = models.SolarBiasProfile(factors={}, omitted_slots=[])
+    service._metadata = models.SolarBiasMetadata(
+        trained_at="2026-04-24T03:00:00+02:00",
+        training_config_fingerprint=service_mod.compute_fingerprint(cfg),
+        usable_days=12,
+        dropped_days=[],
+        factor_min=1.0,
+        factor_max=1.0,
+        factor_median=1.0,
+        omitted_slot_count=0,
+        last_outcome=last_outcome,
+    )
+    return service
+
+
+def test_live_day_ratio_scales_the_rest_of_today_when_adjusted_and_enabled():
+    service = _make_applied_service(_make_cfg())
+
+    result = service.build_adjustment_result(_LIVE_RAW, NOW, _LIVE_ACTUAL)
+
+    assert result.effective_variant == "adjusted"
+    assert [p["value"] for p in result.adjusted_points] == [10.0, 10.0, 5.0, 5.0]
+    assert result.live_day_ratio == models.LiveDayRatio(
+        ratio=0.5, applied_ratio=0.5, weight=1.0, factor=0.5, elapsed_share=0.5
+    )
+
+
+def test_disabled_live_day_ratio_leaves_the_profile_only_forecast():
+    enabled = _make_applied_service(_make_cfg())
+    disabled = _make_applied_service(_make_cfg(live_day_ratio_enabled=False))
+
+    result = disabled.build_adjustment_result(_LIVE_RAW, NOW, _LIVE_ACTUAL)
+
+    assert result.live_day_ratio is None
+    assert result.adjusted_points == enabled.build_adjustment_result(
+        _LIVE_RAW, NOW, []
+    ).adjusted_points
+    assert [p["value"] for p in result.adjusted_points] == [10.0] * 4
+
+
+def test_live_day_ratio_is_not_applied_to_the_raw_variant():
+    service = _make_applied_service(_make_cfg(), last_outcome="insufficient_history")
+
+    result = service.build_adjustment_result(_LIVE_RAW, NOW, _LIVE_ACTUAL)
+
+    assert result.effective_variant == "raw"
+    assert result.live_day_ratio is None
+    assert result.adjusted_points == _LIVE_RAW
 
 
 def test_training_failed_without_profile_falls_back_to_raw():
@@ -113,7 +182,8 @@ def test_training_failed_without_profile_falls_back_to_raw():
 
     result = service.build_adjustment_result(
         [{"timestamp": "2026-04-24T12:00:00+02:00", "value": 10.0}],
-        None,
+        NOW,
+        [],
     )
 
     assert result.status == "training_failed"
@@ -735,7 +805,8 @@ def test_async_train_save_failure_keeps_previous_profile_active():
 
         result = service.build_adjustment_result(
             [{"timestamp": "2026-04-24T12:00:00+02:00", "value": 10.0}],
-            None,
+            NOW,
+            [],
         )
 
         assert payload["status"] == "training_failed"

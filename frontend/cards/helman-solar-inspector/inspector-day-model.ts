@@ -1,4 +1,5 @@
 import { slotMinutes } from "../shared/time/slot-time";
+import type { LiveDayRatioDTO } from "../helman-api";
 import { toAveragePower, type ChartEntry } from "./chart-power";
 import { symmetricPowerAxis } from "./chart-axis";
 import {
@@ -168,6 +169,8 @@ export type InspectorPayload = {
   batterySocBounds: SocBoundsPoint[];
   /** The currency-per-energy unit both price rails are quoted in. */
   priceUnit: string | null;
+  /** Today's live day ratio from the forecast snapshot; null on any other day. */
+  liveDayRatio?: LiveDayRatioDTO | null;
   trainingExplainability: TrainingExplainability | null;
 };
 

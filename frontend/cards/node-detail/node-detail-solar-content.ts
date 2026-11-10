@@ -1,4 +1,4 @@
-import { formatKwh, formatPower } from "../shared/format";
+import { formatKwh, formatPower, liveDayRatioValues } from "../shared/format";
 import { SLOT_MS } from "../shared/time/slot-time";
 import { css, html, nothing } from "lit";
 import { customElement, property } from "lit/decorators.js";
@@ -27,6 +27,7 @@ import type { SolarDetailParams } from "./node-detail-types";
 import "../helman-simple/simple-card-solar";
 import "./detail-headline";
 import "./flow-gauge";
+import "./help-tip";
 import { boldTemplate } from "./detail-section";
 import { renderForecastChart } from "./node-detail-forecast";
 import { historyRow, kwhText, renderShowMore, sectionNotReady, subTitle } from "./node-detail-history";
@@ -450,6 +451,11 @@ export class NodeDetailSolarContent extends NodeDetailContentBase<SolarDetailPay
             ${this._row(t("solar_factor"), raw && corrected !== null && solar?.adjustedPoints ? `× ${(corrected / raw).toFixed(2)}` : "—", "correction")}
             ${this._row(t("bias_status"), bias ? t(bias.effectiveVariant === "adjusted" ? "bias_applied" : "bias_not_applied") : "—", "bias-status")}
             ${this._row(t("bias_days"), bias ? String(bias.explainability.usableDays) : "—", "bias-days")}
+            ${this._row(
+                html`${t("live_day_ratio")}<helman-help-tip .explanation=${t("live_day_ratio_help")}></helman-help-tip>`,
+                bias?.liveDayRatio ? this.localize("node_detail.shared.technical.live_day_ratio_value", liveDayRatioValues(bias.liveDayRatio, this._locale)) : "—",
+                "live-day-ratio",
+            )}
         </div>`;
     }
 

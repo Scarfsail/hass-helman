@@ -306,6 +306,11 @@ class ConfigEditorContractTests(unittest.IsolatedAsyncioTestCase):
             ],
             resolved.slot_invalidation_curtailment_max_actual_forecast_ratio,
         )
+        for key in ("enabled", "full_confidence_share", "min_ratio", "max_ratio"):
+            self.assertEqual(
+                CONFIG_FIELD_DEFAULTS[f"data_and_learning.solar_bias.live_day_ratio.{key}"],
+                getattr(resolved, f"live_day_ratio_{key}"),
+            )
 
     def test_validate_config_returns_structured_report(self) -> None:
         connection = FakeConnection(is_admin=True)

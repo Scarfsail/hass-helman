@@ -224,6 +224,63 @@ class SolarBiasConfigValidationTests(unittest.TestCase):
             )
         )
 
+    def test_live_day_ratio_overrides_pass_without_unknown_key_warnings(self) -> None:
+        config = _valid_config()
+        config.setdefault("data_and_learning", {})["solar_bias"] = {
+            "live_day_ratio": {
+                "enabled": False,
+                "full_confidence_share": 0.05,
+                "min_ratio": 1,
+                "max_ratio": 5,
+            },
+        }
+
+        report = validate_config_document(config)
+        self.assertTrue(report.valid)
+        self.assertFalse(
+            any("live_day_ratio" in issue.path for issue in report.warnings)
+        )
+
+    def test_live_day_ratio_values_out_of_range_are_refused(self) -> None:
+        for key, value in (
+            ("enabled", "yes"),
+            ("full_confidence_share", 0.04),
+            ("full_confidence_share", 1.1),
+            ("min_ratio", 0.04),
+            ("min_ratio", 1.1),
+            ("max_ratio", 0.9),
+            ("max_ratio", 5.1),
+        ):
+            with self.subTest(key=key, value=value):
+                config = _valid_config()
+                config.setdefault("data_and_learning", {})["solar_bias"] = {
+                    "live_day_ratio": {key: value},
+                }
+
+                report = validate_config_document(config)
+                self.assertFalse(report.valid)
+                self.assertTrue(
+                    any(
+                        issue.path
+                        == f"data_and_learning.solar_bias.live_day_ratio.{key}"
+                        for issue in report.errors
+                    )
+                )
+
+    def test_unknown_live_day_ratio_key_warns(self) -> None:
+        config = _valid_config()
+        config.setdefault("data_and_learning", {})["solar_bias"] = {
+            "live_day_ratio": {"ramp": 0.5},
+        }
+
+        report = validate_config_document(config)
+        self.assertTrue(
+            any(
+                issue.path.startswith("data_and_learning.solar_bias.live_day_ratio")
+                for issue in report.warnings
+            )
+        )
+
     def test_absence_of_correction_settings_is_valid(self) -> None:
         config = _valid_config()
         config.get("data_and_learning", {}).pop("solar_bias", None)

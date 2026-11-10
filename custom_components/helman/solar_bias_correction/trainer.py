@@ -34,7 +34,15 @@ _ALGORITHM_VERSION = (
     "+hourly_statistics_tail_v1+carry_staleness_v1"
 )
 _LOGGER = logging.getLogger(__name__)
-_NOT_FINGERPRINTED = {"enabled", "training_time"}
+# The live day ratio only scales today's application of the profile.
+_NOT_FINGERPRINTED = {
+    "enabled",
+    "training_time",
+    "live_day_ratio_enabled",
+    "live_day_ratio_full_confidence_share",
+    "live_day_ratio_min_ratio",
+    "live_day_ratio_max_ratio",
+}
 
 
 def compute_fingerprint(cfg: BiasConfig) -> str:

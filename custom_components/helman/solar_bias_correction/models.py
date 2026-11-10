@@ -23,6 +23,10 @@ from ..const import (
     SOLAR_BIAS_DEFAULT_CURTAILMENT_MAX_ACTUAL_FORECAST_RATIO,
     SOLAR_BIAS_DEFAULT_DATA_GLITCH_BACKFILL_MAX_MINUTES,
     SOLAR_BIAS_DEFAULT_DATA_GLITCH_MIN_NEIGHBOUR_FORECAST_WH,
+    SOLAR_BIAS_DEFAULT_LIVE_DAY_RATIO_ENABLED,
+    SOLAR_BIAS_DEFAULT_LIVE_DAY_RATIO_FULL_CONFIDENCE_SHARE,
+    SOLAR_BIAS_DEFAULT_LIVE_DAY_RATIO_MIN_RATIO,
+    SOLAR_BIAS_DEFAULT_LIVE_DAY_RATIO_MAX_RATIO,
 )
 
 
@@ -61,6 +65,14 @@ class BiasConfig:
     grid_power_inverted: bool | None = None
     solar_max_power_w: float | None = None
     max_training_window_days: int = SOLAR_BIAS_DEFAULT_MAX_TRAINING_WINDOW_DAYS
+    # Applied to today's corrected forecast only, never to training: the
+    # trainer keeps these out of the fingerprint.
+    live_day_ratio_enabled: bool = SOLAR_BIAS_DEFAULT_LIVE_DAY_RATIO_ENABLED
+    live_day_ratio_full_confidence_share: float = (
+        SOLAR_BIAS_DEFAULT_LIVE_DAY_RATIO_FULL_CONFIDENCE_SHARE
+    )
+    live_day_ratio_min_ratio: float = SOLAR_BIAS_DEFAULT_LIVE_DAY_RATIO_MIN_RATIO
+    live_day_ratio_max_ratio: float = SOLAR_BIAS_DEFAULT_LIVE_DAY_RATIO_MAX_RATIO
 
 
 @dataclass
@@ -146,11 +158,42 @@ class SolarBiasExplainability:
 
 
 @dataclass
+class LiveDayRatio:
+    """How today has produced so far against its profile-corrected forecast.
+
+    ``ratio`` is the measured actual / corrected over the matched elapsed
+    slots, ``applied_ratio`` the same clamped to the configured bounds,
+    ``elapsed_share`` the matched elapsed share of today's corrected energy,
+    ``weight`` the trust that share earns and ``factor`` the multiplier the
+    rest of today was scaled by (``applied_ratio ** weight``).
+    """
+
+    ratio: float
+    applied_ratio: float
+    weight: float
+    factor: float
+    elapsed_share: float
+
+
+def live_day_ratio_to_payload(live: LiveDayRatio | None) -> dict[str, Any] | None:
+    if live is None:
+        return None
+    return {
+        "ratio": live.ratio,
+        "appliedRatio": live.applied_ratio,
+        "weight": live.weight,
+        "factor": live.factor,
+        "elapsedShare": live.elapsed_share,
+    }
+
+
+@dataclass
 class SolarBiasAdjustmentResult:
     status: str
     effective_variant: str | None
     adjusted_points: list[dict[str, Any]]
     explainability: SolarBiasExplainability | None
+    live_day_ratio: LiveDayRatio | None = None
 
 
 @dataclass
@@ -420,6 +463,9 @@ class SolarBiasInspectorDay:
     #: same meter and share a y-scale in the strip, so a payload that quoted
     #: them differently would be undrawable anyway.
     price_unit: str | None = None
+    #: Today's live day ratio as the canonical snapshot reports it; ``None``
+    #: on any other date.
+    live_day_ratio: dict[str, Any] | None = None
 
 
 def navigation_range_payload(min_date: str, max_date: str) -> dict[str, str]:
@@ -515,6 +561,7 @@ def inspector_day_to_payload(day: SolarBiasInspectorDay) -> dict[str, Any]:
             "hasProfile": day.availability.has_profile,
         },
         "priceUnit": day.price_unit,
+        "liveDayRatio": day.live_day_ratio,
         "batterySocBounds": [
             {"slot": p.slot, "minPct": p.min_pct, "maxPct": p.max_pct}
             for p in day.battery_soc_bounds
@@ -658,6 +705,7 @@ def read_bias_config(config: dict[str, Any]) -> BiasConfig:
         ),
     )
     slot_invalidation = read_mapping(bias.get("slot_invalidation"))
+    live_day_ratio = read_mapping(bias.get("live_day_ratio"))
     daily_energy_entity_ids = read_solar_forecast_entities(config)
     # The documented fallback uses the solar forecast's meter when bias has none.
     total_energy_entity_id = read_entity_id(
@@ -741,4 +789,19 @@ def read_bias_config(config: dict[str, Any]) -> BiasConfig:
             slot_invalidation_data_glitch_backfill_max_minutes
         ),
         max_training_window_days=max_training_window_days,
+        live_day_ratio_enabled=live_day_ratio.get(
+            "enabled", SOLAR_BIAS_DEFAULT_LIVE_DAY_RATIO_ENABLED
+        ),
+        live_day_ratio_full_confidence_share=_read_number(
+            live_day_ratio.get("full_confidence_share"),
+            SOLAR_BIAS_DEFAULT_LIVE_DAY_RATIO_FULL_CONFIDENCE_SHARE,
+        ),
+        live_day_ratio_min_ratio=_read_number(
+            live_day_ratio.get("min_ratio"),
+            SOLAR_BIAS_DEFAULT_LIVE_DAY_RATIO_MIN_RATIO,
+        ),
+        live_day_ratio_max_ratio=_read_number(
+            live_day_ratio.get("max_ratio"),
+            SOLAR_BIAS_DEFAULT_LIVE_DAY_RATIO_MAX_RATIO,
+        ),
     )

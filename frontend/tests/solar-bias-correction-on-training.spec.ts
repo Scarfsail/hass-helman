@@ -1,6 +1,8 @@
 import { configDoc } from "./support/payload-builders";
 import { test, expect, type Locator, type Page } from "@playwright/test";
 import { EDITOR_BUNDLE, loadBundle } from "./support/card-page";
+import editorCs from "../cards/localize/editor-translations/cs.json";
+import editorEn from "../cards/localize/editor-translations/en.json";
 
 /**
  * Solar bias correction is edited on the Training tab (issue #306), and its
@@ -58,11 +60,11 @@ const TRAINING_STATUS = {
     jobs: ["solar_bias", "house_consumption", "appliance_energy"].map(job),
 };
 
-async function mountEditor(page: Page): Promise<void> {
+async function mountEditor(page: Page, language = "en"): Promise<void> {
     await loadBundle(page, "helman-config-editor-panel", EDITOR_BUNDLE);
 
     await page.evaluate(
-        ({ config, trainingStatus }) => {
+        ({ config, trainingStatus, language }) => {
             // The editor will not enter YAML mode until ha-yaml-editor is
             // defined; a stub is enough, as in entities-only-toggle.spec.ts.
             if (!customElements.get("ha-yaml-editor")) {
@@ -75,8 +77,8 @@ async function mountEditor(page: Page): Promise<void> {
                 "helman-config-editor-panel",
             ) as HTMLElement & Record<string, unknown>;
             element.hass = {
-                language: "en",
-                locale: { language: "en" },
+                language,
+                locale: { language },
                 user: { is_admin: true },
                 connection: window.__mockHass().connection,
                 callWS: window.__mockHass({
@@ -114,7 +116,7 @@ async function mountEditor(page: Page): Promise<void> {
             };
             document.body.appendChild(element);
         },
-        { config: JSON.parse(JSON.stringify(CONFIG)), trainingStatus: TRAINING_STATUS },
+        { config: JSON.parse(JSON.stringify(CONFIG)), trainingStatus: TRAINING_STATUS, language },
     );
 
     await expect(page.locator(".tabs button").first()).toBeVisible();
@@ -137,12 +139,15 @@ function section(page: Page, label: string) {
  * The Solar bias panel's Configuration scope (#313): a sub-panel labelled
  * generically, so it is found inside its named parent.
  */
-function solarBiasConfig(page: Page): Locator {
-    return section(page, "Solar forecast correction").locator(
+function solarBiasConfig(
+    page: Page,
+    labels: { solarBias: string; config: string } = { solarBias: "Solar forecast correction", config: "Configuration" },
+): Locator {
+    return section(page, labels.solarBias).locator(
         ":scope > .section-content > details.section-card",
         {
             has: page.locator(":scope > summary .section-summary-label", {
-                hasText: /^Configuration$/,
+                hasText: new RegExp(`^${labels.config}$`),
             }),
         },
     );
@@ -184,7 +189,8 @@ test("bias correction edited on Data and learning saves under data_and_learning.
     await openSection(page, "Invalidate training slot data");
     await expect(solarBias).not.toContainText("energy_nodes.solar.forecast.bias_correction");
 
-    const enabled = solarBias.locator(".toggle-field", {
+    // The panel's own switch, not the live day ratio's in its nested scope.
+    const enabled = solarBias.locator(":scope > .section-content > .field-grid > .toggle-field", {
         has: page.locator("ha-formfield"),
     });
     await expect(enabled).toHaveCount(1);
@@ -280,3 +286,40 @@ test("a validation issue on a bias field counts on the Training tab", async ({ p
     await expect(tab("Data and learning").locator(".tab-count.errors")).toHaveText("1");
     await expect(tab("Energy nodes").locator(".tab-count")).toHaveCount(0);
 });
+
+for (const [language, bundle] of [["en", editorEn], ["cs", editorCs]] as const) {
+    test(`the live day ratio subsection explains itself and each of its fields (${language})`, async ({ page }) => {
+        const editor = bundle.editor;
+        await mountEditor(page, language);
+        await openTab(page, editor.tabs.data_and_learning);
+        await openSection(page, editor.sections.solar_bias);
+        await openCard(solarBiasConfig(page, { solarBias: editor.sections.solar_bias, config: editor.sections.config }));
+        const live = section(page, editor.sections.bias_correction_live_day_ratio);
+        await openCard(live);
+
+        // Flat: the callout and the fields, no inner card repeating the title.
+        await expect(live.locator(":scope > .section-content details.section-card")).toHaveCount(0);
+        await expect(live.locator(":scope > .section-content > helman-info-callout")).toHaveJSProperty(
+            "text",
+            editor.notes.training_solar_bias_live_day_ratio,
+        );
+
+        const help = live.locator(".help-btn");
+        await expect(help).toHaveCount(4);
+        const texts: string[] = [];
+        for (let index = 0; index < 4; index += 1) {
+            await help.nth(index).click();
+            const body = page.locator(".help-dialog-body");
+            await expect(body).toHaveCount(1);
+            texts.push((await body.textContent())?.trim() ?? "");
+            await page.locator(".help-dialog-close").click();
+            await expect(body).toHaveCount(0);
+        }
+        expect(texts).toEqual(
+            ["enabled", "full_confidence_share", "min_ratio", "max_ratio"].map(
+                (key) => editor.help[`bias_correction_live_day_ratio_${key}` as keyof typeof editor.help],
+            ),
+        );
+        expect(texts.every((text) => text.length > 0)).toBe(true);
+    });
+}

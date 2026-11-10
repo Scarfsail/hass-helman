@@ -58,6 +58,7 @@ class DaySolar:
     invalidated_points: list[SolarBiasInspectorPoint]
     factors: list[SolarBiasFactorPoint]
     has_profile: bool
+    live_day_ratio: dict[str, Any] | None = None
 
 
 @dataclass

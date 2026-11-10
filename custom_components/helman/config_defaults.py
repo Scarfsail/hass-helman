@@ -17,6 +17,10 @@ from .const import (
     SOLAR_BIAS_DEFAULT_DATA_GLITCH_BACKFILL_MAX_MINUTES,
     SOLAR_BIAS_DEFAULT_DATA_GLITCH_MIN_NEIGHBOUR_FORECAST_WH,
     SOLAR_BIAS_DEFAULT_ENABLED,
+    SOLAR_BIAS_DEFAULT_LIVE_DAY_RATIO_ENABLED,
+    SOLAR_BIAS_DEFAULT_LIVE_DAY_RATIO_FULL_CONFIDENCE_SHARE,
+    SOLAR_BIAS_DEFAULT_LIVE_DAY_RATIO_MAX_RATIO,
+    SOLAR_BIAS_DEFAULT_LIVE_DAY_RATIO_MIN_RATIO,
     SOLAR_BIAS_DEFAULT_MAX_INTERPOLATED_CONSECUTIVE_SLOTS,
     SOLAR_BIAS_DEFAULT_MAX_TRAINING_WINDOW_DAYS,
     SOLAR_BIAS_DEFAULT_MIN_HISTORY_DAYS,
@@ -61,6 +65,18 @@ CONFIG_FIELD_DEFAULTS: dict[str, object] = {
     "data_and_learning.solar_bias.clamp_max": SOLAR_BIAS_DEFAULT_CLAMP_MAX,
     "data_and_learning.solar_bias.max_interpolated_consecutive_slots": (
         SOLAR_BIAS_DEFAULT_MAX_INTERPOLATED_CONSECUTIVE_SLOTS
+    ),
+    "data_and_learning.solar_bias.live_day_ratio.enabled": (
+        SOLAR_BIAS_DEFAULT_LIVE_DAY_RATIO_ENABLED
+    ),
+    "data_and_learning.solar_bias.live_day_ratio.full_confidence_share": (
+        SOLAR_BIAS_DEFAULT_LIVE_DAY_RATIO_FULL_CONFIDENCE_SHARE
+    ),
+    "data_and_learning.solar_bias.live_day_ratio.min_ratio": (
+        SOLAR_BIAS_DEFAULT_LIVE_DAY_RATIO_MIN_RATIO
+    ),
+    "data_and_learning.solar_bias.live_day_ratio.max_ratio": (
+        SOLAR_BIAS_DEFAULT_LIVE_DAY_RATIO_MAX_RATIO
     ),
     "data_and_learning.solar_bias.slot_invalidation.curtailment_max_export_w": (
         SOLAR_BIAS_DEFAULT_CURTAILMENT_MAX_EXPORT_W

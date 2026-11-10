@@ -2,6 +2,8 @@ import { html } from "lit";
 import { CHART_COLORS } from "../chart-colors";
 import type { DayCoverage, InspectorPayload, SeriesKey } from "../inspector-day-model";
 import { formatIncompleteNote, formatWh } from "../inspector-format";
+import { liveDayRatioValues } from "../../shared/format";
+import { resolveLocale } from "../../shared/resolve-locale";
 import {
   renderFamilyRow,
   renderHouseForecastErrorMetric,
@@ -58,6 +60,13 @@ export function renderTotals(
           : ""}
         ${renderFamilyRow(ctx, "grid", totals.gridForecastWh, totals.gridActualWh, incomplete)}
         ${renderFamilyRow(ctx, "battery", totals.batteryForecastWh, totals.batteryActualWh, incomplete)}
+        ${payload.liveDayRatio
+          ? renderMetric(
+            ctx,
+            t("node_detail.shared.technical.live_day_ratio"),
+            t("node_detail.shared.technical.live_day_ratio_value", liveDayRatioValues(payload.liveDayRatio, resolveLocale(ctx.hass))),
+          )
+          : ""}
         ${options.hideMoneyStrip ? "" : renderMoneyMetrics(ctx, payload, null)}
       </div>
     </div>
