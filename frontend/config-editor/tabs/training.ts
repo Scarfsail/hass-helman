@@ -1018,6 +1018,55 @@ export function renderTrainingTab(
           </div>
 
           ${host._renderSectionScope(
+            SECTION_SCOPE_IDS.data_and_learning.solar_bias_live_day_ratio,
+            html`
+              <helman-info-callout
+                .hass=${host.hass}
+                .text=${host._t("editor.notes.training_solar_bias_live_day_ratio")}
+              ></helman-info-callout>
+              <div class="field-grid">
+                ${renderBooleanField(
+                  host,
+                  ["data_and_learning", "solar_bias", "live_day_ratio", "enabled"],
+                  "editor.fields.bias_correction_live_day_ratio_enabled",
+                  configDefaultValue(host.configDefaults, [
+                    "data_and_learning",
+                    "solar_bias",
+                    "live_day_ratio",
+                    "enabled",
+                  ]) === true,
+                  "editor.help.bias_correction_live_day_ratio_enabled",
+                )}
+                ${renderOptionalNumberField(
+                  host,
+                  ["data_and_learning", "solar_bias", "live_day_ratio", "full_confidence_share"],
+                  "editor.fields.bias_correction_live_day_ratio_full_confidence_share",
+                  "editor.helpers.bias_correction_live_day_ratio_full_confidence_share",
+                  "editor.help.bias_correction_live_day_ratio_full_confidence_share",
+                  { min: 0.05, max: 1 },
+                )}
+                ${renderOptionalNumberField(
+                  host,
+                  ["data_and_learning", "solar_bias", "live_day_ratio", "min_ratio"],
+                  "editor.fields.bias_correction_live_day_ratio_min_ratio",
+                  "editor.helpers.bias_correction_live_day_ratio_min_ratio",
+                  "editor.help.bias_correction_live_day_ratio_min_ratio",
+                  { min: 0.05, max: 1 },
+                )}
+                ${renderOptionalNumberField(
+                  host,
+                  ["data_and_learning", "solar_bias", "live_day_ratio", "max_ratio"],
+                  "editor.fields.bias_correction_live_day_ratio_max_ratio",
+                  "editor.helpers.bias_correction_live_day_ratio_max_ratio",
+                  "editor.help.bias_correction_live_day_ratio_max_ratio",
+                  { min: 1, max: 5 },
+                )}
+              </div>
+            `,
+            { initialOpen: false },
+          )}
+
+          ${host._renderSectionScope(
             SECTION_SCOPE_IDS.data_and_learning.solar_bias_slot_invalidation,
             html`
               <helman-info-callout

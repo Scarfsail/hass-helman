@@ -256,6 +256,22 @@ def _resolve_runtime_entity_and_states(
     return entity_id, running_active_states(activity)
 
 
+def _without_stale_live_day_ratio(
+    snapshot: dict[str, Any], reference_time: datetime
+) -> dict[str, Any]:
+    bias = snapshot.get("biasCorrection")
+    if not isinstance(bias, dict) or bias.get("liveDayRatio") is None:
+        return snapshot
+    generated_at = dt_util.parse_datetime(snapshot.get("generatedAt") or "")
+    if (
+        generated_at is not None
+        and dt_util.as_local(generated_at).date()
+        == dt_util.as_local(reference_time).date()
+    ):
+        return snapshot
+    return {**snapshot, "biasCorrection": {**bias, "liveDayRatio": None}}
+
+
 def _build_forecast_staleness(
     generated_at: Any,
     *,
@@ -736,6 +752,7 @@ class ForecastService:
             bias_result = solar_bias_service.build_adjustment_result(
                 raw_points,
                 reference_time,
+                raw_solar.get("actualHistory") or [],
             )
             if bias_result is not None:
                 snapshot["biasCorrection"] = build_bias_correction_payload(bias_result)
@@ -1027,11 +1044,15 @@ class ForecastService:
 
         A pure cache read: rebuilding here would put a 56-day recorder scan on
         the path of every card open. The snapshot's age reaches the card in the
-        payload's ``staleness`` block instead.
+        payload's ``staleness`` block instead. Only the live day ratio is
+        withheld from a snapshot built on an earlier local day: it describes
+        the day it was measured on, and must not be read as today's.
         """
         cached_solar_forecast = self._cached_solar_forecast
         if isinstance(cached_solar_forecast, dict):
-            return cached_solar_forecast
+            return _without_stale_live_day_ratio(
+                cached_solar_forecast, reference_time
+            )
         return None
 
     def _canonical_house_forecast(self) -> dict[str, Any]:

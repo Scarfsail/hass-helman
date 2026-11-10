@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Sequence
+from copy import deepcopy
 from datetime import date, datetime, time, timedelta
 from typing import TYPE_CHECKING, Any, Protocol
 from zoneinfo import ZoneInfo
@@ -849,6 +850,7 @@ class SolarInspector:
         # acting on.
         raw_points: list[dict[str, Any]] = []
         corrected_points: list[dict[str, Any]] = []
+        live_day_ratio = None
         if need_past:
             # On a statistics day the elapsed half comes from the same one hourly
             # read as every other measured series -- ``solar_forecast_by_slot``,
@@ -891,6 +893,10 @@ class SolarInspector:
                 start=next_slot,
             )
             raw_points += future_raw
+            if target_date == local_now.date():
+                live_day_ratio = deepcopy(
+                    (canonical_snapshot.get("biasCorrection") or {}).get("liveDayRatio")
+                )
             canonical_corrected = canonical_snapshot.get("correctedPoints") or []
             if effective_variant == "adjusted" and canonical_corrected:
                 corrected_points += _points_from(
@@ -929,6 +935,7 @@ class SolarInspector:
             invalidated_points=invalidated_points,
             factors=factors,
             has_profile=has_profile,
+            live_day_ratio=live_day_ratio,
         )
 
     def _day_forecast_past_coros(
@@ -1326,6 +1333,7 @@ class SolarInspector:
             ),
             price_unit=price_rails.price_unit,
             data_granularity_minutes=HOUR_MINUTES if meters.reads_statistics else SLOT_MINUTES,
+            live_day_ratio=solar.live_day_ratio,
         )
         return inspector_day_to_payload(day)
 

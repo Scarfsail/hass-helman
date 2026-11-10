@@ -71,6 +71,37 @@ class SolarBiasResponseTests(unittest.TestCase):
                         "median": 1.0,
                     },
                 },
+                "liveDayRatio": None,
+            },
+        )
+
+    def test_payload_reports_todays_live_day_ratio(self) -> None:
+        response_module = self._import_response_module()
+        models = self._import_models_module()
+        adjustment_result = models.SolarBiasAdjustmentResult(
+            status="applied",
+            effective_variant="adjusted",
+            adjusted_points=[],
+            explainability=None,
+            live_day_ratio=models.LiveDayRatio(
+                ratio=0.25,
+                applied_ratio=0.3,
+                weight=0.8,
+                factor=0.3**0.8,
+                elapsed_share=0.4,
+            ),
+        )
+
+        payload = response_module.build_bias_correction_payload(adjustment_result)
+
+        self.assertEqual(
+            payload["liveDayRatio"],
+            {
+                "ratio": 0.25,
+                "appliedRatio": 0.3,
+                "weight": 0.8,
+                "factor": 0.3**0.8,
+                "elapsedShare": 0.4,
             },
         )
 

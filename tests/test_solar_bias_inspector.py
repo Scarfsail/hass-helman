@@ -110,6 +110,7 @@ def test_inspector_day_serializes_frontend_contract():
             "hasProfile": True,
         },
         "priceUnit": None,
+        "liveDayRatio": None,
         "batterySocBounds": [],
         "trainingExplainability": None,
     }
@@ -553,6 +554,40 @@ def test_inspector_day_today_preserves_15min_granularity():
     assert impact[1]["factor"] == pytest.approx(0.8)
     assert impact[2]["factor"] == pytest.approx(0.9)
     assert impact[3]["factor"] == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize(
+    ("target_date", "expected"),
+    [
+        ("2026-04-25", {"ratio": 0.6, "appliedRatio": 0.6, "weight": 0.8, "factor": 0.66, "elapsedShare": 0.4}),
+        ("2026-04-26", None),
+        ("2026-04-24", None),
+    ],
+)
+def test_inspector_day_reports_the_live_day_ratio_for_today_only(target_date, expected):
+    live = {"ratio": 0.6, "appliedRatio": 0.6, "weight": 0.8, "factor": 0.66, "elapsedShare": 0.4}
+
+    async def provider(*, reference_time):
+        return {
+            "rawPoints": [],
+            "correctedPoints": [],
+            "biasCorrection": {"liveDayRatio": live},
+        }
+
+    service = _make_service(provider)
+
+    async def fake_actuals(*args, **kwargs):
+        return {}
+
+    old_now = service_mod.dt_util.now
+    try:
+        _seed_solar_actuals(service, fake_actuals)
+        service_mod.dt_util.now = lambda: datetime.fromisoformat("2026-04-25T10:00:00+02:00")
+        payload = asyncio.run(service.async_get_inspector_day(target_date))
+    finally:
+        service_mod.dt_util.now = old_now
+
+    assert payload["liveDayRatio"] == expected
 
 
 def test_inspector_day_impact_factor_is_none_when_raw_is_zero():

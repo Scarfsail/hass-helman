@@ -459,7 +459,7 @@ def _validate_data_and_learning_config(
                                allowed={"min_history_days", "max_training_window_days", "min_valid_slot_days",
                                         "enabled", "total_energy_entity_id", "clamp_min", "clamp_max",
                                         "aggregation_method", "max_interpolated_consecutive_slots",
-                                        "slot_invalidation"}, report=report)
+                                        "slot_invalidation", "live_day_ratio"}, report=report)
             for key in (
                 "min_history_days",
                 "max_training_window_days",
@@ -796,6 +796,27 @@ def _validate_solar_bias_correction(
                     code="missing_prerequisite",
                     message=f"{slot_path} requires energy_nodes.battery.entities.capacity",
                 )
+
+    live_day_ratio = bias_map.get("live_day_ratio")
+    if live_day_ratio is not None:
+        live_path = f"{base_path}.live_day_ratio"
+        live_map = _require_mapping(live_day_ratio, live_path, section, report)
+        if live_map is not None:
+            _warn_unknown_keys(live_map, path=live_path, section=section,
+                               allowed={"enabled", "full_confidence_share", "min_ratio", "max_ratio"},
+                               report=report)
+            _validate_optional_bool(
+                report, section, f"{live_path}.enabled", live_map.get("enabled")
+            )
+            for key, bounds in (
+                ("full_confidence_share", {"ge": 0.05, "le": 1}),
+                ("min_ratio", {"ge": 0.05, "le": 1}),
+                ("max_ratio", {"ge": 1, "le": 5}),
+            ):
+                _validate_optional_number(
+                    report, section, f"{live_path}.{key}", live_map.get(key), **bounds
+                )
+            # min_ratio <= 1 <= max_ratio, so the ranges already keep them ordered.
 
     clamp_min = bias_map.get("clamp_min")
     clamp_max = bias_map.get("clamp_max")

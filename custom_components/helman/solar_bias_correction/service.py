@@ -13,7 +13,7 @@ from homeassistant.util import dt as dt_util
 
 from ..training.schedule import next_scheduled_training_at
 from .actuals import load_actuals_window
-from .adjuster import adjust
+from .adjuster import adjust, apply_live_day_ratio, live_day_ratio
 from .forecast_history import load_trainer_samples
 from .models import (
     BiasConfig,
@@ -168,12 +168,17 @@ class SolarBiasCorrectionService:
         self,
         raw_points: list[dict[str, Any]],
         now,
+        actual_history: list[dict[str, Any]],
     ) -> SolarBiasAdjustmentResult:
-        del now
         status, effective_variant, fallback_reason = self._resolve_status()
         adjusted_points = _copy_points(raw_points)
+        live = None
         if effective_variant == "adjusted" and self._profile is not None:
             adjusted_points = adjust(raw_points, self._profile)
+            if self._cfg.live_day_ratio_enabled:
+                live = live_day_ratio(adjusted_points, actual_history, now, self._cfg)
+                if live is not None:
+                    adjusted_points = apply_live_day_ratio(adjusted_points, live, now)
 
         explainability = SolarBiasExplainability(
             fallback_reason=fallback_reason,
@@ -192,6 +197,7 @@ class SolarBiasCorrectionService:
             effective_variant=effective_variant,
             adjusted_points=adjusted_points,
             explainability=explainability,
+            live_day_ratio=live,
         )
 
     def get_status_payload(self) -> dict[str, Any]:

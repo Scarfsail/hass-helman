@@ -44,6 +44,14 @@ export function formatKwh(kwh: number, { precision = "tile" }: { precision?: Ene
     return kwh.toFixed(decimals);
 }
 
+/** Today's live day ratio in the viewer's decimals: the applied factor, and its trust as a whole percentage. */
+export function liveDayRatioValues(live: { factor: number; weight: number }, locale: string): { factor: string; weight: number } {
+    return {
+        factor: new Intl.NumberFormat(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(live.factor),
+        weight: Math.round(live.weight * 100),
+    };
+}
+
 /** Prices and money use two decimals unless the caller names an axis/compact context. */
 export function formatMoney(amount: number, unit: string | null, { precision = "money" }: { precision?: MoneyPrecision } = {}): string {
     const decimals = precision === "axis" || precision === "ranking" ? 1 : precision === "compact" ? (Math.abs(amount) >= 10 ? 0 : 1) : 2;

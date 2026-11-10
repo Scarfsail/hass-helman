@@ -38,6 +38,10 @@ const CONFIG_DEFAULTS = {
     "data_and_learning.solar_bias.clamp_max": 3.0,
     "data_and_learning.solar_bias.enabled": true,
     "data_and_learning.solar_bias.aggregation_method": "ratio_of_sums",
+    "data_and_learning.solar_bias.live_day_ratio.enabled": true,
+    "data_and_learning.solar_bias.live_day_ratio.full_confidence_share": 0.5,
+    "data_and_learning.solar_bias.live_day_ratio.min_ratio": 0.3,
+    "data_and_learning.solar_bias.live_day_ratio.max_ratio": 2.0,
 };
 
 const CLAMP_MIN_LABEL = "Min forecast clamp";
@@ -47,6 +51,10 @@ const ENABLED_LABEL = "Enable bias correction";
 const AGGREGATION_LABEL = "Aggregation method";
 const SAMPLING_INTERVAL_LABEL = "Sampling interval (seconds)";
 const SAMPLES_LABEL = "Samples to keep";
+const LIVE_SHARE_LABEL = "Fully trusted after (share of today's forecast)";
+const LIVE_MIN_LABEL = "Lowest live ratio";
+const LIVE_MAX_LABEL = "Highest live ratio";
+const LIVE_ENABLED_LABEL = "Adjust the rest of today live";
 
 async function mountEditor(page: Page, config: unknown = STORED_CONFIG, holdValidation = false): Promise<void> {
     await loadBundle(page, "helman-config-editor-panel", EDITOR_BUNDLE);
@@ -210,6 +218,22 @@ test("a checkbox and a select stand on the backend default while unset", async (
         { enabled: ENABLED_LABEL, aggregation: AGGREGATION_LABEL },
     );
     expect(state).toEqual({ checked: true, selected: "ratio_of_sums" });
+});
+
+test("the live day ratio fields show their backend defaults", async ({ page }) => {
+    await mountEditor(page);
+
+    expect(await readField(page, LIVE_SHARE_LABEL)).toEqual({ value: "", placeholder: "0.5" });
+    expect(await readField(page, LIVE_MIN_LABEL)).toEqual({ value: "", placeholder: "0.3" });
+    expect(await readField(page, LIVE_MAX_LABEL)).toEqual({ value: "", placeholder: "2" });
+    const checked = await page.evaluate((label) => {
+        const root = document.querySelector("helman-config-editor-panel")?.shadowRoot;
+        const toggle = Array.from(root?.querySelectorAll("ha-formfield") ?? []).find(
+            (formfield) => (formfield as HTMLElement & { label?: string }).label === label,
+        );
+        return (toggle?.querySelector("ha-switch") as (HTMLElement & { checked?: boolean }) | null)?.checked ?? null;
+    }, LIVE_ENABLED_LABEL);
+    expect(checked).toBe(true);
 });
 
 test("a field with a stored value shows that value", async ({ page }) => {

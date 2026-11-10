@@ -70,6 +70,8 @@ type Variant = {
     battery?: string;
     /** The viewer is an admin. */
     admin?: boolean;
+    /** Today is running at x0.6 of the corrected forecast, 80 % trusted. */
+    liveDayRatio?: boolean;
 };
 
 /** Raw forecast Wh for the slot starting at `ms`. */
@@ -255,6 +257,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 biasCorrection: {
                     status: "applied", effectiveVariant: "adjusted",
                     explainability: { fallbackReason: null, trainedAt: "2026-10-21T03:00:00+00:00", usableDays: 21, droppedDays: 2 },
+                    liveDayRatio: v.liveDayRatio ? { ratio: 0.6, appliedRatio: 0.6, weight: 0.8, factor: 0.6 ** 0.8, elapsedShare: 0.4 } : null,
                 },
             },
         };
@@ -471,11 +474,24 @@ test("solar Technical details compares the raw and corrected forecast for an adm
     await expect(section.locator("[data-row=correction] .value")).toHaveText("× 0.90");
     await expect(section.locator("[data-row=bias-status] .value")).toHaveText("applied");
     await expect(section.locator("[data-row=bias-days] .value")).toHaveText("21");
+    await expect(section.locator("[data-row=live-day-ratio] .value")).toHaveText("—");
     await expect(section.locator("[data-row=raw] .value")).toContainText("kWh");
     await expect(section.locator("[data-row=corrected] .value")).toContainText("kWh");
     await expect(section.locator("[data-entities]")).toHaveCount(1);
     await expect(section.locator('[data-entities] [data-entity="sensor.solar"]')).toHaveCount(1);
     await expect(section.locator('[data-entities] [data-entity="sensor.solar_today"]')).toHaveCount(1);
+});
+
+test("solar Technical details shows today's live day ratio with its trust", async ({ page }) => {
+    await mount(page, { admin: true, liveDayRatio: true });
+    await openSolar(page);
+    const section = content(page).locator("helman-detail-section[data-technical]");
+    await section.locator("button").first().click();
+    const row = section.locator("[data-row=live-day-ratio]");
+    await expect(row.locator(".label")).toContainText("Today's live ratio");
+    await expect(row.locator(".value")).toHaveText("× 0.66 · 80 % trusted");
+    expect(await row.locator("helman-help-tip").evaluate((el: any) => el.explanation))
+        .toBe("Rest of today scaled by how today has produced so far against the forecast");
 });
 
 test("solar Technical details is not rendered for a non-admin", async ({ page }) => {
