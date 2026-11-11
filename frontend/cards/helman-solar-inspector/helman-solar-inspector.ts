@@ -214,6 +214,8 @@ const PAN_THRESHOLD_PX = 6;
  * and the axes the two days share.
  */
 type NeighbourModel = {
+  /** Its own bucket width: a day the recorder kept only hourly is never split finer. */
+  slotMinutes: number;
   view: DayView;
   stacks: ChartStacks;
   layout: ChartLayout;
@@ -1632,7 +1634,7 @@ export class HelmanSolarInspector extends LitElement {
         .stacks=${neighbour.stacks}
         .layout=${neighbour.layout}
         .socBars=${this._socBarsModel.length > 0 ? neighbour.socBars : EMPTY_SOC_BARS}
-        .slotMinutes=${this._slotMinutes}
+        .slotMinutes=${neighbour.slotMinutes}
         .hiddenSeries=${this._hiddenSeries}
         .chartSeries=${this.chartSeries}
         .impactVisible=${this._impactStripVisible}
@@ -2396,18 +2398,22 @@ export class HelmanSolarInspector extends LitElement {
       const neighbourPayload = side === 0
         ? null
         : this._dayPayloads.get(addDays(this._selectedDate, side)) ?? null;
+      // The neighbour at its own native width, as `_showDayPayload` would hold
+      // it once selected: an hourly day spread over 15-minute slots would read
+      // four times its power, and stretch the shared axis with it.
+      const neighbourSlot = Math.max(slot, payloadGranularity(neighbourPayload));
       const neighbourView = neighbourPayload !== null && dayHasSeries(neighbourPayload, this.houseFocus)
-        ? this._neighbourViewOf(neighbourPayload, slot)
+        ? this._neighbourViewOf(neighbourPayload, neighbourSlot)
         : null;
       const neighbourStacks = neighbourView === null
         ? null
-        : this._neighbourStacksOf(neighbourView, slot, hidden, enabled);
+        : this._neighbourStacksOf(neighbourView, neighbourSlot, hidden, enabled);
       // Both days on one power axis, or the halves would not meet at the seam.
       const peakW = neighbourView === null || neighbourStacks === null
         ? null
         : Math.max(
           this._peakOf(view, stacks, slot, hidden, enabled),
-          this._neighbourPeakOf(neighbourView, neighbourStacks, slot, hidden, enabled),
+          this._neighbourPeakOf(neighbourView, neighbourStacks, neighbourSlot, hidden, enabled),
         );
       this._layout = this._layoutOf(
         view, stacks, slot, this._chartWidth, this._daylightOnly, this.daylightThresholdW, hidden, enabled,
@@ -2420,10 +2426,11 @@ export class HelmanSolarInspector extends LitElement {
         // The selected window in the neighbour's own frame: its 00:00 lands
         // exactly where the selected day's 24:00 does, with no x scale of its own.
         const neighbourLayout = this._neighbourLayoutOf(
-          neighbourView, neighbourStacks, slot, this._chartWidth, this._daylightOnly, this.daylightThresholdW,
+          neighbourView, neighbourStacks, neighbourSlot, this._chartWidth, this._daylightOnly, this.daylightThresholdW,
           hidden, enabled, this._shiftedWindowOf(window, -side), peakW,
         );
         this._neighbour = {
+          slotMinutes: neighbourSlot,
           view: neighbourView,
           stacks: neighbourStacks,
           layout: neighbourLayout,
@@ -2439,8 +2446,8 @@ export class HelmanSolarInspector extends LitElement {
           this._moneyCellsOf(view.series.moneyActual, view.series.moneyForecast, slot,
             seamMinutes(this._nowMs, view.date, timeZone, slot)),
           this._layout.dayStartMinutes, this._layout.dayEndMinutes,
-          this._neighbourMoneyCellsOf(neighbourView.series.moneyActual, neighbourView.series.moneyForecast, slot,
-            seamMinutes(this._nowMs, neighbourView.date, timeZone, slot)),
+          this._neighbourMoneyCellsOf(neighbourView.series.moneyActual, neighbourView.series.moneyForecast,
+            neighbourSlot, seamMinutes(this._nowMs, neighbourView.date, timeZone, neighbourSlot)),
           neighbourLayout.dayStartMinutes, neighbourLayout.dayEndMinutes,
         );
       }
@@ -2810,7 +2817,7 @@ export class HelmanSolarInspector extends LitElement {
             .date=${this._neighbour.view.date}
             .timeZone=${this._haTimeZone() ?? "UTC"}
             .geometry=${this._neighbour.stripGeometry}
-            .slotMinutes=${this._slotMinutes}
+            .slotMinutes=${this._neighbour.slotMinutes}
             .nowMs=${this._nowMs}
             .valueScale=${this._sharedPriceScale}
           ></helman-solar-price-strip>
@@ -2855,7 +2862,7 @@ export class HelmanSolarInspector extends LitElement {
             .date=${this._neighbour.view.date}
             .timeZone=${this._haTimeZone() ?? "UTC"}
             .geometry=${this._neighbour.stripGeometry}
-            .slotMinutes=${this._slotMinutes}
+            .slotMinutes=${this._neighbour.slotMinutes}
             .nowMs=${this._nowMs}
             .valueScale=${this._sharedMoneyScale}
           ></helman-solar-money-strip>

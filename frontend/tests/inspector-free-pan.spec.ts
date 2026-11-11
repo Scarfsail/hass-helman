@@ -32,19 +32,27 @@ function solarHours(offset: number): { start: number; end: number } {
     return { start: 8 - 2 * offset, end: 16 + 2 * offset };
 }
 
-async function mountInspector(page: Page, options: { daylightOnly: boolean; nowIso?: string }): Promise<void> {
+async function mountInspector(
+    page: Page,
+    options: { daylightOnly: boolean; nowIso?: string; slotMinutes?: number; hourlyDates?: string[] },
+): Promise<void> {
     await page.setViewportSize({ width: 1200, height: 1000 });
     await installFixedClock(page);
     if (options.nowIso !== undefined) await page.clock.setFixedTime(new Date(options.nowIso));
     await loadBundle(page, "helman-solar-inspector");
-    await page.evaluate(({ daylightOnly, today, yesterday, tomorrow }) => {
+    await page.evaluate(({ daylightOnly, slotMinutes, hourlyDates, today, yesterday, tomorrow }) => {
         const dayMs = 86_400_000;
         const todayMs = Date.parse(`${today}T00:00:00Z`);
         const offsetOf = (date: string) => Math.round((Date.parse(`${date}T00:00:00Z`) - todayMs) / dayMs);
-        const slots = Array.from({ length: 96 }, (_, index) =>
-            `${String(Math.floor(index / 4)).padStart(2, "0")}:${String((index % 4) * 15).padStart(2, "0")}`);
+        const slotsOf = (minutes: number) => Array.from({ length: 1440 / minutes }, (_, index) =>
+            `${String(Math.floor((index * minutes) / 60)).padStart(2, "0")}:${String((index * minutes) % 60).padStart(2, "0")}`);
         const payload = (date: string) => {
             const offset = offsetOf(date);
+            // A day only the recorder's hourly statistics still hold: the same
+            // power, in a quarter as many buckets of four times the energy.
+            const granularity = hourlyDates.includes(date) ? 60 : 15;
+            const perBucket = granularity / 15;
+            const slots = slotsOf(granularity);
             const firstHour = 8 - 2 * offset;
             const lastHour = 16 + 2 * offset;
             const sunny = (slot: string) => {
@@ -67,7 +75,7 @@ async function mountInspector(page: Page, options: { daylightOnly: boolean; nowI
                 },
                 series: {
                     raw: [], actual: [], invalidated: [], factors: [], impact: [],
-                    corrected: slots.map((slot) => ({ slot, valueWh: sunny(slot) ? 100 * (offset + 3) : 0 })),
+                    corrected: slots.map((slot) => ({ slot, valueWh: sunny(slot) ? 100 * (offset + 3) * perBucket : 0 })),
                     houseForecast: [], houseActual: [], houseActualBreakdown: [],
                     batterySocForecast: slots.map((slot) => ({ slot, pct: 50 + 10 * offset })),
                     batterySocActual: [],
@@ -75,7 +83,7 @@ async function mountInspector(page: Page, options: { daylightOnly: boolean; nowI
                     importPrice: slots.map((slot) => ({ slot, value: 3 + offset })),
                     exportPrice: slots.map((slot) => ({ slot, value: 1 })),
                     moneyActual: [],
-                    moneyForecast: slots.map((slot) => ({ slot, cost: 0.2 * (offset + 2), gain: 0.1 })),
+                    moneyForecast: slots.map((slot) => ({ slot, cost: 0.2 * (offset + 2) * perBucket, gain: 0.1 * perBucket })),
                 },
                 totals: {
                     rawWh: null, correctedWh: 1000 * (offset + 5), actualWh: null,
@@ -83,6 +91,7 @@ async function mountInspector(page: Page, options: { daylightOnly: boolean; nowI
                     batteryForecastWh: null, batteryActualWh: null, moneyActual: null, moneyForecast: null,
                 },
                 availability: { hasProfile: true },
+                ...(granularity === 15 ? {} : { dataGranularityMinutes: granularity }),
                 priceUnit: "CZK/kWh",
                 batterySocBounds: [],
                 trainingExplainability: null,
@@ -103,7 +112,7 @@ async function mountInspector(page: Page, options: { daylightOnly: boolean; nowI
         (window as unknown as Record<string, unknown>).__requestedDates = requestedDates;
         const inspector = document.createElement("helman-solar-inspector") as unknown as HTMLElement & Record<string, unknown>;
         inspector.daylightOnlyDefault = daylightOnly;
-        inspector.slotMinutesDefault = 30;
+        inspector.slotMinutesDefault = slotMinutes;
         inspector.hass = {
             language: "en",
             locale: { language: "en" },
@@ -131,7 +140,10 @@ async function mountInspector(page: Page, options: { daylightOnly: boolean; nowI
             }),
         };
         document.body.appendChild(inspector);
-    }, { daylightOnly: options.daylightOnly, today: TODAY, yesterday: YESTERDAY, tomorrow: TOMORROW });
+    }, {
+        daylightOnly: options.daylightOnly, slotMinutes: options.slotMinutes ?? 30, hourlyDates: options.hourlyDates ?? [],
+        today: TODAY, yesterday: YESTERDAY, tomorrow: TOMORROW,
+    });
 
     await page.waitForFunction(() => {
         const root = document.querySelector("helman-solar-inspector")?.shadowRoot;
@@ -462,6 +474,42 @@ test.describe("dragging the inspector's day view", () => {
         // Yesterday washes as past up to now, today's own boundary.
         expect(band!.editableFromMs).toBe(Date.parse(`${TODAY}T06:00:00.000Z`));
         expect(band!.runStarts).toContain(todayStartMs + 20 * 3_600_000);
+    });
+
+    test("an hourly neighbour beside a 15-minute day keeps its own buckets and its true power", async ({ page }) => {
+        await mountInspector(page, { daylightOnly: false, slotMinutes: 15, hourlyDates: [YESTERDAY] });
+        const readAxes = () => page.evaluate(() => {
+            const root = document.querySelector("helman-solar-inspector")!.shadowRoot!;
+            const chart = root.querySelector("helman-solar-day-chart:not([overlay])") as any;
+            const overlay = root.querySelector("helman-solar-day-chart[overlay]") as any;
+            const strip = root.querySelector("helman-solar-price-strip[overlay]") as any;
+            return {
+                maxKw: chart.layout.maxKw,
+                slotWidth: chart.layout.slotWidth,
+                overlay: overlay === null ? null : {
+                    slotMinutes: overlay.slotMinutes,
+                    stripSlotMinutes: strip.slotMinutes,
+                    maxKw: overlay.layout.maxKw,
+                    slotWidth: overlay.layout.slotWidth,
+                    corrected: overlay.view.series.corrected
+                        .filter((point: { valueWh: number }) => point.valueWh > 0)
+                        .map((point: { slot: string }) => point.slot),
+                },
+            };
+        });
+        const before = await readAxes();
+
+        // Today keeps the majority, so yesterday stays a neighbour in the overhang.
+        await mouseDrag(page, 0.3);
+        await expect.poll(() => readView(page)).toMatchObject({ selected: TODAY, overlayDate: YESTERDAY });
+        const after = await readAxes();
+        // Yesterday's 800 Wh an hour is 800 W, under today's 1.2 kW: the shared
+        // axis is today's alone, not a 3.2 kW peak read off 15-minute buckets.
+        expect(after.maxKw).toBe(before.maxKw);
+        expect(after.overlay).toMatchObject({ slotMinutes: 60, stripSlotMinutes: 60, maxKw: before.maxKw });
+        // Its columns are whole hours, on the same x scale as today's quarters.
+        expect(after.overlay!.slotWidth).toBeCloseTo(4 * after.slotWidth, 6);
+        expect(after.overlay!.corrected).toEqual(["10:00", "11:00", "12:00", "13:00"]);
     });
 
     test("daylight-only: the window takes each day's solar width around the same centre", async ({ page }) => {
