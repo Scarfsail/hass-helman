@@ -32,9 +32,10 @@ function solarHours(offset: number): { start: number; end: number } {
     return { start: 8 - 2 * offset, end: 16 + 2 * offset };
 }
 
-async function mountInspector(page: Page, options: { daylightOnly: boolean }): Promise<void> {
+async function mountInspector(page: Page, options: { daylightOnly: boolean; nowIso?: string }): Promise<void> {
     await page.setViewportSize({ width: 1200, height: 1000 });
     await installFixedClock(page);
+    if (options.nowIso !== undefined) await page.clock.setFixedTime(new Date(options.nowIso));
     await loadBundle(page, "helman-solar-inspector");
     await page.evaluate(({ daylightOnly, today, yesterday, tomorrow }) => {
         const dayMs = 86_400_000;
@@ -407,6 +408,60 @@ test.describe("dragging the inspector's day view", () => {
         expect(await page.evaluate(() => (window as any).__sawLoading)).toBe(false);
         // Both days were already at hand: nothing was fetched.
         expect(await page.evaluate(() => (window as any).__requestedDates.length)).toBe(requestsBefore);
+    });
+
+    test("with today in yesterday's overhang, the clock keeps moving today's now marker", async ({ page }) => {
+        // Early enough that a window held mostly in yesterday still shows now.
+        await mountInspector(page, { daylightOnly: false, nowIso: `${TODAY}T06:00:00.000Z` });
+        // 0.6 of a day earlier: yesterday 09:36 to today 09:36.
+        await mouseDrag(page, 0.6);
+        await expect.poll(() => readView(page)).toMatchObject({ selected: YESTERDAY, overlayDate: TODAY });
+
+        const nowMarkerX = () => page.evaluate(() => {
+            const overlay = document.querySelector("helman-solar-inspector")!.shadowRoot!
+                .querySelector("helman-solar-day-chart[overlay]") as any;
+            const line = overlay.shadowRoot.querySelector(".main-chart-wrap svg line[vector-effect='non-scaling-stroke']");
+            return line === null ? null : Number(line.getAttribute("x1"));
+        });
+        const before = await nowMarkerX();
+        expect(before).not.toBeNull();
+
+        // An hour on, and the clock's catch-up tick on returning to the tab.
+        await page.clock.setFixedTime(new Date(`${TODAY}T07:00:00.000Z`));
+        await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+        await expect.poll(nowMarkerX).toBeGreaterThan(before!);
+    });
+
+    test("with yesterday selected, the band still draws today's runs in the overhang", async ({ page }) => {
+        await mountInspector(page, { daylightOnly: false, nowIso: `${TODAY}T06:00:00.000Z` });
+        await mouseDrag(page, 0.6);
+        await expect.poll(() => readView(page)).toMatchObject({ selected: YESTERDAY, overlayDate: TODAY });
+
+        const band = await page.evaluate(() => {
+            const band = document.querySelector("helman-solar-inspector")!.shadowRoot!
+                .querySelector("helman-solar-schedule-band-strip")!.shadowRoot!
+                .querySelector("scheduling-entity-day-band") as any;
+            return band === null ? null : {
+                windowStartMs: band.windowStartMs,
+                windowEndMs: band.windowEndMs,
+                spanStartMs: band.day.startMs,
+                spanEndMs: band.day.endMs,
+                editableFromMs: band.day.editableFromMs,
+                runStarts: band.lanes.flatMap((lane: any) => lane.blocks.map((block: any) => block.startMs)),
+            };
+        });
+        expect(band).not.toBeNull();
+        const todayStartMs = Date.parse(`${TODAY}T00:00:00Z`);
+        const yesterdayStartMs = todayStartMs - DAY_MS;
+        // The window counts from yesterday's midnight, which has no schedule day.
+        const view = await readView(page);
+        expect(band!.windowStartMs).toBe(yesterdayStartMs + view.start * 60_000);
+        expect(band!.windowEndMs).toBe(yesterdayStartMs + view.end * 60_000);
+        expect(band!.spanStartMs).toBe(yesterdayStartMs);
+        expect(band!.spanEndMs).toBe(todayStartMs + DAY_MS);
+        // Yesterday washes as past up to now, today's own boundary.
+        expect(band!.editableFromMs).toBe(Date.parse(`${TODAY}T06:00:00.000Z`));
+        expect(band!.runStarts).toContain(todayStartMs + 20 * 3_600_000);
     });
 
     test("daylight-only: the window takes each day's solar width around the same centre", async ({ page }) => {

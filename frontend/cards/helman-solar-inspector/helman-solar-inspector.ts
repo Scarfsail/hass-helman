@@ -1014,17 +1014,24 @@ export class HelmanSolarInspector extends LitElement {
    * chart, both strips and the schedule band. Two things on screen read it: the
    * "now" line, which only today's day view draws, and the day rollover, which
    * moves the pill window, the navigation bounds and which day counts as today
-   * wherever the card happens to be. A past day and the aggregate views mark no
-   * moment at all, so between two midnights the clock reaches nothing there and
-   * the tick is dropped.
+   * wherever the card happens to be. Today counts as on screen when a drag
+   * shows it in the overhang beside the selected day, too. A past day and the
+   * aggregate views mark no moment at all, so between two midnights the clock
+   * reaches nothing there and the tick is dropped.
    */
   private _tickNow = (): void => {
     const today = this._todayIso();
-    if (today !== this._todayKey
-      || (this._viewMode === "day" && this._selectedDate === today)) {
+    if (today !== this._todayKey || this._todayInDayView(today)) {
       this._nowMs = Date.now();
     }
   };
+
+  /** Whether the day view shows `today`, selected or in the dragged window's overhang. */
+  private _todayInDayView(today: string): boolean {
+    if (this._viewMode !== "day") return false;
+    if (this._selectedDate === today) return true;
+    return this._window !== null && addDays(this._selectedDate, overhangSide(this._window)) === today;
+  }
 
   /**
    * Derive the pill window once per cycle, before anything renders.
