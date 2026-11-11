@@ -535,6 +535,15 @@ export function buildStacks(
 }
 
 /**
+ * The minutes the plot spans, relative to the selected day's midnight.
+ *
+ * Normally a slice of that day, but a drag can carry it below 0 or past 1440
+ * into a neighbouring day -- never wider than one day, so it overhangs at most
+ * one of them.
+ */
+export type DayWindow = { startMinutes: number; endMinutes: number };
+
+/**
  * The hour-aligned span of the day that carries solar production — the first
  * hour any of the raw, corrected or actual solar series reaches the daylight
  * threshold to the hour past the last. Cropping to this window fills the plot
@@ -576,21 +585,38 @@ function solarWindow(
   return end > start ? { start, end } : { start: 0, end: MINUTES_PER_DAY };
 }
 
-export function chartLayout(
-  view: InspectorPayload,
-  stacks: ChartStacks,
-  slot: number,
-  width: number,
+/**
+ * The window a day opens at: its solar hours in the daylight-only view, the
+ * whole day otherwise. A day navigation lands here, and a drag that hands the
+ * majority to another day takes that day's width from here too.
+ */
+export function defaultDayWindow(
+  payload: InspectorPayload,
   daylightOnly: boolean,
   thresholdW: number,
   hidden: ReadonlySet<SeriesKey>,
   enabled: readonly SeriesKey[] | undefined,
-): ChartLayout {
-  const height = 260;
-  const margin = { top: 18, right: 24, bottom: 34, left: 48 };
-  const plotWidth = width - margin.left - margin.right;
-  const plotHeight = height - margin.top - margin.bottom;
+): DayWindow {
+  const { start, end } = daylightOnly
+    ? solarWindow(payload, thresholdW, hidden, enabled)
+    : { start: 0, end: MINUTES_PER_DAY };
+  return { startMinutes: start, endMinutes: end };
+}
 
+/**
+ * The tallest watts the day's chart has to fit, either way of zero.
+ *
+ * Its own step so two days drawn side by side can share one axis: the larger
+ * of the two peaks is handed to both layouts, or the halves would not meet at
+ * the seam.
+ */
+export function chartPeakW(
+  view: InspectorPayload,
+  stacks: ChartStacks,
+  slot: number,
+  hidden: ReadonlySet<SeriesKey>,
+  enabled: readonly SeriesKey[] | undefined,
+): number {
   const powerFor = (series: SeriesKey, entries: ChartEntry[]) =>
     isSeriesVisible(hidden, enabled, series) ? entries.map((e) => e.powerW) : [];
   const invalidatedPoints = toAveragePower(view.series.invalidated, { bucketMinutes: slot });
@@ -605,13 +631,36 @@ export function chartLayout(
   // Every watt supplied is a watt consumed, so the two stacks are mirror
   // images and the axis has to be too: a slot that reaches 3 kW of production
   // reaches 3 kW of consumption. One bound serves both directions.
-  const peakW = Math.max(1000, ...allPower.map((w) => Math.abs(w)));
-  const { maxKw, yTicks } = symmetricPowerAxis(peakW);
+  return Math.max(1000, ...allPower.map((w) => Math.abs(w)));
+}
+
+/**
+ * The chart's scales. `window` replaces the day's own window once a drag has
+ * moved it, and `peakW` the day's own peak while a neighbouring day is drawn
+ * beside it; left null, each is the day's own.
+ */
+export function chartLayout(
+  view: InspectorPayload,
+  stacks: ChartStacks,
+  slot: number,
+  width: number,
+  daylightOnly: boolean,
+  thresholdW: number,
+  hidden: ReadonlySet<SeriesKey>,
+  enabled: readonly SeriesKey[] | undefined,
+  window: DayWindow | null = null,
+  peakW: number | null = null,
+): ChartLayout {
+  const height = 260;
+  const margin = { top: 18, right: 24, bottom: 34, left: 48 };
+  const plotWidth = width - margin.left - margin.right;
+  const plotHeight = height - margin.top - margin.bottom;
+
+  const { maxKw, yTicks } = symmetricPowerAxis(peakW ?? chartPeakW(view, stacks, slot, hidden, enabled));
   const minKw = -maxKw;
   const spanW = (maxKw - minKw) * 1000;
-  const { start: dayStartMinutes, end: dayEndMinutes } = daylightOnly
-    ? solarWindow(view, thresholdW, hidden, enabled)
-    : { start: 0, end: MINUTES_PER_DAY };
+  const { startMinutes: dayStartMinutes, endMinutes: dayEndMinutes } = window
+    ?? defaultDayWindow(view, daylightOnly, thresholdW, hidden, enabled);
   const daySpan = dayEndMinutes - dayStartMinutes;
   const slotWidth = (plotWidth * slot) / daySpan;
   const xForMinutes = (minutes: number) =>

@@ -11,6 +11,11 @@ export class LatestRequest<K> {
         return this._current === token;
     }
 
+    /** A request has begun and has not been reset since. */
+    get pending(): boolean {
+        return this._current !== null;
+    }
+
     reset(): void {
         this._current = null;
     }

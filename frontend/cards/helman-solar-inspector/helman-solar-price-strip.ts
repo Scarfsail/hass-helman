@@ -8,16 +8,18 @@ import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize
 import type { SlotPickDetail } from "./slot-selection.js";
 import {
     EMPTY_SELECTED_MINUTES,
+    labelClearsSeam,
     renderCellBand,
     seamMinutes,
     stripClickDetail,
     stripMinutesForSvgX,
     stripWindow,
     svgXFromEvent,
+    windowGridTicks,
     type ScheduleStripGeometry,
 } from "./strip-geometry";
 import { renderNowMarkerOnDay } from "./now-marker.js";
-import { renderSlotGridlines, slotGridTicks } from "../shared/slot-gridlines";
+import { renderSlotGridlines } from "../shared/slot-gridlines";
 import { helmanColorVars } from "../color-vars";
 import { hourAnchorOffset, selectLabelledColumns, stripValueLabel } from "../shared/strip-value-labels";
 import type { PriceColumn } from "./inspector-day-model";
@@ -49,6 +51,31 @@ function _inkOn(bar: { value: number; side: "import" | "export" } | null): strin
     if (bar === null) return "var(--secondary-text-color)";
     if (bar.value < 0) return INK_ON_NEGATIVE;
     return bar.side === "export" ? INK_ON_EXPORT : INK_ON_IMPORT;
+}
+
+/**
+ * The rates a strip's bars are scaled against: the tallest above zero and the
+ * deepest below it (0 when no rate went negative).
+ */
+export interface PriceScale {
+    maxPositive: number;
+    maxNegative: number;
+}
+
+/**
+ * The scale a day's two rails draw at on their own. Exported so the inspector
+ * can take the larger of two days' and hand it to both, while a drag shows a
+ * neighbouring day beside the selected one.
+ */
+export function priceScale(
+    importColumns: readonly PriceColumn[],
+    exportColumns: readonly PriceColumn[],
+): PriceScale {
+    const values = [...importColumns, ...exportColumns].map((column) => column.value);
+    return {
+        maxPositive: Math.max(0, ...values),
+        maxNegative: Math.max(0, ...values.map((value) => -value)),
+    };
 }
 
 /** One slot's two rates, zipped so the strip can draw them as a single column. */
@@ -92,6 +119,10 @@ export interface PriceTooltipContent {
  *
  * `hass` is held only to read through — it is a conduit for localization, never
  * a change signal (see `../README.md`).
+ *
+ * An `overlay` instance draws a neighbouring day over the selected day's own
+ * strip, in the part of the window a drag carried past midnight: the bars and
+ * their figures only, no guides, grid, hover or selection, and no pointer.
  */
 @customElement("helman-solar-price-strip")
 export class HelmanSolarPriceStrip extends LitElement {
@@ -99,6 +130,10 @@ export class HelmanSolarPriceStrip extends LitElement {
         :host {
             display: block;
             width: 100%;
+        }
+
+        :host([overlay]) {
+            pointer-events: none;
         }
 
         .strip-wrap {
@@ -135,6 +170,10 @@ export class HelmanSolarPriceStrip extends LitElement {
     @property({ attribute: false }) public exportColumns: readonly PriceColumn[] = [];
     /** The currency-per-energy unit both rails are quoted in, e.g. `CZK/kWh`. */
     @property({ type: String }) public unit = "";
+    /** The scale to draw at instead of this day's own, while two days share the strip. */
+    @property({ attribute: false }) public valueScale: PriceScale | null = null;
+    /** Draw only the bars, over another instance: see the class comment. */
+    @property({ type: Boolean, reflect: true }) public overlay = false;
 
     render() {
         if (!this.hass || this.geometry === null) {
@@ -153,17 +192,17 @@ export class HelmanSolarPriceStrip extends LitElement {
     ): TemplateResult {
         const { height, padTop, padBottom } = PRICE_STRIP;
         const innerHeight = height - padTop - padBottom;
-        const allColumns = [...importColumns, ...exportColumns];
         // One y-scale for both rails: they are the same unit, and the whole point
         // of drawing them together is that their heights are comparable.
-        const hasNegative = allColumns.some((column) => column.value < 0);
+        const scale = this.valueScale ?? priceScale(importColumns, exportColumns);
+        const hasNegative = scale.maxNegative > 0;
         // Each side of zero gets its own scale. Splitting the height evenly and
         // scaling both by the larger extent would draw a lone -0.3 against a
         // 7.3 import rate as a hairline nobody can see or label -- and "the
         // rate went negative" is the one thing on this strip worth not missing.
         // The bands stay fixed so the zero line does not jump between days.
-        const maxPositive = Math.max(0.0001, ...allColumns.map((c) => Math.max(0, c.value)));
-        const maxNegative = Math.max(0.0001, ...allColumns.map((c) => Math.max(0, -c.value)));
+        const maxPositive = Math.max(0.0001, scale.maxPositive);
+        const maxNegative = Math.max(0.0001, scale.maxNegative);
         const negativeBand = hasNegative ? innerHeight * NEGATIVE_BAND_SHARE : 0;
         const positiveBand = innerHeight - negativeBand;
         const zeroY = padTop + positiveBand;
@@ -185,7 +224,7 @@ export class HelmanSolarPriceStrip extends LitElement {
                     viewBox="0 0 ${geometry.width} ${height}"
                     role="img"
                     aria-label=${this._t("bias_correction.inspector.price_strip")}
-                    style="cursor: pointer;"
+                    style="cursor: var(--helman-plot-cursor, pointer);"
                     @click=${(event: MouseEvent) => this._handleClick(event, geometry)}
                     @mousemove=${(event: MouseEvent) =>
                         this._handleHover(event, geometry, importColumns, exportColumns)}
@@ -196,21 +235,18 @@ export class HelmanSolarPriceStrip extends LitElement {
                             <rect x=${geometry.marginLeft} y="0" width=${geometry.plotWidth} height=${height}></rect>
                         </clipPath>
                     </defs>
-                    ${this._renderGuides(geometry, zeroY, yForValue, maxPositive, maxNegative, hasNegative)}
-                    ${renderSlotGridlines({
-                        ticks: slotGridTicks({
-                            startMinutes: windowStart,
-                            endMinutes: windowEnd,
-                            slotMinutes: this.slotMinutes,
-                            plotWidth: geometry.plotWidth,
-                        }),
-                        xForMinutes,
-                        top: 0,
-                        bottom: height,
-                    })}
-                    ${renderCellBand(cells, this.hoverMinutes, "hover", height, xForMinutes)}
-                    ${this.selectedMinutes.map((minutes) =>
-                        renderCellBand(cells, minutes, "selected", height, xForMinutes))}
+                    ${this.overlay ? nothing : svg`
+                        ${this._renderGuides(geometry, zeroY, yForValue, maxPositive, maxNegative, hasNegative)}
+                        ${renderSlotGridlines({
+                            ticks: windowGridTicks(windowStart, windowEnd, this.slotMinutes, geometry.plotWidth),
+                            xForMinutes,
+                            top: 0,
+                            bottom: height,
+                        })}
+                        ${renderCellBand(cells, this.hoverMinutes, "hover", height, xForMinutes)}
+                        ${this.selectedMinutes.map((minutes) =>
+                            renderCellBand(cells, minutes, "selected", height, xForMinutes))}
+                    `}
                     <g clip-path="url(#price-plot-clip)">
                     ${this._renderPairedBars(cells, { zeroY, yForValue, seam, xForMinutes })}
                     </g>
@@ -342,10 +378,17 @@ export class HelmanSolarPriceStrip extends LitElement {
         const visible = (cell: PriceCell) =>
             cell.endMinutes > ctx.window.start && cell.startMinutes < ctx.window.end;
         const first = cells.find(visible);
+        // A column whose figures would reach over a dragged-in midnight is no
+        // candidate either: the neighbouring day writes its own up to there.
+        const clearsSeam = (cell: PriceCell, bars: { value: number }[]) => {
+            const { left, width } = this._cellSpan(cell, ctx.xForMinutes);
+            return bars.every(({ value }) =>
+                labelClearsSeam(left + width / 2, formatMoney(value, ""), ctx.window, ctx.xForMinutes));
+        };
         return selectLabelledColumns(
             cells.map((cell) => {
                 const bars = this._cellBars(cell);
-                return bars.length === 0 || !visible(cell)
+                return bars.length === 0 || !visible(cell) || !clearsSeam(cell, bars)
                     ? { value: null, text: null }
                     : {
                         // Both rates in the key, so either one moving makes the
@@ -470,9 +513,11 @@ export class HelmanSolarPriceStrip extends LitElement {
      * matching how clicking outside the plot on the chart deselects.
      */
     private _handleClick(event: MouseEvent, geometry: ScheduleStripGeometry): void {
+        const detail = stripClickDetail(event, geometry);
+        if (detail === null) return;
         this.dispatchEvent(
             new CustomEvent<SlotPickDetail>("slot-pick", {
-                detail: stripClickDetail(event, geometry),
+                detail,
                 bubbles: true,
                 composed: true,
             }),

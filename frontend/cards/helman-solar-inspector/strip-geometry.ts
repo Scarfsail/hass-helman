@@ -1,6 +1,9 @@
 import { nothing, svg } from "lit";
 import { getScheduleLocalTimeParts } from "../shared/schedule/model/schedule-time";
 import { slotSelectionModeForEvent, type SlotPickDetail } from "./slot-selection.js";
+import { slotGridTicks, type SlotGridTick } from "../shared/slot-gridlines";
+import { overhangSide } from "./pan-window";
+import { STRIP_LABEL_FONT_SIZE } from "../shared/strip-value-labels";
 
 const MINUTES_PER_DAY = 1440;
 
@@ -42,14 +45,70 @@ export function stripWindow(geometry: ScheduleStripGeometry): { start: number; e
     return end > start ? { start, end } : { start: 0, end: MINUTES_PER_DAY };
 }
 
-/** Invert a strip's x mapping: a viewBox x back to its minute-of-day, or null in the gutter. */
+/**
+ * Invert a strip's x mapping: a viewBox x back to its minute-of-day, or null
+ * in the gutter -- and over a neighbouring day a drag has brought into view,
+ * whose slots are not the selected day's to hover or select.
+ */
 export function stripMinutesForSvgX(geometry: ScheduleStripGeometry, svgX: number): number | null {
+    const minutes = stripWindowMinutesForSvgX(geometry, svgX);
+    return minutes === null ? null : minutesOfDayOrNull(minutes);
+}
+
+/** A strip's viewBox x as a minute of its window -- outside 0..1440 over a neighbour -- or null in the gutter. */
+function stripWindowMinutesForSvgX(geometry: ScheduleStripGeometry, svgX: number): number | null {
     const plotRight = geometry.marginLeft + geometry.plotWidth;
     if (svgX < geometry.marginLeft || svgX > plotRight) {
         return null;
     }
     const { start, end } = stripWindow(geometry);
     return start + ((svgX - geometry.marginLeft) / geometry.plotWidth) * (end - start);
+}
+
+/** A minute of the selected day, or null for one on a neighbouring day. */
+export function minutesOfDayOrNull(minutes: number): number | null {
+    return minutes < 0 || minutes >= MINUTES_PER_DAY ? null : minutes;
+}
+
+/**
+ * The time grid of a window, for every row of the inspector.
+ *
+ * A window a drag carried past either midnight names the midnights, so the
+ * hours past one read as the clock (01, not 25) and the day boundary is
+ * marked; a window inside its day is ruled exactly as it always was.
+ */
+export function windowGridTicks(
+    startMinutes: number,
+    endMinutes: number,
+    slotMinutes: number,
+    plotWidth: number,
+): SlotGridTick[] {
+    const overhangs = overhangSide({ startMinutes, endMinutes }) !== 0;
+    return slotGridTicks({
+        startMinutes,
+        endMinutes,
+        slotMinutes,
+        plotWidth,
+        midnightMinutes: overhangs ? [-MINUTES_PER_DAY, 0, MINUTES_PER_DAY, 2 * MINUTES_PER_DAY] : undefined,
+    });
+}
+
+/**
+ * Whether a value label centred at x stays on its own day's side of a midnight
+ * the window was dragged across. The neighbouring day's instance writes its own
+ * labels up to the same seam, and the two thin their labels apart, so one that
+ * reached over it would run into the other day's figures. The width is an
+ * estimate off the text's length, a digit being about 0.6em.
+ */
+export function labelClearsSeam(
+    x: number,
+    text: string,
+    window: { start: number; end: number },
+    xForMinutes: (minutes: number) => number,
+): boolean {
+    const halfWidth = (text.length * STRIP_LABEL_FONT_SIZE * 0.6) / 2 + 1;
+    return !(window.start < 0 && x - halfWidth < xForMinutes(0))
+        && !(window.end > MINUTES_PER_DAY && x + halfWidth > xForMinutes(MINUTES_PER_DAY));
 }
 
 /**
@@ -67,13 +126,15 @@ export function svgXFromEvent(event: MouseEvent, viewBoxWidth: number): number {
 /**
  * What a click on a strip asks the inspector to select: the minute under the
  * pointer, or `null` in the axis gutter so the inspector clears its selection,
- * matching how clicking outside the plot on the chart deselects.
+ * matching how clicking outside the plot on the chart deselects. A click over
+ * a neighbouring day a drag brought into view asks for nothing at all.
  */
-export function stripClickDetail(event: MouseEvent, geometry: ScheduleStripGeometry): SlotPickDetail {
-    return {
-        minutes: stripMinutesForSvgX(geometry, svgXFromEvent(event, geometry.width)),
-        mode: slotSelectionModeForEvent(event),
-    };
+export function stripClickDetail(event: MouseEvent, geometry: ScheduleStripGeometry): SlotPickDetail | null {
+    const minutes = stripWindowMinutesForSvgX(geometry, svgXFromEvent(event, geometry.width));
+    if (minutes !== null && minutesOfDayOrNull(minutes) === null) {
+        return null;
+    }
+    return { minutes, mode: slotSelectionModeForEvent(event) };
 }
 
 /**

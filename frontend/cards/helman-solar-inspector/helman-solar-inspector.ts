@@ -15,7 +15,7 @@ import {
 } from "../shared/hover-tooltip";
 import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize";
 import { dispatchWatchedEntities } from "../shared/hass-change";
-import { todayKey } from "../shared/time/day-key";
+import { addDays, daysBetween, todayKey } from "../shared/time/day-key";
 import "./helman-solar-schedule-band-strip";
 import "../shared/schedule/dialogs/scheduling-day-editor-host";
 import type {
@@ -45,7 +45,9 @@ import {
 import "./helman-solar-day-chart";
 import { chartGridTicks, type DayChartTooltipDetail } from "./helman-solar-day-chart";
 import "./helman-solar-price-strip";
+import { priceScale, type PriceScale } from "./helman-solar-price-strip";
 import "./helman-solar-money-strip";
+import { buildMoneyCells, moneyScale, type MoneyCell, type MoneyScale } from "./helman-solar-money-strip";
 import "./helman-solar-aggregate-chart";
 import type {
   AggregateBucketOpenDetail,
@@ -93,14 +95,16 @@ import { EMPTY_NORMALIZED_SCHEDULE } from "../shared/schedule/model/schedule-nor
 import { ForecastLoader } from "../shared/data/forecast-loader";
 import { resolveLocale } from "../shared/resolve-locale";
 import type { ScheduleHoverTooltipContent } from "./helman-solar-schedule-band-strip";
-import { EMPTY_SELECTED_MINUTES, type ScheduleStripGeometry } from "./strip-geometry";
+import { EMPTY_SELECTED_MINUTES, seamMinutes, type ScheduleStripGeometry } from "./strip-geometry";
 import { memoOne } from "../shared/memo-one";
 import {
   EMPTY_DAY_COVERAGE,
   buildDayView,
   buildStacks,
   chartLayout,
+  chartPeakW,
   dayCoverage,
+  defaultDayWindow,
   dayHasSeries,
   isSeriesEnabled,
   isSeriesVisible,
@@ -112,9 +116,18 @@ import {
   type ChartStacks,
   type DayCoverage,
   type DayView,
+  type DayWindow,
   type InspectorPayload,
   type SeriesKey,
 } from "./inspector-day-model";
+import {
+  clampWindow,
+  majorityDayOffset,
+  overhangSide,
+  shiftWindow,
+  snapWindow,
+  windowAround,
+} from "./pan-window";
 import {
   monthBounds,
   parseOrToday as navigationParseOrToday,
@@ -189,6 +202,70 @@ const EMPTY_SCHEDULE_SNAPSHOT: ScheduleOwnerSnapshot = {
  */
 const INSPECTOR_CONTENT_MIN_HEIGHT = 520;
 
+/**
+ * How far a press travels sideways before it is a drag rather than a click: a
+ * press that never gets this far still selects its slot.
+ */
+const PAN_THRESHOLD_PX = 6;
+
+/**
+ * The neighbouring day drawn into the part of the window a drag carried past
+ * midnight, with its own scales -- the selected day's window shifted by a day,
+ * and the axes the two days share.
+ */
+type NeighbourModel = {
+  view: DayView;
+  stacks: ChartStacks;
+  layout: ChartLayout;
+  stripGeometry: ScheduleStripGeometry;
+  socBars: readonly SocBar[];
+};
+
+/** A primary press on the day view, and the drag it became once it travelled. */
+type PanPress = {
+  pointerId: number;
+  touch: boolean;
+  startX: number;
+  startY: number;
+  lastX: number;
+  /**
+   * Null until the press passes `PAN_THRESHOLD_PX`. The window's centre with
+   * the pointer at `anchorX`, in the selected day's frame, and the plot's
+   * rendered width; a drag past midnight that hands the selection to the next
+   * day re-anchors it there, in that day's frame and at its width.
+   */
+  pan: { anchorCentre: number; anchorX: number; plotPx: number } | null;
+};
+
+/** One scale for two days' price rails: the further reach either way of zero. */
+function sharedPriceScale(
+  importColumns: DayView["importPriceColumns"],
+  exportColumns: DayView["exportPriceColumns"],
+  neighbourImport: DayView["importPriceColumns"],
+  neighbourExport: DayView["exportPriceColumns"],
+): PriceScale {
+  const own = priceScale(importColumns, exportColumns);
+  const neighbour = priceScale(neighbourImport, neighbourExport);
+  return {
+    maxPositive: Math.max(own.maxPositive, neighbour.maxPositive),
+    maxNegative: Math.max(own.maxNegative, neighbour.maxNegative),
+  };
+}
+
+/** One scale for two days' money, each read over the part of it on screen. */
+function sharedMoneyScale(
+  cells: readonly MoneyCell[],
+  start: number,
+  end: number,
+  neighbourCells: readonly MoneyCell[],
+  neighbourStart: number,
+  neighbourEnd: number,
+): MoneyScale {
+  const own = moneyScale(cells, { start, end });
+  const neighbour = moneyScale(neighbourCells, { start: neighbourStart, end: neighbourEnd });
+  return { maxUp: Math.max(own.maxUp, neighbour.maxUp), maxDown: Math.max(own.maxDown, neighbour.maxDown) };
+}
+
 export class HelmanSolarInspector extends LitElement {
   @property({ attribute: false }) hass?: HomeAssistant;
   /** Solar power (W) at or above which a slot counts as carrying sun energy. */
@@ -261,7 +338,47 @@ export class HelmanSolarInspector extends LitElement {
   @state() private _nodeDetail: NodeDetailParams | null = null;
   /** Counts detail opens, so a slower earlier one never overrides a later one. */
   private _nodeDetailRequest = 0;
-  @state() private _payload: InspectorPayload | null = null;
+  /**
+   * The day payloads at hand: the selected day and, once a drag has reached
+   * into them, its two neighbours -- never more. A drag that hands the
+   * majority to a neighbour finds it here, so the day changes under it with no
+   * load and no spinner.
+   */
+  @state() private _dayPayloads: ReadonlyMap<string, InspectorPayload> = new Map();
+  /**
+   * Which of them the day view draws: the selected day once it has loaded, and
+   * until then the day it replaces -- kept up, dimmed, while the next one loads.
+   */
+  @state() private _payloadDate = "";
+  /** Neighbour reads in flight, so a drag asks for each day once. */
+  private readonly _neighbourRequests = new Set<string>();
+  /** Neighbour reads that failed, not asked again until the next drag or refresh. */
+  private readonly _neighbourFailures = new Set<string>();
+  /** Bumped by a refresh, so a neighbour read from before it wins nothing. */
+  private _neighbourGeneration = 0;
+  /**
+   * The minutes the day view spans, relative to the selected day's midnight,
+   * or null for the day's own window: its solar hours in the daylight-only
+   * view, the whole day otherwise. A drag sets it and may take it below 0 or
+   * past 1440; every day navigation puts it back to null.
+   */
+  @state() private _window: DayWindow | null = null;
+  /** A drag is moving the window: the cursor grips, and hover stands down. */
+  @state() private _panning = false;
+  private _press: PanPress | null = null;
+  private _panFrame = 0;
+  /** The click that ends a drag is not a slot press. */
+  private _suppressClick = false;
+
+  /** The day payload the day view draws: see `_payloadDate`. */
+  private get _payload(): InspectorPayload | null {
+    return this._dayPayloads.get(this._payloadDate) ?? null;
+  }
+
+  /** Replace the drawn day's payload in place -- the hook specs edit it through. */
+  private set _payload(payload: InspectorPayload) {
+    this._dayPayloads = new Map(this._dayPayloads).set(this._payloadDate, payload);
+  }
   /**
    * The composition panels' group nodes, kept across renders so their
    * expanded state survives picking another slot. Not `@state`: the nodes are
@@ -450,6 +567,27 @@ export class HelmanSolarInspector extends LitElement {
   private readonly _stripGeometryOf = memoOne(stripGeometry);
   private readonly _socBarsOf = memoOne(socBars);
   private readonly _selectedMinutesOf = memoOne(selectedMinutes);
+  /**
+   * The neighbouring day's model, while the window overhangs it, and the
+   * scales the two days share. Its own memo set, so deriving the neighbour
+   * never invalidates the selected day's -- a frame of a drag rebuilds the
+   * layouts and nothing else.
+   */
+  private _neighbour: NeighbourModel | null = null;
+  private _sharedPriceScale: PriceScale | null = null;
+  private _sharedMoneyScale: MoneyScale | null = null;
+  private readonly _neighbourViewOf = memoOne(buildDayView);
+  private readonly _neighbourStacksOf = memoOne(buildStacks);
+  private readonly _neighbourLayoutOf = memoOne(chartLayout);
+  private readonly _neighbourStripGeometryOf = memoOne(stripGeometry);
+  private readonly _neighbourSocBarsOf = memoOne(socBars);
+  private readonly _peakOf = memoOne(chartPeakW);
+  private readonly _neighbourPeakOf = memoOne(chartPeakW);
+  private readonly _shiftedWindowOf = memoOne(shiftWindow);
+  private readonly _priceScaleOf = memoOne(sharedPriceScale);
+  private readonly _moneyCellsOf = memoOne(buildMoneyCells);
+  private readonly _neighbourMoneyCellsOf = memoOne(buildMoneyCells);
+  private readonly _moneyScaleOf = memoOne(sharedMoneyScale);
   /**
    * The day's coverage, as `dayCoverage` last returned it: the wider-bucket
    * starts the current view drew over a hole, per short series, with the
@@ -761,6 +899,34 @@ export class HelmanSolarInspector extends LitElement {
       }
     }
 
+    /* The chart and the strips under it, as one surface a drag moves through
+       time. Vertical page scrolling stays the browser's; only a sideways drag
+       is the card's. The plots read the cursor through the custom property,
+       so the grip shows over them as well as between them. */
+    .pan-surface {
+      --helman-plot-cursor: grab;
+      touch-action: pan-y;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    .pan-surface.panning {
+      --helman-plot-cursor: grabbing;
+      cursor: grabbing;
+    }
+
+    /* The neighbouring day's instance lies over the selected day's own, in the
+       same box: it draws only where the window ran past midnight. */
+    .pan-stack {
+      position: relative;
+    }
+
+    .pan-overlay {
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+    }
+
     .strip-section {
       display: grid;
       gap: 2px;
@@ -833,6 +999,7 @@ export class HelmanSolarInspector extends LitElement {
     this.removeEventListener(NODE_DETAIL_REQUEST_EVENT, this._handleNodeDetailRequest);
     this._stopNowClock?.();
     this._stopNowClock = undefined;
+    this._endPress();
     this._disconnectChartResizeObserver();
     this._unsubscribeScheduleOwner?.();
     this._unsubscribeScheduleOwner = undefined;
@@ -1327,7 +1494,7 @@ export class HelmanSolarInspector extends LitElement {
             class="icon-button ${this._daylightOnly ? "active" : ""}"
             title=${this._t("bias_correction.inspector.daylight_only")}
             aria-pressed=${this._daylightOnly ? "true" : "false"}
-            @click=${() => { this._daylightOnly = !this._daylightOnly; }}
+            @click=${() => { this._daylightOnly = !this._daylightOnly; this._window = null; }}
           >☀</button>`}
           <button
             class="icon-button"
@@ -1376,6 +1543,12 @@ export class HelmanSolarInspector extends LitElement {
                  three -- the order the day editor stacks the same four things
                  in, so moving between the two is not a re-read. -->
             ${this._renderTooltip()}
+            <div
+              class="pan-surface ${this._panning ? "panning" : ""}"
+              @pointerdown=${{ handleEvent: this._handlePanPointerDown, capture: true }}
+              @click=${{ handleEvent: this._handlePanClickCapture, capture: true }}
+            >
+            <div class="pan-stack">
             <helman-solar-day-chart
               .hass=${this.hass}
               .view=${view}
@@ -1398,9 +1571,12 @@ export class HelmanSolarInspector extends LitElement {
               @slot-hover=${this._handleStripHover}
               @slot-tooltip=${this._handleChartTooltip}
             ></helman-solar-day-chart>
+            ${this._renderChartOverlay(view)}
+            </div>
             ${this.hidePriceStrip ? "" : this._renderPriceStrip(view)}
             ${this.hideMoneyStrip ? "" : this._renderMoneyStrip(view)}
             ${this.hideScheduleStrip ? "" : this._renderScheduleActionsStrip(view, layout)}
+            </div>
             ${renderSelectedSlotDetails(panel, view, {
               slots: this._selectedSlotsIn(view),
               focusSlot: this._selectedSlot,
@@ -1429,6 +1605,36 @@ export class HelmanSolarInspector extends LitElement {
             })}
           `
         : html`<div class="note">${this._t("bias_correction.inspector.no_data", { date: this._formatDay(view.date) })}</div>`}
+    `;
+  }
+
+  /**
+   * The neighbouring day's chart, over the selected day's own, while the
+   * window reaches into it. Its optional rows follow the base instance's, so
+   * the two stack row for row.
+   */
+  private _renderChartOverlay(view: DayView) {
+    const neighbour = this._neighbour;
+    if (neighbour === null) return "";
+    return html`
+      <helman-solar-day-chart
+        class="pan-overlay"
+        overlay
+        .hass=${this.hass}
+        .view=${neighbour.view}
+        .stacks=${neighbour.stacks}
+        .layout=${neighbour.layout}
+        .socBars=${this._socBarsModel.length > 0 ? neighbour.socBars : EMPTY_SOC_BARS}
+        .slotMinutes=${this._slotMinutes}
+        .hiddenSeries=${this._hiddenSeries}
+        .chartSeries=${this.chartSeries}
+        .impactVisible=${this._impactStripVisible}
+        .impactRowDrawn=${view.series.impact.length > 0}
+        .houseFocus=${this.houseFocus}
+        .date=${neighbour.view.date}
+        .timeZone=${this._haTimeZone() ?? "UTC"}
+        .nowMs=${this._nowMs}
+      ></helman-solar-day-chart>
     `;
   }
 
@@ -1480,6 +1686,7 @@ export class HelmanSolarInspector extends LitElement {
       // from M without this opened the 1st of January.
       this._selectedDate = this._dayForMinutesStop();
       this._clearChartFocus();
+      this._window = null;
       this._viewMode = "day";
       this._setSlotMinutes(stop.minutes);
       this._ensureDayLoaded();
@@ -2139,6 +2346,9 @@ export class HelmanSolarInspector extends LitElement {
    */
   private _rebuildDayModelIfNeeded(): void {
     const payload = this._viewMode === "day" ? this._drawablePayload() : null;
+    this._neighbour = null;
+    this._sharedPriceScale = null;
+    this._sharedMoneyScale = null;
     if (payload === null) {
       this._view = null;
       this._stacks = null;
@@ -2171,12 +2381,62 @@ export class HelmanSolarInspector extends LitElement {
       this._layout = null;
       this._stripGeometry = null;
     } else {
+      // The day the window reaches into, when a drag took it past midnight and
+      // that day has arrived. Only ever for the day actually selected: a stale
+      // payload kept up through a load is drawn in its own window.
+      const window = payload.date === this._selectedDate ? this._window : null;
+      const side = window === null ? 0 : overhangSide(window);
+      const neighbourPayload = side === 0
+        ? null
+        : this._dayPayloads.get(addDays(this._selectedDate, side)) ?? null;
+      const neighbourView = neighbourPayload !== null && dayHasSeries(neighbourPayload, this.houseFocus)
+        ? this._neighbourViewOf(neighbourPayload, slot)
+        : null;
+      const neighbourStacks = neighbourView === null
+        ? null
+        : this._neighbourStacksOf(neighbourView, slot, hidden, enabled);
+      // Both days on one power axis, or the halves would not meet at the seam.
+      const peakW = neighbourView === null || neighbourStacks === null
+        ? null
+        : Math.max(
+          this._peakOf(view, stacks, slot, hidden, enabled),
+          this._neighbourPeakOf(neighbourView, neighbourStacks, slot, hidden, enabled),
+        );
       this._layout = this._layoutOf(
         view, stacks, slot, this._chartWidth, this._daylightOnly, this.daylightThresholdW, hidden, enabled,
+        window, peakW,
       );
       // One object per layout: the three strips compare it by identity, and a
       // fresh literal per render would re-render all three on every hover.
       this._stripGeometry = this._stripGeometryOf(this._layout);
+      if (window !== null && neighbourView !== null && neighbourStacks !== null) {
+        // The selected window in the neighbour's own frame: its 00:00 lands
+        // exactly where the selected day's 24:00 does, with no x scale of its own.
+        const neighbourLayout = this._neighbourLayoutOf(
+          neighbourView, neighbourStacks, slot, this._chartWidth, this._daylightOnly, this.daylightThresholdW,
+          hidden, enabled, this._shiftedWindowOf(window, -side), peakW,
+        );
+        this._neighbour = {
+          view: neighbourView,
+          stacks: neighbourStacks,
+          layout: neighbourLayout,
+          stripGeometry: this._neighbourStripGeometryOf(neighbourLayout),
+          socBars: this._neighbourSocBarsOf(neighbourView, hidden, enabled, neighbourStacks.fillFromMinutes),
+        };
+        this._sharedPriceScale = this._priceScaleOf(
+          view.importPriceColumns, view.exportPriceColumns,
+          neighbourView.importPriceColumns, neighbourView.exportPriceColumns,
+        );
+        const timeZone = this._haTimeZone() ?? "UTC";
+        this._sharedMoneyScale = this._moneyScaleOf(
+          this._moneyCellsOf(view.series.moneyActual, view.series.moneyForecast, slot,
+            seamMinutes(this._nowMs, view.date, timeZone, slot)),
+          this._layout.dayStartMinutes, this._layout.dayEndMinutes,
+          this._neighbourMoneyCellsOf(neighbourView.series.moneyActual, neighbourView.series.moneyForecast, slot,
+            seamMinutes(this._nowMs, neighbourView.date, timeZone, slot)),
+          neighbourLayout.dayStartMinutes, neighbourLayout.dayEndMinutes,
+        );
+      }
     }
 
     // Off the seam the stacks put the forecast at, so the SoC columns turn
@@ -2376,8 +2636,22 @@ export class HelmanSolarInspector extends LitElement {
   private _refreshActiveView(silent: boolean): void {
     this._spanRequest.reset();
     this._historyRequest.reset();
+    // The neighbours held went stale with the day beside them. The one the
+    // window reaches into is on screen, so the day view asks for it again with
+    // the day; any other is dropped, to be fetched by the next drag that
+    // reaches it -- a refresh asks only for what is drawn.
+    this._neighbourGeneration++;
+    this._neighbourRequests.clear();
+    this._neighbourFailures.clear();
+    const side = this._viewMode === "day" && this._window !== null ? overhangSide(this._window) : 0;
+    const drawnNeighbour = side === 0 ? null : addDays(this._selectedDate, side);
+    const kept = [...this._dayPayloads].filter(([date]) => date === this._payloadDate || date === drawnNeighbour);
+    if (kept.length !== this._dayPayloads.size) {
+      this._dayPayloads = new Map(kept);
+    }
     if (this._viewMode === "day") {
       void this._load({ silent });
+      if (drawnNeighbour !== null) void this._ensureNeighbourLoaded(drawnNeighbour, true);
       return;
     }
     this._dayStale = true;
@@ -2421,12 +2695,14 @@ export class HelmanSolarInspector extends LitElement {
    * land in the controller's next frame, as one update.
    */
   private _hover(minutes: number | null) {
+    // A drag owns the pointer: the hover stands down until it ends.
+    if (this._panning) return;
     this._tooltip.inNextFrame(() => this._setHoverMinutes(minutes));
   }
 
   /** A popup some other element measured, at the viewport point it reported. */
   private _showReported(content: TooltipContent | null, anchor: EventTarget | null) {
-    if (content === null) {
+    if (content === null || this._panning) {
       this._tooltip.hide();
       return;
     }
@@ -2446,7 +2722,7 @@ export class HelmanSolarInspector extends LitElement {
    */
   private _handleChartTooltip = (event: CustomEvent<DayChartTooltipDetail | null>): void => {
     const detail = event.detail;
-    if (detail === null) {
+    if (detail === null || this._panning) {
       this._tooltip.hide();
     } else if (!detail.tap) {
       this._tooltip.show(detail.event, detail.body);
@@ -2497,6 +2773,7 @@ export class HelmanSolarInspector extends LitElement {
     return html`
       <div class="compact-strip-section chart-separator">
         <span class="compact-strip-label">${this._t("bias_correction.inspector.price_strip_compact")}</span>
+        <div class="pan-stack">
         <helman-solar-price-strip
           .hass=${this.hass}
           .importColumns=${payload.importPriceColumns}
@@ -2509,11 +2786,29 @@ export class HelmanSolarInspector extends LitElement {
           .hoverMinutes=${this._hoveredMinutes}
           .slotMinutes=${this._slotMinutes}
           .nowMs=${this._nowMs}
+          .valueScale=${this._sharedPriceScale}
           @slot-pick=${(event: CustomEvent<SlotPickDetail>) =>
             this._handleStripSlotPick(event)}
           @slot-hover=${this._handleStripHover}
           @slot-tooltip=${this._handleStripTooltip}
         ></helman-solar-price-strip>
+        ${this._neighbour === null ? "" : html`
+          <helman-solar-price-strip
+            class="pan-overlay"
+            overlay
+            .hass=${this.hass}
+            .importColumns=${this._neighbour.view.importPriceColumns}
+            .exportColumns=${this._neighbour.view.exportPriceColumns}
+            .unit=${this._neighbour.view.priceUnit ?? ""}
+            .date=${this._neighbour.view.date}
+            .timeZone=${this._haTimeZone() ?? "UTC"}
+            .geometry=${this._neighbour.stripGeometry}
+            .slotMinutes=${this._slotMinutes}
+            .nowMs=${this._nowMs}
+            .valueScale=${this._sharedPriceScale}
+          ></helman-solar-price-strip>
+        `}
+        </div>
       </div>
     `;
   }
@@ -2523,6 +2818,7 @@ export class HelmanSolarInspector extends LitElement {
     return html`
       <div class="compact-strip-section chart-separator">
         <span class="compact-strip-label">${this._t("bias_correction.inspector.money_strip_compact")}</span>
+        <div class="pan-stack">
         <helman-solar-money-strip
           .hass=${this.hass}
           .moneyActual=${payload.series.moneyActual}
@@ -2535,11 +2831,29 @@ export class HelmanSolarInspector extends LitElement {
           .hoverMinutes=${this._hoveredMinutes}
           .slotMinutes=${this._slotMinutes}
           .nowMs=${this._nowMs}
+          .valueScale=${this._sharedMoneyScale}
           @slot-pick=${(event: CustomEvent<SlotPickDetail>) =>
             this._handleStripSlotPick(event)}
           @slot-hover=${this._handleStripHover}
           @slot-tooltip=${this._handleStripTooltip}
         ></helman-solar-money-strip>
+        ${this._neighbour === null ? "" : html`
+          <helman-solar-money-strip
+            class="pan-overlay"
+            overlay
+            .hass=${this.hass}
+            .moneyActual=${this._neighbour.view.series.moneyActual}
+            .moneyForecast=${this._neighbour.view.series.moneyForecast}
+            .currency=${currencyFromPriceUnit(this._neighbour.view.priceUnit)}
+            .date=${this._neighbour.view.date}
+            .timeZone=${this._haTimeZone() ?? "UTC"}
+            .geometry=${this._neighbour.stripGeometry}
+            .slotMinutes=${this._slotMinutes}
+            .nowMs=${this._nowMs}
+            .valueScale=${this._sharedMoneyScale}
+          ></helman-solar-money-strip>
+        `}
+        </div>
       </div>
     `;
   }
@@ -2699,28 +3013,8 @@ export class HelmanSolarInspector extends LitElement {
         // duplicate or one that fails leaves the day owed, so returning to it
         // asks again instead of drawing what the announcement superseded.
         this._dayStale = false;
-        this._payload = payload;
-        this._emitWatchedEntities(payload);
-        this._dayRange = payload.range;
-        // A day drawn from hourly statistics has nothing finer to show, so the
-        // width comes down to what the data is. Through `_setSlotMinutes` rather
-        // than by assignment, so the selection is re-gridded onto the coarser
-        // grid the same way a manual press does it -- otherwise a selection
-        // carried in from a 15-minute day would point at slots this day has no
-        // columns for.
-        if (payloadGranularity(payload) > this._slotMinutes) {
-          this._setSlotMinutes(payloadGranularity(payload));
-        }
-        const reconciled = reconcileSlotSelection(
-          this._orderedSlots(null),
-          this._slotSelection,
-        );
-        this._slotSelection = reconciled;
-        this._selectedTrainingDate = this._resolveSelectedTrainingDate(
-          reconciled.focusSlot,
-          payload,
-          requestedDate,
-        );
+        this._dayPayloads = new Map(this._dayPayloads).set(requestedDate, payload);
+        this._showDayPayload(payload, requestedDate);
       }
     } catch (err: any) {
       if (this._dayRequest.isCurrent(request) && requestedDate === this._selectedDate) {
@@ -2733,6 +3027,278 @@ export class HelmanSolarInspector extends LitElement {
       }
       this.requestUpdate();
     }
+  }
+
+  /**
+   * Make a payload at hand the day the view draws -- one `_load` fetched, or a
+   * neighbour a drag handed the majority to.
+   */
+  private _showDayPayload(payload: InspectorPayload, date: string) {
+    this._payloadDate = date;
+    this._emitWatchedEntities(payload);
+    this._dayRange = payload.range;
+    // A day drawn from hourly statistics has nothing finer to show, so the
+    // width comes down to what the data is. Through `_setSlotMinutes` rather
+    // than by assignment, so the selection is re-gridded onto the coarser
+    // grid the same way a manual press does it -- otherwise a selection
+    // carried in from a 15-minute day would point at slots this day has no
+    // columns for.
+    if (payloadGranularity(payload) > this._slotMinutes) {
+      this._setSlotMinutes(payloadGranularity(payload));
+    }
+    const reconciled = reconcileSlotSelection(
+      this._orderedSlots(null),
+      this._slotSelection,
+    );
+    this._slotSelection = reconciled;
+    this._selectedTrainingDate = this._resolveSelectedTrainingDate(
+      reconciled.focusSlot,
+      payload,
+      date,
+    );
+    // Only the day and its two neighbours are ever worth holding.
+    const kept = [...this._dayPayloads].filter(([key]) => Math.abs(daysBetween(date, key)) <= 1);
+    if (kept.length !== this._dayPayloads.size) {
+      this._dayPayloads = new Map(kept);
+    }
+  }
+
+  /**
+   * Fetch a neighbouring day for a drag to draw, quietly.
+   *
+   * No loading overlay and no error note: the drag must not wait on it, and
+   * until it lands its part of the window simply draws empty. A refresh bumps
+   * the generation, so an answer from before it is dropped rather than parked
+   * beside the refreshed day; `force` is the refresh asking again for a day
+   * already held.
+   */
+  private async _ensureNeighbourLoaded(date: string, force = false): Promise<void> {
+    const hass = this.hass;
+    if (!hass || this._neighbourRequests.has(date) || this._neighbourFailures.has(date)
+      || (!force && this._dayPayloads.has(date))
+      || !this._dayIsReachable(date)) {
+      return;
+    }
+    const generation = this._neighbourGeneration;
+    this._neighbourRequests.add(date);
+    try {
+      const payload = await callHelman(hass, "helman/solar_bias/inspector", { date });
+      if (generation !== this._neighbourGeneration || Math.abs(daysBetween(this._selectedDate, date)) > 1) {
+        return;
+      }
+      this._dayPayloads = new Map(this._dayPayloads).set(date, payload);
+      // A drag that already passed the majority to this day was held on the
+      // old one only for the want of it.
+      this._followMajorityDay();
+    } catch {
+      // The overhang stays empty; the next drag that reaches it asks again.
+      if (generation === this._neighbourGeneration) this._neighbourFailures.add(date);
+    } finally {
+      if (generation === this._neighbourGeneration) this._neighbourRequests.delete(date);
+    }
+  }
+
+  /**
+   * The window has moved: hand the selection to whichever day now covers most
+   * of it, and fetch the neighbour it reaches into.
+   *
+   * The handover changes no load: the day is taken from what is at hand, and a
+   * day that has not arrived yet keeps the selection where it is until it does.
+   * The window is re-expressed in the new day's frame and takes that day's own
+   * width -- its solar hours, or the whole day -- around the same centre.
+   */
+  private _followMajorityDay() {
+    const window = this._window;
+    if (window === null || this._viewMode !== "day") return;
+    const offset = majorityDayOffset(window);
+    const date = addDays(this._selectedDate, offset);
+    const cached = offset === 0 ? undefined : this._dayPayloads.get(date);
+    // A day with nothing to draw is held off like one not loaded yet: handing
+    // it the selection would blank the chart under the pointer.
+    const payload = cached !== undefined && dayHasSeries(cached, this.houseFocus) ? cached : undefined;
+    if (payload !== undefined) {
+      const shifted = shiftWindow(window, -offset);
+      const own = defaultDayWindow(
+        payload, this._daylightOnly, this.daylightThresholdW, this._hiddenSeries, this.chartSeries,
+      );
+      // A load of the day being left is moot now, and must not stay keyed as
+      // in flight: coming back to that day would then never ask for it. Its
+      // spinner goes with it, and the copy of that day it was replacing is
+      // dropped rather than drawn stale beside this one -- the overhang asks
+      // for it afresh.
+      if (this._dayRequest.pending) {
+        this._dayRequest.reset();
+        this._loading = false;
+        const payloads = new Map(this._dayPayloads);
+        payloads.delete(this._selectedDate);
+        this._dayPayloads = payloads;
+      }
+      this._selectedDate = date;
+      this._window = clampWindow(
+        windowAround((shifted.startMinutes + shifted.endMinutes) / 2, own.endMinutes - own.startMinutes),
+        date,
+        payload.range,
+      );
+      this._showDayPayload(payload, date);
+      // A drag in progress carries on from here, at the new width's scale, so
+      // the content stays under the pointer.
+      const press = this._press;
+      if (press?.pan) {
+        press.pan.anchorCentre = (this._window.startMinutes + this._window.endMinutes) / 2;
+        press.pan.anchorX = press.lastX;
+      }
+    }
+    const side = overhangSide(this._window!);
+    if (side !== 0) {
+      void this._ensureNeighbourLoaded(addDays(this._selectedDate, side));
+    }
+  }
+
+  /** Put the window somewhere, held inside the days navigation can reach. */
+  private _placeWindow(window: DayWindow) {
+    this._window = clampWindow(window, this._selectedDate, this._dayRange);
+    this._followMajorityDay();
+  }
+
+  /**
+   * A press on the day view: the primary button, or one finger. It is only a
+   * press so far -- it becomes a drag once it travels sideways, and otherwise
+   * stays the click that selects a slot.
+   */
+  private readonly _handlePanPointerDown = (event: PointerEvent): void => {
+    this._suppressClick = false;
+    const touch = event.pointerType === "touch";
+    if (this._press !== null || (touch ? !event.isPrimary : event.button !== 0)) {
+      return;
+    }
+    this._press = {
+      pointerId: event.pointerId,
+      touch,
+      startX: event.clientX,
+      startY: event.clientY,
+      lastX: event.clientX,
+      pan: null,
+    };
+    window.addEventListener("pointermove", this._handlePanPointerMove);
+    window.addEventListener("pointerup", this._handlePanPointerUp);
+    window.addEventListener("pointercancel", this._handlePanPointerUp);
+  };
+
+  /**
+   * The pressed pointer moved. A finger that sets off upright is a page scroll
+   * and is let go; anything past the threshold sideways is a drag, applied at
+   * most once a frame.
+   */
+  private readonly _handlePanPointerMove = (event: PointerEvent): void => {
+    const press = this._press;
+    if (press === null || event.pointerId !== press.pointerId) {
+      return;
+    }
+    // A mouse moving with no button down was released where this never heard
+    // of it: the press is over.
+    if (event.pointerType === "mouse" && event.buttons === 0) {
+      this._handlePanPointerUp(event);
+      return;
+    }
+    press.lastX = event.clientX;
+    if (press.pan === null) {
+      const dx = Math.abs(event.clientX - press.startX);
+      const dy = Math.abs(event.clientY - press.startY);
+      if (press.touch && dy > PAN_THRESHOLD_PX && dy >= dx) {
+        this._endPress();
+        return;
+      }
+      if (dx <= PAN_THRESHOLD_PX || !this._beginPan(press)) {
+        return;
+      }
+    }
+    event.preventDefault();
+    if (this._panFrame === 0) {
+      this._panFrame = requestAnimationFrame(() => {
+        this._panFrame = 0;
+        this._applyPan();
+      });
+    }
+  };
+
+  /** The drag ends where it is dropped, its start snapped to the slot grid. */
+  private readonly _handlePanPointerUp = (event: PointerEvent): void => {
+    const press = this._press;
+    if (press === null || event.pointerId !== press.pointerId) {
+      return;
+    }
+    if (press.pan !== null) {
+      if (event.type === "pointerup") press.lastX = event.clientX;
+      this._applyPan();
+      if (this._window !== null) this._placeWindow(snapWindow(this._window, this._slotMinutes));
+      // Only the click this release produces, dispatched in the same task: a
+      // touch drag produces none, and a later click must not be swallowed.
+      this._suppressClick = true;
+      setTimeout(() => { this._suppressClick = false; });
+    }
+    this._endPress();
+  };
+
+  /** After a drag, the click its release produces must not select a slot. */
+  private readonly _handlePanClickCapture = (event: Event): void => {
+    if (!this._suppressClick) return;
+    this._suppressClick = false;
+    event.stopPropagation();
+    event.preventDefault();
+  };
+
+  /**
+   * Turn the press into a drag: pin the window where it is drawn, take the
+   * plot's width on screen off the layout, and hide the hover.
+   */
+  private _beginPan(press: PanPress): boolean {
+    const layout = this._layout;
+    const chart = this.renderRoot.querySelector<HTMLElement>("helman-solar-day-chart");
+    const renderedWidth = chart?.getBoundingClientRect().width ?? 0;
+    if (layout === null || renderedWidth <= 0 || this._viewMode !== "day") {
+      return false;
+    }
+    const window = { startMinutes: layout.dayStartMinutes, endMinutes: layout.dayEndMinutes };
+    press.pan = {
+      anchorCentre: (window.startMinutes + window.endMinutes) / 2,
+      anchorX: press.startX,
+      plotPx: (layout.plotWidth * renderedWidth) / layout.width,
+    };
+    this._window = window;
+    this._panning = true;
+    this._hoveredMinutes = null;
+    this._tooltip.hide();
+    this._neighbourFailures.clear();
+    try {
+      this.renderRoot.querySelector(".pan-surface")?.setPointerCapture(press.pointerId);
+    } catch {
+      // A pointer the browser no longer tracks has nothing to capture.
+    }
+    // Fetched as the drag sets off, towards the side it is heading.
+    void this._ensureNeighbourLoaded(addDays(this._selectedDate, press.lastX < press.startX ? 1 : -1));
+    return true;
+  }
+
+  /** Move the window to where the pointer has dragged it, in the selected day's frame. */
+  private _applyPan() {
+    const press = this._press;
+    const pan = press?.pan;
+    const window = this._window;
+    if (!press || !pan || window === null) return;
+    const width = window.endMinutes - window.startMinutes;
+    const centre = pan.anchorCentre - (press.lastX - pan.anchorX) * (width / pan.plotPx);
+    this._placeWindow(windowAround(centre, width));
+  }
+
+  /** Let go of the press, whether it ended as a click, a drag or a scroll. */
+  private _endPress() {
+    cancelAnimationFrame(this._panFrame);
+    this._panFrame = 0;
+    this._press = null;
+    this._panning = false;
+    window.removeEventListener("pointermove", this._handlePanPointerMove);
+    window.removeEventListener("pointerup", this._handlePanPointerUp);
+    window.removeEventListener("pointercancel", this._handlePanPointerUp);
   }
 
   /**
@@ -2812,6 +3378,9 @@ export class HelmanSolarInspector extends LitElement {
       this._pickBucket(event.detail.date);
       return;
     }
+    // Any day navigation lands on the day's own window, the day already
+    // selected included: pressing its pill brings a dragged window back.
+    this._window = null;
     if (event.detail.date === this._selectedDate) {
       return;
     }
@@ -2822,6 +3391,7 @@ export class HelmanSolarInspector extends LitElement {
 
   private _selectTrainingDate(date: string) {
     this._selectedTrainingDate = date;
+    this._window = null;
     if (date === this._selectedDate) {
       this.requestUpdate();
       return;

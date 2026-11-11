@@ -25,9 +25,15 @@ import {
     type EntityDayBandLane,
 } from "../shared/schedule/model/entity-lane-source";
 import { formatScheduleTime } from "../shared/schedule/model/schedule-time";
-import { EMPTY_SELECTED_MINUTES, stripWindow, type ScheduleStripGeometry } from "./strip-geometry";
-import { slotGridTicks } from "../shared/slot-gridlines";
+import {
+    EMPTY_SELECTED_MINUTES,
+    minutesOfDayOrNull,
+    stripWindow,
+    windowGridTicks,
+    type ScheduleStripGeometry,
+} from "./strip-geometry";
 import { SLOT_MINUTES } from "./chart-stack";
+import { overhangSide } from "./pan-window";
 import { helmanColorVars } from "../color-vars";
 
 /** One lane's action at the hovered moment, for the fast hover popup. */
@@ -70,6 +76,13 @@ const TRACK_HEIGHT_PX = 16;
  * clock -- and the editor a press opens belong to `scheduling-day-editor-host`,
  * which the card above owns and hands down. This element is the drawing: the
  * geometry, the highlights, the hover, and the band.
+ *
+ * A window a drag carried past either midnight draws the neighbouring day's
+ * runs into that overhang. Unlike the charts, which stack a second instance
+ * for the neighbour, the band is one: its lanes are keyed by entity rather
+ * than by slot of a day, and it already draws a span across midnights -- so
+ * the span is widened to take the neighbour in, and its lanes stay one row
+ * per entity across the seam.
  */
 @customElement("helman-solar-schedule-band-strip")
 export class HelmanSolarScheduleBandStrip extends LitElement {
@@ -123,7 +136,7 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
         host: SchedulingDayEditorHost | null;
         lanes: unknown;
         slots: unknown;
-        day: EntityScheduleDay | null;
+        span: EntityScheduleDay | null;
         clockSlotMs: number;
         projectionIndex: unknown;
     } | null = null;
@@ -159,14 +172,14 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
      */
     private _rebuildBandLanesIfNeeded(): void {
         const host = this.editorHost;
-        const day = this._selectedDay();
+        const span = this._spanDay();
         const previous = this._bandLanesFor;
         if (
             previous !== null
             && previous.host === host
             && previous.lanes === host?.lanes
             && previous.slots === host?.dayView.slots
-            && previous.day === day
+            && previous.span === span
             // The host's clock snapped to the schedule's grid, not its raw
             // `nowMs`: every lane the builder cuts is bounded by slot edges, so
             // the geometry cannot move between two of them and keying on the
@@ -180,11 +193,49 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
             host,
             lanes: host?.lanes,
             slots: host?.dayView.slots,
-            day,
+            span,
             clockSlotMs: host?.clockSlotMs ?? 0,
             projectionIndex: host?.projectionIndex,
         };
-        this._bandLanes = host === null || day === null ? [] : this._buildBandLanes(host, day);
+        this._bandLanes = host === null || span === null ? [] : this._buildBandLanes(host, span);
+    }
+
+    /**
+     * The selected day, widened over the neighbour the window reaches into.
+     *
+     * Kept as one object for as long as the days it joins are, because the
+     * band compares `.day` by identity and the lanes are rebuilt off it.
+     */
+    private _span: EntityScheduleDay | null = null;
+    private _spanFor: { day: EntityScheduleDay; neighbour: EntityScheduleDay | undefined } | null = null;
+
+    private _spanDay(): EntityScheduleDay | null {
+        const day = this._selectedDay();
+        if (day === null || this.geometry === null) {
+            return null;
+        }
+        const { start, end } = stripWindow(this.geometry);
+        const side = overhangSide({ startMinutes: start, endMinutes: end });
+        const days = this.editorHost?.days ?? [];
+        const neighbour = side === 0 ? undefined : days[days.indexOf(day) + side];
+        if (this._spanFor === null || this._spanFor.day !== day || this._spanFor.neighbour !== neighbour) {
+            this._spanFor = { day, neighbour };
+            const [first, last] = side < 0 ? [neighbour ?? day, day] : [day, neighbour ?? day];
+            this._span = neighbour === undefined
+                ? day
+                : {
+                    ...day,
+                    startMs: first.startMs,
+                    endMs: last.endMs,
+                    // The earlier of the two days' own: a day ahead reports its
+                    // first slot and one gone by reports now, so the earlier is
+                    // where now falls -- the selected day's alone would wash a
+                    // future overhang as past.
+                    editableFromMs: Math.min(first.editableFromMs, last.editableFromMs),
+                    slots: [...first.slots, ...last.slots],
+                };
+        }
+        return this._span;
     }
 
     private _buildBandLanes(host: SchedulingDayEditorHost, day: EntityScheduleDay): EntityDayBandLane[] {
@@ -246,7 +297,8 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
         }
 
         const day = this._selectedDay();
-        if (day === null) {
+        const span = this._spanDay();
+        if (day === null || span === null) {
             return nothing;
         }
 
@@ -273,7 +325,7 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
                 <scheduling-entity-day-band
                     .hass=${this.hass}
                     .localize=${this._localize}
-                    .day=${day}
+                    .day=${span}
                     .lanes=${lanes}
                     .nowMs=${this._nowMs}
                     .locale=${this._locale}
@@ -330,14 +382,10 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
             slotMinutes: this.slotMinutes,
             plotWidth: geometry.plotWidth,
         };
-        this._gridTicks = slotGridTicks({
-            startMinutes: start,
-            endMinutes: end,
-            slotMinutes: this.slotMinutes,
-            plotWidth: geometry.plotWidth,
-        }).map((tick) => ({
+        this._gridTicks = windowGridTicks(start, end, this.slotMinutes, geometry.plotWidth).map((tick) => ({
             atMs: day.startMs + tick.minutes * MINUTE_MS,
             major: tick.hour !== null,
+            ...(tick.midnight ? { midnight: true } : {}),
         }));
     }
 
@@ -408,15 +456,22 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
 
     private _handleTimeHover = (event: CustomEvent<EntityDayBandTimeHoverDetail>): void => {
         event.stopPropagation();
-        const day = this._selectedDay();
-        const atMs = event.detail.atMs;
-        this._emitHover(
-            atMs === null || day === null ? null : (atMs - day.startMs) / MINUTE_MS,
-        );
-        if (atMs === null) {
+        const minutes = this._minutesOfDay(event.detail.atMs);
+        this._emitHover(minutes);
+        if (minutes === null) {
             this._emitTooltip(null);
         }
     };
+
+    /**
+     * An instant as a minute of the selected day, or null -- off the band, and
+     * over a neighbouring day a drag brought into view, whose slots are not
+     * this day's to hover.
+     */
+    private _minutesOfDay(atMs: number | null): number | null {
+        const day = this._selectedDay();
+        return atMs === null || day === null ? null : minutesOfDayOrNull((atMs - day.startMs) / MINUTE_MS);
+    }
 
     /**
      * Every lane with something active at the hovered moment, in one fast
@@ -427,7 +482,7 @@ export class HelmanSolarScheduleBandStrip extends LitElement {
     private _handlePointerMove = (event: CustomEvent<EntityDayBandPointerMoveDetail>): void => {
         event.stopPropagation();
         const { atMs, clientX, clientY } = event.detail;
-        if (atMs === null) {
+        if (atMs === null || this._minutesOfDay(atMs) === null) {
             this._emitTooltip(null);
             return;
         }

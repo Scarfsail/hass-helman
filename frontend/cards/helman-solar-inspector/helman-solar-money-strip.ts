@@ -8,16 +8,18 @@ import { getLocalizeFunction, type LocalizeFunction } from "../localize/localize
 import type { SlotPickDetail } from "./slot-selection.js";
 import {
     EMPTY_SELECTED_MINUTES,
+    labelClearsSeam,
     renderCellBand,
     seamMinutes,
     stripClickDetail,
     stripMinutesForSvgX,
     stripWindow,
     svgXFromEvent,
+    windowGridTicks,
     type ScheduleStripGeometry,
 } from "./strip-geometry";
 import { renderNowMarkerOnDay } from "./now-marker.js";
-import { renderSlotGridlines, slotGridTicks } from "../shared/slot-gridlines";
+import { renderSlotGridlines } from "../shared/slot-gridlines";
 import { helmanColorVars } from "../color-vars";
 import { hourAnchorOffset, selectLabelledColumns, stripValueLabel } from "../shared/strip-value-labels";
 import { EMPTY_MONEY, moneyNet, type MoneyPoint } from "./money-model";
@@ -49,11 +51,90 @@ const MONEY_STRIP = { height: 65, padTop: 14, padBottom: 18 } as const;
  * not drawn and the tooltip says so with an em dash, rather than claiming a
  * flat zero for energy whose rate is simply unknown.
  */
-interface MoneyCell {
+export interface MoneyCell {
     startMinutes: number;
     endMinutes: number;
     cost: number | null;
     gain: number | null;
+}
+
+/** How far the drawn bars reach above and below the zero line. */
+export interface MoneyScale {
+    maxUp: number;
+    maxDown: number;
+}
+
+/**
+ * Both vintages bucketed onto the inspector's slot grid, actual taking the
+ * elapsed slots and forecast the rest.
+ *
+ * Amounts falling in one cell **sum**. That is the one place this strip must
+ * not follow the price strip above it, which averages: four quarter-hours of
+ * cost in an hour is their total, not their mean.
+ *
+ * Per direction, and unpriced slots are skipped rather than counted as
+ * zero, so a cell keeps whichever side its rails could price and reports
+ * the other as unknown.
+ */
+export function buildMoneyCells(
+    actual: readonly MoneyPoint[],
+    forecast: readonly MoneyPoint[],
+    slot: number,
+    seam: number,
+): MoneyCell[] {
+    const cells = new Map<number, MoneyCell>();
+    const add = (points: readonly MoneyPoint[], wantElapsed: boolean) => {
+        for (const point of points) {
+            const minutes = slotMinutes(point.slot);
+            if (minutes === null) continue;
+            // Each slot is claimed by exactly one vintage, so the two can
+            // never both contribute and double the day's money.
+            if ((minutes < seam) !== wantElapsed) continue;
+            const cost = amountOrNull(point.cost);
+            const gain = amountOrNull(point.gain);
+            if (cost === null && gain === null) continue;
+            const start = Math.floor(minutes / slot) * slot;
+            const cell = cells.get(start) ?? {
+                startMinutes: start,
+                endMinutes: Math.min(start + slot, MINUTES_PER_DAY),
+                cost: null,
+                gain: null,
+            };
+            if (cost !== null) cell.cost = (cell.cost ?? 0) + cost;
+            if (gain !== null) cell.gain = (cell.gain ?? 0) + gain;
+            cells.set(start, cell);
+        }
+    };
+    add(actual, true);
+    add(forecast, false);
+    return [...cells.values()].sort((a, b) => a.startMinutes - b.startMinutes);
+}
+
+/**
+ * How far the bars of the cells inside a window reach, either way of zero.
+ *
+ * Scaled to the cells the reader can see. The daylight-only view is the
+ * default, so a night of cheap grid charging would otherwise set a maximum
+ * that no drawn bar reaches -- collapsing the daytime bars to slivers and
+ * labelling the axis with a column outside the window.
+ *
+ * Measured in what is actually *drawn*, not in cost and gain: cost goes up and
+ * gain goes down, so a negative amount crosses to the other side of the line.
+ * Reading the extents off the signed amounts instead would clamp those
+ * crossings away, and a day of negative export prices would then scale its
+ * bars against a maximum that excludes them and silently clip whatever
+ * overshot the plot.
+ */
+export function moneyScale(cells: readonly MoneyCell[], window: { start: number; end: number }): MoneyScale {
+    const scaled = cells.filter((cell) => cell.endMinutes > window.start && cell.startMinutes < window.end);
+    const drawn = (scaled.length > 0 ? scaled : cells).flatMap((cell) => [
+        ...(cell.cost === null ? [] : [cell.cost]),
+        ...(cell.gain === null ? [] : [-cell.gain]),
+    ]);
+    return {
+        maxUp: Math.max(0, ...drawn),
+        maxDown: Math.max(0, ...drawn.map((value) => -value)),
+    };
 }
 
 /** The popup content emitted for the inspector's shared floating tooltip. */
@@ -85,6 +166,10 @@ export interface MoneyTooltipContent {
  *
  * Both vintages are drawn: actual for the part of the day that has elapsed,
  * forecast for the rest, split at the same seam the chart uses.
+ *
+ * An `overlay` instance draws a neighbouring day over the selected day's own
+ * strip, in the part of the window a drag carried past midnight: the bars and
+ * their figures only, no guides, grid, hover or selection, and no pointer.
  */
 @customElement("helman-solar-money-strip")
 export class HelmanSolarMoneyStrip extends LitElement {
@@ -92,6 +177,10 @@ export class HelmanSolarMoneyStrip extends LitElement {
         :host {
             display: block;
             width: 100%;
+        }
+
+        :host([overlay]) {
+            pointer-events: none;
         }
 
         .strip-wrap {
@@ -118,6 +207,10 @@ export class HelmanSolarMoneyStrip extends LitElement {
     @property({ attribute: false }) public moneyForecast: readonly MoneyPoint[] = EMPTY_MONEY;
     /** The currency the amounts are in, derived from the price rail's unit. */
     @property({ type: String }) public currency = "";
+    /** The scale to draw at instead of this day's own, while two days share the strip. */
+    @property({ attribute: false }) public valueScale: MoneyScale | null = null;
+    /** Draw only the bars, over another instance: see the class comment. */
+    @property({ type: Boolean, reflect: true }) public overlay = false;
 
     private _t(key: string, values?: Record<string, string | number>): string {
         const localize: LocalizeFunction = this.hass
@@ -161,7 +254,7 @@ export class HelmanSolarMoneyStrip extends LitElement {
             return;
         }
         this._cellsFor = { actual: this.moneyActual, forecast: this.moneyForecast, slot, seam };
-        this._cells = this._buildCells(seam);
+        this._cells = buildMoneyCells(this.moneyActual, this.moneyForecast, slot, seam);
     }
 
     render() {
@@ -176,48 +269,6 @@ export class HelmanSolarMoneyStrip extends LitElement {
         return this._renderStrip(cells, this.geometry);
     }
 
-    /**
-     * Both vintages bucketed onto the inspector's slot grid, actual taking the
-     * elapsed slots and forecast the rest.
-     *
-     * Amounts falling in one cell **sum**. That is the one place this strip must
-     * not follow the price strip above it, which averages: four quarter-hours of
-     * cost in an hour is their total, not their mean.
-     *
-     * Per direction, and unpriced slots are skipped rather than counted as
-     * zero, so a cell keeps whichever side its rails could price and reports
-     * the other as unknown.
-     */
-    private _buildCells(seam: number): MoneyCell[] {
-        const slot = this.slotMinutes;
-        const cells = new Map<number, MoneyCell>();
-        const add = (points: readonly MoneyPoint[], wantElapsed: boolean) => {
-            for (const point of points) {
-                const minutes = slotMinutes(point.slot);
-                if (minutes === null) continue;
-                // Each slot is claimed by exactly one vintage, so the two can
-                // never both contribute and double the day's money.
-                if ((minutes < seam) !== wantElapsed) continue;
-                const cost = amountOrNull(point.cost);
-                const gain = amountOrNull(point.gain);
-                if (cost === null && gain === null) continue;
-                const start = Math.floor(minutes / slot) * slot;
-                const cell = cells.get(start) ?? {
-                    startMinutes: start,
-                    endMinutes: Math.min(start + slot, MINUTES_PER_DAY),
-                    cost: null,
-                    gain: null,
-                };
-                if (cost !== null) cell.cost = (cell.cost ?? 0) + cost;
-                if (gain !== null) cell.gain = (cell.gain ?? 0) + gain;
-                cells.set(start, cell);
-            }
-        };
-        add(this.moneyActual, true);
-        add(this.moneyForecast, false);
-        return [...cells.values()].sort((a, b) => a.startMinutes - b.startMinutes);
-    }
-
     /** Where elapsed money gives way to projected money: see `seamMinutes`. */
     private _seamMinutes(): number {
         return seamMinutes(this.nowMs, this.date, this.timeZone, this.slotMinutes);
@@ -227,25 +278,7 @@ export class HelmanSolarMoneyStrip extends LitElement {
         const { height, padTop, padBottom } = MONEY_STRIP;
         const innerHeight = height - padTop - padBottom;
         const { start: visibleStart, end: visibleEnd } = stripWindow(geometry);
-        // Scale to the cells the reader can see. The daylight-only view is the
-        // default, so a night of cheap grid charging would otherwise set a
-        // maximum that no drawn bar reaches -- collapsing the daytime bars to
-        // slivers and labelling the axis with a column outside the window.
-        const scaled = cells.filter(
-            (cell) => cell.endMinutes > visibleStart && cell.startMinutes < visibleEnd,
-        );
-        // The bands are measured in what is actually *drawn*, not in cost and
-        // gain: cost goes up and gain goes down, so a negative amount crosses
-        // to the other side of the line. Reading the extents off the signed
-        // amounts instead would clamp those crossings away, and a day of
-        // negative export prices would then scale its bars against a maximum
-        // that excludes them and silently clip whatever overshot the plot.
-        const drawn = (scaled.length > 0 ? scaled : cells).flatMap((cell) => [
-            ...(cell.cost === null ? [] : [cell.cost]),
-            ...(cell.gain === null ? [] : [-cell.gain]),
-        ]);
-        const maxUp = Math.max(0, ...drawn);
-        const maxDown = Math.max(0, ...drawn.map((value) => -value));
+        const { maxUp, maxDown } = this.valueScale ?? moneyScale(cells, { start: visibleStart, end: visibleEnd });
         // Up and down share one scale, so a slot's two amounts stay comparable
         // by height -- which is the whole question this strip answers.
         const extent = Math.max(0.0001, maxUp, maxDown);
@@ -273,7 +306,7 @@ export class HelmanSolarMoneyStrip extends LitElement {
                     viewBox="0 0 ${geometry.width} ${height}"
                     role="img"
                     aria-label=${this._t("bias_correction.inspector.money_strip")}
-                    style="cursor: pointer;"
+                    style="cursor: var(--helman-plot-cursor, pointer);"
                     @click=${(event: MouseEvent) => this._handleClick(event, geometry)}
                     @mousemove=${(event: MouseEvent) => this._handleHover(event, geometry, cells)}
                     @mouseleave=${() => { this._emitHover(null); this._emitTooltip(null); }}
@@ -283,21 +316,18 @@ export class HelmanSolarMoneyStrip extends LitElement {
                             <rect x=${geometry.marginLeft} y="0" width=${geometry.plotWidth} height=${height}></rect>
                         </clipPath>
                     </defs>
-                    ${this._renderGuides(geometry, zeroY, yForValue, maxUp, maxDown)}
-                    ${renderSlotGridlines({
-                        ticks: slotGridTicks({
-                            startMinutes: windowStart,
-                            endMinutes: windowEnd,
-                            slotMinutes: this.slotMinutes,
-                            plotWidth: geometry.plotWidth,
-                        }),
-                        xForMinutes,
-                        top: 0,
-                        bottom: height,
-                    })}
-                    ${renderCellBand(cells, this.hoverMinutes, "hover", height, xForMinutes)}
-                    ${this.selectedMinutes.map((minutes) =>
-                        renderCellBand(cells, minutes, "selected", height, xForMinutes))}
+                    ${this.overlay ? nothing : svg`
+                        ${this._renderGuides(geometry, zeroY, yForValue, maxUp, maxDown)}
+                        ${renderSlotGridlines({
+                            ticks: windowGridTicks(windowStart, windowEnd, this.slotMinutes, geometry.plotWidth),
+                            xForMinutes,
+                            top: 0,
+                            bottom: height,
+                        })}
+                        ${renderCellBand(cells, this.hoverMinutes, "hover", height, xForMinutes)}
+                        ${this.selectedMinutes.map((minutes) =>
+                            renderCellBand(cells, minutes, "selected", height, xForMinutes))}
+                    `}
                     <g clip-path="url(#money-plot-clip)">
                     ${this._renderBars(cells, { zeroY, yForValue, seam, xForMinutes })}
                     </g>
@@ -393,10 +423,17 @@ export class HelmanSolarMoneyStrip extends LitElement {
         // An amount that rounds to nothing gets no label: "0.0" over a hairline
         // bar says less than the bar already did. Nor does an unpriced
         // direction, which has no bar to label.
+        // Nor does one that would reach over a dragged-in midnight, where the
+        // neighbouring day writes its own.
+        const clearsSeam = (cell: MoneyCell, text: string) => {
+            const { left, width: cellWidth } = this._cellSpan(cell, ctx.xForMinutes);
+            return labelClearsSeam(left + cellWidth / 2, text, ctx.window, ctx.xForMinutes);
+        };
         const candidates = (pick: (cell: MoneyCell) => number | null) => cells.map((cell) => {
             const amount = pick(cell);
-            return visible(cell) && amount !== null && Math.abs(amount) >= 0.05
-                ? { value: amount, text: this._formatAmount(amount) }
+            const text = amount === null ? "" : this._formatAmount(amount);
+            return visible(cell) && amount !== null && Math.abs(amount) >= 0.05 && clearsSeam(cell, text)
+                ? { value: amount, text }
                 : { value: null, text: null };
         });
         const costs = candidates((cell) => cell.cost);
@@ -464,9 +501,11 @@ export class HelmanSolarMoneyStrip extends LitElement {
 
     /** A click resolves to a minute-of-day, or null in the gutter to deselect. */
     private _handleClick(event: MouseEvent, geometry: ScheduleStripGeometry): void {
+        const detail = stripClickDetail(event, geometry);
+        if (detail === null) return;
         this.dispatchEvent(
             new CustomEvent<SlotPickDetail>("slot-pick", {
-                detail: stripClickDetail(event, geometry),
+                detail,
                 bubbles: true,
                 composed: true,
             }),
