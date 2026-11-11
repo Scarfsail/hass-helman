@@ -5,7 +5,7 @@ import type { HomeAssistant } from "../../types/ha";
 import { getLocalizeFunction } from "../localize/localize";
 import { helmanColorVars } from "../color-vars";
 import { toAveragePower, type ChartEntry } from "./chart-power";
-import { renderSlotGridlines, slotGridTicks, type SlotGridTick } from "../shared/slot-gridlines";
+import { renderSlotGridlines, type SlotGridTick } from "../shared/slot-gridlines";
 import { hourAnchorOffset, selectLabelledColumns, stripValueLabel } from "../shared/strip-value-labels";
 import { accumulateBands, bandRuns, stackSlots, type StackBand, type StackSet } from "./chart-stack";
 import { slotToMinutes, type SocBar } from "./chart-soc";
@@ -21,7 +21,7 @@ import {
 } from "./slot-selection.js";
 import { resolveSelectedImpactSlot } from "./solar-inspector-model.js";
 import { renderNowMarkerOnDay } from "./now-marker.js";
-import { renderSlotBand, svgXFromEvent } from "./strip-geometry";
+import { labelClearsSeam, minutesOfDayOrNull, renderSlotBand, svgXFromEvent, windowGridTicks } from "./strip-geometry";
 import {
   EMPTY_DAY_COVERAGE,
   MINUTES_PER_DAY,
@@ -142,12 +142,7 @@ function splitForecastAtActuals<T>(
  * by one grid.
  */
 export function chartGridTicks(layout: ChartLayout, slotMinutes: number): SlotGridTick[] {
-  return slotGridTicks({
-    startMinutes: layout.dayStartMinutes,
-    endMinutes: layout.dayEndMinutes,
-    slotMinutes,
-    plotWidth: layout.plotWidth,
-  });
+  return windowGridTicks(layout.dayStartMinutes, layout.dayEndMinutes, slotMinutes, layout.plotWidth);
 }
 
 /** The four things the combined chart stacks; one popup section per family. */
@@ -177,6 +172,11 @@ export interface DayChartTooltipDetail {
  * what the pointer does is reported back up the way the strips report it: the
  * minute under it as `slot-hover`, a press as `slot-pick`, and the popup as
  * `slot-tooltip` (`DayChartTooltipDetail`, or null to hide it).
+ *
+ * An `overlay` instance draws a neighbouring day into the part of the window a
+ * drag carried past midnight: stacked over the selected day's own instance in
+ * the same box, it draws only the clipped plot content -- no background, axes,
+ * gridlines, captions, hover or selection -- and takes no pointer.
  */
 @customElement("helman-solar-day-chart")
 export class HelmanSolarDayChart extends LitElement {
@@ -184,6 +184,23 @@ export class HelmanSolarDayChart extends LitElement {
     :host {
       display: block;
       width: 100%;
+    }
+
+    :host([overlay]) {
+      pointer-events: none;
+    }
+
+    :host([overlay]) .chart-wrap {
+      background: transparent;
+      outline: none;
+    }
+
+    :host([overlay]) .compact-strip-label {
+      visibility: hidden;
+    }
+
+    :host([overlay]) .chart-separator {
+      border-top-color: transparent;
     }
 
     .chart-wrap svg {
@@ -197,6 +214,10 @@ export class HelmanSolarDayChart extends LitElement {
       position: relative;
       outline: none;
       border-radius: 0;
+      /* The frame's overflow makes this a scroll container, which the card's
+         pan-y does not reach into: without its own, a touch drag starting on
+         the chart is taken back by the browser and never pans. */
+      touch-action: pan-y;
     }
 
     .soc-strip-wrap {
@@ -239,11 +260,19 @@ export class HelmanSolarDayChart extends LitElement {
   @property({ attribute: false }) public coverage: DayCoverage = EMPTY_DAY_COVERAGE;
   @property({ type: Boolean }) public dimIncompleteSlots = true;
   @property({ type: Boolean }) public impactVisible = false;
+  /**
+   * An overlay's impact row is drawn where the selected day's instance under
+   * it draws one -- that day having impact slots, not this one -- so the rows
+   * below stay level with that instance's.
+   */
+  @property({ type: Boolean }) public impactRowDrawn = false;
   @property({ type: Boolean }) public houseFocus = false;
   /** The selected day, the zone it is read in and the clock, for the "now" line. */
   @property({ type: String }) public date = "";
   @property({ type: String }) public timeZone = "UTC";
   @property({ type: Number }) public nowMs = Date.now();
+  /** Draw only the plot content, over another instance: see the class comment. */
+  @property({ type: Boolean, reflect: true }) public overlay = false;
 
   /** The combined chart's popup, one build per hovered slot. */
   private _chartTooltip: { rows: TooltipRow[]; title: string } | null = null;
@@ -327,6 +356,14 @@ export class HelmanSolarDayChart extends LitElement {
 
   /** The minute-of-day under the pointer on one of the chart's rows, or null in the axis gutter. */
   private _plotMinutesAt(event: MouseEvent, layout: ChartLayout): number | null {
+    const minutes = this._plotWindowMinutesAt(event, layout);
+    // A minute on a neighbouring day a drag brought into view is none of this
+    // day's slots: hover and selection belong to the day the pills name.
+    return minutes === null ? null : minutesOfDayOrNull(minutes);
+  }
+
+  /** The minute of the window under the pointer -- outside 0..1440 over a neighbour -- or null in the gutter. */
+  private _plotWindowMinutesAt(event: MouseEvent, layout: ChartLayout): number | null {
     const svgX = svgXFromEvent(event, layout.width);
     if (svgX < layout.margin.left || svgX > layout.width - layout.margin.right) {
       return null;
@@ -361,8 +398,12 @@ export class HelmanSolarDayChart extends LitElement {
    * in the axis gutter, clears the selection.
    */
   private _handlePick(event: MouseEvent, layout: ChartLayout) {
+    const minutes = this._plotWindowMinutesAt(event, layout);
+    // A press over a neighbouring day asks for nothing: it is not the gutter
+    // press that clears the selection.
+    if (minutes !== null && minutesOfDayOrNull(minutes) === null) return;
     this.dispatchEvent(new CustomEvent<SlotPickDetail>("slot-pick", {
-      detail: { minutes: this._plotMinutesAt(event, layout), mode: slotSelectionModeForEvent(event) },
+      detail: { minutes, mode: slotSelectionModeForEvent(event) },
       bubbles: true,
       composed: true,
     }));
@@ -589,17 +630,19 @@ export class HelmanSolarDayChart extends LitElement {
         viewBox="0 0 ${layout.width} ${layout.height}"
         role="img"
         aria-label=${this._t("bias_correction.inspector.title")}
-        style="cursor: pointer;"
+        style="cursor: var(--helman-plot-cursor, pointer);"
         @click=${(e: MouseEvent) => this._handleTap(e, layout, this._mainChartHit(e, payload, stacks, layout))}
         @mousemove=${(e: MouseEvent) => this._handleHitHover(e, this._mainChartHit(e, payload, stacks, layout))}
         @mouseleave=${() => this._clearHover()}
       >
         ${this._renderChartBackground(layout)}
         ${this._plotClipDef("plot-clip-chart", layout, layout.height)}
-        ${this._renderHoverHighlight(layout, layout.margin.top, layout.plotHeight)}
-        ${this._renderSlotHighlights(layout, layout.margin.top, layout.plotHeight)}
-        ${this._renderLeftAxis(layout)}
-        ${this._renderXAxis(layout)}
+        ${this.overlay ? "" : svg`
+          ${this._renderHoverHighlight(layout, layout.margin.top, layout.plotHeight)}
+          ${this._renderSlotHighlights(layout, layout.margin.top, layout.plotHeight)}
+          ${this._renderLeftAxis(layout)}
+          ${this._renderXAxis(layout)}
+        `}
         <g clip-path="url(#plot-clip-chart)">
           ${this._renderStackSet(layout, stacks.actual, "actual", Number.NEGATIVE_INFINITY)}
           ${this._renderStackSet(layout, stacks.forecast, "forecast", forecastFillFrom)}
@@ -609,7 +652,7 @@ export class HelmanSolarDayChart extends LitElement {
              the column it covers, and a wash painted underneath only lightens
              the empty background around the bars, which reads as a highlight --
              the opposite of what a short column should look like. -->
-        ${this._renderPartialBuckets(layout, layout.margin.top, layout.plotHeight)}
+        ${this.overlay ? "" : this._renderPartialBuckets(layout, layout.margin.top, layout.plotHeight)}
         ${this._renderNowMarker(layout, layout.margin.top, layout.plotHeight)}
       </svg>
     `;
@@ -699,7 +742,7 @@ export class HelmanSolarDayChart extends LitElement {
 
   private _renderChartBackground(layout: ChartLayout) {
     return svg`
-      <rect x="0" y="0" width=${layout.width} height=${layout.height} fill="var(--card-background-color)"></rect>
+      ${this.overlay ? "" : svg`<rect x="0" y="0" width=${layout.width} height=${layout.height} fill="var(--card-background-color)"></rect>`}
       <defs>
         ${STACK_HATCH_COLORS.map((color) => svg`
           <pattern id=${hatchId(color)} patternUnits="userSpaceOnUse" width="5" height="5" patternTransform="rotate(45)">
@@ -810,7 +853,7 @@ export class HelmanSolarDayChart extends LitElement {
         viewBox="0 0 ${layout.width} ${height}"
         role="img"
         aria-label=${this._t("bias_correction.inspector.battery_soc_strip")}
-        style="cursor: pointer;"
+        style="cursor: var(--helman-plot-cursor, pointer);"
         @click=${(e: MouseEvent) => this._handleTap(e, layout, this._socHit(e, payload, layout, bars))}
         @mousemove=${(e: MouseEvent) => this._handleHitHover(e, this._socHit(e, payload, layout, bars))}
         @mouseleave=${() => this._clearHover()}
@@ -826,15 +869,17 @@ export class HelmanSolarDayChart extends LitElement {
           </pattern>
         </defs>
         ${this._plotClipDef("plot-clip-soc", layout, height)}
-        ${this._renderSocGridlines(layout, yForPct)}
-        ${renderSlotGridlines({
-          ticks: chartGridTicks(layout, this.slotMinutes),
-          xForMinutes: layout.xForMinutes,
-          top: 0,
-          bottom: height,
-        })}
-        ${this._renderHoverHighlight(layout, 0, height)}
-        ${this._renderSlotHighlights(layout, 0, height)}
+        ${this.overlay ? "" : svg`
+          ${this._renderSocGridlines(layout, yForPct)}
+          ${renderSlotGridlines({
+            ticks: chartGridTicks(layout, this.slotMinutes),
+            xForMinutes: layout.xForMinutes,
+            top: 0,
+            bottom: height,
+          })}
+          ${this._renderHoverHighlight(layout, 0, height)}
+          ${this._renderSlotHighlights(layout, 0, height)}
+        `}
         <g clip-path="url(#plot-clip-soc)">
         ${bars.map((bar) => {
           const top = yForPct(bar.pct);
@@ -866,10 +911,18 @@ export class HelmanSolarDayChart extends LitElement {
           // beyond it are clipped away, and letting them into the selection
           // spends the "keep the two ends" rule on midnight and 23:45 -- ends
           // nobody can see -- and judges the series on hours nobody is reading.
-          const labels = bars.map((bar) => bar.minutes < layout.dayStartMinutes
-            || bar.minutes >= layout.dayEndMinutes
-            ? { value: null, text: null }
-            : { value: bar.pct, text: `${Math.round(bar.pct)}%` });
+          // Nor a column whose figure would reach over a dragged-in midnight,
+          // where the neighbouring day writes its own.
+          const labelX = (bar: SocBar) => layout.xForMinutes(bar.minutes) + 0.5 + Math.max(2, barWidth - 1) / 2;
+          const drawn = { start: layout.dayStartMinutes, end: layout.dayEndMinutes };
+          const labels = bars.map((bar) => {
+            const text = `${Math.round(bar.pct)}%`;
+            return bar.minutes < layout.dayStartMinutes
+              || bar.minutes >= layout.dayEndMinutes
+              || !labelClearsSeam(labelX(bar), text, drawn, layout.xForMinutes)
+              ? { value: null, text: null }
+              : { value: bar.pct, text };
+          });
           const labelled = selectLabelledColumns(labels, {
             // The pitch the labels are laid out on, which is the slot width --
             // `barWidth` is floored at 3 so a hairline column still draws, and
@@ -879,7 +932,7 @@ export class HelmanSolarDayChart extends LitElement {
             anchorOffset: hourAnchorOffset(bars.map((bar) => bar.minutes)),
           });
           return bars.map((bar, index) => labelled[index] ? stripValueLabel({
-            x: layout.xForMinutes(bar.minutes) + 0.5 + Math.max(2, barWidth - 1) / 2,
+            x: labelX(bar),
             y: Math.max(yForPct(bar.pct) - 3, 9),
             text: labels[index].text!,
           }) : "");
@@ -1090,7 +1143,7 @@ export class HelmanSolarDayChart extends LitElement {
   }
 
   private _renderImpactStrip(payload: InspectorPayload, layout: ChartLayout) {
-    if (!payload.series.impact.length) return "";
+    if (this.overlay ? !this.impactRowDrawn : !payload.series.impact.length) return "";
     const stripHeight = 24;
     const stripWidth = layout.width;
     const values = payload.series.impact
@@ -1104,14 +1157,16 @@ export class HelmanSolarDayChart extends LitElement {
         viewBox="0 0 ${stripWidth} ${stripHeight}"
         role="img"
         aria-label=${this._t("bias_correction.inspector.correction_impact")}
-        style="cursor: pointer;"
+        style="cursor: var(--helman-plot-cursor, pointer);"
         @click=${(e: MouseEvent) => this._handlePick(e, layout)}
         @mousemove=${(e: MouseEvent) => this._handleChartHover(e, layout)}
         @mouseleave=${() => this._clearHover()}
       >
         ${this._plotClipDef("plot-clip-impact", layout, stripHeight)}
-        ${this._renderHoverHighlight(layout, 0, stripHeight)}
-        ${this._renderSlotHighlights(layout, 0, stripHeight)}
+        ${this.overlay ? "" : svg`
+          ${this._renderHoverHighlight(layout, 0, stripHeight)}
+          ${this._renderSlotHighlights(layout, 0, stripHeight)}
+        `}
         <g clip-path="url(#plot-clip-impact)">
         ${payload.series.impact.map((point) => {
           if (point.impactWh === null || !Number.isFinite(point.impactWh)) return "";

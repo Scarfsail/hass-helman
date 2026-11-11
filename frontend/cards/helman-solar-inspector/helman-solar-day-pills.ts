@@ -738,12 +738,12 @@ export class HelmanSolarDayPills extends LitElement {
         }));
     }
 
-    /** Re-selecting the shown day would reload it for nothing. */
+    /**
+     * Report a press, the shown day's own included: the card does not reload
+     * a day it already shows, but a press on it still brings a dragged window
+     * back to the day's own hours.
+     */
     private _select(dayKey: string): void {
-        if (dayKey === this.selectedDate) {
-            return;
-        }
-
         this.dispatchEvent(new CustomEvent<DayPillSelectDetail>("day-pill-select", {
             bubbles: true,
             composed: true,

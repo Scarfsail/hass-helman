@@ -152,10 +152,16 @@ export function renderSlotGridlines(options: {
   return ticks.map((tick) => {
     const x = xForMinutes(tick.minutes);
     const isLabelled = tick.hour !== null;
+    // A named midnight is the day boundary, dashed in the text colour the way
+    // the schedule band dashes its own, so a span across it is seen to cross.
     return svg`
-      <line x1=${x} y1=${top} x2=${x} y2=${bottom}
-            stroke="var(--divider-color)" stroke-width="1"
-            opacity=${isLabelled ? SLOT_GRID_LINE_OPACITY.major : SLOT_GRID_LINE_OPACITY.minor}></line>
+      ${tick.midnight
+        ? svg`<line class="midnight-line" x1=${x} y1=${top} x2=${x} y2=${bottom}
+                    stroke="var(--primary-text-color)" stroke-width="1" stroke-dasharray="4 3"
+                    opacity="0.7"></line>`
+        : svg`<line x1=${x} y1=${top} x2=${x} y2=${bottom}
+                    stroke="var(--divider-color)" stroke-width="1"
+                    opacity=${isLabelled ? SLOT_GRID_LINE_OPACITY.major : SLOT_GRID_LINE_OPACITY.minor}></line>`}
       ${tick.hour !== null && labelY !== undefined
         ? svg`<text x=${x} y=${labelY} text-anchor="middle" fill="var(--secondary-text-color)" font-size="11">${pad2(tick.hour)}</text>`
         : ""}

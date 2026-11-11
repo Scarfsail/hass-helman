@@ -156,8 +156,6 @@ async function mountInspector(page: Page): Promise<void> {
  * so a rebuild is visible as a new identity on the field the card stores its
  * result in -- each step returns a fresh object whenever it runs, and the very
  * same one whenever it does not. Those fields are compared after every update.
- * The money strip still builds its cells in a method of its own, so that one
- * is counted by wrapping it on the prototype.
  */
 async function installCounters(page: Page): Promise<void> {
     await page.evaluate(() => {
@@ -195,18 +193,6 @@ async function installCounters(page: Page): Promise<void> {
                 return original.apply(this, args);
             };
         };
-        const wrap = (tag: string, method: string, key: keyof Counts): void => {
-            const proto = customElements.get(tag)!.prototype as unknown as
-                Record<string, (...args: unknown[]) => unknown>;
-            const original = proto[method];
-            if (typeof original !== "function") {
-                throw new Error(`${tag} has no ${method} to count`);
-            }
-            proto[method] = function counted(this: unknown, ...args: unknown[]) {
-                window.__hoverCounts[key] += 1;
-                return original.apply(this, args);
-            };
-        };
         watch("helman-solar-inspector", inspector, {
             view: "_view",
             coverage: "_coverage",
@@ -219,7 +205,9 @@ async function installCounters(page: Page): Promise<void> {
         watch("helman-solar-price-strip", inspector.shadowRoot.querySelector("helman-solar-price-strip")!, {
             priceColumns: "importColumns",
         });
-        wrap("helman-solar-money-strip", "_buildCells", "moneyCells");
+        watch("helman-solar-money-strip", inspector.shadowRoot.querySelector("helman-solar-money-strip")!, {
+            moneyCells: "_cells",
+        });
     });
 }
 

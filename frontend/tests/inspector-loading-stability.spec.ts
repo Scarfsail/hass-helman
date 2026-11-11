@@ -63,9 +63,10 @@ type ShellReadout = {
     hasChart: boolean;
     isLoading: boolean;
     overlayText: string;
-    /** The chart's own opacity, read through `getComputedStyle` -- the
-     *  dimming rule targets the shell's children, so this is what shows it
-     *  actually landed on the content and not just on the shell. */
+    /** The opacity of the shell child holding the chart, read through
+     *  `getComputedStyle` -- the dimming rule targets the shell's children, so
+     *  this is what shows it actually landed on the content and not just on
+     *  the shell. */
     contentOpacity: string;
     errorNotes: string[];
 };
@@ -81,7 +82,7 @@ async function readShell(page: Page): Promise<ShellReadout> {
             hasChart: !!chartWrap,
             isLoading: !!root?.querySelector(".content-shell.is-loading"),
             overlayText: root?.querySelector(".loading-overlay")?.textContent?.trim() ?? "",
-            contentOpacity: chartWrap ? getComputedStyle(chartWrap).opacity : "",
+            contentOpacity: chartWrap ? getComputedStyle(chartWrap.closest(".content-shell > *") ?? chartWrap).opacity : "",
             errorNotes: Array.from(root?.querySelectorAll(".body > .note") ?? []).map(
                 (note) => note.textContent?.trim() ?? "",
             ),
