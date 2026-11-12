@@ -70,6 +70,13 @@ class RankSlotsContiguousTests(unittest.TestCase):
         )
         self.assertEqual(ranking, [_slot_id(12, 0), _slot_id(12, 15), _slot_id(10, 0)])
 
+    def test_picked_slots_seed_adjacency_without_being_ordered(self) -> None:
+        prices = {_slot_id(10, 0): 1.0, _slot_id(12, 15): 1.0}
+        ranking = rank_slots_contiguous(
+            prices, key=prices.__getitem__, picked=[_slot_id(12, 0)]
+        )
+        self.assertEqual(ranking, [_slot_id(12, 15), _slot_id(10, 0)])
+
     def test_a_group_on_both_sides_takes_the_earliest_adjacent_first(self) -> None:
         prices = {_slot_id(12, 0): 1.0} | {
             slot_id: 2.0

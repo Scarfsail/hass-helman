@@ -430,7 +430,7 @@ class ParamOverrideTests(unittest.TestCase):
 
         self.assertEqual(
             optimizer.conditions[0].params["battery_first"],
-            {"target_soc": 95.0, "margin_pct": 10.0},
+            {"target_soc": 95.0, "min_soc": 0.0, "margin_pct": 10.0},
         )
 
     def test_window_end_can_move_while_start_is_inherited(self) -> None:

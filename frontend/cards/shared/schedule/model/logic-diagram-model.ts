@@ -358,6 +358,8 @@ export function gateDetail(
             return ratio(params.surplusAtWindowStart, params.neededKwh, "kWh");
         case "reserve_hold":
             return ratio(params.projectedSoc, params.requiredSoc, "%");
+        case "above_min_soc":
+            return ratio(params.socPct, params.minSoc, "%");
         case "cheap_window_capacity":
             return ratio(params.slotsAvailable, params.slotsNeeded);
         case "placement_capacity":

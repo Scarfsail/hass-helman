@@ -49,6 +49,7 @@ const SCHEMA = {
                     type: "object",
                     fields: [
                         { key: "target_soc", type: "number", minimum: 0, maximum: 100 },
+                        { key: "min_soc", type: "number", minimum: 0, maximum: 100, default: 0 },
                         { key: "margin_pct", type: "number", minimum: 0, default: 0 },
                     ],
                 },
@@ -178,7 +179,7 @@ test.describe("schema-driven optimizer card", () => {
         const panel = await mountEditor(page);
         const card = await openCard(panel);
 
-        // window.start/end and battery_first.target_soc/margin_pct, all derived
+        // window.start/end and battery_first.target_soc/min_soc/margin_pct, all derived
         // from the schema — no charge_hold-specific TypeScript involved.
         const labels = await card
             .locator(".appliance-body > .field-grid label")
@@ -188,7 +189,8 @@ test.describe("schema-driven optimizer card", () => {
                 "Window start",
                 "Window end",
                 "Target SoC %",
-                "Margin %",
+                "Min SoC %",
+                "Charge energy margin %",
             ]),
         );
     });
@@ -314,12 +316,12 @@ test.describe("schema-driven optimizer card", () => {
             .allInnerTexts();
         expect(masterLabels).toContain("Max consecutive skips");
 
-        // The override form keeps its four overridable fields (window
-        // start/end, target SoC, margin) and gains no fifth — so this is a
-        // filter, not a broken form.
+        // The override form keeps its five overridable fields (window
+        // start/end, target SoC, min SoC, margin) and gains no sixth — so this
+        // is a filter, not a broken form.
         const firstGroup = card.locator(".condition-group").first();
         await firstGroup.locator(".param-override > summary").click();
-        await expect(firstGroup.locator(".param-override input")).toHaveCount(4);
+        await expect(firstGroup.locator(".param-override input")).toHaveCount(5);
     });
 
     test("adding a group appends one seeded from the kind's draft", async ({ page }) => {

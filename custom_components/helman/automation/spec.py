@@ -250,6 +250,7 @@ OPTIMIZER_SPECS: dict[str, OptimizerSpec] = {
                 F.obj(
                     "battery_first",
                     F.soc("target_soc"),
+                    F.soc("min_soc", default=0),
                     F.margin_pct("margin_pct"),
                 ),
             ),
@@ -260,7 +261,11 @@ OPTIMIZER_SPECS: dict[str, OptimizerSpec] = {
                 "target": {"controllable_id": CONTROLLABLE_ID_INVERTER},
                 "params": {
                     "window": {"start": "06:00", "end": "14:00"},
-                    "battery_first": {"target_soc": 100, "margin_pct": 20},
+                    "battery_first": {
+                        "target_soc": 100,
+                        "min_soc": 0,
+                        "margin_pct": 20,
+                    },
                 },
                 "conditions": [{"run_when": ["surplus"]}],
             },

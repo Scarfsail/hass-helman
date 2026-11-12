@@ -1340,6 +1340,39 @@ test.describe("a block shows the numbers it was decided by", () => {
         expect(invented).toEqual([]);
     });
 
+    test("the charge hold floor reads as the SoC entering against the floor", async ({ page }) => {
+        // A slot the battery enters below charge_hold's min SoC: never held, and
+        // it never meets the ranking.
+        await mountPanel(page, explanationRows({
+            controllableId: "inverter",
+            date: DATE,
+            slotIds: SLOT_IDS.slice(0, 1),
+            runAt: RUN_AT,
+            optimizers: [{
+                optimizerId: "charge_hold",
+                slots: [{
+                    slotId: SLOT_IDS[0],
+                    verdict: "skip",
+                    matchedGroupIndex: 0,
+                    groups: [{ label: "Přebytek", conditions: [] }],
+                    gates: [
+                        { key: "hold_window", role: "veto", state: "true", params: { start: "06:00", end: "14:00" } },
+                        {
+                            key: "above_min_soc", role: "veto",
+                            state: "false",
+                            params: { socPct: 12.47, minSoc: 20 },
+                        },
+                    ],
+                }],
+            }],
+        }));
+        await selectSlot(page, 0, "charge_hold");
+
+        expect(await svgText(
+            diagram(page).locator('g.block[data-key="above_min_soc"] text.detail'),
+        )).toBe("12.47/20 %");
+    });
+
     test("the daily minimum counts up to the slot, not to the morning", async ({ page }) => {
         // Every slot of the run carries the same recorded "0 of 2 done" -- true
         // of the whole day and useless on a slot in the middle of the run. The

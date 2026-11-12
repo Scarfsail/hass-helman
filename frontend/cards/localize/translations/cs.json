@@ -1108,6 +1108,7 @@
         "stop_export_supported": "Podpora zastavení exportu",
         "blocked_user_owned": "Slot bez ručního plánu",
         "reserve_hold": "Držení rezervy",
+        "above_min_soc": "Nad min. SoC",
         "ev_charging": "Nabíjení EV"
       },
       "condition_detail": {
@@ -1118,6 +1119,7 @@
         "cheapest_rank": "Kolikátý nejlevnější je tento slot mezi sloty, o kterých se pro tento den rozhodovalo. Tohle je to per-slot číslo, které říká, proč se plánuje zrovna tenhle slot. U držení nabíjení je to obráceně: splněno = slot v žebříčku neuspěl, levnější sloty už potřebu pokryjí a přebytek se tady vyplatí spíš prodat.",
         "ensure_self_sustainability": "Co běh spotřebiče udělá s baterií: horizont se přepočítá s tímto slotem navíc a porovná se s průběhem bez spotřebiče. Nastavené číslo je denní tolerance energie, kterou nedodalo slunce — vybitá baterie i nákup ze sítě se sčítají. 0 znamená, že se den musí zaplatit sám, 100 toleranci vypíná a hlídá se jen podlaha SoC. Vyhodnocuje se postupně v pořadí podle ceny, takže výsledek závisí i na tom, které sloty byly přijaty před tímto.",
         "reserve_hold": "Zastaví vybíjení, pokud by baterie i po plánu levného nabíjení klesla pod požadované minimum; odebírá ze sítě a uchová rezervu pro výpadek.",
+        "above_min_soc": "Zda je předpovězené SoC baterie na začátku tohoto slotu alespoň na nastaveném min. SoC. Splněno = slot se smí zadržet; nesplněno = baterie do slotu vstupuje pod min. SoC, takže nabíjí bez ohledu na cenu.",
         "ev_charging": "Zda vybraná nabíječka v tomto slotu nabíjí. Budoucí sloty podle plánu, aktuální slot podle skutečného odběru nabíječky (nad 1 kW, s tolerancí výpadku senzoru)."
       },
       "self_sustainability": {
