@@ -3,6 +3,7 @@ from __future__ import annotations
 import types
 import unittest
 from copy import deepcopy
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 
 from _ha_stubs import stub_ha_dt, stub_module
@@ -204,14 +205,18 @@ def _make_config(
     window_end: str = "14:00",
     target_soc: int = 100,
     margin_pct: int = 0,
+    min_soc: int | None = None,
     groups: list[dict] | None = None,
 ) -> OptimizerInstanceConfig:
+    battery_first = {"target_soc": target_soc, "margin_pct": margin_pct}
+    if min_soc is not None:
+        battery_first["min_soc"] = min_soc
     return make_optimizer_config(
         id="morning-export",
         kind="charge_hold",
         params={
             "window": {"start": window_start, "end": window_end},
-            "battery_first": {"target_soc": target_soc, "margin_pct": margin_pct},
+            "battery_first": battery_first,
         },
         conditions=groups or [{"run_when": list(run_when)}],
     )
@@ -686,6 +691,214 @@ class ChargeHoldTraceContractTests(unittest.TestCase):
         self.assertEqual(explanation["status"], "skipped")
         self.assertEqual(explanation.get("statusReason"), "battery_params_missing")
         self.assertEqual({slot["verdict"] for slot in explanation["slots"]}, {"skip"})
+
+
+def _series_rising_from(soc_pct: float, *, day_offset: int = 0) -> list[dict[str, object]]:
+    """The surplus series with a SoC trajectory: ``soc_pct`` overnight, then
+    each 0.5 kWh surplus bucket lifting a 10 kWh battery by 5 points."""
+    shift = timedelta(days=day_offset)
+    overnight, *surplus = _series_with_soc(soc_pct)
+    series = [dict(overnight)]
+    for index, point in enumerate(surplus):
+        series.append(dict(point, socPct=soc_pct + 5.0 * (index + 1)))
+    for point in series:
+        point["timestamp"] = (
+            datetime.fromisoformat(point["timestamp"]) + shift
+        ).isoformat(timespec="seconds")
+    return series
+
+
+_BELOW_FLOOR = {
+    _slot_id(hour, minute) for hour in range(6, 10) for minute in (0, 15, 30, 45)
+} | {_slot_id(10, 0)}
+
+
+class ChargeHoldMinSocTests(unittest.TestCase):
+    """``battery_first.min_soc``: no hold while the battery enters below it.
+
+    The battery sits at 15% until the 10:00 surplus lifts it to 20%, so every
+    window slot up to and including 10:00 enters below a 20% floor. Target 90
+    from 15 is 7.5 kWh: without a floor that is the fifteen cheapest surplus
+    slots, and 06:00-10:00 is held.
+    """
+
+    def _run(self, config, snapshot=None):
+        return run_optimizer_with_trace(
+            build_charge_hold_optimizer(config),
+            snapshot
+            or _make_snapshot(
+                day_context=_day_context(),
+                surplus_series=_series_rising_from(15.0),
+            ),
+            config,
+            reference_time=REFERENCE_TIME,
+        )
+
+    def test_without_a_floor_the_low_morning_is_held(self) -> None:
+        result, _ = self._run(_make_config(target_soc=90))
+        self.assertEqual(_held_slot_ids(result), _BELOW_FLOOR)
+
+    def test_below_floor_slots_charge_and_seed_the_need(self) -> None:
+        result, trace = self._run(_make_config(target_soc=90, min_soc=20))
+        assert_trace_contract(self, trace)
+        # 10:00's 0.5 kWh counts first, so the ranking needs fourteen slots, not
+        # fifteen: 13:xx, 12:xx, 11:xx and two of the tied 10:xx. 10:00 charges,
+        # so it counts as picked and the tie runs on from it: 10:15 and 10:30,
+        # leaving 10:45 the one slot still held.
+        self.assertEqual(_held_slot_ids(result), {_slot_id(10, 45)})
+
+        slots = _slots_by_id(trace)
+        below = _gate(slots[_slot_id(7, 0)], "above_min_soc")
+        self.assertEqual(below["state"], "false")
+        self.assertEqual(below["params"], {"socPct": 15.0, "minSoc": 20})
+        self.assertIsNone(_gate(slots[_slot_id(7, 0)], "cheapest_rank"))
+        self.assertEqual(_gate(slots[_slot_id(10, 0)], "above_min_soc")["state"], "false")
+
+        held = slots[_slot_id(10, 45)]
+        above = _gate(held, "above_min_soc")
+        self.assertEqual(above["state"], "true")
+        self.assertEqual(above["params"], {"socPct": 30.0, "minSoc": 20})
+        rank = _gate(held, "cheapest_rank")
+        self.assertEqual(rank["state"], "true")
+        # Below-floor slots take no place in the ranking.
+        self.assertEqual(rank["params"]["rankOf"], 15)
+
+        released = slots[_slot_id(12, 0)]
+        self.assertEqual(_gate(released, "above_min_soc")["state"], "true")
+        self.assertEqual(_gate(released, "cheapest_rank")["state"], "false")
+        self.assertEqual(_gate(released, "hold_room")["params"]["minSoc"], 20)
+
+    def test_a_group_override_applies_on_its_day_only(self) -> None:
+        tomorrow = DAY + timedelta(days=1)
+        snapshot = _make_snapshot(
+            day_context=_day_context(),
+            surplus_series=_series_rising_from(15.0)
+            + _series_rising_from(15.0, day_offset=1),
+        )
+        snapshot.context.day_contexts[tomorrow] = replace(
+            _day_context(classification="deficit"), local_date=tomorrow
+        )
+        config = _make_config(
+            target_soc=90,
+            groups=[
+                {
+                    "run_when": ["surplus"],
+                    "params": {"battery_first": {"min_soc": 20}},
+                },
+                {"run_when": ["deficit"]},
+            ],
+        )
+        result, trace = self._run(config, snapshot)
+        held = _held_slot_ids(result)
+        tomorrow_morning = (
+            datetime(2026, 7, 11, 7, 0, tzinfo=TZ).isoformat(timespec="seconds")
+        )
+
+        self.assertNotIn(_slot_id(7, 0), held)
+        self.assertIn(tomorrow_morning, held)
+        gate = _gate(_slots_by_id(trace)[tomorrow_morning], "above_min_soc")
+        self.assertEqual(gate["state"], "true")
+        self.assertEqual(gate["params"]["minSoc"], 0)
+
+    def _run_series(self, config, overnight_soc, rows, prices_by_hour):
+        """Run over a hand-built forecast: ``rows`` are
+        ``(hour, minute, solar_kwh, house_kwh, soc_pct)`` 15-minute buckets
+        behind a 05:30 overnight point at ``overnight_soc``."""
+        overnight = {
+            "timestamp": datetime(2026, 7, 10, 5, 30, tzinfo=TZ).isoformat(
+                timespec="seconds"
+            ),
+            "solarKwh": 0.0,
+            "baselineHouseKwh": 0.0,
+            "durationHours": 0.5,
+            "socPct": overnight_soc,
+        }
+        series = [overnight] + [
+            {
+                "timestamp": _slot_id(hour, minute),
+                "solarKwh": solar,
+                "baselineHouseKwh": house,
+                "durationHours": 0.25,
+                "socPct": soc,
+            }
+            for hour, minute, solar, house, soc in rows
+        ]
+        return self._run(
+            config,
+            _make_snapshot(
+                day_context=_day_context(),
+                surplus_series=series,
+                export_price_points=_export_price_points(prices_by_hour),
+            ),
+        )
+
+    def test_a_zero_need_holds_nothing_for_below_floor_slots(self) -> None:
+        # 55% entering 06:00 against a 50% target: nothing to charge. The
+        # pre-dawn drain dips under the 20% floor at 08:00-08:45 (08:45 with a
+        # little surplus); that must not turn the morning into a hold.
+        drain = [(hour, minute) for hour in (6, 7) for minute in (0, 15, 30, 45)]
+        rows = [
+            (hour, minute, 0.0, 0.5, max(18.0, 55.0 - 5.0 * (index + 1)))
+            for index, (hour, minute) in enumerate(drain)
+        ] + [
+            (8, 0, 0.0, 0.0, 18.0),
+            (8, 15, 0.0, 0.0, 18.0),
+            (8, 30, 0.0, 0.0, 18.0),
+            (8, 45, 0.5, 0.0, 23.0),
+        ]
+        result, trace = self._run_series(
+            _make_config(target_soc=50, min_soc=20), 55.0, rows, {}
+        )
+        assert_trace_contract(self, trace)
+        self.assertEqual(_held_slot_ids(result), set())
+        slots = _slots_by_id(trace)
+        for minute in (0, 15, 30, 45):
+            gate = _gate(slots[_slot_id(8, minute)], "above_min_soc")
+            self.assertEqual(gate["state"], "false")
+
+    def test_a_dry_below_floor_slot_does_not_delay_the_release(self) -> None:
+        # 70% -> 90% is 2 kWh: the four 10:xx slots, done by 10:45. A load spike
+        # takes 12:30 under the floor with no surplus; it adds no charge, so
+        # 11:00-12:15 stay released rather than held up to it.
+        rows = [
+            (10, minute, 0.5, 0.0, 75.0 + minute / 3) for minute in (0, 15, 30, 45)
+        ] + [(12, 15, 0.0, 7.5, 15.0), (12, 30, 0.0, 0.0, 25.0)]
+        result, trace = self._run_series(
+            _make_config(target_soc=90, min_soc=20), 70.0, rows, {10: 1.0}
+        )
+        assert_trace_contract(self, trace)
+        self.assertEqual(
+            _held_slot_ids(result),
+            {_slot_id(hour, minute) for hour in range(6, 10) for minute in (0, 15, 30, 45)},
+        )
+        gate = _gate(_slots_by_id(trace)[_slot_id(12, 30)], "above_min_soc")
+        self.assertEqual(gate["state"], "false")
+
+    def test_charging_below_floor_slots_count_as_picked_for_ties(self) -> None:
+        # 10% -> 40% is 3 kWh. 06:00-06:45 enter below 20% and bring 2 kWh;
+        # 10:45 is cheapest, then 07:00 and 11:00 tie. 07:00 continues the
+        # below-floor run, so it wins over 11:00 (next to 10:45) instead of the
+        # battery charging to 07:00, holding 07:00, and charging again later.
+        rows = [
+            (6, 0, 0.5, 0.0, 12.0),
+            (6, 15, 0.5, 0.0, 14.0),
+            (6, 30, 0.5, 0.0, 16.0),
+            (6, 45, 0.5, 0.0, 20.0),
+            (7, 0, 0.5, 0.0, 25.0),
+            (10, 45, 0.5, 0.0, 30.0),
+            (11, 0, 0.5, 0.0, 35.0),
+        ]
+        result, trace = self._run_series(
+            _make_config(target_soc=40, min_soc=20),
+            10.0,
+            rows,
+            {7: 2.0, 10: 1.0, 11: 2.0},
+        )
+        assert_trace_contract(self, trace)
+        held = {
+            _slot_id(hour, minute) for hour in range(7, 11) for minute in (0, 15, 30, 45)
+        } - {_slot_id(7, 0), _slot_id(10, 45)}
+        self.assertEqual(_held_slot_ids(result), held)
 
 
 from automation_trace_contract import trace_rows_payload

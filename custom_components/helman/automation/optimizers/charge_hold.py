@@ -37,6 +37,13 @@ made tomorrow look nearly full, so a single slot covered the phantom need and
 the rest of the cheap band was held — leaving the real charge to finish in the
 dear afternoon behind it.
 
+**No hold below the floor.** A window slot whose forecast SoC entering it is
+below ``battery_first.min_soc`` is never held: it charges whatever its price,
+and its surplus counts toward the need before the price walk, so the cheap
+slots are not asked to cover it a second time. ``0`` (the default) turns the
+floor off. The floor is this optimizer's own, independent of
+``battery_reserve``'s.
+
 Runs **before** ``export_price`` in config order so ``export_price``'s protective
 ``stop_export`` wins any slot both want.
 
@@ -100,6 +107,11 @@ GATE_HOLD_WINDOW = "hold_window"
 #: The day's remaining solar can still refill the battery at all. Day-scoped:
 #: one accounting serves every slot of the date.
 GATE_HOLD_ROOM = "hold_room"
+#: The forecast SoC entering the slot is at or above ``battery_first.min_soc``.
+#: Same polarity as its siblings — ``true`` means the slot *may* be held;
+#: ``false`` means the battery enters it below the floor, so it charges
+#: regardless of price and never meets the ranking.
+GATE_ABOVE_MIN_SOC = "above_min_soc"
 #: Where the slot placed in the day's export-price ranking. **An ordinal, not a
 #: truth value** — ``params.rank`` / ``params.rankOf`` carry the position, the
 #: same shape ``battery_reserve`` uses for its cheap band.
@@ -179,20 +191,30 @@ class ChargeHoldOptimizer:
             params = resolved.params
             battery_first = params["battery_first"]
             window_start = time_on(params["window"]["start"], local_date, tzinfo=tzinfo)
+            window_end = time_on(params["window"]["end"], local_date, tzinfo=tzinfo)
             # The gap to close is the one the battery will have when this day's
             # window opens, not the one it has at run time: a 48 h horizon sizes
             # tomorrow, and the overnight discharge between the two is exactly
             # what tonight's reading omits. A window already open (today's, on a
             # midday run) reads at `now`, which is where the forecast starts and
             # so is the live SoC either way.
-            start_soc = _soc_at_window_start(
-                snapshot,
-                window_start=window_start,
-                fallback_soc=battery_state.current_soc,
+            start_soc = _forecast_soc_entering(
+                snapshot, at=window_start, fallback_soc=battery_state.current_soc
             )
+            day_slot_ids = slots_by_date.get(local_date, [])
+            window_soc_by_slot = {
+                slot_id: _forecast_soc_entering(
+                    snapshot,
+                    at=parse_slot_id(slot_id),
+                    fallback_soc=battery_state.current_soc,
+                )
+                for slot_id in day_slot_ids
+                if window_start <= parse_slot_id(slot_id) < window_end
+            }
+            min_soc = battery_first["min_soc"]
             resolution = _resolve_day_hold(
                 window_start=window_start,
-                window_end=time_on(params["window"]["end"], local_date, tzinfo=tzinfo),
+                window_end=window_end,
                 needed_kwh=_compute_needed_kwh(
                     target_soc=battery_first["target_soc"],
                     current_soc=start_soc,
@@ -201,14 +223,22 @@ class ChargeHoldOptimizer:
                 ),
                 start_soc=start_soc,
                 margin_pct=battery_first["margin_pct"],
+                min_soc=min_soc,
+                window_soc_by_slot=window_soc_by_slot,
+                below_floor=frozenset(
+                    slot_id
+                    for slot_id, soc in window_soc_by_slot.items()
+                    if soc < min_soc
+                ),
                 group_label=resolved.group.label,
-                day_slot_ids=slots_by_date.get(local_date, []),
+                day_slot_ids=day_slot_ids,
                 surplus_by_slot=surplus_by_slot,
                 price_by_slot=price_by_slot,
             )
             resolutions[local_date] = resolution
             return resolution
 
+        below_floor_by_day: dict[date, list[str]] = {}
         released_by_day: dict[date, list[str]] = {}
         no_room_by_day: dict[date, list[str]] = {}
         no_day_context: list[str] = []
@@ -238,6 +268,9 @@ class ChargeHoldOptimizer:
             if not resolved.has_room:
                 no_room_by_day.setdefault(local_date, []).append(slot_id)
                 continue
+            if slot_id in resolved.below_floor:
+                below_floor_by_day.setdefault(local_date, []).append(slot_id)
+                continue
             if slot_id in resolved.released:
                 released_by_day.setdefault(local_date, []).append(slot_id)
                 continue
@@ -248,6 +281,7 @@ class ChargeHoldOptimizer:
             trace,
             eligibility=eligibility,
             resolutions=resolutions,
+            below_floor_by_day=below_floor_by_day,
             released_by_day=released_by_day,
             no_room_by_day=no_room_by_day,
             no_day_context=no_day_context,
@@ -259,23 +293,21 @@ class ChargeHoldOptimizer:
         return writer.flush()
 
 
-def _soc_at_window_start(
+def _forecast_soc_entering(
     snapshot: "OptimizationSnapshot",
     *,
-    window_start: datetime,
+    at: datetime,
     fallback_soc: float,
 ) -> float:
-    """The day's starting SoC, forecast where the window is still ahead.
+    """The forecast SoC entering ``at`` — a window start or a single slot.
 
-    Clamped to ``now`` because the forecast begins there: a window that opened
-    hours ago has no forecast point before it, and the battery's own reading is
-    the honest answer for the stretch that is already running. A forecast with
-    no SoC at all falls back the same way, which is what keeps this readable
+    Clamped to ``now`` because the forecast begins there: an instant already
+    past has no forecast point before it, and the battery's own reading is the
+    honest answer for the stretch that is already running. A forecast with no
+    SoC at all falls back the same way, which is what keeps this readable
     against a series that carries only solar and house figures.
     """
-    read_at = max(
-        dt_util.as_utc(window_start), dt_util.as_utc(snapshot.context.now)
-    )
+    read_at = max(dt_util.as_utc(at), dt_util.as_utc(snapshot.context.now))
     forecast_soc = read_forecast_soc_at(snapshot, read_at)
     return fallback_soc if forecast_soc is None else forecast_soc
 
@@ -335,6 +367,12 @@ class _DayHoldResolution:
     #: SoC the day's window opens at — what `needed_kwh` was measured from.
     start_soc: float
     margin_pct: float
+    #: The day's SoC floor and the window slots whose forecast SoC entering them
+    #: is below it: never held, charged up front, never ranked.
+    min_soc: float
+    below_floor: frozenset[str]
+    #: Forecast SoC entering each window slot — what the floor was tested on.
+    window_soc_by_slot: dict[str, float]
     group_label: str
 
 
@@ -345,6 +383,9 @@ def _resolve_day_hold(
     needed_kwh: float,
     start_soc: float,
     margin_pct: float,
+    min_soc: float,
+    window_soc_by_slot: dict[str, float],
+    below_floor: frozenset[str],
     group_label: str,
     day_slot_ids: list[str],
     surplus_by_slot: dict[str, float],
@@ -356,6 +397,10 @@ def _resolve_day_hold(
     calendar day's own solar can refill the battery for this day's hold, and
     ``day_slot_ids`` is already scoped to the date, so no part of tomorrow's
     forecast can leak in.
+
+    ``below_floor`` slots charge whatever their price: they join the charge set
+    before the walk, their surplus seeds the running total, and they take no
+    place in the ranking.
     """
     threshold = max(0.0, needed_kwh) * (1 + margin_pct / 100)
     # A slot with no surplus is not a place the battery can charge, so it takes
@@ -363,26 +408,38 @@ def _resolve_day_hold(
     # rank on nothing and read as "released" where there is nothing to release.
     # Left out of the ranking it is simply held, as every pre-dawn slot was
     # under the release model.
-    candidates = [
+    day_surplus_slots = [
         slot_id
         for slot_id in day_slot_ids
         if parse_slot_id(slot_id) >= window_start
         and surplus_by_slot.get(slot_id, 0.0) > 0
+    ]
+    candidates = [slot_id for slot_id in day_surplus_slots if slot_id not in below_floor]
+    # Below-floor slots with surplus are the ones that actually charge.
+    charging_below_floor = [
+        slot_id for slot_id in day_surplus_slots if slot_id in below_floor
     ]
     # Cheapest first. Among equal prices the slot adjacent to an already-picked
     # slot wins first, keeping the charge one continuous run instead of flipping
     # between charging and exporting; only then the earlier slot, which banks
     # the charge sooner and leaves more of the day to recover from a short
     # forecast. An unknown price sorts last: it is only ever charged into as a
-    # last resort.
+    # last resort. Charging below-floor slots count as already picked.
     ranking = rank_slots_contiguous(
         candidates,
         key=lambda slot_id: price_by_slot.get(slot_id, float("inf")),
+        picked=charging_below_floor,
     )
 
-    charge_set: set[str] = set()
+    # Below-floor slots charge first, so the need they cover is not charged a
+    # second time in the cheap slots.
+    charge_set: set[str] = set(below_floor)
+    # The slots that bring the battery to target: what `charge_complete_at` is
+    # measured over. A zero need is met before any slot charges, and a
+    # below-floor slot with no surplus adds nothing.
+    contributing: set[str] = set(charging_below_floor) if threshold > 0 else set()
     ranked: list[_RankedSlot] = []
-    cumulative = 0.0
+    cumulative = sum(surplus_by_slot.get(slot_id, 0.0) for slot_id in below_floor)
     covered = cumulative >= threshold
     for index, slot_id in enumerate(ranking):
         surplus_kwh = surplus_by_slot.get(slot_id, 0.0)
@@ -390,6 +447,7 @@ def _resolve_day_hold(
         if in_charge_set:
             cumulative += surplus_kwh
             charge_set.add(slot_id)
+            contributing.add(slot_id)
             covered = cumulative >= threshold
         ranked.append(
             _RankedSlot(
@@ -414,15 +472,15 @@ def _resolve_day_hold(
         marginal_price = max(prices) if prices else None
 
     # Where the charge set finishes the job — the instant the battery is at
-    # target and the hold has nothing left to protect. An empty charge set on a
+    # target and the hold has nothing left to protect. No contributing slot on a
     # covered day means the need was already zero, so that instant is the window
     # start itself. Not covered at all is the no-room case, which holds nothing
     # anyway.
     charge_complete_at: datetime | None = None
     if covered:
         charge_complete_at = (
-            max(parse_slot_id(slot_id) for slot_id in charge_set)
-            if charge_set
+            max(parse_slot_id(slot_id) for slot_id in contributing)
+            if contributing
             else window_start
         )
         # Past that instant the battery may charge freely. Holding on would buy
@@ -450,13 +508,18 @@ def _resolve_day_hold(
         rank_of=len(ranked),
         marginal_price=marginal_price,
         has_room=covered and window_end > window_start,
+        # The room test counts below-floor slots too: they are still the day's
+        # surplus.
         surplus_at_window_start=sum(
-            surplus_by_slot.get(slot_id, 0.0) for slot_id in candidates
+            surplus_by_slot.get(slot_id, 0.0) for slot_id in day_surplus_slots
         ),
         threshold_kwh=threshold,
         needed_kwh=needed_kwh,
         start_soc=start_soc,
         margin_pct=margin_pct,
+        min_soc=min_soc,
+        below_floor=below_floor,
+        window_soc_by_slot=window_soc_by_slot,
         group_label=group_label,
     )
 
@@ -466,6 +529,7 @@ def _emit_charge_hold_gates(
     *,
     eligibility: "Eligibility",
     resolutions: dict[date, _DayHoldResolution],
+    below_floor_by_day: dict[date, list[str]],
     released_by_day: dict[date, list[str]],
     no_room_by_day: dict[date, list[str]],
     no_day_context: list[str],
@@ -553,9 +617,27 @@ def _emit_charge_hold_gates(
             # surprising `neededKwh` legible instead of arbitrary.
             "startSocPct": round(resolved.start_soc, 2),
             "marginPct": resolved.margin_pct,
+            "minSoc": resolved.min_soc,
             "surplusAtWindowStart": round(resolved.surplus_at_window_start, 3),
             "thresholdKwh": round(resolved.threshold_kwh, 3),
         }
+
+    def _emit_min_soc(
+        local_date: date, slot_ids: list[str], *, state: str
+    ) -> None:
+        """One gate per slot: each slot enters at its own forecast SoC."""
+        resolved = resolutions[local_date]
+        for slot_id in slot_ids:
+            trace.gate(
+                role="veto",
+                slot_ids=[slot_id],
+                key=GATE_ABOVE_MIN_SOC,
+                state=state,
+                params={
+                    "socPct": round(resolved.window_soc_by_slot[slot_id], 2),
+                    "minSoc": resolved.min_soc,
+                },
+            )
 
     def _emit_rank(
         local_date: date, slot_ids: list[str], *, state: str
@@ -613,6 +695,24 @@ def _emit_charge_hold_gates(
             state=STATE_FALSE,
             params=_room_params(resolved),
         )
+    for local_date, slot_ids in below_floor_by_day.items():
+        resolved = _day_gates(local_date, slot_ids)
+        trace.gate(
+            role="veto",
+            slot_ids=slot_ids,
+            key=GATE_HOLD_WINDOW,
+            state=STATE_TRUE,
+            params=_window_params(resolved),
+        )
+        trace.gate(
+            role="veto",
+            slot_ids=slot_ids,
+            key=GATE_HOLD_ROOM,
+            state=STATE_TRUE,
+            params=_room_params(resolved),
+        )
+        # Ends here: a below-floor slot never met the ranking.
+        _emit_min_soc(local_date, slot_ids, state=STATE_FALSE)
     for local_date, slot_ids in released_by_day.items():
         resolved = _day_gates(local_date, slot_ids)
         trace.gate(
@@ -629,6 +729,7 @@ def _emit_charge_hold_gates(
             state=STATE_TRUE,
             params=_room_params(resolved),
         )
+        _emit_min_soc(local_date, slot_ids, state=STATE_TRUE)
         _emit_rank(local_date, slot_ids, state=STATE_FALSE)
     for local_date, slot_ids in held_by_day.items():
         # Held slots the user owns pass every one of these gates and are still
@@ -649,6 +750,7 @@ def _emit_charge_hold_gates(
             state=STATE_TRUE,
             params=_room_params(resolved),
         )
+        _emit_min_soc(local_date, slot_ids, state=STATE_TRUE)
         _emit_rank(local_date, slot_ids, state=STATE_TRUE)
 
 

@@ -366,6 +366,37 @@ class ConfigValidationTests(unittest.TestCase):
 
         self.assertTrue(report.valid, msg=report.to_dict())
 
+    def test_charge_hold_min_soc_must_be_a_soc(self) -> None:
+        for min_soc in (-1, 101):
+            with self.subTest(min_soc=min_soc):
+                config = _valid_config()
+                config["automation"] = {
+                    "enabled": True,
+                    "system_optimizers": [
+                        {
+                            "id": "hold",
+                            "kind": "charge_hold",
+                            "params": {
+                                "window": {"start": "06:00", "end": "14:00"},
+                                "battery_first": {
+                                    "target_soc": 100,
+                                    "min_soc": min_soc,
+                                    "margin_pct": 20,
+                                },
+                            },
+                            "conditions": [{"run_when": ["surplus"]}],
+                        }
+                    ],
+                }
+
+                report = validate_config_document(config)
+
+                self.assertFalse(report.valid)
+                self.assertIn(
+                    "automation.system_optimizers[0].params.battery_first.min_soc",
+                    [issue.path for issue in report.errors],
+                )
+
     def test_an_optimizer_aimed_at_a_kind_it_cannot_drive_is_rejected(self) -> None:
         """A ``charge_hold`` on a boiler used to be accepted and do nothing.
 

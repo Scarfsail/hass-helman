@@ -26,6 +26,7 @@ def rank_slots_contiguous(
     # does not express the ordering, so the return type is Any.
     key: Callable[[str], Any],
     seed: str | None = None,
+    picked: Iterable[str] = (),
 ) -> list[str]:
     """Order ``slot_ids`` by ``key``, ties going to a slot adjacent to a pick.
 
@@ -34,7 +35,8 @@ def rank_slots_contiguous(
     ordered slot (from any earlier group or earlier in this group) comes next;
     with none adjacent, the earliest remaining slot does. A ``seed`` among
     ``slot_ids`` goes first and seeds adjacency; the rest of its group is walked
-    with its key as usual.
+    with its key as usual. ``picked`` slots are already bought elsewhere: they
+    seed adjacency but are not part of the ordering.
     """
     start_by_slot = {
         slot_id: dt_util.as_utc(parse_slot_id(slot_id)) for slot_id in slot_ids
@@ -44,7 +46,9 @@ def rank_slots_contiguous(
         groups.setdefault(key(slot_id), []).append(slot_id)
 
     ordered: list[str] = []
-    ordered_starts: set[datetime] = set()
+    ordered_starts: set[datetime] = {
+        dt_util.as_utc(parse_slot_id(slot_id)) for slot_id in picked
+    }
 
     def append(slot_id: str) -> None:
         ordered.append(slot_id)
