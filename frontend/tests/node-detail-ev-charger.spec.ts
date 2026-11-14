@@ -63,6 +63,8 @@ type Variant = {
     /** The boiler's user action from 12:00 to 13:00, another lane's override. */
     userBoiler?: boolean;
     evNode?: "meterless" | "missing_kind" | "multiple";
+    /** The charger's live use mode, `Fast` by default. */
+    useMode?: string;
 };
 
 declare global {
@@ -135,7 +137,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             "sensor.ev_power": s(v.power ?? "6400", "W"), "sensor.ev_energy": s("9474.7", "kWh"),
             "sensor.boiler_power": s("0", "W"), "sensor.boiler_energy": s("10", "kWh"),
             "switch.ev_charge": { ...s(v.chargeSwitch ?? "on"), attributes: { icon: "mdi:ev-station" } },
-            "select.ev_use_mode": s("Fast"), "select.ev_eco_gear": s("6A"),
+            "select.ev_use_mode": s(v.useMode ?? "Fast"), "select.ev_eco_gear": s("6A"),
             "sensor.kona_soc": s(v.soc ?? "50", "%"), "sensor.ioniq_soc": s("30", "%"),
         };
         if (v.limit !== null) states["number.kona_limit"] = s(v.limit ?? "80", "%");
@@ -228,7 +230,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 {
                     id: "garage-ev", name: "Garage EV", kind: "ev_charger",
                     primaryEntityId: "switch.ev_charge", supportsAuthoring: true, normalState: "off",
-                    metadata: { icon: "mdi:car", maxChargingPowerKw: 11, scheduleCapabilities: { chargeToggle: true, useModes: ["Fast", "ECO"], ecoGears: ["6A"], requiresVehicleSelection: true } },
+                    metadata: { icon: "mdi:car", maxChargingPowerKw: 11, scheduleCapabilities: { chargeToggle: true, useModes: ["Fast", "ECO"], ecoGears: ["6A", "10A"], requiresVehicleSelection: true } },
                     controls: { charge: { entityId: "switch.ev_charge" }, useMode: { entityId: "select.ev_use_mode" }, ecoGear: { entityId: "select.ev_eco_gear" } },
                     vehicles: [vehicle("kona", "Kona", v.limit !== null), ...(v.twoCars ? [vehicle("ioniq", "Ioniq", true)] : [])],
                 },
@@ -621,3 +623,99 @@ test("ev-charger Technical details is not rendered for a non-admin", async ({ pa
     await expect(content(page).locator("helman-detail-section[data-history]")).toHaveCount(1);
     await expect(content(page).locator("helman-detail-section[data-technical]")).toHaveCount(0);
 });
+
+const modeControl = (page: Page) => content(page).locator("helman-ev-mode-control");
+const serviceCalls = (page: Page) => page.evaluate(() => window.__EvChargerRequests.filter((r) => r.type === "call_service"));
+
+test("charger Overview shows the live use mode pressed, and a click sets the use mode", async ({ page }) => {
+    await mount(page, { useMode: "ECO", executionEnabled: false });
+    await openDevice(page, "Garage EV");
+    const useModes = modeControl(page).locator("[data-ev-mode-row=use_mode] button");
+    await expect(useModes).toHaveText(["Fast", "ECO"]);
+    await expect(modeControl(page).locator("[data-ev-mode-row=use_mode] [aria-pressed=true]")).toHaveText("ECO");
+
+    await useModes.filter({ hasText: "Fast" }).click();
+    await expect.poll(() => serviceCalls(page)).toEqual([
+        { type: "call_service", domain: "select", service: "select_option", service_data: { entity_id: "select.ev_use_mode", option: "Fast" } },
+    ]);
+});
+
+test("charger mode control names a live use mode that is not offered, with no button pressed", async ({ page }) => {
+    await mount(page, { useMode: "Stop", executionEnabled: false });
+    await openDevice(page, "Garage EV");
+    await expect(modeControl(page).locator("[data-ev-mode-row=use_mode] [aria-pressed=true]")).toHaveCount(0);
+    await expect(modeControl(page).locator(".title")).toContainText("Stop");
+});
+
+test("charger mode control shows the eco gears only in ECO, and a click sets the gear", async ({ page }) => {
+    await mount(page, { executionEnabled: false });
+    await openDevice(page, "Garage EV");
+    await expect(modeControl(page).locator("[data-ev-mode-row=use_mode]")).toHaveCount(1);
+    await expect(modeControl(page).locator("[data-ev-mode-row=eco_gear]")).toHaveCount(0);
+
+    // The charger reports ECO: a new hass, as HA pushes one.
+    await page.locator("helman-card").evaluate((card: any) => {
+        const hass = window.__NodeDetailHass;
+        window.__NodeDetailHass = { ...hass, states: { ...hass.states, "select.ev_use_mode": { ...hass.states["select.ev_use_mode"], state: "ECO" } } };
+        card.hass = window.__NodeDetailHass;
+    });
+    const gears = modeControl(page).locator("[data-ev-mode-row=eco_gear] button");
+    await expect(gears).toHaveText(["6A", "10A"]);
+    await expect(modeControl(page).locator("[data-ev-mode-row=eco_gear] [aria-pressed=true]")).toHaveText("6A");
+    await gears.filter({ hasText: "10A" }).click();
+    await expect.poll(() => serviceCalls(page)).toEqual([
+        { type: "call_service", domain: "select", service: "select_option", service_data: { entity_id: "select.ev_eco_gear", option: "10A" } },
+    ]);
+});
+
+test("charger mode control is locked while an executing window sets the mode, and says until when", async ({ page }) => {
+    await mount(page);
+    await openDevice(page, "Garage EV");
+    await expect(modeControl(page).locator("button")).toHaveCount(2);
+    for (const button of await modeControl(page).locator("button").all()) await expect(button).toBeDisabled();
+    await expect(modeControl(page).locator("[data-ev-mode-locked]")).toHaveText("Set by the plan until 14:00");
+});
+
+test("charger mode control stays locked across back-to-back windows that set the mode, until the last one ends", async ({ page }) => {
+    await mount(page, { windows: [
+        { from: 11.75, to: 14, vehicleId: "kona", useMode: "ECO" },
+        { from: 14, to: 16, vehicleId: "kona", useMode: "Fast" },
+    ] });
+    await openDevice(page, "Garage EV");
+    for (const button of await modeControl(page).locator("[data-ev-mode-row=use_mode] button").all()) await expect(button).toBeDisabled();
+    await expect(modeControl(page).locator("[data-ev-mode-locked]")).toHaveText("Set by the plan until 16:00");
+});
+
+test("charger mode control shows the error when the charger rejects a mode, and skips the mode already set", async ({ page }) => {
+    await mount(page, { executionEnabled: false });
+    await openDevice(page, "Garage EV");
+    await page.evaluate(() => {
+        const hass = window.__NodeDetailHass;
+        const original = hass.callWS;
+        hass.callWS = (request: { type: string }) => {
+            if (request.type !== "call_service") return original(request);
+            window.__NodeDetailRequests.push({ ...request });
+            return Promise.reject({ code: "home_assistant_error", message: "Option ECO is not valid" });
+        };
+    });
+    const useModes = modeControl(page).locator("[data-ev-mode-row=use_mode] button");
+    await useModes.filter({ hasText: "Fast" }).click();
+    await useModes.filter({ hasText: "ECO" }).click();
+    await expect(modeControl(page).locator("[data-error]")).toHaveText("Option ECO is not valid");
+    await expect.poll(() => serviceCalls(page)).toEqual([
+        { type: "call_service", domain: "select", service: "select_option", service_data: { entity_id: "select.ev_use_mode", option: "ECO" } },
+    ]);
+});
+
+for (const [name, variant] of [
+    ["execution is off", { executionEnabled: false }],
+    ["the window in progress is a candidate", { windows: [{ from: 11.75, to: 14, candidate: true, vehicleId: "kona", useMode: "Fast" }] }],
+] satisfies Array<[string, Variant]>) {
+    test(`charger mode control is enabled when ${name}`, async ({ page }) => {
+        await mount(page, variant);
+        await openDevice(page, "Garage EV");
+        await expect(modeControl(page).locator("button")).toHaveCount(2);
+        for (const button of await modeControl(page).locator("button").all()) await expect(button).toBeEnabled();
+        await expect(modeControl(page).locator("[data-ev-mode-locked]")).toHaveCount(0);
+    });
+}

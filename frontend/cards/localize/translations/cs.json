@@ -635,6 +635,11 @@
     },
     "ev_charger": {
       "loading": "Načítám podrobnosti nabíječky…",
+      "mode": {
+        "title": "Režim nabíjení",
+        "locked": "Nastavuje plán do {time}",
+        "locked_open": "Nastavuje plán"
+      },
       "load_failed": "Podrobnosti nabíječky se nepodařilo načíst.",
       "retry": "Zkusit znovu",
       "unavailable": "nedostupné",
@@ -1394,6 +1399,7 @@
     "fields": {
       "state": "Stav",
       "connection": "Připojení",
+      "mode": "Režim",
       "power": "Výkon",
       "energy_today": "Energie dnes",
       "target_temperature": "Nastavená teplota",

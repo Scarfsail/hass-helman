@@ -40,6 +40,7 @@ import "./help-tip";
 import { consumerHistoryFallback, consumerHistorySummary, deviceStatsSection, nodeHistorySection, nodeHistoryStyles, renderNodeHistory } from "./node-history";
 import { defaultPeriod, type HistoryPeriod } from "./history-period-picker";
 import "./switch-tile";
+import "./ev-mode-control";
 import "./who-decides";
 import { boldTemplate } from "./detail-section";
 import {
@@ -293,11 +294,47 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
                         .entityId=${direct.switchEntityId} fallbackIcon="mdi:car-electric"></helman-switch-tile>`
                         : html`<ha-icon slot="icon" icon="mdi:car-electric"></ha-icon>`}
                 </helman-detail-headline>
+                ${this._renderModeControl(overview)}
                 <helman-flow-gauge of="house" direction="from" .items=${estimatedConsumerMix(this.params.flows, power)} .estimated=${true} .localize=${this.localize}></helman-flow-gauge>
                 <helman-who-decides .hass=${this.hass} .localize=${this.localize} .controllableId=${this.deviceId}></helman-who-decides>
                 ${this._renderCarTile(overview, selection)}
             </div>
         `;
+    }
+
+    /** The charger's use mode and eco gear, settable; none without a use mode entity or modes to offer. */
+    private _renderModeControl(overview: EvChargerDetailPayload) {
+        const capabilities = this._appliance.payload?.metadata.scheduleCapabilities;
+        const useModeEntityId = overview.entities.use_mode;
+        if (!useModeEntityId || !capabilities?.useModes.length) return nothing;
+        return html`<helman-ev-mode-control .hass=${this.hass} .localize=${this.localize} .useModeEntityId=${useModeEntityId}
+            .ecoGearEntityId=${overview.entities.eco_gear ?? null} .useModes=${capabilities.useModes} .ecoGears=${capabilities.ecoGears}
+            .lockedCaption=${this._modeLockedCaption()}></helman-ev-mode-control>`;
+    }
+
+    /**
+     * Until when the executing windows that set the mode hold it: the executor
+     * re-applies its mode and gear at each slot whose action changes, so a
+     * hand-set mode lasts only to the next one. Back-to-back such windows hold
+     * it to the last one's end. `null` while execution is off, or no such
+     * window is running.
+     */
+    private _modeLockedCaption(): string | null {
+        if (!this._plan.schedule?.executionEnabled) return null;
+        const setsMode = (run: ChargeWindow) => !run.candidate && (!!run.useMode || !!run.ecoGear);
+        const window = this._runInProgress(Date.now());
+        if (!window || !setsMode(window)) return null;
+        let end = window.endMs;
+        let next: ChargeWindow | undefined;
+        while (end !== null && (next = this._plan.runs.find((run) => run.startMs === end && setsMode(run)))) end = next.endMs;
+        return end === null
+            ? this.localize("node_detail.ev_charger.mode.locked_open")
+            : fillTemplate(this.localize("node_detail.ev_charger.mode.locked"), { time: this._time(end) });
+    }
+
+    /** The charging window in progress at `now`, an open one included. */
+    private _runInProgress(now: number): ChargeWindow | null {
+        return this._plan.runs.find((run) => run.startMs <= now && (run.endMs === null || now < run.endMs)) ?? null;
     }
 
     // Forecast ----------------------------------------------------------------
@@ -454,7 +491,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
     protected _renderTechnical(overview: EvChargerDetailPayload) {
         const now = Date.now();
         const runtime = runtimeFor<ApplianceRuntimeDTO>(this._plan.schedule, this.deviceId, now);
-        const window = this._plan.runs.find((run) => run.startMs <= now && (run.endMs === null || now < run.endMs)) ?? null;
+        const window = this._runInProgress(now);
         const projection = this._projection.payload;
         const fault = this._fault(overview);
         const comparison = this._comparison(overview);
