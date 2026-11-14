@@ -758,7 +758,8 @@
     "reason": {
       "scheduled": "Podle plánu",
       "target_soc_reached": "Cílové SoC dosaženo",
-      "vehicle_not_accepting": "Vozidlo nepřijímá nabíjení"
+      "vehicle_not_accepting": "Vozidlo nepřijímá nabíjení",
+      "manual_run": "Spuštěno ručně — běží až do dalšího naplánovaného slotu"
     },
     "runtime": {
       "applied": "Použito",

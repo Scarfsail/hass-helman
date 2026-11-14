@@ -31,7 +31,11 @@ from ..appliances.projection_response import (
     build_empty_appliance_projections_response,
 )
 from ..appliances.registry_holder import AppliancesRegistryHolder
-from ..appliances.state import AppliancesRuntimeRegistry
+from ..appliances.state import (
+    AppliancesRuntimeRegistry,
+    is_appliance_running,
+    resolve_running_entity_and_states,
+)
 from ..automation.compute_inputs import (
     ComputeInputs,
     CustomConditionGroupResult,
@@ -62,10 +66,6 @@ from ..consumption_forecast_builder import (
     ConsumptionForecastBuilder,
     read_house_forecast_request,
 )
-from ..controllables.config import (
-    is_active_state,
-    running_active_states,
-)
 from ..controllables.spec import (
     CONTROLLABLE_KIND_CLIMATE,
     CONTROLLABLE_KIND_GENERIC,
@@ -85,6 +85,7 @@ from ..scheduling.schedule import (
     ScheduleControlConfig,
     ScheduleDocument,
     appliance_actions,
+    find_active_slot,
     read_schedule_control_config,
     strip_candidate_actions,
 )
@@ -238,22 +239,6 @@ def _battery_forecast_slot_values(entry: dict[str, Any]) -> dict[str, float] | N
         except (TypeError, ValueError):
             pass
     return values or None
-
-
-def _resolve_runtime_entity_and_states(
-    appliance: GenericApplianceRuntime | ClimateApplianceRuntime,
-) -> tuple[str | None, tuple[str, ...]]:
-    """Return the recorder entity id and active-state set defining "on" runtime.
-
-    The kind's running signal and its active states — a switch being ``on``, a
-    climate entity heating or cooling — the same pair a meterless child's share
-    is split by.
-    """
-    signal = spec_for(appliance.kind).running_signal(appliance)
-    if signal is None:
-        return None, ()
-    entity_id, activity = signal
-    return entity_id, running_active_states(activity)
 
 
 def _without_stale_live_day_ratio(
@@ -1819,28 +1804,43 @@ class ForecastService:
                 )
             ),
             custom_condition_results_by_optimizer_id=custom_condition_results,
-            appliance_active_by_id=self._read_appliance_active_by_id(),
+            appliance_active_by_id=self._read_appliance_active_by_id(started_at),
             ev_hold_live=self._ev_hold.snapshot(started_at),
         )
 
-    def _read_appliance_active_by_id(self) -> dict[str, bool]:
-        """Which appliances are running right now, from live state.
+    def _read_appliance_active_by_id(self, now: datetime) -> dict[str, bool]:
+        """Which appliances are running right now as part of helman's plan.
 
-        Uses the same entity/active-state pair the recorder runtime query uses
-        (:func:`_resolve_runtime_entity_and_states`), so "running" means the
-        same thing to the optimizer as the delivered hours it plans against.
-        An appliance whose entity is missing or unavailable counts as not
-        running — the pin it feeds may only ever preserve a run, so failing
-        this way loses smoothness, never control.
+        An appliance counts only when it is running by live state, the stored
+        schedule's current slot holds a committed, enabled action for it, and
+        the executor has not flagged it as a manual run. So the optimizer's
+        in-flight pin protects helman's own runs and never adopts one the user
+        started by hand. Reading the stored schedule rather than executor
+        memory keeps the pin across a restart, before the executor has ticked.
+
+        "Running" is :func:`is_appliance_running`, the same entity/active-state
+        pair the recorder runtime query uses, so it means the same thing to the
+        optimizer as the delivered hours it plans against. An appliance whose
+        entity is missing or unavailable counts as not running — the pin it
+        feeds may only ever preserve a run, so failing this way loses
+        smoothness, never control.
         """
+        current_slot = find_active_slot(
+            stored_slots=strip_candidate_actions(self.schedule.load()).slots,
+            reference_time=now,
+        )
+        current_actions = (
+            {} if current_slot is None else appliance_actions(current_slot.controllables)
+        )
+        manual_run_ids = self.schedule.executor.manual_run_appliance_ids()
         active_by_id: dict[str, bool] = {}
         for appliance in self._iter_automation_candidate_appliances():
-            entity_id, active_states = _resolve_runtime_entity_and_states(appliance)
-            if entity_id is None:
-                continue
-            state = self._hass.states.get(entity_id)
-            active_by_id[appliance.id] = is_active_state(
-                getattr(state, "state", None), active_states
+            action = current_actions.get(appliance.id)
+            active_by_id[appliance.id] = (
+                action is not None
+                and spec_for(appliance.kind).is_running(action)
+                and appliance.id not in manual_run_ids
+                and is_appliance_running(self._hass.states.get, appliance)
             )
         return active_by_id
 
@@ -2258,7 +2258,7 @@ class ForecastService:
             lookback_days = lookback_days_by_appliance_id.get(appliance.id)
             if lookback_days is None:
                 continue
-            entity_id, active_states = _resolve_runtime_entity_and_states(appliance)
+            entity_id, active_states = resolve_running_entity_and_states(appliance)
             if entity_id is None:
                 continue
             requests.append(

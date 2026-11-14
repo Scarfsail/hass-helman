@@ -454,9 +454,11 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(memory.last_runtime_action_kind, "slot_stop")
         self.assertFalse(memory.last_enabled)
 
-    async def test_missing_action_after_restart_uses_last_scheduled_charge_action(
+    async def test_restart_after_the_run_ended_leaves_it_as_a_manual_run(
         self,
     ) -> None:
+        # HA was down across the run's last boundary: nothing records that
+        # helman started it, so it is a manual run until the next planned slot.
         hass = FakeHass(
             {
                 "switch.ev_nabijeni": FakeState("on"),
@@ -481,12 +483,9 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
             reference_time=REFERENCE_TIME,
         )
 
-        self.assertEqual(
-            hass.services.calls,
-            [("switch", "turn_off", {"entity_id": "switch.ev_nabijeni"}, True)],
-        )
-        self.assertIsNone(runtime)
-        self.assertFalse(memory.last_enabled)
+        self.assertEqual(hass.services.calls, [])
+        self.assertEqual(runtime.reason, "manual_run")
+        self.assertEqual(memory.manual_run_slot_id, CURRENT_SLOT_ID)
 
     async def test_unchanged_same_slot_is_noop(self) -> None:
         hass = FakeHass(
@@ -844,7 +843,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(runtime)
         self.assertFalse(memory.last_enabled)
 
-    async def test_generic_missing_action_after_restart_uses_last_scheduled_on_action(
+    async def test_generic_restart_after_the_run_ended_leaves_it_as_a_manual_run(
         self,
     ) -> None:
         hass = FakeHass({"switch.dishwasher": FakeState("on")})
@@ -859,12 +858,9 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
             reference_time=REFERENCE_TIME,
         )
 
-        self.assertEqual(
-            hass.services.calls,
-            [("switch", "turn_off", {"entity_id": "switch.dishwasher"}, True)],
-        )
-        self.assertIsNone(runtime)
-        self.assertFalse(memory.last_enabled)
+        self.assertEqual(hass.services.calls, [])
+        self.assertEqual(runtime.reason, "manual_run")
+        self.assertEqual(memory.manual_run_slot_id, CURRENT_SLOT_ID)
 
     async def test_generic_unchanged_same_slot_is_noop(self) -> None:
         hass = FakeHass({"switch.dishwasher": FakeState("on")})
@@ -1078,7 +1074,7 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(runtime)
         self.assertFalse(memory.last_enabled)
 
-    async def test_climate_missing_action_after_restart_uses_last_scheduled_mode(
+    async def test_climate_restart_after_the_run_ended_leaves_it_as_a_manual_run(
         self,
     ) -> None:
         hass = FakeHass(
@@ -1100,22 +1096,9 @@ class ApplianceExecutorTests(unittest.IsolatedAsyncioTestCase):
             reference_time=REFERENCE_TIME,
         )
 
-        self.assertEqual(
-            hass.services.calls,
-            [
-                (
-                    "climate",
-                    "set_hvac_mode",
-                    {
-                        "entity_id": "climate.living_room",
-                        "hvac_mode": "off",
-                    },
-                    True,
-                )
-            ],
-        )
-        self.assertIsNone(runtime)
-        self.assertFalse(memory.last_enabled)
+        self.assertEqual(hass.services.calls, [])
+        self.assertEqual(runtime.reason, "manual_run")
+        self.assertEqual(memory.manual_run_slot_id, CURRENT_SLOT_ID)
 
     async def test_climate_missing_action_after_explicit_off_does_not_repeat_stop(self) -> None:
         hass = FakeHass(
@@ -1368,6 +1351,203 @@ class EvNotAcceptingLatchTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(runtime.outcome, "failed")
         self.assertIsNone(memory.not_accepting)
+
+
+LATER_SLOT_ID = "2026-03-20T21:30:00+01:00"
+
+
+class ManualRunTests(unittest.IsolatedAsyncioTestCase):
+    """A run helman did not start is left alone until a later planned slot."""
+
+    def setUp(self) -> None:
+        self.hass = FakeHass({"switch.ev_nabijeni": FakeState("on")})
+        self.executor = ApplianceExecutor(
+            _actuator(self.hass),
+            EvChargerDriver(charge_on_wait_seconds=0, sleep=_no_sleep),
+        )
+
+    async def _execute(self, memory, *, action=None, slot_id=CURRENT_SLOT_ID):
+        return await self.executor.async_execute(
+            appliance=_build_appliance(),
+            action=action,
+            last_scheduled_action=None,
+            memory=memory,
+            active_slot_id=slot_id,
+            reference_time=REFERENCE_TIME,
+        )
+
+    def _turn_off_calls(self) -> int:
+        return sum(1 for call in self.hass.services.calls if call[1] == "turn_off")
+
+    async def _flagged_memory(self) -> ApplianceExecutionMemory:
+        runtime, memory = await self._execute(None)
+        self.assertEqual(self.hass.services.calls, [])
+        self.assertEqual(runtime.action_kind, "noop")
+        self.assertEqual(runtime.outcome, "skipped")
+        self.assertEqual(runtime.reason, "manual_run")
+        self.assertEqual(memory.manual_run_slot_id, CURRENT_SLOT_ID)
+        self.assertFalse(memory.last_enabled)
+        return memory
+
+    async def test_empty_slot_leaves_a_manual_run_alone(self) -> None:
+        await self._flagged_memory()
+
+    async def test_adoption_in_the_flagged_slot_does_not_stop_it_next_slot(
+        self,
+    ) -> None:
+        memory = await self._flagged_memory()
+
+        runtime, memory = await self._execute(memory, action=CHARGE_ACTION)
+        self.assertEqual(runtime.reason, "manual_run")
+        self.assertEqual(memory.manual_run_slot_id, CURRENT_SLOT_ID)
+
+        runtime, memory = await self._execute(memory, slot_id=NEXT_SLOT_ID)
+        self.assertEqual(runtime.reason, "manual_run")
+        self.assertEqual(memory.manual_run_slot_id, CURRENT_SLOT_ID)
+        self.assertEqual(self.hass.services.calls, [])
+        self.assertEqual(self.hass.states.get("switch.ev_nabijeni").state, "on")
+
+    async def test_a_later_planned_charge_takes_over(self) -> None:
+        memory = await self._flagged_memory()
+
+        runtime, memory = await self._execute(
+            memory, action=CHARGE_ACTION, slot_id=NEXT_SLOT_ID
+        )
+        self.assertEqual(runtime.action_kind, "apply")
+        self.assertEqual(runtime.outcome, "success")
+        self.assertIsNone(memory.manual_run_slot_id)
+        self.assertTrue(memory.last_enabled)
+        self.assertEqual(self._turn_off_calls(), 0)
+
+        runtime, memory = await self._execute(memory, slot_id=LATER_SLOT_ID)
+        self.assertIsNone(runtime)
+        self.assertEqual(memory.last_runtime_action_kind, "slot_stop")
+        self.assertEqual(self._turn_off_calls(), 1)
+
+    async def test_a_later_planned_off_switches_it_off(self) -> None:
+        memory = await self._flagged_memory()
+
+        runtime, memory = await self._execute(
+            memory, action={"charge": False}, slot_id=NEXT_SLOT_ID
+        )
+
+        self.assertEqual(runtime.action_kind, "apply")
+        self.assertEqual(runtime.outcome, "success")
+        self.assertIsNone(memory.manual_run_slot_id)
+        self.assertEqual(self._turn_off_calls(), 1)
+        self.assertEqual(self.hass.states.get("switch.ev_nabijeni").state, "off")
+
+    async def test_a_manual_run_that_ends_clears_the_flag(self) -> None:
+        memory = await self._flagged_memory()
+        self.hass.states._states["switch.ev_nabijeni"].state = "off"
+
+        runtime, memory = await self._execute(memory)
+        self.assertIsNone(runtime)
+        self.assertIsNone(memory.manual_run_slot_id)
+
+        runtime, memory = await self._execute(memory, slot_id=NEXT_SLOT_ID)
+        self.assertIsNone(runtime)
+        self.assertEqual(self.hass.services.calls, [])
+
+    async def test_a_run_helman_started_is_still_stopped_next_slot(self) -> None:
+        self.hass.states._states["switch.ev_nabijeni"].state = "off"
+
+        runtime, memory = await self._execute(None, action=CHARGE_ACTION)
+        self.assertEqual(runtime.outcome, "success")
+        self.assertIsNone(memory.manual_run_slot_id)
+
+        runtime, memory = await self._execute(memory, slot_id=NEXT_SLOT_ID)
+        self.assertIsNone(runtime)
+        self.assertEqual(memory.last_runtime_action_kind, "slot_stop")
+        self.assertEqual(self._turn_off_calls(), 1)
+
+    async def test_restart_inside_a_planned_run_is_helmans_own(self) -> None:
+        runtime, memory = await self._execute(None, action=CHARGE_ACTION)
+        self.assertEqual(runtime.action_kind, "apply")
+        self.assertEqual(runtime.outcome, "success")
+        self.assertIsNone(memory.manual_run_slot_id)
+        self.assertTrue(memory.last_enabled)
+
+        runtime, memory = await self._execute(memory, slot_id=NEXT_SLOT_ID)
+        self.assertIsNone(runtime)
+        self.assertEqual(memory.last_runtime_action_kind, "slot_stop")
+        self.assertEqual(self._turn_off_calls(), 1)
+
+    async def test_an_off_already_applied_this_slot_leaves_a_manual_run_alone(
+        self,
+    ) -> None:
+        self.hass.states._states["switch.ev_nabijeni"].state = "off"
+        off_action = {"charge": False}
+        runtime, memory = await self._execute(None, action=off_action)
+        self.assertEqual(runtime.outcome, "success")
+        self.hass.states._states["switch.ev_nabijeni"].state = "on"
+
+        runtime, memory = await self._execute(memory, action=off_action)
+
+        self.assertEqual(runtime.reason, "manual_run")
+        self.assertEqual(memory.manual_run_slot_id, CURRENT_SLOT_ID)
+        self.assertEqual(self._turn_off_calls(), 0)
+
+    async def test_generic_adoption_in_the_flagged_slot_does_not_stop_it(
+        self,
+    ) -> None:
+        hass = FakeHass({"switch.dishwasher": FakeState("on")})
+        executor = ApplianceExecutor(_actuator(hass), GenericApplianceDriver())
+
+        async def _execute(memory, *, action=None, slot_id=CURRENT_SLOT_ID):
+            return await executor.async_execute(
+                appliance=_build_generic_appliance(),
+                action=action,
+                last_scheduled_action=None,
+                memory=memory,
+                active_slot_id=slot_id,
+                reference_time=REFERENCE_TIME,
+            )
+
+        runtime, memory = await _execute(None)
+        self.assertEqual(runtime.reason, "manual_run")
+        runtime, memory = await _execute(memory, action={"on": True})
+        self.assertEqual(runtime.reason, "manual_run")
+        runtime, memory = await _execute(memory, slot_id=NEXT_SLOT_ID)
+
+        self.assertEqual(runtime.reason, "manual_run")
+        self.assertEqual(memory.manual_run_slot_id, CURRENT_SLOT_ID)
+        self.assertEqual(hass.services.calls, [])
+
+    async def test_a_run_ending_in_its_flagged_slot_stays_off_until_next_slot(
+        self,
+    ) -> None:
+        memory = await self._flagged_memory()
+        runtime, memory = await self._execute(memory, action=CHARGE_ACTION)
+        self.assertEqual(runtime.reason, "manual_run")
+        self.hass.states._states["switch.ev_nabijeni"].state = "off"
+
+        for _ in range(2):
+            runtime, memory = await self._execute(memory, action=CHARGE_ACTION)
+            self.assertEqual(runtime.reason, "manual_run")
+        self.assertEqual(self.hass.services.calls, [])
+        self.assertEqual(self.hass.states.get("switch.ev_nabijeni").state, "off")
+
+        runtime, memory = await self._execute(
+            memory, action=CHARGE_ACTION, slot_id=NEXT_SLOT_ID
+        )
+        self.assertEqual(runtime.action_kind, "apply")
+        self.assertEqual(runtime.outcome, "success")
+        self.assertIsNone(memory.manual_run_slot_id)
+
+    async def test_an_unavailable_flap_keeps_the_manual_run_flag(self) -> None:
+        memory = await self._flagged_memory()
+        self.hass.states._states["switch.ev_nabijeni"].state = "unavailable"
+
+        runtime, memory = await self._execute(memory, slot_id=NEXT_SLOT_ID)
+        self.assertEqual(runtime.reason, "manual_run")
+        self.assertEqual(memory.manual_run_slot_id, CURRENT_SLOT_ID)
+
+        self.hass.states._states["switch.ev_nabijeni"].state = "on"
+        runtime, memory = await self._execute(memory, slot_id=LATER_SLOT_ID)
+        self.assertEqual(runtime.reason, "manual_run")
+        self.assertEqual(memory.manual_run_slot_id, CURRENT_SLOT_ID)
+        self.assertEqual(self.hass.services.calls, [])
 
 
 if __name__ == "__main__":

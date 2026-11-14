@@ -51,6 +51,8 @@ type Variant = {
     duration?: string;
     faultCode?: string;
     runtimeFailed?: boolean;
+    /** The executor is leaving a charge the user started by hand alone. */
+    manualRun?: boolean;
     overviewFails?: boolean;
     /** The charge switch's state; `null` for a charger without one configured. */
     chargeSwitch?: string | null;
@@ -276,7 +278,9 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 activeSlotId: "2026-10-21T12:00:00+00:00",
                 controllables: v.runtimeFailed
                     ? { "garage-ev": { actionKind: "apply", outcome: "failed", errorCode: "write_failed", message: "the charger did not accept Start Charging" } }
-                    : {},
+                    : v.manualRun
+                        ? { "garage-ev": { actionKind: "noop", outcome: "skipped", reason: "manual_run" } }
+                        : {},
             },
         };
         const projection = {
@@ -347,6 +351,14 @@ test("ev-charger Overview shows the P1 detail layout", async ({ page }) => {
     await expect(c.locator("helman-switch-tile")).toHaveCount(1);
     await expect(c.locator("helman-flow-gauge")).toHaveCount(1);
     await expect(c.locator("[data-car]")).toHaveCount(1);
+});
+
+test("charger Overview says a charge started by hand is left running", async ({ page }) => {
+    await mount(page, { manualRun: true });
+    await openDevice(page, "Garage EV");
+    const headline = content(page).locator("helman-detail-headline");
+    await expect(headline).toContainText("Started manually — left running until the next planned slot");
+    await expect(headline).not.toContainText("charging now");
 });
 
 test("charger gauge adds up to its headline, small shares included", async ({ page }) => {
