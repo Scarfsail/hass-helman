@@ -305,3 +305,35 @@ export const nodeDetailPictureStyles = css`
         background: var(--meter-accent, var(--schedule-action-tone-accent));
     }
 `;
+
+/** A device's own action button, like a cover's Open or a charger's mode. */
+export const nodeDetailActionButtonStyles = css`
+    button.action {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px 14px;
+        border: 1px solid var(--divider-color);
+        border-radius: 8px;
+        background: var(--secondary-background-color);
+        color: var(--primary-text-color);
+        font: inherit;
+        font-size: 13px;
+        font-weight: var(--ha-font-weight-medium, 500);
+        cursor: pointer;
+        touch-action: manipulation;
+        user-select: none;
+        transition: background 0.2s, border-color 0.2s;
+    }
+    button.action:hover:not(:disabled) {
+        border-color: var(--primary-color);
+    }
+    button.action:focus-visible {
+        outline: 2px solid var(--primary-color);
+        outline-offset: 2px;
+    }
+    button.action:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+    }
+`;

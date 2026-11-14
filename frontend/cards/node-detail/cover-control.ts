@@ -3,6 +3,7 @@ import { customElement, property, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../types/ha";
 import type { LocalizeFunction } from "../localize/localize";
 import { dispatchWatchedEntities } from "../shared/hass-change";
+import { nodeDetailActionButtonStyles } from "./node-detail-shared-styles";
 
 export const COVER_FEATURE_OPEN = 1;
 export const COVER_FEATURE_CLOSE = 2;
@@ -10,7 +11,7 @@ export const COVER_FEATURE_STOP = 8;
 
 @customElement("helman-cover-control")
 export class HelmanCoverControl extends LitElement {
-    static styles = css`
+    static styles = [nodeDetailActionButtonStyles, css`
         :host {
             display: flex;
             flex-direction: column;
@@ -36,34 +37,8 @@ export class HelmanCoverControl extends LitElement {
             gap: 8px;
             flex-wrap: wrap;
         }
-        button.action {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 8px 14px;
-            border: 1px solid var(--divider-color);
-            border-radius: 8px;
-            background: var(--secondary-background-color);
-            color: var(--primary-text-color);
-            font: inherit;
-            font-size: 13px;
-            font-weight: var(--ha-font-weight-medium, 500);
-            cursor: pointer;
-            touch-action: manipulation;
-            user-select: none;
-            transition: background 0.2s, border-color 0.2s;
-        }
         button.action:hover:not(:disabled) {
             background: color-mix(in srgb, var(--primary-color) 12%, var(--secondary-background-color));
-            border-color: var(--primary-color);
-        }
-        button.action:focus-visible {
-            outline: 2px solid var(--primary-color);
-            outline-offset: 2px;
-        }
-        button.action:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
         }
         ha-icon {
             --mdc-icon-size: 18px;
@@ -74,7 +49,7 @@ export class HelmanCoverControl extends LitElement {
             font-size: 12px;
             line-height: 1.4;
         }
-    `;
+    `];
 
     @property({ attribute: false }) public hass!: HomeAssistant;
     @property() public entityId = "";

@@ -9,7 +9,7 @@ import { isReadableState, readPowerW } from "../shared/power-reading";
 import { isSwitchOn } from "../shared/config/devices";
 import { IDLE_W } from "../node-detail/live-flows";
 import { readEnergyKWh, readingNumber, readingText, type EnergyNodes, type EnergyReadings } from "../node-detail/node-detail-readings";
-import { deviceDirectControls, evChargerId, evCharging, powerEntity } from "../node-detail/node-detail-utils";
+import { deviceDirectControls, evChargerId, evCharging, evModeLabel, powerEntity } from "../node-detail/node-detail-utils";
 
 /**
  * The device card's field catalog: the one place that knows which fields a
@@ -18,7 +18,7 @@ import { deviceDirectControls, evChargerId, evCharging, powerEntity } from "../n
  */
 
 export const FIELD_IDS = [
-    "state", "connection", "power", "energy_today", "target_temperature", "current_temperature", "soc", "import_today", "export_today",
+    "state", "connection", "mode", "power", "energy_today", "target_temperature", "current_temperature", "soc", "import_today", "export_today",
 ] as const;
 export type FieldId = typeof FIELD_IDS[number];
 
@@ -78,6 +78,7 @@ export function availableFields(target: DeviceCardTarget): FieldId[] {
         ? {
             state: stateEntityId(item) !== null || evChargerId(item) !== null,
             connection: evChargerId(item) !== null,
+            mode: evChargerId(item) !== null,
             power: !!powerEntity(item),
             energy_today: !!item.energyEntityId,
             target_temperature: !!item.climateEntityId,
@@ -89,6 +90,7 @@ export function availableFields(target: DeviceCardTarget): FieldId[] {
         : {
             state: false,
             connection: false,
+            mode: false,
             power: true,
             energy_today: (target.node === "solar" || target.node === "house") && !!item.todayEnergyEntityId,
             target_temperature: false,
@@ -106,6 +108,7 @@ export function fieldEntityIds(target: DeviceCardTarget, field: FieldId, ev: EvC
     switch (field) {
         case "state": return [stateEntityId(item), ev?.entities.run_mode, ev?.entities.power];
         case "connection": return [ev?.entities.run_mode];
+        case "mode": return [ev?.entities.use_mode, ev?.entities.eco_gear];
         case "power": return target.kind === "device" ? [powerEntity(item)] : [item.power?.entityId, item.powerSensorId];
         case "energy_today": return [target.kind === "device" ? item.energyEntityId : item.todayEnergyEntityId];
         case "target_temperature":
@@ -170,6 +173,15 @@ function connectionText(ctx: FieldContext): string | null {
     return stateObj && isReadableState(stateObj.state) ? hass.formatEntityState(stateObj) : null;
 }
 
+/** The charger's use mode with its gear in ECO, as the schedule names it: `ECO 6A`, `Fast`. */
+function modeText(ctx: FieldContext): string | null {
+    const { hass, localize, ev } = ctx;
+    const useMode = ev?.entities.use_mode ? hass.states[ev.entities.use_mode]?.state : undefined;
+    if (!isReadableState(useMode)) return null;
+    const ecoGear = useMode === "ECO" && ev?.entities.eco_gear ? hass.states[ev.entities.eco_gear]?.state : undefined;
+    return evModeLabel(localize, useMode, isReadableState(ecoGear) ? ecoGear : null);
+}
+
 function kwhValue(kwh: number | null | undefined): FieldValue | null {
     return kwh === null || kwh === undefined ? null : { text: formatKwh(kwh), unit: "kWh" };
 }
@@ -192,6 +204,10 @@ export function readField(target: DeviceCardTarget, field: FieldId, ctx: FieldCo
         }
         case "connection": {
             const text = connectionText(ctx);
+            return text === null ? null : { text, unit: "" };
+        }
+        case "mode": {
+            const text = modeText(ctx);
             return text === null ? null : { text, unit: "" };
         }
         case "power": {

@@ -2,6 +2,7 @@ import type { HomeAssistant } from "../../types/ha";
 import { convertToKWh } from "../helman/energy-unit-converter";
 import type { TreeItem } from "../shared/data/tree-item";
 import type { EvChargerDetailPayload } from "../helman-api";
+import type { LocalizeFunction } from "../localize/localize";
 import { readPowerW } from "../shared/power-reading";
 import { IDLE_W } from "./live-flows";
 
@@ -88,4 +89,11 @@ export const evCharging = (hass: HomeAssistant, overview: EvChargerDetailPayload
     if (overview.entities.run_mode) return false;
     const power = readPowerW(hass, overview.entities.power);
     return power !== null && power > IDLE_W;
+};
+
+/** An EV charger's use mode as read: `ECO` with its gear, `Fast`, any other mode as is; `null` without one. */
+export const evModeLabel = (localize: LocalizeFunction, useMode: string | null | undefined, ecoGear: string | null | undefined): string | null => {
+    if (!useMode) return null;
+    if (useMode === "ECO") return ecoGear ? `${localize("scheduling.appliance.ev.mode.eco")} ${ecoGear}` : localize("scheduling.appliance.ev.mode.eco");
+    return useMode === "Fast" ? localize("scheduling.appliance.ev.mode.fast") : useMode;
 };

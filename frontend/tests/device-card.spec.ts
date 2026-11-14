@@ -81,6 +81,8 @@ async function setup(page: Page): Promise<void> {
                 "sensor.ev_energy": state("100", { unit_of_measurement: "kWh" }),
                 "switch.ev_charge": state("on"),
                 "select.ev_run_mode": state("charging"),
+                "select.ev_use_mode": state("ECO"),
+                "select.ev_eco_gear": state("6A"),
                 "sensor.heat_pump_power": watts("850"),
                 "sensor.heat_pump_energy": state("40", { unit_of_measurement: "kWh" }),
                 "climate.heat_pump": state("heat", { temperature: 21, current_temperature: 20.5, hvac_action: "heating" }),
@@ -99,7 +101,7 @@ async function setup(page: Page): Promise<void> {
                 const runMode = window.__deviceCardHass.states["select.ev_run_mode"].state;
                 return {
                     node: "ev_charger", deviceId: request.device_id, asOf: "2026-10-21T12:00:00+00:00", profile: null, sections: [],
-                    entities: { power: "sensor.ev_power", run_mode: "select.ev_run_mode" },
+                    entities: { power: "sensor.ev_power", run_mode: "select.ev_run_mode", use_mode: "select.ev_use_mode", eco_gear: "select.ev_eco_gear" },
                     // An unavailable run mode resolves no status, as the backend's run_mode_condition reads it.
                     status: runMode === "unavailable" ? null : {
                         kind: ({ available: "no_car", faulted: "fault", charging: "charging" } as Record<string, string>)[runMode] ?? "waiting",
@@ -185,6 +187,18 @@ test("an EV charger's connection shows a faulted run mode as HA shows its state"
     await page.evaluate(() => window.__push({ "select.ev_run_mode": { state: "faulted", attributes: {} } }));
     await mount(page, { device: "sensor.ev_energy", fields: ["connection"] });
     await expect(line(page)).toHaveText("faulted");
+});
+
+test("an EV charger's mode reads its use mode with the eco gear in ECO, and follows the selects", async ({ page }) => {
+    await setup(page);
+    await mount(page, { device: "sensor.ev_energy", fields: ["mode"] });
+    await expect(line(page)).toHaveText("ECO 6A");
+
+    await page.evaluate(() => window.__push({ "select.ev_eco_gear": { state: "10A", attributes: {} } }));
+    await expect(line(page)).toHaveText("ECO 10A");
+
+    await page.evaluate(() => window.__push({ "select.ev_use_mode": { state: "Fast", attributes: {} } }));
+    await expect(line(page)).toHaveText("Fast");
 });
 
 test("a climate device shows its mode, set temperature and power", async ({ page }) => {
@@ -390,7 +404,7 @@ test("the editor offers only the picked target's fields, and a new target drops 
     await expect.poll(() => options("fields")).toEqual(["power", "energy_today"]);
 
     await editor.evaluate((element: any) => element.setConfig({ type: "custom:helman-device-card", device: "sensor.ev_energy", fields: ["connection"] }));
-    await expect.poll(() => options("fields")).toEqual(["state", "connection", "power", "energy_today"]);
+    await expect.poll(() => options("fields")).toEqual(["state", "connection", "mode", "power", "energy_today"]);
     expect(await options("hide_when_idle")).toEqual(["connection"]);
 });
 

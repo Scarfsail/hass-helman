@@ -730,6 +730,11 @@
     },
     "ev_charger": {
       "loading": "Loading charger details…",
+      "mode": {
+        "title": "Charging mode",
+        "locked": "Set by the plan until {time}",
+        "locked_open": "Set by the plan"
+      },
       "load_failed": "Charger details could not be loaded.",
       "retry": "Try again",
       "unavailable": "unavailable",
@@ -1047,6 +1052,7 @@
     "fields": {
       "state": "State",
       "connection": "Connection",
+      "mode": "Mode",
       "power": "Power",
       "energy_today": "Energy today",
       "target_temperature": "Set temperature",

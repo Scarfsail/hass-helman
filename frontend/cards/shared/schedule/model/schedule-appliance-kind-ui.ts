@@ -8,6 +8,7 @@ import {
     isScheduleGenericApplianceAction,
 } from "../schedule-types";
 import { isSwitchOn } from "../../config/devices";
+import { evModeLabel } from "../../../node-detail/node-detail-utils";
 
 export type ApplianceOption = {
     mode: string;
@@ -137,10 +138,7 @@ export const APPLIANCE_KIND_UI: Record<ScheduleApplianceMetadata["kind"], KindUi
             if (!isScheduleEvChargerAction(action) || !action.charge) {
                 return { icon, label: localize("scheduling.appliance.ev.action.no_charge"), tone: "stop" };
             }
-            const label = action.useMode === "ECO"
-                ? `${localize("scheduling.appliance.ev.mode.eco")}${action.ecoGear ? ` ${action.ecoGear}` : ""}`
-                : localize("scheduling.appliance.ev.mode.fast");
-            return { icon, label, tone: "charge" };
+            return { icon, label: evModeLabel(localize, action.useMode, action.ecoGear) ?? localize("scheduling.appliance.ev.mode.fast"), tone: "charge" };
         },
         renderDetail: (appliance, mode, detail, localize) => {
             if (appliance.kind !== "ev_charger" || mode !== "charge") return nothing;
@@ -150,7 +148,7 @@ export const APPLIANCE_KIND_UI: Record<ScheduleApplianceMetadata["kind"], KindUi
                     <div class="field">
                         <div class="field-label">${localize("scheduling.dialog.appliance.mode")}</div>
                         <select class="select-input" .value=${detail.useMode} @change=${detail.onUseModeChange}>
-                            ${capabilities.useModes.map((value) => html`<option value=${value} ?selected=${detail.useMode === value}>${value === "ECO" ? localize("scheduling.appliance.ev.mode.eco") : localize("scheduling.appliance.ev.mode.fast")}</option>`)}
+                            ${capabilities.useModes.map((value) => html`<option value=${value} ?selected=${detail.useMode === value}>${evModeLabel(localize, value, null) ?? value}</option>`)}
                         </select>
                     </div>
                     ${detail.useMode === "ECO" ? html`
