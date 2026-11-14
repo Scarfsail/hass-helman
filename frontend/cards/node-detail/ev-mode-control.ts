@@ -41,7 +41,7 @@ export class HelmanEvModeControl extends LitElement {
         if (this.hass.states[entityId]?.state === option) return;
         this._actionError = null;
         try {
-            await this.hass.callWS({ type: "call_service", domain: "select", service: "select_option", service_data: { entity_id: entityId, option } });
+            await this.hass.callWS({ type: "call_service", domain: entityId.split(".")[0], service: "select_option", service_data: { entity_id: entityId, option } });
         } catch (error) {
             this._actionError = describeError(error);
         }

@@ -65,6 +65,7 @@ type Variant = {
     evNode?: "meterless" | "missing_kind" | "multiple";
     /** The charger's live use mode, `Fast` by default. */
     useMode?: string;
+    useModeEntity?: string;
 };
 
 declare global {
@@ -137,13 +138,13 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             "sensor.ev_power": s(v.power ?? "6400", "W"), "sensor.ev_energy": s("9474.7", "kWh"),
             "sensor.boiler_power": s("0", "W"), "sensor.boiler_energy": s("10", "kWh"),
             "switch.ev_charge": { ...s(v.chargeSwitch ?? "on"), attributes: { icon: "mdi:ev-station" } },
-            "select.ev_use_mode": s(v.useMode ?? "Fast"), "select.ev_eco_gear": s("6A"),
+            [v.useModeEntity ?? "select.ev_use_mode"]: s(v.useMode ?? "Fast"), "select.ev_eco_gear": s("6A"),
             "sensor.kona_soc": s(v.soc ?? "50", "%"), "sensor.ioniq_soc": s("30", "%"),
         };
         if (v.limit !== null) states["number.kona_limit"] = s(v.limit ?? "80", "%");
         const entities: Record<string, string | null> = {
             power: "sensor.ev_power", energy_total: "sensor.ev_energy", charge_switch: v.chargeSwitch === null ? null : "switch.ev_charge",
-            use_mode: "select.ev_use_mode", eco_gear: "select.ev_eco_gear",
+            use_mode: v.useModeEntity ?? "select.ev_use_mode", eco_gear: "select.ev_eco_gear",
         };
         const telemetry: Record<string, [string, string, string?, string?, string?]> = {
             run_mode: ["sensor.ev_run_mode", v.runMode ?? "Charging"],
@@ -231,7 +232,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                     id: "garage-ev", name: "Garage EV", kind: "ev_charger",
                     primaryEntityId: "switch.ev_charge", supportsAuthoring: true, normalState: "off",
                     metadata: { icon: "mdi:car", maxChargingPowerKw: 11, scheduleCapabilities: { chargeToggle: true, useModes: ["Fast", "ECO"], ecoGears: ["6A", "10A"], requiresVehicleSelection: true } },
-                    controls: { charge: { entityId: "switch.ev_charge" }, useMode: { entityId: "select.ev_use_mode" }, ecoGear: { entityId: "select.ev_eco_gear" } },
+                    controls: { charge: { entityId: "switch.ev_charge" }, useMode: { entityId: v.useModeEntity ?? "select.ev_use_mode" }, ecoGear: { entityId: "select.ev_eco_gear" } },
                     vehicles: [vehicle("kona", "Kona", v.limit !== null), ...(v.twoCars ? [vehicle("ioniq", "Ioniq", true)] : [])],
                 },
                 { id: "boiler", name: "Boiler", kind: "generic", primaryEntityId: "switch.boiler", supportsAuthoring: true, normalState: "off", metadata: { icon: "mdi:water-boiler", scheduleCapabilities: { onOffToggle: true } }, controls: { switch: { entityId: "switch.boiler" } } },
@@ -637,6 +638,15 @@ test("charger Overview shows the live use mode pressed, and a click sets the use
     await useModes.filter({ hasText: "Fast" }).click();
     await expect.poll(() => serviceCalls(page)).toEqual([
         { type: "call_service", domain: "select", service: "select_option", service_data: { entity_id: "select.ev_use_mode", option: "Fast" } },
+    ]);
+});
+
+test("a use mode held by an input_select is set through the input_select domain", async ({ page }) => {
+    await mount(page, { useMode: "ECO", useModeEntity: "input_select.ev_use_mode", executionEnabled: false });
+    await openDevice(page, "Garage EV");
+    await modeControl(page).locator("[data-ev-mode-row=use_mode] button").filter({ hasText: "Fast" }).click();
+    await expect.poll(() => serviceCalls(page)).toEqual([
+        { type: "call_service", domain: "input_select", service: "select_option", service_data: { entity_id: "input_select.ev_use_mode", option: "Fast" } },
     ]);
 });
 
