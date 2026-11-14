@@ -1340,21 +1340,33 @@ const RESERVE_SCHEMA = { version: 2, kinds: [{ ...SCHEMA.kinds[0], kind: "batter
     params: [{ key: "charge_start_margin_slots", type: "integer", default: 2 }],
     conditionTypes: [
         { key: "reserve_floor_soc", scope: "run", field: { key: "reserve_floor_soc", type: "number" } },
-        { key: "solar_dip_floor_soc", scope: "run", field: { key: "solar_dip_floor_soc", type: "number", required: false } },
         { key: "expensive_window_buffer_pct", scope: "run",
             field: { key: "expensive_window_buffer_pct", type: "number", minimum: 0, maximum: 100, required: false } },
         { key: "hold_reserve_in_expensive_windows", scope: "run",
             field: { key: "hold_reserve_in_expensive_windows", type: "boolean", required: false } },
+        { key: "solar_dip_floor_soc", scope: "run", field: { key: "solar_dip_floor_soc", type: "number", required: false } },
+        { key: "solar_dip_buffer_pct", scope: "run",
+            field: { key: "solar_dip_buffer_pct", type: "number", minimum: 0, maximum: 100, required: false } },
+    ],
+    conditionSections: [
+        { key: "outage_reserve",
+            conditionTypes: ["reserve_floor_soc", "expensive_window_buffer_pct", "hold_reserve_in_expensive_windows"] },
+        { key: "solar_dip", conditionTypes: ["solar_dip_floor_soc", "solar_dip_buffer_pct"] },
     ] }] };
 
-function mountReserve(page: Page, group: Record<string, unknown>) {
+function mountReserve(page: Page, group: Record<string, unknown>, schema: object = RESERVE_SCHEMA) {
     return mountPanel(page, {
         payload: { ...PAYLOAD, optimizers: [{ ...PAYLOAD.optimizers[0], kind: "battery_reserve" }] },
-        schema: RESERVE_SCHEMA,
+        schema,
         config: { ...CONFIG, automation: { ...CONFIG.automation,
             system_optimizers: [{ ...CONFIG.automation.system_optimizers[1], kind: "battery_reserve",
                 params: { charge_start_margin_slots: 2 }, conditions: [group] }] } },
     });
+}
+
+/** The field grid right under one condition section's subheading. */
+function reserveSection(page: Page, section: string) {
+    return dialog(page).locator(`.condition-group .condition-section-head[data-section="${section}"] + .field-grid`);
 }
 
 async function savedReserveGroup(page: Page) {
@@ -1365,11 +1377,43 @@ async function savedReserveGroup(page: Page) {
     return config.automation.system_optimizers[0];
 }
 
+test("battery reserve groups its conditions under titled sections", async ({ page }) => {
+    await mountReserve(page, { reserve_floor_soc: 20 });
+    await openDialog(page);
+    const heads = dialog(page).locator(".condition-group .condition-section-head");
+    await expect(heads.locator("strong")).toHaveText(["Reserve", "Before solar recovery"]);
+    await expect(heads.locator(".helper")).toHaveText([
+        "Kept for a grid outage; topped up with cheap energy ahead of expensive windows.",
+        "A lower minimum inside an expensive window while the forecast says solar brings the battery back to the reserve.",
+    ]);
+    const reserve = reserveSection(page, "outage_reserve");
+    const dip = reserveSection(page, "solar_dip");
+    for (const label of ["Reserve floor SoC %", "Expensive-window buffer %", "Hold reserve in expensive windows"]) {
+        await expect(reserve.getByText(label, { exact: true })).toHaveCount(1);
+        await expect(dip.getByText(label, { exact: true })).toHaveCount(0);
+    }
+    for (const label of ["Solar dip floor SoC %", "Solar dip buffer %"]) {
+        await expect(dip.getByText(label, { exact: true })).toHaveCount(1);
+        await expect(reserve.getByText(label, { exact: true })).toHaveCount(0);
+    }
+});
+
+test("an optimizer without condition sections renders its conditions as one flat grid", async ({ page }) => {
+    const [kind] = RESERVE_SCHEMA.kinds;
+    const { conditionSections: _sections, ...flat } = kind;
+    await mountReserve(page, { reserve_floor_soc: 20 }, { ...RESERVE_SCHEMA, kinds: [flat] });
+    await openDialog(page);
+    await expect(dialog(page).locator(".condition-section-head")).toHaveCount(0);
+    const grid = dialog(page).locator(".condition-group-body > .field-grid").first();
+    await expect(grid.locator('input[type="number"]')).toHaveCount(4);
+    await expect(grid.locator("ha-switch")).toHaveCount(1);
+});
+
 test("battery reserve hold switch saves both true and false as a group key", async ({ page }) => {
     for (const on of [true, false]) {
         await mountReserve(page, { reserve_floor_soc: 20, hold_reserve_in_expensive_windows: !on });
         await openDialog(page);
-        const toggle = dialog(page).locator('.condition-group .field-grid').first().locator('ha-switch');
+        const toggle = reserveSection(page, "outage_reserve").locator('ha-switch');
         await expect(toggle).toHaveCount(1);
         await toggle.evaluate((element, checked) => {
             (element as HTMLElement & { checked: boolean }).checked = checked;
@@ -1385,13 +1429,15 @@ test("battery reserve hold switch saves both true and false as a group key", asy
 test("battery reserve dip floor sits beside the reserve floor without inheritance controls", async ({ page }) => {
     await mountReserve(page, { reserve_floor_soc: 20 });
     await openDialog(page);
-    const group = dialog(page).locator('.condition-group .field-grid').first();
-    await expect(group.locator('input[type="number"]')).toHaveCount(3);
-    await expect(group.locator('ha-switch')).toHaveJSProperty("checked", false);
+    const reserve = reserveSection(page, "outage_reserve");
+    const dip = reserveSection(page, "solar_dip");
+    await expect(reserve.locator('input[type="number"]')).toHaveCount(2);
+    await expect(dip.locator('input[type="number"]')).toHaveCount(2);
+    await expect(reserve.locator('ha-switch')).toHaveJSProperty("checked", false);
     await expect(dialog(page).getByText("Use optimizer default")).toHaveCount(0);
     await expect(dialog(page).getByText("Inherited from optimizer settings")).toHaveCount(0);
-    await group.locator('input[type="number"]').nth(1).fill("10");
-    await group.locator('input[type="number"]').nth(1).blur();
+    await dip.locator('input[type="number"]').nth(0).fill("10");
+    await dip.locator('input[type="number"]').nth(0).blur();
     const optimizer = await savedReserveGroup(page);
     expect(optimizer.conditions[0]).toEqual({ reserve_floor_soc: 20, solar_dip_floor_soc: 10 });
     expect(optimizer.params).toEqual({ charge_start_margin_slots: 2 });
@@ -1400,7 +1446,7 @@ test("battery reserve dip floor sits beside the reserve floor without inheritanc
 test("battery reserve clearing the dip floor deletes the key", async ({ page }) => {
     await mountReserve(page, { reserve_floor_soc: 20, solar_dip_floor_soc: 10 });
     await openDialog(page);
-    const input = dialog(page).locator('.condition-group .field-grid').first().locator('input[type="number"]').nth(1);
+    const input = reserveSection(page, "solar_dip").locator('input[type="number"]').nth(0);
     await input.fill("");
     await input.blur();
     const optimizer = await savedReserveGroup(page);
@@ -1408,10 +1454,30 @@ test("battery reserve clearing the dip floor deletes the key", async ({ page }) 
     expect("solar_dip_floor_soc" in optimizer.conditions[0]).toBe(false);
 });
 
+test("battery reserve solar dip buffer saves as a group key and clearing it deletes the key", async ({ page }) => {
+    await mountReserve(page, { reserve_floor_soc: 20, solar_dip_floor_soc: 10 });
+    await openDialog(page);
+    let input = reserveSection(page, "solar_dip").locator('input[type="number"]').nth(1);
+    await input.fill("5");
+    await input.blur();
+    let optimizer = await savedReserveGroup(page);
+    expect(optimizer.conditions[0]).toEqual({ reserve_floor_soc: 20, solar_dip_floor_soc: 10, solar_dip_buffer_pct: 5 });
+    expect(optimizer.params).toEqual({ charge_start_margin_slots: 2 });
+
+    await mountReserve(page, { reserve_floor_soc: 20, solar_dip_floor_soc: 10, solar_dip_buffer_pct: 5 });
+    await openDialog(page);
+    input = reserveSection(page, "solar_dip").locator('input[type="number"]').nth(1);
+    await input.fill("");
+    await input.blur();
+    optimizer = await savedReserveGroup(page);
+    expect(optimizer.conditions[0]).toEqual({ reserve_floor_soc: 20, solar_dip_floor_soc: 10 });
+    expect("solar_dip_buffer_pct" in optimizer.conditions[0]).toBe(false);
+});
+
 test("battery reserve expensive-window buffer saves as a group key and clearing it deletes the key", async ({ page }) => {
     await mountReserve(page, { reserve_floor_soc: 20 });
     await openDialog(page);
-    let input = dialog(page).locator('.condition-group .field-grid').first().locator('input[type="number"]').nth(2);
+    let input = reserveSection(page, "outage_reserve").locator('input[type="number"]').nth(1);
     await input.fill("10");
     await input.blur();
     let optimizer = await savedReserveGroup(page);
@@ -1420,7 +1486,7 @@ test("battery reserve expensive-window buffer saves as a group key and clearing 
 
     await mountReserve(page, { reserve_floor_soc: 20, expensive_window_buffer_pct: 10 });
     await openDialog(page);
-    input = dialog(page).locator('.condition-group .field-grid').first().locator('input[type="number"]').nth(2);
+    input = reserveSection(page, "outage_reserve").locator('input[type="number"]').nth(1);
     await input.fill("");
     await input.blur();
     optimizer = await savedReserveGroup(page);

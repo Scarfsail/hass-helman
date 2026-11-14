@@ -58,11 +58,22 @@ export interface SchemaConditionType {
     field: SchemaField;
 }
 
+/** A titled run of condition types the group form renders under one subheading. */
+export interface SchemaConditionSection {
+    key: string;
+    conditionTypes: string[];
+}
+
 export interface OptimizerSchema {
     kind: string;
     target: SchemaField[];
     params: SchemaField[];
     conditionTypes: SchemaConditionType[];
+    /**
+     * Optional sections covering every condition type once, in order. Empty or
+     * absent renders the conditions as one flat grid.
+     */
+    conditionSections?: SchemaConditionSection[];
     /**
      * Controllable kinds this optimizer kind may drive.
      *

@@ -43,6 +43,10 @@ class OptimizerSpec:
     params: tuple[Field, ...] = ()
     #: Condition types this kind accepts, in the order the editor offers them.
     condition_types: tuple[str, ...] = ()
+    #: Optional titled sections the editor groups :attr:`condition_types` into,
+    #: as ``(section key, condition-type keys)`` pairs covering every condition
+    #: type exactly once, in order. Empty renders the conditions as one list.
+    condition_sections: tuple[tuple[str, tuple[str, ...]], ...] = ()
     #: The granularity at which this kind resolves *params* — independent of the
     #: scope of its conditions. A DAY- or RUN-scoped kind may accept SLOT-scoped
     #: conditions, in which case different slots of one day can match different
@@ -122,6 +126,10 @@ class OptimizerSpec:
                 }
                 for condition in self.condition_type_list
             ],
+            "conditionSections": [
+                {"key": key, "conditionTypes": list(condition_keys)}
+                for key, condition_keys in self.condition_sections
+            ],
             "controllableKinds": list(self.controllable_kinds),
             "bucket": self.bucket,
             "newDraft": self.new_draft,
@@ -145,6 +153,17 @@ def _validate_battery_reserve(
                 path=f"{path.removesuffix('.params')}.solar_dip_floor_soc",
                 code="invalid_value",
                 message="Solar dip floor must not exceed the reserve floor",
+            )
+        dip_buffer = condition_values.get("solar_dip_buffer_pct") or 0
+        buffer = condition_values.get("expensive_window_buffer_pct") or 0
+        if dip_floor + dip_buffer > condition_values["reserve_floor_soc"] + buffer:
+            raise OptimizerConfigError(
+                path=f"{path.removesuffix('.params')}.solar_dip_buffer_pct",
+                code="invalid_value",
+                message=(
+                    "Solar dip floor plus its buffer must not exceed the reserve"
+                    " plus its buffer"
+                ),
             )
 
 
@@ -339,9 +358,21 @@ OPTIMIZER_SPECS: dict[str, OptimizerSpec] = {
             ),
             condition_types=(
                 "reserve_floor_soc",
-                "solar_dip_floor_soc",
                 "expensive_window_buffer_pct",
                 "hold_reserve_in_expensive_windows",
+                "solar_dip_floor_soc",
+                "solar_dip_buffer_pct",
+            ),
+            condition_sections=(
+                (
+                    "outage_reserve",
+                    (
+                        "reserve_floor_soc",
+                        "expensive_window_buffer_pct",
+                        "hold_reserve_in_expensive_windows",
+                    ),
+                ),
+                ("solar_dip", ("solar_dip_floor_soc", "solar_dip_buffer_pct")),
             ),
             validate=_validate_battery_reserve,
             param_scope=Scope.RUN,

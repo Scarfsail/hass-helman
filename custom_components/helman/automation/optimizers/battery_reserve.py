@@ -269,6 +269,7 @@ class BatteryReserveOptimizer:
                         ).soc_by_bucket.items()
                     }
                     reserve = resolved.condition_value("reserve_floor_soc")
+                    # Neither buffer applies to holds: they stop at the bare floors.
                     required = _required_soc(
                         trajectory, band.start, band.end, reserve,
                         resolved.condition_value("solar_dip_floor_soc", reserve),
@@ -337,12 +338,19 @@ class BatteryReserveOptimizer:
             format_slot_id(expensive_band.end),
         ]
         floor = resolved.condition_value("reserve_floor_soc")
-        # Planning headroom over the reserve, for sizing only: the holds and the
-        # cheap-band floor keep the configured reserve.  Absent reads as 0.  An
-        # absent dip floor falls back to the buffered reserve: without one,
-        # every bucket requires the reserve.
+        # Planning headroom over the reserve and over the dip floor, for sizing
+        # only: the holds and the cheap-band floor keep the configured floors.
+        # Absent buffers read as 0.  An absent dip floor falls back to the
+        # buffered reserve and ignores the dip buffer: without one, every
+        # bucket requires the reserve.
         buffer = resolved.condition_value("expensive_window_buffer_pct") or 0
-        dip_floor = resolved.condition_value("solar_dip_floor_soc", floor + buffer)
+        dip_buffer = resolved.condition_value("solar_dip_buffer_pct") or 0
+        bare_dip_floor = resolved.condition_value("solar_dip_floor_soc")
+        dip_floor = (
+            floor + buffer
+            if bare_dip_floor is None
+            else bare_dip_floor + dip_buffer
+        )
         group_index = resolved.group.index
 
         # #274 (P0 of #270): one raw observation per evaluated expensive
@@ -402,16 +410,16 @@ class BatteryReserveOptimizer:
             dip_floor,
             buffer=buffer,
         )
-        # Sizing aims at the buffer, but the floor node reports the reserve
-        # itself: a window that misses only the buffer is still covered.
+        # Sizing aims at the buffers, but the floor node reports the bare
+        # floors: a window that misses only a buffer is still covered.
         floor_dip = dip
-        if buffer:
+        if buffer or (bare_dip_floor is not None and dip_buffer):
             floor_dip = -_window_slack(
                 dict(soc_by_bucket),
                 expensive_band.start,
                 expensive_band.end,
                 floor,
-                resolved.condition_value("solar_dip_floor_soc", floor),
+                floor if bare_dip_floor is None else bare_dip_floor,
             )
         covered = _FloorResolution(
             STATE_FALSE, floor, round(window_min_soc, 1), group_index
@@ -490,6 +498,9 @@ class BatteryReserveOptimizer:
         charge_needed_params = {
             "targetSoc": round(target, 1),
             "solarDipFloorSoc": resolved.condition_value("solar_dip_floor_soc"),
+            "solarDipBufferPct": resolved.condition_value(
+                "solar_dip_buffer_pct"
+            ),
             "expensiveWindowBufferPct": resolved.condition_value(
                 "expensive_window_buffer_pct"
             ),
@@ -909,6 +920,9 @@ class BatteryReserveOptimizer:
                         {
                             "goalSoc": round(floor_soc + buffer + goal, 1),
                             "solarDipFloorSoc": resolved.condition_value("solar_dip_floor_soc"),
+                            "solarDipBufferPct": resolved.condition_value(
+                                "solar_dip_buffer_pct"
+                            ),
                             "expensiveWindowBufferPct": resolved.condition_value(
                                 "expensive_window_buffer_pct"
                             ),
@@ -985,6 +999,9 @@ class BatteryReserveOptimizer:
                 {
                     "goalSoc": round(floor_soc + buffer + goal, 1),
                     "solarDipFloorSoc": resolved.condition_value("solar_dip_floor_soc"),
+                    "solarDipBufferPct": resolved.condition_value(
+                        "solar_dip_buffer_pct"
+                    ),
                     "expensiveWindowBufferPct": resolved.condition_value(
                         "expensive_window_buffer_pct"
                     ),
@@ -1327,9 +1344,11 @@ def _required_soc(
 ) -> dict[datetime, float]:
     """Allow a lower minimum only before a later recovery in this window.
 
-    ``buffer`` lifts only the buckets that require the reserve; recovery is
-    still judged against the unbuffered reserve, and the dip floor stays as
-    configured.
+    ``dip_floor`` is whatever the caller passes: the bare
+    ``solar_dip_floor_soc`` for holds and the floor report, or that floor plus
+    ``solar_dip_buffer_pct`` for sizing. ``buffer`` lifts only the buckets that
+    require the reserve; recovery is still judged against the unbuffered
+    reserve.
     """
     start, end = dt_util.as_utc(window_start), dt_util.as_utc(window_end)
     buckets = sorted(
