@@ -56,6 +56,8 @@
       "warnings": "Varování"
     },
     "sections": {
+      "battery_reserve_outage_reserve": "Rezerva",
+      "battery_reserve_solar_dip": "Před návratem slunce",
       "device_groupings": "Seskupení a fáze",
       "house": "Dům",
       "solar": "Solár",
@@ -348,6 +350,8 @@
       "history_depth_split": "{raw_states} d surových stavů, {statistics} d statistik"
     },
     "helpers": {
+      "battery_reserve_outage_reserve": "Drží se pro případ výpadku sítě; před drahými okny se dobije levnou energií.",
+      "battery_reserve_solar_dip": "Nižší minimum v drahém okně, pokud předpověď slibuje, že slunce vrátí baterii na rezervu.",
       "power_sensor_name_cleaner_regex": "Volitelný regex odstraněný z názvu entity všude, kde se podle ní pojmenovává zařízení bez vlastního názvu.",
       "training_time": "Čas dne (HH:MM v místním čase), kdy se spouští noční dávka trénování.",
       "import_price_unit": "Např.: CZK/kWh",

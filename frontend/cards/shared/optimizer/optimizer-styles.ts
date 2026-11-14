@@ -123,6 +123,17 @@ export const optimizerCardStyles = css`
         flex-wrap: wrap;
     }
 
+    /* A flat subheading over one run of a group's conditions -- deliberately
+       not an inner card, so the group does not read as nested in itself. */
+    .condition-section-head {
+        display: grid;
+        gap: 2px;
+    }
+
+    .condition-section-head:not(:first-child) {
+        margin-top: 6px;
+    }
+
     /* An optional param object: the toggle owns the block, and its fields only
        exist while it is on, so the indent shows what turning it off removes. */
     .optional-param-group {

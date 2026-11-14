@@ -1083,6 +1083,44 @@ class SpecInvariantTests(unittest.TestCase):
                 for key in spec.condition_types:
                     self.assertIn(key, CONDITION_TYPES)
 
+    def test_condition_sections_cover_every_condition_type_in_order(self) -> None:
+        for kind, spec in OPTIMIZER_SPECS.items():
+            if not spec.condition_sections:
+                continue
+            with self.subTest(kind=kind):
+                self.assertEqual(
+                    tuple(
+                        key
+                        for _, keys in spec.condition_sections
+                        for key in keys
+                    ),
+                    spec.condition_types,
+                )
+
+    def test_battery_reserve_schema_carries_its_condition_sections(self) -> None:
+        schema = OPTIMIZER_SPECS["battery_reserve"].to_dict()
+
+        self.assertEqual(
+            schema["conditionSections"],
+            [
+                {
+                    "key": "outage_reserve",
+                    "conditionTypes": [
+                        "reserve_floor_soc",
+                        "expensive_window_buffer_pct",
+                        "hold_reserve_in_expensive_windows",
+                    ],
+                },
+                {
+                    "key": "solar_dip",
+                    "conditionTypes": ["solar_dip_floor_soc", "solar_dip_buffer_pct"],
+                },
+            ],
+        )
+        self.assertEqual(
+            OPTIMIZER_SPECS["charge_hold"].to_dict()["conditionSections"], []
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

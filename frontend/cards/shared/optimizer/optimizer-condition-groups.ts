@@ -20,6 +20,7 @@ import {
     type OptimizerConfigBucket,
     type OptimizerEditorHost,
     type OptimizerSchema,
+    type SchemaConditionType,
 } from "./optimizer-schema";
 
 /** Rotates when the group opens, so the marker and the name share one line. */
@@ -128,11 +129,7 @@ function renderGroup(
                 </div>
             </summary>
             <div class="condition-group-body">
-                <div class="field-grid">
-                    ${schema.conditionTypes.map((condition) =>
-                        renderConditionWidget(host, schema, condition, groupPath),
-                    )}
-                </div>
+                ${renderConditionFields(host, schema, groupPath)}
 
                 ${overridableParams.length
                     ? html`
@@ -258,6 +255,40 @@ function renderGroupName(
 
 function defaultGroupName(host: OptimizerEditorHost, groupIndex: number): string {
     return host.t("editor.dynamic.condition_group", { index: groupIndex + 1 });
+}
+
+/**
+ * The group's condition widgets: one grid, or — when the schema groups them —
+ * a flat subheading, helper line and grid per section. A subheading rather than
+ * an inner card, so the group does not read as nested cards of itself.
+ */
+function renderConditionFields(
+    host: OptimizerEditorHost,
+    schema: OptimizerSchema,
+    groupPath: PathSegment[],
+): TemplateResult {
+    const renderGrid = (conditions: SchemaConditionType[]) => html`
+        <div class="field-grid">
+            ${conditions.map((condition) =>
+                renderConditionWidget(host, schema, condition, groupPath),
+            )}
+        </div>
+    `;
+    const sections = schema.conditionSections ?? [];
+    if (!sections.length) return renderGrid(schema.conditionTypes);
+    const byKey = new Map(schema.conditionTypes.map((condition) => [condition.key, condition]));
+    return html`${sections.map((section) => {
+        const textKey = `${schema.kind}_${section.key}`;
+        return html`
+            <div class="condition-section-head" data-section=${section.key}>
+                <strong>${host.t(`editor.sections.${textKey}`)}</strong>
+                <span class="helper">${host.t(`editor.helpers.${textKey}`)}</span>
+            </div>
+            ${renderGrid(
+                section.conditionTypes.flatMap((key) => byKey.get(key) ?? []),
+            )}
+        `;
+    })}`;
 }
 
 function renderConditionWidget(

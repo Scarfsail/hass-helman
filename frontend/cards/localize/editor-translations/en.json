@@ -56,6 +56,8 @@
       "warnings": "Warnings"
     },
     "sections": {
+      "battery_reserve_outage_reserve": "Reserve",
+      "battery_reserve_solar_dip": "Before solar recovery",
       "device_groupings": "Groupings and phases",
       "house": "House",
       "solar": "Solar",
@@ -348,6 +350,8 @@
       "history_depth_split": "{raw_states} d raw states, {statistics} d statistics"
     },
     "helpers": {
+      "battery_reserve_outage_reserve": "Kept for a grid outage; topped up with cheap energy ahead of expensive windows.",
+      "battery_reserve_solar_dip": "A lower minimum inside an expensive window while the forecast says solar brings the battery back to the reserve.",
       "power_sensor_name_cleaner_regex": "Optional regex removed from an entity's name wherever a device without its own name is named from it.",
       "training_time": "Time of day (HH:MM in local time) when the nightly training batch runs.",
       "import_price_unit": "Example: CZK/kWh",
