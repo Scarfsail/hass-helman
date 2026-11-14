@@ -1341,6 +1341,8 @@ const RESERVE_SCHEMA = { version: 2, kinds: [{ ...SCHEMA.kinds[0], kind: "batter
     conditionTypes: [
         { key: "reserve_floor_soc", scope: "run", field: { key: "reserve_floor_soc", type: "number" } },
         { key: "solar_dip_floor_soc", scope: "run", field: { key: "solar_dip_floor_soc", type: "number", required: false } },
+        { key: "solar_dip_buffer_pct", scope: "run",
+            field: { key: "solar_dip_buffer_pct", type: "number", minimum: 0, maximum: 100, required: false } },
         { key: "expensive_window_buffer_pct", scope: "run",
             field: { key: "expensive_window_buffer_pct", type: "number", minimum: 0, maximum: 100, required: false } },
         { key: "hold_reserve_in_expensive_windows", scope: "run",
@@ -1386,7 +1388,7 @@ test("battery reserve dip floor sits beside the reserve floor without inheritanc
     await mountReserve(page, { reserve_floor_soc: 20 });
     await openDialog(page);
     const group = dialog(page).locator('.condition-group .field-grid').first();
-    await expect(group.locator('input[type="number"]')).toHaveCount(3);
+    await expect(group.locator('input[type="number"]')).toHaveCount(4);
     await expect(group.locator('ha-switch')).toHaveJSProperty("checked", false);
     await expect(dialog(page).getByText("Use optimizer default")).toHaveCount(0);
     await expect(dialog(page).getByText("Inherited from optimizer settings")).toHaveCount(0);
@@ -1408,10 +1410,30 @@ test("battery reserve clearing the dip floor deletes the key", async ({ page }) 
     expect("solar_dip_floor_soc" in optimizer.conditions[0]).toBe(false);
 });
 
+test("battery reserve solar dip buffer saves as a group key and clearing it deletes the key", async ({ page }) => {
+    await mountReserve(page, { reserve_floor_soc: 20, solar_dip_floor_soc: 10 });
+    await openDialog(page);
+    let input = dialog(page).locator('.condition-group .field-grid').first().locator('input[type="number"]').nth(2);
+    await input.fill("5");
+    await input.blur();
+    let optimizer = await savedReserveGroup(page);
+    expect(optimizer.conditions[0]).toEqual({ reserve_floor_soc: 20, solar_dip_floor_soc: 10, solar_dip_buffer_pct: 5 });
+    expect(optimizer.params).toEqual({ charge_start_margin_slots: 2 });
+
+    await mountReserve(page, { reserve_floor_soc: 20, solar_dip_floor_soc: 10, solar_dip_buffer_pct: 5 });
+    await openDialog(page);
+    input = dialog(page).locator('.condition-group .field-grid').first().locator('input[type="number"]').nth(2);
+    await input.fill("");
+    await input.blur();
+    optimizer = await savedReserveGroup(page);
+    expect(optimizer.conditions[0]).toEqual({ reserve_floor_soc: 20, solar_dip_floor_soc: 10 });
+    expect("solar_dip_buffer_pct" in optimizer.conditions[0]).toBe(false);
+});
+
 test("battery reserve expensive-window buffer saves as a group key and clearing it deletes the key", async ({ page }) => {
     await mountReserve(page, { reserve_floor_soc: 20 });
     await openDialog(page);
-    let input = dialog(page).locator('.condition-group .field-grid').first().locator('input[type="number"]').nth(2);
+    let input = dialog(page).locator('.condition-group .field-grid').first().locator('input[type="number"]').nth(3);
     await input.fill("10");
     await input.blur();
     let optimizer = await savedReserveGroup(page);
@@ -1420,7 +1442,7 @@ test("battery reserve expensive-window buffer saves as a group key and clearing 
 
     await mountReserve(page, { reserve_floor_soc: 20, expensive_window_buffer_pct: 10 });
     await openDialog(page);
-    input = dialog(page).locator('.condition-group .field-grid').first().locator('input[type="number"]').nth(2);
+    input = dialog(page).locator('.condition-group .field-grid').first().locator('input[type="number"]').nth(3);
     await input.fill("");
     await input.blur();
     optimizer = await savedReserveGroup(page);

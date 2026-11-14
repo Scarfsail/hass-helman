@@ -146,6 +146,17 @@ def _validate_battery_reserve(
                 code="invalid_value",
                 message="Solar dip floor must not exceed the reserve floor",
             )
+        dip_buffer = condition_values.get("solar_dip_buffer_pct") or 0
+        buffer = condition_values.get("expensive_window_buffer_pct") or 0
+        if dip_floor + dip_buffer > condition_values["reserve_floor_soc"] + buffer:
+            raise OptimizerConfigError(
+                path=f"{path.removesuffix('.params')}.solar_dip_buffer_pct",
+                code="invalid_value",
+                message=(
+                    "Solar dip floor plus its buffer must not exceed the reserve"
+                    " plus its buffer"
+                ),
+            )
 
 
 def _validate_window(
@@ -340,6 +351,7 @@ OPTIMIZER_SPECS: dict[str, OptimizerSpec] = {
             condition_types=(
                 "reserve_floor_soc",
                 "solar_dip_floor_soc",
+                "solar_dip_buffer_pct",
                 "expensive_window_buffer_pct",
                 "hold_reserve_in_expensive_windows",
             ),

@@ -759,6 +759,7 @@ class GroupExplanationTests(unittest.TestCase):
                 {
                     "reserve_floor_soc": 20,
                     "solar_dip_floor_soc": 12,
+                    "solar_dip_buffer_pct": 5,
                     "expensive_window_buffer_pct": 10,
                     "hold_reserve_in_expensive_windows": True,
                 }
@@ -796,6 +797,22 @@ class GroupExplanationTests(unittest.TestCase):
             self.assertTrue(
                 raised.exception.path.endswith("expensive_window_buffer_pct")
             )
+
+    def test_solar_dip_buffer_is_optional_and_bounded(self) -> None:
+        absent = make_optimizer_config(
+            id="reserve", kind="battery_reserve", conditions=[{"reserve_floor_soc": 20}]
+        )
+        self.assertNotIn("solar_dip_buffer_pct", absent.conditions[0].condition_values)
+        for value in (-1, 101):
+            with self.subTest(value=value), self.assertRaises(
+                AutomationConfigError
+            ) as raised:
+                make_optimizer_config(
+                    id="reserve",
+                    kind="battery_reserve",
+                    conditions=[{"reserve_floor_soc": 20, "solar_dip_buffer_pct": value}],
+                )
+            self.assertTrue(raised.exception.path.endswith("solar_dip_buffer_pct"))
 
     def test_condition_scope_is_carried_onto_the_node(self) -> None:
         config = make_appliance_member_config(
