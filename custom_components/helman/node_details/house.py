@@ -39,6 +39,7 @@ from ..const import (
 )
 from ..consumption_forecast_profiles import HourOfWeekWinsorizedMeanProfile
 from ..power_polarity import is_power_inverted
+from ..span_history_model import recorder_tail_start
 from ..vendors import INVERTER_TELEMETRY_KEY
 from .battery import TIME_SENSORS, helman_sensor_ids, today_ranking_report
 from .context import NodeDetailContext
@@ -347,7 +348,15 @@ async def _weekday_comparison(
     elapsed_hours = int((dt_util.as_utc(windows[0][1]) - dt_util.as_utc(windows[0][0])).total_seconds() // 3600)
     if elapsed_hours <= 0:
         return {**base, **compare_same_weekdays([], elapsed_hours=0), "unavailable": "no_elapsed_hour"}
-    series = await _hourly_energy(hass, entity_id, windows)
+    hourly = await _hourly_energy(hass, entity_id, windows[-1][0], windows[0][1], local_now)
+    series = [
+        {
+            hour: kwh
+            for hour, kwh in hourly.items()
+            if dt_util.as_utc(start) <= hour < dt_util.as_utc(end)
+        }
+        for start, end in windows
+    ]
     return {
         **base,
         **compare_same_weekdays(list(zip(days, series)), elapsed_hours=elapsed_hours),
@@ -355,18 +364,25 @@ async def _weekday_comparison(
 
 
 async def _hourly_energy(
-    hass: Any, entity_id: str, windows: Sequence[tuple[datetime, datetime]]
-) -> list[dict[datetime, float]]:
-    """The meter's hourly energy per window, in one batched recorder read.
+    hass: Any, entity_id: str, local_start: datetime, local_end: datetime, now: datetime
+) -> dict[datetime, float]:
+    """The meter's energy per UTC hour over ``[local_start, local_end)``.
 
-    Imported here, like :mod:`.day_stats` does, so loading the node details
-    needs no recorder.
+    One hourly statistics read, its uncompiled newest hours filled from the
+    five-minute tail, so the compared days cost their hours and reach past the
+    raw states' purge. The reader is imported here, like :mod:`.day_stats`
+    does, so loading the node details needs no recorder.
     """
-    from ..recorder_slot_energy import query_cumulative_slot_energy_changes_for_windows
+    from ..recorder_statistics_span import query_hourly_statistics
 
-    return await query_cumulative_slot_energy_changes_for_windows(
-        hass, entity_id, windows, interval_minutes=60
+    statistics = await query_hourly_statistics(
+        hass,
+        [entity_id],
+        local_start=local_start,
+        local_end=local_end,
+        tail_start=recorder_tail_start(local_start, local_end, now),
     )
+    return statistics.energy_for(entity_id)
 
 
 def compare_same_weekdays(
