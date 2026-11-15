@@ -88,7 +88,9 @@ class FakeStates:
 
 
 class FakeServices:
-    def __init__(self) -> None:
+    def __init__(self, states: dict[str, FakeState]) -> None:
+        # A finished pick shows on the entity, as a blocking call leaves it.
+        self._states = states
         self.calls: list[tuple[str, str, dict, bool]] = []
         self.error: Exception | None = None
         # When set, every call parks until the event fires -- a stalled or slow
@@ -111,13 +113,15 @@ class FakeServices:
         if self.release is not None:
             self.entered.set()
             await self.release.wait()
+        if service == "select_option" and data["entity_id"] in self._states:
+            self._states[data["entity_id"]].state = data["option"]
 
 
 class FakeHass(SharedFakeHass):
     def __init__(self, states: dict[str, FakeState]) -> None:
         super().__init__()
         self.states = FakeStates(states)
-        self.services = FakeServices()
+        self.services = FakeServices(states)
         self.created_tasks = 0
         # Helman's own entities by unique id, as the entity registry has them.
         self.registered_entity_ids: dict[str, str] = {}
@@ -265,6 +269,46 @@ def _build_executor(
         now=now,
     )
     return executor, hass, store
+
+
+_MODE_ENTITY_ID = "input_select.mode"
+_STOP_DISCHARGING = ScheduleAction(kind=SCHEDULE_ACTION_STOP_DISCHARGING)
+_STOP_EXPORT = ScheduleAction(kind=SCHEDULE_ACTION_STOP_EXPORT)
+
+
+def _at(clock: str) -> datetime:
+    return datetime.fromisoformat(f"2026-03-20T{clock}:00+01:00")
+
+
+def _build_hand_pick_executor(
+    slots: dict[str, ScheduleAction],
+    battery_state: BatteryLiveState | None = None,
+) -> tuple[ScheduleExecutor, FakeHass]:
+    """An executor on a Normal mode entity, with inverter actions by HH:MM."""
+    executor, hass, _store = _build_executor(
+        entity_id=_MODE_ENTITY_ID,
+        state=FakeState("Normal", options=_build_mode_options()),
+        document=ScheduleDocument(
+            execution_enabled=True,
+            slots={
+                _at(clock).isoformat(): build_controllable_actions(inverter=action)
+                for clock, action in slots.items()
+            },
+        ),
+        battery_state=battery_state,
+    )
+    return executor, hass
+
+
+async def _reconcile_at(
+    executor: ScheduleExecutor, clock: str
+) -> ControllableRuntimeStatus:
+    await executor.async_reconcile(reason="interval", reference_time=_at(clock))
+    return executor.runtime.execution_status.active_slot_runtime.inverter
+
+
+def _picked_options(hass: FakeHass) -> list[str]:
+    return [call[2]["option"] for call in hass.services.calls]
 
 
 class RuntimeAnnouncementTests(unittest.IsolatedAsyncioTestCase):
@@ -706,6 +750,197 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             executor.runtime.execution_status.active_slot_runtime.executed_action.kind,
             SCHEDULE_ACTION_NORMAL,
         )
+        self.assertEqual(
+            executor.runtime.execution_status.active_slot_runtime.inverter.reason,
+            "scheduled",
+        )
+
+    async def test_hand_pick_holds_through_the_window_without_service_calls(
+        self,
+    ) -> None:
+        executor, hass = _build_hand_pick_executor(
+            {"21:00": _STOP_DISCHARGING, "21:15": _STOP_DISCHARGING}
+        )
+        await _reconcile_at(executor, "21:07")
+        hass.states.get(_MODE_ENTITY_ID).state = "Normal"
+
+        for clock in ("21:08", "21:16"):
+            inverter = await _reconcile_at(executor, clock)
+            self.assertEqual(
+                (inverter.action_kind, inverter.outcome, inverter.reason),
+                ("noop", "skipped", "manual_mode"),
+            )
+            self.assertEqual(inverter.executed_action, _STOP_DISCHARGING)
+        self.assertEqual(_picked_options(hass), ["Stop Discharging"])
+
+    async def test_hand_pick_holds_through_the_first_empty_slot(self) -> None:
+        executor, hass = _build_hand_pick_executor({"21:00": _STOP_DISCHARGING})
+        await _reconcile_at(executor, "21:07")
+        hass.states.get(_MODE_ENTITY_ID).state = "Normal"
+
+        inverter = await _reconcile_at(executor, "21:16")
+
+        self.assertEqual(inverter.reason, "manual_mode")
+        self.assertEqual(inverter.executed_action.kind, SCHEDULE_ACTION_EMPTY)
+        self.assertEqual(_picked_options(hass), ["Stop Discharging"])
+
+    async def test_hand_pick_releases_when_the_next_window_starts(self) -> None:
+        # A, empty, A: the second A is a new window even though the action
+        # matches the one the pick was made in.
+        executor, hass = _build_hand_pick_executor(
+            {"21:00": _STOP_DISCHARGING, "21:30": _STOP_DISCHARGING}
+        )
+        await _reconcile_at(executor, "21:07")
+        hass.states.get(_MODE_ENTITY_ID).state = "Normal"
+        await _reconcile_at(executor, "21:16")
+
+        inverter = await _reconcile_at(executor, "21:31")
+
+        self.assertEqual((inverter.action_kind, inverter.reason), ("apply", "scheduled"))
+        self.assertEqual(
+            _picked_options(hass), ["Stop Discharging", "Stop Discharging"]
+        )
+        self.assertIsNone(executor.runtime.manual_hold_action)
+
+    async def test_hand_pick_releases_when_another_action_starts(self) -> None:
+        executor, hass = _build_hand_pick_executor(
+            {"21:00": _STOP_DISCHARGING, "21:15": _STOP_EXPORT}
+        )
+        await _reconcile_at(executor, "21:07")
+        hass.states.get(_MODE_ENTITY_ID).state = "Normal"
+        await _reconcile_at(executor, "21:08")
+
+        inverter = await _reconcile_at(executor, "21:16")
+
+        self.assertEqual((inverter.action_kind, inverter.reason), ("apply", "scheduled"))
+        self.assertEqual(_picked_options(hass), ["Stop Discharging", "Stop Export"])
+
+    async def test_hand_pick_releases_when_helmans_option_is_picked_back(
+        self,
+    ) -> None:
+        executor, hass = _build_hand_pick_executor(
+            {"21:00": _STOP_DISCHARGING, "21:15": _STOP_DISCHARGING}
+        )
+        await _reconcile_at(executor, "21:07")
+        hass.states.get(_MODE_ENTITY_ID).state = "Normal"
+        await _reconcile_at(executor, "21:08")
+        hass.states.get(_MODE_ENTITY_ID).state = "Stop Discharging"
+
+        inverter = await _reconcile_at(executor, "21:09")
+
+        self.assertEqual((inverter.action_kind, inverter.reason), ("apply", "scheduled"))
+        self.assertIsNone(executor.runtime.manual_hold_action)
+        self.assertEqual(_picked_options(hass), ["Stop Discharging"])
+
+    async def test_pick_before_a_window_does_not_hold_it(self) -> None:
+        executor, hass = _build_hand_pick_executor(
+            {"21:00": _STOP_DISCHARGING, "21:30": _STOP_EXPORT}
+        )
+        await _reconcile_at(executor, "21:07")
+        await _reconcile_at(executor, "21:16")
+        # Picked just before the window, first seen on its first reconcile.
+        hass.states.get(_MODE_ENTITY_ID).state = "Stop Charging"
+
+        inverter = await _reconcile_at(executor, "21:31")
+
+        self.assertEqual((inverter.action_kind, inverter.reason), ("apply", "scheduled"))
+        self.assertIsNone(executor.runtime.manual_hold_action)
+        self.assertEqual(
+            _picked_options(hass), ["Stop Discharging", "Normal", "Stop Export"]
+        )
+
+    async def test_picking_helmans_option_back_in_an_empty_slot_keeps_the_hold(
+        self,
+    ) -> None:
+        executor, hass = _build_hand_pick_executor({"21:00": _STOP_DISCHARGING})
+        await _reconcile_at(executor, "21:07")
+        hass.states.get(_MODE_ENTITY_ID).state = "Normal"
+        await _reconcile_at(executor, "21:16")
+        hass.states.get(_MODE_ENTITY_ID).state = "Stop Discharging"
+
+        inverter = await _reconcile_at(executor, "21:17")
+
+        self.assertEqual(
+            (inverter.action_kind, inverter.outcome, inverter.reason),
+            ("noop", "skipped", "manual_mode"),
+        )
+        self.assertEqual(_picked_options(hass), ["Stop Discharging"])
+
+    async def test_hand_pick_releases_when_the_target_soc_changes(self) -> None:
+        executor, hass = _build_hand_pick_executor(
+            {
+                "21:00": ScheduleAction(
+                    kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC, target_soc=80
+                ),
+                "21:15": ScheduleAction(
+                    kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC, target_soc=90
+                ),
+            },
+            battery_state=_build_battery_state(current_soc=50),
+        )
+        await _reconcile_at(executor, "21:07")
+        hass.states.get(_MODE_ENTITY_ID).state = "Normal"
+        await _reconcile_at(executor, "21:08")
+
+        inverter = await _reconcile_at(executor, "21:16")
+
+        self.assertEqual((inverter.action_kind, inverter.reason), ("apply", "scheduled"))
+        self.assertEqual(
+            _picked_options(hass), ["Charge To Target", "Charge To Target"]
+        )
+
+    async def test_hold_begun_after_a_slot_stop_releases_when_a_window_starts(
+        self,
+    ) -> None:
+        executor, hass = _build_hand_pick_executor(
+            {"21:00": _STOP_DISCHARGING, "21:30": _STOP_EXPORT}
+        )
+        await _reconcile_at(executor, "21:07")
+        await _reconcile_at(executor, "21:16")
+        hass.states.get(_MODE_ENTITY_ID).state = "Stop Charging"
+
+        held = await _reconcile_at(executor, "21:17")
+        inverter = await _reconcile_at(executor, "21:31")
+
+        self.assertEqual(held.reason, "manual_mode")
+        self.assertEqual((inverter.action_kind, inverter.reason), ("apply", "scheduled"))
+        self.assertEqual(
+            _picked_options(hass), ["Stop Discharging", "Normal", "Stop Export"]
+        )
+
+    async def test_restarted_runtime_applies_the_slot_mode(self) -> None:
+        executor, hass = _build_hand_pick_executor({"21:00": _STOP_DISCHARGING})
+        await _reconcile_at(executor, "21:07")
+        hass.states.get(_MODE_ENTITY_ID).state = "Normal"
+        executor.reset_runtime()
+
+        inverter = await _reconcile_at(executor, "21:08")
+
+        self.assertEqual((inverter.action_kind, inverter.reason), ("apply", "scheduled"))
+        self.assertEqual(
+            _picked_options(hass), ["Stop Discharging", "Stop Discharging"]
+        )
+
+    async def test_vendor_register_drift_is_still_repaired_after_a_command(
+        self,
+    ) -> None:
+        # Helman's select keeps showing the commanded option when a vendor
+        # register changes: that is drift to repair, not a hand pick.
+        executor, hass, _store = _build_helman_select_executor(
+            INVERTER_MODE_ENTITY_ID
+        )
+        select = _FakeHelmanSelect(drifted=[])
+        hass.select_entities[INVERTER_MODE_ENTITY_ID] = select
+        await executor.async_reconcile(
+            reason="interval", reference_time=REFERENCE_TIME
+        )
+        select._drifted = [("select.goodwe_ems_mode", "battery_standby")]
+
+        await executor.async_reconcile(
+            reason="interval", reference_time=REFERENCE_TIME
+        )
+
+        self.assertEqual(_picked_options(hass), ["Stop Discharging"])
         self.assertEqual(
             executor.runtime.execution_status.active_slot_runtime.inverter.reason,
             "scheduled",

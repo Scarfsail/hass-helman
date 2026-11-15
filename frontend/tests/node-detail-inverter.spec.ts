@@ -51,6 +51,12 @@ type Variant = {
     plannedChargeNow?: boolean;
     userOverrideNow?: boolean;
     runtimeFailed?: boolean;
+    /** A mode picked by hand holds: the executor skips the slot's action. */
+    manualModeNow?: boolean;
+    /** Helman's mode select is unavailable. */
+    modeUnavailable?: boolean;
+    /** The overview has no mode control. */
+    noMode?: boolean;
     /** The slot in progress charges to a target the battery has reached: the executor holds it with stop discharging. */
     targetReachedNow?: boolean;
     timeZone?: string;
@@ -116,7 +122,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
         const states: Record<string, unknown> = {
             "sensor.solar": s(v.solar ?? "4200", "W"), "sensor.grid": s(v.grid ?? "-300", "W"), "sensor.battery": s(v.battery ?? "-500", "W"),
             "sensor.house": s(v.house ?? "1200", "W"), "number.min_soc": s("10", "%"), "number.max_soc": s("100", "%"),
-            "select.helman_inverter_mode": s(v.targetReachedNow ? "stop_discharging" : "normal", undefined, { friendly_name: "Helman inverter mode" }),
+            "select.helman_inverter_mode": s(v.modeUnavailable ? "unavailable" : v.targetReachedNow ? "stop_discharging" : "normal", undefined, { friendly_name: "Helman inverter mode" }),
         };
         const entities: Record<string, string | null> = { battery_min_soc: "number.min_soc", battery_max_soc: "number.max_soc" };
         if (profile) {
@@ -135,7 +141,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             asOf: "2026-10-21T12:00:00+00:00",
             configured: true,
             profile: profile ? { id: "solax_inverter", label: "SolaX inverter" } : null,
-            mode: { entityId: "select.helman_inverter_mode", actionOptions: Object.fromEntries(kinds.map((k) => [k, k])) },
+            mode: v.noMode ? null : { entityId: "select.helman_inverter_mode", actionOptions: Object.fromEntries(kinds.map((k) => [k, k])) },
             entities,
             maxAllowedExportPower: 9900,
             agreement: profile
@@ -187,7 +193,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             if (!v.noCharge && hour >= 14 && hour < 16) action = { kind: "charge_to_target_soc", targetSoc: 80, setBy: "automation" };
             if (hour >= 18 && hour < 19) action = { kind: "discharge_to_target_soc", targetSoc: 30, setBy: "automation", conditionMet: false };
             if (v.candidateNow && hour < 14) action = { kind: "discharge_to_target_soc", targetSoc: 30, setBy: "automation", conditionMet: false };
-            if ((v.plannedChargeNow || v.targetReachedNow) && hour < 14) action = { kind: "charge_to_target_soc", targetSoc: 80, setBy: "automation" };
+            if ((v.plannedChargeNow || v.targetReachedNow || v.manualModeNow) && hour < 14) action = { kind: "charge_to_target_soc", targetSoc: 80, setBy: "automation" };
             if (v.userOverrideNow && hour < 14) action = { kind: "normal", setBy: "user" };
             slots.push({ id, controllables: action ? { inverter: action } : {} });
         }
@@ -197,7 +203,9 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             slots,
             runtime: {
                 activeSlotId: "2026-10-21T12:00:00+00:00",
-                controllables: { inverter: { actionKind: "apply", outcome: v.runtimeFailed ? "failed" : "success", executedAction: { kind: v.targetReachedNow ? "stop_discharging" : "normal" }, reason: v.targetReachedNow ? "target_soc_reached" : "scheduled" } },
+                controllables: { inverter: v.manualModeNow
+                    ? { actionKind: "noop", outcome: "skipped", executedAction: { kind: "charge_to_target_soc", targetSoc: 80 }, reason: "manual_mode" }
+                    : { actionKind: "apply", outcome: v.runtimeFailed ? "failed" : "success", executedAction: { kind: v.targetReachedNow ? "stop_discharging" : "normal" }, reason: v.targetReachedNow ? "target_soc_reached" : "scheduled" } },
             },
         };
         window.__modesFail = !!v.modesFail;
@@ -321,6 +329,43 @@ test("inverter does not claim agreement when the plan differs from the last comm
     await mount(page, { plannedChargeNow: true });
     await page.locator(".inverter-cell").click();
     await expect(content(page).locator("[data-verdict]")).toContainText("last command differs from the plan");
+});
+
+test("inverter verdict says a hand-picked mode holds instead of a plan mismatch", async ({ page }) => {
+    await mount(page, { manualModeNow: true });
+    await page.locator(".inverter-cell").click();
+    const verdict = content(page).locator("[data-verdict]");
+    await expect(verdict).toContainText("Set by hand — kept until Helman's next planned window");
+    await expect(verdict).not.toContainText("last command differs from the plan");
+});
+
+test("inverter Overview's mode picker shows the configured modes, the commanded one pressed, and a click sets the mode", async ({ page }) => {
+    await mount(page);
+    await page.locator(".inverter-cell").click();
+    const picker = content(page).locator("[data-mode-picker]");
+    await expect(picker.locator("button")).toHaveText(["Normal", "No charging", "No discharging", "Charging", "Discharging", "No export"]);
+    await expect(picker.locator("[aria-pressed=true]")).toHaveText("Normal");
+    for (const button of await picker.locator("button").all()) await expect(button).toBeEnabled();
+
+    await picker.locator("button").filter({ hasText: "No export" }).click();
+    await expect.poll(() => page.evaluate(() => window.__InverterRequests.filter((r) => r.type === "call_service"))).toEqual([
+        { type: "call_service", domain: "select", service: "select_option", service_data: { entity_id: "select.helman_inverter_mode", option: "stop_export" } },
+    ]);
+});
+
+test("inverter Overview's mode picker is disabled while the mode control is unreadable", async ({ page }) => {
+    await mount(page, { modeUnavailable: true });
+    await page.locator(".inverter-cell").click();
+    const buttons = content(page).locator("[data-mode-picker] button");
+    await expect(buttons).toHaveCount(6);
+    for (const button of await buttons.all()) await expect(button).toBeDisabled();
+});
+
+test("inverter Overview has no mode picker without a mode control", async ({ page }) => {
+    await mount(page, { noMode: true });
+    await page.locator(".inverter-cell").click();
+    await expect(content(page).locator("[data-verdict]")).toBeVisible();
+    await expect(content(page).locator("[data-mode-picker]")).toHaveCount(0);
 });
 
 test("inverter agrees when a charge to target holds the battery at its reached target", async ({ page }) => {

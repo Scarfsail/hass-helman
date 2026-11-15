@@ -39,6 +39,7 @@ import { boldTemplate } from "./detail-section";
 import { historyRow, historySummary, renderShowMore, sectionNotReady, subTitle } from "./node-detail-history";
 import "./detail-headline";
 import "./help-tip";
+import "./option-segments";
 
 const PHASES = [1, 2, 3] as const;
 
@@ -250,9 +251,24 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
                     ${pct !== null ? html`<span class="meter"><span class="meter-fill" style=${`width:${Math.min(100, pct)}%`}></span></span>` : nothing}
                     <div class="row"><span class="label">${this.localize("node_detail.shared.temperature")}</span><span>${this._reading(overview, "inverter_temperature") ?? "—"}</span></div>
                 </div>
+                ${this._renderModePicker(overview)}
                 <button type="button" class="outline-button" ?disabled=${!controllable?.supportsAuthoring} @click=${this._openOverride}>${this.localize("node_detail.shared.override_mode")}</button>
             </div>
         `;
+    }
+
+    /**
+     * The mode control's options as buttons, labelled by their action kind; a
+     * pick writes the mode control now and holds until Helman's next window.
+     * None without a mode control.
+     */
+    private _renderModePicker(overview: InverterDetailPayload) {
+        if (!overview.mode) return nothing;
+        const kindOf = new Map(Object.entries(overview.mode.actionOptions)
+            .filter(([, option]) => option)
+            .map(([kind, option]) => [option!, kind as ScheduleActionKind]));
+        return html`<helman-option-segments data-mode-picker .hass=${this.hass} .entityId=${overview.mode.entityId}
+            .options=${[...kindOf.keys()]} .label=${(option: string) => this._modeLabel(kindOf.get(option)!)}></helman-option-segments>`;
     }
 
     /** A fault or off-grid operation the hardware reports, else a reported mismatch. */
@@ -281,10 +297,13 @@ export class NodeDetailInverterContent extends NodeDetailContentBase<InverterDet
         const planned = current ? resolved ?? effectiveAction(current.action).kind : null;
         const commanded = this._commandedKind(overview);
         const planMismatch = planned !== null && commanded !== null && planned !== commanded;
+        // A hand pick explains the plan mismatch, but not a failed command or a hardware mismatch.
+        const manualMode = runtime?.reason === "manual_mode";
         const reason = notApplied ? this._t("why.execution_off_short")
-            : planMismatch ? this._t("chain.plan_mismatch")
+            : planMismatch && !manualMode ? this._t("chain.plan_mismatch")
                 : runtime?.outcome === "failed" ? this._t("chain.executor_failed")
-                    : mismatch ? this._t("exception.mismatch") : null;
+                    : mismatch ? this._t("exception.mismatch")
+                        : planMismatch ? getScheduleReasonLabel(runtime!.reason, this.localize) : null;
         return html`
             <div class="picture chain" data-chain>
                 <span class="chain-row">

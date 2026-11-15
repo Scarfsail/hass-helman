@@ -93,6 +93,12 @@ class ScheduleExecutionRuntime:
     last_active_slot_id: str | None = None
     last_runtime_action_kind: RuntimeActionKind | None = None
     last_error: str | None = None
+    # The mode option helman last picked on the mode entity. The entity showing
+    # another readable option means the user picked a mode by hand.
+    last_commanded_option: str | None = None
+    # While a hand pick holds: the slot action seen on the latest reconcile, so
+    # a new inverter window starting is told apart from the one that runs on.
+    manual_hold_action: ScheduleAction | None = None
     appliance_memories: dict[str, ApplianceExecutionMemory] = field(
         default_factory=dict
     )
@@ -143,6 +149,17 @@ class InverterExecutor:
         slot_id: str,
         now: datetime,
     ) -> tuple[ControllableRuntimeStatus, ScheduleError | None]:
+        if control_config is not None and self._manual_hold(control_config, action):
+            return (
+                ControllableRuntimeStatus(
+                    action_kind="noop",
+                    outcome="skipped",
+                    executed_action=action,
+                    reason="manual_mode",
+                ),
+                None,
+            )
+
         if action.kind == SCHEDULE_ACTION_EMPTY:
             cached_runtime = self.build_cached_empty_runtime(
                 active_slot_id=slot_id
@@ -196,6 +213,63 @@ class InverterExecutor:
             read_battery_state=self._read_battery_state,
         )
         return result.runtime, result.error
+
+    def _manual_hold(
+        self,
+        control_config: ScheduleControlConfig,
+        action: ScheduleAction,
+    ) -> bool:
+        """Whether a mode picked by hand keeps helman from touching the inverter.
+
+        A hand pick holds until the next helman window starts (empty to an
+        action, or one action to another) or, inside a window, the user picks
+        helman's option back, like an appliance run started by hand.
+        """
+        runtime = self._runtime
+        try:
+            current_option = SelectEntityController(
+                control_config.mode_entity_id,
+                description=_INVERTER_MODE_DESCRIPTION,
+            ).read_state(self._actuator).state
+        except ScheduleError:
+            current_option = None
+
+        if runtime.manual_hold_action is None:
+            if (
+                runtime.last_commanded_option is None
+                or current_option is None
+                or current_option == runtime.last_commanded_option
+                or self._window_not_applied_yet(action)
+            ):
+                return False
+        elif action.kind != SCHEDULE_ACTION_EMPTY and (
+            current_option == runtime.last_commanded_option
+            or _inverter_action_changed(action, runtime.manual_hold_action)
+        ):
+            runtime.manual_hold_action = None
+            return False
+
+        runtime.manual_hold_action = action
+        return True
+
+    def _window_not_applied_yet(self, action: ScheduleAction) -> bool:
+        """Whether a window started that helman has not applied yet.
+
+        It takes over a pick made before it started. Compared resolved, as
+        helman applied it: a charge window past its target applies stop
+        discharging.
+        """
+        if action.kind == SCHEDULE_ACTION_EMPTY:
+            return False
+        try:
+            executed_action = self._resolve_action(
+                action=action, read_battery_state=self._read_battery_state
+            ).executed_action
+        except ScheduleError:
+            return True
+        return _inverter_action_changed(
+            executed_action, self._runtime.last_applied_action
+        )
 
     async def async_execute(
         self,
@@ -395,6 +469,7 @@ class InverterExecutor:
         ):
             await controller.async_select_option(self._actuator, option=desired_option)
 
+        self._runtime.last_commanded_option = desired_option
         self._runtime.last_applied_action = action
         self._runtime.last_active_slot_id = active_slot_id
         self._runtime.last_runtime_action_kind = action_kind
@@ -884,6 +959,16 @@ def _build_last_scheduled_appliance_actions(
             last_actions[appliance_id] = action
 
     return last_actions
+
+
+def _inverter_action_changed(
+    action: ScheduleAction,
+    previous: ScheduleAction | None,
+) -> bool:
+    return previous is None or (action.kind, action.target_soc) != (
+        previous.kind,
+        previous.target_soc,
+    )
 
 
 def _empty_inverter_action_requires_slot_stop(
