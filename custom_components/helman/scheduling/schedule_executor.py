@@ -93,6 +93,15 @@ class ScheduleExecutionRuntime:
     last_active_slot_id: str | None = None
     last_runtime_action_kind: RuntimeActionKind | None = None
     last_error: str | None = None
+    # The mode option helman last picked on the mode entity. The entity showing
+    # another readable option means the user picked a mode by hand.
+    last_commanded_option: str | None = None
+    # While a hand pick holds: the slot action seen on the latest reconcile, so
+    # a new inverter window starting is told apart from the one that runs on.
+    manual_hold_action: ScheduleAction | None = None
+    # The slot action of the latest reconcile that was applied or held, as
+    # planned (not resolved), so distinct target-SoC windows stay distinct.
+    last_planned_action: ScheduleAction | None = None
     appliance_memories: dict[str, ApplianceExecutionMemory] = field(
         default_factory=dict
     )
@@ -137,6 +146,34 @@ class InverterExecutor:
         return controller, state
 
     async def async_reconcile(
+        self,
+        control_config: ScheduleControlConfig | None,
+        action: ScheduleAction,
+        slot_id: str,
+        now: datetime,
+    ) -> tuple[ControllableRuntimeStatus, ScheduleError | None]:
+        if control_config is not None and self._manual_hold(control_config, action):
+            # Recorded while held too, so a window that starts later and fails
+            # to apply is still seen as not applied yet and retried.
+            self._runtime.last_planned_action = action
+            return (
+                ControllableRuntimeStatus(
+                    action_kind="noop",
+                    outcome="skipped",
+                    executed_action=action,
+                    reason="manual_mode",
+                ),
+                None,
+            )
+
+        runtime, error = await self._async_reconcile_window(
+            control_config, action, slot_id, now
+        )
+        if error is None:
+            self._runtime.last_planned_action = action
+        return runtime, error
+
+    async def _async_reconcile_window(
         self,
         control_config: ScheduleControlConfig | None,
         action: ScheduleAction,
@@ -196,6 +233,55 @@ class InverterExecutor:
             read_battery_state=self._read_battery_state,
         )
         return result.runtime, result.error
+
+    def _manual_hold(
+        self,
+        control_config: ScheduleControlConfig,
+        action: ScheduleAction,
+    ) -> bool:
+        """Whether a mode picked by hand keeps helman from touching the inverter.
+
+        A hand pick holds until the next helman window starts (empty to an
+        action, or one action to another) or, inside a window, the user picks
+        helman's option back, like an appliance run started by hand.
+        """
+        runtime = self._runtime
+        try:
+            current_option = SelectEntityController(
+                control_config.mode_entity_id,
+                description=_INVERTER_MODE_DESCRIPTION,
+            ).read_state(self._actuator).state
+        except ScheduleError:
+            current_option = None
+
+        if runtime.manual_hold_action is None:
+            if (
+                runtime.last_commanded_option is None
+                or current_option is None
+                or current_option == runtime.last_commanded_option
+                or self._window_not_applied_yet(action)
+            ):
+                return False
+        elif action.kind != SCHEDULE_ACTION_EMPTY and (
+            current_option == runtime.last_commanded_option
+            or _inverter_action_changed(action, runtime.manual_hold_action)
+        ):
+            runtime.manual_hold_action = None
+            return False
+
+        runtime.manual_hold_action = action
+        return True
+
+    def _window_not_applied_yet(self, action: ScheduleAction) -> bool:
+        """Whether a window started that helman has not applied yet.
+
+        It takes over a pick made before it started. Compared as planned, not
+        resolved: charge-to-80 and charge-to-90 both resolve to stop
+        discharging above 90 %, yet the second is a new window.
+        """
+        if action.kind == SCHEDULE_ACTION_EMPTY:
+            return False
+        return _inverter_action_changed(action, self._runtime.last_planned_action)
 
     async def async_execute(
         self,
@@ -395,6 +481,7 @@ class InverterExecutor:
         ):
             await controller.async_select_option(self._actuator, option=desired_option)
 
+        self._runtime.last_commanded_option = desired_option
         self._runtime.last_applied_action = action
         self._runtime.last_active_slot_id = active_slot_id
         self._runtime.last_runtime_action_kind = action_kind
@@ -884,6 +971,16 @@ def _build_last_scheduled_appliance_actions(
             last_actions[appliance_id] = action
 
     return last_actions
+
+
+def _inverter_action_changed(
+    action: ScheduleAction,
+    previous: ScheduleAction | None,
+) -> bool:
+    return previous is None or (action.kind, action.target_soc) != (
+        previous.kind,
+        previous.target_soc,
+    )
 
 
 def _empty_inverter_action_requires_slot_stop(

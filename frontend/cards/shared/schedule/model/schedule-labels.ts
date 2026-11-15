@@ -41,5 +41,7 @@ export function getScheduleReasonLabel(
             return localize("scheduling.reason.vehicle_not_accepting");
         case "manual_run":
             return localize("scheduling.reason.manual_run");
+        case "manual_mode":
+            return localize("scheduling.reason.manual_mode");
     }
 }

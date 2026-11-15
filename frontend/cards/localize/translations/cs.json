@@ -759,7 +759,8 @@
       "scheduled": "Podle plánu",
       "target_soc_reached": "Cílové SoC dosaženo",
       "vehicle_not_accepting": "Vozidlo nepřijímá nabíjení",
-      "manual_run": "Spuštěno ručně — běží až do dalšího naplánovaného slotu"
+      "manual_run": "Spuštěno ručně — běží až do dalšího naplánovaného slotu",
+      "manual_mode": "Nastaveno ručně — drží se až do dalšího naplánovaného okna Helmanu"
     },
     "runtime": {
       "applied": "Použito",
