@@ -135,6 +135,25 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
                     [(1, "invalid_date", "Date must use YYYY-MM-DD format")],
                 )
 
+    async def test_explainability_returns_the_trained_model_or_null(self) -> None:
+        explainability = {"trainedAt": "2026-04-25T03:00:00+02:00", "slots": {}}
+        for payload in (explainability, None):
+            with self.subTest(payload=payload):
+                service = SimpleNamespace(
+                    training_explainability_payload=lambda payload=payload: payload
+                )
+                coordinator = SimpleNamespace(solar_inspector=service)
+                connection = FakeConnection(is_admin=False)
+
+                await self.solar_bias_ws.ws_get_solar_bias_explainability.__wrapped__(
+                    FakeHass(coordinator),
+                    connection,
+                    {"id": 1, "type": "helman/solar_bias/explainability"},
+                )
+
+                self.assertEqual(connection.results, [(1, payload)])
+                self.assertEqual(connection.errors, [])
+
     async def test_day_aggregates_defaults_to_day_buckets(self) -> None:
         payload = {"bucket": "day", "priceUnit": None, "days": []}
         service = SimpleNamespace(
@@ -279,6 +298,7 @@ class SolarBiasWebsocketTests(unittest.IsolatedAsyncioTestCase):
         self.websockets_mod.async_register_websocket_commands(object())
 
         self.assertIn(self.solar_bias_ws.ws_get_solar_bias_inspector, registered)
+        self.assertIn(self.solar_bias_ws.ws_get_solar_bias_explainability, registered)
         # Its diagnostics ride the solar job of the admin-only training status.
         self.assertNotIn(
             "helman/solar_bias/status",

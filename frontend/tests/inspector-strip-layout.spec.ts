@@ -44,7 +44,6 @@ async function mountInspector(page: Page): Promise<void> {
             },
             priceUnit: "CZK/kWh",
             batterySocBounds: [],
-            trainingExplainability: null,
         });
         const inspector = document.createElement("helman-solar-inspector") as any;
         inspector.daylightOnlyDefault = false;

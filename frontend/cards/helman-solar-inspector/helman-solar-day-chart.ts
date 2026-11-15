@@ -19,7 +19,7 @@ import {
   type SlotPickDetail,
   type SlotSelectionState,
 } from "./slot-selection.js";
-import { resolveSelectedImpactSlot } from "./solar-inspector-model.js";
+import { resolveSelectedImpactSlot, type TrainingExplainability } from "./solar-inspector-model.js";
 import { renderNowMarkerOnDay } from "./now-marker.js";
 import { labelClearsSeam, minutesOfDayOrNull, renderSlotBand, svgXFromEvent, windowGridTicks } from "./strip-geometry";
 import {
@@ -260,6 +260,8 @@ export class HelmanSolarDayChart extends LitElement {
   @property({ attribute: false }) public coverage: DayCoverage = EMPTY_DAY_COVERAGE;
   @property({ type: Boolean }) public dimIncompleteSlots = true;
   @property({ type: Boolean }) public impactVisible = false;
+  /** The trained model's per-slot fit, which marks the impact strip's untrained slots. */
+  @property({ attribute: false }) public trainingExplainability: TrainingExplainability | null = null;
   /**
    * An overlay's impact row is drawn where the selected day's instance under
    * it draws one -- that day having impact slots, not this one -- so the rows
@@ -1151,7 +1153,7 @@ export class HelmanSolarDayChart extends LitElement {
       .filter((v) => Number.isFinite(v));
     const maxImpact = Math.max(1, ...values);
     const selectedSlot = resolveSelectedImpactSlot(payload.series.impact, this.selection.focusSlot);
-    const explainability = payload.trainingExplainability;
+    const explainability = this.trainingExplainability;
     return svg`
       <svg
         viewBox="0 0 ${stripWidth} ${stripHeight}"

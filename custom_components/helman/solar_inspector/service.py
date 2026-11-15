@@ -64,6 +64,7 @@ from ..solar_bias_correction.models import (
     SolarBiasTrainingExplainability,
     inspector_day_to_payload,
     navigation_range_payload,
+    training_explainability_to_payload,
 )
 from ..solar_bias_correction.statistics_day import (
     HOUR_MINUTES,
@@ -1327,7 +1328,6 @@ class SolarInspector:
             ),
             is_today=target_date == today,
             is_future=target_date > today,
-            training_explainability=self._explainability if solar.has_profile else None,
             battery_soc_bounds=self._battery_soc_bounds_for_date(
                 series.bounds_entity_ids, series.numeric_history_by_entity
             ),
@@ -1410,6 +1410,15 @@ class SolarInspector:
             price_rails=price_rails,
             running_slot=running_slot,
         )
+
+    def training_explainability_payload(self) -> dict[str, Any] | None:
+        """The trained model's per-slot explainability, or ``None`` untrained.
+
+        Served on its own rather than inside every inspector day: it does not
+        depend on the date, and a day carries ``trainedAt`` so the card can tell
+        when to read it again.
+        """
+        return training_explainability_to_payload(self._explainability)
 
     def _live_battery_soc_bounds(self) -> tuple[float | None, float | None]:
         if self._live_sources is None or not hasattr(self._live_sources, "battery_soc_bounds"):

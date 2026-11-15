@@ -94,7 +94,6 @@ async function mountInspector(
                 ...(granularity === 15 ? {} : { dataGranularityMinutes: granularity }),
                 priceUnit: "CZK/kWh",
                 batterySocBounds: [],
-                trainingExplainability: null,
             });
         };
 

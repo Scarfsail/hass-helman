@@ -75,7 +75,7 @@ import { readEnergyReadings, resolveEnergyNodes } from "../node-detail/node-deta
 import { buildNodeDetailContext, buildNodeDetailParams } from "../node-detail/node-detail-params-builder";
 import { deviceForControllable } from "../node-detail/node-control-rollup";
 import { HistoryEngine } from "../shared/data/history-engine";
-import { findTrainingSlot, resolveSelectedTrainingDate } from "./solar-inspector-model.js";
+import { findTrainingSlot, resolveSelectedTrainingDate, type TrainingExplainability } from "./solar-inspector-model.js";
 import { minutesToSlot, snapSlotToGrid } from "./slot-aggregation.js";
 import {
   EMPTY_SLOT_SELECTION,
@@ -452,6 +452,13 @@ export class HelmanSolarInspector extends LitElement {
    */
   @state() private _slotSelection: SlotSelectionState = EMPTY_SLOT_SELECTION;
   @state() private _selectedTrainingDate: string | null = null;
+  /**
+   * The trained model's explainability: the same for every day, so read once
+   * per `trainedAt` rather than with each day -- see `_loadTrainingExplainability`.
+   */
+  @state() private _trainingExplainability: TrainingExplainability | null = null;
+  /** The `trainedAt` `_trainingExplainability` belongs to, or is being read for. */
+  private _explainabilityTrainedAt: string | null = null;
   @state() private _trainingTableCollapsed = true;
   @state() private _impactStripVisible = false;
   @state() private _daylightOnly = true;
@@ -1572,6 +1579,7 @@ export class HelmanSolarInspector extends LitElement {
               .coverage=${this._coverage}
               .dimIncompleteSlots=${this.dimIncompleteSlots}
               .impactVisible=${this._impactStripVisible}
+              .trainingExplainability=${this._shownExplainability}
               .houseFocus=${this.houseFocus}
               .date=${this._selectedDate}
               .timeZone=${this._haTimeZone() ?? "UTC"}
@@ -1596,6 +1604,7 @@ export class HelmanSolarInspector extends LitElement {
               hidePriceStrip: this.hidePriceStrip,
               hideMoneyStrip: this.hideMoneyStrip,
               groups: this._breakdownGroups,
+              trainingExplainability: this._shownExplainability,
               contribution: {
                 collapsed: this._trainingTableCollapsed,
                 impactStripVisible: this._impactStripVisible,
@@ -1639,6 +1648,7 @@ export class HelmanSolarInspector extends LitElement {
         .chartSeries=${this.chartSeries}
         .impactVisible=${this._impactStripVisible}
         .impactRowDrawn=${view.series.impact.length > 0}
+        .trainingExplainability=${neighbour.view.availability.hasProfile ? this._trainingExplainability : null}
         .houseFocus=${this.houseFocus}
         .date=${neighbour.view.date}
         .timeZone=${this._haTimeZone() ?? "UTC"}
@@ -3050,6 +3060,7 @@ export class HelmanSolarInspector extends LitElement {
   private _showDayPayload(payload: InspectorPayload, date: string) {
     this._payloadDate = date;
     this._emitWatchedEntities(payload);
+    void this._loadTrainingExplainability(payload.trainedAt);
     this._dayRange = payload.range;
     // A day drawn from hourly statistics has nothing finer to show, so the
     // width comes down to what the data is. Through `_setSlotMinutes` rather
@@ -3065,11 +3076,7 @@ export class HelmanSolarInspector extends LitElement {
       this._slotSelection,
     );
     this._slotSelection = reconciled;
-    this._selectedTrainingDate = this._resolveSelectedTrainingDate(
-      reconciled.focusSlot,
-      payload,
-      date,
-    );
+    this._selectedTrainingDate = this._resolveSelectedTrainingDate(reconciled.focusSlot, date);
     // Only the day and its two neighbours are ever worth holding.
     const kept = [...this._dayPayloads].filter(([key]) => Math.abs(daysBetween(date, key)) <= 1);
     if (kept.length !== this._dayPayloads.size) {
@@ -3450,15 +3457,42 @@ export class HelmanSolarInspector extends LitElement {
 
   private _resolveSelectedTrainingDate(
     slot: string | null,
-    payload: InspectorPayload | null = this._payload,
     preferredDate: string | null = this._selectedDate,
   ) {
-    const trainingSlot = findTrainingSlot(payload?.trainingExplainability ?? null, slot);
+    const trainingSlot = findTrainingSlot(this._shownExplainability, slot);
     return resolveSelectedTrainingDate(
       trainingSlot?.rows ?? [],
       preferredDate,
       this._selectedTrainingDate,
     );
+  }
+
+  /** `_trainingExplainability` while the day drawn has a profile it explains; null otherwise. */
+  private get _shownExplainability(): TrainingExplainability | null {
+    return this._payload?.availability.hasProfile ? this._trainingExplainability : null;
+  }
+
+  /**
+   * Read the explainability of the model a day was drawn with, when it is not
+   * the one already held. Every day names its model's `trainedAt`, so moving
+   * between days asks for nothing; a retrain shows up as a new `trainedAt` on
+   * the next day load. The store keeps the answer per `trainedAt`, so the
+   * object handed down keeps its identity between loads.
+   */
+  private async _loadTrainingExplainability(trainedAt: string | null) {
+    if (trainedAt === this._explainabilityTrainedAt || !this.hass) return;
+    this._explainabilityTrainedAt = trainedAt;
+    this._trainingExplainability = null;
+    if (trainedAt === null) return;
+    try {
+      const explainability = await getSharedHelmanStore(this.hass).getTrainingExplainability(trainedAt);
+      if (trainedAt !== this._explainabilityTrainedAt) return;
+      this._trainingExplainability = explainability;
+      this._selectedTrainingDate = this._resolveSelectedTrainingDate(this._selectedSlot);
+    } catch {
+      // The panels say there is no explainability; the next day load asks again.
+      if (trainedAt === this._explainabilityTrainedAt) this._explainabilityTrainedAt = null;
+    }
   }
 
   /** Today's day key in the time zone this card reads dates in. See `shared/time/day-key`. */

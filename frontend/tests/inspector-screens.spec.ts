@@ -75,7 +75,6 @@ async function mountDay(page: Page): Promise<void> {
                 moneyActual: { cost: 3.1, gain: 1.2, net: 1.9 }, moneyForecast: { cost: 7.4, gain: 2.6, net: 4.8 } },
             availability: { hasProfile: true },
             batterySocBounds: [],
-            trainingExplainability: null,
         });
         document.body.innerHTML = "";
         const el = document.createElement("helman-solar-inspector") as any;

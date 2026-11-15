@@ -28,6 +28,7 @@ from .node_details import NodeDetailContext, NodeDetailError, async_get_node_det
 from .ws_common import get_coordinator, map_errors, validate_dates, validate_report_dates
 from .solar_bias_correction.websocket import (
     ws_get_solar_bias_day_aggregates,
+    ws_get_solar_bias_explainability,
     ws_get_solar_bias_inspector,
 )
 from .scheduling.schedule import ScheduleError, slot_from_dict
@@ -109,6 +110,7 @@ def async_register_websocket_commands(hass: HomeAssistant) -> None:
     async_register_command(hass, ws_get_device_report)
     async_register_command(hass, ws_get_node_detail)
     async_register_command(hass, ws_get_solar_bias_inspector)
+    async_register_command(hass, ws_get_solar_bias_explainability)
     async_register_command(hass, ws_get_solar_bias_day_aggregates)
     async_register_command(hass, ws_get_training_status)
     async_register_command(hass, ws_train_now)

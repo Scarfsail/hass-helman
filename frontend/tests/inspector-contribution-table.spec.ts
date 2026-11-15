@@ -6,9 +6,9 @@ import { loadBundle } from "./support/card-page";
  *
  * A few days back the recorded forecast entity is purged, so a past day's
  * payload carries no `raw` or `impact` series — only `actual` (and here a
- * `corrected` curve the chart can still draw) and the per-slot
- * `trainingExplainability`, which is keyed by slot-of-day and is there for
- * every date. The selected-slot detail used to narrow the selection against
+ * `corrected` curve the chart can still draw). The per-slot training
+ * explainability comes from its own command, keyed by slot-of-day and the same
+ * for every date. The selected-slot detail used to narrow the selection against
  * `series.impact`; on these days that set is empty, so the whole detail panel —
  * the "Training contribution" table included — rendered nothing on exactly the
  * days a reader opens to see what a slot contributed to the fit.
@@ -62,38 +62,38 @@ async function mountPurgedPastDay(
                 hasProfile: true,
             },
             batterySocBounds: [],
-            trainingExplainability: {
-                trainedAt: "2026-07-11T03:00:00+00:00",
-                aggregationMethod: "trimmed_mean",
-                slots: {
-                    "12:00": {
-                        factor: 1.08,
-                        rawRatio: 1.08,
-                        clamped: false,
-                        forecastSumWh: 12000,
-                        actualSumWh: 12960,
-                        rows: [
-                            { date: "2026-07-03", forecastWh: 2000, actualWh: 2200, ratio: 1.1, status: "included", reason: null },
-                            { date: "2026-07-04", forecastWh: 1900, actualWh: 2010, ratio: 1.058, status: "included", reason: null },
-                        ],
-                        interpolated: false,
-                        interpolationAnchors: null,
-                    },
-                    "13:00": {
-                        factor: 0.92,
-                        rawRatio: 0.92,
-                        clamped: false,
-                        forecastSumWh: 11000,
-                        actualSumWh: 10120,
-                        rows: [
-                            { date: "2026-07-05", forecastWh: 1800, actualWh: 1650, ratio: 0.917, status: "included", reason: null },
-                        ],
-                        interpolated: false,
-                        interpolationAnchors: null,
-                    },
+        });
+        const explainability = {
+            trainedAt: "2026-07-11T03:00:00+00:00",
+            aggregationMethod: "trimmed_mean",
+            slots: {
+                "12:00": {
+                    factor: 1.08,
+                    rawRatio: 1.08,
+                    clamped: false,
+                    forecastSumWh: 12000,
+                    actualSumWh: 12960,
+                    rows: [
+                        { date: "2026-07-03", forecastWh: 2000, actualWh: 2200, ratio: 1.1, status: "included", reason: null },
+                        { date: "2026-07-04", forecastWh: 1900, actualWh: 2010, ratio: 1.058, status: "included", reason: null },
+                    ],
+                    interpolated: false,
+                    interpolationAnchors: null,
+                },
+                "13:00": {
+                    factor: 0.92,
+                    rawRatio: 0.92,
+                    clamped: false,
+                    forecastSumWh: 11000,
+                    actualSumWh: 10120,
+                    rows: [
+                        { date: "2026-07-05", forecastWh: 1800, actualWh: 1650, ratio: 0.917, status: "included", reason: null },
+                    ],
+                    interpolated: false,
+                    interpolationAnchors: null,
                 },
             },
-        });
+        };
 
         document.body.innerHTML = "";
         const el = document.createElement("helman-solar-inspector") as any;
@@ -109,7 +109,8 @@ async function mountPurgedPastDay(
                     date: string;
                 }) => {
                     return ({ ...payload, date: msg.date });
-                }
+                },
+                "helman/solar_bias/explainability": explainability,
             }).callWS,
         };
         document.body.appendChild(el);
@@ -186,4 +187,26 @@ test("the contribution table stays behind the raw diagnostic", async ({ page }) 
     await selectSlot(page, "12:00");
 
     expect(await contributionToggleText(page)).toBeNull();
+});
+
+test("moving to another day asks for the training explainability no second time", async ({ page }) => {
+    await mountPurgedPastDay(page, { biasRatioDefault: true });
+    await selectSlot(page, "12:00");
+    await toggleContribution(page);
+
+    // A training row navigates to its day; the day it lands on names the same
+    // trained model, so the explainability already held serves it.
+    await page.evaluate(() => {
+        const el = document.querySelector("helman-solar-inspector") as any;
+        el._selectTrainingDate("2026-07-03");
+    });
+    await page.waitForFunction(() => {
+        const el = document.querySelector("helman-solar-inspector") as any;
+        return el._payload?.date === "2026-07-03" && !el._loading;
+    });
+
+    const requests = await page.evaluate(() => window.__mockRequests.map((request) => request.type));
+    expect(requests.filter((type) => type === "helman/solar_bias/inspector").length).toBeGreaterThan(1);
+    expect(requests.filter((type) => type === "helman/solar_bias/explainability")).toHaveLength(1);
+    expect([...(await contributionRowDates(page))!].sort()).toEqual(["2026-07-03", "2026-07-04"]);
 });

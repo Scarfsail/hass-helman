@@ -4,6 +4,7 @@ import { formatFactor, formatWh } from "../inspector-format";
 import {
   resolveSelectedTrainingDate,
   type ContributionRow,
+  type TrainingExplainability,
   type TrainingSlotExplainability,
 } from "../solar-inspector-model.js";
 import type { PanelContext } from "./metrics";
@@ -27,6 +28,7 @@ export function renderContributionTable(
   ctx: PanelContext,
   payload: InspectorPayload,
   selectedSlot: string,
+  explainability: TrainingExplainability | null,
   trainingSlot: TrainingSlotExplainability | null,
   state: ContributionState,
 ) {
@@ -34,7 +36,7 @@ export function renderContributionTable(
   if (!payload.availability.hasProfile) {
     return html`<div class="note">${t("bias_correction.inspector.no_profile")}</div>`;
   }
-  if (!payload.trainingExplainability) {
+  if (!explainability) {
     return html`<div class="note">${t("bias_correction.inspector.no_explainability")}</div>`;
   }
   if (!trainingSlot) {

@@ -69,7 +69,6 @@ async function mountInspector(page: Page, gap: boolean): Promise<void> {
                 hasProfile: true,
             },
             batterySocBounds: [],
-            trainingExplainability: null,
         });
 
         document.body.innerHTML = "";

@@ -200,6 +200,7 @@ export async function installMockHass(page: Page): Promise<void> {
             "helman/validate_config": { valid: true, errors: [], warnings: [] },
             "helman/get_forecast": forecast,
             "helman/solar_bias/inspector": (request: MockRequest) => window.__inspectorDay({ date: String(request.date ?? "") }),
+            "helman/solar_bias/explainability": null,
             "helman/solar_bias/day_aggregates": { days: [], bucket: "day", priceUnit: "CZK/kWh", range: { minDate: "", maxDate: "" } },
         };
     }, fixtureDefaults);
@@ -361,7 +362,6 @@ export async function installFakeHass(page: Page, options: FakeHassOptions): Pro
                 hasProfile: true,
             },
             batterySocBounds: [],
-            trainingExplainability: null,
         }));
 
         // Measured days for every past day in reach of the pill row. A past

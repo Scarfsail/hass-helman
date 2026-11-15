@@ -167,7 +167,6 @@ async function mountInspector(
                 hasProfile: true,
             },
             batterySocBounds: [],
-            trainingExplainability: null,
         }));
 
         const requestedDates: string[] = [];

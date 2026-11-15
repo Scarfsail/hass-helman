@@ -24,7 +24,7 @@ export function inspectorDay(overrides: InspectorDayOverrides = {}): InspectorPa
         series: { raw: [], corrected: [], actual: [], invalidated: [], factors: [], impact: [], houseForecast: [], houseActual: [], houseActualBreakdown: [], houseForecastBreakdown: [], batterySocForecast: [], batterySocActual: [], gridForecast: [], gridActual: [], batteryForecast: [], batteryActual: [], importPrice: [], exportPrice: [], moneyActual: [], moneyForecast: [], ...series },
         totals: { rawWh: null, correctedWh: null, actualWh: null, houseForecastWh: null, houseActualWh: null, gridForecastWh: null, gridActualWh: null, batteryForecastWh: null, batteryActualWh: null, moneyActual: null, moneyForecast: null, ...totals },
         availability: { hasProfile: false, ...availability },
-        batterySocBounds: [], priceUnit: null, trainingExplainability: null,
+        batterySocBounds: [], priceUnit: null,
         ...rest,
     };
 }

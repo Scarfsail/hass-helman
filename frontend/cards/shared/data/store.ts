@@ -12,6 +12,7 @@ import { callHelman } from "./helman-commands";
 import type { HelmanSchedulePatch } from "../../helman/models";
 import type { ScheduleControllable } from "../schedule/model/schedule-appliance-metadata";
 import type { ScheduleExplanationPayload } from "./helman-commands";
+import type { TrainingExplainability } from "../../helman-solar-inspector/solar-inspector-model";
 import { getSharedDataChangedFeed } from "./data-changed";
 
 type HelmanConnection = HomeAssistant["connection"];
@@ -35,6 +36,7 @@ export interface HelmanStore {
     getDeviceTree(options?: { fresh?: boolean }): Promise<TreePayload>;
     getHistory(options?: { fresh?: boolean }): Promise<HistoryPayload>;
     getNodeDetail<T>(request: GetNodeDetailRequest, options?: { fresh?: boolean }): Promise<T>;
+    getTrainingExplainability(trainedAt: string): Promise<TrainingExplainability | null>;
 }
 
 export function getSharedHelmanStore(hass: HomeAssistant): HelmanStore {
@@ -67,6 +69,8 @@ class HelmanStoreImpl implements HelmanStore {
     private _roster: readonly ScheduleControllable[] | null = null;
     private _rosterRequest: Promise<readonly ScheduleControllable[]> | null = null;
     private _explanations = new Map<string, ScheduleExplanationPayload | null>();
+    /** The last trained model's explainability, and the `trainedAt` it was read for. */
+    private _trainingExplainability: { trainedAt: string; payload: TrainingExplainability | null } | null = null;
     private _unsubscribeDataChanged: (() => void) | null = null;
     private readonly _explanationListeners = new Set<() => void>();
     private readonly _rosterListeners = new Set<() => void>();
@@ -235,5 +239,24 @@ class HelmanStoreImpl implements HelmanStore {
         if (options?.fresh && request.node === "inverter" && !request.section) this._inFlight.delete(key);
         else if (options?.fresh) return callHelman(this._hass, "helman/get_node_detail", request) as Promise<T>;
         return this._dedupe(key, () => callHelman(this._hass, "helman/get_node_detail", request) as Promise<T>);
+    }
+
+    /**
+     * The trained model's explainability, read once per `trainedAt`.
+     *
+     * Every inspector day names the model it was drawn with, and the model only
+     * changes when training replaces it -- under a new `trainedAt`. So the key
+     * is the whole invalidation: no data-changed hook, and only the latest model
+     * is kept.
+     */
+    public getTrainingExplainability(trainedAt: string): Promise<TrainingExplainability | null> {
+        if (this._trainingExplainability?.trainedAt === trainedAt) {
+            return Promise.resolve(this._trainingExplainability.payload);
+        }
+        return this._dedupe(`solar_bias_explainability:${trainedAt}`, async () => {
+            const payload = await callHelman(this._hass, "helman/solar_bias/explainability", {});
+            this._trainingExplainability = { trainedAt, payload };
+            return payload;
+        });
     }
 }

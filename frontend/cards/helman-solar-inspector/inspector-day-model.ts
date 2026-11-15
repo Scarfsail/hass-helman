@@ -22,7 +22,6 @@ import {
   type HouseBreakdownPoint,
   type ImpactPoint,
   type InspectorPoint,
-  type TrainingExplainability,
 } from "./solar-inspector-model";
 import {
   actualsCoverUntil,
@@ -171,7 +170,6 @@ export type InspectorPayload = {
   priceUnit: string | null;
   /** Today's live day ratio from the forecast snapshot; null on any other day. */
   liveDayRatio?: LiveDayRatioDTO | null;
-  trainingExplainability: TrainingExplainability | null;
 };
 
 /**

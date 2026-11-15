@@ -94,7 +94,6 @@ async function mountInspector(page: Page): Promise<void> {
                 hasProfile: true,
             },
             batterySocBounds: [],
-            trainingExplainability: null,
         });
 
         const el = document.createElement("helman-solar-inspector") as any;

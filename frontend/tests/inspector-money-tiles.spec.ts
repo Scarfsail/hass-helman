@@ -82,7 +82,6 @@ async function mountInspector(
             },
             priceUnit: "CZK/kWh",
             batterySocBounds: [],
-            trainingExplainability: null,
         });
 
         document.body.innerHTML = "";
