@@ -17,7 +17,7 @@ from .drivers import (
     build_runtime_status,
 )
 from .schedule import ApplianceScheduleActionDict
-from .state import AppliancesRuntimeRegistry
+from .state import AppliancesRuntimeRegistry, read_appliance_running
 
 
 @dataclass(frozen=True)
@@ -29,6 +29,10 @@ class ApplianceExecutionMemory:
     # Set when the appliance refused a start: the driver's acceptance
     # fingerprint at that moment. The start is not retried until it changes.
     not_accepting: tuple[object, ...] | None = None
+    # The slot in which the appliance was first seen running without helman
+    # having switched it on: a manual run, left alone until a later slot holds
+    # a helman action for it, or until the run ends.
+    manual_run_slot_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -47,6 +51,10 @@ class ApplianceExecutor:
     next reconcile instead of being remembered as done. A start the appliance
     refused is the exception: it is latched, across slots, until the driver's
     acceptance fingerprint changes.
+
+    A run helman did not start is hands-off: it is neither stopped nor adopted
+    until a later slot holds a helman action for the appliance, which then
+    takes over as usual.
     """
 
     def __init__(
@@ -67,6 +75,53 @@ class ApplianceExecutor:
         active_slot_id: str,
         reference_time: datetime,
     ) -> tuple[ControllableRuntimeStatus | None, ApplianceExecutionMemory | None]:
+        # None when the state is unknown/unavailable: a flap neither starts nor
+        # ends a manual run.
+        running = read_appliance_running(self._actuator.read_state, appliance)
+        manual_run_slot_id = (
+            memory.manual_run_slot_id
+            if memory is not None
+            and (
+                running is not False
+                # A run that ended inside its flagged slot keeps that slot's
+                # action unapplied until the slot ends.
+                or (action is not None and active_slot_id == memory.manual_run_slot_id)
+            )
+            else None
+        )
+        if (
+            running is True
+            and manual_run_slot_id is None
+            and (memory is None or not memory.last_enabled)
+            and (
+                action is None
+                or self._applied_disabled(appliance, action, memory, active_slot_id)
+            )
+        ):
+            manual_run_slot_id = active_slot_id
+        if manual_run_slot_id is not None and (
+            action is None or active_slot_id == manual_run_slot_id
+        ):
+            return (
+                build_runtime_status(
+                    action_kind="noop",
+                    outcome="skipped",
+                    reason="manual_run",
+                    reference_time=reference_time,
+                ),
+                ApplianceExecutionMemory(
+                    last_active_slot_id=active_slot_id,
+                    last_action_signature=None,
+                    last_enabled=False,
+                    manual_run_slot_id=manual_run_slot_id,
+                )
+                if memory is None
+                else replace(memory, manual_run_slot_id=manual_run_slot_id),
+            )
+        if memory is not None and memory.manual_run_slot_id is not None:
+            # The manual run ended, or a later slot's action takes it over.
+            memory = replace(memory, manual_run_slot_id=None)
+
         if action is None:
             if (
                 memory is not None
@@ -169,6 +224,25 @@ class ApplianceExecutor:
                 last_enabled=enabled,
                 last_runtime_action_kind="apply",
             ),
+        )
+
+    def _applied_disabled(
+        self,
+        appliance: Any,
+        action: ApplianceScheduleActionDict,
+        memory: ApplianceExecutionMemory | None,
+        active_slot_id: str,
+    ) -> bool:
+        """Whether ``action`` is an off this slot has already applied.
+
+        An appliance running past it was switched on by hand; an off not yet
+        applied is still helman's to apply.
+        """
+        return (
+            not self._driver.is_enabled(appliance, action)
+            and memory is not None
+            and memory.last_active_slot_id == active_slot_id
+            and memory.last_action_signature == self._driver.signature(action)
         )
 
     async def async_disable_active_action(

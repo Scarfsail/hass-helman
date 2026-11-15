@@ -283,7 +283,7 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         const direct = deviceDirectControls(this.params.item);
         const session = this._sessionKWh(overview);
         const caption = [direct?.switchEntityId && this.hass.states[direct.switchEntityId]?.state === "off"
-            ? this.localize("node_detail.shared.ev_off") : charging ? this.localize("node_detail.shared.ev_charging") : this._waitingPreview(overview, selection)];
+            ? this.localize("node_detail.shared.ev_off") : charging ? this._manualRunLabel() ?? this.localize("node_detail.shared.ev_charging") : this._waitingPreview(overview, selection)];
         if (session !== null) caption.push(fillTemplate(this.localize("node_detail.shared.ev_session_total"), { kwh: formatKwh(session) }));
         return html`
             <div class="content" data-overview>
@@ -688,10 +688,16 @@ export class NodeDetailEvChargerContent extends NodeDetailContentBase<EvChargerD
         return { kind: "reasons", reasons, eco };
     }
 
+    /** The manual-run label while helman is leaving a charge the user started alone. */
+    private _manualRunLabel(): string | null {
+        const runtime = runtimeFor<ApplianceRuntimeDTO>(this._plan.schedule, this.deviceId, Date.now());
+        return runtime?.reason === "manual_run" ? getScheduleReasonLabel(runtime.reason, this.localize) : null;
+    }
+
     private _waitingPreview(overview: EvChargerDetailPayload, selection: VehicleSelection): string {
         const waiting = this._waiting(overview, selection);
         if (waiting.kind === "fault") return this._t("waiting.fault_short");
-        if (waiting.kind === "charging") return this._t("waiting.charging");
+        if (waiting.kind === "charging") return this._manualRunLabel() ?? this._t("waiting.charging");
         if (waiting.kind === "no_car") return this._t("waiting.no_car_short");
         if (waiting.reasons.length === 1) return waiting.reasons[0];
         return this._t("waiting.unknown_short");

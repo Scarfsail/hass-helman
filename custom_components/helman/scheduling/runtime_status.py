@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from .schedule import ScheduleAction, ScheduleActionDict
 
 ScheduleExecutionReason = Literal[
-    "scheduled", "target_soc_reached", "vehicle_not_accepting"
+    "scheduled", "target_soc_reached", "vehicle_not_accepting", "manual_run"
 ]
 RuntimeActionKind = Literal["apply", "slot_stop", "noop"]
 RuntimeOutcome = Literal["success", "failed", "skipped"]

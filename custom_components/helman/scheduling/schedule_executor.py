@@ -791,6 +791,14 @@ class ScheduleExecutor:
     def clear_appliance_memories(self) -> None:
         self._runtime.appliance_memories = {}
 
+    def manual_run_appliance_ids(self) -> frozenset[str]:
+        """The appliances the executor is leaving alone as a manual run."""
+        return frozenset(
+            appliance_id
+            for appliance_id, memory in self._runtime.appliance_memories.items()
+            if memory.manual_run_slot_id is not None
+        )
+
     def _set_execution_status(self, status: ScheduleExecutionStatus) -> None:
         previous = self._runtime.execution_status
         self._runtime.execution_status = status

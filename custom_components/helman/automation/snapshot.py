@@ -118,12 +118,15 @@ class OptimizationContext:
 
     @property
     def appliance_active_by_id(self) -> dict[str, bool]:
-        """A5 — which appliances are physically running right now.
+        """A5 — which appliances are running as part of helman's plan for the
+        slot in progress.
 
-        The one thing a stateless optimizer cannot derive from the schedule it
-        is about to rewrite: the plan for the slot in progress is a commitment,
-        not a free variable, so an optimizer that would otherwise re-rank an
-        in-flight run out of its own plan can decline to.
+        True only when the appliance is physically running, the stored
+        schedule's current slot holds a committed, enabled action for it, and
+        the executor has not flagged it as a manual run. The plan for the slot
+        in progress is a commitment, not a free variable, so an optimizer that
+        would otherwise re-rank an in-flight run out of its own plan can
+        decline to — but a run the user started by hand is never adopted.
         """
         return self.live.appliance_active_by_id
 

@@ -98,9 +98,11 @@ class ComputeInputs:
     custom_condition_results_by_optimizer_id: dict[
         str, tuple[CustomConditionGroupResult, ...]
     ] = field(default_factory=dict)
-    # Which appliances are physically running at the moment the run started,
-    # by the same definition of "running" the recorder runtime query uses. Read
-    # by ``appliance_runtime`` to keep an in-flight run in the plan; see
+    # Which appliances are running as part of helman's plan for the current
+    # slot at the moment the run started: running by the same definition the
+    # recorder runtime query uses, with a committed enabled action in the
+    # stored current slot, and not flagged as a manual run. Read by
+    # ``appliance_runtime`` to keep an in-flight run in the plan; see
     # ``OptimizationContext.appliance_active_by_id``.
     appliance_active_by_id: dict[str, bool] = field(default_factory=dict)
     # The EV battery hold's live charger and solar readings at the moment the

@@ -603,7 +603,7 @@ export type ScheduleApplianceActionDTO =
     | ScheduleGenericApplianceActionDTO
     | ScheduleClimateApplianceActionDTO;
 
-export type ScheduleRuntimeReason = "scheduled" | "target_soc_reached" | "vehicle_not_accepting";
+export type ScheduleRuntimeReason = "scheduled" | "target_soc_reached" | "vehicle_not_accepting" | "manual_run";
 export type RuntimeActionKind = "apply" | "slot_stop" | "noop";
 export type RuntimeOutcome = "success" | "failed" | "skipped";
 

@@ -1,5 +1,5 @@
 from __future__ import annotations
-from tests._fakes import FakeHass, make_coordinator
+from tests._fakes import FakeHass, FakeState, FakeStorage, make_coordinator
 
 import importlib
 import unittest
@@ -744,6 +744,90 @@ class ApplianceRuntimeHistoryResolutionTests(unittest.IsolatedAsyncioTestCase):
         result = await self._resolve(_Reader())
 
         self.assertEqual(result, {"pool-filtration": {}, "dishwasher": {}})
+
+
+class ApplianceActiveByIdTests(unittest.TestCase):
+    """The in-flight pin protects helman's own runs, never a manual one."""
+
+    APPLIANCES = {
+        "devices": {"consumers": [
+            {
+                "kind": "generic",
+                "schedulable": True,
+                "id": "dishwasher",
+                "name": "Dishwasher",
+                "controls": {"switch": {"entity_id": "switch.dishwasher"}},
+                "consumption": {
+                    "energy_entity_id": "sensor.appliance_energy",
+                    "projection": {
+                        "strategy": "fixed",
+                        "hourly_energy_kwh": 1.0,
+                    },
+                },
+            },
+        ]}
+    }
+
+    def _read(self, *, current_action=None, manual_run=False, switch="on"):
+        schedule_module = importlib.import_module(
+            "custom_components.helman.scheduling.schedule"
+        )
+        execution_module = importlib.import_module(
+            "custom_components.helman.appliances.execution"
+        )
+        slot_id = schedule_module.format_slot_id(
+            schedule_module.build_horizon_start(REFERENCE_TIME)
+        )
+        slots = {} if current_action is None else {slot_id: {"dishwasher": current_action}}
+        coordinator = make_coordinator(
+            _hass=FakeHass({"switch.dishwasher": FakeState(switch)}),
+            _storage=FakeStorage(
+                schedule_document={
+                    "executionEnabled": True,
+                    "slotMinutes": 15,
+                    "slots": slots,
+                }
+            ),
+        )
+        coordinator._active_config = {}
+        coordinator._appliances_registry.current = build_appliances_runtime_registry(
+            self.APPLIANCES
+        )
+        # Empty executor memory unless flagged: what a restart looks like.
+        if manual_run:
+            coordinator.schedule.executor.runtime.appliance_memories = {
+                "dishwasher": execution_module.ApplianceExecutionMemory(
+                    last_active_slot_id=slot_id,
+                    last_action_signature=None,
+                    last_enabled=False,
+                    manual_run_slot_id=slot_id,
+                )
+            }
+        return coordinator.forecast._read_appliance_active_by_id(REFERENCE_TIME)
+
+    def test_a_running_appliance_with_no_current_action_is_not_in_flight(self) -> None:
+        self.assertEqual(self._read(), {"dishwasher": False})
+
+    def test_a_run_helman_planned_for_this_slot_is_in_flight(self) -> None:
+        self.assertEqual(self._read(current_action={"on": True}), {"dishwasher": True})
+
+    def test_a_planned_run_that_is_not_running_is_not_in_flight(self) -> None:
+        self.assertEqual(
+            self._read(current_action={"on": True}, switch="off"),
+            {"dishwasher": False},
+        )
+
+    def test_a_candidate_action_does_not_make_it_in_flight(self) -> None:
+        self.assertEqual(
+            self._read(current_action={"on": True, "conditionMet": False}),
+            {"dishwasher": False},
+        )
+
+    def test_a_manual_run_is_not_in_flight_even_with_a_current_action(self) -> None:
+        self.assertEqual(
+            self._read(current_action={"on": True}, manual_run=True),
+            {"dishwasher": False},
+        )
 
 
 class ApplianceEnergyAdoptionTests(unittest.TestCase):
