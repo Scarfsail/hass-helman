@@ -30,7 +30,7 @@ export type FlowTier = 0 | 1 | 2;
  * peak (`fade` of the period), rises back (`rise`) and the floor it rests on.
  */
 const TIERS = [
-    { from: 0, interval: 2, travel: { long: 2.5, short: 1 }, glow: { rise: 0.35, fade: 0.65, floor: 0.2 } },
+    { from: 0, interval: 4, travel: { long: 3, short: 1 }, glow: { rise: 0.35, fade: 0.65, floor: 0.2 } },
     { from: 0.2, interval: 1, travel: { long: 1.5, short: 0.5 }, glow: { rise: 0.2, fade: 0.8, floor: 0.35 } },
     { from: 0.5, interval: 0.5, travel: { long: 1, short: 0.5 }, glow: { rise: 0.4, fade: 0.6, floor: 0.55 } },
 ] as const;

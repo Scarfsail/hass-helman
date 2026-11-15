@@ -36,8 +36,8 @@ test.describe("the tables, unit-checked", () => {
 
     test("each tier's interval and travel, long edge and short, in beats", () => {
         expect(RATIOS.map((r) => [flowTempo(flowTier(r), false), flowTempo(flowTier(r), true)])).toEqual([
-            [{ interval: 2, travel: 2.5 }, { interval: 2, travel: 1 }],
-            [{ interval: 2, travel: 2.5 }, { interval: 2, travel: 1 }],
+            [{ interval: 4, travel: 3 }, { interval: 4, travel: 1 }],
+            [{ interval: 4, travel: 3 }, { interval: 4, travel: 1 }],
             [{ interval: 1, travel: 1.5 }, { interval: 1, travel: 0.5 }],
             [{ interval: 1, travel: 1.5 }, { interval: 1, travel: 0.5 }],
             [{ interval: 0.5, travel: 1 }, { interval: 0.5, travel: 0.5 }],
@@ -139,6 +139,7 @@ test.describe("a strong flow next to a weak one", () => {
                     surges: surges.length,
                     // Surges leave one interval apart, each on a loop of as many intervals as there are surges.
                     interval: loop / surges.length,
+                    loop,
                 }];
             }));
         });
@@ -149,7 +150,12 @@ test.describe("a strong flow next to a weak one", () => {
         expect(strong.opacity).toBeGreaterThan(weak.opacity);
         expect(strong.interval).toBeLessThan(weak.interval);
         expect(strong.interval).toBe(BEAT_MS / 2);
-        expect(weak.interval).toBe(BEAT_MS * 2);
+        expect(weak.interval).toBe(BEAT_MS * 4);
+        // Surges in transit at once, on average: count x travel / loop. A weak flow on a long edge carries fewer.
+        const inTransit = (beam: typeof strong, tier: 0 | 2, short: boolean) => beam.surges * flowTempo(tier, short).travel * BEAT_MS / beam.loop;
+        expect(inTransit(weak, 0, false)).toBeCloseTo(0.75, 10);
+        expect(inTransit(strong, 2, true)).toBeCloseTo(1, 10);
+        expect(inTransit(strong, 2, true)).toBeGreaterThan(inTransit(weak, 0, false));
     });
 
     test("the battery glows larger, brighter and quicker than the house, and neither glow goes dark", async ({ page }) => {
@@ -500,10 +506,10 @@ test("on the helman card the top-level rows glow and the house's devices never d
 });
 
 test("an edge carries floor(travel / interval) + 1 surges, staggered by one interval", () => {
-    // Tier 0 on a long edge: a surge every 2 beats, 2.5 beats in transit -> 2 surges on a 4-beat loop.
+    // Tier 0 on a long edge: a surge every 4 beats, 3 beats in transit -> 1 surge on a 4-beat loop.
     const { reach, surges } = flowSurges(0, false, 0);
-    expect(surges.map((surge) => surge.delay)).toEqual([`${-4 * BEAT_MS}ms`, `${-2 * BEAT_MS}ms`]);
-    expect(reach).toBeCloseTo(4 / 2.5, 10);
+    expect(surges.map((surge) => surge.delay)).toEqual([`${-4 * BEAT_MS}ms`]);
+    expect(reach).toBeCloseTo(4 / 3, 10);
     // Tier 2 on a short edge leaving half a beat in: 2 surges on a 1-beat loop.
     expect(flowSurges(2, true, 0.5).surges.map((surge) => surge.delay)).toEqual([`${-0.5 * BEAT_MS}ms`, `${-1 * BEAT_MS}ms`]);
 });
