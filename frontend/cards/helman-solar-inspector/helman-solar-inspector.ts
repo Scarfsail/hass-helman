@@ -92,7 +92,6 @@ import { startNowClock } from "../shared/now-clock";
 import { getSharedScheduleOwner, type SharedScheduleOwner } from "../shared/schedule/schedule-owner";
 import type { NormalizedScheduleModel, ScheduleOwnerSnapshot } from "../shared/schedule/schedule-types";
 import { EMPTY_NORMALIZED_SCHEDULE } from "../shared/schedule/model/schedule-normalizer";
-import { ForecastLoader } from "../shared/data/forecast-loader";
 import { resolveLocale } from "../shared/resolve-locale";
 import type { ScheduleHoverTooltipContent } from "./helman-solar-schedule-band-strip";
 import { EMPTY_SELECTED_MINUTES, seamMinutes, type ScheduleStripGeometry } from "./strip-geometry";
@@ -445,7 +444,6 @@ export class HelmanSolarInspector extends LitElement {
    * view is on screen, the ones that draw no pills included.
    */
   @state() private _forecast: ForecastPayload | null = null;
-  private readonly _forecastLoader = new ForecastLoader();
   /**
    * The one slot selection every surface shares: the charts highlight each selected
    * slot, and the schedule-actions strip both renders it and bulk-edits it.
@@ -2628,13 +2626,9 @@ export class HelmanSolarInspector extends LitElement {
       return;
     }
     const request = ++this._forecastRequest;
-    try {
-      const forecast = await this._forecastLoader.load(hass);
-      if (request === this._forecastRequest && this.hass?.connection === hass.connection) {
-        this._forecast = forecast;
-      }
-    } catch (error) {
-      console.error("helman-solar-inspector: failed to load forecast", error);
+    const forecast = await getSharedHelmanStore(hass).getForecast();
+    if (forecast && request === this._forecastRequest && this.hass?.connection === hass.connection) {
+      this._forecast = forecast;
     }
   }
 

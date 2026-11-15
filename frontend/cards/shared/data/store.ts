@@ -3,6 +3,7 @@ import type {
     ApplianceProjectionsPayload,
     AppliancesPayload,
     EntityActualHistoryPayload,
+    ForecastPayload,
     GetNodeDetailRequest,
     HistoryPayload,
     SchedulePayload,
@@ -14,6 +15,7 @@ import type { ScheduleControllable } from "../schedule/model/schedule-appliance-
 import type { ScheduleExplanationPayload } from "./helman-commands";
 import type { TrainingExplainability } from "../../helman-solar-inspector/solar-inspector-model";
 import { getSharedDataChangedFeed } from "./data-changed";
+import { ForecastLoader } from "./forecast-loader";
 
 type HelmanConnection = HomeAssistant["connection"];
 
@@ -37,6 +39,8 @@ export interface HelmanStore {
     getHistory(options?: { fresh?: boolean }): Promise<HistoryPayload>;
     getNodeDetail<T>(request: GetNodeDetailRequest, options?: { fresh?: boolean }): Promise<T>;
     getTrainingExplainability(trainedAt: string): Promise<TrainingExplainability | null>;
+    getForecast(): Promise<ForecastPayload | null>;
+    subscribeForecastInvalidation(listener: () => void): () => void;
 }
 
 export function getSharedHelmanStore(hass: HomeAssistant): HelmanStore {
@@ -74,6 +78,9 @@ class HelmanStoreImpl implements HelmanStore {
     private _unsubscribeDataChanged: (() => void) | null = null;
     private readonly _explanationListeners = new Set<() => void>();
     private readonly _rosterListeners = new Set<() => void>();
+    private readonly _forecastListeners = new Set<() => void>();
+    /** One loader per connection, so every forecast shown after a change shares one request. */
+    private readonly _forecastLoader = new ForecastLoader();
     private _explanationGeneration = 0;
     private _rosterGeneration = 0;
 
@@ -204,7 +211,21 @@ class HelmanStoreImpl implements HelmanStore {
                 if (key.startsWith("get_schedule_explanation:")) this._inFlight.delete(key);
             }
             for (const listener of this._explanationListeners) listener();
+            this._forecastLoader.invalidate();
+            for (const listener of this._forecastListeners) listener();
         });
+    }
+
+    /** The forecast, or the last one read when a reload fails; null when none ever arrived. */
+    public getForecast(): Promise<ForecastPayload | null> {
+        this._ensureDataChangedInvalidation();
+        return this._forecastLoader.refresh(this._hass);
+    }
+
+    public subscribeForecastInvalidation(listener: () => void): () => void {
+        this._ensureDataChangedInvalidation();
+        this._forecastListeners.add(listener);
+        return () => this._forecastListeners.delete(listener);
     }
 
     /**

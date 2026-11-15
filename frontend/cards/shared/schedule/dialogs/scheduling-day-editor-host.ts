@@ -6,7 +6,6 @@ import type {
     EntityActualHistorySlotDTO,
     ForecastPayload,
 } from "../../../helman-api";
-import { ForecastLoader } from "../../data/forecast-loader";
 import { getSharedHelmanStore } from "../../data/store";
 import { getLocalizeFunction, type LocalizeFunction } from "../../../localize/localize";
 import { fireEvent, showToast } from "../../fire-event";
@@ -151,7 +150,6 @@ export class SchedulingDayEditorHost extends LitElement {
     private _unsubscribeOwner?: () => void;
     private _unsubscribeRoster?: () => void;
     private _loadedConnection: unknown = null;
-    private _forecastLoader: ForecastLoader | null = null;
     private _projectionLoadGeneration = 0;
     /** An editor has been asked for, so the day is worth keeping complete. */
     private _opened = false;
@@ -623,15 +621,9 @@ export class SchedulingDayEditorHost extends LitElement {
             return;
         }
 
-        this._forecastLoader ??= new ForecastLoader();
-
-        try {
-            const forecast = await this._forecastLoader.load(hass);
-            if (this.hass?.connection === hass.connection) {
-                this._forecast = forecast;
-            }
-        } catch (error) {
-            console.error("scheduling: failed to load forecast", error);
+        const forecast = await getSharedHelmanStore(hass).getForecast();
+        if (forecast && this.hass?.connection === hass.connection) {
+            this._forecast = forecast;
         }
     }
 
