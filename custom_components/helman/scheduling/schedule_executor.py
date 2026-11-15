@@ -99,6 +99,9 @@ class ScheduleExecutionRuntime:
     # While a hand pick holds: the slot action seen on the latest reconcile, so
     # a new inverter window starting is told apart from the one that runs on.
     manual_hold_action: ScheduleAction | None = None
+    # The slot action of the window helman last reconciled, as planned (not
+    # resolved), so distinct target-SoC windows stay distinct.
+    last_planned_action: ScheduleAction | None = None
     appliance_memories: dict[str, ApplianceExecutionMemory] = field(
         default_factory=dict
     )
@@ -160,6 +163,20 @@ class InverterExecutor:
                 None,
             )
 
+        runtime, error = await self._async_reconcile_window(
+            control_config, action, slot_id, now
+        )
+        if error is None:
+            self._runtime.last_planned_action = action
+        return runtime, error
+
+    async def _async_reconcile_window(
+        self,
+        control_config: ScheduleControlConfig | None,
+        action: ScheduleAction,
+        slot_id: str,
+        now: datetime,
+    ) -> tuple[ControllableRuntimeStatus, ScheduleError | None]:
         if action.kind == SCHEDULE_ACTION_EMPTY:
             cached_runtime = self.build_cached_empty_runtime(
                 active_slot_id=slot_id
@@ -255,21 +272,13 @@ class InverterExecutor:
     def _window_not_applied_yet(self, action: ScheduleAction) -> bool:
         """Whether a window started that helman has not applied yet.
 
-        It takes over a pick made before it started. Compared resolved, as
-        helman applied it: a charge window past its target applies stop
-        discharging.
+        It takes over a pick made before it started. Compared as planned, not
+        resolved: charge-to-80 and charge-to-90 both resolve to stop
+        discharging above 90 %, yet the second is a new window.
         """
         if action.kind == SCHEDULE_ACTION_EMPTY:
             return False
-        try:
-            executed_action = self._resolve_action(
-                action=action, read_battery_state=self._read_battery_state
-            ).executed_action
-        except ScheduleError:
-            return True
-        return _inverter_action_changed(
-            executed_action, self._runtime.last_applied_action
-        )
+        return _inverter_action_changed(action, self._runtime.last_planned_action)
 
     async def async_execute(
         self,

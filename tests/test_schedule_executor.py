@@ -889,6 +889,52 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
             _picked_options(hass), ["Charge To Target", "Charge To Target"]
         )
 
+    async def test_pick_before_a_new_target_window_past_its_target_does_not_hold_it(
+        self,
+    ) -> None:
+        # Both windows resolve to stop discharging at 95 %, but the second is
+        # a new window and takes over a pick seen first on its first reconcile.
+        executor, hass = _build_hand_pick_executor(
+            {
+                "21:00": ScheduleAction(
+                    kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC, target_soc=80
+                ),
+                "21:15": ScheduleAction(
+                    kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC, target_soc=90
+                ),
+            },
+            battery_state=_build_battery_state(current_soc=95),
+        )
+        await _reconcile_at(executor, "21:07")
+        hass.states.get(_MODE_ENTITY_ID).state = "Normal"
+
+        inverter = await _reconcile_at(executor, "21:16")
+
+        self.assertEqual((inverter.action_kind, inverter.reason), ("apply", "target_soc_reached"))
+        self.assertIsNone(executor.runtime.manual_hold_action)
+        self.assertEqual(
+            _picked_options(hass), ["Stop Discharging", "Stop Discharging"]
+        )
+
+    async def test_hand_pick_holds_in_a_target_window_past_its_target(
+        self,
+    ) -> None:
+        executor, hass = _build_hand_pick_executor(
+            {
+                "21:00": ScheduleAction(
+                    kind=SCHEDULE_ACTION_CHARGE_TO_TARGET_SOC, target_soc=80
+                ),
+            },
+            battery_state=_build_battery_state(current_soc=95),
+        )
+        await _reconcile_at(executor, "21:07")
+        hass.states.get(_MODE_ENTITY_ID).state = "Normal"
+
+        inverter = await _reconcile_at(executor, "21:08")
+
+        self.assertEqual(inverter.reason, "manual_mode")
+        self.assertEqual(_picked_options(hass), ["Stop Discharging"])
+
     async def test_hold_begun_after_a_slot_stop_releases_when_a_window_starts(
         self,
     ) -> None:
