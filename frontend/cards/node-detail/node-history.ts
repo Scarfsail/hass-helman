@@ -84,7 +84,7 @@ export const nodeHistoryStyles = [gaugePillStyles, css`
     .pill.missed > * { text-shadow: 0 0 3px var(--card-background-color, var(--primary-background-color)),
         0 0 1px var(--card-background-color, var(--primary-background-color)); }
     /* The glow says "flowing now": a period's figures do not glow. */
-    .gauges .pill[data-active] { animation: none; box-shadow: none; }
+    .gauges .pill::after { content: none; }
     [data-estimates] .row .value { text-align: end; }
     /* What the learned figures are, at the far end of the rows' title, in plain case. */
     .section-title .aside { margin-left: auto; text-transform: none; letter-spacing: normal; font-weight: 400; }

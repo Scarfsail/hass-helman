@@ -3,7 +3,7 @@ import { LitElement, css, html, svg, unsafeCSS } from "lit-element";
 import { customElement, property } from "lit/decorators.js";
 
 import { helmanColorVars } from "../color-vars";
-import { FLOW_SWEEP_DURATION } from "../shared/flow-style";
+import { BEAT_MS } from "../shared/flow-style";
 import { simpleCardSharedStyles } from "./simple-card-shared-styles";
 
 @customElement("simple-card-grid")
@@ -35,11 +35,11 @@ export class SimpleCardGrid extends LitElement {
 
         .dot-import {
             fill: var(--simple-card-grid-accent);
-            animation: flow-in ${unsafeCSS(FLOW_SWEEP_DURATION)} linear infinite;
+            animation: flow-in ${unsafeCSS(BEAT_MS)}ms linear infinite;
         }
         /* export dot color is set dynamically via sourceColor prop */
         .dot-export {
-            animation: flow-out ${unsafeCSS(FLOW_SWEEP_DURATION)} linear infinite;
+            animation: flow-out ${unsafeCSS(BEAT_MS)}ms linear infinite;
         }
 
         /* Import: dots move from right to center (toward house) */
@@ -129,19 +129,19 @@ export class SimpleCardGrid extends LitElement {
         const dotStyle = importing ? '' : `fill: ${dotColor}`;
         return svg`
             <circle class="dot ${dotClass}" style="${dotStyle}" r="3">
-                <animateMotion dur="${FLOW_SWEEP_DURATION}" repeatCount="indefinite" begin="0s"
+                <animateMotion dur="${BEAT_MS}ms" repeatCount="indefinite" begin="0ms"
                     keyPoints="${importing ? '0;1' : '1;0'}" keyTimes="0;1" calcMode="linear">
                     <mpath href="#${this._wlId}"/>
                 </animateMotion>
             </circle>
             <circle class="dot ${dotClass}" style="${dotStyle}" r="3">
-                <animateMotion dur="${FLOW_SWEEP_DURATION}" repeatCount="indefinite" begin="0.6s"
+                <animateMotion dur="${BEAT_MS}ms" repeatCount="indefinite" begin="${BEAT_MS / 4}ms"
                     keyPoints="${importing ? '0;1' : '1;0'}" keyTimes="0;1" calcMode="linear">
                     <mpath href="#${this._wcId}"/>
                 </animateMotion>
             </circle>
             <circle class="dot ${dotClass}" style="${dotStyle}" r="3">
-                <animateMotion dur="${FLOW_SWEEP_DURATION}" repeatCount="indefinite" begin="1.2s"
+                <animateMotion dur="${BEAT_MS}ms" repeatCount="indefinite" begin="${BEAT_MS / 2}ms"
                     keyPoints="${importing ? '0;1' : '1;0'}" keyTimes="0;1" calcMode="linear">
                     <mpath href="#${this._wrId}"/>
                 </animateMotion>

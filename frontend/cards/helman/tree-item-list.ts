@@ -22,6 +22,7 @@ function sortedIdsByHistoryAndName(devices: TreeItem[]): string[] {
         .map(device => device.id);
 }
 import "./tree-item-row";
+import type { RowBeat } from "./tree-item-row";
 
 @customElement("helman-tree-item-list")
 export class HelmanTreeItemList extends LitElement {
@@ -45,6 +46,8 @@ export class HelmanTreeItemList extends LitElement {
     @property({ type: Boolean }) public openNodeDetailOnIcon = false;
     /** Handed to every row as its centre content; the rows' own children never inherit it. */
     @property({ attribute: false }) public centreContent?: TemplateResult;
+    /** Handed to every row: its part in the card's rhythm; the rows' own children never inherit it. */
+    @property({ attribute: false }) public beat?: RowBeat;
 
     willUpdate(changedProperties: Map<string, unknown>): void {
         super.willUpdate(changedProperties);
@@ -135,6 +138,7 @@ export class HelmanTreeItemList extends LitElement {
                         .historyRevision=${this.historyRevision}
                         .openNodeDetailOnIcon=${this.openNodeDetailOnIcon}
                         .centreContent=${this.centreContent}
+                        .beat=${this.beat}
                     ></helman-tree-item>
                 `)}
             </div>

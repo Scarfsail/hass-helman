@@ -50,11 +50,8 @@ export class SimpleCardHouse extends LitElement {
         .house-body.active {
             fill: var(--simple-card-surface-light);
             stroke: var(--simple-card-house-color);
-            animation: house-glow 2.4s ease-in-out infinite;
-        }
-        @keyframes house-glow {
-            0%, 100% { filter: drop-shadow(0 0 4px color-mix(in srgb, var(--window-color, var(--simple-card-house-color)) 27%, transparent)); }
-            50%       { filter: drop-shadow(0 0 14px color-mix(in srgb, var(--window-color, var(--simple-card-house-color)) 60%, transparent)) drop-shadow(0 0 24px color-mix(in srgb, var(--window-color, var(--simple-card-house-color)) 27%, transparent)); }
+            /* Still: the card's halo carries the beat. */
+            filter: drop-shadow(0 0 4px color-mix(in srgb, var(--window-color, var(--simple-card-house-color)) 27%, transparent));
         }
         .roof {
             fill: var(--simple-card-neutral-stroke-soft);
@@ -84,11 +81,7 @@ export class SimpleCardHouse extends LitElement {
         }
         .window.active {
             fill: var(--window-color, var(--simple-card-house-color));
-            animation: window-glow 2.4s ease-in-out infinite;
-        }
-        @keyframes window-glow {
-            0%, 100% { filter: drop-shadow(0 0 4px var(--window-color, var(--simple-card-house-color))); opacity: 0.85; }
-            50%       { filter: drop-shadow(0 0 10px var(--window-color, var(--simple-card-house-color))); opacity: 1; }
+            filter: drop-shadow(0 0 4px var(--window-color, var(--simple-card-house-color)));
         }
         .chimney {
             fill: var(--simple-card-neutral-stroke-soft);
