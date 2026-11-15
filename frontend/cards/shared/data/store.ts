@@ -276,8 +276,10 @@ class HelmanStoreImpl implements HelmanStore {
         }
         return this._dedupe(`solar_bias_explainability:${trainedAt}`, async () => {
             const payload = await callHelman(this._hass, "helman/solar_bias/explainability", {});
-            this._trainingExplainability = { trainedAt, payload };
-            return payload;
+            // The request names no model: it answers with whichever is current,
+            // so the reply's own `trainedAt` is the key, never the caller's.
+            if (payload) this._trainingExplainability = { trainedAt: payload.trainedAt, payload };
+            return payload && payload.trainedAt !== trainedAt ? null : payload;
         });
     }
 }

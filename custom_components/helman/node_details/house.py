@@ -349,13 +349,10 @@ async def _weekday_comparison(
     if elapsed_hours <= 0:
         return {**base, **compare_same_weekdays([], elapsed_hours=0), "unavailable": "no_elapsed_hour"}
     hourly = await _hourly_energy(hass, entity_id, windows[-1][0], windows[0][1], local_now)
+    utc_windows = [(dt_util.as_utc(start), dt_util.as_utc(end)) for start, end in windows]
     series = [
-        {
-            hour: kwh
-            for hour, kwh in hourly.items()
-            if dt_util.as_utc(start) <= hour < dt_util.as_utc(end)
-        }
-        for start, end in windows
+        {hour: kwh for hour, kwh in hourly.items() if start <= hour < end}
+        for start, end in utc_windows
     ]
     return {
         **base,

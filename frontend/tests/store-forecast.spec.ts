@@ -97,3 +97,16 @@ test("a caller after the change never receives the payload from before it", asyn
     expect(forecastReplies).toHaveLength(2);
     expect(await again).toBe(after);
 });
+
+test("an explainability reply is cached under its own trainedAt, not the requested one", async () => {
+    let calls = 0;
+    const reply = { trainedAt: "Y", aggregationMethod: "median", slots: {} };
+    const hass = {
+        callWS: () => { calls += 1; return Promise.resolve(reply); },
+        connection: { subscribeMessage: () => Promise.resolve(() => undefined) },
+    };
+    const store = getSharedHelmanStore(hass as any);
+    expect(await store.getTrainingExplainability("X")).toBeNull();
+    expect(await store.getTrainingExplainability("Y")).toBe(reply);
+    expect(calls).toBe(1);
+});
