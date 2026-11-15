@@ -5,7 +5,7 @@ import type { ConfigDefaults } from "../config/config-defaults";
 import type { EntityInspectionResult } from "../config/entity-group";
 import type { OptimizerSchemaDocument } from "../optimizer/optimizer-schema";
 import type { NavigationRange } from "../../helman-solar-inspector/inspector-navigation";
-import type { ApplianceComponent } from "../../helman-solar-inspector/solar-inspector-model";
+import type { ApplianceComponent, TrainingExplainability } from "../../helman-solar-inspector/solar-inspector-model";
 import type { TrainingStatus } from "../../../config-editor/training-status";
 
 /** One bucket of the span read: a local day, or a local month. */
@@ -180,6 +180,7 @@ export interface HelmanCommands {
     "helman/preview_energy_import": { req: { config: object }; res: Api.EnergyImportPreview };
     "helman/solar_bias/day_aggregates": { req: { start_date: string; end_date: string; bucket?: "day" | "month"; house_breakdown?: boolean; house_forecast?: boolean }; res: DayAggregatesPayload };
     "helman/solar_bias/inspector": { req: { date: string }; res: Api.InspectorPayload };
+    "helman/solar_bias/explainability": { req: Record<string, never>; res: TrainingExplainability | null };
     "helman/training/status": { req: Record<string, never>; res: TrainingStatus };
     "helman/training/train_now": { req: { job?: string }; res: { outcomes: Record<string, string>; status: TrainingStatus } };
 }

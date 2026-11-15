@@ -20,6 +20,7 @@ import {
   findTrainingSlot,
   resolveSelectedImpactSlot,
   type InspectorPoint,
+  type TrainingExplainability,
 } from "../solar-inspector-model.js";
 import { renderHouseBreakdown, type BreakdownGroups } from "./breakdown";
 import { renderContributionTable, type ContributionState } from "./contribution";
@@ -53,6 +54,8 @@ export function renderSelectedSlotDetails(
     hideMoneyStrip: boolean;
     groups: BreakdownGroups;
     contribution: ContributionState;
+    /** The trained model's explainability, or null where the day has no profile. */
+    trainingExplainability: TrainingExplainability | null;
   },
 ) {
   const t = ctx.t;
@@ -66,7 +69,7 @@ export function renderSelectedSlotDetails(
   const rawWh = sumWhOverSlots(payload.series.raw, slots);
   const correctedWh = sumWhOverSlots(payload.series.corrected, slots);
   const actualWh = sumWhOverSlots(payload.series.actual, slots);
-  const trainingSlot = findTrainingSlot(payload.trainingExplainability, selectedSlot);
+  const trainingSlot = findTrainingSlot(options.trainingExplainability, selectedSlot);
   const houseFcWh = sumWhOverSlots(payload.series.houseForecast, slots);
   const houseAcWh = sumWhOverSlots(payload.series.houseActual, slots);
   const houseBreakdown = aggregateBreakdownOverSlots(
@@ -183,7 +186,7 @@ export function renderSelectedSlotDetails(
       ? renderHouseBreakdown(ctx, options.groups, houseForecastBreakdown, slots, "forecast", options.native, slotMinutes)
       : ""}
     ${showDiagnostics
-      ? renderContributionTable(ctx, payload, selectedSlot, trainingSlot, options.contribution)
+      ? renderContributionTable(ctx, payload, selectedSlot, options.trainingExplainability, trainingSlot, options.contribution)
       : ""}
   `;
 }

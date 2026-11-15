@@ -112,7 +112,6 @@ def test_inspector_day_serializes_frontend_contract():
         "priceUnit": None,
         "liveDayRatio": None,
         "batterySocBounds": [],
-        "trainingExplainability": None,
     }
 
 
@@ -150,7 +149,7 @@ def test_inspector_day_serializes_battery_soc_bounds():
     ]
 
 
-def test_inspector_day_serializes_impact_and_training_explainability():
+def test_inspector_day_serializes_impact_without_training_explainability():
     payload = models.inspector_day_to_payload(
         models.SolarBiasInspectorDay(
             date="2026-04-25",
@@ -185,29 +184,6 @@ def test_inspector_day_serializes_impact_and_training_explainability():
             ),
             is_today=True,
             is_future=False,
-            training_explainability=models.SolarBiasTrainingExplainability(
-                trained_at="2026-04-25T03:00:04+02:00",
-                aggregation_method="ratio_of_sums",
-                slots={
-                    "12:00": models.SolarBiasSlotExplainability(
-                        factor=1.34,
-                        raw_ratio=1.34,
-                        clamped=False,
-                        forecast_sum_wh=1500.0,
-                        actual_sum_wh=2010.0,
-                        rows=[
-                            models.SolarBiasContributionRow(
-                                date="2026-04-21",
-                                forecast_wh=520.0,
-                                actual_wh=610.0,
-                                ratio=1.1730769231,
-                                status="included",
-                                reason=None,
-                            )
-                        ],
-                    )
-                },
-            ),
         )
     )
 
@@ -220,7 +196,41 @@ def test_inspector_day_serializes_impact_and_training_explainability():
             "factor": 1.34,
         }
     ]
-    assert payload["trainingExplainability"] == {
+    # The explainability is served by its own command, once per trained model;
+    # the day only says which model it was drawn with.
+    assert "trainingExplainability" not in payload
+    assert payload["trainedAt"] == "2026-04-25T03:00:04+02:00"
+    assert payload["availability"] == {"hasProfile": True}
+
+
+def test_training_explainability_serializes_slot_rows():
+    payload = models.training_explainability_to_payload(
+        models.SolarBiasTrainingExplainability(
+            trained_at="2026-04-25T03:00:04+02:00",
+            aggregation_method="ratio_of_sums",
+            slots={
+                "12:00": models.SolarBiasSlotExplainability(
+                    factor=1.34,
+                    raw_ratio=1.34,
+                    clamped=False,
+                    forecast_sum_wh=1500.0,
+                    actual_sum_wh=2010.0,
+                    rows=[
+                        models.SolarBiasContributionRow(
+                            date="2026-04-21",
+                            forecast_wh=520.0,
+                            actual_wh=610.0,
+                            ratio=1.1730769231,
+                            status="included",
+                            reason=None,
+                        )
+                    ],
+                )
+            },
+        )
+    )
+
+    assert payload == {
         "trainedAt": "2026-04-25T03:00:04+02:00",
         "aggregationMethod": "ratio_of_sums",
         "slots": {
@@ -493,7 +503,7 @@ def test_inspector_day_applies_current_profile_and_totals():
 
 
 def test_inspector_day_today_preserves_15min_granularity():
-    """Today/future inspector must surface raw/corrected/impact at 15-min, matching factors and trainingExplainability."""
+    """Today/future inspector must surface raw/corrected/impact at 15-min, matching factors."""
     raw_15min = [
         {"timestamp": "2026-04-25T16:00:00+02:00", "value": 600.0},
         {"timestamp": "2026-04-25T16:15:00+02:00", "value": 600.0},
@@ -1071,7 +1081,7 @@ def test_inspector_day_does_not_show_invalidated_series_for_today_or_future():
     assert future_payload["series"]["invalidated"] == []
 
 
-def test_inspector_day_returns_selected_day_impact_and_training_explainability():
+def test_inspector_day_returns_impact_and_leaves_explainability_to_its_own_read():
     points = [
         {"timestamp": "2026-04-25T08:00:00+02:00", "value": 100.0},
         {"timestamp": "2026-04-25T09:00:00+02:00", "value": 200.0},
@@ -1144,7 +1154,9 @@ def test_inspector_day_returns_selected_day_impact_and_training_explainability()
             "factor": 0.5,
         },
     ]
-    assert payload["trainingExplainability"]["slots"]["08:00"]["factor"] == 1.5
+    assert "trainingExplainability" not in payload
+    assert payload["trainedAt"] == "2026-04-25T03:00:00+02:00"
+    assert service.training_explainability_payload()["slots"]["08:00"]["factor"] == 1.5
 
 
 def test_service_saves_training_explainability_after_training():

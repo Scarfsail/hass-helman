@@ -150,7 +150,6 @@ export async function mountInspector(
                 hasProfile: true,
             },
             batterySocBounds: [],
-            trainingExplainability: null,
         });
 
         (window as any).__spanRequests = [];

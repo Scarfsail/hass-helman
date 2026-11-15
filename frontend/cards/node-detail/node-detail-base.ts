@@ -6,7 +6,6 @@ import type { LocalizeFunction } from "../localize/localize";
 import type { ForecastPayload, GetNodeDetailRequest, NodeDetailNode, ScheduleActionDTO, SchedulePayload } from "../helman-api";
 import { getScheduleActionLabel } from "../shared/schedule/model/schedule-labels";
 import { DataChangedController } from "../shared/data/data-changed";
-import { ForecastLoader } from "../shared/data/forecast-loader";
 import { startNowClock } from "../shared/now-clock";
 import { getSharedHelmanStore } from "../shared/data/store";
 import { SectionResource, TODAY_REFRESH_MS, hassLocale, timeZone, type SectionOptions, type SectionState } from "./section-resource";
@@ -77,9 +76,9 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview> extend
     private _overviewRequest = 0;
     /** The signature of the states the current overview was computed from. */
     private _overviewStates = "";
-    private readonly _forecastLoader = new ForecastLoader();
     private _forecastRequest = 0;
-    private _forecastRequested = false;
+    /** Set once the forecast is asked for: the store's invalidation re-reads it from then on. */
+    private _unsubscribeForecast?: () => void;
     /** When the clock next moves something shown; the now-clock re-renders then. */
     private _nextBoundary = Infinity;
     private _stopClock?: () => void;
@@ -109,6 +108,8 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview> extend
         // Whatever is still in flight answers nobody.
         this._overviewRequest += 1;
         this._forecastRequest += 1;
+        this._unsubscribeForecast?.();
+        this._unsubscribeForecast = undefined;
         for (const section of this._sections) section.cancel();
         this._scheduleController?.stop();
         this._stop();
@@ -146,12 +147,7 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview> extend
      * follow the overview, which says which of them are offered.
      */
     protected async _onDataChanged(): Promise<void> {
-        const overview = this._loadOverview(true);
-        if (this._forecastRequested) {
-            this._forecastLoader.invalidate();
-            void this._loadForecast();
-        }
-        await overview;
+        await this._loadOverview(true);
         if (!this._started) return;
         for (const section of this._sections) section.reload();
     }
@@ -251,10 +247,11 @@ export abstract class NodeDetailContentBase<O extends NodeDetailOverview> extend
 
     /** The forecast, kept on a failed refresh; reloaded on shared changes once asked for. */
     protected async _loadForecast(): Promise<void> {
-        this._forecastRequested = true;
+        const store = getSharedHelmanStore(this.hass);
+        this._unsubscribeForecast ??= store.subscribeForecastInvalidation(() => void this._loadForecast());
         const request = ++this._forecastRequest;
         if (this._forecast === null) this._forecastFailed = false;
-        const forecast = await this._forecastLoader.refresh(this.hass);
+        const forecast = await store.getForecast();
         if (!this._started || request !== this._forecastRequest) return;
         if (forecast) {
             this._forecast = forecast;

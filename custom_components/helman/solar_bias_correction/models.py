@@ -446,7 +446,6 @@ class SolarBiasInspectorDay:
     availability: SolarBiasInspectorAvailability
     is_today: bool
     is_future: bool
-    training_explainability: SolarBiasTrainingExplainability | None = None
     battery_soc_bounds: list[BatterySocBoundsPoint] = field(default_factory=list)
     #: How wide one point of every measured series is, in minutes: 15 on a day
     #: still held in raw recorder states, 60 on one read back from hourly
@@ -566,9 +565,6 @@ def inspector_day_to_payload(day: SolarBiasInspectorDay) -> dict[str, Any]:
             {"slot": p.slot, "minPct": p.min_pct, "maxPct": p.max_pct}
             for p in day.battery_soc_bounds
         ],
-        "trainingExplainability": training_explainability_to_payload(
-            day.training_explainability
-        ),
     }
 
 

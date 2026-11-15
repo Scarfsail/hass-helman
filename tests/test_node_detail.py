@@ -1746,25 +1746,44 @@ def house_detail(
     section=None,
     report=None,
     day_stats_result=None,
-    windows_result=None,
+    meter=None,
     now=NOW,
     coordinator=None,
 ):
-    calls = {"day_stats": [], "windows": [], "reports": []}
+    """The house detail over a fake recorder.
+
+    ``meter`` maps a UTC hour start to the house energy meter's hourly
+    statistics ``state`` at that hour's end; the real span reader serves it.
+    """
+    from custom_components.helman import recorder_slot_energy
+    from custom_components.helman import recorder_statistics_span as span_module
+
+    calls = {"day_stats": [], "statistics": [], "raw_states": [], "reports": []}
 
     async def fake_day_stats(hass, entity_ids, *, start, end, now):
         calls["day_stats"].append((list(entity_ids), start, end))
         return day_stats_result or {}
 
-    async def fake_windows(hass, entity_id, windows):
-        calls["windows"].append((entity_id, list(windows), 60))
-        return windows_result or [{} for _ in windows]
+    def statistics_during_period(hass, start, end, ids, period, units, types):
+        if period != "hour" or meter is None:
+            return {}
+        rows, cursor = [], start
+        while cursor < end:
+            rows.append({"start": cursor.timestamp(), "end": cursor.timestamp() + 3600.0, "state": meter(cursor)})
+            cursor += timedelta(hours=1)
+        return {HOUSE_ENERGY: rows} if HOUSE_ENERGY in ids else {}
+
+    def state_changes_during_period(*args, **kwargs):
+        calls["raw_states"].append(args)
+        return {}
 
     async def device_report(name, query):
         calls["reports"].append((name, query))
         return report
 
     hass = fake_hass({})
+    hass.data = {}
+    hass.async_add_executor_job = _executor
     hass.config_entries = loaded_config_entries(
         coordinator or NS(async_device_report=device_report)
     )
@@ -1776,10 +1795,12 @@ def house_detail(
             else tele,
         ),
         patch("custom_components.helman.node_details.house.async_day_stats", side_effect=fake_day_stats),
-        patch(
-            "custom_components.helman.node_details.house._hourly_energy",
-            side_effect=fake_windows,
-        ),
+        patch.object(span_module, "statistics_during_period", statistics_during_period),
+        patch.object(span_module, "get_instance", lambda hass: NS(async_add_executor_job=_executor)),
+        patch.object(
+            span_module, "query_hourly_statistics", wraps=span_module.query_hourly_statistics
+        ) as reader,
+        patch.object(recorder_slot_energy, "state_changes_during_period", state_changes_during_period),
     ):
         payload = asyncio.run(
             async_get_node_detail(
@@ -1791,13 +1812,14 @@ def house_detail(
                 now=now,
             )
         )
+    calls["statistics"] = [(call.args[1], call.kwargs) for call in reader.call_args_list]
     return payload, calls
 
 
 def test_the_house_overview_carries_its_mappings_and_reads_no_history():
     payload, calls = house_detail()
 
-    assert calls == {"day_stats": [], "windows": [], "reports": []}
+    assert calls == {"day_stats": [], "statistics": [], "raw_states": [], "reports": []}
     assert payload["node"] == "house"
     assert payload["sections"] == ["today", "ranking", "pattern"]
     entities = payload["entities"]
@@ -1946,7 +1968,7 @@ def test_the_today_section_reuses_todays_ranking_report():
     }
     payload, calls = house_detail(section="today", report=report)
 
-    assert calls["day_stats"] == [] and calls["windows"] == []
+    assert calls["day_stats"] == [] and calls["statistics"] == []
     (name, query), = calls["reports"]
     assert name == "ranking"
     assert query.start_date == query.end_date == NOW.date()
@@ -1969,7 +1991,7 @@ def test_house_ranking_returns_the_same_report_and_unavailable_reason():
     payload, calls = house_detail(section="ranking", report=report)
     assert payload["report"] == report
     assert payload["unavailable"] is None
-    assert calls["day_stats"] == calls["windows"] == []
+    assert calls["day_stats"] == calls["statistics"] == []
     (name, query), = calls["reports"]
     assert name == "ranking"
     assert query.start_date == query.end_date == NOW.date()
@@ -2047,20 +2069,46 @@ def test_without_an_earlier_day_or_any_usage_nothing_is_divided():
     assert result["used"] == 0 and result["averageKwh"] is None and result["ratio"] is None
 
 
+def half_a_kwh_an_hour(hour_start):
+    """A meter reading that grows by 0.5 kWh every hour."""
+    return hour_start.timestamp() / 3600 * 0.5
+
+
 def test_the_pattern_section_reads_the_same_completed_hours_of_earlier_weekdays():
     now = datetime(2026, 10, 10, 14, 25, tzinfo=PRAGUE)
-    payload, calls = house_detail(section="pattern", now=now)
+    payload, calls = house_detail(section="pattern", now=now, meter=half_a_kwh_an_hour)
 
-    (entity_id, windows, interval), = calls["windows"]
-    assert entity_id == HOUSE_ENERGY and interval == 60
-    assert len(windows) == 5
-    for weeks, (start, end) in enumerate(windows):
-        day = now.date() - timedelta(days=7 * weeks)
-        assert (start.date(), start.hour, start.minute) == (day, 0, 0)
-        # Completed hours only: 00:00 to 14:00, the hour in progress left out.
-        assert (end.date(), end.hour, end.minute) == (day, 14, 0)
-    assert payload["comparison"]["elapsedHours"] == 14
-    assert payload["comparison"]["unavailable"] is None
+    (ids, window), = calls["statistics"]
+    assert ids == [HOUSE_ENERGY]
+    # From the oldest compared day's start to today's completed hours.
+    assert window["local_start"] == datetime(2026, 9, 12, 0, 0, tzinfo=PRAGUE)
+    assert window["local_end"] == datetime(2026, 10, 10, 14, 0, tzinfo=PRAGUE)
+    assert window["tail_start"] == datetime(2026, 10, 10, 11, 0, tzinfo=PRAGUE)
+    comparison = payload["comparison"]
+    assert comparison["elapsedHours"] == comparison["comparedHours"] == 14
+    assert comparison["unavailable"] is None
+    assert comparison["todayKwh"] == pytest.approx(7.0)
+    assert [day["kwh"] for day in comparison["days"]] == [pytest.approx(7.0)] * 4
+    assert comparison["ratio"] == pytest.approx(1.0)
+
+
+def test_the_pattern_section_asks_the_statistics_reader_once_and_reads_no_raw_states():
+    payload, calls = house_detail(section="pattern", meter=half_a_kwh_an_hour)
+
+    assert len(calls["statistics"]) == 1
+    assert calls["raw_states"] == []
+    assert payload["comparison"]["used"] == 4
+
+
+def test_a_day_older_than_the_raw_states_still_counts():
+    # The raw states are purged after ten days; four weeks back only the
+    # hourly statistics still know the day.
+    payload, calls = house_detail(section="pattern", meter=half_a_kwh_an_hour)
+
+    oldest = payload["comparison"]["days"][-1]
+    assert oldest["date"] == (NOW.date() - timedelta(days=28)).isoformat()
+    assert oldest["kwh"] == pytest.approx(7.0)
+    assert payload["comparison"]["used"] == 4
 
 
 @pytest.mark.parametrize(
@@ -2073,7 +2121,7 @@ def test_the_pattern_section_reads_the_same_completed_hours_of_earlier_weekdays(
 def test_a_comparison_without_a_meter_or_a_completed_hour_says_why(cfg, now, reason):
     payload, calls = house_detail(cfg=cfg, section="pattern", now=now)
 
-    assert calls["windows"] == []
+    assert calls["statistics"] == []
     assert payload["comparison"]["unavailable"] == reason
     assert payload["comparison"]["todayKwh"] is None
 

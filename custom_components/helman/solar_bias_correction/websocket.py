@@ -47,6 +47,29 @@ async def ws_get_solar_bias_inspector(
 
 @websocket_api.websocket_command(
     {
+        vol.Required("type"): "helman/solar_bias/explainability",
+    }
+)
+@websocket_api.async_response
+async def ws_get_solar_bias_explainability(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict,
+) -> None:
+    """The trained model's explainability, or ``null`` when nothing is trained.
+
+    Date-independent, so it is not part of ``helman/solar_bias/inspector``'s
+    day; the card reads it once per ``trainedAt``.
+    """
+    service = _get_solar_inspector(hass, connection, msg)
+    if service is None:
+        return
+
+    connection.send_result(msg["id"], service.training_explainability_payload())
+
+
+@websocket_api.websocket_command(
+    {
         vol.Required("type"): "helman/solar_bias/day_aggregates",
         vol.Required("start_date"): str,
         vol.Required("end_date"): str,

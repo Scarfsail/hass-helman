@@ -208,7 +208,6 @@ async function mountInspector(
                 hasProfile: true,
             },
             batterySocBounds: [],
-            trainingExplainability: null,
         });
 
         // A state per configured switch so the shared badge has something to show.
