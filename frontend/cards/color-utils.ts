@@ -120,6 +120,11 @@ export function nodeAccentColor(sourceType: string | null | undefined): string {
     return withAlpha(canonicalSourceColor(sourceType), '60');
 }
 
+/** The opaque palette colour a translucent `nodeAccentColor` (or any `withAlpha` hex) was made from. */
+export function opaqueColor(hex: string): string {
+    return hex.length === 9 ? hex.slice(0, 7) : hex;
+}
+
 /** Compute the color of the dominant (highest-power) source from the latest history bucket. No blending. */
 export function computeDominantSourceColor(node: { sourcePowerHistory?: { [sourceId: string]: { power: number; color: string } }[] }): string | undefined {
     const history = node.sourcePowerHistory;

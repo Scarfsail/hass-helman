@@ -1,4 +1,4 @@
-import { LitElement, css, html, svg, unsafeCSS } from "lit-element";
+import { LitElement, PropertyValues, css, html, nothing, svg } from "lit-element";
 import { customElement } from "lit/decorators.js";
 import type { HomeAssistant, LovelaceCard } from "../../types/ha";
 import { HelmanSimpleCardConfig } from "./HelmanSimpleCardConfig";
@@ -13,9 +13,54 @@ import "./simple-card-battery";
 import "./simple-card-grid";
 import "./simple-card-house";
 import { helmanColorVars } from "../color-vars";
-import { FLOW_BAND_LENGTH, FLOW_BAND_PEAK_OPACITY, FLOW_RIBBON_OPACITY, FLOW_SWEEP_DURATION } from "../shared/flow-style";
-import { dominantFlowColor, getFlowColor } from "./flow-colors";
+import { FLOW_SURGE_LENGTH_CSS, alignToBeat, flowBeam, flowBeatStyles, flowGlow, flowHalo, flowHot, flowLandsAt, flowRatio, flowSurgeLength, flowSurgeStops, flowSurges, type FlowBeam } from "../shared/flow-style";
+import { dominantFlowColor, getFlowColor, type FlowSource } from "./flow-colors";
 import { IDLE_W, liveFlows } from "../node-detail/live-flows";
+
+/** Every flow on this card leaves its source on the beat's origin. */
+const LEAVES_AT = 0;
+
+/** One flow the card draws: its power against its source's maximum. */
+interface Edge {
+    power: number;
+    r: number;
+    color: string;
+    /** The vertical connectors are short edges; the horizontals and diagonals are long. */
+    short: boolean;
+}
+
+/** One edge as drawn: whether it carries power, its beam and whether it is short. */
+interface DrawnEdge {
+    active: boolean;
+    beam: FlowBeam;
+    short: boolean;
+}
+
+/** The diagonal overlay's viewBox: the energy grid at its default size, px. */
+const OVERLAY_W = 200;
+const OVERLAY_H = 168;
+
+/** A node's halo, while it has a flow: its ratio, its colour and the beat it peaks on. */
+interface Halo {
+    r: number;
+    color: string;
+    phase: number;
+}
+
+/**
+ * A node's halo from its flows: it emits in its own colour as its surges
+ * leave, or receives in `sourceColor` (its strongest flow's colour without
+ * one) as its strongest flow's surges land; no flow, no halo.
+ */
+function nodeHalo(r: number, ownColor: string, outgoing: Edge[], incoming: Edge[], sourceColor?: string): Halo | null {
+    if (outgoing.some((edge) => edge.power > 0)) {
+        return { r, color: ownColor, phase: LEAVES_AT };
+    }
+    const strongest = incoming.filter((edge) => edge.power > 0).sort((a, b) => b.power - a.power)[0];
+    return strongest
+        ? { r, color: sourceColor ?? strongest.color, phase: flowLandsAt(LEAVES_AT, strongest.r, strongest.short) }
+        : null;
+}
 
 // ──────────────────────────────────── Card ────────────────────────────────────
 
@@ -47,7 +92,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
     }
 
     // 2. Static styles
-    static styles = [helmanColorVars, css`
+    static styles = [helmanColorVars, flowBeatStyles, css`
         :host { display: block; }
         ha-card { overflow: hidden; }
         ha-card.transparent {
@@ -79,6 +124,23 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             justify-content: center;
             padding: 2px 0;
             cursor: pointer;
+            position: relative;
+            isolation: isolate;
+        }
+        /* The halo, behind the node and centred on its 50 px illustration. */
+        .halo-level {
+            position: absolute;
+            top: 2px;
+            left: 50%;
+            width: 50px;
+            height: 50px;
+            transform: translateX(-50%);
+            z-index: -1;
+            pointer-events: none;
+        }
+        .halo {
+            position: absolute;
+            border-radius: 50%;
         }
         .connector-h,
         .connector-v {
@@ -97,22 +159,9 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
             pointer-events: none;
             overflow: visible;
         }
-        .flow-ribbon, .flow-band {
+        .flow-bloom, .flow-beam, .flow-core {
             fill: none;
             stroke-linecap: round;
-        }
-        .flow-ribbon { opacity: ${unsafeCSS(FLOW_RIBBON_OPACITY)}; }
-        .flow-band {
-            pointer-events: none;
-            transform-box: view-box;
-            animation: sweep-band ${unsafeCSS(FLOW_SWEEP_DURATION)} linear infinite;
-        }
-        @keyframes sweep-band {
-            from { transform: translate(0, 0); }
-            to { transform: translate(var(--travel-x), var(--travel-y)); }
-        }
-        @media (prefers-reduced-motion: reduce) {
-            .flow-band { display: none; }
         }
 
         /* The inverter sits where the flows cross: drawn over them, kept small. */
@@ -156,6 +205,7 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
 
     // Setters & Getters delegating to host
     public set hass(hass: HomeAssistant) {
+        this.toggleAttribute("light-theme", hass.themes?.darkMode === false);
         this._host.setHass(hass);
     }
 
@@ -167,6 +217,11 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
 
     setConfig(config: HelmanSimpleCardConfig) {
         this._config = { ...config };
+    }
+
+    protected updated(changed: PropertyValues): void {
+        super.updated(changed);
+        alignToBeat(this.renderRoot);
     }
 
     // 10. Render method
@@ -184,22 +239,20 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         const flows = liveFlows({ ...energy, gridPower: energy.gridPowerSigned ?? 0 });
         const effectiveGridPower = flows.gridPower;
 
-        // Stroke width scales linearly from 1.5 to 12 px based on the power ratio; minimum ensures visibility.
         const edgeList = [
-            { key: "solarToGrid", max: energy.solarMaxPower },
-            { key: "solarToHouse", max: energy.solarMaxPower },
-            { key: "solarToBattery", max: energy.solarMaxPower },
-            { key: "gridToBattery", max: energy.gridMaxPower },
-            { key: "gridToHouse", max: energy.gridMaxPower },
-            { key: "batteryToHouse", max: energy.batteryMaxPower },
-            { key: "batteryToGrid", max: energy.batteryMaxPower },
+            { key: "solarToGrid", from: "solar", max: energy.solarMaxPower, short: false },
+            { key: "solarToHouse", from: "solar", max: energy.solarMaxPower, short: true },
+            { key: "solarToBattery", from: "solar", max: energy.solarMaxPower, short: false },
+            { key: "gridToBattery", from: "grid", max: energy.gridMaxPower, short: true },
+            { key: "gridToHouse", from: "grid", max: energy.gridMaxPower, short: false },
+            { key: "batteryToHouse", from: "battery", max: energy.batteryMaxPower, short: false },
+            { key: "batteryToGrid", from: "battery", max: energy.batteryMaxPower, short: true },
         ] as const;
-        const edge = (key: typeof edgeList[number]["key"]) => {
-            const power = flows[key];
-            const max = edgeList.find((entry) => entry.key === key)!.max;
-            // An absent node has no maximum: its edge keeps the minimum width.
-            return { active: power > 0, width: max === null ? 1.5 : Math.max(1.5, Math.min(power / max, 1) * 12) };
-        };
+        // An absent node has no maximum: its edge is drawn at the lowest ratio.
+        const edges = Object.fromEntries(edgeList.map(({ key, from, max, short }) => [key, {
+            power: flows[key], r: flowRatio(flows[key], max), color: getFlowColor(from as FlowSource), short,
+        }])) as Record<typeof edgeList[number]["key"], Edge>;
+        const edge = (key: keyof typeof edges): DrawnEdge => ({ active: edges[key].power > 0, beam: flowBeam(edges[key].r, edges[key].color), short: edges[key].short });
 
         const solarFlowColor   = getFlowColor("solar");
         const gridFlowColor    = getFlowColor("grid");
@@ -216,6 +269,19 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
 
         const gridStyle = this._buildGridStyle();
 
+        // Each node's ratio from its own total power; the house's against the largest maximum.
+        const houseMax = Math.max(0, ...[energy.solarMaxPower, energy.gridMaxPower, energy.batteryMaxPower].filter((max): max is number => max !== null));
+        const halos = {
+            solar: nodeHalo(flowRatio(solarPower, energy.solarMaxPower), solarFlowColor,
+                [edges.solarToGrid, edges.solarToHouse, edges.solarToBattery], []),
+            grid: nodeHalo(flowRatio(Math.abs(effectiveGridPower), energy.gridMaxPower), gridFlowColor,
+                [edges.gridToBattery, edges.gridToHouse], [edges.solarToGrid, edges.batteryToGrid], gridSourceColor),
+            house: nodeHalo(flowRatio(housePower, houseMax), "var(--helman-house)",
+                [], [edges.solarToHouse, edges.gridToHouse, edges.batteryToHouse], houseSourceColor),
+            battery: nodeHalo(flowRatio(Math.abs(batteryPower), energy.batteryMaxPower), batteryFlowColor,
+                [edges.batteryToHouse, edges.batteryToGrid], [edges.solarToBattery, edges.gridToBattery], battSourceColor),
+        };
+
         return html`
             <ha-card class=${this._config?.transparent_background ? "transparent" : ""}>
                 <div class="card-content">
@@ -223,18 +289,20 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
 
                         <!-- ── Row 1: Solar  ─── connector ─── Grid ── -->
                         <div class="node-cell" @click=${() => this._openNode("solar")}>
+                            ${this._halo(halos.solar)}
                             <simple-card-solar .power=${solarPower}></simple-card-solar>
                         </div>
                         <div class="connector-h">
-                            ${edge("solarToGrid").active ? this._flowH("solar-grid", solarFlowColor, false, edge("solarToGrid").width, 22.5, 33) : ""}
+                            ${edge("solarToGrid").active ? this._flowH("solar-grid", solarFlowColor, false, edge("solarToGrid"), 22.5, 33) : ""}
                         </div>
                         <div class="node-cell" @click=${() => this._openNode("grid")}>
+                            ${this._halo(halos.grid)}
                             <simple-card-grid .power=${effectiveGridPower} .sourceColor=${gridSourceColor}></simple-card-grid>
                         </div>
 
                         <!-- ── Row 2: vertical connectors ── -->
                         <div class="connector-v">
-                            ${edge("solarToHouse").active ? this._flowV("solar-house", solarFlowColor, false, edge("solarToHouse").width) : ""}
+                            ${edge("solarToHouse").active ? this._flowV("solar-house", solarFlowColor, false, edge("solarToHouse")) : ""}
                         </div>
                         <div class="center-cell">
                             <helman-inverter-cell
@@ -245,16 +313,18 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
                             ></helman-inverter-cell>
                         </div>
                         <div class="connector-v">
-                            ${edge("gridToBattery").active ? this._flowV("grid-battery", gridFlowColor, false, edge("gridToBattery").width) : ""}
-                            ${edge("batteryToGrid").active ? this._flowV("battery-grid", batteryFlowColor, true, edge("batteryToGrid").width) : ""}
+                            ${edge("gridToBattery").active ? this._flowV("grid-battery", gridFlowColor, false, edge("gridToBattery")) : ""}
+                            ${edge("batteryToGrid").active ? this._flowV("battery-grid", batteryFlowColor, true, edge("batteryToGrid")) : ""}
                         </div>
 
                         <!-- ── Row 3: House ─── connector ─── Battery ── -->
                         <div class="node-cell" @click=${() => this._openNode("house")}>
+                            ${this._halo(halos.house)}
                             <simple-card-house .power=${housePower} .sourceColor=${houseSourceColor}></simple-card-house>
                         </div>
                         <div class="connector-h"></div>
                         <div class="node-cell" @click=${() => this._openNode("battery")}>
+                            ${this._halo(halos.battery)}
                             <simple-card-battery
                                 .power=${batteryPower}
                                 .soc=${batterySoc}
@@ -303,23 +373,35 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         return parts.join("; ");
     }
 
-    private _renderFlowOverlay(solarToBatt: { active: boolean; width: number }, gridToHouse: { active: boolean; width: number }, battToHouse: { active: boolean; width: number }) {
+    /** A node's halo: the level and size on a static wrapper, only the opacity on the beat. */
+    private _halo(halo: Halo | null) {
+        if (!halo) return nothing;
+        const glow = flowGlow(halo.r, halo.phase);
+        const { extent, background } = flowHalo(halo.color, glow.size);
+        return html`
+            <div class="halo-level" style="opacity: ${glow.level}">
+                <div class="halo" data-beat="glow" data-tier=${glow.tier}
+                    style="inset: -${extent}px; background: ${background}; --beat-delay: ${glow.delay}"></div>
+            </div>`;
+    }
+
+    private _renderFlowOverlay(solarToBatt: DrawnEdge, gridToHouse: DrawnEdge, battToHouse: DrawnEdge) {
         if (!solarToBatt.active && !gridToHouse.active && !battToHouse.active) return "";
         // SVG overlays the full energy-grid (viewBox 0 0 200 168).
         // Column centers: House=45, Grid/Battery=155. Row centers: top≈35, bottom≈133.
         // vector-effect="non-scaling-stroke" keeps stroke-width in screen pixels,
         // matching the same scale used by the straight connector flows.
         return html`
-            <svg class="diagonal-overlay" viewBox="0 0 200 168"
+            <svg class="diagonal-overlay" viewBox="0 0 ${OVERLAY_W} ${OVERLAY_H}"
                  preserveAspectRatio="none"
                  xmlns="http://www.w3.org/2000/svg">
-                ${solarToBatt.active ? this._flowLine("solar-battery", getFlowColor("solar"), solarToBatt.width, "62", "48", "138", "120", true) : ""}
-                ${gridToHouse.active ? this._flowLine("grid-house", getFlowColor("grid"), gridToHouse.width, "138", "48", "62", "120", true) : ""}
-                ${battToHouse.active ? this._flowLine("battery-house", getFlowColor("battery"), battToHouse.width, "130", "133", "70", "133", true) : ""}
+                ${solarToBatt.active ? this._flowLine("solar-battery", getFlowColor("solar"), solarToBatt, "62", "48", "138", "120", true) : ""}
+                ${gridToHouse.active ? this._flowLine("grid-house", getFlowColor("grid"), gridToHouse, "138", "48", "62", "120", true) : ""}
+                ${battToHouse.active ? this._flowLine("battery-house", getFlowColor("battery"), battToHouse, "130", "133", "70", "133", true) : ""}
             </svg>`;
     }
 
-    private _flowH(key: string, color: string, reverse: boolean, strokeWidth: number, leftOverhang = 0, rightOverhang = 0) {
+    private _flowH(key: string, color: string, reverse: boolean, flow: DrawnEdge, leftOverhang = 0, rightOverhang = 0) {
         // connectorW matches the 20px CSS grid connector column so absolute SVG
         // coordinates (no viewBox) map 1:1 to pixels, letting us reach actual
         // picture borders on both sides via overflow:visible.
@@ -328,52 +410,86 @@ export class HelmanSimpleCard extends LitElement implements LovelaceCard {
         const x2 = reverse ? -leftOverhang : connectorW + rightOverhang;
         return html`
             <svg width="100%" height="100%" style="display:block; overflow:visible">
-                ${this._flowLine(key, color, strokeWidth, String(x1), "50%", String(x2), "50%")}
+                ${this._flowLine(key, color, flow, String(x1), "50%", String(x2), "50%")}
             </svg>`;
     }
 
-    private _flowV(key: string, color: string, reverse: boolean, strokeWidth: number) {
+    private _flowV(key: string, color: string, reverse: boolean, flow: DrawnEdge) {
         const y1 = reverse ? "100%" : "0%";
         const y2 = reverse ? "0%" : "100%";
         return html`
             <svg width="100%" height="100%" style="display:block; overflow:visible">
-                ${this._flowLine(key, color, strokeWidth, "50%", y1, "50%", y2)}
+                ${this._flowLine(key, color, flow, "50%", y1, "50%", y2)}
             </svg>`;
     }
 
-    /** A solid ribbon and a 40%-length white band sweeping from its first endpoint to its second. */
-    private _flowLine(key: string, color: string, width: number, x1: string, y1: string, x2: string, y2: string, nonScaling = false) {
+    /**
+     * A beam from its first endpoint to its second: its bloom, the body in
+     * the flow's colour, a hot core along it, and the tier's surges, clipped
+     * to the beam's ends by a mask of its own shape. The bloom is a blurred
+     * copy of the body under it (a shadow's blur radius is twice the blur's
+     * deviation) rather than a shadow of the body, so the body's opacity does
+     * not dim it.
+     *
+     * Only the surges animate, and only their transform. vector-effect is
+     * kept off them: a non-scaling stroke takes the animation off the
+     * compositor, to a style recalc and a paint every frame. On the overlay,
+     * whose viewBox stretches with the card's configured size, a surge is
+     * drawn in px instead: unscaled by the overlay's scale and turned to the
+     * beam's on-screen angle.
+     */
+    private _flowLine(key: string, color: string, { beam, short }: DrawnEdge, x1: string, y1: string, x2: string, y2: string, nonScaling = false) {
         const gradientId = `${this._flowId}-${key}-gradient`;
         const maskId = `${this._flowId}-${key}-mask`;
-        const along = (start: string, end: string, fraction: number) =>
-            `${parseFloat(start) + (parseFloat(end) - parseFloat(start)) * fraction}${start.endsWith("%") ? "%" : ""}`;
-        const bandX = along(x1, x2, -FLOW_BAND_LENGTH);
-        const bandY = along(y1, y2, -FLOW_BAND_LENGTH);
+        const vectorEffect = nonScaling ? "non-scaling-stroke" : "none";
+        const { reach, surges } = flowSurges(beam.tier, short, LEAVES_AT);
         const travel = (start: string, end: string) =>
-            `${(parseFloat(end) - parseFloat(start)) * (1 + FLOW_BAND_LENGTH)}${start.endsWith("%") ? "%" : "px"}`;
+            `${(parseFloat(end) - parseFloat(start)) * reach}${start.endsWith("%") ? "%" : "px"}`;
+        // A vertical connector's length is its cell's height, a percentage of
+        // it; every other beam is drawn in units its length can be taken in.
+        const vertical = x1 === x2;
+        const dx = parseFloat(x2) - parseFloat(x1);
+        const dy = vertical ? 0 : parseFloat(y2) - parseFloat(y1);
+        const halfThickness = beam.surgeThickness / 2;
+        const [scaleX, scaleY] = nonScaling
+            ? [(this._config?.width ?? OVERLAY_W) / OVERLAY_W, (this._config?.height ?? OVERLAY_H) / OVERLAY_H]
+            : [1, 1];
+        const halfLength = flowSurgeLength(Math.hypot(dx * scaleX, dy * scaleY)) / 2;
+        const blob = vertical
+            ? svg`<ellipse cx=${x1} cy=${y1} rx=${halfThickness} style="ry: calc(${FLOW_SURGE_LENGTH_CSS} / 2)" fill="url(#${gradientId})"/>`
+            : nonScaling
+                ? svg`<ellipse rx=${halfLength} ry=${halfThickness} fill="url(#${gradientId})"
+                        transform="translate(${x1} ${y1}) scale(${1 / scaleX} ${1 / scaleY}) rotate(${Math.atan2(dy * scaleY, dx * scaleX) * 180 / Math.PI})"/>`
+                : svg`<ellipse cx=${x1} cy=${y1} rx=${halfLength} ry=${halfThickness} fill="url(#${gradientId})"/>`;
         return svg`
             <defs>
-                <linearGradient id=${gradientId} gradientUnits="userSpaceOnUse"
-                        x1=${bandX} y1=${bandY} x2=${x1} y2=${y1}>
-                    <stop offset="0" stop-color="white" stop-opacity="0"/>
-                    <stop offset="0.5" stop-color="white" stop-opacity=${FLOW_BAND_PEAK_OPACITY}/>
-                    <stop offset="1" stop-color="white" stop-opacity="0"/>
-                </linearGradient>
+                <radialGradient id=${gradientId}>
+                    ${flowSurgeStops(color).map(([offset, stop]) => svg`<stop offset=${offset} style="stop-color: ${offset === 1 ? color : stop}; stop-opacity: ${offset === 1 ? 0 : 1}"/>`)}
+                </radialGradient>
                 <mask id=${maskId} maskUnits="userSpaceOnUse" x="-1000" y="-1000" width="2000" height="2000">
                     <line x1=${x1} y1=${y1} x2=${x2} y2=${y2}
-                          stroke="white" stroke-width=${width} stroke-linecap="round"
-                          vector-effect=${nonScaling ? "non-scaling-stroke" : "none"}/>
+                          stroke="white" stroke-width=${beam.surgeThickness} stroke-linecap="round"
+                          vector-effect=${vectorEffect}/>
                 </mask>
             </defs>
-            <line class="flow-ribbon" data-flow=${key} x1=${x1} y1=${y1} x2=${x2} y2=${y2}
-                  stroke=${color} stroke-width=${width}
-                  vector-effect=${nonScaling ? "non-scaling-stroke" : "none"}
-                  style="filter: drop-shadow(0 0 3px color-mix(in srgb, ${color} 67%, transparent))"/>
-            <g mask="url(#${maskId})">
-                <line class="flow-band" x1=${bandX} y1=${bandY} x2=${x1} y2=${y1}
-                      stroke="url(#${gradientId})" stroke-width=${width}
-                      vector-effect=${nonScaling ? "non-scaling-stroke" : "none"}
-                      style="--travel-x: ${travel(x1, x2)}; --travel-y: ${travel(y1, y2)}"/>
+            <line class="flow-bloom" x1=${x1} y1=${y1} x2=${x2} y2=${y2}
+                  stroke-width=${beam.width}
+                  vector-effect=${vectorEffect}
+                  style="stroke: ${beam.bloomColor}; filter: blur(${beam.bloomBlur / 2}px)"/>
+            <line class="flow-beam" data-flow=${key} x1=${x1} y1=${y1} x2=${x2} y2=${y2}
+                  stroke=${color} stroke-width=${beam.width}
+                  vector-effect=${vectorEffect}
+                  style="opacity: ${beam.bodyOpacity}"/>
+            <line class="flow-core" x1=${x1} y1=${y1} x2=${x2} y2=${y2}
+                  stroke-width=${beam.coreWidth}
+                  vector-effect=${vectorEffect}
+                  style="stroke: ${flowHot(color)}; opacity: ${beam.bodyOpacity}"/>
+            <g mask="url(#${maskId})" opacity=${beam.surgeOpacity}>
+                ${surges.map((surge) => svg`
+                    <g class="flow-surge" data-beat="surge" data-tier=${beam.tier} ?data-short=${short}
+                       style="--surge-x: ${travel(x1, x2)}; --surge-y: ${travel(y1, y2)}; --surge-rest: ${surge.rest}; --beat-delay: ${surge.delay}">
+                        ${blob}
+                    </g>`)}
             </g>
         `;
     }

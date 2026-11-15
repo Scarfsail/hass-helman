@@ -16,7 +16,6 @@ type BatteryView = {
     fillClass: string;
     powerClass: string;
     pulseColor: string | null;
-    pulseColorSoft: string | null;
     fillY: number;
     fillHeight: number;
     innerX: number;
@@ -60,8 +59,9 @@ export class SimpleCardBattery extends LitElement {
             stroke-width: 2.5;
             transition: stroke 0.6s;
         }
+        /* Still while charging or discharging: the card's halo carries the beat. */
         .battery-body.active {
-            animation: cover-pulse 1.8s ease-in-out infinite;
+            filter: drop-shadow(0 0 3px var(--pulse-color, var(--simple-card-source-battery)));
         }
         .battery-body.low {
             stroke: var(--simple-card-danger-color);
@@ -70,10 +70,6 @@ export class SimpleCardBattery extends LitElement {
         .battery-body.low-orange {
             stroke: var(--simple-card-warning-color);
             animation: cover-orange-pulse 1.2s ease-in-out infinite;
-        }
-        @keyframes cover-pulse {
-            0%, 100% { filter: drop-shadow(0 0 3px var(--pulse-color, var(--simple-card-source-battery))); }
-            50%       { filter: drop-shadow(0 0 10px var(--pulse-color, var(--simple-card-source-battery))) drop-shadow(0 0 18px var(--pulse-color-soft, color-mix(in srgb, var(--simple-card-source-battery) 53%, transparent))); }
         }
         @keyframes cover-low-pulse {
             0%, 100% { filter: drop-shadow(0 0 3px var(--simple-card-danger-color)); }
@@ -87,9 +83,6 @@ export class SimpleCardBattery extends LitElement {
         .battery-terminal {
             fill: var(--simple-card-neutral-stroke);
             transition: fill 0.6s;
-        }
-        .battery-terminal.active {
-            animation: terminal-pulse 1.8s ease-in-out infinite;
         }
         .battery-terminal.low {
             fill: var(--simple-card-danger-color);
@@ -109,12 +102,6 @@ export class SimpleCardBattery extends LitElement {
         .fill-green  { fill: var(--simple-card-source-battery); }
         .fill-orange { fill: var(--simple-card-warning-color); }
         .fill-red    { fill: var(--simple-card-danger-color); }
-        /* Active pulse overlaid on color class when charging or discharging */
-        .fill-active { animation: fill-pulse 1.8s ease-in-out infinite; }
-        @keyframes fill-pulse {
-            0%, 100% { opacity: 0.75; }
-            50%       { opacity: 1; }
-        }
         .soc-label {
             font-size: 1.8rem;
             font-weight: 700;
@@ -176,11 +163,10 @@ export class SimpleCardBattery extends LitElement {
             : '';
 
         const pulseColor = isCharging ? (this.sourceColor ?? 'var(--helman-battery)') : isDischarging ? 'var(--helman-battery)' : null;
-        const pulseColorSoft = pulseColor ? `color-mix(in srgb, ${pulseColor} 53%, transparent)` : null;
 
         const fillColorClass = socClamped < this.minSoc ? 'fill-red' : socClamped < this.minSoc + 10 ? 'fill-orange' : 'fill-green';
         const fillClass = (isCharging || isDischarging)
-            ? `${fillColorClass} fill-active`
+            ? fillColorClass
             : (socClamped < 30 ? fillColorClass : 'fill-idle');
 
         const powerClass = isCharging ? 'charge' : isDischarging ? 'discharge' : '';
@@ -194,7 +180,7 @@ export class SimpleCardBattery extends LitElement {
 
         this._view = {
             coverClass, fillClass, powerClass,
-            pulseColor, pulseColorSoft,
+            pulseColor,
             fillY, fillHeight,
             innerX, innerWidth, innerFillY, innerFillHeight,
             socClampedRounded: socClamped.toFixed(0),
@@ -223,7 +209,7 @@ export class SimpleCardBattery extends LitElement {
                     <rect class="battery-body ${v.coverClass}"
                         x="${BODY_X}" y="${BODY_TOP}"
                         width="${BODY_WIDTH}" height="${BODY_HEIGHT}" rx="5"
-                        style="${v.pulseColor ? `stroke: ${v.pulseColor}; --pulse-color: ${v.pulseColor}; --pulse-color-soft: ${v.pulseColorSoft};` : ''}"/>
+                        style="${v.pulseColor ? `stroke: ${v.pulseColor}; --pulse-color: ${v.pulseColor};` : ''}"/>
 
                     <!-- Fill level -->
                     <clipPath id="${this._clipId}">

@@ -83,21 +83,31 @@ test("a gauge pill too narrow for power and share drops the share and keeps the 
     expect(await clipped()).toBe(false);
 });
 
-test("an active gauge pill pulses its glow, and holds it still under reduced motion", async ({ page }) => {
+test("an active gauge pill glows on the beat at its share's level, and holds it still under reduced motion", async ({ page }) => {
     await page.evaluate(() => {
         const gauge = document.createElement("helman-flow-gauge") as any;
         gauge.of = "house";
-        gauge.items = [{ node: "solar", powerW: 800 }];
+        gauge.items = [{ node: "solar", powerW: 800 }, { node: "grid", powerW: 100 }];
         gauge.localize = (key: string) => key;
         document.getElementById("mount")!.append(gauge);
     });
-    const animations = () => page.locator("helman-flow-gauge").evaluate((el) => Array.from(el.shadowRoot!.querySelectorAll("button"))
-        .map((button) => button.getAnimations().filter((animation) => animation.playState === "running").length));
-    await expect.poll(animations).toEqual([1, 0, 0]);
+    const glows = () => page.locator("helman-flow-gauge").evaluate((el) => Array.from(el.shadowRoot!.querySelectorAll("button")).map((button) => ({
+        tier: button.dataset.tier ?? null,
+        running: button.getAnimations({ subtree: true }).filter((animation) => animation.playState === "running").length,
+        startTimes: button.getAnimations({ subtree: true }).map((animation) => animation.startTime),
+        shadow: getComputedStyle(button, "::after").boxShadow,
+        opacity: getComputedStyle(button, "::after").opacity,
+    })));
+    // Solar carries 8/9 of the gauge, tier 2; grid 1/9, tier 0; battery nothing.
+    await expect.poll(async () => (await glows()).map((glow) => [glow.tier, glow.running])).toEqual([["2", 1], [null, 0], ["0", 1]]);
+    const live = await glows();
+    expect(live[0].startTimes).toEqual([0]);
+    expect(live[1].shadow).toBe("none");
     await page.emulateMedia({ reducedMotion: "reduce" });
-    await expect.poll(animations).toEqual([0, 0, 0]);
-    const glow = await page.locator("helman-flow-gauge").evaluate((el) => getComputedStyle(el.shadowRoot!.querySelector("button")!).boxShadow);
-    expect(glow).not.toBe("none");
+    await expect.poll(async () => (await glows()).map((glow) => glow.running)).toEqual([0, 0, 0]);
+    const still = await glows();
+    expect(still[0].shadow).not.toBe("none");
+    expect(still[0].opacity).toBe("0.6");
 });
 
 test("help tips close on Escape and opening another tip", async ({ page }) => {

@@ -1,8 +1,10 @@
-import { LitElement, TemplateResult, css, html, nothing } from "lit-element";
+import { LitElement, PropertyValues, TemplateResult, css, html, nothing } from "lit-element";
 import { styleMap } from 'lit/directives/style-map.js';
 import { customElement, property, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../types/ha";
-import { DEFERRABLE_HOUSE_COLOR, nodeAccentColor, withAlpha } from "../color-utils";
+import { DEFERRABLE_HOUSE_COLOR, NEUTRAL_LIGHT_COLOR, canonicalSourceColor, computeDominantSourceColorCached, nodeAccentColor, opaqueColor, withAlpha } from "../color-utils";
+import { alignToBeat, flowBeatStyles, flowGlow, flowLandsAt, flowRatio, flowRowGlow } from "../shared/flow-style";
+import { ARROW_IDLE_W } from "./power-flow-arrows";
 import { TreeItem, isItemVisible } from "../shared/data/tree-item";
 import "./tree-item-row";
 import "./tree-item-list";
@@ -13,6 +15,18 @@ import "./tree-item-info";
 
 /** The house's Untracked remainder: `{house id}_unmeasured`, as the backend names it. A breaker's remainder opens nothing. */
 const HOUSE_UNMEASURED_ID = "house_unmeasured";
+
+/**
+ * A row's part in the card's rhythm: it emits when its surges leave, or
+ * receives when they land, `leavesAt` beats in plus the travel of a flow of
+ * `travelPower` (its own power by default) against `maxPower`.
+ */
+export interface RowBeat {
+    role: "emit" | "receive";
+    leavesAt: number;
+    travelPower?: number;
+    maxPower: number;
+}
 
 /** A config device, or the house's Untracked remainder, opens a detail from its name. */
 function opensDetail(item: TreeItem): boolean {
@@ -44,6 +58,8 @@ export class HelmanTreeItem extends LitElement {
      * full card puts the inverter cell on its central distribution row.
      */
     @property({ attribute: false }) public centreContent?: TemplateResult;
+    /** Set on the card's top-level rows only: the row glows on the beat while it has power. */
+    @property({ attribute: false }) public beat?: RowBeat;
 
     @state() private _childrenCollapsed = true;
 
@@ -57,6 +73,11 @@ export class HelmanTreeItem extends LitElement {
     disconnectedCallback(): void {
         super.disconnectedCallback();
 
+    }
+
+    protected updated(changed: PropertyValues): void {
+        super.updated(changed);
+        alignToBeat(this.renderRoot);
     }
 
     private _showMoreInfo(entityId: string) {
@@ -90,7 +111,7 @@ export class HelmanTreeItem extends LitElement {
     }
 
     static get styles() {
-        return css`
+        return [flowBeatStyles, css`
             .border{
                 box-shadow: 0 0px 12px var(--device-shadow-color, rgba(0,0,0,0.8));
                 border-radius: var(--ha-card-border-radius, 12px);
@@ -198,6 +219,49 @@ export class HelmanTreeItem extends LitElement {
                 position: relative;
                 z-index: 3;
             }
+            /* The row's glow: over the row's own box, not its expanded children, and a
+               sibling of .deviceContent, which clips its overflow. */
+            .row {
+                position: relative;
+                flex-basis: 100%;
+                min-width: 0;
+            }
+            .glow-level, .glow {
+                position: absolute;
+                inset: 0;
+                pointer-events: none;
+                border-radius: var(--ha-card-border-radius, 12px);
+            }
+            .glow-level {
+                z-index: 3;
+            }
+            .glow {
+                box-sizing: border-box;
+                border-style: solid;
+            }
+        `];
+    }
+
+    /** The outline that pulses on the beat, or nothing while the row has no beat or no power. */
+    private _renderGlow(power: number) {
+        const beat = this.beat;
+        if (!beat || power <= ARROW_IDLE_W) {
+            return nothing;
+        }
+        const emits = beat.role === "emit";
+        const r = flowRatio(power, beat.maxPower);
+        const phase = emits ? beat.leavesAt : flowLandsAt(beat.leavesAt, flowRatio(beat.travelPower ?? power, beat.maxPower), true);
+        const glow = flowGlow(r, phase);
+        // The history stores each source in its translucent accent; the outline takes it at full strength, as the beams do.
+        const dominant = computeDominantSourceColorCached(this.device);
+        const color = emits ? canonicalSourceColor(this.device.sourceType) : dominant ? opaqueColor(dominant) : NEUTRAL_LIGHT_COLOR;
+        // The distribution row carries the inverter cell: it glows by its outline only.
+        const { borderWidth, boxShadow } = flowRowGlow(color, glow.size, !this.centreContent);
+        return html`
+            <div class="glow-level" style="opacity: ${glow.level}">
+                <div class="glow" data-beat="glow" data-tier=${glow.tier}
+                    style="border-width: ${borderWidth}; border-color: ${color}; box-shadow: ${boxShadow}; --beat-delay: ${glow.delay}"></div>
+            </div>
         `;
     }
 
@@ -324,7 +388,10 @@ export class HelmanTreeItem extends LitElement {
         `
         return html`
             <div class="device">
-                ${deviceContent}
+                <div class="row">
+                    ${deviceContent}
+                    ${this._renderGlow(currentPower)}
+                </div>
                 ${isExpanded && !this.device.hideChildren ? this._renderChildren(childrenToRender, currentPower, historyToRender) : nothing}
             </div>
         `;

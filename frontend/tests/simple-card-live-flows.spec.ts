@@ -6,6 +6,7 @@ import { IDLE_W, liveFlows } from "../cards/node-detail/live-flows";
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
 import { installFixedClock } from "./support/fixed-clock";
 import { CARD_BUNDLE } from "./support/card-page";
+import { BEAT_MS, flowSurges, flowTempo, flowThickness, flowTier } from "../cards/shared/flow-style";
 
 /**
  * The live power split between solar, grid, battery and house.
@@ -144,7 +145,7 @@ async function mountCard(page: Page, powers: { solar: number; house: number; bat
 function lines(page: Page): Promise<Line[]> {
     return page.evaluate(() => {
         const root = document.querySelector("helman-simple-card")!.shadowRoot!;
-        return [...root.querySelectorAll(".energy-grid line.flow-ribbon")].map((line) => ({
+        return [...root.querySelectorAll(".energy-grid line[data-flow]")].map((line) => ({
             x1: line.getAttribute("x1")!,
             y1: line.getAttribute("y1")!,
             x2: line.getAttribute("x2")!,
@@ -158,8 +159,8 @@ function lines(page: Page): Promise<Line[]> {
 const SOLAR = "var(--helman-solar)";
 const GRID = "var(--helman-grid)";
 const BATTERY = "var(--helman-battery)";
-/** The card's stroke: 12 px at the source's maximum, never thinner than 1.5 px. */
-const stroke = (watts: number, max: number) => Math.max(1.5, Math.min(watts / max, 1) * 12);
+/** The card's beam: as thick as its ratio of the source's maximum says. */
+const stroke = (watts: number, max: number) => flowThickness(Math.min(watts / max, 1));
 
 test.describe("the card draws the split as before", () => {
     test("measured export keeps the grid meter value and export connectors", async ({ page }) => {
@@ -237,53 +238,73 @@ test.describe("the card draws the split as before", () => {
     });
 });
 
-test("the ribbons have a shared-duration sweep in the flow direction", async ({ page }) => {
+test("the beams carry their tier's surges in the flow direction, over a hot core", async ({ page }) => {
     await mountCard(page, { solar: 6500, house: 900, battery: 3200, grid: -2400 });
-    const bands = await page.evaluate(() => {
+    const beams = await page.evaluate(() => {
         const root = document.querySelector("helman-simple-card")!.shadowRoot!;
-        return [...root.querySelectorAll<SVGLineElement>("line.flow-ribbon")].map(line => {
-            const band = line.nextElementSibling!.querySelector(".flow-band") as SVGLineElement;
-            const id = band.getAttribute("stroke")!.slice(5, -1);
-            const gradient = line.ownerSVGElement!.querySelector<SVGLinearGradientElement>(`#${id}`)!;
+        return [...root.querySelectorAll<SVGLineElement>("line[data-flow]")].map(line => {
+            const core = line.nextElementSibling as SVGLineElement;
+            const surges = [...core.nextElementSibling!.querySelectorAll<SVGGElement>('[data-beat="surge"]')];
             return {
                 flow: line.dataset.flow,
-                width: line.getAttribute("stroke-width"),
-                bandWidth: band.getAttribute("stroke-width"),
-                opacity: getComputedStyle(line).opacity,
-                peak: gradient.querySelectorAll("stop")[1].getAttribute("stop-opacity"),
-                duration: band.getAnimations()[0]?.effect?.getTiming().duration,
-                travelX: getComputedStyle(band).getPropertyValue("--travel-x"),
-                travelY: getComputedStyle(band).getPropertyValue("--travel-y"),
-                stops: [...gradient.querySelectorAll("stop")].map(stop => stop.getAttribute("offset")),
+                width: Number(line.getAttribute("stroke-width")),
+                coreWidth: Number(core.getAttribute("stroke-width")),
+                tier: surges.map(surge => surge.dataset.tier),
+                short: surges.map(surge => surge.hasAttribute("data-short")),
+                durations: surges.map(surge => surge.getAnimations()[0]?.effect?.getTiming().duration),
+                travelX: parseFloat(getComputedStyle(surges[0]).getPropertyValue("--surge-x")),
+                travelY: parseFloat(getComputedStyle(surges[0]).getPropertyValue("--surge-y")),
             };
         });
     });
-    expect(bands.map(band => band.flow)).toEqual(["solar-grid", "solar-house", "solar-battery"]);
-    for (const band of bands) {
-        expect(band.width).toBe(band.bandWidth);
-        expect(band.opacity).toBe("0.5");
-        expect(band.peak).toBe("0.5");
-        expect(band.duration).toBe(2400);
-        expect(band.stops).toEqual(["0", "0.5", "1"]);
+    expect(beams.map(beam => beam.flow)).toEqual(["solar-grid", "solar-house", "solar-battery"]);
+    // Solar → grid and solar → battery run long; solar → house down the left is a short edge.
+    for (const [beam, watts, short] of [[beams[0], 2400, false], [beams[1], 900, true], [beams[2], 3200, false]] as const) {
+        const tier = flowTier(watts / 5000);
+        const { reach, surges } = flowSurges(tier, short, 0);
+        expect(beam.coreWidth).toBeCloseTo(beam.width * 0.35, 5);
+        expect(beam.tier).toEqual(surges.map(() => String(tier)));
+        expect(beam.short).toEqual(surges.map(() => short));
+        // Each surge loops over as many intervals as there are surges.
+        expect(beam.durations).toEqual(surges.map(() => reach * flowTempo(tier, short).travel * BEAT_MS));
     }
-    expect(parseFloat(bands[0].travelX)).toBeGreaterThan(0);
-    expect(parseFloat(bands[2].travelX)).toBeGreaterThan(0);
+    expect(beams[0].travelX).toBeGreaterThan(0);
+    expect(beams[1].travelY).toBeGreaterThan(0);
+    expect(beams[2].travelX).toBeGreaterThan(0);
+
+    // A surge fades out in its own colour, not through transparent black, so it leaves no grey fringe.
+    const outerStops = await page.evaluate(() => {
+        const root = document.querySelector("helman-simple-card")!.shadowRoot!;
+        return [...root.querySelectorAll("radialGradient")].map(gradient => {
+            const stop = gradient.lastElementChild as SVGStopElement;
+            return { color: stop.style.stopColor, opacity: stop.style.stopOpacity, first: (gradient.firstElementChild as SVGStopElement).style.stopColor };
+        });
+    });
+    expect(outerStops.length).toBeGreaterThan(0);
+    for (const { color, opacity, first } of outerStops) {
+        expect(opacity).toBe("0");
+        expect(color).not.toBe("transparent");
+        expect(color).not.toBe(first);
+    }
 
     const movement = await page.evaluate(async () => {
-        const band = document.querySelector("helman-simple-card")!.shadowRoot!.querySelector(".flow-band")!;
-        const before = getComputedStyle(band).transform;
+        const surge = document.querySelector("helman-simple-card")!.shadowRoot!.querySelector('[data-beat="surge"]')!;
+        const before = getComputedStyle(surge).transform;
         await new Promise(resolve => setTimeout(resolve, 200));
-        return [before, getComputedStyle(band).transform];
+        return [before, getComputedStyle(surge).transform];
     });
     expect(movement[1]).not.toBe(movement[0]);
 
     await mountCard(page, { solar: 0, house: 500, battery: -2000, grid: 10 });
     const reverse = await page.evaluate(() => {
         const root = [...document.querySelectorAll("helman-simple-card")].at(-1)!.shadowRoot!;
-        return [...root.querySelectorAll(".flow-band")].map(band => ({
-            travelX: parseFloat(getComputedStyle(band).getPropertyValue("--travel-x")),
-            travelY: parseFloat(getComputedStyle(band).getPropertyValue("--travel-y")),
-        }));
+        return [...root.querySelectorAll("line[data-flow]")].map(line => {
+            const surge = line.nextElementSibling!.nextElementSibling!.querySelector('[data-beat="surge"]')!;
+            return {
+                travelX: parseFloat(getComputedStyle(surge).getPropertyValue("--surge-x")),
+                travelY: parseFloat(getComputedStyle(surge).getPropertyValue("--surge-y")),
+            };
+        });
     });
     expect(reverse[0].travelY).toBeLessThan(0); // battery → grid
     expect(reverse[1].travelX).toBeLessThan(0); // battery → house
@@ -303,7 +324,7 @@ test("theme overrides reach the card and standalone illustrations without a rere
             return node;
         });
         await Promise.all(standalone.map(node => node.updateComplete));
-        const before = getComputedStyle(root.querySelector(".flow-ribbon")!).stroke;
+        const before = getComputedStyle(root.querySelector("line[data-flow]")!).stroke;
         document.documentElement.style.setProperty("--helman-theme-solar", "#e879f9");
         document.documentElement.style.setProperty("--helman-theme-grid", "#fb923c");
         document.documentElement.style.setProperty("--helman-theme-battery", "#2dd4bf");
@@ -316,7 +337,7 @@ test("theme overrides reach the card and standalone illustrations without a rere
         const standalone = ["simple-card-solar", "simple-card-grid", "simple-card-battery", "simple-card-house"]
             .map(tag => document.body.querySelector(tag)!.shadowRoot!);
         return {
-            ribbon: getComputedStyle(root.querySelector(".flow-ribbon")!).stroke,
+            ribbon: getComputedStyle(root.querySelector("line[data-flow]")!).stroke,
             cardSolar: getComputedStyle(root.querySelector("simple-card-solar")!.shadowRoot!.querySelector(".core.active")!).fill,
             solar: getComputedStyle(standalone[0].querySelector(".core.active")!).fill,
             grid: getComputedStyle(standalone[1].querySelector(".wire")!).stroke,
@@ -418,7 +439,7 @@ test("multiple cards keep their gradient IDs inside their own shadow roots", asy
         await second.updateComplete;
         await new Promise(resolve => {
             const timer = setInterval(() => {
-                if (second.shadowRoot?.querySelector("linearGradient")) {
+                if (second.shadowRoot?.querySelector("radialGradient")) {
                     clearInterval(timer);
                     resolve(undefined);
                 }
@@ -427,7 +448,7 @@ test("multiple cards keep their gradient IDs inside their own shadow roots", asy
         const cards = [...document.querySelectorAll("helman-simple-card")];
         return cards.map(card => {
             const root = card.shadowRoot!;
-            return [...root.querySelectorAll("linearGradient, mask")].map(definition => ({
+            return [...root.querySelectorAll("radialGradient, mask")].map(definition => ({
                 id: definition.id,
                 present: !!root.querySelector(`#${definition.id}`),
             }));

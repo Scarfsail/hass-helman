@@ -4,9 +4,9 @@ import { CARD_BUNDLE } from "./support/card-page";
 /**
  * What the flow arrows are allowed to cost while nobody is looking at them.
  *
- * The light band sweeps forever, so the animation is paused whenever the element
- * is scrolled out of the viewport or the tab is in the background, and picks up
- * where it left off on the way back. Before that, three arrow rows kept the
+ * The surges run forever, so their animations are paused whenever the element
+ * is scrolled out of the viewport or the tab is in the background, and rejoin
+ * the shared beat on the way back. Before that, three arrow rows kept the
  * renderer recalculating style and painting on every frame for as long as the
  * card was on the page -- offscreen and backgrounded included.
  *
@@ -64,7 +64,7 @@ function segments(page: Page): Promise<{ source: string | null; grow: string }[]
     });
 }
 
-/** The play states of every light band animation, deduplicated. */
+/** The play states of every surge animation, deduplicated. */
 function playStates(page: Page): Promise<string[]> {
     return page.evaluate(() => {
         const root = document.querySelector("power-flow-arrows")!.shadowRoot!;
@@ -82,16 +82,32 @@ async function setHidden(page: Page, hidden: boolean): Promise<void> {
     }, hidden);
 }
 
-test("an arrow's width stays proportional to its power, and tiny flows draw nothing", async ({ page }) => {
-    await mountArrows(page, [MAX_POWER / 4, 2 * MAX_POWER, 0.2, null]);
+test("a beam is as thick as its power says, not a share of its column, and tiny flows draw nothing", async ({ page }) => {
+    await mountArrows(page, [MAX_POWER / 2, 2 * MAX_POWER, MAX_POWER / 100, 0.2, null]);
 
     const widths = await page.evaluate(() => {
         const root = document.querySelector("power-flow-arrows")!.shadowRoot!;
         return [...root.querySelectorAll(".item-container")]
-            .map((item) => (item.querySelector(".animated-arrow") as HTMLElement | null)?.style.width ?? null);
+            .map((item) => (item.querySelector(".animated-arrow") as HTMLElement | null)?.getBoundingClientRect().width ?? null);
     });
 
-    expect(widths).toEqual(["25%", "100%", null, null]);
+    expect(widths).toEqual([7, 14, 2.5, null, null]);
+});
+
+test("at half the maximum a consumer's beam is 7 px wide and keeps its source shares in order", async ({ page }) => {
+    const consumer = {
+        powerValue: MAX_POWER / 2,
+        sourcePowerHistory: [{ "src-grid": { power: 100, color: "#000" }, "src-solar": { power: 300, color: "#000" } }],
+    };
+    await mountDevices(page, [consumer], SOURCES);
+
+    const width = await page.evaluate(() =>
+        document.querySelector("power-flow-arrows")!.shadowRoot!.querySelector(".animated-arrow")!.getBoundingClientRect().width);
+    expect(width).toBe(7);
+    expect(await segments(page)).toEqual([[
+        { source: "solar", grow: "0.75" },
+        { source: "grid", grow: "0.25" },
+    ]]);
 });
 
 test("a source's ribbon is one band in its own colour", async ({ page }) => {
@@ -179,7 +195,7 @@ test("an element remounted after being scrolled away starts running", async ({ p
         document.getElementById("stage")!.appendChild(el);
         // Read before yielding: the observer's first callback is a task away, and
         // what is drawn until it lands is this verdict -- a still frame of
-        // a half-swept light band if the element kept the one it was removed on.
+        // frozen surges if the element kept the one it was removed on.
         return el.hasAttribute("paused");
     });
 

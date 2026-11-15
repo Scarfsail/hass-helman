@@ -28,6 +28,7 @@ export interface HomeAssistant {
   user?: { is_admin: boolean };
   language: string;
   locale: { language: string; first_weekday: string };
+  themes?: { darkMode: boolean };
   localize: LocalizeFunc;
   loadBackendTranslation(category: string): Promise<LocalizeFunc>;
   loadFragmentTranslation(fragment: string): Promise<LocalizeFunc | undefined>;

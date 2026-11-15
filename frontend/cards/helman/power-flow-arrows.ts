@@ -1,9 +1,16 @@
-import { LitElement, css, html, unsafeCSS } from "lit-element";
+import { LitElement, PropertyValues, css, html, unsafeCSS } from "lit-element";
 import { customElement, property } from "lit/decorators.js";
 import { TreeItem } from "../shared/data/tree-item";
 import { nothing } from "lit-html";
 import { NEUTRAL_LIGHT_COLOR, canonicalSourceColor } from "../color-utils";
-import { FLOW_BAND_LENGTH, FLOW_BAND_PEAK_OPACITY, FLOW_RIBBON_OPACITY, FLOW_SWEEP_DURATION } from "../shared/flow-style";
+import { FLOW_SURGE_LENGTH_CSS, alignToBeat, flowBeam, flowBeatStyles, flowHot, flowRatio, flowSurgeGradient, flowSurges } from "../shared/flow-style";
+import { helmanColorVars } from "../color-vars";
+
+/** The house this card assumes without `max_power`: three phases of 25 A. */
+export const DEFAULT_MAX_POWER = 25 * 230 * 3;
+
+/** At or below this many watts a column draws no flow and its row no glow. */
+export const ARROW_IDLE_W = 0.4;
 
 /** One coloured band of a ribbon: where a share of its power came from. */
 interface FlowBand {
@@ -37,29 +44,33 @@ function flowBands(item: TreeItem, sources: readonly TreeItem[]): FlowBand[] {
 }
 
 /**
- * The light band that says power is flowing, and the two rules that keep it cheap.
+ * The beams between two rows of the helman card, one per column.
  *
- * The animation never ends, so its per-frame cost is paid for as long as the
- * card is on the page. It therefore moves nothing but `transform`: the light
- * band is painted once as static artwork and the frames only slide it, which
- * the compositor can do without a style recalc and a repaint of the whole
- * card on every one of them. Animating `background-color` and `box-shadow`
- * instead cost a `UpdateLayoutTree` and a `Paint` per frame per animated
- * element, measured at ~60 style recalcs and ~3600 paint
- * events a second on three arrow rows.
+ * A beam is `flowThickness` wide, its body the column's source-share bands
+ * with a hot core and a static bloom over them, and its surges leave on the
+ * shared beat at `leavesAt`. Every gap here is a short edge.
+ *
+ * The animations never end, so their per-frame cost is paid for as long as the
+ * card is on the page. They therefore move nothing but `transform` (the
+ * surges) on artwork painted once, which the compositor runs without a style
+ * recalc or a repaint; animating `background-color` and `box-shadow` instead
+ * was measured at ~60 style recalcs and ~3600 paint events a second on three
+ * arrow rows.
  *
  * And frames nobody can see are not worth running at all, so the animation is
  * paused while this element is scrolled out of the viewport or the tab is in
- * the background, and resumes where it left off on the way back. The pause is
- * an attribute rather than reactive state because it changes nothing the
- * template says, so it must not cost a render.
+ * the background, and rejoins the beat on the way back rather than resuming
+ * where it froze. The pause is an attribute rather than reactive state because
+ * it changes nothing the template says, so it must not cost a render.
  */
 @customElement("power-flow-arrows")
 export class PowerFlowArrows extends LitElement {
     @property({ type: Array }) devices: (TreeItem | undefined)[] = [];
-    @property({ type: Number }) maxPower?: number; // Default max power for 3-phase system and 25A per phase
+    @property({ type: Number }) maxPower?: number;
     /** The source row, left to right: names each bucket key and orders the bands. */
     @property({ type: Array }) sources: readonly TreeItem[] = [];
+    /** When this row's surges leave, in beats. */
+    @property({ type: Number }) leavesAt = 0;
     /**
      * Bumped by the card once per history tick; see `helman-card._historyRevision`.
      *
@@ -83,7 +94,7 @@ export class PowerFlowArrows extends LitElement {
                 this._syncPaused();
             }, {
                 // Resumed just before it is on screen: `animation-play-state`
-                // freezes the light band mid-sweep, and un-pausing at the viewport's
+                // freezes a surge mid-flight, and un-pausing at the viewport's
                 // very edge shows that still frame for a frame or two.
                 rootMargin: "200px",
             });
@@ -102,14 +113,23 @@ export class PowerFlowArrows extends LitElement {
         super.disconnectedCallback();
     }
 
+    protected updated(changed: PropertyValues): void {
+        super.updated(changed);
+        alignToBeat(this.renderRoot);
+    }
+
     private _onVisibilityChange = () => this._syncPaused();
 
     private _syncPaused() {
-        this.toggleAttribute("paused", document.hidden || !this._onScreen);
+        const wasPaused = this.hasAttribute("paused");
+        const paused = this.toggleAttribute("paused", document.hidden || !this._onScreen);
+        if (wasPaused && !paused) {
+            alignToBeat(this.renderRoot, true);
+        }
     }
 
     static get styles() {
-        return css`
+        return [helmanColorVars, flowBeatStyles, css`
             .container {
                 display: flex;
                 flex-direction: row;
@@ -123,71 +143,89 @@ export class PowerFlowArrows extends LitElement {
             }
             .animated-arrow {
                 position: relative;
-                width: 100%;
                 height: 22px;
                 margin: 0 auto;
-                border-radius: 0px;
-                overflow: hidden;
+            }
+            .body, .segments {
+                position: absolute;
+                inset: 0;
+                border-radius: inherit;
             }
             .segments {
                 display: flex;
-                height: 100%;
+                overflow: hidden;
             }
             .segment {
                 min-width: 0;
-                opacity: ${unsafeCSS(FLOW_RIBBON_OPACITY)};
+            }
+            .core {
+                position: absolute;
+                top: 0;
+                bottom: 0;
+                left: 50%;
+                transform: translateX(-50%);
+                border-radius: inherit;
+            }
+            .surges {
+                position: absolute;
+                top: 0;
+                bottom: 0;
+                left: 50%;
+                transform: translateX(-50%);
+                overflow: hidden;
             }
             .band {
                 position: absolute;
                 left: 0;
                 right: 0;
-                top: 0;
-                height: ${unsafeCSS(FLOW_BAND_LENGTH * 100)}%;
-                background: linear-gradient(to bottom, transparent, rgba(255, 255, 255, ${unsafeCSS(FLOW_BAND_PEAK_OPACITY)}), transparent);
-                transform: translateY(-100%);
-                animation: sweep ${unsafeCSS(FLOW_SWEEP_DURATION)} linear infinite;
+                top: -50%;
+                height: 100%;
+                background-position: center;
+                background-repeat: no-repeat;
+                background-size: 100% ${unsafeCSS(FLOW_SURGE_LENGTH_CSS)};
             }
-            :host([paused]) .band {
+            :host([paused]) [data-beat][data-tier] {
                 animation-play-state: paused;
             }
-            @keyframes sweep {
-                from { transform: translateY(-100%); }
-                /* Clear of the ribbon's far end: its length is 1 / FLOW_BAND_LENGTH bands. */
-                to { transform: translateY(${unsafeCSS(100 / FLOW_BAND_LENGTH)}%); }
-            }
-            @media (prefers-reduced-motion: reduce) {
-                .band {
-                    animation: none;
-                }
-            }
-        `;
+        `];
     }
 
     render() {
         if (!this.devices || this.devices.length === 0) {
             return nothing;
         }
-        const maxPower = this.maxPower || (25 * 230 * 3); // Default to 3-phase system with 25A per phase
+        const maxPower = this.maxPower || DEFAULT_MAX_POWER;
         return html`
             <div class="container">
                 ${this.devices.map((device) => {
-                    if (!device?.powerValue || device.powerValue <= 0.4) {
+                    if (!device?.powerValue || device.powerValue <= ARROW_IDLE_W) {
                         return html`<div class="item-container"></div>`;
                     }
-                    const widthPercentage = Math.min((device.powerValue / maxPower) * 100, 100);
+                    const bands = flowBands(device, this.sources);
+                    const color = canonicalSourceColor(bands.reduce((max, band) => band.share > max.share ? band : max).sourceType, NEUTRAL_LIGHT_COLOR);
+                    const beam = flowBeam(flowRatio(device.powerValue, maxPower), color);
+                    const { reach, surges } = flowSurges(beam.tier, true, this.leavesAt);
                     return html`
                         <div class="item-container">
-                            <div class="animated-arrow" style="width: ${widthPercentage}%">
-                                <div class="segments">
-                                    ${flowBands(device, this.sources).map((band) => html`
-                                        <div
-                                            class="segment"
-                                            data-source=${band.sourceType ?? "none"}
-                                            style="flex: ${band.share} 1 0; background-color: ${canonicalSourceColor(band.sourceType, NEUTRAL_LIGHT_COLOR)}"
-                                        ></div>
+                            <div class="animated-arrow" style="width: ${beam.width}px; border-radius: ${beam.width / 2}px; box-shadow: ${beam.bloom}">
+                                <div class="body" style="opacity: ${beam.bodyOpacity}">
+                                    <div class="segments">
+                                        ${bands.map((band) => html`
+                                            <div
+                                                class="segment"
+                                                data-source=${band.sourceType ?? "none"}
+                                                style="flex: ${band.share} 1 0; background-color: ${canonicalSourceColor(band.sourceType, NEUTRAL_LIGHT_COLOR)}"
+                                            ></div>
+                                        `)}
+                                    </div>
+                                    <div class="core" style="width: ${beam.coreWidth}px; background: ${flowHot(color)}"></div>
+                                </div>
+                                <div class="surges" style="width: ${beam.surgeThickness}px; opacity: ${beam.surgeOpacity}">
+                                    ${surges.map((surge) => html`
+                                        <div class="band" data-beat="surge" data-tier=${beam.tier} data-short
+                                            style="background-image: ${flowSurgeGradient(color)}; --surge-x: 0px; --surge-y: ${reach * 100}%; --surge-rest: ${surge.rest}; --beat-delay: ${surge.delay}"></div>
                                     `)}
                                 </div>
-                                <div class="band"></div>
                             </div>
                         </div>
                     `;
