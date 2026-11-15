@@ -99,8 +99,8 @@ class ScheduleExecutionRuntime:
     # While a hand pick holds: the slot action seen on the latest reconcile, so
     # a new inverter window starting is told apart from the one that runs on.
     manual_hold_action: ScheduleAction | None = None
-    # The slot action of the window helman last reconciled, as planned (not
-    # resolved), so distinct target-SoC windows stay distinct.
+    # The slot action of the latest reconcile that was applied or held, as
+    # planned (not resolved), so distinct target-SoC windows stay distinct.
     last_planned_action: ScheduleAction | None = None
     appliance_memories: dict[str, ApplianceExecutionMemory] = field(
         default_factory=dict
@@ -153,6 +153,9 @@ class InverterExecutor:
         now: datetime,
     ) -> tuple[ControllableRuntimeStatus, ScheduleError | None]:
         if control_config is not None and self._manual_hold(control_config, action):
+            # Recorded while held too, so a window that starts later and fails
+            # to apply is still seen as not applied yet and retried.
+            self._runtime.last_planned_action = action
             return (
                 ControllableRuntimeStatus(
                     action_kind="noop",

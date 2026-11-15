@@ -802,6 +802,33 @@ class ScheduleExecutorTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIsNone(executor.runtime.manual_hold_action)
 
+    async def test_hand_pick_release_is_retried_after_a_failed_window_start(
+        self,
+    ) -> None:
+        # A, empty, A with the second A failing to apply once: the next tick
+        # retries it instead of starting another hold.
+        executor, hass = _build_hand_pick_executor(
+            {"21:00": _STOP_DISCHARGING, "21:30": _STOP_DISCHARGING}
+        )
+        await _reconcile_at(executor, "21:07")
+        hass.states.get(_MODE_ENTITY_ID).state = "Normal"
+        await _reconcile_at(executor, "21:16")
+
+        hass.services.error = RuntimeError("boom")
+        with self.assertRaises(ScheduleExecutionUnavailableError):
+            await _reconcile_at(executor, "21:31")
+        hass.services.error = None
+
+        inverter = await _reconcile_at(executor, "21:32")
+
+        self.assertEqual(
+            (inverter.action_kind, inverter.outcome, inverter.reason),
+            ("apply", "success", "scheduled"),
+        )
+        self.assertEqual(
+            _picked_options(hass), ["Stop Discharging", "Stop Discharging"]
+        )
+
     async def test_hand_pick_releases_when_another_action_starts(self) -> None:
         executor, hass = _build_hand_pick_executor(
             {"21:00": _STOP_DISCHARGING, "21:15": _STOP_EXPORT}
