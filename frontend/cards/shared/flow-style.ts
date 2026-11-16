@@ -3,40 +3,43 @@ import { css, unsafeCSS } from "lit";
 /**
  * The look every power flow shares: the simple card's beams and node halos,
  * the helman card's flow arrows and row outlines, and the node details' gauge
- * pills, which follow the same beat. Every number of the look lives here and
+ * pills, which share the same glow. Every number of the look lives here and
  * nowhere else.
  *
  * One ratio drives it all, per flow and per node: `r = min(power / max, 1)`,
  * with the maximum the card already scales that flow by. From `r` come the
- * continuous cues (thickness, level `k`, glow size `s`) and the tier, which
- * picks the rhythm on one shared half-beat grid.
+ * cues (thickness, and through one easing `e` the level `k`, glow size `s`,
+ * surge speed and spacing, and glow rate), all continuous curves.
  *
- * What animates never carries data. The continuous cues sit on static
- * wrappers and geometry painted once; the animated element only moves its
- * transform, or its opacity between its tier's fixed floor and 1. Three tiers
- * are three keyframe sets, so a power tick that stays within a tier restarts
- * nothing, and the compositor runs every frame without a style recalc or a
- * paint.
+ * Every edge runs its own tempo and every glow breathes at its own node's
+ * rate; nothing shares a beat. What animates never carries data. The level
+ * and size sit on static wrappers and geometry painted once; the animated
+ * element only moves its transform, or its opacity between a fixed floor and
+ * 1, on one keyframe set run at a fixed base duration. Its speed is its
+ * `playbackRate` (`data-rate`), which `syncFlowRates` retunes in place, so a
+ * power tick changes a surge's speed where it is, and the compositor runs
+ * every frame without a style recalc or a paint. Only a step in an edge's
+ * surge count re-renders that edge's surges, once.
  */
 
-/** The beat every pulse and glow sits on, ms. */
-export const BEAT_MS = 1300;
+/** The surge's and glow's keyframes run once per this many ms at a `playbackRate` of 1. */
+const SURGE_BASE_MS = 1000;
+const GLOW_BASE_MS = 1000;
 
-export type FlowTier = 0 | 1 | 2;
+/** How long a surge takes to cross a long and a short edge, ms, from `e` = 0 to 1. */
+const TRAVEL_MS = { long: [3900, 1300], short: [1300, 650] } as const;
 
-/**
- * The rhythm of each tier, in beats: how often a surge leaves, how long it
- * takes to cross a long and a short edge, and how a node's glow fades from its
- * peak (`fade` of the period), rises back (`rise`) and the floor it rests on.
- */
-const TIERS = [
-    { from: 0, interval: 4, travel: { long: 3, short: 1 }, glow: { rise: 0.35, fade: 0.65, floor: 0.2 } },
-    { from: 0.2, interval: 1, travel: { long: 1.5, short: 0.5 }, glow: { rise: 0.2, fade: 0.8, floor: 0.35 } },
-    { from: 0.5, interval: 0.5, travel: { long: 1, short: 0.5 }, glow: { rise: 0.4, fade: 0.6, floor: 0.55 } },
-] as const;
+/** The most surges on a long and a short edge at once. */
+const MAX_SURGES = { long: 3, short: 2 } as const;
 
-/** When the helman card's arrow rows leave, in beats: the sources' first, the consumers' half a beat later. */
-export const ROW_LEAVES_AT = { sources: 0, consumers: 0.5 } as const;
+/** A glow's period, ms, from `e` = 0 to 1: never quicker than one breath per 1300 ms. */
+const GLOW_PERIOD_MS = [3900, 1300] as const;
+
+/** One sweep of the grid illustration's wire dots, ms. */
+export const WIRE_SWEEP_MS = 1300;
+
+/** How a glow fades from its peak (`fade` of the period) to its floor, then rises back. */
+const GLOW = { fade: 0.8, floor: 0.35 } as const;
 
 /** A glow's opacity, as a share of its level, while motion is reduced. */
 const STILL_GLOW = 0.6;
@@ -64,36 +67,46 @@ export function flowThickness(r: number): number {
     return Math.max(2.5, r * 14);
 }
 
+/** The easing every cue but thickness takes `r` through, 0 – 1. */
+export function flowEase(r: number): number {
+    return r ** 0.7;
+}
+
 /** Level `k`: the brightness of a beam or glow, 0.2 – 1. */
 export function flowLevel(r: number): number {
-    return 0.2 + 0.8 * r ** 0.7;
+    return 0.2 + 0.8 * flowEase(r);
 }
 
 /** Glow size `s`, 0 – 1. */
 export function flowGlowSize(r: number): number {
-    return (flowLevel(r) - 0.2) / 0.8;
+    return flowEase(r);
 }
 
-export function flowTier(r: number): FlowTier {
-    return r >= TIERS[2].from ? 2 : r >= TIERS[1].from ? 1 : 0;
+/** From `from` to `to`, read at `e`, linearly. */
+const along = ([from, to]: readonly [number, number], e: number) => from + (to - from) * e;
+
+/** How long a surge takes to cross its edge, ms. */
+export function flowTravelMs(r: number, short: boolean): number {
+    return along(TRAVEL_MS[short ? "short" : "long"], flowEase(r));
 }
 
-/** How often a surge leaves and how long it travels, in beats. */
-export function flowTempo(tier: FlowTier, short: boolean): { interval: number; travel: number } {
-    const { interval, travel } = TIERS[tier];
-    return { interval, travel: short ? travel.short : travel.long };
+/** How many surges are on an edge at once: at least two, so one is always on the beam. */
+export function flowSurgeCount(r: number, short: boolean): number {
+    const max = MAX_SURGES[short ? "short" : "long"];
+    return Math.min(max, 2 + Math.floor(flowEase(r) * (max - 1)));
 }
 
-/** When a flow's surges land, in beats, given when they leave. */
-export function flowLandsAt(leavesAt: number, r: number, short: boolean): number {
-    return leavesAt + flowTempo(flowTier(r), short).travel;
+/** A node's glow period, ms. */
+export function flowGlowPeriodMs(r: number): number {
+    return along(GLOW_PERIOD_MS, flowEase(r));
 }
 
-/** The `--beat-delay` that puts a loop of `period` beats at its start on `phase`, on the shared origin. */
-export function beatDelay(phase: number, period: number): string {
-    const offset = ((phase % period) + period) % period;
-    return `${Math.round((offset - period) * BEAT_MS)}ms`;
-}
+/**
+ * The `playbackRate` that runs a keyframe set of `baseMs` once per `periodMs`,
+ * as `data-rate` carries it: rounded down to 0.01, so it never runs quicker
+ * than its curve (a glow never above one breath per 1300 ms).
+ */
+const rateFor = (baseMs: number, periodMs: number) => Math.floor(baseMs / periodMs * 100) / 100;
 
 /** The hot core of a flow in colour `color`. */
 export function flowHot(color: string): string {
@@ -105,7 +118,6 @@ const tint = (color: string, share: number) => `color-mix(in srgb, ${color} ${+(
 
 /** Everything static about one beam. */
 export interface FlowBeam {
-    tier: FlowTier;
     width: number;
     coreWidth: number;
     bodyOpacity: number;
@@ -124,7 +136,6 @@ export function flowBeam(r: number, color: string): FlowBeam {
     const bloomBlur = +(width + 2 + 8 * k).toFixed(2);
     const bloomColor = tint(color, 0.85 * k);
     return {
-        tier: flowTier(r),
         width,
         coreWidth: width * CORE_SHARE,
         bodyOpacity: 0.25 + 0.65 * k,
@@ -144,6 +155,15 @@ export function flowSurgeLength(beamLength: number): number {
 /** The same, for a beam whose length is the reference box of a CSS percentage. */
 export const FLOW_SURGE_LENGTH_CSS = `min(${SURGE_LENGTH}px, ${SURGE_MAX_SHARE * 100}%)`;
 
+/**
+ * Where a surge's centre starts along such a beam, as a CSS length: half a
+ * surge length back from its start, against `towards` (1 or -1), the
+ * direction the beam runs in.
+ */
+export function flowSurgeStartCss(towards: number): string {
+    return `calc(${FLOW_SURGE_LENGTH_CSS} * ${-towards / 2})`;
+}
+
 /** The surge's soft blob, as gradient stops: offset, colour. */
 export function flowSurgeStops(color: string): [number, string][] {
     return [[0, flowHot(color)], [0.6, tint(color, 0.6)], [1, "transparent"]];
@@ -154,51 +174,42 @@ export function flowSurgeGradient(color: string): string {
     return `radial-gradient(closest-side, ${flowSurgeStops(color).map(([offset, stop]) => `${stop} ${offset * 100}%`).join(", ")})`;
 }
 
-/** One surge of an edge: its `--beat-delay` and, while motion is reduced, where it rests. */
+/** One surge of an edge: its `animation-delay` and, while motion is reduced, where it rests. */
 export interface FlowSurge {
     delay: string;
-    /** The share of `reach` it rests at, so the edge's surges spread evenly along the beam. */
+    /** The share of its path it rests at, so the edge's surges spread evenly along the beam. */
     rest: number;
 }
 
-/** How many surges are in transit on an edge at once, and the loop each one runs on, in beats. */
-function flowLoop(tier: FlowTier, short: boolean): { count: number; loop: number } {
-    const { interval, travel } = flowTempo(tier, short);
-    const count = Math.floor(travel / interval) + 1;
-    return { count, loop: count * interval };
-}
-
 /**
- * The surges in transit on one edge. Each runs on a loop of as many intervals
- * as there are surges, staggered by one interval: its centre is at the beam's
- * start at loop time 0, at its end one travel later, and it then runs on out
- * of the clip. `reach` is how far it gets in a whole loop, in beam lengths.
+ * The surges on one edge and the `playbackRate` they run at. Each one's loop
+ * is one crossing: its centre runs from half a surge length before the beam's
+ * start to half a surge length past its end, so one leaves as the last one
+ * goes. They are spread evenly over the loop, by a delay in the animation's
+ * own time, which holds at any rate.
  */
-export function flowSurges(tier: FlowTier, short: boolean, leavesAt: number): { reach: number; surges: FlowSurge[] } {
-    const { interval, travel } = flowTempo(tier, short);
-    const { count, loop } = flowLoop(tier, short);
-    const reach = loop / travel;
+export function flowSurges(r: number, short: boolean): { count: number; rate: number; surges: FlowSurge[] } {
+    const count = flowSurgeCount(r, short);
     return {
-        reach,
+        count,
+        rate: rateFor(SURGE_BASE_MS, flowTravelMs(r, short)),
         surges: Array.from({ length: count }, (_, index) => ({
-            delay: beatDelay(leavesAt + index * interval, loop),
-            rest: (index + 1) / (count + 1) / reach,
+            delay: `${-Math.round(index / count * SURGE_BASE_MS)}ms`,
+            rest: (index + 1) / (count + 1),
         })),
     };
 }
 
 /** Everything static about one node's glow. */
 export interface FlowGlow {
-    tier: FlowTier;
     level: number;
     size: number;
-    /** Its `--beat-delay`, peaking on `phase` (beats). */
-    delay: string;
+    /** Its `playbackRate`, from its own node's ratio alone. */
+    rate: number;
 }
 
-export function flowGlow(r: number, phase: number): FlowGlow {
-    const tier = flowTier(r);
-    return { tier, level: flowLevel(r), size: flowGlowSize(r), delay: beatDelay(phase, TIERS[tier].interval) };
+export function flowGlow(r: number): FlowGlow {
+    return { level: flowLevel(r), size: flowGlowSize(r), rate: rateFor(GLOW_BASE_MS, flowGlowPeriodMs(r)) };
 }
 
 /** The simple card's halo: how far it reaches past the illustration, px, and its fill. */
@@ -215,92 +226,98 @@ export function flowRowGlow(color: string, size: number, inside: boolean): { bor
     };
 }
 
-const ms = (beats: number) => `${Math.round(beats * BEAT_MS)}ms`;
 const pct = (share: number) => `${+(share * 100).toFixed(2)}%`;
 
+/** The keyframe sets the surge and glow run, the only animations `syncFlowRates` retunes. */
+const SURGE_KEYFRAMES = "helman-surge";
+const GLOW_KEYFRAMES = "helman-glow";
+
 /**
- * The surge and glow animations, keyed by `data-tier`.
+ * The surge and glow animations, each one keyframe set at its base duration;
+ * `syncFlowRates` sets each one's speed from its element's `data-rate`.
  *
- * `[data-beat="surge"]` moves from its resting transform to
- * `translate(var(--surge-x), var(--surge-y))`, a whole loop's `reach`;
- * `data-short` marks a short edge. `[data-beat="glow"]`, or the `::after` of
- * `[data-beat="glow-after"]`, ripples its opacity between its tier's floor and
- * 1. The phase is the delay in `--beat-delay` (inherited, so it reaches an
- * `::after`); `alignToBeat` puts every one of them on the same origin.
+ * `[data-beat="surge"]` moves its centre from `--surge-start-x/y` (half a
+ * surge length back from the beam's start) to the far side of the beam's
+ * vector `--surge-x/y`, as far past its end. `[data-beat="glow"]`, or the
+ * `::after` of `[data-beat="glow-after"]`, ripples its opacity between a fixed
+ * floor and 1. Motion reduced, a surge rests at `--surge-rest` of its path.
  */
 export const flowBeatStyles = css`
     [data-beat="surge"] { transform-box: view-box; }
     @media (prefers-reduced-motion: no-preference) {
-        ${unsafeCSS(TIERS.map((_, tier) => ([false, true] as const).map((short) =>
-            `[data-beat="surge"][data-tier="${tier}"]${short ? "[data-short]" : ""} { animation: helman-surge ${ms(flowLoop(tier as FlowTier, short).loop)} linear infinite var(--beat-delay, 0ms); }`,
-        ).join("\n")).join("\n"))}
-        ${unsafeCSS(TIERS.map(({ interval }, tier) => `
-            [data-beat="glow"][data-tier="${tier}"], [data-beat="glow-after"][data-tier="${tier}"]::after {
-                animation: helman-glow-${tier} ${ms(interval)} var(--beat-delay, 0ms) infinite;
-            }`).join("\n"))}
+        [data-beat="surge"] { animation: ${unsafeCSS(SURGE_KEYFRAMES)} ${SURGE_BASE_MS}ms linear infinite; }
+        [data-beat="glow"], [data-beat="glow-after"]::after { animation: ${unsafeCSS(GLOW_KEYFRAMES)} ${GLOW_BASE_MS}ms infinite; }
     }
-    @keyframes helman-surge {
-        from { transform: translate(0, 0); }
-        to { transform: translate(var(--surge-x), var(--surge-y)); }
+    @keyframes ${unsafeCSS(SURGE_KEYFRAMES)} {
+        from { transform: translate(var(--surge-start-x), var(--surge-start-y)); }
+        to { transform: translate(calc(var(--surge-x) - var(--surge-start-x)), calc(var(--surge-y) - var(--surge-start-y))); }
     }
-    ${unsafeCSS(TIERS.map(({ glow }, tier) => `
-        @keyframes helman-glow-${tier} {
-            0% { opacity: 1; animation-timing-function: ${SMOOTHSTEP}; }
-            ${pct(glow.fade)} { opacity: ${glow.floor}; animation-timing-function: ${SMOOTHSTEP}; }
-            ${pct(glow.fade + glow.rise)} { opacity: 1; }
-        }`).join("\n"))}
+    @keyframes ${unsafeCSS(GLOW_KEYFRAMES)} {
+        0% { opacity: 1; animation-timing-function: ${unsafeCSS(SMOOTHSTEP)}; }
+        ${unsafeCSS(pct(GLOW.fade))} { opacity: ${GLOW.floor}; animation-timing-function: ${unsafeCSS(SMOOTHSTEP)}; }
+        100% { opacity: 1; }
+    }
     @media (prefers-reduced-motion: reduce) {
         [data-beat="surge"] {
-            transform: translate(calc(var(--surge-x) * var(--surge-rest)), calc(var(--surge-y) * var(--surge-rest)));
+            transform: translate(
+                calc(var(--surge-start-x) + (var(--surge-x) - 2 * var(--surge-start-x)) * var(--surge-rest)),
+                calc(var(--surge-start-y) + (var(--surge-y) - 2 * var(--surge-start-y)) * var(--surge-rest)));
         }
         [data-beat="glow"], [data-beat="glow-after"]::after { opacity: ${STILL_GLOW}; }
     }
 `;
 
-/** The tier each `data-beat` element was last aligned at: a new tier is a new animation. */
-const alignedAt = new WeakMap<Element, string | null>();
+/**
+ * Per root, the `data-rate` each of its `data-beat` elements' animations were
+ * last set to. Rebuilt on every sync, so an element that loses `data-beat`
+ * drops out, and gets its rate again when it regains it.
+ */
+const appliedRates = new WeakMap<ParentNode, Map<Element, string>>();
 
 /** The roots already listening for animations the browser starts on its own. */
 const listening = new WeakSet<ParentNode>();
 
-/** Put the running animations of `element` and its pseudo-elements on the origin. */
-function alignElement(element: Element): void {
+/** Run the surge and glow animations of `element` and its pseudo-elements at `rate`. */
+function applyRate(element: Element, rate: string): void {
     for (const animation of element.getAnimations({ subtree: true })) {
-        if (animation.playState === "running" && animation.startTime !== 0) {
-            animation.startTime = 0;
+        if (animation instanceof CSSAnimation
+            && (animation.animationName === SURGE_KEYFRAMES || animation.animationName === GLOW_KEYFRAMES)) {
+            animation.updatePlaybackRate(Number(rate));
         }
     }
 }
 
 /**
- * Lock every animation of the `data-beat` elements under `root` to the
- * document timeline's origin.
+ * Set every animation of the `data-beat` elements under `root` to its
+ * element's `data-rate`.
  *
- * A CSS animation starts whenever its element first renders, so animations in
- * different shadow roots drift apart; with `startTime = 0` they all count from
- * the same instant, and each one's phase is its delay. A paused one is left
- * alone: setting its start time would resume it and take its play state away
- * from CSS.
- *
- * Reading an element's animations flushes style, so a render only reads an
- * element when it is new or its tier, and with it its animation, changed,
- * which aligns it before it is first painted. The browser also starts
- * animations without a render: on a remount, or when a hidden ancestor is
- * shown. Each of those fires `animationstart` on its element, and the root
- * aligns that element then, after style is already resolved. `force` reads
- * them all, for animations that just resumed.
+ * `updatePlaybackRate` keeps an animation's progress, so a new rate changes a
+ * surge's speed where it is, without a restart or a jump. Reading an
+ * element's animations flushes style, so a render only reads an element when
+ * it is new or its rate changed, which sets it before it is first painted.
+ * The browser also starts animations without a render: on a remount, or when
+ * a hidden ancestor is shown. Each of those fires `animationstart` on its
+ * element, and the root sets that element's rate then.
  */
-export function alignToBeat(root: ParentNode & EventTarget, force = false): void {
+export function syncFlowRates(root: ParentNode & EventTarget): void {
     if (!listening.has(root)) {
         listening.add(root);
-        root.addEventListener("animationstart", (event) => alignElement(event.target as Element));
+        root.addEventListener("animationstart", (event) => {
+            const element = event.target as Element;
+            const rate = element.getAttribute("data-rate");
+            if (rate !== null) {
+                applyRate(element, rate);
+            }
+        });
     }
-    for (const element of root.querySelectorAll("[data-beat]")) {
-        const tier = element.getAttribute("data-tier");
-        if (!force && alignedAt.has(element) && alignedAt.get(element) === tier) {
-            continue;
+    const previous = appliedRates.get(root);
+    const applied = new Map<Element, string>();
+    for (const element of root.querySelectorAll("[data-beat][data-rate]")) {
+        const rate = element.getAttribute("data-rate")!;
+        applied.set(element, rate);
+        if (previous?.get(element) !== rate) {
+            applyRate(element, rate);
         }
-        alignedAt.set(element, tier);
-        alignElement(element);
     }
+    appliedRates.set(root, applied);
 }

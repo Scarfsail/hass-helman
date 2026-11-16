@@ -6,7 +6,7 @@ import { IDLE_W, liveFlows } from "../cards/node-detail/live-flows";
 import { HA_DIALOG_STUB } from "./support/ha-dialog-stub";
 import { installFixedClock } from "./support/fixed-clock";
 import { CARD_BUNDLE } from "./support/card-page";
-import { BEAT_MS, flowSurges, flowTempo, flowThickness, flowTier } from "../cards/shared/flow-style";
+import { flowSurges, flowThickness } from "../cards/shared/flow-style";
 
 /**
  * The live power split between solar, grid, battery and house.
@@ -238,35 +238,34 @@ test.describe("the card draws the split as before", () => {
     });
 });
 
-test("the beams carry their tier's surges in the flow direction, over a hot core", async ({ page }) => {
+test("the beams carry their surges in the flow direction at their own tempo, over a hot core", async ({ page }) => {
     await mountCard(page, { solar: 6500, house: 900, battery: 3200, grid: -2400 });
-    const beams = await page.evaluate(() => {
+    const beams = await page.evaluate(async () => {
         const root = document.querySelector("helman-simple-card")!.shadowRoot!;
-        return [...root.querySelectorAll<SVGLineElement>("line[data-flow]")].map(line => {
+        return Promise.all([...root.querySelectorAll<SVGLineElement>("line[data-flow]")].map(async line => {
             const core = line.nextElementSibling as SVGLineElement;
             const surges = [...core.nextElementSibling!.querySelectorAll<SVGGElement>('[data-beat="surge"]')];
+            const animations = surges.map(surge => surge.getAnimations()[0]);
+            await Promise.all(animations.map(animation => animation.ready));
             return {
                 flow: line.dataset.flow,
                 width: Number(line.getAttribute("stroke-width")),
                 coreWidth: Number(core.getAttribute("stroke-width")),
-                tier: surges.map(surge => surge.dataset.tier),
-                short: surges.map(surge => surge.hasAttribute("data-short")),
-                durations: surges.map(surge => surge.getAnimations()[0]?.effect?.getTiming().duration),
+                rates: animations.map(animation => animation.playbackRate),
+                delays: animations.map(animation => animation.effect!.getTiming().delay),
                 travelX: parseFloat(getComputedStyle(surges[0]).getPropertyValue("--surge-x")),
                 travelY: parseFloat(getComputedStyle(surges[0]).getPropertyValue("--surge-y")),
             };
-        });
+        }));
     });
     expect(beams.map(beam => beam.flow)).toEqual(["solar-grid", "solar-house", "solar-battery"]);
     // Solar → grid and solar → battery run long; solar → house down the left is a short edge.
     for (const [beam, watts, short] of [[beams[0], 2400, false], [beams[1], 900, true], [beams[2], 3200, false]] as const) {
-        const tier = flowTier(watts / 5000);
-        const { reach, surges } = flowSurges(tier, short, 0);
+        const { rate, surges } = flowSurges(watts / 5000, short);
         expect(beam.coreWidth).toBeCloseTo(beam.width * 0.35, 5);
-        expect(beam.tier).toEqual(surges.map(() => String(tier)));
-        expect(beam.short).toEqual(surges.map(() => short));
-        // Each surge loops over as many intervals as there are surges.
-        expect(beam.durations).toEqual(surges.map(() => reach * flowTempo(tier, short).travel * BEAT_MS));
+        // Every surge of a beam at its rate, spread evenly over one crossing.
+        expect(beam.rates).toEqual(surges.map(() => rate));
+        expect(beam.delays).toEqual(surges.map(surge => parseFloat(surge.delay)));
     }
     expect(beams[0].travelX).toBeGreaterThan(0);
     expect(beams[1].travelY).toBeGreaterThan(0);

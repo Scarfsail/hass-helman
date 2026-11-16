@@ -12,7 +12,6 @@ import "../node-detail/node-detail-dialog";
 import "../helman-simple/inverter-cell";
 import { DEFAULT_MAX_POWER } from "./power-flow-arrows";
 import type { RowBeat } from "./tree-item-row";
-import { ROW_LEAVES_AT, flowLandsAt, flowRatio } from "../shared/flow-style";
 import { helmanColorVars } from "../color-vars";
 import "./tree-item-info";
 import "./house-devices-section";
@@ -111,9 +110,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         const historyBucketDuration = this._uiConfig.history_bucket_duration;
         const dialogParams = this._host.dialogParams;
         const maxPower = this.config?.max_power || DEFAULT_MAX_POWER;
-        const beats = this._rowBeats(maxPower, Math.max(0, ...sourcesChildren.map((source) => source.powerValue ?? 0)));
-        // The house's devices take their surges from the house as it glows: when its own surge lands.
-        const houseLeavesAt = flowLandsAt(ROW_LEAVES_AT.consumers, flowRatio(houseNode?.powerValue ?? 0, maxPower), true);
+        const beats = this._rowBeats(maxPower);
 
         return html`
             <ha-card>
@@ -129,7 +126,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
                         .openNodeDetailOnIcon=${true}
                         .beat=${beats.sources}
                     ></helman-tree-item-list>
-                    <power-flow-arrows .devices=${sourcesChildren} .sources=${sourcesChildren} .historyRevision=${this._historyRevision} .maxPower=${maxPower} .leavesAt=${ROW_LEAVES_AT.sources}></power-flow-arrows>
+                    <power-flow-arrows .devices=${sourcesChildren} .sources=${sourcesChildren} .historyRevision=${this._historyRevision} .maxPower=${maxPower}></power-flow-arrows>
 
                     <helman-tree-item-list
                         .hass=${this._hass!}
@@ -147,7 +144,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
                             ></helman-inverter-cell>
                         `}
                     ></helman-tree-item-list>
-                    <power-flow-arrows .devices=${consumersChildren} .sources=${sourcesChildren} .historyRevision=${this._historyRevision} .maxPower=${maxPower} .leavesAt=${ROW_LEAVES_AT.consumers}></power-flow-arrows>
+                    <power-flow-arrows .devices=${consumersChildren} .sources=${sourcesChildren} .historyRevision=${this._historyRevision} .maxPower=${maxPower}></power-flow-arrows>
 
                     <helman-tree-item-list
                         .hass=${this._hass!}
@@ -160,7 +157,7 @@ export class HelmanCard extends LitElement implements LovelaceCard {
                         .openNodeDetailOnIcon=${true}
                         .beat=${beats.consumers}
                     ></helman-tree-item-list>
-                    <power-flow-arrows .devices=${houseArrowDevices} .sources=${sourcesChildren} .historyRevision=${this._historyRevision} .maxPower=${maxPower} .leavesAt=${houseLeavesAt}></power-flow-arrows>
+                    <power-flow-arrows .devices=${houseArrowDevices} .sources=${sourcesChildren} .historyRevision=${this._historyRevision} .maxPower=${maxPower}></power-flow-arrows>
                     <helman-house-devices-section
                         .hass=${this._hass!}
                         .devices=${houseDevices}
@@ -194,19 +191,14 @@ export class HelmanCard extends LitElement implements LovelaceCard {
         `;
     }
 
-    /**
-     * The sources emit as their surges leave; the distribution row receives as
-     * its strongest source's surge lands; the consumers receive as their own land.
-     */
-    private _rowBeats(maxPower: number, strongestSource: number) {
+    /** The sources emit; the distribution row and the consumers receive. One object per `maxPower`, so the rows see no change. */
+    private _rowBeats(maxPower: number) {
         if (this._beats?.sources.maxPower !== maxPower) {
             this._beats = {
-                sources: { role: "emit", leavesAt: ROW_LEAVES_AT.sources, maxPower },
-                distribution: { role: "receive", leavesAt: ROW_LEAVES_AT.sources, travelPower: strongestSource, maxPower },
-                consumers: { role: "receive", leavesAt: ROW_LEAVES_AT.consumers, maxPower },
+                sources: { role: "emit", maxPower },
+                distribution: { role: "receive", maxPower },
+                consumers: { role: "receive", maxPower },
             };
-        } else if (this._beats.distribution.travelPower !== strongestSource) {
-            this._beats = { ...this._beats, distribution: { ...this._beats.distribution, travelPower: strongestSource } };
         }
         return this._beats;
     }

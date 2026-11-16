@@ -5,10 +5,11 @@ import { CARD_BUNDLE } from "./support/card-page";
  * What the flow arrows are allowed to cost while nobody is looking at them.
  *
  * The surges run forever, so their animations are paused whenever the element
- * is scrolled out of the viewport or the tab is in the background, and rejoin
- * the shared beat on the way back. Before that, three arrow rows kept the
- * renderer recalculating style and painting on every frame for as long as the
- * card was on the page -- offscreen and backgrounded included.
+ * is scrolled out of the viewport or the tab is in the background, and resume
+ * where they froze, at the rate they had, on the way back. Before that, three
+ * arrow rows kept the renderer recalculating style and painting on every frame
+ * for as long as the card was on the page -- offscreen and backgrounded
+ * included.
  *
  * The pause is a host attribute rather than reactive state, so it costs no
  * render; these read the animation's own `playState` rather than the attribute,

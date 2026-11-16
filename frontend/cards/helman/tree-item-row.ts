@@ -3,7 +3,7 @@ import { styleMap } from 'lit/directives/style-map.js';
 import { customElement, property, state } from "lit/decorators.js";
 import type { HomeAssistant } from "../../types/ha";
 import { DEFERRABLE_HOUSE_COLOR, NEUTRAL_LIGHT_COLOR, canonicalSourceColor, computeDominantSourceColorCached, nodeAccentColor, opaqueColor, withAlpha } from "../color-utils";
-import { alignToBeat, flowBeatStyles, flowGlow, flowLandsAt, flowRatio, flowRowGlow } from "../shared/flow-style";
+import { flowBeatStyles, flowGlow, flowRatio, flowRowGlow, syncFlowRates } from "../shared/flow-style";
 import { ARROW_IDLE_W } from "./power-flow-arrows";
 import { TreeItem, isItemVisible } from "../shared/data/tree-item";
 import "./tree-item-row";
@@ -16,15 +16,9 @@ import "./tree-item-info";
 /** The house's Untracked remainder: `{house id}_unmeasured`, as the backend names it. A breaker's remainder opens nothing. */
 const HOUSE_UNMEASURED_ID = "house_unmeasured";
 
-/**
- * A row's part in the card's rhythm: it emits when its surges leave, or
- * receives when they land, `leavesAt` beats in plus the travel of a flow of
- * `travelPower` (its own power by default) against `maxPower`.
- */
+/** A row's glow: it emits in its own colour or receives in its dominant source's, its power against `maxPower`. */
 export interface RowBeat {
     role: "emit" | "receive";
-    leavesAt: number;
-    travelPower?: number;
     maxPower: number;
 }
 
@@ -58,7 +52,7 @@ export class HelmanTreeItem extends LitElement {
      * full card puts the inverter cell on its central distribution row.
      */
     @property({ attribute: false }) public centreContent?: TemplateResult;
-    /** Set on the card's top-level rows only: the row glows on the beat while it has power. */
+    /** Set on the card's top-level rows only: the row glows while it has power. */
     @property({ attribute: false }) public beat?: RowBeat;
 
     @state() private _childrenCollapsed = true;
@@ -77,7 +71,7 @@ export class HelmanTreeItem extends LitElement {
 
     protected updated(changed: PropertyValues): void {
         super.updated(changed);
-        alignToBeat(this.renderRoot);
+        syncFlowRates(this.renderRoot);
     }
 
     private _showMoreInfo(entityId: string) {
@@ -242,16 +236,14 @@ export class HelmanTreeItem extends LitElement {
         `];
     }
 
-    /** The outline that pulses on the beat, or nothing while the row has no beat or no power. */
+    /** The outline that breathes at the row's own rate, or nothing while the row has no beat or no power. */
     private _renderGlow(power: number) {
         const beat = this.beat;
         if (!beat || power <= ARROW_IDLE_W) {
             return nothing;
         }
         const emits = beat.role === "emit";
-        const r = flowRatio(power, beat.maxPower);
-        const phase = emits ? beat.leavesAt : flowLandsAt(beat.leavesAt, flowRatio(beat.travelPower ?? power, beat.maxPower), true);
-        const glow = flowGlow(r, phase);
+        const glow = flowGlow(flowRatio(power, beat.maxPower));
         // The history stores each source in its translucent accent; the outline takes it at full strength, as the beams do.
         const dominant = computeDominantSourceColorCached(this.device);
         const color = emits ? canonicalSourceColor(this.device.sourceType) : dominant ? opaqueColor(dominant) : NEUTRAL_LIGHT_COLOR;
@@ -259,8 +251,8 @@ export class HelmanTreeItem extends LitElement {
         const { borderWidth, boxShadow } = flowRowGlow(color, glow.size, !this.centreContent);
         return html`
             <div class="glow-level" style="opacity: ${glow.level}">
-                <div class="glow" data-beat="glow" data-tier=${glow.tier}
-                    style="border-width: ${borderWidth}; border-color: ${color}; box-shadow: ${boxShadow}; --beat-delay: ${glow.delay}"></div>
+                <div class="glow" data-beat="glow" data-rate=${glow.rate}
+                    style="border-width: ${borderWidth}; border-color: ${color}; box-shadow: ${boxShadow}"></div>
             </div>
         `;
     }

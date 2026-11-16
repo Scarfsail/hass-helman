@@ -4,7 +4,7 @@ import { formatPower } from "../shared/format";
 import { fillTemplate } from "../localize/localize";
 import { NODE_DETAIL_REQUEST_EVENT } from "./node-detail-types";
 import { helmanColorVars } from "../color-vars";
-import { alignToBeat, flowBeatStyles, flowGlow } from "../shared/flow-style";
+import { flowBeatStyles, flowGlow, syncFlowRates } from "../shared/flow-style";
 import "./help-tip";
 
 export interface FlowGaugeItem { node: "solar" | "battery" | "grid" | "house"; powerW: number }
@@ -28,8 +28,8 @@ export function nodeIcon(node: FlowGaugeItem["node"]): string {
 /**
  * The gauge's pill: tinted in its node's colour (`--node`), filled to its
  * share (`--fill`), muted while not `data-active`. Shared by every gauge drawn
- * this way, live or over a period. A live pill that flows glows on the
- * shared beat (`data-beat`), at the level its share gives `--glow`.
+ * this way, live or over a period. A live pill that flows glows
+ * (`data-beat`) at the level and rate its share gives (`--glow`, `data-rate`).
  */
 export const gaugePillStyles = css`
     .gauge-title { display: flex; align-items: center; font-size: 11px; font-weight: 600; text-transform: uppercase;
@@ -43,7 +43,7 @@ export const gaugePillStyles = css`
         background: color-mix(in srgb, var(--node) 55%, transparent); }
     /* Above the fill; a popup keeps its own position. */
     .pill > :not(.popup) { position: relative; }
-    /* The glow: painted once, its level in its colour; only its opacity follows the beat. */
+    /* The glow: painted once, its level in its colour; only its opacity animates. */
     .pill[data-beat]::after { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
         box-shadow: 0 0 12px var(--glow); }
     /* Mute the idle pill's own content, not its popup. */
@@ -88,7 +88,7 @@ export class HelmanFlowGauge extends LitElement {
 
     protected updated(changed: PropertyValues): void {
         super.updated(changed);
-        alignToBeat(this.renderRoot);
+        syncFlowRates(this.renderRoot);
     }
 
     /** Always the same three pills, so the overview never jumps; an idle one is muted but still opens its node. */
@@ -102,11 +102,11 @@ export class HelmanFlowGauge extends LitElement {
                 const active = powerW > 0;
                 const pct = active ? Math.max(1, Math.round(powerW / total * 100)) : 0;
                 const figure = html`${formatPower(powerW).display}${active ? html` <span class="percent">${pct} %</span>` : nothing}`;
-                // The pill's share of the gauge is its ratio: its tier and level.
-                const glow = active ? flowGlow(powerW / total, 0) : null;
+                // The pill's share of the gauge is its ratio: its level and rate.
+                const glow = active ? flowGlow(powerW / total) : null;
                 return html`<button class="pill" type="button" ?data-active=${active}
-                    data-beat=${glow ? "glow-after" : nothing} data-tier=${glow?.tier ?? nothing}
-                    style=${`--node: var(--helman-${node}); --fill: ${pct}%${glow ? `; --glow: color-mix(in srgb, var(--node) ${+(glow.level * 100).toFixed(1)}%, transparent); --beat-delay: ${glow.delay}` : ""}`}
+                    data-beat=${glow ? "glow-after" : nothing} data-rate=${glow?.rate ?? nothing}
+                    style=${`--node: var(--helman-${node}); --fill: ${pct}%${glow ? `; --glow: color-mix(in srgb, var(--node) ${+(glow.level * 100).toFixed(1)}%, transparent)` : ""}`}
                     @click=${() => this.dispatchEvent(new CustomEvent(NODE_DETAIL_REQUEST_EVENT, { detail: { target: node }, bubbles: true, composed: true }))}>
                     <ha-icon icon=${nodeIcon(node)}></ha-icon>
                     <span class="figure gauge-figure">${figure}</span>
