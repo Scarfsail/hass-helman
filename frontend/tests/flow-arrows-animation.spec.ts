@@ -92,10 +92,10 @@ test("a beam is as thick as its power says, not a share of its column, and tiny 
             .map((item) => (item.querySelector(".animated-arrow") as HTMLElement | null)?.getBoundingClientRect().width ?? null);
     });
 
-    expect(widths).toEqual([7, 14, 2.5, null, null]);
+    expect(widths).toEqual([10.5, 21, 2.5, null, null]);
 });
 
-test("at half the maximum a consumer's beam is 7 px wide and keeps its source shares in order", async ({ page }) => {
+test("at half the maximum a consumer's beam is 10.5 px wide and keeps its source shares in order", async ({ page }) => {
     const consumer = {
         powerValue: MAX_POWER / 2,
         sourcePowerHistory: [{ "src-grid": { power: 100, color: "#000" }, "src-solar": { power: 300, color: "#000" } }],
@@ -104,7 +104,7 @@ test("at half the maximum a consumer's beam is 7 px wide and keeps its source sh
 
     const width = await page.evaluate(() =>
         document.querySelector("power-flow-arrows")!.shadowRoot!.querySelector(".animated-arrow")!.getBoundingClientRect().width);
-    expect(width).toBe(7);
+    expect(width).toBe(10.5);
     expect(await segments(page)).toEqual([[
         { source: "solar", grow: "0.75" },
         { source: "grid", grow: "0.25" },

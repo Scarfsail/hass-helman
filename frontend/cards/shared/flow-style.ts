@@ -8,29 +8,34 @@ import { css, unsafeCSS } from "lit";
  *
  * One ratio drives it all, per flow and per node: `r = min(power / max, 1)`,
  * with the maximum the card already scales that flow by. From `r` come the
- * cues (thickness, and through one easing `e` the level `k`, glow size `s`,
- * surge speed and spacing, and glow rate), all continuous curves.
+ * cues (thickness and surge speed, and through one easing `e` the level `k`,
+ * glow size `s` and glow rate), all continuous curves. A surge's speed is a
+ * velocity on screen, px/s, the same on every edge, and its blob and the
+ * spacing between surges are fixed lengths on screen, so a flow pulses at the
+ * same rhythm on a short beam and a long one.
  *
  * Every edge runs its own tempo and every glow breathes at its own node's
  * rate; nothing shares a beat. What animates never carries data. The level
  * and size sit on static wrappers and geometry painted once; the animated
  * element only moves its transform, or its opacity between a fixed floor and
  * 1, on one keyframe set run at a fixed base duration. Its speed is its
- * `playbackRate` (`data-rate`), which `syncFlowRates` retunes in place, so a
- * power tick changes a surge's speed where it is, and the compositor runs
- * every frame without a style recalc or a paint. Only a step in an edge's
- * surge count re-renders that edge's surges, once.
+ * `playbackRate` (`data-rate`; a surge's from its speed and its beam's
+ * measured length), which `syncFlowRates` retunes in place, so a power tick
+ * changes a surge's speed where it is, and the compositor runs every frame
+ * without a style recalc or a paint. An edge's surge count comes from its
+ * beam's length alone, so only a layout that resizes the beam re-renders its
+ * surges, once.
  */
 
 /** The surge's and glow's keyframes run once per this many ms at a `playbackRate` of 1. */
 const SURGE_BASE_MS = 1000;
 const GLOW_BASE_MS = 1000;
 
-/** How long a surge takes to cross a long and a short edge, ms, from `e` = 0 to 1. */
-const TRAVEL_MS = { long: [3900, 1300], short: [1300, 650] } as const;
+/** A surge's speed on screen, px/s, from `r` = 0 to 1, on every edge. */
+const SURGE_SPEED = [3, 120] as const;
 
-/** The most surges on a long and a short edge at once. */
-const MAX_SURGES = { long: 3, short: 2 } as const;
+/** How far apart an edge's surges are, px of their path on screen, about. */
+const SURGE_SPACING = 40;
 
 /** A glow's period, ms, from `e` = 0 to 1: never quicker than one breath per 1300 ms. */
 const GLOW_PERIOD_MS = [3900, 1300] as const;
@@ -45,8 +50,18 @@ const GLOW = { fade: 0.8, floor: 0.35 } as const;
 const STILL_GLOW = 0.6;
 
 /** The surge: its length, px, and the share of a short beam it may take at most. */
-const SURGE_LENGTH = 36;
+const SURGE_LENGTH = 12;
 const SURGE_MAX_SHARE = 0.9;
+
+/** A beam's thickness, px: its floor, at the faintest flows, and at `r` = 1. */
+const BEAM_THICKNESS = { floor: 2.5, max: 21 } as const;
+
+/**
+ * How far, px, a surge's blob still overlaps its beam's end as it leaves,
+ * and the next one's its start as it enters: a beam that carries one surge
+ * is never empty, even at the instant it hands off.
+ */
+const SURGE_HANDOFF = 1.5;
 
 /** The hot core's share of the beam's thickness. */
 const CORE_SHARE = 0.35;
@@ -64,7 +79,7 @@ export function flowRatio(power: number, max: number | null | undefined): number
 
 /** Beam thickness, px. */
 export function flowThickness(r: number): number {
-    return Math.max(2.5, r * 14);
+    return Math.max(BEAM_THICKNESS.floor, r * BEAM_THICKNESS.max);
 }
 
 /** The easing every cue but thickness takes `r` through, 0 – 1. */
@@ -82,18 +97,21 @@ export function flowGlowSize(r: number): number {
     return flowEase(r);
 }
 
-/** From `from` to `to`, read at `e`, linearly. */
-const along = ([from, to]: readonly [number, number], e: number) => from + (to - from) * e;
+/** From `from` to `to`, read at `t` (0 – 1), linearly. */
+const along = ([from, to]: readonly [number, number], t: number) => from + (to - from) * t;
 
-/** How long a surge takes to cross its edge, ms. */
-export function flowTravelMs(r: number, short: boolean): number {
-    return along(TRAVEL_MS[short ? "short" : "long"], flowEase(r));
+/** A surge's speed on screen, px/s: linear in `r`, the cue the eye reads power by. */
+export function flowSpeed(r: number): number {
+    return along(SURGE_SPEED, r);
 }
 
-/** How many surges are on an edge at once: at least two, so one is always on the beam. */
-export function flowSurgeCount(r: number, short: boolean): number {
-    const max = MAX_SURGES[short ? "short" : "long"];
-    return Math.min(max, 2 + Math.floor(flowEase(r) * (max - 1)));
+/**
+ * How many surges are on a beam `beamLength` px long at once: one per
+ * `SURGE_SPACING` px of the beam and a blob, at least one, so a blob always
+ * overlaps the beam.
+ */
+export function flowSurgeCount(beamLength: number): number {
+    return Math.max(1, Math.round((beamLength + flowSurgeLength(beamLength)) / SURGE_SPACING));
 }
 
 /** A node's glow period, ms. */
@@ -102,11 +120,22 @@ export function flowGlowPeriodMs(r: number): number {
 }
 
 /**
- * The `playbackRate` that runs a keyframe set of `baseMs` once per `periodMs`,
- * as `data-rate` carries it: rounded down to 0.01, so it never runs quicker
- * than its curve (a glow never above one breath per 1300 ms).
+ * The `playbackRate` that runs a glow's keyframe set of `baseMs` once per
+ * `periodMs`, as `data-rate` carries it: rounded down to 0.01, so it never
+ * runs quicker than its curve (never above one breath per 1300 ms).
  */
 const rateFor = (baseMs: number, periodMs: number) => Math.floor(baseMs / periodMs * 100) / 100;
+
+/**
+ * The `playbackRate` of a surge moving at `speed` px/s along a beam
+ * `beamLength` px long on screen: one loop is one crossing, its centre
+ * running `flowSurgeTravel`. Rounded to three significant digits, so a slow
+ * surge on a long beam never stops and is never more than 0.5 % off its
+ * speed.
+ */
+export function flowSurgeRate(speed: number, beamLength: number): number {
+    return Number((SURGE_BASE_MS * speed / (flowSurgeTravel(beamLength) * 1000)).toPrecision(3));
+}
 
 /** The hot core of a flow in colour `color`. */
 export function flowHot(color: string): string {
@@ -130,6 +159,9 @@ export interface FlowBeam {
     surgeOpacity: number;
 }
 
+/** The surge's thickness, px: wider than its beam, so it swells past the body. */
+const surgeThickness = (r: number) => flowThickness(r) + 4 + 10 * flowLevel(r);
+
 export function flowBeam(r: number, color: string): FlowBeam {
     const width = flowThickness(r);
     const k = flowLevel(r);
@@ -142,7 +174,7 @@ export function flowBeam(r: number, color: string): FlowBeam {
         bloom: `0 0 ${bloomBlur}px ${bloomColor}`,
         bloomBlur,
         bloomColor,
-        surgeThickness: width + 4 + 10 * k,
+        surgeThickness: surgeThickness(r),
         surgeOpacity: 0.35 + 0.65 * k,
     };
 }
@@ -156,12 +188,29 @@ export function flowSurgeLength(beamLength: number): number {
 export const FLOW_SURGE_LENGTH_CSS = `min(${SURGE_LENGTH}px, ${SURGE_MAX_SHARE * 100}%)`;
 
 /**
- * Where a surge's centre starts along such a beam, as a CSS length: half a
- * surge length back from its start, against `towards` (1 or -1), the
- * direction the beam runs in.
+ * How far a surge's centre starts before a beam `beamLength` px long and ends
+ * past it, px: half its blob, short of `SURGE_HANDOFF`, so it enters just
+ * overlapping the beam's start and leaves just overlapping its end. A beam
+ * shows its surges over its own length, ends square. Never below 0: on a beam
+ * too short for the hand-off, a centre starts at the start and ends at the
+ * end, so a crossing is never shorter than the beam.
+ */
+export function flowSurgeLead(beamLength: number): number {
+    return Math.max(0, flowSurgeLength(beamLength) / 2 - SURGE_HANDOFF);
+}
+
+/** How far a surge's centre runs in one crossing of a beam `beamLength` px long, px: never less than the beam. */
+export function flowSurgeTravel(beamLength: number): number {
+    return beamLength + 2 * flowSurgeLead(beamLength);
+}
+
+/**
+ * Where a surge's centre starts along a beam whose length is the reference
+ * box of a CSS percentage, as a CSS length: `flowSurgeLead` back from its
+ * start, against `towards` (1 or -1), the direction the beam runs in.
  */
 export function flowSurgeStartCss(towards: number): string {
-    return `calc(${FLOW_SURGE_LENGTH_CSS} * ${-towards / 2})`;
+    return `calc(max(0px, ${FLOW_SURGE_LENGTH_CSS} / 2 - ${SURGE_HANDOFF}px) * ${-towards})`;
 }
 
 /** The surge's soft blob, as gradient stops: offset, colour. */
@@ -182,17 +231,22 @@ export interface FlowSurge {
 }
 
 /**
- * The surges on one edge and the `playbackRate` they run at. Each one's loop
- * is one crossing: its centre runs from half a surge length before the beam's
- * start to half a surge length past its end, so one leaves as the last one
- * goes. They are spread evenly over the loop, by a delay in the animation's
- * own time, which holds at any rate.
+ * The surges on one edge, on a beam `beamLength` px long on screen as
+ * `syncFlowRates` measured it, and the `playbackRate` they run at. Each one's
+ * loop is one crossing: its centre runs from `flowSurgeLead` before the
+ * beam's start to as far past its end, so the next one enters as the last
+ * one leaves. They are spread evenly over the loop, by a delay in the
+ * animation's own time, which holds at any rate. A beam not measured yet, or
+ * not laid out, carries none.
  */
-export function flowSurges(r: number, short: boolean): { count: number; rate: number; surges: FlowSurge[] } {
-    const count = flowSurgeCount(r, short);
+export function flowSurges(r: number, beamLength: number | undefined): { count: number; rate: number; surges: FlowSurge[] } {
+    if (!beamLength) {
+        return { count: 0, rate: 0, surges: [] };
+    }
+    const count = flowSurgeCount(beamLength);
     return {
         count,
-        rate: rateFor(SURGE_BASE_MS, flowTravelMs(r, short)),
+        rate: flowSurgeRate(flowSpeed(r), beamLength),
         surges: Array.from({ length: count }, (_, index) => ({
             delay: `${-Math.round(index / count * SURGE_BASE_MS)}ms`,
             rest: (index + 1) / (count + 1),
@@ -236,8 +290,8 @@ const GLOW_KEYFRAMES = "helman-glow";
  * The surge and glow animations, each one keyframe set at its base duration;
  * `syncFlowRates` sets each one's speed from its element's `data-rate`.
  *
- * `[data-beat="surge"]` moves its centre from `--surge-start-x/y` (half a
- * surge length back from the beam's start) to the far side of the beam's
+ * `[data-beat="surge"]` moves its centre from `--surge-start-x/y`
+ * (`flowSurgeLead` back from the beam's start) to the far side of the beam's
  * vector `--surge-x/y`, as far past its end. `[data-beat="glow"]`, or the
  * `::after` of `[data-beat="glow-after"]`, ripples its opacity between a fixed
  * floor and 1. Motion reduced, a surge rests at `--surge-rest` of its path.
@@ -267,15 +321,94 @@ export const flowBeatStyles = css`
     }
 `;
 
-/**
- * Per root, the `data-rate` each of its `data-beat` elements' animations were
- * last set to. Rebuilt on every sync, so an element that loses `data-beat`
- * drops out, and gets its rate again when it regains it.
- */
-const appliedRates = new WeakMap<ParentNode, Map<Element, string>>();
+/** Each beam's length on screen, px, by its `data-flow-beam` key. */
+export type FlowBeamLengths = Record<string, number>;
 
-/** The roots already listening for animations the browser starts on its own. */
-const listening = new WeakSet<ParentNode>();
+/** What `syncFlowRates` keeps per root. */
+interface FlowRoot {
+    /**
+     * The `data-rate` each of its `data-beat` elements' animations were last
+     * set to. Rebuilt on every sync, so an element that loses `data-beat`
+     * drops out, and gets its rate again when it regains it.
+     */
+    rates: Map<Element, string>;
+    /** Each beam's length as last measured; cleared when the layout resizes one. */
+    measured: Map<Element, number>;
+    /** The lengths last handed to `onLengths`. */
+    lengths: FlowBeamLengths;
+    onLengths?: (lengths: FlowBeamLengths) => void;
+    /**
+     * Watches what sizes each beam and never follows its power (an SVG beam its `<svg>`, an HTML beam its
+     * parent, as a beam's own width does), made once the root has a beam.
+     */
+    resize?: ResizeObserver;
+    observed: Set<Element>;
+}
+
+const roots = new WeakMap<ParentNode, FlowRoot>();
+
+/** A measured length, px, to 0.01 px: a re-measure of the same layout reads the same. */
+const roundLength = (length: number) => Math.round(length * 100) / 100;
+
+/**
+ * A beam's length on screen, px, to 0.01 px: a `<line>` from its ends through its screen
+ * transform, so its stroke never counts, any other beam down its height.
+ */
+function measureBeam(beam: Element): number {
+    if (beam instanceof SVGLineElement) {
+        const ctm = beam.getScreenCTM();
+        if (!ctm) {
+            return 0;
+        }
+        const start = new DOMPoint(beam.x1.baseVal.value, beam.y1.baseVal.value).matrixTransform(ctm);
+        const end = new DOMPoint(beam.x2.baseVal.value, beam.y2.baseVal.value).matrixTransform(ctm);
+        return roundLength(Math.hypot(end.x - start.x, end.y - start.y));
+    }
+    return roundLength(beam.getBoundingClientRect().height);
+}
+
+/** Whether two sets of beam lengths are the same. */
+const sameLengths = (a: FlowBeamLengths, b: FlowBeamLengths) =>
+    Object.keys(a).length === Object.keys(b).length && Object.keys(a).every((key) => a[key] === b[key]);
+
+/**
+ * Measure the `[data-flow-beam]` beams under `root`, each once until the
+ * layout resizes it, and hand their lengths to `state.onLengths` when they
+ * differ from the last ones handed over.
+ */
+function measureBeams(root: ParentNode & EventTarget, state: FlowRoot): void {
+    const measured = new Map<Element, number>();
+    const lengths: FlowBeamLengths = {};
+    const observed = new Set<Element>();
+    for (const beam of root.querySelectorAll("[data-flow-beam]")) {
+        const length = state.measured.get(beam) ?? measureBeam(beam);
+        measured.set(beam, length);
+        lengths[beam.getAttribute("data-flow-beam")!] = length;
+        observed.add((beam instanceof SVGElement ? beam.ownerSVGElement : beam.parentElement) ?? beam);
+    }
+    state.measured = measured;
+    if (observed.size > 0 && !state.resize) {
+        state.resize = new ResizeObserver(() => {
+            state.measured.clear();
+            syncFlowRates(root, state.onLengths);
+        });
+    }
+    for (const target of state.observed) {
+        if (!observed.has(target)) {
+            state.resize!.unobserve(target);
+        }
+    }
+    for (const target of observed) {
+        if (!state.observed.has(target)) {
+            state.resize!.observe(target);
+        }
+    }
+    state.observed = observed;
+    if (!sameLengths(lengths, state.lengths)) {
+        state.lengths = lengths;
+        state.onLengths?.(lengths);
+    }
+}
 
 /** Run the surge and glow animations of `element` and its pseudo-elements at `rate`. */
 function applyRate(element: Element, rate: string): void {
@@ -289,19 +422,25 @@ function applyRate(element: Element, rate: string): void {
 
 /**
  * Set every animation of the `data-beat` elements under `root` to its
- * element's `data-rate`.
+ * element's `data-rate`, and hand the on-screen lengths of the beams marked
+ * `data-flow-beam` to `onLengths`, whenever they change. A card renders each
+ * edge's surges from its beam's length (`flowSurges`), so a beam not yet
+ * measured carries none until the first sync hands its length over, and a
+ * layout that resizes it hands the new one over.
  *
  * `updatePlaybackRate` keeps an animation's progress, so a new rate changes a
  * surge's speed where it is, without a restart or a jump. Reading an
- * element's animations flushes style, so a render only reads an element when
- * it is new or its rate changed, which sets it before it is first painted.
- * The browser also starts animations without a render: on a remount, or when
- * a hidden ancestor is shown. Each of those fires `animationstart` on its
- * element, and the root sets that element's rate then.
+ * element's animations flushes style, and measuring a beam layout, so a
+ * render only reads an element when it is new or its rate changed, and only
+ * measures a beam when it is new or the layout resized it, which sets it
+ * before it is first painted. The browser also starts animations without a
+ * render: on a remount, or when a hidden ancestor is shown. Each of those
+ * fires `animationstart` on its element, and the root sets that element's
+ * rate then.
  */
-export function syncFlowRates(root: ParentNode & EventTarget): void {
-    if (!listening.has(root)) {
-        listening.add(root);
+export function syncFlowRates(root: ParentNode & EventTarget, onLengths?: (lengths: FlowBeamLengths) => void): void {
+    let state = roots.get(root);
+    if (!state) {
         root.addEventListener("animationstart", (event) => {
             const element = event.target as Element;
             const rate = element.getAttribute("data-rate");
@@ -309,15 +448,21 @@ export function syncFlowRates(root: ParentNode & EventTarget): void {
                 applyRate(element, rate);
             }
         });
+        state = { rates: new Map(), measured: new Map(), lengths: {}, observed: new Set() };
+        roots.set(root, state);
     }
-    const previous = appliedRates.get(root);
+    state.onLengths = onLengths;
+    if (onLengths) {
+        measureBeams(root, state);
+    }
+
     const applied = new Map<Element, string>();
     for (const element of root.querySelectorAll("[data-beat][data-rate]")) {
         const rate = element.getAttribute("data-rate")!;
         applied.set(element, rate);
-        if (previous?.get(element) !== rate) {
+        if (state.rates.get(element) !== rate) {
             applyRate(element, rate);
         }
     }
-    appliedRates.set(root, applied);
+    state.rates = applied;
 }

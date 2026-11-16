@@ -1,10 +1,10 @@
 import { LitElement, PropertyValues, css, html, unsafeCSS } from "lit-element";
-import { customElement, property } from "lit/decorators.js";
+import { customElement, property, state } from "lit/decorators.js";
 import { TreeItem } from "../shared/data/tree-item";
 import { nothing } from "lit-html";
 import { NEUTRAL_LIGHT_COLOR, canonicalSourceColor } from "../color-utils";
 import { keyed } from "lit/directives/keyed.js";
-import { FLOW_SURGE_LENGTH_CSS, flowBeam, flowBeatStyles, flowHot, flowRatio, flowSurgeGradient, flowSurgeStartCss, flowSurges, syncFlowRates } from "../shared/flow-style";
+import { FLOW_SURGE_LENGTH_CSS, flowBeam, flowBeatStyles, flowHot, flowRatio, flowSurgeGradient, flowSurgeStartCss, flowSurges, syncFlowRates, type FlowBeamLengths } from "../shared/flow-style";
 import { helmanColorVars } from "../color-vars";
 
 /** The house this card assumes without `max_power`: three phases of 25 A. */
@@ -49,7 +49,7 @@ function flowBands(item: TreeItem, sources: readonly TreeItem[]): FlowBand[] {
  *
  * A beam is `flowThickness` wide, its body the column's source-share bands
  * with a hot core and a static bloom over them, and its surges run at the
- * column's own tempo. Every gap here is a short edge.
+ * column's own speed, as many as its measured length holds. It ends square.
  *
  * The animations never end, so their per-frame cost is paid for as long as the
  * card is on the page. They therefore move nothing but `transform` (the
@@ -80,6 +80,9 @@ export class PowerFlowArrows extends LitElement {
      * at `hass` churn rate rather than at the tick the value actually moves on.
      */
     @property({ type: Number }) historyRevision?: number;
+
+    /** Each column's beam length on screen, px, as `syncFlowRates` measured it. */
+    @state() private _beamLengths: FlowBeamLengths = {};
 
     private _observer?: IntersectionObserver;
     private _onScreen = true;
@@ -114,7 +117,7 @@ export class PowerFlowArrows extends LitElement {
 
     protected updated(changed: PropertyValues): void {
         super.updated(changed);
-        syncFlowRates(this.renderRoot);
+        syncFlowRates(this.renderRoot, (lengths) => { this._beamLengths = lengths; });
     }
 
     private _onVisibilityChange = () => this._syncPaused();
@@ -144,7 +147,6 @@ export class PowerFlowArrows extends LitElement {
             .body, .segments {
                 position: absolute;
                 inset: 0;
-                border-radius: inherit;
             }
             .segments {
                 display: flex;
@@ -159,7 +161,6 @@ export class PowerFlowArrows extends LitElement {
                 bottom: 0;
                 left: 50%;
                 transform: translateX(-50%);
-                border-radius: inherit;
             }
             .surges {
                 position: absolute;
@@ -192,7 +193,7 @@ export class PowerFlowArrows extends LitElement {
         const maxPower = this.maxPower || DEFAULT_MAX_POWER;
         return html`
             <div class="container">
-                ${this.devices.map((device) => {
+                ${this.devices.map((device, index) => {
                     if (!device?.powerValue || device.powerValue <= ARROW_IDLE_W) {
                         return html`<div class="item-container"></div>`;
                     }
@@ -200,10 +201,12 @@ export class PowerFlowArrows extends LitElement {
                     const color = canonicalSourceColor(bands.reduce((max, band) => band.share > max.share ? band : max).sourceType, NEUTRAL_LIGHT_COLOR);
                     const r = flowRatio(device.powerValue, maxPower);
                     const beam = flowBeam(r, color);
-                    const { count, rate, surges } = flowSurges(r, true);
+                    const { count, rate, surges } = flowSurges(r, this._beamLengths[index]);
+                    // The beam is measured down its own height; its column, whose width never follows the power, is
+                    // what is watched for a resize, so a power tick never re-measures it.
                     return html`
                         <div class="item-container">
-                            <div class="animated-arrow" style="width: ${beam.width}px; border-radius: ${beam.width / 2}px; box-shadow: ${beam.bloom}">
+                            <div class="animated-arrow" data-flow-beam=${index} style="width: ${beam.width}px; box-shadow: ${beam.bloom}">
                                 <div class="body" style="opacity: ${beam.bodyOpacity}">
                                     <div class="segments">
                                         ${bands.map((band) => html`

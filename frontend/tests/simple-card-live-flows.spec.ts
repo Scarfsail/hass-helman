@@ -247,8 +247,12 @@ test("the beams carry their surges in the flow direction at their own tempo, ove
             const surges = [...core.nextElementSibling!.querySelectorAll<SVGGElement>('[data-beat="surge"]')];
             const animations = surges.map(surge => surge.getAnimations()[0]);
             await Promise.all(animations.map(animation => animation.ready));
+            const ctm = line.getScreenCTM()!;
+            const start = new DOMPoint(line.x1.baseVal.value, line.y1.baseVal.value).matrixTransform(ctm);
+            const end = new DOMPoint(line.x2.baseVal.value, line.y2.baseVal.value).matrixTransform(ctm);
             return {
                 flow: line.dataset.flow,
+                length: Math.hypot(end.x - start.x, end.y - start.y),
                 width: Number(line.getAttribute("stroke-width")),
                 coreWidth: Number(core.getAttribute("stroke-width")),
                 rates: animations.map(animation => animation.playbackRate),
@@ -259,13 +263,13 @@ test("the beams carry their surges in the flow direction at their own tempo, ove
         }));
     });
     expect(beams.map(beam => beam.flow)).toEqual(["solar-grid", "solar-house", "solar-battery"]);
-    // Solar → grid and solar → battery run long; solar → house down the left is a short edge.
-    for (const [beam, watts, short] of [[beams[0], 2400, false], [beams[1], 900, true], [beams[2], 3200, false]] as const) {
-        const { rate, surges } = flowSurges(watts / 5000, short);
+    for (const [beam, watts] of [[beams[0], 2400], [beams[1], 900], [beams[2], 3200]] as const) {
+        const { rate, surges } = flowSurges(watts / 5000, beam.length);
         expect(beam.coreWidth).toBeCloseTo(beam.width * 0.35, 5);
-        // Every surge of a beam at its rate, spread evenly over one crossing.
-        expect(beam.rates).toEqual(surges.map(() => rate));
+        // As many surges as the beam's length on screen holds, spread evenly over one crossing, each at its
+        // speed over that length: within 1 %, as the card measured the beam on its own.
         expect(beam.delays).toEqual(surges.map(surge => parseFloat(surge.delay)));
+        for (const actual of beam.rates) expect(Math.abs(actual - rate) / rate).toBeLessThanOrEqual(0.01);
     }
     expect(beams[0].travelX).toBeGreaterThan(0);
     expect(beams[1].travelY).toBeGreaterThan(0);
