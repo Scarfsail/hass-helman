@@ -6,10 +6,16 @@ import { css, unsafeCSS } from "lit";
  * pills, which share the same glow. Every number of the look lives here and
  * nowhere else.
  *
- * One ratio drives it all, per flow and per node: `r = min(power / max, 1)`,
- * with the maximum the card already scales that flow by. From `r` come the
- * cues (thickness and surge speed, and through one easing `e` the level `k`,
- * glow size `s` and glow rate), all continuous curves. A surge's speed is a
+ * One ratio drives it all, per flow and per node:
+ * `r = (power - FLOW_FLOOR_W) / (max - FLOW_FLOOR_W)`, clamped to 0 – 1, with
+ * one shared maximum on every card, `flowScaleW`: the largest of the solar,
+ * battery and grid `max_power`, so equal watts look equal everywhere. A flow
+ * at or under the 200 W floor draws at `r` = 0, the faintest look.
+ * Every cue (thickness, surge width, halo and speed, level `k`, glow size `s`
+ * and glow rate) comes from `r` through one easing `t = flowEase(r)`, all
+ * continuous curves, so they always agree. A surge is a bubble swelling
+ * around its beam inside a soft halo in the flow's colour, an energy pulse
+ * glowing past the pipe; both grow with `t`. A surge's speed is a
  * velocity on screen, px/s, the same on every edge, and its blob and the
  * spacing between surges are fixed lengths on screen, so a flow pulses at the
  * same rhythm on a short beam and a long one.
@@ -31,13 +37,13 @@ import { css, unsafeCSS } from "lit";
 const SURGE_BASE_MS = 1000;
 const GLOW_BASE_MS = 1000;
 
-/** A surge's speed on screen, px/s, from `r` = 0 to 1, on every edge. */
+/** A surge's speed on screen, px/s, from `t` = 0 to 1, on every edge. */
 const SURGE_SPEED = [3, 120] as const;
 
 /** How far apart an edge's surges are, px of their path on screen, about. */
 const SURGE_SPACING = 40;
 
-/** A glow's period, ms, from `e` = 0 to 1: never quicker than one breath per 1300 ms. */
+/** A glow's period, ms, from `t` = 0 to 1: never quicker than one breath per 1300 ms. */
 const GLOW_PERIOD_MS = [3900, 1300] as const;
 
 /** One sweep of the grid illustration's wire dots, ms. */
@@ -53,8 +59,14 @@ const STILL_GLOW = 0.6;
 const SURGE_LENGTH = 12;
 const SURGE_MAX_SHARE = 0.9;
 
-/** A beam's thickness, px: its floor, at the faintest flows, and at `r` = 1. */
-const BEAM_THICKNESS = { floor: 2.5, max: 21 } as const;
+/** A beam's thickness, px: its floor, at `r` = 0, and at `r` = 1. */
+const BEAM_THICKNESS = { floor: 1.5, max: 21 } as const;
+
+/** How much wider than its beam a surge's bubble is, px, from `t` = 0 to 1. */
+const SURGE_SWELL = [4, 12] as const;
+
+/** The soft halo around a surge's bubble, px each side, from `t` = 0 to 1. */
+const SURGE_HALO = [2, 8] as const;
 
 /**
  * How far, px, a surge's blob still overlaps its beam's end as it leaves,
@@ -72,19 +84,22 @@ export const FLOW_HOT_MIX = "80%";
 /** `cubic-bezier` control points that trace smoothstep, `3t² − 2t³`, exactly. */
 const SMOOTHSTEP = "cubic-bezier(0.3333, 0, 0.6667, 1)";
 
-/** The ratio a flow or node is drawn at. */
+/** The shared scale every flow is drawn against, W: the largest positive of `maxima`, else 0. */
+export function flowScaleW(maxima: readonly (number | null | undefined)[]): number {
+    return Math.max(0, ...maxima.filter((max): max is number => typeof max === "number" && max > 0));
+}
+
+/** The power, W, at or under which a flow or node draws at the lowest ratio. */
+export const FLOW_FLOOR_W = 200;
+
+/** The ratio a flow or node is drawn at: from the floor to `max`, 0 – 1; 0 when `max` is at or under the floor. */
 export function flowRatio(power: number, max: number | null | undefined): number {
-    return max ? Math.min(Math.max(power, 0) / max, 1) : 0;
+    return max && max > FLOW_FLOOR_W ? Math.min(Math.max(power - FLOW_FLOOR_W, 0) / (max - FLOW_FLOOR_W), 1) : 0;
 }
 
-/** Beam thickness, px. */
-export function flowThickness(r: number): number {
-    return Math.max(BEAM_THICKNESS.floor, r * BEAM_THICKNESS.max);
-}
-
-/** The easing every cue but thickness takes `r` through, 0 – 1. */
+/** The easing every cue takes `r` through, 0 – 1. */
 export function flowEase(r: number): number {
-    return r ** 0.7;
+    return Math.sqrt(r);
 }
 
 /** Level `k`: the brightness of a beam or glow, 0.2 – 1. */
@@ -100,9 +115,14 @@ export function flowGlowSize(r: number): number {
 /** From `from` to `to`, read at `t` (0 – 1), linearly. */
 const along = ([from, to]: readonly [number, number], t: number) => from + (to - from) * t;
 
-/** A surge's speed on screen, px/s: linear in `r`, the cue the eye reads power by. */
+/** Beam thickness, px. */
+export function flowThickness(r: number): number {
+    return along([BEAM_THICKNESS.floor, BEAM_THICKNESS.max], flowEase(r));
+}
+
+/** A surge's speed on screen, px/s. */
 export function flowSpeed(r: number): number {
-    return along(SURGE_SPEED, r);
+    return along(SURGE_SPEED, flowEase(r));
 }
 
 /**
@@ -155,18 +175,22 @@ export interface FlowBeam {
     /** The same bloom's blur radius, px, and colour, for a beam that draws it as a blurred copy of itself. */
     bloomBlur: number;
     bloomColor: string;
+    /** The surge's bubble, px across: wider than its beam, so it swells around the body. */
     surgeThickness: number;
+    /** The bubble and its halo, px across: how wide a surge is drawn, and what its clip lets through. */
+    surgeWidth: number;
     surgeOpacity: number;
 }
 
-/** The surge's thickness, px: wider than its beam, so it swells past the body. */
-const surgeThickness = (r: number) => flowThickness(r) + 4 + 10 * flowLevel(r);
+/** The surge's bubble, px across: its beam and a swell, both from `t`, so a bigger flow's is always the bigger. */
+const surgeThickness = (r: number) => flowThickness(r) + along(SURGE_SWELL, flowEase(r));
 
 export function flowBeam(r: number, color: string): FlowBeam {
     const width = flowThickness(r);
     const k = flowLevel(r);
     const bloomBlur = +(width + 2 + 8 * k).toFixed(2);
     const bloomColor = tint(color, 0.85 * k);
+    const bubble = surgeThickness(r);
     return {
         width,
         coreWidth: width * CORE_SHARE,
@@ -174,7 +198,8 @@ export function flowBeam(r: number, color: string): FlowBeam {
         bloom: `0 0 ${bloomBlur}px ${bloomColor}`,
         bloomBlur,
         bloomColor,
-        surgeThickness: surgeThickness(r),
+        surgeThickness: bubble,
+        surgeWidth: bubble + 2 * along(SURGE_HALO, flowEase(r)),
         surgeOpacity: 0.35 + 0.65 * k,
     };
 }
@@ -213,14 +238,25 @@ export function flowSurgeStartCss(towards: number): string {
     return `calc(max(0px, ${FLOW_SURGE_LENGTH_CSS} / 2 - ${SURGE_HANDOFF}px) * ${-towards})`;
 }
 
-/** The surge's soft blob, as gradient stops: offset, colour. */
-export function flowSurgeStops(color: string): [number, string][] {
-    return [[0, flowHot(color)], [0.6, tint(color, 0.6)], [1, "transparent"]];
+/** The step the bubble's share of a surge's width is rounded to in its gradient stops. */
+const SURGE_STOP_STEP = 0.05;
+
+/**
+ * The surge's soft blob across `beam.surgeWidth`, as gradient stops: offset,
+ * colour. A hot bubble `beam.surgeThickness` across, its edge still lit, and
+ * around it a halo in the flow's colour fading out: an energy pulse glowing
+ * past the beam. Painted once into the blob, so it moves with its transform.
+ * The bubble's share is rounded to `SURGE_STOP_STEP`, so a power tick
+ * repaints the gradient only when the share crosses a step.
+ */
+export function flowSurgeStops(color: string, beam: Pick<FlowBeam, "surgeThickness" | "surgeWidth">): [number, string][] {
+    const bubble = +(Math.round(beam.surgeThickness / beam.surgeWidth / SURGE_STOP_STEP) * SURGE_STOP_STEP).toFixed(4);
+    return [[0, flowHot(color)], [+(0.6 * bubble).toFixed(4), tint(color, 0.6)], [bubble, tint(color, 0.5)], [1, "transparent"]];
 }
 
 /** The surge's soft blob, as a CSS background. */
-export function flowSurgeGradient(color: string): string {
-    return `radial-gradient(closest-side, ${flowSurgeStops(color).map(([offset, stop]) => `${stop} ${offset * 100}%`).join(", ")})`;
+export function flowSurgeGradient(color: string, beam: Pick<FlowBeam, "surgeThickness" | "surgeWidth">): string {
+    return `radial-gradient(closest-side, ${flowSurgeStops(color, beam).map(([offset, stop]) => `${stop} ${+(offset * 100).toFixed(2)}%`).join(", ")})`;
 }
 
 /** One surge of an edge: its `animation-delay` and, while motion is reduced, where it rests. */

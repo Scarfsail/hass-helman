@@ -51,8 +51,6 @@ type Variant = {
     battery?: string;
     /** The grid meter's state, W, negative exporting. */
     grid?: string;
-    /** The inverter's rated power register, W; absent without one. */
-    ratedPower?: string;
     /** The viewer is an admin. */
     admin?: boolean;
 };
@@ -89,7 +87,6 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
         const states: Record<string, unknown> = {
             "sensor.solar": s(v.solar ?? "4200", "W"), "sensor.grid": s(v.gridUnavailable ? "unavailable" : v.grid ?? "-650", "W"),
             "sensor.battery": s(v.battery ?? "-500", "W"), "sensor.house": s(v.house ?? "1200", "W"),
-            "sensor.solax_inverter_power_type": s(v.ratedPower ?? "unknown", "W"),
             "sensor.today_import": s("8.4", "kWh"), "sensor.today_export": s("12600", "Wh"),
         };
         const entities: Record<string, string | null> = { power: "sensor.grid", today_import: "sensor.today_import", today_export: "sensor.today_export" };
@@ -177,7 +174,7 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
                 ],
             },
         };
-        const inverter = window.__inverterOverview({ entities: v.ratedPower ? { rated_power: "sensor.solax_inverter_power_type" } : {} });
+        const inverter = window.__inverterOverview();
         window.__GridHass = window.__configureNodeDetail({
             states, tree, overviews: { grid: overview, inverter }, sections: { grid: { voltage: v.sectionFails ? "error" : section, money, power } }, forecast,
             hass: v.admin ? { user: { is_admin: true } } : {},

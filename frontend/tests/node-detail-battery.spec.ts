@@ -45,8 +45,6 @@ type Variant = {
     house?: string;
     grid?: string;
     soc?: string;
-    /** The inverter's rated power register, W; absent without one. */
-    ratedPower?: string;
     /** The slot in progress holds a charge candidate whose condition is not met. */
     candidateNow?: boolean;
     /** Schedule execution is switched off. */
@@ -109,7 +107,6 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             "sensor.house": s(v.house ?? "1200", "W"),
             "sensor.soc": s(v.soc ?? "67", "%"), "sensor.remaining": s(v.remaining ?? "11577", v.remainingUnit ?? "Wh"),
             "number.min_soc": s(v.minSoc ?? "10", "%"), "number.max_soc": s(v.maxSoc ?? "100", "%"),
-            "sensor.solax_inverter_power_type": s(v.ratedPower ?? "unknown", "W"),
             "sensor.battery_in_today": s("6.2", v.todayUnit ?? "kWh"), "sensor.battery_out_today": s("4.1", "kWh"),
             "sensor.helman_battery_time_to_empty": s(v.timeToEmpty ?? "280", "min", { target_time: "2026-10-21T16:40:00+00:00", target_soc: 10 }),
             "sensor.helman_battery_time_to_full": s("unknown", "min", { target_time: "", target_soc: null }),
@@ -201,7 +198,6 @@ async function mount(page: Page, variant: Variant = {}): Promise<void> {
             },
         };
         const inverter = window.__inverterOverview({
-            entities: v.ratedPower ? { rated_power: "sensor.solax_inverter_power_type" } : {},
             agreement: { status: "match", reason: null, commanded: null, observedOption: v.observed === undefined ? "normal" : v.observed, observedFrom: [], registers: [] },
         });
         window.__moreInfo = [];

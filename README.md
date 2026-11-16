@@ -58,7 +58,7 @@ animated flow indicators and compact history bars. Can group house devices by Ho
 and surface custom label badges per device.
 
 - Live power and per-bucket history bars (configurable buckets and duration)
-- Sources vs Consumers layout with animated flow arrows scaled by max power
+- Sources vs Consumers layout with animated flow arrows scaled by the largest solar, battery or grid max power
 - House device tree built from `devices.consumers` (with an "👻 Untracked consumption" remainder row under every measured device with children); a meterless child shows under its parent with an estimated `sensor.helman_share_power_<id>` — the parent's own power split evenly among its running meterless children — and `sensor.helman_share_energy_<id>`, a `total_increasing` kWh sensor accumulating that share, its history back-filled once from the share-power sensor's hourly means; on upgrade to config version 21 the Energy dashboard's individual devices are imported into `devices` once, and Energy preferences are not read after that; on upgrade to config version 23 each metered device missing a power sensor or switch gains them from the HA device owning its meter (the top-ranked power sensor; a switch only when it carries the power-switch label or is named like the HA device)
 - Optional house consumption forecast in the node detail dialogs
 - Entity disambiguation via HA Labels for power sensor and power switch suggestions
@@ -90,8 +90,6 @@ Top-level schema is `HelmanCardConfig`. Only `energy_nodes` is required; everyth
 
 **Top-level options**
 - `type`: string — Must be `custom:helman-card`.
-- `max_power`: number — Scaling reference (W) for animated flow arrows. Defaults to a 3-phase 25A
-  system: `25 * 230 * 3`.
 - `show_empty_groups`: boolean — While a "Group by" filter is active, also list the groups with no devices. Default: `false`.
 - `show_others_group`: boolean — While a "Group by" filter is active, list the devices outside every group under "Others". Default: `true`.
 

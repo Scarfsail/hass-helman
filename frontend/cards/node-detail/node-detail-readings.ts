@@ -1,5 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
-import { isReadableState, applyValueType, powerUnitFactor, readPowerW } from "../shared/power-reading";
+import { isReadableState, applyValueType, readPowerW } from "../shared/power-reading";
+import { flowScaleW } from "../shared/flow-style";
 import type { HomeAssistant } from "../../types/ha";
 import type { LocalizeFunction } from "../localize/localize";
 import { convertToKWh, isSupportedEnergyUnit } from "../helman/energy-unit-converter";
@@ -125,7 +126,8 @@ export interface EnergyReadings {
     batteryMaxPower: number | null;
     housePower: number;
     houseReadable: boolean;
-    flowScaleW: number | null;
+    /** The one scale every flow on both cards is drawn against, W: the largest node maximum, else 0. */
+    flowScaleW: number;
 }
 
 function findHouse(items: TreeItem[]): TreeItem | null {
@@ -162,7 +164,7 @@ export function resolveEnergyNodes(items: TreeItem[]): EnergyNodes {
 
 /**
  * Returns the superset of readings (signed live-sensor readings, SoC, min SoC,
- * max powers, flowScaleW = inverter rated power else solar max, else null).
+ * max powers, flowScaleW = the largest of the solar, grid and battery max powers, else 0).
  * Only input to the node-detail context builder (D11).
  */
 export function readEnergyReadings(
@@ -177,7 +179,6 @@ export function readEnergyReadings(
         batteryProducerNode,
         batteryConsumerNode,
         houseNode,
-        inverter,
     } = energyNodes;
 
     const raw = (entityId: string | null | undefined): number | null =>
@@ -213,14 +214,6 @@ export function readEnergyReadings(
     const housePower = houseRaw === null ? 0 : Math.max(0, applyValueType(houseRaw, houseNode?.valueType ?? "default"));
     const houseReadable = houseRaw !== null;
 
-    // The power a detail's flow draws at full height: the inverter's AC
-    // rating, else the solar node's configured maximum.
-    const ratedEntityId = inverter?.entities?.rated_power;
-    const ratedValue = readingNumber(hass, ratedEntityId);
-    const factor = powerUnitFactor(hass, ratedEntityId);
-    const rated = ratedValue === null || factor === null ? null : ratedValue * factor;
-    const flowScaleW = rated !== null && rated > 0 ? rated : solarMaxPower;
-
     return {
         solarPower,
         solarPowerReading,
@@ -234,6 +227,6 @@ export function readEnergyReadings(
         batteryMaxPower,
         housePower,
         houseReadable,
-        flowScaleW,
+        flowScaleW: flowScaleW([solarMaxPower, gridMaxPower, batteryMaxPower]),
     };
 }

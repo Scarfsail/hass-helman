@@ -11,10 +11,6 @@ const SCHEMA: readonly HaFormSchema[] = [
         selector: { number: { min: 1, mode: "box" } },
     },
     {
-        name: "max_power",
-        selector: { number: { min: 0, mode: "box" } },
-    },
-    {
         name: "collapsed_consumers_count",
         selector: { number: { min: 0, mode: "box" } },
     },

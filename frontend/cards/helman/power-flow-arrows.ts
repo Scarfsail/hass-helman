@@ -7,9 +7,6 @@ import { keyed } from "lit/directives/keyed.js";
 import { FLOW_SURGE_LENGTH_CSS, flowBeam, flowBeatStyles, flowHot, flowRatio, flowSurgeGradient, flowSurgeStartCss, flowSurges, syncFlowRates, type FlowBeamLengths } from "../shared/flow-style";
 import { helmanColorVars } from "../color-vars";
 
-/** The house this card assumes without `max_power`: three phases of 25 A. */
-export const DEFAULT_MAX_POWER = 25 * 230 * 3;
-
 /** At or below this many watts a column draws no flow and its row no glow. */
 export const ARROW_IDLE_W = 0.4;
 
@@ -138,6 +135,7 @@ export class PowerFlowArrows extends LitElement {
                 flex: 1;
                 min-width: 0;
                 text-align: center;
+                container-type: inline-size;
             }
             .animated-arrow {
                 position: relative;
@@ -168,6 +166,7 @@ export class PowerFlowArrows extends LitElement {
                 bottom: 0;
                 left: 50%;
                 transform: translateX(-50%);
+                max-width: 100cqi;
                 overflow: hidden;
             }
             .band {
@@ -190,7 +189,7 @@ export class PowerFlowArrows extends LitElement {
         if (!this.devices || this.devices.length === 0) {
             return nothing;
         }
-        const maxPower = this.maxPower || DEFAULT_MAX_POWER;
+        const maxPower = this.maxPower ?? 0;
         return html`
             <div class="container">
                 ${this.devices.map((device, index) => {
@@ -202,6 +201,7 @@ export class PowerFlowArrows extends LitElement {
                     const r = flowRatio(device.powerValue, maxPower);
                     const beam = flowBeam(r, color);
                     const { count, rate, surges } = flowSurges(r, this._beamLengths[index]);
+                    const surgeGradient = flowSurgeGradient(color, beam);
                     // The beam is measured down its own height; its column, whose width never follows the power, is
                     // what is watched for a resize, so a power tick never re-measures it.
                     return html`
@@ -219,10 +219,10 @@ export class PowerFlowArrows extends LitElement {
                                     </div>
                                     <div class="core" style="width: ${beam.coreWidth}px; background: ${flowHot(color)}"></div>
                                 </div>
-                                <div class="surges" style="width: ${beam.surgeThickness}px; opacity: ${beam.surgeOpacity}">
+                                <div class="surges" style="width: ${beam.surgeWidth}px; opacity: ${beam.surgeOpacity}">
                                     ${keyed(count, surges.map((surge) => html`
                                         <div class="band" data-beat="surge" data-rate=${rate}
-                                            style="background-image: ${flowSurgeGradient(color)}; --surge-x: 0px; --surge-y: 100%; --surge-start-x: 0px; --surge-start-y: ${flowSurgeStartCss(1)}; --surge-rest: ${surge.rest}; animation-delay: ${surge.delay}"></div>
+                                            style="background-image: ${surgeGradient}; --surge-x: 0px; --surge-y: 100%; --surge-start-x: 0px; --surge-start-y: ${flowSurgeStartCss(1)}; --surge-rest: ${surge.rest}; animation-delay: ${surge.delay}"></div>
                                     `))}
                                 </div>
                             </div>

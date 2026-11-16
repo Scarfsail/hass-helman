@@ -51,13 +51,11 @@ export interface NodeDetailRequestDetail {
 
 /**
  * What every energy node's flow is drawn from: the card's live power split,
- * rebuilt with the params on every card render, and the fixed scale.
+ * rebuilt with the params on every card render.
  */
 export interface EnergyNodeFlowParams {
     /** The card's live power split, W; `null` while the solar or battery meter has no reading. */
     flows: LiveFlows | null;
-    /** The power the Now flow draws at full height, W: the inverter's AC rating, else the solar node's maximum; `null` with neither. */
-    flowScaleW: number | null;
 }
 
 /**
